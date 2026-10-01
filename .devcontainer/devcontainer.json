@@ -1,0 +1,5 @@
+{
+  "name": "Chat-gpt • OpenClaw",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "postCreateCommand": "bash .devcontainer/install-openclaw.sh"
+}

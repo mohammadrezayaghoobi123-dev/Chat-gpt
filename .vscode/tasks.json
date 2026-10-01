@@ -1,0 +1,11 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "OpenClaw Status",
+      "type": "shell",
+      "command": "openclaw status",
+      "problemMatcher": []
+    }
+  ]
+}

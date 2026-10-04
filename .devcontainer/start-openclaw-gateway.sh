@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export TS_SOCKET="/tmp/tailscaled.sock"
+export TS_STATE_DIR="/var/lib/tailscale"
+export OPENCLAW_NO_RESPAWN="1"
+export NODE_COMPILE_CACHE="/var/tmp/openclaw-compile-cache"
+
 mkdir -p /var/tmp/openclaw-compile-cache /tmp/openclaw
 
 if ! pgrep -f '/workspaces/Chat-gpt/.devcontainer/keep-openclaw-alive.sh' >/dev/null 2>&1; then

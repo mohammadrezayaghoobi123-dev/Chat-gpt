@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 set -u
+
+export TS_SOCKET="/tmp/tailscaled.sock"
+export TS_STATE_DIR="/var/lib/tailscale"
+export OPENCLAW_NO_RESPAWN="1"
+export NODE_COMPILE_CACHE="/var/tmp/openclaw-compile-cache"
+
 mkdir -p /tmp/openclaw /var/tmp/openclaw-compile-cache
 
 while true; do

@@ -3,8 +3,16 @@
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
   "containerEnv": {
     "OPENCLAW_NO_RESPAWN": "1",
-    "NODE_COMPILE_CACHE": "/var/tmp/openclaw-compile-cache"
+    "NODE_COMPILE_CACHE": "/var/tmp/openclaw-compile-cache",
+    "TS_STATE_DIR": "/var/lib/tailscale",
+    "TS_SOCKET": "/tmp/tailscaled.sock",
+    "TS_USERSPACE": "true"
   },
   "postCreateCommand": "bash .devcontainer/install-openclaw.sh",
-  "postStartCommand": "bash .devcontainer/start-openclaw-gateway.sh"
+  "postStartCommand": "bash .devcontainer/start-openclaw-gateway.sh",
+  "privileged": true,
+  "runArgs": [
+    "--dns=100.100.100.100",
+    "--dns=168.63.129.16"
+  ]
 }

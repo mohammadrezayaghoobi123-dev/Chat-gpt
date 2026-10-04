@@ -10,6 +10,7 @@
   },
   "postCreateCommand": "bash .devcontainer/install-openclaw.sh",
   "postStartCommand": "bash .devcontainer/start-openclaw-gateway.sh",
+  "privileged": true,
   "runArgs": [
     "--dns=100.100.100.100",
     "--dns=168.63.129.16"

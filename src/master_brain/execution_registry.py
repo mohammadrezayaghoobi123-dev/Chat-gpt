@@ -3,8 +3,11 @@
 This is a single-host coordination primitive, not exactly-once external execution.
 """
 from __future__ import annotations
+
+from contextlib import closing
 from dataclasses import dataclass
 from enum import Enum
+import math
 import sqlite3
 
 
@@ -47,8 +50,12 @@ class SQLiteExecutionRegistry:
     """Atomic per-key reservations and compare-and-swap transitions."""
 
     def __init__(self, path: str, timeout: float = 5.0):
-        self.path, self.timeout = path, timeout
-        with self._db() as db:
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise ValueError("timeout must be a finite non-negative number")
+        if not math.isfinite(timeout) or timeout < 0:
+            raise ValueError("timeout must be a finite non-negative number")
+        self.path, self.timeout = path, float(timeout)
+        with closing(self._db()) as db, db:
             db.execute("""CREATE TABLE IF NOT EXISTS executions (
                 key TEXT PRIMARY KEY, mission_id TEXT NOT NULL,
                 contract_digest TEXT NOT NULL, payload_digest TEXT NOT NULL,
@@ -59,7 +66,8 @@ class SQLiteExecutionRegistry:
     def _db(self):
         db = sqlite3.connect(self.path, timeout=self.timeout, isolation_level=None)
         db.row_factory = sqlite3.Row
-        db.execute("PRAGMA busy_timeout=5000")
+        # PRAGMA busy_timeout is in milliseconds and overrides the connection setting.
+        db.execute("PRAGMA busy_timeout=?", (int(self.timeout * 1000),))
         return db
 
     @staticmethod
@@ -83,7 +91,7 @@ class SQLiteExecutionRegistry:
         self._required(key=key, mission_id=mission_id, contract_digest=contract_digest,
                        payload_digest=payload_digest, recorded_at=recorded_at)
         try:
-            with self._db() as db:
+            with closing(self._db()) as db, db:
                 db.execute("BEGIN IMMEDIATE")
                 row = db.execute("SELECT * FROM executions WHERE key=?", (key,)).fetchone()
                 if row:
@@ -108,7 +116,7 @@ class SQLiteExecutionRegistry:
     def get(self, key: str) -> Record | None:
         self._required(key=key)
         try:
-            with self._db() as db:
+            with closing(self._db()) as db:
                 row = db.execute("SELECT * FROM executions WHERE key=?", (key,)).fetchone()
                 return None if row is None else self._record(row)
         except sqlite3.Error as exc:
@@ -121,7 +129,7 @@ class SQLiteExecutionRegistry:
         if not isinstance(target, State):
             raise TypeError("target must be a State")
         try:
-            with self._db() as db:
+            with closing(self._db()) as db, db:
                 db.execute("BEGIN IMMEDIATE")
                 row = db.execute("SELECT * FROM executions WHERE key=?", (key,)).fetchone()
                 if row is None:

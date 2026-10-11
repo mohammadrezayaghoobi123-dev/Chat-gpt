@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 import json
-import math
 import re
 from typing import Any, Mapping
 
@@ -99,8 +98,6 @@ class AuditRecord:
             encoded = json.dumps(self.metadata, allow_nan=False)
         except (TypeError, ValueError) as exc:
             raise AuditValidationError("metadata must contain finite JSON-compatible values") from exc
-        if not math.isfinite(float(len(encoded))):
-            raise AuditValidationError("metadata is too large to serialize")
 
     def to_dict(self) -> dict[str, Any]:
         """Return a validated JSON-compatible dictionary."""

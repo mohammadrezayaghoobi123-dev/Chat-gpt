@@ -90,12 +90,15 @@ class IntegrationRequirement:
     """Capability and policy requirements for a proposed integration call."""
 
     capabilities: tuple[str, ...]
+    required_kind: IntegrationKind | None = None
     required_permission_scopes: tuple[str, ...] = ()
     allowed_data_regions: tuple[str, ...] = ()
     max_risk_level: int = 0
     max_cost_per_call: float | None = None
 
     def __post_init__(self) -> None:
+        if self.required_kind is not None and not isinstance(self.required_kind, IntegrationKind):
+            raise TypeError("required_kind must be an IntegrationKind or None")
         for name in ("capabilities", "required_permission_scopes", "allowed_data_regions"):
             value = getattr(self, name)
             if not isinstance(value, tuple):
@@ -125,6 +128,11 @@ def assess_integration(
 ) -> CandidateAssessment:
     """Explain deterministic eligibility; never invokes the integration."""
     reasons: list[str] = []
+    if requirement.required_kind is not None and integration.kind is not requirement.required_kind:
+        reasons.append(
+            f"integration kind is {integration.kind.value}, not required kind "
+            f"{requirement.required_kind.value}"
+        )
     if integration.maturity not in {IntegrationMaturity.ENABLED, IntegrationMaturity.MONITORED}:
         reasons.append("integration is not enabled")
     if integration.health is not IntegrationHealth.AVAILABLE:

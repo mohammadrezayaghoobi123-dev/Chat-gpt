@@ -5,7 +5,8 @@ This branch combines **A (intelligence and opportunity discovery)** with **B (pr
 ## What exists in this branch
 
 - `src/master_brain/core.py`: provider-independent records and deterministic routing, contradiction flags, opportunity scoring, and claim evidence review.
-- `tests/test_core.py`: synthetic unit tests for the current core contracts.
+- `src/master_brain/ctp.py`: Contradiction-to-Proof (CTP) case contracts, rival hypotheses, falsifiers, discriminating tests, and safeguards against marking unrun tests as evidence.
+- `tests/test_core.py` and `tests/test_ctp.py`: synthetic unit tests for core and CTP structural rules.
 - `MASTER_BRAIN_INTEGRATED_ARCHITECTURE.md`: architecture baseline and delivery phases.
 
 ## Safety boundary

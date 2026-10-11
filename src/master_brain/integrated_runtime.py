@@ -50,12 +50,12 @@ def execute_mission(
     digest-bound approval service. An approval must not be simulated by a bool.
     """
     plan = plan_coordination(mission)
-    if plan.review_level is ReviewLevel.HUMAN_GATED:
+    if mission.risk_tier.casefold() in {"high", "critical"} or mission.irreversible_action or plan.review_level is ReviewLevel.HUMAN_GATED:
         return MissionRun(
             plan=plan,
             status="approval_required",
             unresolved_issues=(
-                "Human-gated mission was not dispatched: authenticated approval bound to the exact mission contract is not configured.",
+                "Mission was not dispatched because an approval mechanism is not configured.",
             ),
         )
 

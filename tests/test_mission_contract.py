@@ -111,16 +111,14 @@ class MissionContractTests(unittest.TestCase):
         self.assertTrue(result.allowed)
         self.assertFalse(hasattr(result, "dispatch_performed"))
 
-    def test_human_gated_review_level_cannot_bypass_approval_requirement(self):
-        contract = MissionContract(
-            mission_id="mission-human-gated", objective="Review production change",
-            risk_tier=MissionRiskTier.MEDIUM,
-            review_level=MissionReviewLevel.HUMAN_GATED,
-            requires_approval=False,
-        )
-        result = evaluate_execution_gate(contract, approval_granted=True)
-        self.assertFalse(result.allowed)
-        self.assertIn("audited approval receipt is required; boolean approval assertions are not accepted", result.reasons)
+    def test_human_gated_review_level_requires_approval_in_contract(self):
+        with self.assertRaisesRegex(ValueError, "human_gated review requires approval"):
+            MissionContract(
+                mission_id="mission-human-gated", objective="Review production change",
+                risk_tier=MissionRiskTier.MEDIUM,
+                review_level=MissionReviewLevel.HUMAN_GATED,
+                requires_approval=False,
+            )
 
     def test_direct_blank_contract_cannot_pass_legacy_policy_gate(self):
         contract = MissionContract(mission_id="mission-direct-empty", objective="")

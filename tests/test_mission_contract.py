@@ -172,5 +172,23 @@ class MissionContractTests(unittest.TestCase):
             from_archipelago_plan(plan, requires_approval="false")
 
 
+    def test_contract_rejects_mutable_or_wrong_sequence_fields(self):
+        with self.assertRaisesRegex(TypeError, "selected_islands must be a tuple"):
+            MissionContract(
+                mission_id="mission-test", objective="Review change",
+                selected_islands=["science_research"],
+            )
+        with self.assertRaisesRegex(TypeError, "constraints must be a tuple"):
+            MissionContract(
+                mission_id="mission-test", objective="Review change",
+                constraints=["preserve audit history"],
+            )
+        with self.assertRaisesRegex(TypeError, "success_criteria must be a tuple"):
+            MissionContract(
+                mission_id="mission-test", objective="Review change",
+                success_criteria="verified output",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

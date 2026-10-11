@@ -16,6 +16,7 @@ from master_brain.integrations import IntegrationAdapter, IntegrationDescriptor,
 from master_brain.mission_approval import (
     MissionApprovalReceipt,
     evaluate_approved_execution_gate,
+    mission_contract_digest,
 )
 from master_brain.mission_contract import MissionContract
 
@@ -69,9 +70,7 @@ def execute_mission_once(
             subject_ref=f"mission:{contract.mission_id}",
             payload={
                 "mission_id": contract.mission_id,
-                "contract_digest": __import__(
-                    "master_brain.mission_approval", fromlist=["mission_contract_digest"]
-                ).mission_contract_digest(contract),
+                "contract_digest": mission_contract_digest(contract),
                 "integration_id": getattr(integration, "integration_id", "unknown"),
             },
         )

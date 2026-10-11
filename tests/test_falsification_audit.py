@@ -62,6 +62,13 @@ class FalsificationAuditTests(unittest.TestCase):
         self.assertEqual(payload["evidence_assessment"]["counterevidence_ids"], ["counter-1"])
         self.assertEqual(payload["tests"]["executed"][1]["observed_result"], "Independent count: 72 units")
         self.assertEqual(payload["rival_hypothesis_ids"], ["rival-1"])
+        counter_record = next(
+            item for item in payload["evidence_records"]
+            if item["evidence_id"] == "counter-1"
+        )
+        self.assertEqual(counter_record["source_uri_or_reference"], "independent-inspector")
+        self.assertEqual(counter_record["polarity"], "counters")
+        self.assertTrue(counter_record["attached_to_executed_test"])
 
     def test_decision_change_requires_explanation(self):
         with self.assertRaisesRegex(ValueError, "decision_change_reason is required"):

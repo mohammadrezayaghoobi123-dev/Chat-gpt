@@ -111,6 +111,12 @@ class MissionContractTests(unittest.TestCase):
         self.assertTrue(result.allowed)
         self.assertFalse(hasattr(result, "dispatch_performed"))
 
+    def test_direct_blank_contract_cannot_pass_legacy_policy_gate(self):
+        contract = MissionContract(mission_id="mission-direct-empty", objective="")
+        result = evaluate_execution_gate(contract)
+        self.assertFalse(result.allowed)
+        self.assertIn("mission objective is empty and requires clarification", result.reasons)
+
     def test_empty_objective_is_retained_and_requires_clarification(self):
         contract = from_core_task(Task(objective=""))
         self.assertEqual(contract.objective, "")

@@ -92,7 +92,15 @@ def dispatch_once(
         )
 
     try:
-        output = adapter.invoke(dict(payload))
+        # JSON round-trip creates a detached copy, including nested containers.
+        safe_payload = json.loads(json.dumps(dict(payload), allow_nan=False))
+        output = adapter.invoke(safe_payload)
+    except (TypeError, ValueError, OverflowError):
+        return DispatchResult(
+            DispatchStatus.INVALID_OUTPUT,
+            integration.integration_id,
+            reason="input_not_json_compatible_object",
+        )
     except Exception as exc:
         return DispatchResult(
             DispatchStatus.ADAPTER_ERROR,
@@ -107,8 +115,18 @@ def dispatch_once(
             reason="output_not_json_compatible_object",
         )
 
+    try:
+        # Detach the returned result from adapter-owned nested containers too.
+        safe_output = json.loads(json.dumps(dict(output), allow_nan=False))
+    except (TypeError, ValueError, OverflowError):
+        return DispatchResult(
+            DispatchStatus.INVALID_OUTPUT,
+            integration.integration_id,
+            reason="output_not_json_compatible_object",
+        )
+
     return DispatchResult(
         DispatchStatus.SUCCEEDED,
         integration.integration_id,
-        output=dict(output),
+        output=safe_output,
     )

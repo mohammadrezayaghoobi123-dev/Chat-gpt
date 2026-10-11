@@ -50,6 +50,12 @@ def execute_mission(
     digest-bound approval service. An approval must not be simulated by a bool.
     """
     plan = plan_coordination(mission)
+    if mission.risk_tier.casefold() not in {"low", "medium", "high", "critical"}:
+        return MissionRun(
+            plan=plan,
+            status="needs_clarification",
+            unresolved_issues=("Mission not dispatched because its risk tier is unrecognized.",),
+        )
     if mission.risk_tier.casefold() in {"high", "critical"} or mission.irreversible_action or plan.review_level is ReviewLevel.HUMAN_GATED:
         return MissionRun(
             plan=plan,

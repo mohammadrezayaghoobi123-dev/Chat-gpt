@@ -74,7 +74,9 @@ def execute_mission_once(
                 "integration_id": getattr(integration, "integration_id", "unknown"),
             },
         )
-    except (AuditStoreError, OSError, ValueError, TypeError):
+    except Exception:
+        # Fail closed: never dispatch when the pre-execution audit event cannot
+        # be durably recorded, including unexpected storage/backend exceptions.
         return MissionExecutionResult(
             contract.mission_id, "audit_unavailable", reason="pre_dispatch_audit_failed"
         )
@@ -95,7 +97,9 @@ def execute_mission_once(
                 "external_effect_confirmed": False,
             },
         )
-    except (AuditStoreError, OSError, ValueError, TypeError):
+    except Exception:
+        # The adapter may already have caused a side effect. Never disguise the
+        # audit gap or invite blind retries when the final event cannot persist.
         return MissionExecutionResult(
             contract.mission_id,
             "executed_audit_incomplete",

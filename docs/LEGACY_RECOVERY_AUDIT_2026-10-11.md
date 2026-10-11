@@ -75,3 +75,22 @@ The recovery sweep has now located and read the connected Notion continuity reco
 5. After the original source is actually found, map it against the preserved architecture, then decide what to retain, adapt, test, or replace. Do not treat the detached CTP scaffold as the recovered ~3,000-line implementation.
 
 This update supersedes any implication that Notion/Library had not yet been searched in the current recovery pass. It does **not** change the conclusion that the original implementation and full historical conversations remain unrecovered.
+
+## 2026-10-11 — focused Notion source inspection and scope check
+
+### Canonical Notion mother document
+- Page: [MASTER BRAIN — سند مادر یکپارچه و مرجع قابل‌حمل — 2026-10-09](https://app.notion.com/p/3f4ccfc54a30813eab6ef8723f99c85a?pvs=204).
+- The connected fetch returned **46,445 characters / 527 content lines** in this pass. It includes the consolidated project master, cross-project continuity archive, historical infrastructure inventory, status/decision ledgers, migration plan, and the MB-EVAL-CONTRACT-001 draft.
+- The document itself explicitly says it does **not** contain the missing full ChatGPT conversation archive or inaccessible local Codespace files. It marks the original reported ~3,000-line implementation as **INACCESSIBLE / RECOVERY PENDING**, not confirmed lost.
+- A focused term check of the fetched mother document found no direct occurrences of “blockchain”, “crypto”, “betting”, or “digital economy”. This does not show that no such work exists elsewhere; it means this document alone is not evidence that those specialist implementations/research files have been recovered.
+
+### Other accessible Notion records
+- [Continuation Update & CTP Gate Review — 2026-10-10](https://app.notion.com/p/3f4ccfc54a308155abb3d8d56ff8bd79?pvs=204): 8,077 characters fetched. Reaffirms source recovery and external snapshot before refactoring; preserves the user-stated access hold through 2026-11-01; states all 21 live MB-PROOF-002A cases remain NOT_RUN.
+- [Master Brain / Opportunity Engine — central reference](https://app.notion.com/p/3f4ccfc54a308176a2abd611d30ca894?pvs=204) and [conversation continuity archive](https://app.notion.com/p/3f4ccfc54a3081c5a2ccee7f792f4697?pvs=204) are relevant indexes/syntheses, not substitutes for the original runtime source or full transcripts.
+- Focused Notion searches for “blockchain digital economy crypto betting platform analysis”, “گپ درباره موتور فرصت”, and “آسترولوژی دسترسی” returned the same four broad project/continuity pages rather than distinct domain research pages or full transcripts. Search coverage is not exhaustive and cannot prove absence.
+
+### Recovery interpretation
+1. The project’s **requirements and architecture are substantially documented** in accessible records; the original implementation and full historical chat evidence remain unrecovered.
+2. Do not confuse a detailed specification, a synthetic fixture, or the isolated CTP scaffold with the original runtime implementation.
+3. Keep a separate inventory of (a) architecture/specification, (b) prototype source and tests, (c) original implementation, (d) specialist-domain research/code, and (e) raw chat/task/runtime archives. Each has a different recovery status.
+4. Continue non-destructive document/source inventory while the stated access hold remains in force. At the first permitted connection, snapshot and hash the original environment before any startup, repair, import, migration, or refactor.

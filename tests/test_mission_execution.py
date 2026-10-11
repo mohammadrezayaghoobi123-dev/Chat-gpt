@@ -487,6 +487,12 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
             def get(self, key):
                 return self.inner.get(key)
 
+            def reserve_attempt(self, **kwargs):
+                return self.inner.reserve_attempt(**kwargs)
+
+            def mark_attempt_dispatch_boundary(self, **kwargs):
+                return self.inner.mark_attempt_dispatch_boundary(**kwargs)
+
             def transition(self, **kwargs):
                 self.calls += 1
                 if kwargs.get("target") is State.OUTCOME_UNKNOWN:

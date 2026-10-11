@@ -33,6 +33,27 @@ class MissionRunnerTests(unittest.TestCase):
         result = run_mission("m-5", {}, lambda _: {"bad": float("nan")})
         self.assertEqual(result.status, MissionStatus.INVALID_RESULT)
 
+    def test_handler_cannot_mutate_callers_nested_payload(self):
+        payload = {"nested": {"items": [1]}}
+        def handler(received):
+            received["nested"]["items"].append(2)
+            return {"ok": True}
+        run_mission("m-6", payload, handler)
+        self.assertEqual(payload, {"nested": {"items": [1]}})
+
+    def test_result_is_detached_from_handler_owned_nested_data(self):
+        owned = {"nested": {"items": [1]}}
+        result = run_mission("m-7", {}, lambda _: owned)
+        owned["nested"]["items"].append(2)
+        self.assertEqual(result.result, {"nested": {"items": [1]}})
+
+    def test_non_json_payload_does_not_call_handler(self):
+        calls = []
+        result = run_mission("m-8", {"bad": float("nan")}, lambda _: calls.append(True) or {})
+        self.assertEqual(result.status, MissionStatus.INVALID_RESULT)
+        self.assertEqual(result.error_code, "payload_not_json_compatible")
+        self.assertEqual(calls, [])
+
     def test_empty_mission_id_rejected(self):
         with self.assertRaises(ValueError):
             run_mission(" ", {}, lambda _: {})

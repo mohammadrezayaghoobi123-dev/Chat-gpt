@@ -10,7 +10,11 @@ from master_brain.mission_approval import (
     mission_contract_digest,
     record_mission_approval,
 )
-from master_brain.mission_contract import from_core_task
+from master_brain.mission_contract import (
+    MissionReviewLevel,
+    MissionRiskTier,
+    from_core_task,
+)
 
 
 class MissionApprovalTests(unittest.TestCase):
@@ -117,6 +121,40 @@ class MissionApprovalTests(unittest.TestCase):
         ))
         result = evaluate_approved_execution_gate(low_risk, self.store, None)
         self.assertTrue(result.allowed)
+
+    def test_high_risk_flag_mismatch_fails_closed(self):
+        contract = from_core_task(Task(
+            objective="Summarize a public report",
+            risk=RiskTier.LOW,
+        ))
+        # Simulate an invalid/deserialized object that bypassed dataclass validation.
+        object.__setattr__(contract, "risk_tier", MissionRiskTier.HIGH)
+        object.__setattr__(contract, "requires_approval", False)
+        result = evaluate_approved_execution_gate(contract, self.store, None)
+        self.assertFalse(result.allowed)
+        self.assertIn("required human approval receipt is missing", result.reasons)
+
+    def test_human_gated_flag_mismatch_fails_closed(self):
+        contract = from_core_task(Task(
+            objective="Summarize a public report",
+            risk=RiskTier.LOW,
+        ))
+        # Defense in depth for malformed objects created outside normal constructors.
+        object.__setattr__(contract, "review_level", MissionReviewLevel.HUMAN_GATED)
+        object.__setattr__(contract, "requires_approval", False)
+        result = evaluate_approved_execution_gate(contract, self.store, None)
+        self.assertFalse(result.allowed)
+        self.assertIn("required human approval receipt is missing", result.reasons)
+
+    def test_approval_recording_rejects_high_risk_flag_mismatch(self):
+        contract = from_core_task(Task(
+            objective="Summarize a public report",
+            risk=RiskTier.LOW,
+        ))
+        object.__setattr__(contract, "risk_tier", MissionRiskTier.CRITICAL)
+        object.__setattr__(contract, "requires_approval", False)
+        with self.assertRaisesRegex(ValueError, "does not require human approval"):
+            self.approve(contract=contract)
 
     def test_approval_write_fails_closed_on_tampered_history(self):
         self.approve()

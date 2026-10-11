@@ -160,6 +160,19 @@ def execute_mission_idempotently(
     if not gate.allowed:
         return MissionExecutionResult(contract.mission_id, "rejected", reason="; ".join(gate.reasons))
 
+    # Validate all caller-controlled execution metadata before reserving or
+    # claiming a registry record. Invalid metadata must not strand a mission
+    # in RUNNING/OUTCOME_UNKNOWN when no dispatch attempt was possible.
+    for name, value in (
+        ("event_id_prefix", event_id_prefix),
+        ("recorded_at", recorded_at),
+        ("actor", actor),
+    ):
+        if not isinstance(value, str) or not value.strip():
+            return MissionExecutionResult(
+                contract.mission_id, "rejected", reason=f"invalid_{name}"
+            )
+
     try:
         payload_bytes = json.dumps(
             payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False

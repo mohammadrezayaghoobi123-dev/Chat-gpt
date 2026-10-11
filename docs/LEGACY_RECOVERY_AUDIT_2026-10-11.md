@@ -45,3 +45,12 @@ The principle “reach proof through contradiction” must remain operational: a
 ## Current conclusion
 
 The current architecture and MVP artifacts are present in GitHub, but the old domain-specific research/code has **not yet been located or restored**. The next recovery step is historical tree/commit inspection, then workspace inspection if Codespaces becomes available. This report is an evidence log, not a claim of completed recovery.
+
+
+## Additional historical inspection (2026-10-11)
+
+- The repository-wide commit endpoint currently returns 25 commits, with the oldest visible commit dated 2026-10-01 and titled `first commit`. The subsequent visible history is the OpenClaw/Codespaces setup sequence through 2026-10-04. No older domain-research commit history was returned by that endpoint.
+- The default `main` tree at `090a1850b5a06a16c8d7ae2e004cd08112b11ae5` contains the OpenClaw bootstrap and Tailscale/Codespaces configuration, not the current Python Master Brain package. The current integration branch contains the later Master Brain MVP and architecture documents.
+- `src/master_brain/ctp.py` is a real but small **planning/validation scaffold**: it defines rival hypotheses, falsifiers, proposed discriminating tests, status tracking, and structural validation. It explicitly does not run experiments or convert unexecuted tests into evidence. Its unit tests are source code only; they have not been executed in this inspection.
+- The architecture reconciliation document says the reported earlier ~3,000-line implementation remains inaccessible/recovery pending, not confirmed lost. It also distinguishes the current scaffold from the original implementation.
+- Therefore, based on the GitHub history currently exposed, the old detailed domain research is **not present in the visible commit history inspected so far**. Next sources to investigate are the connected Notion/ChatGPT Library artifacts mentioned in the reconciliation document, followed by the Codespaces workspace when access is permitted. This is a stronger finding than the earlier commit-message search, but it still does not establish that the research was lost.

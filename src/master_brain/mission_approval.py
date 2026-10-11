@@ -130,6 +130,8 @@ def evaluate_approved_execution_gate(
 ) -> ApprovedExecutionGateResult:
     """Fail closed unless a matching approval is present in verified audit history."""
     reasons: list[str] = []
+    if not contract.objective.strip():
+        reasons.append("mission objective is empty and requires clarification")
     if contract.clarification_questions:
         reasons.append("mission requires clarification before dispatch")
     if not contract.requires_approval:

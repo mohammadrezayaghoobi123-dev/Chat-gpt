@@ -14,11 +14,24 @@ import json
 from typing import Any
 
 from master_brain.audit_store import AuditStore, AuditStoreError
-from master_brain.mission_contract import MissionContract
+from master_brain.mission_contract import (
+    MissionContract,
+    MissionReviewLevel,
+    MissionRiskTier,
+)
 
 
 APPROVAL_EVENT_TYPE = "mission.approval_granted"
 APPROVAL_SCHEMA_VERSION = 1
+
+
+def _approval_required(contract: MissionContract) -> bool:
+    """Derive the safety requirement independently of the stored boolean flag."""
+    return (
+        contract.requires_approval
+        or contract.review_level is MissionReviewLevel.HUMAN_GATED
+        or contract.risk_tier in {MissionRiskTier.HIGH, MissionRiskTier.CRITICAL}
+    )
 
 
 def _json_value(value: Any) -> Any:
@@ -88,7 +101,7 @@ def record_mission_approval(
     ):
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{name} must be a non-empty string")
-    if not contract.requires_approval:
+    if not _approval_required(contract):
         raise ValueError("mission contract does not require human approval")
 
     digest = mission_contract_digest(contract)
@@ -134,7 +147,7 @@ def evaluate_approved_execution_gate(
         reasons.append("mission objective is empty and requires clarification")
     if contract.clarification_questions:
         reasons.append("mission requires clarification before dispatch")
-    if not contract.requires_approval:
+    if not _approval_required(contract):
         return ApprovedExecutionGateResult(not reasons, tuple(reasons))
     if receipt is None:
         reasons.append("required human approval receipt is missing")

@@ -1,8 +1,8 @@
 # Evidence Protocol v0 — implementation note
 
 **Branch:** `master-brain/proof-protocol-v0`  
-**Scope:** deterministic, provider-independent claim review gate plus offline audit-chain primitive  
-**Maturity:** implemented in branch; validate the latest CI run before reporting tests as passing
+**Scope:** deterministic claim review, CTP evidence bridge, and offline audit-chain primitive  
+**Maturity:** implemented; check the linked latest CI run for execution status
 
 ## Evidence review
 
@@ -13,6 +13,10 @@
 - Keeps supporting evidence and counterevidence visible.
 - Returns conservative states: `unverified`, `insufficient_evidence`, `insufficient_independence`, `contested`, `provisionally_supported`, or `provisionally_refuted`.
 - Exposes per-record contributions, reasons, and limitations for audit.
+
+## CTP evidence bridge
+
+`src/master_brain/ctp_evidence_bridge.py` links evidence to claim assessments only when a CTP test is marked `PASS` or `FAIL` and has a non-empty observed result. It reports unresolved tests, missing claim/evidence references, duplicate IDs, and evidence linked to claims outside the case. Evidence attached to `NOT_RUN` or `INCONCLUSIVE` tests is treated as an integrity issue and is not used in claim scoring. The bridge returns `truth_established=False`; a ready review package is not proof of truth.
 
 ## Hash-chain audit primitive
 
@@ -34,8 +38,8 @@ The evidence score is a configurable **review gate**, not a probability that a s
 
 ## Validation coverage
 
-Unit tests cover empty evidence, independent source groups, correlated-source caps, counterevidence, model-only evidence, expiry, malformed IDs, cross-claim mixing, timestamps, bounded inputs, hash-chain creation/verification, payload tampering, reordering, duplicate IDs, and invalid JSON numbers. The latest GitHub Actions result is the source of truth for execution status.
+Unit tests cover empty evidence, independent source groups, correlated-source caps, counterevidence, model-only evidence, expiry, malformed IDs, cross-claim mixing, timestamps, bounded inputs, CTP test status/evidence linking, missing and orphan references, hash-chain creation/verification, payload tampering, reordering, duplicate IDs, and invalid JSON numbers. GitHub Actions is the execution source of truth; passing synthetic tests does not establish real-world correctness.
 
 ## Architectural fit
 
-This module strengthens the integrated A+B design: broad reasoning/opportunity discovery may propose claims and options, while this protocol preserves provenance, counterevidence, independence limits, and explicit uncertainty. The audit primitive makes event changes detectable relative to a trusted checkpoint. Neither component replaces the existing CTP prototype or the inaccessible original Master Brain source.
+This module strengthens the integrated A+B design: broad reasoning/opportunity discovery may propose claims and options, while this protocol preserves provenance, counterevidence, independence limits, and explicit uncertainty. CTP records which discriminating tests remain unresolved and links only executed test records to the evidence review. The audit primitive makes event changes detectable relative to a trusted checkpoint. None of these components replaces the inaccessible original Master Brain source.

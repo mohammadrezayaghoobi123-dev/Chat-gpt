@@ -1,4 +1,5 @@
 """Regression tests for read-only execution recovery discovery."""
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -68,7 +69,7 @@ class RecoveryCandidateTests(unittest.TestCase):
     def test_corrupt_unknown_state_blocks_recovery_inventory(self):
         from master_brain.execution_registry import RegistryError
         self.reserve("valid-running", "2026-10-12T00:00:00Z")
-        with __import__("sqlite3").connect(self.registry.path) as db:
+        with sqlite3.connect(self.registry.path) as db:
             db.execute(
                 "UPDATE executions SET state='MAGIC_SUCCESS' WHERE key=?",
                 ("valid-running",),

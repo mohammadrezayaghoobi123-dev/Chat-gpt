@@ -27,7 +27,9 @@ class AuditStore:
     @staticmethod
     def _decode(line: str, number: int) -> AuditEvent:
         try:
-            raw: dict[str, Any] = json.loads(line)
+            raw = json.loads(line)
+            if not isinstance(raw, dict):
+                raise TypeError("audit record must be a JSON object")
             return AuditEvent(
                 event_id=raw["event_id"],
                 event_type=raw["event_type"],

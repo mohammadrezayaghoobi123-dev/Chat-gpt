@@ -265,5 +265,23 @@ class ExecutionRegistryTests(unittest.TestCase):
         self.assertEqual(duplicate.version, 2)
 
 
+    def test_success_state_is_blocked_without_evidence_aware_api(self):
+        from master_brain.execution_registry import InvalidTransition, State
+        record, _ = self.reserve(key="no-proof-success")
+        running = self.registry.transition(
+            key=record.key, expected_version=0, target=State.RUNNING,
+            recorded_at="2026-10-12T00:00:01Z",
+        )
+        with self.assertRaisesRegex(InvalidTransition, "verified completion evidence"):
+            self.registry.transition(
+                key=record.key, expected_version=running.version, target=State.SUCCEEDED,
+                recorded_at="2026-10-12T00:00:02Z",
+            )
+        persisted = self.registry.get(record.key)
+        self.assertEqual(persisted.state, State.RUNNING)
+        self.assertEqual(persisted.version, running.version)
+
+
+
 if __name__ == "__main__":
     unittest.main()

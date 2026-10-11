@@ -144,5 +144,22 @@ class MissionContractTests(unittest.TestCase):
         self.assertTrue(contract.clarification_questions)
 
 
+    def test_contract_rejects_non_integer_budget_and_deadline(self):
+        for value in (True, 1.5, "10"):
+            with self.subTest(budget_units=value):
+                with self.assertRaisesRegex(TypeError, "budget_units must be an integer"):
+                    MissionContract(
+                        mission_id="mission-test", objective="Review change",
+                        budget_units=value,
+                    )
+        for value in (False, 1.5, "120"):
+            with self.subTest(deadline_seconds=value):
+                with self.assertRaisesRegex(TypeError, "deadline_seconds must be an integer"):
+                    MissionContract(
+                        mission_id="mission-test", objective="Review change",
+                        deadline_seconds=value,
+                    )
+
+
 if __name__ == "__main__":
     unittest.main()

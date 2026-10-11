@@ -73,6 +73,27 @@ class DispatchContractTests(unittest.TestCase):
         self.assertEqual(result.status, DispatchStatus.INVALID_OUTPUT)
         self.assertEqual(adapter.calls, 0)
 
+    def test_required_kind_mismatch_never_invokes_adapter(self):
+        adapter = FakeAdapter()
+        requirement = IntegrationRequirement(
+            ("text_reasoning",),
+            required_kind=IntegrationKind.MODEL,
+        )
+        result = dispatch_once(
+            descriptor(kind=IntegrationKind.ACTION_TOOL),
+            requirement,
+            adapter,
+            self.payload,
+        )
+        self.assertEqual(result.status, DispatchStatus.REJECTED)
+        self.assertIn("required kind model", result.reason)
+        self.assertEqual(adapter.calls, 0)
+
+    def test_adapter_without_callable_invoke_is_not_executed(self):
+        result = dispatch_once(descriptor(), self.requirement, object(), self.payload)
+        self.assertEqual(result.status, DispatchStatus.ADAPTER_MISSING)
+        self.assertFalse(result.successful)
+
     def test_ineligible_route_reason_is_preserved(self):
         result = dispatch_once(descriptor(maturity=IntegrationMaturity.REVIEWED),
                                 self.requirement, FakeAdapter(), self.payload)

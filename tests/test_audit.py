@@ -35,8 +35,10 @@ class AuditRecordTests(unittest.TestCase):
             self.make_record(occurred_at="2026-10-12T09:30:00")
 
     def test_rejects_secret_like_metadata_keys_recursively(self):
-        with self.assertRaisesRegex(AuditValidationError, "sensitive field"):
-            self.make_record(metadata={"integration": {"api_key": "must-not-be-logged"}})
+        for key in ("api_key", "APIKey", "api-key", "access-token", "refresh-token", "private-key"):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(AuditValidationError, "sensitive field"):
+                    self.make_record(metadata={"integration": {key: "must-not-be-logged"}})
 
     def test_rejects_non_json_and_non_finite_metadata(self):
         with self.assertRaisesRegex(AuditValidationError, "JSON-compatible"):

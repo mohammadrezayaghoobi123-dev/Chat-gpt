@@ -132,7 +132,7 @@ class MissionApprovalTests(unittest.TestCase):
         object.__setattr__(contract, "requires_approval", False)
         result = evaluate_approved_execution_gate(contract, self.store, None)
         self.assertFalse(result.allowed)
-        self.assertIn("required human approval receipt is missing", result.reasons)
+        self.assertIn("mission contract failed integrity validation", result.reasons[0])
 
     def test_human_gated_flag_mismatch_fails_closed(self):
         contract = from_core_task(Task(
@@ -144,18 +144,27 @@ class MissionApprovalTests(unittest.TestCase):
         object.__setattr__(contract, "requires_approval", False)
         result = evaluate_approved_execution_gate(contract, self.store, None)
         self.assertFalse(result.allowed)
-        self.assertIn("required human approval receipt is missing", result.reasons)
+        self.assertIn("mission contract failed integrity validation", result.reasons[0])
 
-    def test_approval_recording_uses_risk_derived_requirement(self):
+    def test_approval_recording_rejects_inconsistent_contract(self):
         contract = from_core_task(Task(
             objective="Summarize a public report",
             risk=RiskTier.LOW,
         ))
         object.__setattr__(contract, "risk_tier", MissionRiskTier.CRITICAL)
         object.__setattr__(contract, "requires_approval", False)
-        receipt = self.approve(contract=contract)
-        result = evaluate_approved_execution_gate(contract, self.store, receipt)
-        self.assertTrue(result.allowed)
+        with self.assertRaisesRegex(ValueError, "mission contract failed integrity validation"):
+            self.approve(contract=contract)
+
+    def test_non_string_objective_fails_closed_at_gate(self):
+        contract = from_core_task(Task(
+            objective="Summarize a public report",
+            risk=RiskTier.LOW,
+        ))
+        object.__setattr__(contract, "objective", None)
+        result = evaluate_approved_execution_gate(contract, self.store, None)
+        self.assertFalse(result.allowed)
+        self.assertIn("mission contract failed integrity validation", result.reasons[0])
 
     def test_approval_write_fails_closed_on_tampered_history(self):
         self.approve()

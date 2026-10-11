@@ -91,6 +91,8 @@ class FalsificationReview:
     disconfirmation_criteria: tuple[str, ...]
     executed_observations: tuple[TestObservation, ...]
     unexecuted_test_ids: tuple[str, ...]
+    evidence_records: tuple[EvidenceRecord, ...]
+    eligible_evidence_ids: tuple[str, ...]
     counterexample_evidence_ids: tuple[str, ...]
     reasons: tuple[str, ...]
     truth_established: bool = False
@@ -203,6 +205,8 @@ def review_falsification_plan(
         disconfirmation_criteria=plan.disconfirmation_criteria,
         executed_observations=executed,
         unexecuted_test_ids=unexecuted,
+        evidence_records=evidence,
+        eligible_evidence_ids=tuple(sorted(eligible_ids)),
         counterexample_evidence_ids=counterexamples,
         reasons=tuple(reasons),
         truth_established=False,

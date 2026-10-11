@@ -1,0 +1,89 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from master_brain.completion_evidence import CompletionEvidence
+from master_brain.execution_proof import review_operational_completion
+from master_brain.execution_registry import SQLiteExecutionRegistry, State
+from master_brain.verifier_registry import ConfiguredVerifierRegistry, VerifierDescriptor
+
+
+class OperationalProofLaneTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.registry = SQLiteExecutionRegistry(str(Path(self.tmp.name) / "execution.sqlite3"))
+        self.record, _ = self.registry.reserve(
+            key="exec-1", mission_id="mission-1", contract_digest="contract-sha",
+            payload_digest="payload-sha", recorded_at="2026-10-12T10:00:00Z",
+        )
+        self.record = self.registry.transition(
+            key=self.record.key, expected_version=self.record.version,
+            target=State.RUNNING, recorded_at="2026-10-12T10:00:01Z",
+        )
+        self.attempt = self.registry.reserve_attempt(
+            key=self.record.key, expected_version=self.record.version,
+            integration_id="payments", adapter_version="v1", provider_id="provider-x",
+            recorded_at="2026-10-12T10:00:02Z",
+        )
+        self.attempt = self.registry.mark_attempt_dispatch_boundary(
+            attempt_id=self.attempt.attempt_id, recorded_at="2026-10-12T10:00:03Z",
+        )
+        self.record = self.registry.transition(
+            key=self.record.key, expected_version=self.record.version,
+            target=State.OUTCOME_UNKNOWN, recorded_at="2026-10-12T10:00:04Z",
+        )
+        self.evidence = CompletionEvidence(
+            attempt_id=self.attempt.attempt_id, execution_key="exec-1",
+            mission_id="mission-1", contract_digest="contract-sha",
+            payload_digest="payload-sha", integration_id="payments",
+            adapter_version="v1", provider_id="provider-x",
+            evidence_type="operation-receipt", evidence_ref="receipt://abc",
+            provider_receipt_id="receipt-abc", observed_at="2026-10-12T10:00:05Z",
+        )
+
+    def test_valid_evidence_is_reviewed_but_does_not_mutate_execution_state(self):
+        registry = ConfiguredVerifierRegistry([VerifierDescriptor(
+            verifier_id="receipt-check", version="1", provider_id="provider-x",
+            evidence_type="operation-receipt", verify=lambda _evidence: True,
+        )])
+        before = self.registry.get("exec-1")
+        report = review_operational_completion(
+            execution=self.record, attempt=self.attempt, evidence=self.evidence,
+            verifier_id="receipt-check", verifier_version="1",
+            verifier_registry=registry,
+        )
+        self.assertEqual(report.status, "verified_for_reconciliation")
+        self.assertIsNotNone(report.verified_evidence)
+        self.assertIn("not implemented", report.unresolved_issue)
+        self.assertEqual(self.registry.get("exec-1"), before)
+        self.assertEqual(self.registry.get("exec-1").state, State.OUTCOME_UNKNOWN)
+
+    def test_unapproved_verifier_fails_closed(self):
+        report = review_operational_completion(
+            execution=self.record, attempt=self.attempt, evidence=self.evidence,
+            verifier_id="unconfigured", verifier_version="1",
+            verifier_registry=ConfiguredVerifierRegistry([]),
+        )
+        self.assertEqual(report.status, "unverified")
+        self.assertIsNone(report.verified_evidence)
+        self.assertIn("no enabled trusted verifier", report.unresolved_issue)
+        self.assertEqual(self.registry.get("exec-1").state, State.OUTCOME_UNKNOWN)
+
+    def test_false_verifier_result_is_not_accepted(self):
+        registry = ConfiguredVerifierRegistry([VerifierDescriptor(
+            verifier_id="receipt-check", version="1", provider_id="provider-x",
+            evidence_type="operation-receipt", verify=lambda _evidence: False,
+        )])
+        report = review_operational_completion(
+            execution=self.record, attempt=self.attempt, evidence=self.evidence,
+            verifier_id="receipt-check", verifier_version="1",
+            verifier_registry=registry,
+        )
+        self.assertEqual(report.status, "unverified")
+        self.assertIsNone(report.verified_evidence)
+        self.assertIn("not verified", report.unresolved_issue)
+
+
+if __name__ == "__main__":
+    unittest.main()

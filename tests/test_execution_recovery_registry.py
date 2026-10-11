@@ -163,5 +163,56 @@ class RecoveryCandidateTests(unittest.TestCase):
         self.assertEqual(self.registry.list_recovery_candidates(), [])
 
 
+    def test_attempt_is_durably_reserved_before_dispatch_and_unique(self):
+        running = self.reserve("attempt-owner", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+
+        first = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:02Z",
+        )
+        self.assertTrue(first.attempt_id)
+        self.assertEqual(first.key, running.key)
+        self.assertEqual(first.attempt_number, 1)
+        self.assertFalse(first.dispatch_boundary_entered)
+
+        second = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:03Z",
+        )
+        self.assertEqual(second.attempt_number, 2)
+        self.assertNotEqual(first.attempt_id, second.attempt_id)
+        self.assertFalse(self.registry.get_attempt(first.attempt_id).dispatch_boundary_entered)
+
+    def test_attempt_reservation_rejects_non_running_execution(self):
+        from master_brain.execution_registry import InvalidTransition
+        pending = self.reserve("attempt-pending", "2026-10-12T00:00:00Z")
+        with self.assertRaises(InvalidTransition):
+            self.registry.reserve_attempt(
+                key=pending.key, expected_version=pending.version,
+                integration_id="integration-a", adapter_version="v1",
+                provider_id="provider-a", recorded_at="2026-10-12T00:00:01Z",
+            )
+
+    def test_dispatch_boundary_marker_is_idempotent_and_version_checked(self):
+        running = self.reserve("attempt-boundary", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:02Z",
+        )
+        marked = self.registry.mark_attempt_dispatch_boundary(
+            attempt_id=attempt.attempt_id, recorded_at="2026-10-12T00:00:03Z"
+        )
+        self.assertTrue(marked.dispatch_boundary_entered)
+        repeated = self.registry.mark_attempt_dispatch_boundary(
+            attempt_id=attempt.attempt_id, recorded_at="2026-10-12T00:00:04Z"
+        )
+        self.assertEqual(repeated, marked)
+
+
 if __name__ == "__main__":
     unittest.main()

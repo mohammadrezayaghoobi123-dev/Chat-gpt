@@ -66,6 +66,10 @@ class AuditRecord:
     metadata: Mapping[str, Any] = field(default_factory=dict)
     schema_version: int = 1
 
+    def __post_init__(self) -> None:
+        """Reject invalid records at construction, not only at serialization."""
+        self.validate()
+
     def validate(self) -> None:
         for name in ("event_id", "event_type", "occurred_at", "component", "status"):
             _require_text(name, getattr(self, name))

@@ -70,7 +70,7 @@ class AuditRecord:
         for name in ("event_id", "event_type", "occurred_at", "component", "status"):
             _require_text(name, getattr(self, name))
 
-        if self.schema_version != 1:
+        if type(self.schema_version) is not int or self.schema_version != 1:
             raise AuditValidationError("unsupported audit schema_version")
 
         try:

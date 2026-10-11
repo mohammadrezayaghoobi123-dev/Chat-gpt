@@ -97,6 +97,8 @@ class MissionContract:
                 raise ValueError(f"{field_name} entries must be non-empty strings")
         if self.risk_tier in {MissionRiskTier.HIGH, MissionRiskTier.CRITICAL} and not self.requires_approval:
             raise ValueError("high/critical risk missions require approval")
+        if self.review_level is MissionReviewLevel.HUMAN_GATED and not self.requires_approval:
+            raise ValueError("human_gated review requires approval")
 
 
 def _normalize_risk(value: MissionRiskTier | RiskTier | str) -> MissionRiskTier:

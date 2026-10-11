@@ -164,6 +164,7 @@ def execute_mission_idempotently(
     # claiming a registry record. Invalid metadata must not strand a mission
     # in RUNNING/OUTCOME_UNKNOWN when no dispatch attempt was possible.
     for name, value in (
+        ("idempotency_key", idempotency_key),
         ("event_id_prefix", event_id_prefix),
         ("recorded_at", recorded_at),
         ("actor", actor),

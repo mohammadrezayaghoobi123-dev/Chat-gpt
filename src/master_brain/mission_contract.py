@@ -233,7 +233,8 @@ def from_core_task(
         ),
         unknowns=unknowns,
         clarification_questions=questions,
-        rationale=route.rationale + (
+        rationale=(
+            route.rationale,
             f"Compatibility alias only: legacy route {route.specialist} maps to canonical island "
             f"{selected}; semantic equivalence has not been independently validated.",
         ),

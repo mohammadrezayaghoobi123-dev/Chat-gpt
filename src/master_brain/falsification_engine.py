@@ -20,6 +20,9 @@ from master_brain.evidence_protocol import (
 )
 
 
+TEST_OUTCOME_MAPPING_VERSION = "1.0"
+
+
 class TestOutcome(str, Enum):
     """Canonical outcome vocabulary; UNKNOWN preserves unrecognized raw values."""
 

@@ -59,8 +59,13 @@ class IntegrationDescriptor:
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
-        for name in ("kind", "maturity", "health"):
-            if not isinstance(getattr(self, name), getattr(__import__(__name__), name)):
+        enum_types = {
+            "kind": IntegrationKind,
+            "maturity": IntegrationMaturity,
+            "health": IntegrationHealth,
+        }
+        for name, enum_type in enum_types.items():
+            if not isinstance(getattr(self, name), enum_type):
                 raise TypeError(f"{name} has an invalid enum type")
         for name in ("capabilities", "permission_scopes", "data_regions", "limitations"):
             value = getattr(self, name)

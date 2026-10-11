@@ -218,24 +218,41 @@ def review_falsification_plan(
         item for item in observed
         if item.executed and item.outcome_kind is TestOutcome.UNKNOWN
     )
-    non_passing_outcomes = tuple(
+    unresolved_outcomes = tuple(
+        item for item in observed
+        if item.executed and item.outcome_kind is TestOutcome.UNKNOWN
+    )
+    non_decisive_outcomes = tuple(
         item for item in observed
         if item.executed and item.outcome_kind in {
-            TestOutcome.UNKNOWN, TestOutcome.FAIL,
             TestOutcome.ERROR, TestOutcome.INCONCLUSIVE,
         }
     )
-    for item in non_passing_outcomes:
-        if item.outcome_kind is TestOutcome.UNKNOWN:
-            reasons.append(
-                f"Unknown outcome {item.outcome!r} for test {item.test_id}; "
-                "it is neither pass nor fail, was not treated as disconfirmation, and remains unresolved."
-            )
-        else:
-            reasons.append(
-                f"Non-passing outcome {item.outcome!r} for test {item.test_id}; "
-                "the test did not establish a successful check or an explicit counterexample."
-            )
+    failed_outcomes = tuple(
+        item for item in observed
+        if item.executed and item.outcome_kind is TestOutcome.FAIL
+    )
+    for item in unresolved_outcomes:
+        reasons.append(
+            f"Unknown outcome {item.outcome!r} for test {item.test_id}; "
+            "it is neither pass nor fail, is not evidence for or against the claim, "
+            "was not treated as disconfirmation, and remains unresolved."
+        )
+    for item in failed_outcomes:
+        reasons.append(
+            f"Failed criterion for test {item.test_id} (outcome {item.outcome!r}); "
+            "this blocks a provisional-survival decision, but is not by itself an "
+            "explicit counterexample unless the observation/evidence establishes one."
+        )
+    for item in non_decisive_outcomes:
+        reasons.append(
+            f"Non-decisive outcome {item.outcome!r} for test {item.test_id}; "
+            "the test did not yield a valid decisive result and is not automatically "
+            "evidence for or against the claim."
+        )
+    blocking_outcomes = (
+        unresolved_outcomes + failed_outcomes + non_decisive_outcomes
+    )
     explicit_counterexample = any(
         item.executed and item.outcome_kind in {
             TestOutcome.COUNTEREXAMPLE, TestOutcome.FALSIFIED, TestOutcome.REFUTED
@@ -257,11 +274,11 @@ def review_falsification_plan(
     elif assessment.status is ReviewStatus.CONTESTED or explicit_contradiction:
         status = FalsificationStatus.CONTRADICTION_REMAINS
         reasons.append("Supporting and counterevidence conflict or an observation explicitly reports contradiction.")
-    elif missing or unexecuted or unexpected or non_passing_outcomes:
+    elif missing or unexecuted or unexpected or blocking_outcomes:
         status = FalsificationStatus.TESTS_INCOMPLETE
         reasons.append(
             "The planned test set is incomplete, includes unexecuted tests, "
-            "contains unknown/non-passing outcomes, or has unexpected observations."
+            "contains unresolved, failed, or non-decisive outcomes, or has unexpected observations."
         )
     elif not plan.disconfirmation_criteria or not plan.test_ids:
         status = FalsificationStatus.NOT_DESIGNED

@@ -88,9 +88,13 @@ class MissionContractTests(unittest.TestCase):
         blocked = evaluate_execution_gate(contract)
         self.assertFalse(blocked.allowed)
         self.assertIn("required human approval has not been granted", blocked.reasons)
-        approved = evaluate_execution_gate(contract, approval_granted=True)
-        self.assertTrue(approved.allowed)
-        self.assertEqual(approved.reasons, ())
+        # A caller-supplied boolean is not an auditable approval credential.
+        still_blocked = evaluate_execution_gate(contract, approval_granted=True)
+        self.assertFalse(still_blocked.allowed)
+        self.assertIn(
+            "audited approval receipt is required; boolean approval assertions are not accepted",
+            still_blocked.reasons,
+        )
 
     def test_execution_gate_blocks_unresolved_clarification_even_if_approved(self):
         contract = from_core_task(Task(objective=""))

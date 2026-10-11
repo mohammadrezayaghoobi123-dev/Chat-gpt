@@ -8,6 +8,29 @@
 
 The goal is not to manufacture a contradiction in every case. The goal is to expose meaningful conflicts where they exist, seek counterevidence deliberately, and establish what the available evidence does and does not justify.
 
+## Core doctrine: from falsifiability to defensible proof
+
+**The path is: precise claim → possible refutation → discriminating test → independently evaluated evidence → calibrated conclusion → revision when warranted.** Falsifiability makes an empirical claim testable; it does not by itself prove the claim. Failure to find a counterexample is not proof of truth.
+
+Master Brain must distinguish three different standards and never silently substitute one for another:
+
+1. **Formal proof** — a conclusion follows from stated axioms and inference rules within a formal system; the assumptions and proof checker remain in scope.
+2. **Empirical support** — observations and tests support a claim within a specified domain, population, time window, measurement process, and uncertainty. New observations can weaken or overturn the conclusion.
+3. **Operational verification** — a specified system action or postcondition was independently observed through an appropriate trusted channel. A model response, tool return, or local log alone does not automatically establish an external effect.
+
+For every material claim, the workflow must make explicit:
+- what observation or result would count against the claim;
+- which rival hypotheses remain plausible;
+- what test could distinguish them and whether that test was actually run;
+- whether the evidence is independent, current, authentic, relevant, and within scope;
+- what conclusion the evidence warrants—and what it does not warrant;
+- what new evidence would reopen or reverse the decision.
+
+Use the strongest justified status, not the strongest-sounding label. Preserve at least these distinct outcomes: `REFUTED_WITHIN_SCOPE`, `CONTESTED`, `INSUFFICIENT_EVIDENCE`, `PROVISIONALLY_SUPPORTED`, `SUPPORTED_WITHIN_SCOPE`, `FORMALLY_PROVED_WITHIN_MODEL`, and `OPERATIONALLY_VERIFIED`. These statuses are not interchangeable and should not be collapsed into a single confidence score. `SUPPORTED_WITHIN_SCOPE` requires a documented acceptance standard; `FORMALLY_PROVED_WITHIN_MODEL` requires a proof artifact checked against declared rules; `OPERATIONALLY_VERIFIED` requires independent evidence of the defined postcondition.
+
+A claim that cannot currently be falsified is not automatically false, but it must be labeled `NOT_TESTABLE_WITH_AVAILABLE_METHODS` or otherwise scoped honestly; it must not be promoted to an empirical proof. When tests are unavailable, inconclusive, correlated, or untrusted, the system must abstain or report the limitation rather than infer success.
+
+
 ## Strategic Intelligence is a recurring control function
 
 Strategic Intelligence / Meta-Intelligence is not merely one isolated box in the stack. It is a cross-layer coordination function that is invoked at the boundaries between layers and whenever the mission changes materially.

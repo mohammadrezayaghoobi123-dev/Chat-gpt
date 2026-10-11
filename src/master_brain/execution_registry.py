@@ -137,6 +137,10 @@ class SQLiteExecutionRegistry:
                 current = self._record(row)
                 if current.version != expected_version:
                     raise InvalidTransition("stale execution version")
+                # This prototype has no provider-specific evidence verifier yet.
+                # Fail closed rather than let callers assert success by changing state.
+                if target is State.SUCCEEDED:
+                    raise InvalidTransition("SUCCEEDED requires verified completion evidence; API not implemented")
                 if target not in _ALLOWED[current.state]:
                     raise InvalidTransition(f"disallowed transition {current.state.value}->{target.value}")
                 cur = db.execute("""UPDATE executions SET state=?, version=version+1, updated_at=?

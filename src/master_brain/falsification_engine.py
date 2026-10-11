@@ -210,10 +210,24 @@ def review_falsification_plan(
     unexecuted = tuple(sorted(
         set(plan.test_ids) - {item.test_id for item in executed}
     ))
-    counterexamples = tuple(sorted(
-        item.evidence_id for item in eligible
-        if item.polarity.value == "counters"
-    ))
+    # Counterevidence and a demonstrated counterexample are distinct.
+    # Only evidence attached to an explicitly counterexample-like executed
+    # outcome is labeled as counterexample evidence in the review record.
+    explicit_counterexample_test_ids = {
+        item.test_id for item in observed
+        if item.executed and item.outcome_kind in {
+            TestOutcome.COUNTEREXAMPLE, TestOutcome.FALSIFIED, TestOutcome.REFUTED
+        }
+    }
+    explicit_counterexample_evidence_ids = {
+        evidence_id
+        for item in observed
+        if item.test_id in explicit_counterexample_test_ids
+        for evidence_id in item.evidence_ids
+        if evidence_id in evidence_by_id
+        and evidence_by_id[evidence_id].polarity.value == "counters"
+    }
+    counterexamples = tuple(sorted(explicit_counterexample_evidence_ids))
     unresolved_outcomes = tuple(
         item for item in observed
         if item.executed and item.outcome_kind is TestOutcome.UNKNOWN

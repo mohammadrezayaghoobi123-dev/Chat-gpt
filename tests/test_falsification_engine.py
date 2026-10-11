@@ -92,6 +92,24 @@ class FalsificationEngineTests(unittest.TestCase):
             self.policy,
         )
         self.assertEqual(result.status, FalsificationStatus.CONTRADICTION_REMAINS)
+        self.assertEqual(result.counterexample_evidence_ids, ())
+        self.assertFalse(result.truth_established)
+
+    def test_counterevidence_is_not_counterexample_without_explicit_result(self):
+        result = review_falsification_plan(
+            self.plan,
+            [
+                TestObservation("test-1", True, "pass", "Run yielded 103 units", ("e1",)),
+                TestObservation("test-2", True, "inconclusive", "Conflicting measurement", ("e2",)),
+            ],
+            [
+                self.evidence("e1", "machine-log"),
+                self.evidence("e2", "independent-inspector", EvidencePolarity.COUNTERS),
+            ],
+            self.policy,
+        )
+        self.assertEqual(result.status, FalsificationStatus.TESTS_INCOMPLETE)
+        self.assertEqual(result.counterexample_evidence_ids, ())
         self.assertFalse(result.truth_established)
 
     def test_unexecuted_test_evidence_is_excluded(self):

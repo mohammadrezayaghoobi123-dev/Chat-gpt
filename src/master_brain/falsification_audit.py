@@ -12,7 +12,7 @@ from master_brain.audit_store import AuditStore
 from master_brain.evidence_protocol import EvidenceRecord, ProtocolPolicy
 from master_brain.falsification_engine import (
     FalsificationPlan, FalsificationReview, TestObservation,
-    review_falsification_plan,
+    review_falsification_plan, TEST_OUTCOME_MAPPING_VERSION,
 )
 
 
@@ -35,6 +35,7 @@ def falsification_review_payload(
     assessment = review.evidence_assessment
     return {
         "schema_version": 1,
+        "outcome_mapping_version": TEST_OUTCOME_MAPPING_VERSION,
         "claim_id": review.claim_id,
         "status": current_decision,
         "previous_decision": previous_decision,
@@ -60,6 +61,8 @@ def falsification_review_payload(
                 {
                     "test_id": item.test_id,
                     "outcome": item.outcome,
+                    "outcome_kind": item.outcome_kind.value,
+                    "outcome_mapping_version": TEST_OUTCOME_MAPPING_VERSION,
                     "observed_result": item.observed_result,
                     "evidence_ids": list(item.evidence_ids),
                 }

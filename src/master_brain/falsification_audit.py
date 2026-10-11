@@ -6,10 +6,14 @@ silently claim that a review proves truth.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable
 
 from master_brain.audit_store import AuditStore
-from master_brain.falsification_engine import FalsificationReview
+from master_brain.evidence_protocol import EvidenceRecord, ProtocolPolicy
+from master_brain.falsification_engine import (
+    FalsificationPlan, FalsificationReview, TestObservation,
+    review_falsification_plan,
+)
 
 
 def falsification_review_payload(
@@ -112,3 +116,38 @@ def record_falsification_review(
         subject_ref=f"claim:{review.claim_id}",
         payload=payload,
     )
+
+
+
+def run_and_record_falsification_review(
+    store: AuditStore,
+    plan: FalsificationPlan,
+    observations: Iterable[TestObservation],
+    evidence_records: Iterable[EvidenceRecord],
+    *,
+    event_id: str,
+    recorded_at: str,
+    actor: str,
+    policy: ProtocolPolicy = ProtocolPolicy(),
+    previous_decision: str | None = None,
+    decision_change_reason: str | None = None,
+) -> tuple[FalsificationReview, Any]:
+    """Run the review and persist it as one explicit application-level operation.
+
+    The audit append is fail-closed: if the verified store cannot accept the
+    event, the exception propagates and the caller must not treat the operation
+    as durably recorded. The review itself is returned only after append succeeds.
+    """
+    review = review_falsification_plan(
+        plan, observations, evidence_records, policy
+    )
+    event = record_falsification_review(
+        store,
+        review,
+        event_id=event_id,
+        recorded_at=recorded_at,
+        actor=actor,
+        previous_decision=previous_decision,
+        decision_change_reason=decision_change_reason,
+    )
+    return review, event

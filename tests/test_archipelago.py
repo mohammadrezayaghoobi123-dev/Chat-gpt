@@ -37,5 +37,5 @@ class ArchipelagoPlanningTests(unittest.TestCase):
         self.assertTrue(any("empty" in note.lower() for note in plan.rationale))
 
 
-if __ (name__) == "__main__":
+if __name__ == "__main__":
     unittest.main()

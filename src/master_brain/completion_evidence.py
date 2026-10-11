@@ -194,5 +194,6 @@ def validate_registered_completion_evidence(
 
 __all__ = [
     "CompletionEvidence", "EvidenceValidationError", "VerifiedEvidence",
-    "evidence_digest", "validate_completion_evidence",\n    "validate_registered_completion_evidence",
+    "evidence_digest", "validate_completion_evidence",
+    "validate_registered_completion_evidence",
 ]

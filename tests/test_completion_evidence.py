@@ -188,6 +188,7 @@ class RegisteredCompletionEvidenceTests(CompletionEvidenceTests):
         verified = self._validate_registered(self._registry())
         self.assertEqual(verified.attempt_id, self.attempt.attempt_id)
         self.assertEqual(verified.verifier_id, "provider-x-receipt-verifier")
+        self.assertEqual(verified.verifier_version, "1")
 
     def test_unknown_verifier_version_fails_closed(self):
         from master_brain.completion_evidence import EvidenceValidationError

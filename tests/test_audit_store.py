@@ -58,6 +58,12 @@ class AuditStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditStoreError, "invalid audit record"):
             self.store.read_all()
 
+    def test_non_object_json_record_fails_closed(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text('["not", "an", "event"]\\n', encoding="utf-8")
+        with self.assertRaisesRegex(AuditStoreError, "invalid audit record"):
+            self.store.read_all()
+
     def test_record_with_wrong_field_types_fails_closed(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(

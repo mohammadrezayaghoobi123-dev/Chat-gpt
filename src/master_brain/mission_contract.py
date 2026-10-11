@@ -164,6 +164,19 @@ def _review_for(risk: MissionRiskTier, requires_approval: bool, gaps: tuple[str,
     return MissionReviewLevel.LIGHT
 
 
+def _normalize_string_sequence(name: str, values: Iterable[str]) -> tuple[str, ...]:
+    """Reject scalar strings and mappings before normalizing planner inputs."""
+    if isinstance(values, (str, bytes, bytearray, dict)):
+        raise TypeError(f"{name} must be an iterable of non-empty strings")
+    try:
+        normalized = tuple(values)
+    except TypeError as exc:
+        raise TypeError(f"{name} must be an iterable of non-empty strings") from exc
+    if any(not isinstance(item, str) or not item.strip() for item in normalized):
+        raise ValueError(f"{name} entries must be non-empty strings")
+    return normalized
+
+
 def _build_contract(
     *,
     objective: str,
@@ -185,17 +198,19 @@ def _build_contract(
     rationale: Iterable[str] = (),
     traceability: Iterable[str] = (),
 ) -> MissionContract:
+    if not isinstance(objective, str):
+        raise TypeError("objective must be a string")
     if type(requires_approval) is not bool:
         raise TypeError("requires_approval must be a boolean")
-    constraint_tuple = tuple(constraints)
-    criteria_tuple = tuple(success_criteria)
+    constraint_tuple = _normalize_string_sequence("constraints", constraints)
+    criteria_tuple = _normalize_string_sequence("success_criteria", success_criteria)
     risk = _normalize_risk(risk_tier)
     approval = bool(
         requires_approval
         or risk in {MissionRiskTier.HIGH, MissionRiskTier.CRITICAL}
     )
-    selected = tuple(dict.fromkeys(selected_islands))
-    gaps = tuple(capability_gaps)
+    selected = tuple(dict.fromkeys(_normalize_string_sequence("selected_islands", selected_islands)))
+    gaps = _normalize_string_sequence("capability_gaps", capability_gaps)
     if review_level is None:
         review = _review_for(risk, approval, gaps, len(selected))
     elif isinstance(review_level, MissionReviewLevel):
@@ -218,13 +233,13 @@ def _build_contract(
         deadline_seconds=deadline_seconds,
         requires_approval=approval,
         capability_gaps=gaps,
-        assumptions=tuple(assumptions),
-        unknowns=tuple(unknowns),
-        clarification_questions=tuple(clarification_questions),
-        dependencies=tuple(dict.fromkeys(dependencies)),
-        stop_conditions=tuple(stop_conditions),
-        rationale=tuple(rationale),
-        traceability=tuple(traceability),
+        assumptions=_normalize_string_sequence("assumptions", assumptions),
+        unknowns=_normalize_string_sequence("unknowns", unknowns),
+        clarification_questions=_normalize_string_sequence("clarification_questions", clarification_questions),
+        dependencies=tuple(dict.fromkeys(_normalize_string_sequence("dependencies", dependencies))),
+        stop_conditions=_normalize_string_sequence("stop_conditions", stop_conditions),
+        rationale=_normalize_string_sequence("rationale", rationale),
+        traceability=_normalize_string_sequence("traceability", traceability),
     )
 
 

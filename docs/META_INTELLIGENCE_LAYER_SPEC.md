@@ -106,3 +106,21 @@ The initial slice is acceptable only when tests demonstrate:
 - the full test suite runs in CI with a visible result.
 
 Passing these tests validates the code contract, not real-world intelligence. Field performance requires domain-specific benchmark sets and outcome evaluation.
+
+
+## 9. Foundational epistemic principle: contradiction-driven proof
+
+This layer implements the coordination side of the principle defined in [CONTRADICTION_DRIVEN_PROOF_CHARTER.md](CONTRADICTION_DRIVEN_PROOF_CHARTER.md). Strategic Intelligence must not only route a task; it must plan how material claims will be challenged, what counterevidence is needed, which rival hypotheses should be considered, and which checks could distinguish them.
+
+At the mission and subtask boundaries, it should:
+- specify claims or decisions that need verification;
+- identify suitable specialist islands, AI providers/models, agents, and tools, while recording the reason for each selection;
+- distinguish planned resources from resources actually invoked;
+- map dependencies and evidence handoffs;
+- trigger counterevidence and contradiction review proportional to risk and uncertainty;
+- preserve disagreements and unresolved questions for the Proof Plane and Command Core;
+- replan when a contradiction, failed test, unavailable provider, or capability gap changes the mission.
+
+**Important:** a contradiction is not automatic proof of the opposite. The system must validate scope, definitions, context, and time before calling two claims contradictory. “No contradiction found” must never be reported as “proven true.” Consensus between models is not independent corroboration when they share sources or assumptions.
+
+The cross-layer intelligence function coordinates work but cannot override the Supreme Command Core's policy, manufacture evidence, or authorize tools/actions. The detailed acceptance criteria and scientific guardrails are maintained in the charter.

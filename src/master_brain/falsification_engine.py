@@ -24,7 +24,7 @@ TEST_OUTCOME_MAPPING_VERSION = "1.0"
 
 
 class TestOutcome(str, Enum):
-    """Canonical outcome vocabulary; UNKNOWN preserves unrecognized raw values."""
+    """Canonical outcome vocabulary; UNKNOWN is neither pass nor fail."""
 
     PASS = "pass"
     FAIL = "fail"
@@ -163,9 +163,9 @@ def review_falsification_plan(
 
     Only evidence explicitly attached to executed observations is eligible.
     Outcomes are mapped through a versioned vocabulary. Unknown outcomes are
-    preserved verbatim and force a fail-closed incomplete status; they can
-    never be interpreted as a passing test. A contradiction is distinct from
-    an explicit counterexample.
+    preserved verbatim. UNKNOWN is neither pass nor fail and cannot count as
+    disconfirmation; it blocks a complete review until clarified. A contradiction
+    is distinct from an explicit counterexample.
     """
     observed = tuple(observations)
     evidence = tuple(evidence_records)
@@ -229,7 +229,7 @@ def review_falsification_plan(
         if item.outcome_kind is TestOutcome.UNKNOWN:
             reasons.append(
                 f"Unknown outcome {item.outcome!r} for test {item.test_id}; "
-                "the outcome was preserved and not treated as a pass."
+                "it is neither pass nor fail, was not treated as disconfirmation, and remains unresolved."
             )
         else:
             reasons.append(

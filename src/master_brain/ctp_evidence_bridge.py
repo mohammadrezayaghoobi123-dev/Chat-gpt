@@ -29,6 +29,7 @@ class CTPEvidenceReview:
     def ready_for_human_review(self) -> bool:
         return (
             not self.structural_issues
+            and not self.unresolved_test_ids
             and not self.missing_claim_ids
             and not self.missing_evidence_ids
             and not self.orphan_evidence_ids

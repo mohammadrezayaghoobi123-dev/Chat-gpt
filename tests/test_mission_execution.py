@@ -1,4 +1,6 @@
+import sqlite3
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -152,10 +154,6 @@ class MissionExecutionPipelineTests(unittest.TestCase):
         self.assertEqual(adapter.calls, 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ExecutionRegistryTests(unittest.TestCase):
     def setUp(self):
         from master_brain.execution_registry import SQLiteExecutionRegistry
@@ -224,3 +222,48 @@ class ExecutionRegistryTests(unittest.TestCase):
             with self.subTest(timeout=value):
                 with self.assertRaises(ValueError):
                     SQLiteExecutionRegistry(str(Path(self.tmp.name) / f"bad-{value}.sqlite3"), timeout=value)
+
+
+    def test_corrupt_persisted_state_fails_closed(self):
+        from master_brain.execution_registry import RegistryError
+        self.reserve(key="corrupt-key")
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("UPDATE executions SET state='MAGIC_SUCCESS' WHERE key='corrupt-key'")
+        with self.assertRaises(RegistryError):
+            self.registry.get("corrupt-key")
+
+    def test_lock_contention_respects_configured_timeout(self):
+        from master_brain.execution_registry import RegistryError
+        blocker = sqlite3.connect(self.db_path, timeout=0.1, isolation_level=None)
+        self.addCleanup(blocker.close)
+        blocker.execute("BEGIN IMMEDIATE")
+        started = time.monotonic()
+        try:
+            with self.assertRaises(RegistryError):
+                self.reserve(key="blocked-key")
+            elapsed = time.monotonic() - started
+            self.assertGreaterEqual(elapsed, 0.15)
+            self.assertLess(elapsed, 1.5)
+        finally:
+            blocker.rollback()
+
+    def test_terminal_duplicate_reservation_does_not_create_new_execution(self):
+        from master_brain.execution_registry import State
+        record, created = self.reserve(key="terminal-key")
+        self.assertTrue(created)
+        self.registry.transition(
+            key=record.key, expected_version=0, target=State.RUNNING,
+            recorded_at="2026-10-12T00:00:01Z",
+        )
+        self.registry.transition(
+            key=record.key, expected_version=1, target=State.FAILED,
+            recorded_at="2026-10-12T00:00:02Z",
+        )
+        duplicate, created_again = self.reserve(key="terminal-key")
+        self.assertFalse(created_again)
+        self.assertEqual(duplicate.state, State.FAILED)
+        self.assertEqual(duplicate.version, 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

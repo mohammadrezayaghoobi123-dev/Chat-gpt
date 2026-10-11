@@ -51,16 +51,24 @@ class AuditEvent:
 
     def __post_init__(self) -> None:
         for field_name in ("event_id", "event_type", "recorded_at", "actor", "subject_ref"):
-            if not getattr(self, field_name).strip():
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise TypeError(f"{field_name} must be a string")
+            if not value.strip():
                 raise ValueError(f"{field_name} must not be empty")
+        if not isinstance(self.payload, dict):
+            raise TypeError("payload must be a dictionary")
+        for field_name in ("previous_hash", "event_hash"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise TypeError(f"{field_name} must be a string")
+            if len(value) != 64:
+                raise ValueError("hashes must be 64-character SHA-256 hex digests")
+            try:
+                int(value, 16)
+            except ValueError as exc:
+                raise ValueError("hashes must be hexadecimal") from exc
         _validate_timestamp(self.recorded_at)
-        if len(self.previous_hash) != 64 or len(self.event_hash) != 64:
-            raise ValueError("hashes must be 64-character SHA-256 hex digests")
-        try:
-            int(self.previous_hash, 16)
-            int(self.event_hash, 16)
-        except ValueError as exc:
-            raise ValueError("hashes must be hexadecimal") from exc
         _canonical_json(self.payload)
 
 

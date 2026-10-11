@@ -8,8 +8,9 @@ This branch combines **A (intelligence and opportunity discovery)** with **B (pr
 - `src/master_brain/archipelago.py` and `src/master_brain/meta_intelligence.py`: initial multi-island mission-planning and coordination scaffolds.
 - `src/master_brain/ctp.py`: Contradiction-to-Proof (CTP) case contracts, rival hypotheses, falsifiers, discriminating tests, and safeguards against marking unrun tests as evidence.
 - `src/master_brain/evidence_protocol.py`: evidence provenance, source-group independence caps, staleness/expiry handling, counterevidence preservation, and conservative review gates.
+- `src/master_brain/ctp_evidence_bridge.py`: links evidence to CTP only through executed tests with observed outcomes; reports unresolved tests, missing claims/evidence, and orphan references.
 - `src/master_brain/audit_ledger.py`: canonical JSON event hashing and hash-chain verification for offline audit records.
-- `tests/`: synthetic unit tests for core, CTP, coordination, evidence protocol, and audit-chain integrity.
+- `tests/`: synthetic unit tests for core, CTP, coordination, evidence protocol, CTP-evidence links, and audit-chain integrity.
 - `docs/MASTER_BRAIN_EVIDENCE_PROTOCOL_V0.md`: scope, maturity, interpretation boundaries, and known gaps.
 - `MASTER_BRAIN_INTEGRATED_ARCHITECTURE.md`: architecture baseline and delivery phases.
 
@@ -19,7 +20,7 @@ This branch combines **A (intelligence and opportunity discovery)** with **B (pr
 - The contradiction detector identifies *potential conflicts*; it does not determine which claim is true.
 - Opportunity scores and evidence weights are initial heuristics, not calibrated forecasts or probabilities of truth.
 - Evidence from one source group is capped to avoid treating correlated copies or model outputs as independent confirmation.
-- Supporting evidence and counterevidence must remain visible; an absence of counterevidence is not proof.
+- CTP test evidence is considered only when the test has an executed status and an observed result. `NOT_RUN` and `INCONCLUSIVE` tests remain unresolved.
 - The hash chain detects changes only relative to trusted checkpoints. It is not a signature, trusted timestamp, or durable storage layer; a full rewrite can be rehashed by an attacker with write access.
 - Passing synthetic tests does not establish real-world correctness.
 - Do not put API keys, passwords, tokens, private business data, or personal secrets in this repository.
@@ -49,12 +50,12 @@ PYTHONPATH=src python -m master_brain.demo
 
 ## Current maturity
 
-The evidence protocol and hash-chain audit primitive are committed on `master-brain/proof-protocol-v0`. Test execution must be verified against the latest GitHub Actions run before claiming it passes. This branch is not independently validated or production verified. The original Master Brain source remains a separate recovery item and must not be assumed replaced by this prototype.
+The evidence protocol, CTP-evidence bridge, and hash-chain audit primitive are committed on `master-brain/proof-protocol-v0`. Latest CI status is tracked in GitHub Actions. This branch is not independently validated or production verified. The original Master Brain source remains a separate recovery item and must not be assumed replaced by this prototype.
 
 ## Next engineering gates
 
 1. Verify the latest CI run and fix any failures on this feature branch.
 2. Add a durable append-only audit store with externally anchored checkpoints.
-3. Extend CTP to reference evidence-protocol records without conflating protocol scores with proof.
+3. Extend CTP to capture procedure versions, execution environment, calibrated instruments, and structured observed results.
 4. Add semantic contradiction detection and claim normalization with explicit uncertainty.
 5. Add durable persistence and provider adapters only after deterministic contracts and tests are stable.

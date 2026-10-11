@@ -85,7 +85,7 @@ class SQLiteExecutionRegistry:
                 dispatch_boundary_entered INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                UNIQUE(execution_key, attempt_number))""")
+                UNIQUE(execution_key))""")
             db.execute("CREATE INDEX IF NOT EXISTS idx_attempts_execution ON execution_attempts(execution_key, attempt_number)")
             db.execute("PRAGMA journal_mode=WAL")
 
@@ -186,10 +186,12 @@ class SQLiteExecutionRegistry:
                     raise InvalidTransition("stale execution version")
                 if execution.state is not State.RUNNING:
                     raise InvalidTransition("attempt requires RUNNING execution")
-                number = db.execute(
-                    "SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM execution_attempts WHERE execution_key=?",
-                    (key,),
-                ).fetchone()[0]
+                existing = db.execute(
+                    "SELECT attempt_id FROM execution_attempts WHERE execution_key=?", (key,)
+                ).fetchone()
+                if existing is not None:
+                    raise InvalidTransition("an attempt already exists; reconcile before any retry")
+                number = 1
                 attempt_id = uuid.uuid4().hex
                 db.execute(
                     """INSERT INTO execution_attempts

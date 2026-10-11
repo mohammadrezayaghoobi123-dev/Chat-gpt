@@ -35,8 +35,9 @@ def _check_sensitive_keys(value: Any, path: str = "metadata") -> None:
         for key, child in value.items():
             if not isinstance(key, str):
                 raise AuditValidationError(f"{path} keys must be strings")
-            normalized = re.sub(r"[^a-z0-9_]", "", key.lower())
-            if any(part in normalized for part in _SENSITIVE_KEY_PARTS):
+            normalized = re.sub(r"[^a-z0-9]", "", key.lower())
+            sensitive_parts = (re.sub(r"[^a-z0-9]", "", part) for part in _SENSITIVE_KEY_PARTS)
+            if any(part in normalized for part in sensitive_parts):
                 raise AuditValidationError(
                     f"sensitive field name is not allowed in audit metadata: {path}.{key}"
                 )
@@ -95,7 +96,7 @@ class AuditRecord:
         _check_sensitive_keys(self.metadata)
 
         try:
-            encoded = json.dumps(self.metadata, allow_nan=False)
+            json.dumps(self.metadata, allow_nan=False)
         except (TypeError, ValueError) as exc:
             raise AuditValidationError("metadata must contain finite JSON-compatible values") from exc
 

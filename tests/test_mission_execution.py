@@ -358,5 +358,27 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
 
 
 
+    def test_adapter_exception_is_unknown_and_duplicate_is_not_retried(self):
+        from master_brain.execution_registry import State
+
+        class RaisingAdapter:
+            def __init__(self):
+                self.calls = 0
+
+            def invoke(self, payload):
+                self.calls += 1
+                raise RuntimeError("simulated connection drop after provider may have accepted")
+
+        adapter = RaisingAdapter()
+        first = self.execute(adapter, key="exception-key", prefix="exception-run")
+        second = self.execute(adapter, key="exception-key", prefix="exception-run-2")
+        self.assertEqual(first.status, "outcome_unknown")
+        self.assertIn("registry_state:OUTCOME_UNKNOWN", first.reason)
+        self.assertEqual(second.status, "duplicate_existing_execution")
+        self.assertEqual(adapter.calls, 1)
+        self.assertEqual(self.registry.get("exception-key").state, State.OUTCOME_UNKNOWN)
+
+
+
 if __name__ == "__main__":
     unittest.main()

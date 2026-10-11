@@ -153,6 +153,12 @@ Implemented in the current prototype:
 
 Latest observed CI for commit `8438a4d2bd2ba7f1dedb9475e22bb231c70990fd` completed successfully; the unit-test log reports 205 tests run. This is prototype-level evidence only. It does not implement a controlled verifier allowlist, target-resource/policy-version binding, evidence persistence, replay prevention, or an atomic evidence-aware `SUCCEEDED` transition. The generic success transition remains blocked.
 
+## 7D. Verifier allowlist groundwork (2026-10-12)
+
+Added `src/master_brain/verifier_registry.py` with an immutable lookup table keyed by verifier ID, version, provider ID, and evidence type. It rejects malformed descriptors, duplicate exact keys, disabled entries, blank lookup fields, and unknown tuples. Added isolated tests for those cases.
+
+Important trust boundary: this module is configuration plumbing, not a security sandbox and not yet wired into `validate_completion_evidence`. Production composition must construct it only from reviewed deployment configuration, and mission/user payloads must not supply verifier callables or select arbitrary verifier policy. The next step is to bind verifier selection to trusted provider/evidence policy and then integrate it with evidence validation. No success-state transition is enabled by this change.
+
 ## 8. Acceptance conditions before enabling success
 
 - The provider-specific completion predicate is explicit and terminal.

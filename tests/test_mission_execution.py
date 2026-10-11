@@ -365,7 +365,7 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
         self.assertEqual(conflict.status, "idempotency_conflict")
         self.assertEqual(adapter.calls, 1)
 
-    def test_pre_dispatch_audit_failure_marks_failed_without_adapter_call(self):
+    def test_pre_dispatch_audit_failure_stays_conservative_without_adapter_call(self):
         from master_brain.execution_registry import State
         adapter = Adapter()
 
@@ -386,7 +386,9 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
         )
         self.assertEqual(result.status, "audit_unavailable")
         self.assertEqual(adapter.calls, 0)
-        self.assertEqual(self.registry.get("audit-fail-key").state, State.FAILED)
+        # The adapter was not called, but the registry has no trusted, dedicated
+        # pre-dispatch abort transition yet. Keep the post-claim state conservative.
+        self.assertEqual(self.registry.get("audit-fail-key").state, State.OUTCOME_UNKNOWN)
 
 
 

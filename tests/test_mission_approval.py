@@ -146,15 +146,16 @@ class MissionApprovalTests(unittest.TestCase):
         self.assertFalse(result.allowed)
         self.assertIn("required human approval receipt is missing", result.reasons)
 
-    def test_approval_recording_rejects_high_risk_flag_mismatch(self):
+    def test_approval_recording_uses_risk_derived_requirement(self):
         contract = from_core_task(Task(
             objective="Summarize a public report",
             risk=RiskTier.LOW,
         ))
         object.__setattr__(contract, "risk_tier", MissionRiskTier.CRITICAL)
         object.__setattr__(contract, "requires_approval", False)
-        with self.assertRaisesRegex(ValueError, "does not require human approval"):
-            self.approve(contract=contract)
+        receipt = self.approve(contract=contract)
+        result = evaluate_approved_execution_gate(contract, self.store, receipt)
+        self.assertTrue(result.allowed)
 
     def test_approval_write_fails_closed_on_tampered_history(self):
         self.approve()

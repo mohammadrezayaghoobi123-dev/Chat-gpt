@@ -59,6 +59,7 @@ def execute_mission_once(
     recorded_at: str,
     actor: str,
     before_dispatch: Callable[[], None] | None = None,
+    attempt_id: str | None = None,
 ) -> MissionExecutionResult:
     """Gate, write a pre-dispatch audit event, dispatch once, then record outcome.
 
@@ -90,6 +91,7 @@ def execute_mission_once(
                 "mission_id": contract.mission_id,
                 "contract_digest": mission_contract_digest(contract),
                 "integration_id": getattr(integration, "integration_id", "unknown"),
+                "attempt_id": attempt_id,
             },
         )
     except Exception:
@@ -117,6 +119,7 @@ def execute_mission_once(
             payload={
                 "mission_id": contract.mission_id,
                 "integration_id": result.integration_id,
+                "attempt_id": attempt_id,
                 "dispatch_status": result.status.value,
                 "reason": result.reason,
                 "external_effect_confirmed": False,
@@ -266,6 +269,7 @@ def execute_mission_idempotently(
             before_dispatch=lambda: registry.mark_attempt_dispatch_boundary(
                 attempt_id=attempt.attempt_id, recorded_at=recorded_at
             ),
+            attempt_id=attempt.attempt_id,
         )
     except Exception:
         result = MissionExecutionResult(

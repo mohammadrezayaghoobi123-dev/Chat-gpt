@@ -51,7 +51,7 @@ class MissionApprovalTests(unittest.TestCase):
             objective="Deploy production release",
             constraints=("preserve audit history", "require canary"),
             risk=RiskTier.HIGH,
-        ))
+        ), mission_id=self.contract.mission_id)
         result = evaluate_approved_execution_gate(changed, self.store, receipt)
         self.assertFalse(result.allowed)
         self.assertIn("approval receipt belongs to a different mission", result.reasons)
@@ -94,6 +94,15 @@ class MissionApprovalTests(unittest.TestCase):
         ))
         result = evaluate_approved_execution_gate(low_risk, self.store, None)
         self.assertTrue(result.allowed)
+
+    def test_approval_write_fails_closed_on_tampered_history(self):
+        self.approve()
+        path = self.store.path
+        path.write_text(path.read_text(encoding="utf-8").replace(
+            '"decision":"approved"', '"decision":"denied"'
+        ), encoding="utf-8")
+        with self.assertRaises(AuditStoreError):
+            self.approve(event_id="approval-002")
 
     def test_approval_requires_nonblank_metadata(self):
         with self.assertRaisesRegex(ValueError, "event_id"):

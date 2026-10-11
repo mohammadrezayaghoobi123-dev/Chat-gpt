@@ -233,8 +233,15 @@ def from_core_task(
         ),
         unknowns=unknowns,
         clarification_questions=questions,
-        rationale=(route.rationale,),
-        traceability=("planner=core.route_task", f"legacy_route={route.specialist}"),
+        rationale=route.rationale + (
+            f"Compatibility alias only: legacy route {route.specialist} maps to canonical island "
+            f"{selected}; semantic equivalence has not been independently validated.",
+        ),
+        traceability=(
+            "planner=core.route_task",
+            f"legacy_route={route.specialist}",
+            f"compatibility_mapping={route.specialist}->{selected}",
+        ),
     )
 
 

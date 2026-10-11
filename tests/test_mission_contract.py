@@ -80,6 +80,17 @@ class MissionContractTests(unittest.TestCase):
                 selected_islands=("science_research", "science_research"),
             )
 
+    def test_contract_rejects_malformed_identity_field_types(self):
+        with self.assertRaisesRegex(ValueError, "mission_id"):
+            MissionContract(mission_id=None, objective="Review change")
+        with self.assertRaisesRegex(TypeError, "objective"):
+            MissionContract(mission_id="mission-test", objective=None)
+        with self.assertRaisesRegex(TypeError, "selected island IDs"):
+            MissionContract(
+                mission_id="mission-test", objective="Review change",
+                selected_islands=(None,),
+            )
+
     def test_execution_gate_fails_closed_for_high_risk_without_approval(self):
         contract = from_core_task(Task(
             objective="Deploy production change",

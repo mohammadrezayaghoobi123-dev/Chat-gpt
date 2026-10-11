@@ -54,7 +54,7 @@ class MissionApprovalTests(unittest.TestCase):
         ), mission_id=self.contract.mission_id)
         result = evaluate_approved_execution_gate(changed, self.store, receipt)
         self.assertFalse(result.allowed)
-        self.assertIn("approval receipt belongs to a different mission", result.reasons)
+        self.assertNotIn("approval receipt belongs to a different mission", result.reasons)
         self.assertIn("mission contract changed after approval", result.reasons)
 
     def test_receipt_cannot_be_replayed_for_another_mission(self):

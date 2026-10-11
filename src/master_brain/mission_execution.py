@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from master_brain.audit_store import AuditStore, AuditStoreError
-from master_brain.dispatch import DispatchResult, DispatchStatus, dispatch_once
-from master_brain.integrations import IntegrationAdapter, IntegrationDescriptor, IntegrationRequirement
+from master_brain.dispatch import DispatchResult, DispatchStatus, IntegrationAdapter, dispatch_once
+from master_brain.integrations import IntegrationDescriptor, IntegrationRequirement
 from master_brain.mission_approval import (
     MissionApprovalReceipt,
     evaluate_approved_execution_gate,

@@ -89,6 +89,17 @@ class AuditLedgerTests(unittest.TestCase):
                 payload=[],
             )
 
+    def test_build_chain_rejects_non_string_identity_fields(self):
+        rows = self.raw_events()
+        rows[0]["event_id"] = 7
+        with self.assertRaisesRegex(TypeError, "event_id must be a string"):
+            build_chain(rows)
+
+        rows = self.raw_events()
+        rows[0]["actor"] = ["not", "a", "string"]
+        with self.assertRaisesRegex(TypeError, "actor must be a string"):
+            build_chain(rows)
+
     def test_non_finite_json_numbers_are_rejected(self):
         with self.assertRaises(ValueError):
             create_event(

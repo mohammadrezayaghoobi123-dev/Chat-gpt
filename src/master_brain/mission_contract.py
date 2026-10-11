@@ -83,8 +83,14 @@ class MissionContract:
             raise TypeError("risk_tier must be a MissionRiskTier")
         if not isinstance(self.review_level, MissionReviewLevel):
             raise TypeError("review_level must be a MissionReviewLevel")
+        # bool is an int subclass in Python; reject it explicitly because
+        # policy budgets and deadlines must be actual integer quantities.
+        if type(self.budget_units) is not int:
+            raise TypeError("budget_units must be an integer")
         if self.budget_units < 0:
             raise ValueError("budget_units must be >= 0")
+        if type(self.deadline_seconds) is not int:
+            raise TypeError("deadline_seconds must be an integer")
         if self.deadline_seconds < 1:
             raise ValueError("deadline_seconds must be >= 1")
         if any(not isinstance(item, str) for item in self.selected_islands):

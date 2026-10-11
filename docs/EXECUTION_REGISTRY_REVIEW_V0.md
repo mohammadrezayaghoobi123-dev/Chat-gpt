@@ -2,8 +2,8 @@
 
 ## Review status
 
-Reviewed source: `src/master_brain/execution_registry.py` at commit `fa2aeae9b84dbc5e34334d0d9533b0080c24a37b`.
-Current maturity: **IMPLEMENTED PROTOTYPE; not independently validated as a safety control**. CI on the implementation commit passed the repository's existing unit-test and offline-demo steps, but the new registry has no dedicated test module yet. The review document itself has no observed CI run as of this review.
+Reviewed components: `src/master_brain/execution_registry.py` and `src/master_brain/mission_execution.py` on `master-brain/proof-protocol-v0`.
+Current maturity: **IMPLEMENTED PROTOTYPE; not independently validated as a production safety control**. Dedicated registry and registry-backed execution tests are now present and CI has passed for the integration code commit; a subsequent test commit is being checked separately. This does not establish provider-side exactly-once behavior or production readiness.
 
 ## Positive properties visible in source
 
@@ -17,8 +17,8 @@ Current maturity: **IMPLEMENTED PROTOTYPE; not independently validated as a safe
 
 ## Gaps and threat boundaries
 
-1. **No execution-path integration.** `mission_execution.py` does not call this registry. Existing dispatch can still run without reserving a registry key.
-2. **No dedicated tests yet.** The existing green CI run proves the repository's configured checks passed, not that registry-specific race/failure cases were exercised.
+1. **Optional integration only.** `execute_mission_idempotently(...)` now uses the registry, but the older `execute_mission_once(...)` remains available without it. Callers must explicitly choose the registry-backed entry point where deduplication is required.
+2. **Test coverage is still incomplete.** Dedicated tests cover duplicate reservation, digest conflict, concurrency, lock timeout, corrupted state, and the registry-backed dispatch path. Crash recovery, process-level races, and broader fault injection remain.
 3. **No provider idempotency.** A local key does not deduplicate a side effect at a remote provider.
 4. **No durable invocation intent/receipt fields.** The current record stores state and digests but no attempt ID, adapter identity/version, provider receipt, result reference, or reconciliation owner.
 5. **No stale RUNNING recovery API.** A process crash can leave a record in RUNNING. It must not simply be reclaimed and redispatched; recovery should transition to OUTCOME_UNKNOWN and reconcile.
@@ -26,15 +26,15 @@ Current maturity: **IMPLEMENTED PROTOTYPE; not independently validated as a safe
 7. **Key scoping is a caller responsibility.** The primary key is global within the database. Multi-tenant deployments must construct an unambiguous scoped key or change the schema to a composite unique key.
 8. **Audit is separate.** Registry transactions do not atomically commit with the JSONL hash-chain audit store. A transactional outbox or explicit reconciliation is needed to bridge them.
 9. **SQLite deployment boundary.** This is a local/single-host primitive. Do not treat a database file on arbitrary network storage as a distributed lock service.
-10. **Result state is not evidence.** The registry permits a transition to SUCCEEDED but currently stores no required evidence for that state. The caller can misuse the API unless a stricter typed transition API is added.
-11. **Configured timeout is overridden.** `sqlite3.connect(..., timeout=self.timeout)` is followed by `PRAGMA busy_timeout=5000`, which sets a fixed five-second busy timeout. As a result, the constructor's `timeout` parameter does not reliably configure lock waiting. The implementation should derive the PRAGMA value from the validated timeout, or remove the redundant PRAGMA and use the connection setting consistently.
-12. **Connection lifecycle is implicit.** `with self._db() as db` uses the SQLite connection's transaction context manager; it commits or rolls back but does not itself close the connection. Use explicit closure (for example, `contextlib.closing` around a transaction context) so connection lifetime is deterministic, including error paths.
+10. **Result state is not evidence.** The generic transition to SUCCEEDED is now blocked. A future evidence-aware API must verify provider-specific receipts before allowing success.
+11. **Provider and distributed boundaries remain.** The local SQLite key prevents duplicate local reservations, not remote side effects across machines, databases, or provider retries. No provider-side idempotency key is sent by this prototype.
+12. **Connection lifecycle and timeout were hardened.** The connection is explicitly closed and the busy timeout is derived from the validated constructor timeout; tests cover lock contention.
 
 ## Follow-up hardening: success is now fail-closed
 
 The generic `transition(..., target=SUCCEEDED)` path is deliberately blocked until an evidence-aware completion API exists. The registry does not yet verify provider receipts, so allowing a caller to set `SUCCEEDED` would overstate what the system knows. This makes the prototype stricter but also means there is currently no supported path to mark an execution successful. A future API must validate a provider-specific evidence contract before enabling that transition.
 
-## Required tests before integration
+## Required tests and remaining verification
 
 - duplicate reservation, including after state is RUNNING and after terminal states
 - same key with changed mission ID, contract digest, or payload digest
@@ -44,9 +44,9 @@ The generic `transition(..., target=SUCCEEDED)` path is deliberately blocked unt
 - lock contention and configured busy-timeout behavior return a controlled error
 - connection cleanup on success and exception paths
 - crash simulation around reservation, dispatch claim, and result persistence
-- no adapter call when reservation fails or an identical existing key is returned
-- no automatic redispatch from RUNNING or OUTCOME_UNKNOWN
-- successful terminal transition requires validated evidence, not a bare caller-supplied state
+- no adapter call when reservation fails or an identical existing key is returned — covered by current unit tests
+- no automatic redispatch from RUNNING or OUTCOME_UNKNOWN — duplicate requests return the existing record and do not reclaim it; crash recovery still needs implementation
+- successful terminal transition requires validated evidence, not a bare caller-supplied state — generic success transition is now blocked
 
 ## Next safe implementation slice
 

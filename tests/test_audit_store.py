@@ -45,7 +45,7 @@ class AuditStoreTests(unittest.TestCase):
         rows = self.path.read_text(encoding="utf-8").splitlines()
         raw = json.loads(rows[0])
         raw["payload"]["status"] = "rewritten"
-        self.path.write_text(json.dumps(raw) + "\\n", encoding="utf-8")
+        self.path.write_text(json.dumps(raw) + "\n", encoding="utf-8")
         with self.assertRaisesRegex(AuditStoreError, "verification failed"):
             self.store.read_all()
         with self.assertRaises(AuditStoreError):
@@ -54,13 +54,13 @@ class AuditStoreTests(unittest.TestCase):
     def test_malformed_trailing_record_is_not_silently_repaired(self):
         self.append("e-1")
         with self.path.open("a", encoding="utf-8") as handle:
-            handle.write("{broken\\n")
+            handle.write("{broken\n")
         with self.assertRaisesRegex(AuditStoreError, "invalid audit record"):
             self.store.read_all()
 
     def test_blank_lines_are_rejected(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text("\\n", encoding="utf-8")
+        self.path.write_text("\n", encoding="utf-8")
         with self.assertRaisesRegex(AuditStoreError, "blank audit record"):
             self.store.read_all()
 

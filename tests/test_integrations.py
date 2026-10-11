@@ -74,6 +74,32 @@ class IntegrationRegistryContractTests(unittest.TestCase):
         self.assertIn("no allowed data-region match", result.reasons)
         self.assertIn("integration risk level exceeds mission limit", result.reasons)
 
+    def test_required_kind_rejects_wrong_kind_even_when_capabilities_match(self):
+        action_tool = enabled_model(kind=IntegrationKind.ACTION_TOOL)
+        result = assess_integration(
+            action_tool,
+            IntegrationRequirement(
+                capabilities=("text_reasoning",),
+                required_kind=IntegrationKind.MODEL,
+            ),
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn(
+            "integration kind is action_tool, not required kind model",
+            result.reasons,
+        )
+
+    def test_required_kind_accepts_matching_kind(self):
+        result = assess_integration(
+            enabled_model(),
+            IntegrationRequirement(
+                capabilities=("text_reasoning",),
+                required_kind=IntegrationKind.MODEL,
+            ),
+        )
+        self.assertTrue(result.eligible)
+        self.assertEqual(result.reasons, ())
+
     def test_candidate_assessment_does_not_claim_execution(self):
         results = assess_candidates(
             (enabled_model(), enabled_model(integration_id="model-b",

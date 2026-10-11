@@ -149,7 +149,50 @@ def validate_completion_evidence(
     )
 
 
+def validate_registered_completion_evidence(
+    *,
+    execution: Record,
+    attempt: ExecutionAttempt,
+    evidence: CompletionEvidence,
+    verifier_id: str,
+    verifier_version: str,
+    registry: object,
+) -> VerifiedEvidence:
+    """Validate evidence using an exact, deployment-configured verifier entry.
+
+    The registry must be constructed from reviewed deployment configuration,
+    never from mission/user input. This is a trusted configuration boundary,
+    not a sandbox. This function validates only; it does not persist evidence
+    or transition execution state.
+    """
+    # Local import avoids a module-import cycle: verifier_registry's descriptor
+    # type references CompletionEvidence.
+    from master_brain.verifier_registry import (
+        ConfiguredVerifierRegistry,
+        VerifierRegistryError,
+    )
+
+    if not isinstance(registry, ConfiguredVerifierRegistry):
+        raise EvidenceValidationError("trusted verifier registry is required")
+    try:
+        verifier = registry.resolve(
+            verifier_id=verifier_id,
+            version=verifier_version,
+            provider_id=evidence.provider_id,
+            evidence_type=evidence.evidence_type,
+        )
+    except VerifierRegistryError as exc:
+        raise EvidenceValidationError("no enabled trusted verifier matches evidence") from exc
+    return validate_completion_evidence(
+        execution=execution,
+        attempt=attempt,
+        evidence=evidence,
+        verifier_id=verifier_id,
+        provider_verifier=verifier,
+    )
+
+
 __all__ = [
     "CompletionEvidence", "EvidenceValidationError", "VerifiedEvidence",
-    "evidence_digest", "validate_completion_evidence",
+    "evidence_digest", "validate_completion_evidence",\n    "validate_registered_completion_evidence",
 ]

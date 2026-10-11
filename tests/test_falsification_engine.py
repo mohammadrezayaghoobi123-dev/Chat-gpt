@@ -173,6 +173,24 @@ class FalsificationEngineTests(unittest.TestCase):
         self.assertFalse(result.truth_established)
         self.assertTrue(any("unknown outcome" in reason.lower() for reason in result.reasons))
 
+    def test_failed_or_inconclusive_test_cannot_be_treated_as_a_pass(self):
+        for outcome in ("fail", "error", "inconclusive"):
+            with self.subTest(outcome=outcome):
+                result = review_falsification_plan(
+                    self.plan,
+                    [
+                        TestObservation("test-1", True, outcome, "The test did not establish a valid pass"),
+                        TestObservation("test-2", True, "pass", "Independent run yielded 101 units"),
+                    ],
+                    [
+                        self.evidence("e1", "machine-log"),
+                        self.evidence("e2", "independent-inspector"),
+                    ],
+                    self.policy,
+                )
+                self.assertEqual(result.status, FalsificationStatus.TESTS_INCOMPLETE)
+                self.assertFalse(result.truth_established)
+
     def test_outcome_mapping_version_is_explicit(self):
         self.assertEqual(TEST_OUTCOME_MAPPING_VERSION, "1.0")
 

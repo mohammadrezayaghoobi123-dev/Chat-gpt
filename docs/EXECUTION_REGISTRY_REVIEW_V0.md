@@ -30,6 +30,10 @@ Current maturity: **IMPLEMENTED PROTOTYPE; not independently validated as a safe
 11. **Configured timeout is overridden.** `sqlite3.connect(..., timeout=self.timeout)` is followed by `PRAGMA busy_timeout=5000`, which sets a fixed five-second busy timeout. As a result, the constructor's `timeout` parameter does not reliably configure lock waiting. The implementation should derive the PRAGMA value from the validated timeout, or remove the redundant PRAGMA and use the connection setting consistently.
 12. **Connection lifecycle is implicit.** `with self._db() as db` uses the SQLite connection's transaction context manager; it commits or rolls back but does not itself close the connection. Use explicit closure (for example, `contextlib.closing` around a transaction context) so connection lifetime is deterministic, including error paths.
 
+## Follow-up hardening: success is now fail-closed
+
+The generic `transition(..., target=SUCCEEDED)` path is deliberately blocked until an evidence-aware completion API exists. The registry does not yet verify provider receipts, so allowing a caller to set `SUCCEEDED` would overstate what the system knows. This makes the prototype stricter but also means there is currently no supported path to mark an execution successful. A future API must validate a provider-specific evidence contract before enabling that transition.
+
 ## Required tests before integration
 
 - duplicate reservation, including after state is RUNNING and after terminal states

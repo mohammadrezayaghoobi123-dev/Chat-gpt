@@ -224,6 +224,26 @@ def execute_mission_idempotently(
             reason="claim_failed_adapter_not_invoked",
         )
 
+    # Persist a distinct attempt before entering the adapter/dispatch path.
+    # A failure here must never invoke the adapter.
+    try:
+        attempt = registry.reserve_attempt(
+            key=idempotency_key,
+            expected_version=running.version,
+            integration_id=integration.integration_id,
+            adapter_version=str(getattr(adapter, "version", "unspecified")),
+            provider_id=str(getattr(integration, "provider_id", integration.integration_id)),
+            recorded_at=recorded_at,
+        )
+        registry.mark_attempt_dispatch_boundary(
+            attempt_id=attempt.attempt_id, recorded_at=recorded_at
+        )
+    except (RegistryError, TypeError, ValueError):
+        return MissionExecutionResult(
+            contract.mission_id, "registry_unavailable",
+            reason="attempt_reservation_or_boundary_failed_adapter_not_invoked",
+        )
+
     # Audit event IDs must be unique across distinct executions even when a
     # caller reuses a human-readable prefix. The stable key-derived suffix
     # preserves retry identity without exposing the raw idempotency key.

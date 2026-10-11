@@ -252,17 +252,13 @@ class ExecutionRegistryTests(unittest.TestCase):
         record, created = self.reserve(key="terminal-key")
         self.assertTrue(created)
         self.registry.transition(
-            key=record.key, expected_version=0, target=State.RUNNING,
+            key=record.key, expected_version=0, target=State.FAILED,
             recorded_at="2026-10-12T00:00:01Z",
-        )
-        self.registry.transition(
-            key=record.key, expected_version=1, target=State.FAILED,
-            recorded_at="2026-10-12T00:00:02Z",
         )
         duplicate, created_again = self.reserve(key="terminal-key")
         self.assertFalse(created_again)
         self.assertEqual(duplicate.state, State.FAILED)
-        self.assertEqual(duplicate.version, 2)
+        self.assertEqual(duplicate.version, 1)
 
 
     def test_success_state_is_blocked_without_evidence_aware_api(self):

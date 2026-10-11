@@ -8,8 +8,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Mapping
 
-from .core import Claim, Contradiction, Decision, Evidence, assess_contradictions, evaluate_claim
+from .core import Claim, Contradiction, Decision, Evidence
 from .meta_intelligence import Mission, CoordinationPlan, ReviewLevel, plan_coordination
+from .proof_plane import review_proof
 
 
 @dataclass(frozen=True)
@@ -87,25 +88,17 @@ def execute_mission(
 
     claims = tuple(claim for result in results for claim in result.claims)
     evidence = tuple(item for result in results for item in result.evidence)
-    contradictions = tuple(assess_contradictions(claims))
-    reviews = tuple(
-        evaluate_claim(claim, evidence)
-        for index, claim in enumerate(claims)
-        if claim.claim_id not in {prior.claim_id for prior in claims[:index]}
-    )
+    proof_report = review_proof(claims, evidence)
+    contradictions = proof_report.contradictions
+    reviews = proof_report.claim_reviews
     provenance = tuple(dict.fromkeys(
         item for result in results for item in result.provenance
     ))
-    unresolved: list[str] = []
-    if contradictions:
-        unresolved.append("Potential cross-island contradictions remain unresolved; compare scope, units, provenance and counterevidence.")
+    unresolved: list[str] = list(proof_report.unresolved_issues)
     if missing:
         unresolved.append("One or more selected islands were not executed because no executor was configured.")
     if errors:
         unresolved.append("One or more selected islands failed; partial results must not be treated as complete.")
-    if any(review.status in {"contested", "unverified", "challenged_by_recorded_evidence"} for review in reviews):
-        unresolved.append("At least one returned claim is contested, challenged, or unverified by the recorded evidence.")
-
     if contradictions:
         status = "needs_review"
     elif missing or errors:

@@ -99,6 +99,49 @@ class MissionExecutionPipelineTests(unittest.TestCase):
         self.assertEqual(result.status, "audit_unavailable")
         self.assertEqual(adapter.calls, 0)
 
+    def test_unexpected_pre_dispatch_audit_error_never_invokes_adapter(self):
+        receipt = self.approve()
+        adapter = Adapter()
+
+        class UnexpectedFailureStore:
+            def read_all(inner_self):
+                return self.store.read_all()
+
+            def append(inner_self, **kwargs):
+                raise RuntimeError("simulated unexpected backend error")
+
+        result = execute_mission_once(
+            self.contract, UnexpectedFailureStore(), receipt, descriptor(),
+            self.requirement, adapter, self.payload,
+            event_id_prefix="run-unexpected-pre-audit",
+            recorded_at="2026-10-12T00:01:00Z", actor="system:test",
+        )
+        self.assertEqual(result.status, "audit_unavailable")
+        self.assertEqual(adapter.calls, 0)
+
+    def test_unexpected_post_dispatch_audit_error_marks_outcome_incomplete(self):
+        receipt = self.approve()
+        adapter = Adapter()
+
+        class FailFinishedEventStore:
+            def read_all(inner_self):
+                return self.store.read_all()
+
+            def append(inner_self, **kwargs):
+                if kwargs.get("event_type") == "mission.dispatch_finished":
+                    raise RuntimeError("simulated unexpected backend error")
+                return self.store.append(**kwargs)
+
+        result = execute_mission_once(
+            self.contract, FailFinishedEventStore(), receipt, descriptor(),
+            self.requirement, adapter, self.payload,
+            event_id_prefix="run-unexpected-post-audit",
+            recorded_at="2026-10-12T00:01:00Z", actor="system:test",
+        )
+        self.assertEqual(result.status, "executed_audit_incomplete")
+        self.assertEqual(result.reason, "post_dispatch_audit_failed_do_not_retry_blindly")
+        self.assertEqual(adapter.calls, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

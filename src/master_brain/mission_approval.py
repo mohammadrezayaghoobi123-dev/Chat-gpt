@@ -44,6 +44,20 @@ def _json_value(value: Any) -> Any:
     return value
 
 
+def _contract_integrity_error(contract: MissionContract) -> str | None:
+    """Re-run dataclass validation at trust boundaries; reject bypassed invariants."""
+    if not isinstance(contract, MissionContract):
+        return "mission contract has an invalid type"
+    try:
+        # Reconstructing invokes MissionContract.__post_init__ again. This is
+        # defense in depth against malformed/deserialized objects or mutation
+        # through low-level Python APIs; it is not a cryptographic guarantee.
+        MissionContract(**asdict(contract))
+    except (TypeError, ValueError, AttributeError) as exc:
+        return f"mission contract failed integrity validation: {exc}"
+    return None
+
+
 def mission_contract_digest(contract: MissionContract) -> str:
     """Return SHA-256 of the canonical, complete mission contract."""
     canonical = json.dumps(
@@ -93,6 +107,10 @@ def record_mission_approval(
     The supplied subject/method are recorded assertions, not verified identity.
     If audit persistence fails, no receipt is returned.
     """
+    integrity_error = _contract_integrity_error(contract)
+    if integrity_error:
+        raise ValueError(integrity_error)
+
     for name, value in (
         ("event_id", event_id),
         ("recorded_at", recorded_at),
@@ -143,6 +161,9 @@ def evaluate_approved_execution_gate(
 ) -> ApprovedExecutionGateResult:
     """Fail closed unless a matching approval is present in verified audit history."""
     reasons: list[str] = []
+    integrity_error = _contract_integrity_error(contract)
+    if integrity_error:
+        return ApprovedExecutionGateResult(False, (integrity_error,))
     if not contract.objective.strip():
         reasons.append("mission objective is empty and requires clarification")
     if contract.clarification_questions:

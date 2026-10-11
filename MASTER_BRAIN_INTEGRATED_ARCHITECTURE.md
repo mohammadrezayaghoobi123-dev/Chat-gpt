@@ -104,3 +104,10 @@ The current meta_intelligence.py is a deterministic keyword-based scaffold. It i
 The binding epistemic principle is documented in [docs/CONTRADICTION_DRIVEN_PROOF_CHARTER.md](docs/CONTRADICTION_DRIVEN_PROOF_CHARTER.md). Master Brain must actively challenge material claims using evidence, counterevidence, rival hypotheses, meaningful contradiction analysis, and discriminating tests. It must not equate model agreement, persuasive fluency, or the absence of detected contradiction with truth.
 
 The five logical layers are: (1) Supreme Command Core, (2) Strategic Intelligence / Meta-Intelligence, (3) Specialist Core Islands, (4) AI Models and Providers, and (5) Agents, Tools, Plugins and External Integrations. Strategic Intelligence is a recurring cross-layer coordination function: it decomposes missions, selects specialist islands and models/providers, plans dependencies and evidence, coordinates contradiction checks, and replans from verified results. This does not collapse layer boundaries or grant authority to override global policy.
+
+
+## Domain expansion: blockchain, digital economy, cryptoassets and betting/gambling
+
+These are explicit future specialist domains, not forgotten or out-of-scope topics. Their detailed scope and safety/compliance requirements are recorded in [docs/BLOCKCHAIN_DIGITAL_ECONOMY_CRYPTO_BETTING_SCOPE.md](docs/BLOCKCHAIN_DIGITAL_ECONOMY_CRYPTO_BETTING_SCOPE.md). They should be distinct but interoperable specialist islands: blockchain/distributed systems, digital-economy/platform analysis, cryptoasset market/risk analysis, and betting/gambling platform analysis.
+
+Blockchain must be evaluated as a solution option, not assumed to be the foundation for the entire product. Any use must be justified against simpler alternatives and evaluated for privacy, cost, security, governance and key management. The contradiction-driven Proof Plane applies to these domains, with risk-adaptive verification and required approvals for consequential financial or external actions.

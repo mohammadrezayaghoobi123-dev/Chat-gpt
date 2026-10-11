@@ -368,6 +368,14 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
         self.assertEqual(adapter.calls, 1)
         self.assertEqual(self.registry.get("stable-key").state, State.OUTCOME_UNKNOWN)
 
+    def test_distinct_idempotency_keys_can_share_event_prefix_without_audit_collision(self):
+        adapter = Adapter()
+        first = self.execute(adapter, key="separate-key-one", prefix="reused-human-prefix")
+        second = self.execute(adapter, key="separate-key-two", prefix="reused-human-prefix")
+        self.assertEqual(first.status, "response_received")
+        self.assertEqual(second.status, "response_received")
+        self.assertEqual(adapter.calls, 2)
+
     def test_concurrent_same_key_dispatches_adapter_exactly_once(self):
         from concurrent.futures import ThreadPoolExecutor
         from threading import Lock

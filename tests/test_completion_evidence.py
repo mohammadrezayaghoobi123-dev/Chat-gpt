@@ -228,5 +228,28 @@ class RegisteredCompletionEvidenceTests(CompletionEvidenceTests):
             self._validate_registered(object())
 
 
+
+    def test_provider_mismatch_cannot_select_another_provider_verifier(self):
+        from master_brain.completion_evidence import EvidenceValidationError
+
+        altered = CompletionEvidence(**{
+            **self.evidence.__dict__, "provider_id": "provider-y"
+        })
+        with self.assertRaisesRegex(EvidenceValidationError, "no enabled trusted verifier"):
+            self._validate_registered(self._registry(), evidence=altered)
+
+    def test_evidence_type_mismatch_cannot_select_another_verifier(self):
+        from master_brain.completion_evidence import EvidenceValidationError
+
+        altered = CompletionEvidence(**{
+            **self.evidence.__dict__, "evidence_type": "generic_success_message"
+        })
+        with self.assertRaisesRegex(EvidenceValidationError, "no enabled trusted verifier"):
+            self._validate_registered(self._registry(), evidence=altered)
+
+    def test_verified_record_binds_exact_verifier_version(self):
+        verified = self._validate_registered(self._registry(version="2026.10.1"), version="2026.10.1")
+        self.assertEqual(verified.verifier_version, "2026.10.1")
+
 if __name__ == "__main__":
     unittest.main()

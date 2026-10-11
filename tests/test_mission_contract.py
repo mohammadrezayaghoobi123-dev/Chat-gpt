@@ -188,6 +188,13 @@ class MissionContractTests(unittest.TestCase):
             from_archipelago_plan(plan, requires_approval="false")
 
 
+    def test_planner_adapter_rejects_scalar_strings_and_mappings_as_sequences(self):
+        plan = plan_mission("Research factory manufacturing risks")
+        for invalid in ("abc", b"abc", {"unexpected": "mapping"}):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(TypeError, "constraints must be an iterable"):
+                    from_archipelago_plan(plan, constraints=invalid)
+
     def test_contract_rejects_mutable_or_wrong_sequence_fields(self):
         with self.assertRaisesRegex(TypeError, "selected_islands must be a tuple"):
             MissionContract(

@@ -65,6 +65,10 @@ def dispatch_once(
     A successful adapter return is not proof that a remote side effect was
     durably completed; provider-specific receipts remain the adapter's duty.
     """
+    if not isinstance(integration, IntegrationDescriptor):
+        return DispatchResult(DispatchStatus.REJECTED, "unknown", reason="integration_descriptor_invalid")
+    if not isinstance(requirement, IntegrationRequirement):
+        return DispatchResult(DispatchStatus.REJECTED, integration.integration_id, reason="integration_requirement_invalid")
     if not _is_json_object(payload):
         return DispatchResult(
             DispatchStatus.INVALID_OUTPUT,

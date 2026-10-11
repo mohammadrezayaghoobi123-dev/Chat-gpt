@@ -164,10 +164,26 @@ class SQLiteExecutionRegistry:
     @staticmethod
     def _attempt(row):
         try:
+            # SQLite stores this flag as an integer. Do not coerce arbitrary
+            # non-zero/corrupt values to True: that could turn a damaged row
+            # into false evidence that the external dispatch boundary was entered.
+            boundary = row["dispatch_boundary_entered"]
+            if type(boundary) is not int or boundary not in (0, 1):
+                raise RegistryError("invalid execution attempt record")
+            attempt_number = row["attempt_number"]
+            if type(attempt_number) is not int or attempt_number < 1:
+                raise RegistryError("invalid execution attempt record")
+            values = (
+                row["attempt_id"], row["execution_key"], row["integration_id"],
+                row["adapter_version"], row["provider_id"], row["created_at"],
+                row["updated_at"],
+            )
+            if any(not isinstance(value, str) or not value.strip() for value in values):
+                raise RegistryError("invalid execution attempt record")
             return ExecutionAttempt(
-                row["attempt_id"], row["execution_key"], row["attempt_number"],
+                row["attempt_id"], row["execution_key"], attempt_number,
                 row["integration_id"], row["adapter_version"], row["provider_id"],
-                bool(row["dispatch_boundary_entered"]), row["created_at"], row["updated_at"],
+                boundary == 1, row["created_at"], row["updated_at"],
             )
         except (ValueError, TypeError, KeyError) as exc:
             raise RegistryError("invalid execution attempt record") from exc

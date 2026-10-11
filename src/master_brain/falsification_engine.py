@@ -214,10 +214,6 @@ def review_falsification_plan(
         item.evidence_id for item in eligible
         if item.polarity.value == "counters"
     ))
-    unknown_outcomes = tuple(
-        item for item in observed
-        if item.executed and item.outcome_kind is TestOutcome.UNKNOWN
-    )
     unresolved_outcomes = tuple(
         item for item in observed
         if item.executed and item.outcome_kind is TestOutcome.UNKNOWN

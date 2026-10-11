@@ -214,5 +214,58 @@ class RecoveryCandidateTests(unittest.TestCase):
         self.assertEqual(repeated, marked)
 
 
+    def _create_legacy_attempt_table(self, db):
+        db.execute("""CREATE TABLE execution_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            execution_key TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            integration_id TEXT NOT NULL,
+            adapter_version TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            dispatch_boundary_entered INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""")
+
+    def test_legacy_attempt_table_without_duplicates_gets_unique_index(self):
+        path = str(Path(self.tmp.name) / "legacy-unique.sqlite3")
+        with sqlite3.connect(path) as db:
+            self._create_legacy_attempt_table(db)
+            db.execute(
+                "INSERT INTO execution_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("a1", "exec-1", 1, "int", "v1", "provider", 0, "t", "t"),
+            )
+
+        SQLiteExecutionRegistry(path)
+        with sqlite3.connect(path) as db:
+            indexes = db.execute("PRAGMA index_list(execution_attempts)").fetchall()
+            unique_indexes = {row[1] for row in indexes if row[2] == 1}
+            self.assertIn("idx_attempts_one_per_execution", unique_indexes)
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "INSERT INTO execution_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    ("a2", "exec-1", 2, "int", "v1", "provider", 0, "t2", "t2"),
+                )
+
+    def test_legacy_duplicate_attempts_fail_closed_and_preserve_rows(self):
+        from master_brain.execution_registry import RegistryError
+
+        path = str(Path(self.tmp.name) / "legacy-duplicates.sqlite3")
+        with sqlite3.connect(path) as db:
+            self._create_legacy_attempt_table(db)
+            for attempt_id in ("a1", "a2"):
+                db.execute(
+                    "INSERT INTO execution_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (attempt_id, "exec-duplicate", 1, "int", "v1", "provider", 0, "t", "t"),
+                )
+
+        with self.assertRaisesRegex(RegistryError, "legacy execution_attempts contains duplicate"):
+            SQLiteExecutionRegistry(path)
+        with sqlite3.connect(path) as db:
+            rows = db.execute(
+                "SELECT attempt_id FROM execution_attempts ORDER BY attempt_id"
+            ).fetchall()
+            self.assertEqual(rows, [("a1",), ("a2",)])
+
 if __name__ == "__main__":
     unittest.main()

@@ -338,16 +338,20 @@ def evaluate_execution_gate(
     *,
     approval_granted: bool = False,
 ) -> ExecutionGateResult:
-    """Fail closed when human approval or objective clarification is outstanding.
+    """Legacy preflight only; a boolean must never authorize a gated mission.
 
-    An approval flag is an explicit caller assertion, not proof of identity or
-    cryptographic authorization. Production callers must authenticate approvers.
+    The parameter remains for source compatibility, but is intentionally not
+    trusted. For any contract requiring approval, callers must use the audited
+    gate in mission_approval with a receipt backed by verified audit history.
+    This function never dispatches work.
     """
     reasons: list[str] = []
     if contract.clarification_questions:
         reasons.append("mission requires clarification before dispatch")
-    if contract.requires_approval and not approval_granted:
-        reasons.append("required human approval has not been granted")
+    if contract.requires_approval:
+        reasons.append(
+            "audited approval receipt is required; boolean approval assertions are not accepted"
+        )
     return ExecutionGateResult(allowed=not reasons, reasons=tuple(reasons))
 
 

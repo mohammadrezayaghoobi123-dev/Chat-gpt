@@ -87,6 +87,13 @@ class MissionApprovalTests(unittest.TestCase):
         self.assertFalse(result.allowed)
         self.assertIn("verified audit history is unavailable or invalid", result.reasons)
 
+    def test_direct_blank_contract_fails_closed_even_without_receipt(self):
+        from master_brain.mission_contract import MissionContract
+        blank = MissionContract(mission_id="mission-empty-direct", objective="")
+        result = evaluate_approved_execution_gate(blank, self.store, None)
+        self.assertFalse(result.allowed)
+        self.assertIn("mission objective is empty and requires clarification", result.reasons)
+
     def test_non_approval_contract_does_not_need_receipt(self):
         low_risk = from_core_task(Task(
             objective="Summarize a public report",

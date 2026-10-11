@@ -65,6 +65,17 @@ class RecoveryCandidateTests(unittest.TestCase):
         self.assertEqual(self.registry.get(pending.key).state, State.PENDING)
         self.assertEqual(self.registry.get(failed.key).state, State.FAILED)
 
+    def test_corrupt_unknown_state_blocks_recovery_inventory(self):
+        from master_brain.execution_registry import RegistryError
+        self.reserve("valid-running", "2026-10-12T00:00:00Z")
+        with __import__("sqlite3").connect(self.registry.path) as db:
+            db.execute(
+                "UPDATE executions SET state='MAGIC_SUCCESS' WHERE key=?",
+                ("valid-running",),
+            )
+        with self.assertRaises(RegistryError):
+            self.registry.list_recovery_candidates()
+
     def test_empty_registry_returns_empty_candidates(self):
         self.assertEqual(self.registry.list_recovery_candidates(), [])
 

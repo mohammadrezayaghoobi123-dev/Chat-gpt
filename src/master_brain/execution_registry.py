@@ -130,20 +130,21 @@ class SQLiteExecutionRegistry:
         review. Listing candidates is deliberately read-only and does not infer
         success or failure from age, process death, or a missing local receipt.
         """
-        states = (
-            State.RUNNING.value,
-            State.OUTCOME_UNKNOWN.value,
-            State.RECONCILIATION_REQUIRED.value,
-        )
-        placeholders = ",".join("?" for _ in states)
+        candidate_states = {
+            State.RUNNING,
+            State.OUTCOME_UNKNOWN,
+            State.RECONCILIATION_REQUIRED,
+        }
         try:
             with closing(self._db()) as db:
+                # Validate every persisted row before filtering. A query that
+                # selects only known states would silently hide corrupt/unknown
+                # state values and make the recovery inventory incomplete.
                 rows = db.execute(
-                    f"SELECT * FROM executions WHERE state IN ({placeholders}) "
-                    "ORDER BY updated_at ASC, key ASC",
-                    states,
+                    "SELECT * FROM executions ORDER BY updated_at ASC, key ASC"
                 ).fetchall()
-                return [self._record(row) for row in rows]
+                records = [self._record(row) for row in rows]
+                return [record for record in records if record.state in candidate_states]
         except RegistryError:
             raise
         except sqlite3.Error as exc:

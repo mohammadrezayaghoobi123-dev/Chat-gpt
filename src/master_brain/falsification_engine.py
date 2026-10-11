@@ -218,11 +218,23 @@ def review_falsification_plan(
         item for item in observed
         if item.executed and item.outcome_kind is TestOutcome.UNKNOWN
     )
-    if unknown_outcomes:
-        for item in unknown_outcomes:
+    non_passing_outcomes = tuple(
+        item for item in observed
+        if item.executed and item.outcome_kind in {
+            TestOutcome.UNKNOWN, TestOutcome.FAIL,
+            TestOutcome.ERROR, TestOutcome.INCONCLUSIVE,
+        }
+    )
+    for item in non_passing_outcomes:
+        if item.outcome_kind is TestOutcome.UNKNOWN:
             reasons.append(
                 f"Unknown outcome {item.outcome!r} for test {item.test_id}; "
                 "the outcome was preserved and not treated as a pass."
+            )
+        else:
+            reasons.append(
+                f"Non-passing outcome {item.outcome!r} for test {item.test_id}; "
+                "the test did not establish a successful check or an explicit counterexample."
             )
     explicit_counterexample = any(
         item.executed and item.outcome_kind in {
@@ -245,11 +257,11 @@ def review_falsification_plan(
     elif assessment.status is ReviewStatus.CONTESTED or explicit_contradiction:
         status = FalsificationStatus.CONTRADICTION_REMAINS
         reasons.append("Supporting and counterevidence conflict or an observation explicitly reports contradiction.")
-    elif missing or unexecuted or unexpected or unknown_outcomes:
+    elif missing or unexecuted or unexpected or non_passing_outcomes:
         status = FalsificationStatus.TESTS_INCOMPLETE
         reasons.append(
             "The planned test set is incomplete, includes unexecuted tests, "
-            "contains unknown outcomes, or has unexpected observations."
+            "contains unknown/non-passing outcomes, or has unexpected observations."
         )
     elif not plan.disconfirmation_criteria or not plan.test_ids:
         status = FalsificationStatus.NOT_DESIGNED

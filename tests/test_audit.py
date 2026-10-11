@@ -49,8 +49,10 @@ class AuditRecordTests(unittest.TestCase):
             self.make_record(input_refs=("claim-1", " "))
 
     def test_rejects_unsupported_schema_version(self):
-        with self.assertRaisesRegex(AuditValidationError, "schema_version"):
-            self.make_record(schema_version=2)
+        for version in (2, True, "1"):
+            with self.subTest(version=version):
+                with self.assertRaisesRegex(AuditValidationError, "schema_version"):
+                    self.make_record(schema_version=version)
 
 
 if __name__ == "__main__":

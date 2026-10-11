@@ -69,8 +69,12 @@ class MissionContract:
     traceability: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.mission_id.strip():
-            raise ValueError("mission_id must not be empty")
+        if not isinstance(self.mission_id, str) or not self.mission_id.strip():
+            raise ValueError("mission_id must be a non-empty string")
+        if not isinstance(self.objective, str):
+            raise TypeError("objective must be a string")
+        if not isinstance(self.schema_version, str):
+            raise TypeError("schema_version must be a string")
         if self.schema_version != MISSION_CONTRACT_SCHEMA_VERSION:
             raise ValueError(
                 f"unsupported mission contract schema version: {self.schema_version}"
@@ -83,6 +87,8 @@ class MissionContract:
             raise ValueError("budget_units must be >= 0")
         if self.deadline_seconds < 1:
             raise ValueError("deadline_seconds must be >= 1")
+        if any(not isinstance(item, str) for item in self.selected_islands):
+            raise TypeError("selected island IDs must be strings")
         if len(self.selected_islands) != len(set(self.selected_islands)):
             raise ValueError("selected island IDs must be unique")
         if any(not item.strip() for item in self.selected_islands):

@@ -86,6 +86,19 @@ class SQLiteExecutionRegistry:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 UNIQUE(execution_key))""")
+            # Retrofit the one-attempt invariant onto databases created before
+            # the table-level UNIQUE constraint existed. If legacy duplicates
+            # exist, index creation fails closed; never delete or merge attempts.
+            try:
+                db.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_attempts_one_per_execution "
+                    "ON execution_attempts(execution_key)"
+                )
+            except sqlite3.IntegrityError as exc:
+                raise RegistryError(
+                    "legacy execution_attempts contains duplicate execution keys; "
+                    "manual evidence-based reconciliation is required"
+                ) from exc
             db.execute("CREATE INDEX IF NOT EXISTS idx_attempts_execution ON execution_attempts(execution_key, attempt_number)")
             db.execute("PRAGMA journal_mode=WAL")
 

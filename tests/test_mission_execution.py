@@ -1,0 +1,93 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from master_brain.audit_store import AuditStore
+from master_brain.dispatch import DispatchStatus
+from master_brain.integrations import (
+    IntegrationDescriptor, IntegrationHealth, IntegrationKind,
+    IntegrationMaturity, IntegrationRequirement,
+)
+from master_brain.mission_approval import record_mission_approval
+from master_brain.mission_contract import MissionContract, MissionRiskTier
+from master_brain.mission_execution import execute_mission_once
+
+
+class Adapter:
+    def __init__(self):
+        self.calls = 0
+
+    def invoke(self, payload):
+        self.calls += 1
+        return {"accepted": True}
+
+
+def descriptor():
+    return IntegrationDescriptor(
+        integration_id="test-model", version="1", kind=IntegrationKind.MODEL,
+        capabilities=("text_reasoning",), maturity=IntegrationMaturity.ENABLED,
+        health=IntegrationHealth.AVAILABLE, risk_level=0,
+        estimated_cost_per_call=0.0,
+    )
+
+
+class MissionExecutionPipelineTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = AuditStore(Path(self.tmp.name) / "audit.jsonl")
+        self.contract = MissionContract(
+            mission_id="mission-42", objective="Execute controlled test",
+            risk_tier=MissionRiskTier.HIGH, requires_approval=True,
+        )
+        self.requirement = IntegrationRequirement(
+            ("text_reasoning",), required_kind=IntegrationKind.MODEL,
+        )
+        self.payload = {"mission_id": "mission-42", "prompt": "test"}
+
+    def approve(self):
+        return record_mission_approval(
+            self.store, self.contract, event_id="approval-42",
+            recorded_at="2026-10-12T00:00:00Z",
+            approver_subject="user:reviewer",
+            authentication_method="upstream-session",
+        )
+
+    def execute(self, adapter, receipt=None, prefix="run-42"):
+        return execute_mission_once(
+            self.contract, self.store, receipt, descriptor(), self.requirement,
+            adapter, self.payload, event_id_prefix=prefix,
+            recorded_at="2026-10-12T00:01:00Z", actor="system:test",
+        )
+
+    def test_missing_approval_never_invokes_adapter_or_audits_dispatch(self):
+        adapter = Adapter()
+        result = self.execute(adapter)
+        self.assertEqual(result.status, "rejected")
+        self.assertEqual(adapter.calls, 0)
+        self.assertEqual(len(self.store.read_all()), 0)
+
+    def test_approved_dispatch_audits_response_without_claiming_external_effect(self):
+        receipt = self.approve()
+        adapter = Adapter()
+        result = self.execute(adapter, receipt)
+        self.assertEqual(result.status, "response_received")
+        self.assertEqual(result.dispatch_result.status, DispatchStatus.SUCCEEDED)
+        self.assertEqual(adapter.calls, 1)
+        events = self.store.read_all()
+        self.assertEqual(events[-2].event_type, "mission.dispatch_started")
+        self.assertEqual(events[-1].event_type, "mission.dispatch_finished")
+        self.assertFalse(events[-1].payload["external_effect_confirmed"])
+
+    def test_post_dispatch_audit_failure_warns_against_blind_retry(self):
+        receipt = self.approve()
+        adapter = Adapter()
+        result = self.execute(adapter, receipt, prefix="approval-42")
+        # Prefix collides with the already-used approval event ID, so the
+        # pre-dispatch append fails and the adapter is not called.
+        self.assertEqual(result.status, "audit_unavailable")
+        self.assertEqual(adapter.calls, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

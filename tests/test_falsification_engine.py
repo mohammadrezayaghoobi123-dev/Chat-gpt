@@ -6,7 +6,7 @@ from master_brain.evidence_protocol import (
 )
 from master_brain.falsification_engine import (
     FalsificationPlan, FalsificationStatus, RivalHypothesis, TestObservation,
-    review_falsification_plan, TestOutcome,
+    review_falsification_plan, TestOutcome, TEST_OUTCOME_MAPPING_VERSION,
 )
 
 
@@ -172,6 +172,9 @@ class FalsificationEngineTests(unittest.TestCase):
         self.assertEqual(result.status, FalsificationStatus.TESTS_INCOMPLETE)
         self.assertFalse(result.truth_established)
         self.assertTrue(any("unknown outcome" in reason.lower() for reason in result.reasons))
+
+    def test_outcome_mapping_version_is_explicit(self):
+        self.assertEqual(TEST_OUTCOME_MAPPING_VERSION, "1.0")
 
     def test_known_outcome_mapping_is_case_and_whitespace_insensitive(self):
         observation = TestObservation("test-1", True, "  PASS  ", "Observed")

@@ -224,6 +224,30 @@ class ExecutionRegistryTests(unittest.TestCase):
                     SQLiteExecutionRegistry(str(Path(self.tmp.name) / f"bad-{value}.sqlite3"), timeout=value)
 
 
+    def test_corrupt_dispatch_boundary_flag_fails_closed(self):
+        from master_brain.execution_registry import RegistryError, State
+
+        for corrupt_value in (2, -1):
+            with self.subTest(corrupt_value=corrupt_value):
+                key = f"corrupt-boundary-{corrupt_value}"
+                record, _ = self.reserve(key=key)
+                running = self.registry.transition(
+                    key=key, expected_version=record.version, target=State.RUNNING,
+                    recorded_at="2026-10-12T00:00:01Z",
+                )
+                attempt = self.registry.reserve_attempt(
+                    key=key, expected_version=running.version,
+                    integration_id="integration-test", adapter_version="1",
+                    provider_id="provider-test", recorded_at="2026-10-12T00:00:02Z",
+                )
+                with sqlite3.connect(self.db_path) as db:
+                    db.execute(
+                        "UPDATE execution_attempts SET dispatch_boundary_entered=? WHERE attempt_id=?",
+                        (corrupt_value, attempt.attempt_id),
+                    )
+                with self.assertRaises(RegistryError):
+                    self.registry.get_attempt(attempt.attempt_id)
+
     def test_corrupt_persisted_state_fails_closed(self):
         from master_brain.execution_registry import RegistryError
         self.reserve(key="corrupt-key")

@@ -108,8 +108,9 @@ class FalsificationEngineTests(unittest.TestCase):
             ],
             self.policy,
         )
-        self.assertEqual(result.status, FalsificationStatus.TESTS_INCOMPLETE)
+        self.assertEqual(result.status, FalsificationStatus.CONTRADICTION_REMAINS)
         self.assertEqual(result.counterexample_evidence_ids, ())
+        self.assertIn("Non-decisive outcome", " ".join(result.reasons))
         self.assertFalse(result.truth_established)
 
     def test_unexecuted_test_evidence_is_excluded(self):

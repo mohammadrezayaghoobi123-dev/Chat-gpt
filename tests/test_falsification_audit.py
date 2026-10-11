@@ -59,7 +59,7 @@ class FalsificationAuditTests(unittest.TestCase):
     def test_payload_preserves_counterevidence_tests_and_provisionality(self):
         payload = falsification_review_payload(self.review)
         self.assertFalse(payload["truth_established"])
-        self.assertEqual(payload["counterexample_evidence_ids"], ["counter-1"])
+        self.assertEqual(payload["counterexample_evidence_ids"], [])
         self.assertEqual(payload["evidence_assessment"]["counterevidence_ids"], ["counter-1"])
         self.assertEqual(payload["tests"]["executed"][1]["observed_result"], "Independent count: 72 units")
         self.assertEqual(payload["rival_hypothesis_ids"], ["rival-1"])
@@ -151,7 +151,7 @@ class FalsificationAuditTests(unittest.TestCase):
             self.assertEqual(loaded[0].payload["status"], self.review.status.value)
             self.assertTrue(loaded[0].payload["decision_changed"])
             self.assertEqual(
-                loaded[0].payload["counterexample_evidence_ids"], ["counter-1"]
+                loaded[0].payload["counterexample_evidence_ids"], []
             )
 
 

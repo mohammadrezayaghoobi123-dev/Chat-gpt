@@ -100,6 +100,27 @@ class IntegrationRegistryContractTests(unittest.TestCase):
         self.assertTrue(result.eligible)
         self.assertEqual(result.reasons, ())
 
+    def test_required_kind_rejects_wrong_runtime_type(self):
+        with self.assertRaises(TypeError):
+            IntegrationRequirement(
+                capabilities=("text_reasoning",),
+                required_kind="model",
+            )
+
+    def test_legacy_positional_requirement_arguments_remain_compatible(self):
+        requirement = IntegrationRequirement(
+            ("text_reasoning",),
+            ("read:public",),
+            ("eu",),
+            2,
+            0.25,
+        )
+        self.assertEqual(requirement.required_permission_scopes, ("read:public",))
+        self.assertEqual(requirement.allowed_data_regions, ("eu",))
+        self.assertEqual(requirement.max_risk_level, 2)
+        self.assertEqual(requirement.max_cost_per_call, 0.25)
+        self.assertIsNone(requirement.required_kind)
+
     def test_candidate_assessment_does_not_claim_execution(self):
         results = assess_candidates(
             (enabled_model(), enabled_model(integration_id="model-b",

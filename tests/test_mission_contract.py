@@ -110,6 +110,22 @@ class MissionContractTests(unittest.TestCase):
             still_blocked.reasons,
         )
 
+    def test_execution_gate_rederives_approval_for_inconsistent_loaded_contract(self):
+        # Simulate a malformed object restored from an untrusted serialized source.
+        contract = object.__new__(MissionContract)
+        object.__setattr__(contract, "objective", "Deploy production change")
+        object.__setattr__(contract, "clarification_questions", ())
+        object.__setattr__(contract, "requires_approval", False)
+        object.__setattr__(contract, "review_level", MissionReviewLevel.STANDARD)
+        object.__setattr__(contract, "risk_tier", MissionRiskTier.CRITICAL)
+
+        result = evaluate_execution_gate(contract)
+        self.assertFalse(result.allowed)
+        self.assertIn(
+            "audited approval receipt is required; boolean approval assertions are not accepted",
+            result.reasons,
+        )
+
     def test_execution_gate_blocks_unresolved_clarification_even_if_approved(self):
         contract = from_core_task(Task(objective=""))
         result = evaluate_execution_gate(contract, approval_granted=True)

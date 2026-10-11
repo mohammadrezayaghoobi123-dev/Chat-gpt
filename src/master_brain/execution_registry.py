@@ -67,7 +67,7 @@ class SQLiteExecutionRegistry:
         db = sqlite3.connect(self.path, timeout=self.timeout, isolation_level=None)
         db.row_factory = sqlite3.Row
         # PRAGMA busy_timeout is in milliseconds and overrides the connection setting.
-        db.execute("PRAGMA busy_timeout=?", (int(self.timeout * 1000),))
+        db.execute(f"PRAGMA busy_timeout={int(self.timeout * 1000)}")
         return db
 
     @staticmethod

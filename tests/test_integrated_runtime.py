@@ -58,6 +58,37 @@ class IntegratedRuntimeTests(unittest.TestCase):
         self.assertEqual(run.status, "incomplete")
         self.assertTrue(all("not executed" in item.lower() for item in run.missing_islands))
 
+    def test_high_risk_mission_does_not_dispatch_without_digest_bound_approval(self):
+        calls = []
+        run = execute_mission(
+            Mission("Compare supplier offers and commit to purchase", risk_tier="high"),
+            executors={"general": lambda mission: calls.append(mission) or IslandResult("general", "done")},
+        )
+        self.assertEqual(calls, [])
+        self.assertEqual(run.status, "approval_required")
+        self.assertEqual(run.results, ())
+
+    def test_unknown_risk_tier_fails_closed_before_dispatch(self):
+        calls = []
+        run = execute_mission(
+            Mission("Research scientific evidence for this material", risk_tier="unknown"),
+            executors={"science_research": lambda mission: calls.append(mission) or IslandResult("science_research", "done")},
+        )
+        self.assertEqual(calls, [])
+        self.assertEqual(run.status, "needs_clarification")
+        self.assertTrue(run.unresolved_issues)
+
+    def test_executor_failure_is_recorded_as_partial_not_success(self):
+        def broken(mission):
+            raise TimeoutError("provider timeout")
+        run = execute_mission(
+            Mission("Research scientific evidence for factory materials", risk_tier="low"),
+            executors={"science_research": broken},
+        )
+        self.assertTrue(run.execution_errors)
+        self.assertEqual(run.status, "incomplete")
+        self.assertFalse(run.results)
+
     def test_human_gated_mission_does_not_dispatch_without_approval(self):
         calls = []
         run = execute_mission(

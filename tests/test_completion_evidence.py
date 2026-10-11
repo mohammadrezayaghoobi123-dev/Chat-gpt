@@ -38,6 +38,9 @@ class CompletionEvidenceTests(unittest.TestCase):
             mission_id="mission-1",
             contract_digest="contract-sha256",
             payload_digest="payload-sha256",
+            integration_id="payments-v1",
+            adapter_version="1.2.0",
+            provider_id="provider-x",
             evidence_type="provider_operation_receipt",
             evidence_ref="receipt://provider-x/abc",
             provider_receipt_id="receipt-abc",
@@ -118,6 +121,33 @@ class CompletionEvidenceTests(unittest.TestCase):
         })
         with self.assertRaisesRegex(EvidenceValidationError, "timezone-aware"):
             self.validate(altered)
+
+    def test_rejects_integration_mismatch_before_verifier(self):
+        altered = CompletionEvidence(**{
+            **self.evidence.__dict__, "integration_id": "other-integration"
+        })
+        called = []
+        with self.assertRaisesRegex(EvidenceValidationError, "integration ID mismatch"):
+            self.validate(altered, verifier=lambda item: called.append(item) or True)
+        self.assertEqual(called, [])
+
+    def test_rejects_adapter_version_mismatch_before_verifier(self):
+        altered = CompletionEvidence(**{
+            **self.evidence.__dict__, "adapter_version": "9.9.9"
+        })
+        called = []
+        with self.assertRaisesRegex(EvidenceValidationError, "adapter version mismatch"):
+            self.validate(altered, verifier=lambda item: called.append(item) or True)
+        self.assertEqual(called, [])
+
+    def test_rejects_provider_mismatch_before_verifier(self):
+        altered = CompletionEvidence(**{
+            **self.evidence.__dict__, "provider_id": "other-provider"
+        })
+        called = []
+        with self.assertRaisesRegex(EvidenceValidationError, "provider ID mismatch"):
+            self.validate(altered, verifier=lambda item: called.append(item) or True)
+        self.assertEqual(called, [])
 
     def test_rejects_truthy_non_boolean_verifier_result(self):
         # A truthy object is not an authenticated verification decision.

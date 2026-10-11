@@ -37,9 +37,9 @@ The JSONL store is single-writer and verifies the chain before read/append, but 
 **Action:** Keep this as a local prototype store. Before production use, add concurrency protection, permissions/secret redaction, versioned event schemas, and independently retained checkpoints. Avoid logging credentials, private prompts, or unnecessary personal data.
 
 ### P1 — Review outcomes are partly free-form
-Test observations currently carry string outcomes. This permits spelling variants and makes it easier to confuse a conflict, a counterexample, and a successful run.
+Test observations retain their raw string for audit compatibility. The current branch now adds a versioned canonical `TestOutcome` mapping (`1.0`): known aliases are normalized, unknown values remain preserved, and unknown/failed/error/inconclusive outcomes cannot produce a provisional-survival status. Explicit counterexample and contradiction outcomes remain separate.
 
-**Action:** Add a versioned outcome enum and an explicit mapping policy. Unknown outcome strings must be preserved but must not be interpreted as passing or falsifying evidence.
+**Remaining action:** Obtain a fresh focused test and CI result for these changes. Preserve raw outcome values when future schemas are migrated; never silently rewrite historic events.
 
 ### P2 — Evidence scoring is heuristic
 Source multipliers and independence groups are review heuristics, not calibrated probabilities. A score crossing a threshold is not a probability that a claim is true.
@@ -62,6 +62,21 @@ Do not merge by copying files blindly. When the original environment becomes acc
 5. Run compatibility tests and a reversible smoke test in an isolated environment.
 6. Merge only after explicit review; keep `main` and the original runtime unchanged until that gate passes.
 
+## Follow-up implementation update — 2026-10-11
+
+The next coding pass has added:
+
+- `src/master_brain/mission_contract.py`: versioned `MissionContract` schema (`1.0`) with stable cross-planner identity, constraints/success criteria, risk tier, selected islands, review level, budget/deadline, approval gate, capability gaps, assumptions/unknowns, clarification questions, dependencies, stop conditions, rationale, and traceability.
+- Mapping adapters for `core.route_task`, `archipelago.plan_mission`, and `meta_intelligence.plan_coordination`. Existing planners remain intact. The core adapter explicitly marks legacy route-to-island aliases as compatibility mappings whose semantic equivalence has not been independently validated.
+- Compatibility tests for stable identity, preserved planner fields, approval gating, duplicate island rejection, and empty-objective clarification.
+- A versioned outcome mapping (`TEST_OUTCOME_MAPPING_VERSION = "1.0"`) and tests that unknown, failed, errored, and inconclusive outcomes cannot be mistaken for passing checks.
+
+**Verification boundary:** These latest commits have been written to the feature branch, but a fresh test/CI result has not been obtained for them. Therefore the new contract and outcome-policy changes are implemented at source level but must not yet be reported as test-verified. No live OpenClaw/Codespaces integration was performed.
+
 ## Next safe implementation step
 
-Create a versioned canonical mission/plan interface and compatibility tests around the three existing planners. In parallel, harden falsification observation outcomes into an enum. Do not connect live providers or allow external actions until the mission lifecycle, evidence provenance, policy gate, and audit boundary are enforced and tested.
+1. Obtain a fresh run of the full test suite and offline demo for the current feature-branch head; repair any failures without weakening assertions.
+2. Add explicit cross-planner parity tests for risk, approval, empty/underspecified objectives, and capability gaps. Keep the legacy planners available as compatibility baselines.
+3. Build a small mission lifecycle service that produces the canonical contract, records plan provenance, accepts explicit execution/test observations, invokes the falsification review, and appends an audit event. It must never imply that a selected island actually ran unless execution evidence exists.
+4. Add versioned audit event schemas and conversion tests between legacy and new evidence representations before attempting any runtime wiring.
+5. Do not connect live providers or allow external actions until lifecycle, provenance, policy gate, and audit boundaries are enforced and tested.

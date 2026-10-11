@@ -58,6 +58,24 @@ class AuditStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditStoreError, "invalid audit record"):
             self.store.read_all()
 
+    def test_record_with_wrong_field_types_fails_closed(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(
+            json.dumps({
+                "event_id": 7,
+                "event_type": "claim.reviewed",
+                "recorded_at": "2026-10-11T12:00:00Z",
+                "actor": "unit-test",
+                "subject_ref": "claim:c-1",
+                "payload": {"status": "contested"},
+                "previous_hash": "0" * 64,
+                "event_hash": "0" * 64,
+            }) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(AuditStoreError, "invalid audit record"):
+            self.store.read_all()
+
     def test_blank_lines_are_rejected(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text("\n", encoding="utf-8")

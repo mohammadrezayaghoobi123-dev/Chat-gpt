@@ -10,6 +10,7 @@ from master_brain.mission_contract import (
     from_archipelago_plan,
     from_coordination_plan,
     from_core_task,
+    evaluate_execution_gate,
 )
 
 
@@ -78,6 +79,30 @@ class MissionContractTests(unittest.TestCase):
                 mission_id="mission-test", objective="x",
                 selected_islands=("science_research", "science_research"),
             )
+
+    def test_execution_gate_fails_closed_for_high_risk_without_approval(self):
+        contract = from_core_task(Task(
+            objective="Deploy production change",
+            risk=RiskTier.HIGH,
+        ))
+        blocked = evaluate_execution_gate(contract)
+        self.assertFalse(blocked.allowed)
+        self.assertIn("required human approval has not been granted", blocked.reasons)
+        approved = evaluate_execution_gate(contract, approval_granted=True)
+        self.assertTrue(approved.allowed)
+        self.assertEqual(approved.reasons, ())
+
+    def test_execution_gate_blocks_unresolved_clarification_even_if_approved(self):
+        contract = from_core_task(Task(objective=""))
+        result = evaluate_execution_gate(contract, approval_granted=True)
+        self.assertFalse(result.allowed)
+        self.assertIn("mission requires clarification before dispatch", result.reasons)
+
+    def test_execution_gate_is_policy_only_and_never_claims_dispatch(self):
+        contract = from_core_task(Task(objective="Summarize a public report"))
+        result = evaluate_execution_gate(contract)
+        self.assertTrue(result.allowed)
+        self.assertFalse(hasattr(result, "dispatch_performed"))
 
     def test_empty_objective_is_retained_and_requires_clarification(self):
         contract = from_core_task(Task(objective=""))

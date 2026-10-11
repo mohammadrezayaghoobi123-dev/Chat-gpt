@@ -324,8 +324,37 @@ def from_coordination_plan(
     )
 
 
+
+@dataclass(frozen=True)
+class ExecutionGateResult:
+    """Policy decision only; this function never dispatches or executes a mission."""
+
+    allowed: bool
+    reasons: tuple[str, ...]
+
+
+def evaluate_execution_gate(
+    contract: MissionContract,
+    *,
+    approval_granted: bool = False,
+) -> ExecutionGateResult:
+    """Fail closed when human approval or objective clarification is outstanding.
+
+    An approval flag is an explicit caller assertion, not proof of identity or
+    cryptographic authorization. Production callers must authenticate approvers.
+    """
+    reasons: list[str] = []
+    if contract.clarification_questions:
+        reasons.append("mission requires clarification before dispatch")
+    if contract.requires_approval and not approval_granted:
+        reasons.append("required human approval has not been granted")
+    return ExecutionGateResult(allowed=not reasons, reasons=tuple(reasons))
+
+
 __all__ = [
     "MISSION_CONTRACT_SCHEMA_VERSION",
+    "ExecutionGateResult",
+    "evaluate_execution_gate",
     "MissionContract",
     "MissionReviewLevel",
     "MissionRiskTier",

@@ -69,6 +69,26 @@ class AuditLedgerTests(unittest.TestCase):
                 payload={},
             )
 
+    def test_audit_event_rejects_malformed_field_types(self):
+        with self.assertRaisesRegex(TypeError, "event_id must be a string"):
+            create_event(
+                event_id=None,
+                event_type="test",
+                recorded_at="2026-10-11T12:00:00Z",
+                actor="test",
+                subject_ref="ref",
+                payload={},
+            )
+        with self.assertRaisesRegex(TypeError, "payload must be a dictionary"):
+            create_event(
+                event_id="ev",
+                event_type="test",
+                recorded_at="2026-10-11T12:00:00Z",
+                actor="test",
+                subject_ref="ref",
+                payload=[],
+            )
+
     def test_non_finite_json_numbers_are_rejected(self):
         with self.assertRaises(ValueError):
             create_event(

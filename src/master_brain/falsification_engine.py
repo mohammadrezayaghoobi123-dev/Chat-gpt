@@ -160,7 +160,7 @@ def review_falsification_plan(
     ))
     explicit_counterexample = any(
         item.executed and item.outcome.strip().lower() in
-        {"counterexample", "contradiction", "falsified", "refuted"}
+        {"counterexample", "falsified", "refuted"}
         for item in observed
     )
     explicit_contradiction = any(

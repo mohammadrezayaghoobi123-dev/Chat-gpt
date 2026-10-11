@@ -325,6 +325,42 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
         self.assertEqual(adapter.calls, 1)
         self.assertEqual(self.registry.get("stable-key").state, State.OUTCOME_UNKNOWN)
 
+    def test_concurrent_same_key_dispatches_adapter_exactly_once(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Lock
+        from master_brain.execution_registry import State
+
+        class CountingAdapter:
+            def __init__(self):
+                self.calls = 0
+                self.lock = Lock()
+
+            def invoke(self, payload):
+                with self.lock:
+                    self.calls += 1
+                time.sleep(0.03)
+                return {"accepted": True}
+
+        adapter = CountingAdapter()
+
+        def invoke(index):
+            return self.execute(
+                adapter, key="concurrent-pipeline-key",
+                prefix=f"concurrent-pipeline-{index}",
+            )
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(invoke, range(16)))
+
+        self.assertEqual(adapter.calls, 1)
+        self.assertEqual(sum(r.status == "response_received" for r in results), 1)
+        self.assertEqual(
+            sum(r.status == "duplicate_existing_execution" for r in results), 15
+        )
+        self.assertEqual(
+            self.registry.get("concurrent-pipeline-key").state, State.OUTCOME_UNKNOWN
+        )
+
     def test_changed_payload_for_same_key_is_rejected_before_dispatch(self):
         adapter = Adapter()
         first = self.execute(adapter)

@@ -592,5 +592,24 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
 
 
 
+    def test_dispatch_audit_events_share_durable_attempt_id(self):
+        adapter = Adapter()
+        result = self.execute(
+            adapter, key="attempt-audit-correlation-key",
+            prefix="attempt-audit-correlation",
+        )
+        self.assertEqual(result.status, "response_received")
+        events = [
+            event for event in self.store.read_all()
+            if event.event_type in ("mission.dispatch_started", "mission.dispatch_finished")
+        ]
+        self.assertEqual(len(events), 2)
+        attempt_ids = [event.payload.get("attempt_id") for event in events]
+        self.assertTrue(all(isinstance(value, str) and value for value in attempt_ids))
+        self.assertEqual(attempt_ids[0], attempt_ids[1])
+        attempt = self.registry.get_attempt(attempt_ids[0])
+        self.assertEqual(attempt.key, "attempt-audit-correlation-key")
+
+
 if __name__ == "__main__":
     unittest.main()

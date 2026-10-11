@@ -108,6 +108,22 @@ class RecoveryCandidateTests(unittest.TestCase):
                     self.transition(record, State.SUCCEEDED, "2026-10-12T00:00:09Z")
                 self.assertEqual(self.registry.get(record.key), record)
 
+    def test_unverified_failure_transition_is_blocked_after_dispatch_boundary(self):
+        from master_brain.execution_registry import InvalidTransition
+
+        running = self.reserve("no-false-failure-running", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        unknown = self.reserve("no-false-failure-reconciliation", "2026-10-12T00:00:02Z")
+        unknown = self.transition(unknown, State.RUNNING, "2026-10-12T00:00:03Z")
+        unknown = self.transition(unknown, State.OUTCOME_UNKNOWN, "2026-10-12T00:00:04Z")
+        unknown = self.transition(unknown, State.RECONCILIATION_REQUIRED, "2026-10-12T00:00:05Z")
+
+        for record in (running, unknown):
+            with self.subTest(key=record.key):
+                with self.assertRaises(InvalidTransition):
+                    self.transition(record, State.FAILED, "2026-10-12T00:00:06Z")
+                self.assertEqual(self.registry.get(record.key), record)
+
     def test_concurrent_identical_reservations_create_exactly_one_record(self):
         barrier = threading.Barrier(2)
         results = []

@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from master_brain.audit_store import AuditStore, AuditStoreError
@@ -71,6 +72,21 @@ class MissionApprovalTests(unittest.TestCase):
             self.approve(approver_subject="  ")
         with self.assertRaisesRegex(ValueError, "authentication_method"):
             self.approve(authentication_method="")
+
+    def test_malformed_receipt_type_fails_closed(self):
+        result = evaluate_approved_execution_gate(self.contract, self.store, "not-a-receipt")
+        self.assertFalse(result.allowed)
+        self.assertIn("approval receipt has an invalid type", result.reasons)
+
+    def test_non_string_receipt_metadata_fails_closed(self):
+        receipt = self.approve()
+        malformed = replace(receipt, approver_subject=None)
+        result = evaluate_approved_execution_gate(self.contract, self.store, malformed)
+        self.assertFalse(result.allowed)
+        self.assertIn(
+            "approval receipt field approver_subject must be a string",
+            result.reasons,
+        )
 
     def test_duplicate_event_id_is_rejected(self):
         self.approve()

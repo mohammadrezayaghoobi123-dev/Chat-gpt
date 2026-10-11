@@ -11,6 +11,7 @@ from master_brain.falsification_engine import (
 )
 from master_brain.falsification_audit import (
     falsification_review_payload, record_falsification_review,
+    run_and_record_falsification_review,
 )
 
 
@@ -85,6 +86,31 @@ class FalsificationAuditTests(unittest.TestCase):
             payload["decision_change_reason"],
             "Independent measurement found a repeatable shortfall",
         )
+
+
+    def test_end_to_end_operation_reviews_then_persists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = AuditStore(Path(directory) / "events.jsonl")
+            review, event = run_and_record_falsification_review(
+                store,
+                self.plan,
+                [
+                    TestObservation("test-1", True, "pass", "Machine log: 103 units", ("support-1",)),
+                    TestObservation("test-2", True, "contradiction", "Independent count: 72 units", ("counter-1",)),
+                ],
+                self.evidence,
+                event_id="audit-e2e",
+                recorded_at="2026-10-11T12:45:00Z",
+                actor="master-brain-test",
+                policy=self.policy,
+            )
+            self.assertEqual(review.status.value, event.payload["status"])
+            self.assertEqual(len(store.read_all()), 1)
+            counter_record = next(
+                item for item in event.payload["evidence_records"]
+                if item["evidence_id"] == "counter-1"
+            )
+            self.assertEqual(counter_record["polarity"], "counters")
 
     def test_review_is_appended_and_survives_reload(self):
         with tempfile.TemporaryDirectory() as directory:

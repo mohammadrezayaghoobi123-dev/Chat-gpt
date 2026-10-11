@@ -71,6 +71,26 @@ class FalsificationAuditTests(unittest.TestCase):
         self.assertEqual(counter_record["polarity"], "counters")
         self.assertTrue(counter_record["attached_to_executed_test"])
 
+    def test_audit_preserves_raw_and_normalized_unknown_outcome(self):
+        raw_outcome = "operator_says_probably_ok"
+        review = review_falsification_plan(
+            self.plan,
+            [
+                TestObservation("test-1", True, raw_outcome, "Unmapped runner status"),
+                TestObservation("test-2", True, "pass", "Machine log: 103 units"),
+            ],
+            self.evidence,
+            self.policy,
+        )
+        payload = falsification_review_payload(review)
+        self.assertEqual(payload["outcome_mapping_version"], "1.0")
+        recorded = next(item for item in payload["tests"]["executed"] if item["test_id"] == "test-1")
+        self.assertEqual(recorded["outcome"], raw_outcome)
+        self.assertEqual(recorded["outcome_kind"], "unknown")
+        self.assertEqual(recorded["outcome_mapping_version"], "1.0")
+        self.assertEqual(review.status.value, "tests_incomplete")
+        self.assertFalse(review.truth_established)
+
     def test_decision_change_requires_explanation(self):
         with self.assertRaisesRegex(ValueError, "decision_change_reason is required"):
             falsification_review_payload(

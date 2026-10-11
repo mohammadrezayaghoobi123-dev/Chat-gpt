@@ -12,7 +12,7 @@ from master_brain.integrations import (
 )
 from master_brain.mission_approval import record_mission_approval
 from master_brain.mission_contract import MissionContract, MissionRiskTier
-from master_brain.mission_execution import execute_mission_once
+from master_brain.mission_execution import execute_mission_once, execute_mission_idempotently
 
 
 class Adapter:
@@ -280,6 +280,81 @@ class ExecutionRegistryTests(unittest.TestCase):
         persisted = self.registry.get(record.key)
         self.assertEqual(persisted.state, State.RUNNING)
         self.assertEqual(persisted.version, running.version)
+
+
+
+class IdempotentMissionExecutionTests(unittest.TestCase):
+    def setUp(self):
+        from master_brain.execution_registry import SQLiteExecutionRegistry
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.store = AuditStore(root / "audit.jsonl")
+        self.registry = SQLiteExecutionRegistry(str(root / "executions.sqlite3"), timeout=0.25)
+        self.contract = MissionContract(
+            mission_id="mission-idempotent", objective="Execute once",
+            risk_tier=MissionRiskTier.HIGH, requires_approval=True,
+        )
+        self.requirement = IntegrationRequirement(
+            ("text_reasoning",), required_kind=IntegrationKind.MODEL,
+        )
+        self.payload = {"mission_id": self.contract.mission_id, "prompt": "stable"}
+        self.receipt = record_mission_approval(
+            self.store, self.contract, event_id="approval-idempotent",
+            recorded_at="2026-10-12T00:00:00Z",
+            approver_subject="user:reviewer",
+            authentication_method="upstream-session",
+        )
+
+    def execute(self, adapter, *, key="stable-key", payload=None, prefix="idempotent-run"):
+        return execute_mission_idempotently(
+            self.contract, self.store, self.receipt, descriptor(), self.requirement,
+            adapter, self.payload if payload is None else payload, self.registry,
+            idempotency_key=key, event_id_prefix=prefix,
+            recorded_at="2026-10-12T00:01:00Z", actor="system:test",
+        )
+
+    def test_duplicate_request_never_invokes_adapter_twice(self):
+        from master_brain.execution_registry import State
+        adapter = Adapter()
+        first = self.execute(adapter)
+        second = self.execute(adapter)
+        self.assertEqual(first.status, "response_received")
+        self.assertIn("registry_state:OUTCOME_UNKNOWN", first.reason)
+        self.assertEqual(second.status, "duplicate_existing_execution")
+        self.assertEqual(adapter.calls, 1)
+        self.assertEqual(self.registry.get("stable-key").state, State.OUTCOME_UNKNOWN)
+
+    def test_changed_payload_for_same_key_is_rejected_before_dispatch(self):
+        adapter = Adapter()
+        first = self.execute(adapter)
+        conflict = self.execute(adapter, payload={"mission_id": self.contract.mission_id, "prompt": "changed"})
+        self.assertEqual(first.status, "response_received")
+        self.assertEqual(conflict.status, "idempotency_conflict")
+        self.assertEqual(adapter.calls, 1)
+
+    def test_pre_dispatch_audit_failure_marks_failed_without_adapter_call(self):
+        from master_brain.execution_registry import State
+        adapter = Adapter()
+
+        class FailingAppendStore:
+            def read_all(inner_self):
+                return self.store.read_all()
+
+            def append(inner_self, **kwargs):
+                if kwargs.get("event_type") == "mission.dispatch_started":
+                    raise RuntimeError("simulated audit failure")
+                return self.store.append(**kwargs)
+
+        result = execute_mission_idempotently(
+            self.contract, FailingAppendStore(), self.receipt, descriptor(),
+            self.requirement, adapter, self.payload, self.registry,
+            idempotency_key="audit-fail-key", event_id_prefix="audit-fail-run",
+            recorded_at="2026-10-12T00:01:00Z", actor="system:test",
+        )
+        self.assertEqual(result.status, "audit_unavailable")
+        self.assertEqual(adapter.calls, 0)
+        self.assertEqual(self.registry.get("audit-fail-key").state, State.FAILED)
 
 
 

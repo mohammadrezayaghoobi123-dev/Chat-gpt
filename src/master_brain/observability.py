@@ -44,23 +44,26 @@ def observation(
     try:
         from langfuse import get_client
         manager = get_client().start_as_current_observation(as_type=as_type, name=name)
+        raw_observation = manager.__enter__()
     except Exception:
+        # Includes missing SDK, invalid configuration, and span-start failures.
         yield None
         return
 
-    body_failed = False
+    safe_observation = _SafeObservation(raw_observation)
+    safe_observation.update(input=dict(input_data), metadata=dict(metadata or {}))
     try:
-        with manager as raw_observation:
-            safe_observation = _SafeObservation(raw_observation)
-            safe_observation.update(input=dict(input_data), metadata=dict(metadata or {}))
-            try:
-                yield safe_observation
-            except BaseException as exc:
-                body_failed = True
-                safe_observation.update(level="ERROR", status_message=type(exc).__name__)
-                raise
-    except Exception:
-        # Suppress exporter/SDK failures, but never suppress an application error.
-        if body_failed:
-            raise
-        return
+        yield safe_observation
+    except BaseException as exc:
+        safe_observation.update(level="ERROR", status_message=type(exc).__name__)
+        try:
+            manager.__exit__(type(exc), exc, exc.__traceback__)
+        except Exception:
+            pass
+        raise
+    else:
+        try:
+            manager.__exit__(None, None, None)
+        except Exception:
+            # Export/close failures must not change a successful mission result.
+            pass

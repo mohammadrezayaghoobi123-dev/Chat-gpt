@@ -20,6 +20,49 @@ from master_brain.evidence_protocol import (
 )
 
 
+class TestOutcome(str, Enum):
+    """Canonical outcome vocabulary; UNKNOWN preserves unrecognized raw values."""
+
+    PASS = "pass"
+    FAIL = "fail"
+    COUNTEREXAMPLE = "counterexample"
+    FALSIFIED = "falsified"
+    REFUTED = "refuted"
+    CONTRADICTION = "contradiction"
+    CONFLICT = "conflict"
+    NOT_RUN = "not_run"
+    INCONCLUSIVE = "inconclusive"
+    ERROR = "error"
+    UNKNOWN = "unknown"
+
+
+_OUTCOME_ALIASES = {
+    "pass": TestOutcome.PASS,
+    "passed": TestOutcome.PASS,
+    "success": TestOutcome.PASS,
+    "succeeded": TestOutcome.PASS,
+    "fail": TestOutcome.FAIL,
+    "failed": TestOutcome.FAIL,
+    "counterexample": TestOutcome.COUNTEREXAMPLE,
+    "falsified": TestOutcome.FALSIFIED,
+    "refuted": TestOutcome.REFUTED,
+    "contradiction": TestOutcome.CONTRADICTION,
+    "conflict": TestOutcome.CONFLICT,
+    "not_run": TestOutcome.NOT_RUN,
+    "not-run": TestOutcome.NOT_RUN,
+    "not run": TestOutcome.NOT_RUN,
+    "skipped": TestOutcome.NOT_RUN,
+    "pending": TestOutcome.NOT_RUN,
+    "inconclusive": TestOutcome.INCONCLUSIVE,
+    "error": TestOutcome.ERROR,
+}
+
+
+def _classify_outcome(raw_outcome: str) -> TestOutcome:
+    """Map known aliases; never coerce an unknown value into a passing result."""
+    return _OUTCOME_ALIASES.get(raw_outcome.strip().lower(), TestOutcome.UNKNOWN)
+
+
 class FalsificationStatus(str, Enum):
     NOT_DESIGNED = "not_designed"
     READY_TO_TEST = "ready_to_test"
@@ -69,13 +112,22 @@ class TestObservation:
     observed_result: str
     evidence_ids: tuple[str, ...] = ()
 
+    @property
+    def outcome_kind(self) -> TestOutcome:
+        """Canonical classification while retaining the original outcome string."""
+        return _classify_outcome(self.outcome)
+
     def __post_init__(self) -> None:
         if not self.test_id.strip():
             raise ValueError("test_id must not be empty")
+        if not isinstance(self.outcome, str):
+            raise TypeError("outcome must be a string so raw unknown values remain auditable")
         if self.executed and not self.observed_result.strip():
             raise ValueError("executed tests require an observed result")
         if not self.executed and self.observed_result.strip():
             raise ValueError("unexecuted tests cannot claim an observed result")
+        if self.executed and _classify_outcome(self.outcome) is TestOutcome.NOT_RUN:
+            raise ValueError("executed tests cannot have a not-run outcome")
         if len(self.evidence_ids) != len(set(self.evidence_ids)):
             raise ValueError("evidence IDs must be unique per test observation")
 
@@ -107,9 +159,10 @@ def review_falsification_plan(
     """Review whether a claim survived specified tests; never call it proven.
 
     Only evidence explicitly attached to executed observations is eligible.
-    A test outcome of 'counterexample' or 'contradiction' is treated as a
-    disconfirmation signal. Other outcome strings are preserved but not
-    interpreted as proof.
+    Outcomes are mapped through a versioned vocabulary. Unknown outcomes are
+    preserved verbatim and force a fail-closed incomplete status; they can
+    never be interpreted as a passing test. A contradiction is distinct from
+    an explicit counterexample.
     """
     observed = tuple(observations)
     evidence = tuple(evidence_records)
@@ -158,14 +211,26 @@ def review_falsification_plan(
         item.evidence_id for item in eligible
         if item.polarity.value == "counters"
     ))
+    unknown_outcomes = tuple(
+        item for item in observed
+        if item.executed and item.outcome_kind is TestOutcome.UNKNOWN
+    )
+    if unknown_outcomes:
+        for item in unknown_outcomes:
+            reasons.append(
+                f"Unknown outcome {item.outcome!r} for test {item.test_id}; "
+                "the outcome was preserved and not treated as a pass."
+            )
     explicit_counterexample = any(
-        item.executed and item.outcome.strip().lower() in
-        {"counterexample", "falsified", "refuted"}
+        item.executed and item.outcome_kind in {
+            TestOutcome.COUNTEREXAMPLE, TestOutcome.FALSIFIED, TestOutcome.REFUTED
+        }
         for item in observed
     )
     explicit_contradiction = any(
-        item.executed and item.outcome.strip().lower() in
-        {"contradiction", "conflict"}
+        item.executed and item.outcome_kind in {
+            TestOutcome.CONTRADICTION, TestOutcome.CONFLICT
+        }
         for item in observed
     )
 
@@ -177,9 +242,12 @@ def review_falsification_plan(
     elif assessment.status is ReviewStatus.CONTESTED or explicit_contradiction:
         status = FalsificationStatus.CONTRADICTION_REMAINS
         reasons.append("Supporting and counterevidence conflict or an observation explicitly reports contradiction.")
-    elif missing or unexecuted or unexpected:
+    elif missing or unexecuted or unexpected or unknown_outcomes:
         status = FalsificationStatus.TESTS_INCOMPLETE
-        reasons.append("The planned test set is incomplete, includes unexecuted tests, or has unexpected observations.")
+        reasons.append(
+            "The planned test set is incomplete, includes unexecuted tests, "
+            "contains unknown outcomes, or has unexpected observations."
+        )
     elif not plan.disconfirmation_criteria or not plan.test_ids:
         status = FalsificationStatus.NOT_DESIGNED
         reasons.append("No complete disconfirmation criteria and test set were defined.")

@@ -203,7 +203,11 @@ def execute_mission_idempotently(
             contract.mission_id, "outcome_unknown",
             reason="execution_exception_after_claim; external_effect_may_have_occurred",
         )
-    target = State.FAILED if result.status in {"rejected", "audit_unavailable"} else State.OUTCOME_UNKNOWN
+    # Once the registry enters RUNNING, this generic API cannot prove that
+    # dispatch did not happen. Even for known pre-dispatch aborts, keep the
+    # record in OUTCOME_UNKNOWN until a dedicated evidence-aware terminal
+    # transition exists; never bypass the registry's fail-closed state guard.
+    target = State.OUTCOME_UNKNOWN
     try:
         registry.transition(
             key=idempotency_key, expected_version=running.version, target=target,

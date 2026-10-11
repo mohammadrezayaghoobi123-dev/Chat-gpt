@@ -358,6 +358,45 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
 
 
 
+    def test_registry_update_failure_after_dispatch_blocks_blind_retry(self):
+        from master_brain.execution_registry import RegistryError, State
+
+        class FailAfterDispatchRegistry:
+            def __init__(self, inner):
+                self.inner = inner
+                self.calls = 0
+
+            def reserve(self, **kwargs):
+                return self.inner.reserve(**kwargs)
+
+            def get(self, key):
+                return self.inner.get(key)
+
+            def transition(self, **kwargs):
+                self.calls += 1
+                if kwargs.get("target") is State.OUTCOME_UNKNOWN:
+                    raise RegistryError("simulated persistence failure after dispatch")
+                return self.inner.transition(**kwargs)
+
+        adapter = Adapter()
+        guarded = FailAfterDispatchRegistry(self.registry)
+        first = execute_mission_idempotently(
+            self.contract, self.store, self.receipt, descriptor(), self.requirement,
+            adapter, self.payload, guarded,
+            idempotency_key="registry-write-fail-key", event_id_prefix="registry-write-fail-run",
+            recorded_at="2026-10-12T00:01:00Z", actor="system:test",
+        )
+        second = execute_mission_idempotently(
+            self.contract, self.store, self.receipt, descriptor(), self.requirement,
+            adapter, self.payload, guarded,
+            idempotency_key="registry-write-fail-key", event_id_prefix="registry-write-fail-run-2",
+            recorded_at="2026-10-12T00:02:00Z", actor="system:test",
+        )
+        self.assertEqual(first.status, "execution_registry_incomplete")
+        self.assertEqual(second.status, "duplicate_existing_execution")
+        self.assertEqual(adapter.calls, 1)
+        self.assertEqual(self.registry.get("registry-write-fail-key").state, State.RUNNING)
+
     def test_adapter_exception_is_unknown_and_duplicate_is_not_retried(self):
         from master_brain.execution_registry import State
 

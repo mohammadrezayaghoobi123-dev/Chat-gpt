@@ -120,7 +120,7 @@ Automatic retry must remain disabled while the result is uncertain unless provid
 The current `validate_completion_evidence` function is a useful structural gate, but it is not yet a trusted completion boundary:
 
 - It accepts a caller-supplied verifier callable and verifier ID. Production composition must resolve these from a controlled, versioned allowlist; user or mission payloads must not select arbitrary callables.
-- The evidence envelope does not yet bind integration ID, adapter version, provider ID, target resource, verifier version, or policy version. These must be compared against persisted attempt metadata and trusted configuration before completion.
+- The evidence envelope now binds integration ID, adapter version, and provider ID, and the validator compares them against persisted attempt metadata before invoking the verifier. Target-resource, verifier-version, and policy-version bindings are still absent and remain required before completion.
 - The verifier sees a receipt-shaped envelope, but authenticity and operation semantics remain the verifier's responsibility. A generic callback returning `True` is only suitable for a unit-test fixture, never production wiring.
 - The timestamp check verifies ISO-8601 syntax and timezone awareness only. It does not establish clock trust, freshness, monotonic ordering, or resistance to replay.
 - Evidence is hashed but not persisted or consumed. The same receipt can therefore be re-presented unless the future registry operation adds provider-scoped replay identity and uniqueness.
@@ -142,6 +142,16 @@ Before implementing the atomic completion method, tests should prove that:
 8. stale verification results cannot complete an execution after its state/version changes.
 
 The existing generic `transition(..., target=State.SUCCEEDED)` must remain blocked until these tests run successfully in observed CI.
+
+## 7C. Incremental implementation update (2026-10-12)
+
+Implemented in the current prototype:
+- Completion evidence now carries `integration_id`, `adapter_version`, and `provider_id`; these fields are included in the canonical evidence digest.
+- The structural validator compares those fields with the persisted attempt metadata before calling the verifier.
+- Negative tests assert that each of the three mismatches is rejected and that the provider verifier is not called on those mismatch paths.
+- The attempt-record reader rejects corrupt dispatch-boundary flags outside integer 0/1, invalid attempt numbers, and blank identity/timestamp fields.
+
+Latest observed CI for commit `8438a4d2bd2ba7f1dedb9475e22bb231c70990fd` completed successfully; the unit-test log reports 205 tests run. This is prototype-level evidence only. It does not implement a controlled verifier allowlist, target-resource/policy-version binding, evidence persistence, replay prevention, or an atomic evidence-aware `SUCCEEDED` transition. The generic success transition remains blocked.
 
 ## 8. Acceptance conditions before enabling success
 

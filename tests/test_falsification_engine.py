@@ -173,6 +173,30 @@ class FalsificationEngineTests(unittest.TestCase):
         self.assertFalse(result.truth_established)
         self.assertTrue(any("unknown outcome" in reason.lower() for reason in result.reasons))
 
+    def test_unknown_is_neutral_and_distinct_from_failure_or_counterexample(self):
+        unknown = TestObservation(
+            "test-1", True, "mystery-state", "Runner returned an unmapped state"
+        )
+        result = review_falsification_plan(
+            self.plan,
+            [
+                unknown,
+                TestObservation("test-2", True, "pass", "Independent run yielded 101 units"),
+            ],
+            [
+                self.evidence("e1", "machine-log"),
+                self.evidence("e2", "independent-inspector"),
+            ],
+            self.policy,
+        )
+        self.assertEqual(unknown.outcome_kind, TestOutcome.UNKNOWN)
+        self.assertEqual(result.status, FalsificationStatus.TESTS_INCOMPLETE)
+        self.assertNotEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
+        self.assertFalse(result.truth_established)
+        self.assertTrue(any("neither pass nor fail" in reason for reason in result.reasons))
+        self.assertTrue(any("not evidence for or against the claim" in reason for reason in result.reasons))
+        self.assertFalse(any("Failed criterion" in reason for reason in result.reasons))
+
     def test_failed_or_inconclusive_test_cannot_be_treated_as_a_pass(self):
         for outcome in ("fail", "error", "inconclusive"):
             with self.subTest(outcome=outcome):

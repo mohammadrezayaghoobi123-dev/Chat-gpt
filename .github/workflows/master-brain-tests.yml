@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - master-brain/integrated-mvp
+      - master-brain/proof-protocol-v0
   pull_request:
     branches:
       - main
+      - master-brain/integrated-mvp
 
 permissions:
   contents: read

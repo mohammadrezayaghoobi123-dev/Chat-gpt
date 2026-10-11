@@ -397,6 +397,36 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
         self.assertEqual(adapter.calls, 1)
         self.assertEqual(self.registry.get("registry-write-fail-key").state, State.RUNNING)
 
+    def test_post_dispatch_audit_failure_keeps_unknown_and_blocks_duplicate(self):
+        from master_brain.execution_registry import State
+
+        class FailFinishedEventStore:
+            def read_all(inner_self):
+                return self.store.read_all()
+
+            def append(inner_self, **kwargs):
+                if kwargs.get("event_type") == "mission.dispatch_finished":
+                    raise RuntimeError("simulated lost post-dispatch audit write")
+                return self.store.append(**kwargs)
+
+        adapter = Adapter()
+        first = execute_mission_idempotently(
+            self.contract, FailFinishedEventStore(), self.receipt, descriptor(),
+            self.requirement, adapter, self.payload, self.registry,
+            idempotency_key="post-audit-fail-key", event_id_prefix="post-audit-fail-run",
+            recorded_at="2026-10-12T00:01:00Z", actor="system:test",
+        )
+        second = self.execute(
+            adapter, key="post-audit-fail-key", prefix="post-audit-fail-run-retry"
+        )
+
+        self.assertEqual(first.status, "executed_audit_incomplete")
+        self.assertEqual(second.status, "duplicate_existing_execution")
+        self.assertEqual(adapter.calls, 1)
+        self.assertEqual(
+            self.registry.get("post-audit-fail-key").state, State.OUTCOME_UNKNOWN
+        )
+
     def test_adapter_exception_is_unknown_and_duplicate_is_not_retried(self):
         from master_brain.execution_registry import State
 

@@ -32,7 +32,7 @@ class LangfuseTracingTests(unittest.TestCase):
     def test_mission_runs_normally_when_tracing_is_not_configured(self):
         with patch.dict(os.environ, {}, clear=True):
             run = execute_mission(
-                Mission("Research scientific evidence for factory materials", risk_tier="low"),
+                Mission("Research scientific evidence carefully", risk_tier="low"),
                 {"science_research": lambda _mission: IslandResult("science_research", "done")},
             )
 
@@ -48,7 +48,7 @@ class LangfuseTracingTests(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=True), patch.dict(sys.modules, {"langfuse": fake_module}):
             run = execute_mission(
-                Mission("CONFIDENTIAL: research supplier dispute", risk_tier="low"),
+                Mission("CONFIDENTIAL: research scientific evidence", risk_tier="low"),
                 {"science_research": lambda _mission: IslandResult("science_research", "private result")},
             )
 
@@ -71,7 +71,7 @@ class LangfuseTracingTests(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=True), patch.dict(sys.modules, {"langfuse": fake_module}):
             run = execute_mission(
-                Mission("Research scientific evidence for factory materials", risk_tier="low"),
+                Mission("Research scientific evidence carefully", risk_tier="low"),
                 {"science_research": lambda _mission: IslandResult("science_research", "done")},
             )
 

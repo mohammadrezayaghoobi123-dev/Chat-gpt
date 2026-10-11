@@ -29,10 +29,34 @@ def eligible_descriptor():
     )
 
 
+class MutatingAdapter:
+    def __init__(self):
+        self.output = {"nested": {"values": [1]}}
+
+    def invoke(self, payload):
+        payload["mission"]["constraints"].append("mutated")
+        return self.output
+
+
 class DispatchInvalidContractTypeTests(unittest.TestCase):
     def setUp(self):
         self.requirement = IntegrationRequirement(("text_reasoning",))
         self.payload = {"question": "test"}
+
+    def test_adapter_cannot_mutate_callers_nested_payload(self):
+        adapter = MutatingAdapter()
+        payload = {"mission": {"constraints": ["preserve"]}}
+        dispatch_once(eligible_descriptor(), self.requirement, adapter, payload)
+        self.assertEqual(payload, {"mission": {"constraints": ["preserve"]}})
+
+    def test_returned_output_is_detached_from_adapter_owned_nested_data(self):
+        adapter = MutatingAdapter()
+        result = dispatch_once(
+            eligible_descriptor(), self.requirement, adapter,
+            {"mission": {"constraints": ["preserve"]}},
+        )
+        adapter.output["nested"]["values"].append(2)
+        self.assertEqual(result.output, {"nested": {"values": [1]}})
 
     def test_invalid_descriptor_type_fails_closed_before_invocation(self):
         adapter = CountingAdapter()

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import hashlib
 import json
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from master_brain.audit_store import AuditStore, AuditStoreError
 from master_brain.dispatch import DispatchResult, DispatchStatus, IntegrationAdapter, dispatch_once
@@ -58,6 +58,7 @@ def execute_mission_once(
     event_id_prefix: str,
     recorded_at: str,
     actor: str,
+    before_dispatch: Callable[[], None] | None = None,
 ) -> MissionExecutionResult:
     """Gate, write a pre-dispatch audit event, dispatch once, then record outcome.
 
@@ -95,6 +96,15 @@ def execute_mission_once(
         return MissionExecutionResult(
             contract.mission_id, "audit_unavailable", reason="pre_dispatch_audit_failed"
         )
+
+    if before_dispatch is not None:
+        try:
+            before_dispatch()
+        except Exception:
+            return MissionExecutionResult(
+                contract.mission_id, "registry_unavailable",
+                reason="dispatch_boundary_persistence_failed_adapter_not_invoked",
+            )
 
     result = dispatch_once(integration, requirement, adapter, payload)
     try:
@@ -235,9 +245,6 @@ def execute_mission_idempotently(
             provider_id=str(getattr(integration, "provider_id", integration.integration_id)),
             recorded_at=recorded_at,
         )
-        registry.mark_attempt_dispatch_boundary(
-            attempt_id=attempt.attempt_id, recorded_at=recorded_at
-        )
     except (RegistryError, TypeError, ValueError):
         return MissionExecutionResult(
             contract.mission_id, "registry_unavailable",
@@ -256,6 +263,9 @@ def execute_mission_idempotently(
             contract, store, receipt, integration, requirement, adapter, payload,
             event_id_prefix=execution_event_id_prefix,
             recorded_at=recorded_at, actor=actor,
+            before_dispatch=lambda: registry.mark_attempt_dispatch_boundary(
+                attempt_id=attempt.attempt_id, recorded_at=recorded_at
+            ),
         )
     except Exception:
         result = MissionExecutionResult(

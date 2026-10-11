@@ -35,8 +35,15 @@ def run_mission(
         raise ValueError("mission_id must be a non-empty string")
     if not isinstance(payload, Mapping):
         raise TypeError("payload must be a mapping")
+    import json
     try:
-        result = handler(dict(payload))
+        # JSON round-trip validates the contract and isolates nested input values.
+        safe_payload = json.loads(json.dumps(dict(payload), allow_nan=False))
+    except (TypeError, ValueError, OverflowError):
+        return MissionResult(mission_id, MissionStatus.INVALID_RESULT,
+                             error_code="payload_not_json_compatible")
+    try:
+        result = handler(safe_payload)
     except Exception as exc:
         # Return exception type only; exception messages can leak secrets.
         return MissionResult(mission_id, MissionStatus.FAILED,
@@ -45,11 +52,9 @@ def run_mission(
         return MissionResult(mission_id, MissionStatus.INVALID_RESULT,
                              error_code="result_not_mapping")
     try:
-        copied = dict(result)
-        # Reject values that are not JSON-compatible without accepting NaN/Infinity.
-        import json
-        json.dumps(copied, allow_nan=False)
+        # Detach returned nested data from handler-owned containers.
+        safe_result = json.loads(json.dumps(dict(result), allow_nan=False))
     except (TypeError, ValueError, OverflowError):
         return MissionResult(mission_id, MissionStatus.INVALID_RESULT,
                              error_code="result_not_json_compatible")
-    return MissionResult(mission_id, MissionStatus.SUCCEEDED, result=copied)
+    return MissionResult(mission_id, MissionStatus.SUCCEEDED, result=safe_result)

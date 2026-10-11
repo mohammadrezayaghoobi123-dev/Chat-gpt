@@ -83,6 +83,8 @@ class MissionContract:
             raise TypeError("risk_tier must be a MissionRiskTier")
         if not isinstance(self.review_level, MissionReviewLevel):
             raise TypeError("review_level must be a MissionReviewLevel")
+        if type(self.requires_approval) is not bool:
+            raise TypeError("requires_approval must be a boolean")
         # bool is an int subclass in Python; reject it explicitly because
         # policy budgets and deadlines must be actual integer quantities.
         if type(self.budget_units) is not int:
@@ -172,6 +174,8 @@ def _build_contract(
     rationale: Iterable[str] = (),
     traceability: Iterable[str] = (),
 ) -> MissionContract:
+    if type(requires_approval) is not bool:
+        raise TypeError("requires_approval must be a boolean")
     constraint_tuple = tuple(constraints)
     criteria_tuple = tuple(success_criteria)
     risk = _normalize_risk(risk_tier)

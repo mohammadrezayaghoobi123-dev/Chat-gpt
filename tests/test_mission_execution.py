@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from master_brain.audit_store import AuditStore
+from master_brain.audit_store import AuditStore, AuditStoreError
 from master_brain.dispatch import DispatchStatus
 from master_brain.integrations import (
     IntegrationDescriptor, IntegrationHealth, IntegrationKind,
@@ -79,12 +79,23 @@ class MissionExecutionPipelineTests(unittest.TestCase):
         self.assertEqual(events[-1].event_type, "mission.dispatch_finished")
         self.assertFalse(events[-1].payload["external_effect_confirmed"])
 
-    def test_post_dispatch_audit_failure_warns_against_blind_retry(self):
+    def test_pre_dispatch_audit_failure_never_invokes_adapter(self):
         receipt = self.approve()
         adapter = Adapter()
-        result = self.execute(adapter, receipt, prefix="approval-42")
-        # Prefix collides with the already-used approval event ID, so the
-        # pre-dispatch append fails and the adapter is not called.
+
+        class FailingAppendStore:
+            def read_all(inner_self):
+                return self.store.read_all()
+
+            def append(inner_self, **kwargs):
+                raise AuditStoreError("simulated persistence outage")
+
+        result = execute_mission_once(
+            self.contract, FailingAppendStore(), receipt, descriptor(),
+            self.requirement, adapter, self.payload,
+            event_id_prefix="run-failing-audit",
+            recorded_at="2026-10-12T00:01:00Z", actor="system:test",
+        )
         self.assertEqual(result.status, "audit_unavailable")
         self.assertEqual(adapter.calls, 0)
 

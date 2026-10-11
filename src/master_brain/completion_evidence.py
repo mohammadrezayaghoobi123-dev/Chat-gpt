@@ -26,6 +26,9 @@ class CompletionEvidence:
     mission_id: str
     contract_digest: str
     payload_digest: str
+    integration_id: str
+    adapter_version: str
+    provider_id: str
     evidence_type: str
     evidence_ref: str
     provider_receipt_id: str
@@ -62,6 +65,9 @@ def evidence_digest(evidence: CompletionEvidence) -> str:
         "mission_id": evidence.mission_id,
         "contract_digest": evidence.contract_digest,
         "payload_digest": evidence.payload_digest,
+        "integration_id": evidence.integration_id,
+        "adapter_version": evidence.adapter_version,
+        "provider_id": evidence.provider_id,
         "evidence_type": evidence.evidence_type,
         "evidence_ref": evidence.evidence_ref,
         "provider_receipt_id": evidence.provider_receipt_id,
@@ -96,6 +102,9 @@ def validate_completion_evidence(
         ("mission_id", evidence.mission_id),
         ("contract_digest", evidence.contract_digest),
         ("payload_digest", evidence.payload_digest),
+        ("integration_id", evidence.integration_id),
+        ("adapter_version", evidence.adapter_version),
+        ("provider_id", evidence.provider_id),
         ("evidence_type", evidence.evidence_type),
         ("evidence_ref", evidence.evidence_ref),
         ("provider_receipt_id", evidence.provider_receipt_id),
@@ -117,6 +126,12 @@ def validate_completion_evidence(
         raise EvidenceValidationError("contract digest mismatch")
     if evidence.payload_digest != execution.payload_digest:
         raise EvidenceValidationError("payload digest mismatch")
+    if evidence.integration_id != attempt.integration_id:
+        raise EvidenceValidationError("integration ID mismatch")
+    if evidence.adapter_version != attempt.adapter_version:
+        raise EvidenceValidationError("adapter version mismatch")
+    if evidence.provider_id != attempt.provider_id:
+        raise EvidenceValidationError("provider ID mismatch")
     if not attempt.dispatch_boundary_entered:
         raise EvidenceValidationError("dispatch boundary was not entered")
     try:

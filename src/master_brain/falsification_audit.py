@@ -65,6 +65,25 @@ def falsification_review_payload(
         "rival_hypothesis_ids": list(review.rival_hypothesis_ids),
         "disconfirmation_criteria": list(review.disconfirmation_criteria),
         "counterexample_evidence_ids": list(review.counterexample_evidence_ids),
+        "evidence_records": [
+            {
+                "evidence_id": item.evidence_id,
+                "claim_id": item.claim_id,
+                "source_uri_or_reference": item.source_uri_or_reference,
+                "source_group": item.source_group,
+                "source_kind": item.source_kind.value,
+                "polarity": item.polarity.value,
+                "relevance": item.relevance,
+                "reliability": item.reliability,
+                "observed_at": item.observed_at,
+                "valid_until": item.valid_until,
+                "method": item.method,
+                "limitations": list(item.limitations),
+                "is_directly_verified": item.is_directly_verified,
+                "attached_to_executed_test": item.evidence_id in review.eligible_evidence_ids,
+            }
+            for item in review.evidence_records
+        ],
         "reasons": list(review.reasons),
     }
 

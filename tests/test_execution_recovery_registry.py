@@ -1,6 +1,7 @@
 """Regression tests for read-only execution recovery discovery."""
 import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -106,6 +107,41 @@ class RecoveryCandidateTests(unittest.TestCase):
                 ):
                     self.transition(record, State.SUCCEEDED, "2026-10-12T00:00:09Z")
                 self.assertEqual(self.registry.get(record.key), record)
+
+    def test_concurrent_identical_reservations_create_exactly_one_record(self):
+        barrier = threading.Barrier(2)
+        results = []
+        errors = []
+
+        def reserve_from_thread():
+            try:
+                barrier.wait(timeout=2)
+                results.append(self.registry.reserve(
+                    key="concurrent-key",
+                    mission_id="mission-concurrent",
+                    contract_digest="contract",
+                    payload_digest="payload",
+                    recorded_at="2026-10-12T00:00:10Z",
+                ))
+            except Exception as exc:
+                errors.append(exc)
+
+        workers = [
+            threading.Thread(target=reserve_from_thread),
+            threading.Thread(target=reserve_from_thread),
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=5)
+
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        self.assertEqual(sum(1 for _, created in results if created), 1)
+        self.assertEqual(sum(1 for _, created in results if not created), 1)
+        self.assertEqual(self.registry.get("concurrent-key").version, 0)
+        self.assertEqual(self.registry.get("concurrent-key").state, State.PENDING)
 
     def test_empty_registry_returns_empty_candidates(self):
         self.assertEqual(self.registry.list_recovery_candidates(), [])

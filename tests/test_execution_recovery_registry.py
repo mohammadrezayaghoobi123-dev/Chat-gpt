@@ -177,13 +177,13 @@ class RecoveryCandidateTests(unittest.TestCase):
         self.assertEqual(first.attempt_number, 1)
         self.assertFalse(first.dispatch_boundary_entered)
 
-        second = self.registry.reserve_attempt(
-            key=running.key, expected_version=running.version,
-            integration_id="integration-a", adapter_version="v1",
-            provider_id="provider-a", recorded_at="2026-10-12T00:00:03Z",
-        )
-        self.assertEqual(second.attempt_number, 2)
-        self.assertNotEqual(first.attempt_id, second.attempt_id)
+        from master_brain.execution_registry import InvalidTransition
+        with self.assertRaisesRegex(InvalidTransition, "reconcile before any retry"):
+            self.registry.reserve_attempt(
+                key=running.key, expected_version=running.version,
+                integration_id="integration-a", adapter_version="v1",
+                provider_id="provider-a", recorded_at="2026-10-12T00:00:03Z",
+            )
         self.assertFalse(self.registry.get_attempt(first.attempt_id).dispatch_boundary_entered)
 
     def test_attempt_reservation_rejects_non_running_execution(self):

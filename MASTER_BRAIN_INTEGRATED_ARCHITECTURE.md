@@ -97,3 +97,10 @@ The Meta-Intelligence Layer is a first-class architectural component between Sup
 Its responsibilities include mission framing, multi-domain discovery, explicit assumptions and unknowns, dependency planning, evidence/verification planning, risk-adaptive review, resource limits, capability-gap reporting, and auditable routing rationale. It cannot override global policy, manufacture evidence, or execute consequential actions. The Command Core retains authority and final synthesis; Proof Plane evaluates claims and results.
 
 The current meta_intelligence.py is a deterministic keyword-based scaffold. It is intentionally not described as semantic understanding, calibrated confidence, or production-grade planning. Provider-backed planning, persistent mission state, dependency graphs, benchmarks and outcome validation remain future work.
+
+
+## Foundational principle: contradiction-driven proof
+
+The binding epistemic principle is documented in [docs/CONTRADICTION_DRIVEN_PROOF_CHARTER.md](docs/CONTRADICTION_DRIVEN_PROOF_CHARTER.md). Master Brain must actively challenge material claims using evidence, counterevidence, rival hypotheses, meaningful contradiction analysis, and discriminating tests. It must not equate model agreement, persuasive fluency, or the absence of detected contradiction with truth.
+
+The five logical layers are: (1) Supreme Command Core, (2) Strategic Intelligence / Meta-Intelligence, (3) Specialist Core Islands, (4) AI Models and Providers, and (5) Agents, Tools, Plugins and External Integrations. Strategic Intelligence is a recurring cross-layer coordination function: it decomposes missions, selects specialist islands and models/providers, plans dependencies and evidence, coordinates contradiction checks, and replans from verified results. This does not collapse layer boundaries or grant authority to override global policy.

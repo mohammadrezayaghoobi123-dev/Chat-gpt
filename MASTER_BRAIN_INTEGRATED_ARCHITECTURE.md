@@ -89,3 +89,11 @@ Master Brain is a growing archipelago, not a flat list of agents. The architectu
 
 ### First implementation slice
 The first executable slice introduces a domain registry, an explicit mission plan, multi-island selection and traceable selection rationales. It does not yet invoke real LLM providers or claim specialist-level expertise. The initial rules are a baseline to be tested and improved.
+
+
+## Meta-Intelligence Layer — critical coordination boundary
+The Meta-Intelligence Layer is a first-class architectural component between Supreme Command Core and specialist islands. Its detailed contract is maintained in [docs/META_INTELLIGENCE_LAYER_SPEC.md](docs/META_INTELLIGENCE_LAYER_SPEC.md).
+
+Its responsibilities include mission framing, multi-domain discovery, explicit assumptions and unknowns, dependency planning, evidence/verification planning, risk-adaptive review, resource limits, capability-gap reporting, and auditable routing rationale. It cannot override global policy, manufacture evidence, or execute consequential actions. The Command Core retains authority and final synthesis; Proof Plane evaluates claims and results.
+
+The current meta_intelligence.py is a deterministic keyword-based scaffold. It is intentionally not described as semantic understanding, calibrated confidence, or production-grade planning. Provider-backed planning, persistent mission state, dependency graphs, benchmarks and outcome validation remain future work.

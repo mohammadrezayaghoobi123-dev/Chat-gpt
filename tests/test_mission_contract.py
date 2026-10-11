@@ -87,7 +87,10 @@ class MissionContractTests(unittest.TestCase):
         ))
         blocked = evaluate_execution_gate(contract)
         self.assertFalse(blocked.allowed)
-        self.assertIn("required human approval has not been granted", blocked.reasons)
+        self.assertIn(
+            "audited approval receipt is required; boolean approval assertions are not accepted",
+            blocked.reasons,
+        )
         # A caller-supplied boolean is not an auditable approval credential.
         still_blocked = evaluate_execution_gate(contract, approval_granted=True)
         self.assertFalse(still_blocked.allowed)

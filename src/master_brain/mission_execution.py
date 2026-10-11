@@ -241,8 +241,8 @@ def execute_mission_idempotently(
             key=idempotency_key,
             expected_version=running.version,
             integration_id=integration.integration_id,
-            adapter_version=str(getattr(adapter, "version", "unspecified")),
-            provider_id=str(getattr(integration, "provider_id", integration.integration_id)),
+            adapter_version=integration.version,
+            provider_id=str(getattr(integration, "provider_id", "unspecified")),
             recorded_at=recorded_at,
         )
     except (RegistryError, TypeError, ValueError):

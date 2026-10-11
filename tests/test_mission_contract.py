@@ -161,5 +161,16 @@ class MissionContractTests(unittest.TestCase):
                     )
 
 
+    def test_approval_flag_must_be_a_boolean_at_contract_boundaries(self):
+        with self.assertRaisesRegex(TypeError, "requires_approval must be a boolean"):
+            MissionContract(
+                mission_id="mission-test", objective="Review change",
+                requires_approval="false",
+            )
+        plan = plan_mission("Research factory manufacturing risks")
+        with self.assertRaisesRegex(TypeError, "requires_approval must be a boolean"):
+            from_archipelago_plan(plan, requires_approval="false")
+
+
 if __name__ == "__main__":
     unittest.main()

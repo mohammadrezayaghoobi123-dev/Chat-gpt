@@ -115,6 +115,34 @@ Automatic retry must remain disabled while the result is uncertain unless provid
 8. Add one provider-specific verifier only after its authentication and completion semantics are documented.
 9. Run the full CI workflow and inspect commit-specific results. An empty status list is not a pass. Do not claim a red-green-refactor cycle unless the failing test was observed in an actual test run.
 
+## 7A. Current validator limitations found during code review
+
+The current `validate_completion_evidence` function is a useful structural gate, but it is not yet a trusted completion boundary:
+
+- It accepts a caller-supplied verifier callable and verifier ID. Production composition must resolve these from a controlled, versioned allowlist; user or mission payloads must not select arbitrary callables.
+- The evidence envelope does not yet bind integration ID, adapter version, provider ID, target resource, verifier version, or policy version. These must be compared against persisted attempt metadata and trusted configuration before completion.
+- The verifier sees a receipt-shaped envelope, but authenticity and operation semantics remain the verifier's responsibility. A generic callback returning `True` is only suitable for a unit-test fixture, never production wiring.
+- The timestamp check verifies ISO-8601 syntax and timezone awareness only. It does not establish clock trust, freshness, monotonic ordering, or resistance to replay.
+- Evidence is hashed but not persisted or consumed. The same receipt can therefore be re-presented unless the future registry operation adds provider-scoped replay identity and uniqueness.
+- A `VerifiedEvidence` dataclass is not itself a security token. Python callers can construct one directly; the registry must not trust an instance merely because its type matches.
+
+These limitations are acceptance blockers, not reasons to remove the existing fail-closed guard on `SUCCEEDED`.
+
+## 7B. Required negative tests before registry integration
+
+Before implementing the atomic completion method, tests should prove that:
+
+1. malformed or timezone-naive timestamps are rejected before the verifier is invoked;
+2. blank or unapproved verifier IDs fail before evidence verification;
+3. a different mission, contract, payload, attempt, provider, integration, adapter version, or target resource is rejected;
+4. a verifier result other than the literal boolean `True` is rejected;
+5. a valid-looking receipt cannot be accepted twice for conflicting execution keys;
+6. concurrent completion attempts with the same expected version cannot both commit;
+7. a database failure between evidence insertion and state update rolls back both changes;
+8. stale verification results cannot complete an execution after its state/version changes.
+
+The existing generic `transition(..., target=State.SUCCEEDED)` must remain blocked until these tests run successfully in observed CI.
+
 ## 8. Acceptance conditions before enabling success
 
 - The provider-specific completion predicate is explicit and terminal.

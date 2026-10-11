@@ -80,8 +80,6 @@ def execute_mission_once(
             },
         )
     except Exception:
-        # Fail closed: never dispatch when the pre-execution audit event cannot
-        # be durably recorded, including unexpected storage/backend exceptions.
         return MissionExecutionResult(
             contract.mission_id, "audit_unavailable", reason="pre_dispatch_audit_failed"
         )
@@ -103,8 +101,6 @@ def execute_mission_once(
             },
         )
     except Exception:
-        # The adapter may already have caused a side effect. Never disguise the
-        # audit gap or invite blind retries when the final event cannot persist.
         return MissionExecutionResult(
             contract.mission_id,
             "executed_audit_incomplete",
@@ -114,10 +110,15 @@ def execute_mission_once(
 
     if result.status is DispatchStatus.SUCCEEDED:
         return MissionExecutionResult(
-            contract.mission_id,
-            "response_received",
-            dispatch_result=result,
+            contract.mission_id, "response_received", dispatch_result=result,
             reason="external_effect_not_confirmed",
+        )
+    if result.status is DispatchStatus.ADAPTER_ERROR:
+        # The adapter may have caused an external side effect before raising.
+        # An exception is therefore uncertainty, not proof of a clean failure.
+        return MissionExecutionResult(
+            contract.mission_id, "outcome_unknown", dispatch_result=result,
+            reason="adapter_exception_external_effect_may_have_occurred",
         )
     return MissionExecutionResult(
         contract.mission_id, "dispatch_failed", dispatch_result=result, reason=result.reason
@@ -156,10 +157,8 @@ def execute_mission_idempotently(
         payload_digest = hashlib.sha256(payload_bytes).hexdigest()
         contract_digest = mission_contract_digest(contract)
         record, created = registry.reserve(
-            key=idempotency_key,
-            mission_id=contract.mission_id,
-            contract_digest=contract_digest,
-            payload_digest=payload_digest,
+            key=idempotency_key, mission_id=contract.mission_id,
+            contract_digest=contract_digest, payload_digest=payload_digest,
             recorded_at=recorded_at,
         )
     except IdempotencyConflict:
@@ -169,8 +168,7 @@ def execute_mission_idempotently(
 
     if not created:
         return MissionExecutionResult(
-            contract.mission_id,
-            "duplicate_existing_execution",
+            contract.mission_id, "duplicate_existing_execution",
             reason=f"existing_execution_state:{record.state.value}",
         )
 
@@ -191,16 +189,10 @@ def execute_mission_idempotently(
             event_id_prefix=event_id_prefix, recorded_at=recorded_at, actor=actor,
         )
     except Exception:
-        # Once the dispatch boundary may have been crossed, an unexpected
-        # exception cannot prove that the external effect did not happen.
-        # Preserve the reservation and fail closed: never auto-retry this key.
         result = MissionExecutionResult(
-            contract.mission_id,
-            "outcome_unknown",
+            contract.mission_id, "outcome_unknown",
             reason="execution_exception_after_claim; external_effect_may_have_occurred",
         )
-    # These outcomes are known to have stopped before dispatch; all other
-    # outcomes may have crossed the external side-effect boundary.
     target = State.FAILED if result.status in {"rejected", "audit_unavailable"} else State.OUTCOME_UNKNOWN
     try:
         registry.transition(
@@ -214,12 +206,9 @@ def execute_mission_idempotently(
             reason="registry_update_failed_do_not_retry_blindly",
         )
     return MissionExecutionResult(
-        contract.mission_id,
-        result.status,
-        dispatch_result=result.dispatch_result,
+        contract.mission_id, result.status, dispatch_result=result.dispatch_result,
         reason=(result.reason + "; registry_state:" + target.value).strip("; "),
     )
-
 
 
 __all__ = ["MissionExecutionResult", "execute_mission_once", "execute_mission_idempotently"]

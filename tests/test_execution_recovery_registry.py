@@ -77,6 +77,36 @@ class RecoveryCandidateTests(unittest.TestCase):
         with self.assertRaises(RegistryError):
             self.registry.list_recovery_candidates()
 
+
+    def test_succeeded_is_blocked_without_verified_evidence_from_uncertain_states(self):
+        from master_brain.execution_registry import InvalidTransition
+
+        running = self.reserve("blocked-running", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+
+        unknown = self.reserve("blocked-unknown", "2026-10-12T00:00:02Z")
+        unknown = self.transition(unknown, State.RUNNING, "2026-10-12T00:00:03Z")
+        unknown = self.transition(unknown, State.OUTCOME_UNKNOWN, "2026-10-12T00:00:04Z")
+
+        reconciliation = self.reserve("blocked-reconciliation", "2026-10-12T00:00:05Z")
+        reconciliation = self.transition(
+            reconciliation, State.RUNNING, "2026-10-12T00:00:06Z"
+        )
+        reconciliation = self.transition(
+            reconciliation, State.OUTCOME_UNKNOWN, "2026-10-12T00:00:07Z"
+        )
+        reconciliation = self.transition(
+            reconciliation, State.RECONCILIATION_REQUIRED, "2026-10-12T00:00:08Z"
+        )
+
+        for record in (running, unknown, reconciliation):
+            with self.subTest(key=record.key):
+                with self.assertRaisesRegex(
+                    InvalidTransition, "verified completion evidence"
+                ):
+                    self.transition(record, State.SUCCEEDED, "2026-10-12T00:00:09Z")
+                self.assertEqual(self.registry.get(record.key), record)
+
     def test_empty_registry_returns_empty_candidates(self):
         self.assertEqual(self.registry.list_recovery_candidates(), [])
 

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 import math
 import sqlite3
+import uuid
 
 
 class RegistryError(RuntimeError): pass
@@ -32,6 +33,19 @@ _ALLOWED = {
     State.RECONCILIATION_REQUIRED: {State.SUCCEEDED, State.OUTCOME_UNKNOWN},
     State.SUCCEEDED: set(), State.FAILED: set(),
 }
+
+
+@dataclass(frozen=True)
+class ExecutionAttempt:
+    attempt_id: str
+    key: str
+    attempt_number: int
+    integration_id: str
+    adapter_version: str
+    provider_id: str
+    dispatch_boundary_entered: bool
+    created_at: str
+    updated_at: str
 
 
 @dataclass(frozen=True)
@@ -61,6 +75,18 @@ class SQLiteExecutionRegistry:
                 contract_digest TEXT NOT NULL, payload_digest TEXT NOT NULL,
                 state TEXT NOT NULL, version INTEGER NOT NULL,
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS execution_attempts (
+                attempt_id TEXT PRIMARY KEY,
+                execution_key TEXT NOT NULL,
+                attempt_number INTEGER NOT NULL,
+                integration_id TEXT NOT NULL,
+                adapter_version TEXT NOT NULL,
+                provider_id TEXT NOT NULL,
+                dispatch_boundary_entered INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(execution_key, attempt_number))""")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_attempts_execution ON execution_attempts(execution_key, attempt_number)")
             db.execute("PRAGMA journal_mode=WAL")
 
     def _db(self):
@@ -121,6 +147,110 @@ class SQLiteExecutionRegistry:
                 return None if row is None else self._record(row)
         except sqlite3.Error as exc:
             raise RegistryError("registry read failed") from exc
+
+    @staticmethod
+    def _attempt(row):
+        try:
+            return ExecutionAttempt(
+                row["attempt_id"], row["execution_key"], row["attempt_number"],
+                row["integration_id"], row["adapter_version"], row["provider_id"],
+                bool(row["dispatch_boundary_entered"]), row["created_at"], row["updated_at"],
+            )
+        except (ValueError, TypeError, KeyError) as exc:
+            raise RegistryError("invalid execution attempt record") from exc
+
+    def reserve_attempt(
+        self, *, key: str, expected_version: int, integration_id: str,
+        adapter_version: str, provider_id: str, recorded_at: str,
+    ) -> ExecutionAttempt:
+        """Durably create a unique attempt before entering the external-call boundary.
+
+        The parent execution must already be RUNNING at the supplied version.
+        This is a local durable record, not proof that a provider was contacted.
+        """
+        self._required(
+            key=key, integration_id=integration_id,
+            adapter_version=adapter_version, provider_id=provider_id,
+            recorded_at=recorded_at,
+        )
+        if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 0:
+            raise ValueError("expected_version must be a non-negative integer")
+        try:
+            with closing(self._db()) as db, db:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute("SELECT * FROM executions WHERE key=?", (key,)).fetchone()
+                if row is None:
+                    raise InvalidTransition("unknown execution key")
+                execution = self._record(row)
+                if execution.version != expected_version:
+                    raise InvalidTransition("stale execution version")
+                if execution.state is not State.RUNNING:
+                    raise InvalidTransition("attempt requires RUNNING execution")
+                number = db.execute(
+                    "SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM execution_attempts WHERE execution_key=?",
+                    (key,),
+                ).fetchone()[0]
+                attempt_id = uuid.uuid4().hex
+                db.execute(
+                    """INSERT INTO execution_attempts
+                    (attempt_id, execution_key, attempt_number, integration_id,
+                     adapter_version, provider_id, dispatch_boundary_entered, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)""",
+                    (attempt_id, key, number, integration_id, adapter_version,
+                     provider_id, recorded_at, recorded_at),
+                )
+                row = db.execute(
+                    "SELECT * FROM execution_attempts WHERE attempt_id=?", (attempt_id,)
+                ).fetchone()
+                db.commit()
+                return self._attempt(row)
+        except (InvalidTransition, RegistryError):
+            raise
+        except sqlite3.Error as exc:
+            raise RegistryError("attempt reservation failed") from exc
+
+    def get_attempt(self, attempt_id: str) -> ExecutionAttempt | None:
+        self._required(attempt_id=attempt_id)
+        try:
+            with closing(self._db()) as db:
+                row = db.execute(
+                    "SELECT * FROM execution_attempts WHERE attempt_id=?", (attempt_id,)
+                ).fetchone()
+                return None if row is None else self._attempt(row)
+        except sqlite3.Error as exc:
+            raise RegistryError("attempt read failed") from exc
+
+    def mark_attempt_dispatch_boundary(
+        self, *, attempt_id: str, recorded_at: str
+    ) -> ExecutionAttempt:
+        """Durably mark conservative entry into the dispatch boundary, idempotently."""
+        self._required(attempt_id=attempt_id, recorded_at=recorded_at)
+        try:
+            with closing(self._db()) as db, db:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute(
+                    "SELECT * FROM execution_attempts WHERE attempt_id=?", (attempt_id,)
+                ).fetchone()
+                if row is None:
+                    raise InvalidTransition("unknown attempt ID")
+                attempt = self._attempt(row)
+                if attempt.dispatch_boundary_entered:
+                    db.commit()
+                    return attempt
+                db.execute(
+                    """UPDATE execution_attempts SET dispatch_boundary_entered=1, updated_at=?
+                    WHERE attempt_id=? AND dispatch_boundary_entered=0""",
+                    (recorded_at, attempt_id),
+                )
+                row = db.execute(
+                    "SELECT * FROM execution_attempts WHERE attempt_id=?", (attempt_id,)
+                ).fetchone()
+                db.commit()
+                return self._attempt(row)
+        except (InvalidTransition, RegistryError):
+            raise
+        except sqlite3.Error as exc:
+            raise RegistryError("attempt boundary update failed") from exc
 
     def list_recovery_candidates(self) -> list[Record]:
         """List executions needing inspection; never dispatch or mutate them.

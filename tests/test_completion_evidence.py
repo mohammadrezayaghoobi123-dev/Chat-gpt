@@ -98,5 +98,32 @@ class CompletionEvidenceTests(unittest.TestCase):
             self.validate()
 
 
+    def test_rejects_mission_mismatch(self):
+        altered = CompletionEvidence(**{
+            **self.evidence.__dict__, "mission_id": "different-mission"
+        })
+        with self.assertRaisesRegex(EvidenceValidationError, "mission ID mismatch"):
+            self.validate(altered)
+
+    def test_rejects_contract_digest_mismatch(self):
+        altered = CompletionEvidence(**{
+            **self.evidence.__dict__, "contract_digest": "different-contract"
+        })
+        with self.assertRaisesRegex(EvidenceValidationError, "contract digest mismatch"):
+            self.validate(altered)
+
+    def test_rejects_timezone_naive_observed_at(self):
+        altered = CompletionEvidence(**{
+            **self.evidence.__dict__, "observed_at": "2026-10-12T00:00:03"
+        })
+        with self.assertRaisesRegex(EvidenceValidationError, "timezone-aware"):
+            self.validate(altered)
+
+    def test_rejects_truthy_non_boolean_verifier_result(self):
+        # A truthy object is not an authenticated verification decision.
+        with self.assertRaisesRegex(EvidenceValidationError, "not verified"):
+            self.validate(verifier=lambda item: {"verified": True})
+
+
 if __name__ == "__main__":
     unittest.main()

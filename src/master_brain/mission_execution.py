@@ -8,6 +8,7 @@ unique event IDs/timestamps.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import hashlib
 import json
 from typing import Any, Mapping
@@ -32,6 +33,17 @@ class MissionExecutionResult:
     status: str
     dispatch_result: DispatchResult | None = None
     reason: str = ""
+
+
+def _is_timezone_aware_timestamp(value: Any) -> bool:
+    """Accept ISO-8601 timestamps only when an explicit UTC offset is present."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
 
 
 def execute_mission_once(
@@ -169,7 +181,12 @@ def execute_mission_idempotently(
         ("recorded_at", recorded_at),
         ("actor", actor),
     ):
-        if not isinstance(value, str) or not value.strip():
+        valid = (
+            _is_timezone_aware_timestamp(value)
+            if name == "recorded_at"
+            else isinstance(value, str) and bool(value.strip())
+        )
+        if not valid:
             return MissionExecutionResult(
                 contract.mission_id, "rejected", reason=f"invalid_{name}"
             )

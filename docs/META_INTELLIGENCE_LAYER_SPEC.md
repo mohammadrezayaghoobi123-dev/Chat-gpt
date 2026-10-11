@@ -124,3 +124,10 @@ At the mission and subtask boundaries, it should:
 **Important:** a contradiction is not automatic proof of the opposite. The system must validate scope, definitions, context, and time before calling two claims contradictory. “No contradiction found” must never be reported as “proven true.” Consensus between models is not independent corroboration when they share sources or assumptions.
 
 The cross-layer intelligence function coordinates work but cannot override the Supreme Command Core's policy, manufacture evidence, or authorize tools/actions. The detailed acceptance criteria and scientific guardrails are maintained in the charter.
+
+
+## Domain discovery example: blockchain and digital economy
+
+The domain registry must be extensible enough to route relevant missions to distinct specialist islands for blockchain/distributed systems, digital-economy/platform economics, cryptoasset markets and risk, and betting/gambling platform analysis. These domains can intersect with software, security, finance, law/compliance, and economics; Meta-Intelligence must model those dependencies rather than force a single-domain route.
+
+See [BLOCKCHAIN_DIGITAL_ECONOMY_CRYPTO_BETTING_SCOPE.md](BLOCKCHAIN_DIGITAL_ECONOMY_CRYPTO_BETTING_SCOPE.md) for scope and guardrails. A blockchain is not the default architecture for Master Brain; choose it only where requirements justify it. Domain support must not be claimed until the relevant implementation, evidence workflow, tests, and risk controls exist.

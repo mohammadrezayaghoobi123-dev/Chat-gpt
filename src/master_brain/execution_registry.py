@@ -27,9 +27,9 @@ class State(str, Enum):
 
 _ALLOWED = {
     State.PENDING: {State.RUNNING, State.FAILED},
-    State.RUNNING: {State.SUCCEEDED, State.FAILED, State.OUTCOME_UNKNOWN},
+    State.RUNNING: {State.SUCCEEDED, State.OUTCOME_UNKNOWN},
     State.OUTCOME_UNKNOWN: {State.RECONCILIATION_REQUIRED},
-    State.RECONCILIATION_REQUIRED: {State.SUCCEEDED, State.FAILED, State.OUTCOME_UNKNOWN},
+    State.RECONCILIATION_REQUIRED: {State.SUCCEEDED, State.OUTCOME_UNKNOWN},
     State.SUCCEEDED: set(), State.FAILED: set(),
 }
 
@@ -152,7 +152,12 @@ class SQLiteExecutionRegistry:
 
     def transition(self, *, key: str, expected_version: int, target: State,
                    recorded_at: str) -> Record:
-        """Atomically enforce state-machine edges and reject stale writers."""
+        """Atomically enforce state-machine edges and reject stale writers.
+
+        FAILED is only reachable from PENDING in this prototype. Once RUNNING,
+        a possible external side effect makes failure a claim that needs trusted
+        evidence; this generic transition API does not accept such evidence.
+        """
         self._required(key=key, recorded_at=recorded_at)
         if not isinstance(target, State):
             raise TypeError("target must be a State")

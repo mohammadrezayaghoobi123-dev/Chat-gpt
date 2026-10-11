@@ -13,11 +13,9 @@ import json
 from typing import Iterable
 
 from master_brain.archipelago import MissionPlan as ArchipelagoMissionPlan
-from master_brain.archipelago import plan_mission
 from master_brain.core import RiskTier, Task, route_task
 from master_brain.meta_intelligence import (
     CoordinationPlan,
-    Mission as MetaMission,
     ReviewLevel as MetaReviewLevel,
     plan_coordination,
 )
@@ -175,8 +173,6 @@ def _build_contract(
         review = review_level
     else:
         review = MissionReviewLevel(str(review_level))
-    if approval and review is not MissionReviewLevel.HUMAN_GATED:
-        review = MissionReviewLevel.HUMAN_GATED
     identifier = mission_id or _stable_mission_id(
         objective, constraint_tuple, criteria_tuple, risk
     )
@@ -231,6 +227,10 @@ def from_core_task(
         budget_units=budget_units,
         deadline_seconds=deadline_seconds,
         requires_approval=route.requires_approval,
+        review_level=(
+            MissionReviewLevel.HUMAN_GATED
+            if route.requires_approval else None
+        ),
         unknowns=unknowns,
         clarification_questions=questions,
         rationale=(route.rationale,),

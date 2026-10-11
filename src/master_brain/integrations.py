@@ -90,11 +90,11 @@ class IntegrationRequirement:
     """Capability and policy requirements for a proposed integration call."""
 
     capabilities: tuple[str, ...]
-    required_kind: IntegrationKind | None = None
     required_permission_scopes: tuple[str, ...] = ()
     allowed_data_regions: tuple[str, ...] = ()
     max_risk_level: int = 0
     max_cost_per_call: float | None = None
+    required_kind: IntegrationKind | None = None
 
     def __post_init__(self) -> None:
         if self.required_kind is not None and not isinstance(self.required_kind, IntegrationKind):

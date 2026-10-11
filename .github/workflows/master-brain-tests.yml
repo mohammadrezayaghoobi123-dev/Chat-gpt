@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master-brain/integrated-mvp
+      - "feature/**"
   pull_request:
     branches:
       - main

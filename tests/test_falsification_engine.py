@@ -197,6 +197,23 @@ class FalsificationEngineTests(unittest.TestCase):
         self.assertTrue(any("not evidence for or against the claim" in reason for reason in result.reasons))
         self.assertFalse(any("Failed criterion" in reason for reason in result.reasons))
 
+    def test_explicit_counterexample_is_not_hidden_by_unrelated_unknown(self):
+        result = review_falsification_plan(
+            self.plan,
+            [
+                TestObservation("test-1", True, "unknown_runner_state", "Runner result unmapped"),
+                TestObservation("test-2", True, "counterexample", "Repeatable run yielded 72 accepted units", ("e2",)),
+            ],
+            [
+                self.evidence("e2", "independent-inspector", EvidencePolarity.COUNTERS),
+            ],
+            self.policy,
+        )
+        self.assertEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
+        self.assertIn("e2", result.counterexample_evidence_ids)
+        self.assertFalse(result.truth_established)
+        self.assertTrue(any("neither pass nor fail" in reason for reason in result.reasons))
+
     def test_failed_or_inconclusive_test_cannot_be_treated_as_a_pass(self):
         for outcome in ("fail", "error", "inconclusive"):
             with self.subTest(outcome=outcome):

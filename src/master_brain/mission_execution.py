@@ -207,10 +207,18 @@ def execute_mission_idempotently(
             reason="claim_failed_adapter_not_invoked",
         )
 
+    # Audit event IDs must be unique across distinct executions even when a
+    # caller reuses a human-readable prefix. The stable key-derived suffix
+    # preserves retry identity without exposing the raw idempotency key.
+    execution_event_id_prefix = (
+        f"{event_id_prefix}:"
+        f"{hashlib.sha256(idempotency_key.encode('utf-8')).hexdigest()[:16]}"
+    )
     try:
         result = execute_mission_once(
             contract, store, receipt, integration, requirement, adapter, payload,
-            event_id_prefix=event_id_prefix, recorded_at=recorded_at, actor=actor,
+            event_id_prefix=execution_event_id_prefix,
+            recorded_at=recorded_at, actor=actor,
         )
     except Exception:
         result = MissionExecutionResult(

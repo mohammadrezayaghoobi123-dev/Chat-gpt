@@ -152,7 +152,9 @@ def build_chain(
     built: list[AuditEvent] = []
     seen_ids: set[str] = set()
     for raw in events:
-        event_id = str(raw.get("event_id", ""))
+        event_id = raw.get("event_id", "")
+        if not isinstance(event_id, str):
+            raise TypeError("event_id must be a string")
         if event_id in seen_ids:
             raise ValueError(f"duplicate event_id: {event_id}")
         event = create_event(

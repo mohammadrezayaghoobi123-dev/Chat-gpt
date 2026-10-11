@@ -346,6 +346,8 @@ def evaluate_execution_gate(
     This function never dispatches work.
     """
     reasons: list[str] = []
+    if not contract.objective.strip():
+        reasons.append("mission objective is empty and requires clarification")
     if contract.clarification_questions:
         reasons.append("mission requires clarification before dispatch")
     if contract.requires_approval:

@@ -85,6 +85,17 @@ class MissionContract:
             raise TypeError("review_level must be a MissionReviewLevel")
         if type(self.requires_approval) is not bool:
             raise TypeError("requires_approval must be a boolean")
+        # A frozen dataclass is only shallowly immutable. Requiring tuples here
+        # prevents callers from mutating contract contents after approval/digest.
+        sequence_fields = (
+            "constraints", "success_criteria", "selected_islands",
+            "capability_gaps", "assumptions", "unknowns",
+            "clarification_questions", "dependencies", "stop_conditions",
+            "rationale", "traceability",
+        )
+        for field_name in sequence_fields:
+            if not isinstance(getattr(self, field_name), tuple):
+                raise TypeError(f"{field_name} must be a tuple")
         # bool is an int subclass in Python; reject it explicitly because
         # policy budgets and deadlines must be actual integer quantities.
         if type(self.budget_units) is not int:

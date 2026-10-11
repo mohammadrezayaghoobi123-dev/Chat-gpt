@@ -139,6 +139,24 @@ def evaluate_approved_execution_gate(
     if receipt is None:
         reasons.append("required human approval receipt is missing")
         return ApprovedExecutionGateResult(False, tuple(reasons))
+    if not isinstance(receipt, MissionApprovalReceipt):
+        reasons.append("approval receipt has an invalid type")
+        return ApprovedExecutionGateResult(False, tuple(reasons))
+
+    for name, value in (
+        ("event_id", receipt.event_id),
+        ("mission_id", receipt.mission_id),
+        ("contract_digest", receipt.contract_digest),
+        ("contract_schema_version", receipt.contract_schema_version),
+        ("approver_subject", receipt.approver_subject),
+        ("authentication_method", receipt.authentication_method),
+        ("recorded_at", receipt.recorded_at),
+        ("event_hash", receipt.event_hash),
+    ):
+        if not isinstance(value, str):
+            reasons.append(f"approval receipt field {name} must be a string")
+    if reasons:
+        return ApprovedExecutionGateResult(False, tuple(reasons))
 
     current_digest = mission_contract_digest(contract)
     if receipt.mission_id != contract.mission_id:

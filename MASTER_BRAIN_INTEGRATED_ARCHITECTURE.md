@@ -67,3 +67,25 @@ Phase 6: deployment, monitoring, rollback and real-world outcome verification.
 
 ## Source relationship
 This integrated design combines the earlier broad Master Brain / Opportunity Engine requirements with the newer implementation-safety baseline. It does not replace either source and does not imply recovery of the historical ~3,000-line implementation.
+
+
+## Archipelago architecture (accepted direction, implementation staged)
+Master Brain is a growing archipelago, not a flat list of agents. The architecture has four logical levels:
+
+1. **Supreme Command Core** — owns the user objective, global priorities, policy boundaries, budgets, final synthesis and escalation. It does not need to perform every specialist task itself.
+2. **Meta-Intelligence / Strategic Coordination Layer** — interprets the problem across domains, discovers which islands are relevant, decomposes the mission, selects collaborators, detects missing expertise and coordinates cross-island dependencies. This is the layer between command and specialists.
+3. **Specialist Islands** — independently versioned domain modules (general reasoning, industrial engineering, economics/markets, accounting/finance, science/research, software/AI, security/risk, and future domains). Islands expose a common contract and may be added without rewriting the command core.
+4. **Shared foundations** — Intelligence Plane, Proof Plane, memory/evidence provenance, policy/security, audit, budgets and evaluation. These are shared services/capabilities, not duplicated independently inside every island.
+
+### Coordination rules
+- One mission may involve multiple islands; the coordinator must not force a single-domain route when cross-domain dependencies are apparent.
+- Domain discovery is open-ended: the registry can grow. "Everything in the universe" is a long-term extensibility goal, not a claim that all knowledge domains are prebuilt or perfectly covered.
+- The command core retains final responsibility for the synthesized response and policy enforcement; specialists cannot grant themselves extra permissions.
+- Islands exchange typed task briefs and evidence-linked results, not unstructured hidden state.
+- The coordinator must record why each island was selected, what it contributed, its limitations, and unresolved cross-domain conflicts.
+- A missing island is reported as a capability gap; the system must not pretend that a nonexistent specialist was consulted.
+- Initial domain routing is deterministic and testable. Learned/LLM-assisted routing may be added later behind evaluation and cost controls.
+- The architecture is logical first. MVP modules do not need to run as separate servers/processes; split deployment only when justified by reliability, scaling or security.
+
+### First implementation slice
+The first executable slice introduces a domain registry, an explicit mission plan, multi-island selection and traceable selection rationales. It does not yet invoke real LLM providers or claim specialist-level expertise. The initial rules are a baseline to be tested and improved.

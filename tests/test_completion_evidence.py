@@ -155,5 +155,77 @@ class CompletionEvidenceTests(unittest.TestCase):
             self.validate(verifier=lambda item: {"verified": True})
 
 
+
+
+class RegisteredCompletionEvidenceTests(CompletionEvidenceTests):
+    """Adversarial tests for the trusted-registry entry point."""
+
+    def _registry(self, *, enabled=True, provider_id="provider-x", evidence_type="provider_operation_receipt", version="1"):
+        from master_brain.verifier_registry import ConfiguredVerifierRegistry, VerifierDescriptor
+
+        return ConfiguredVerifierRegistry([VerifierDescriptor(
+            verifier_id="provider-x-receipt-verifier",
+            version=version,
+            provider_id=provider_id,
+            evidence_type=evidence_type,
+            verify=lambda item: True,
+            enabled=enabled,
+        )])
+
+    def _validate_registered(self, registry, evidence=None, version="1"):
+        from master_brain.completion_evidence import validate_registered_completion_evidence
+
+        return validate_registered_completion_evidence(
+            execution=self.execution,
+            attempt=self.attempt,
+            evidence=evidence or self.evidence,
+            verifier_id="provider-x-receipt-verifier",
+            verifier_version=version,
+            registry=registry,
+        )
+
+    def test_registered_entry_point_resolves_and_verifies(self):
+        verified = self._validate_registered(self._registry())
+        self.assertEqual(verified.attempt_id, self.attempt.attempt_id)
+        self.assertEqual(verified.verifier_id, "provider-x-receipt-verifier")
+
+    def test_unknown_verifier_version_fails_closed(self):
+        from master_brain.completion_evidence import EvidenceValidationError
+
+        with self.assertRaisesRegex(EvidenceValidationError, "no enabled trusted verifier"):
+            self._validate_registered(self._registry(), version="2")
+
+    def test_disabled_verifier_fails_closed(self):
+        from master_brain.completion_evidence import EvidenceValidationError
+
+        with self.assertRaisesRegex(EvidenceValidationError, "no enabled trusted verifier"):
+            self._validate_registered(self._registry(enabled=False))
+
+    def test_binding_mismatch_is_rejected_before_registered_verifier_runs(self):
+        from master_brain.completion_evidence import EvidenceValidationError
+        from master_brain.verifier_registry import ConfiguredVerifierRegistry, VerifierDescriptor
+
+        called = []
+        registry = ConfiguredVerifierRegistry([VerifierDescriptor(
+            verifier_id="provider-x-receipt-verifier",
+            version="1",
+            provider_id="provider-x",
+            evidence_type="provider_operation_receipt",
+            verify=lambda item: called.append(item) or True,
+        )])
+        altered = CompletionEvidence(**{
+            **self.evidence.__dict__, "integration_id": "different-integration"
+        })
+        with self.assertRaisesRegex(EvidenceValidationError, "integration ID mismatch"):
+            self._validate_registered(registry, evidence=altered)
+        self.assertEqual(called, [])
+
+    def test_registry_is_required_not_arbitrary_callable(self):
+        from master_brain.completion_evidence import EvidenceValidationError
+
+        with self.assertRaisesRegex(EvidenceValidationError, "trusted verifier registry is required"):
+            self._validate_registered(object())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -47,8 +47,8 @@ class FalsificationEngineTests(unittest.TestCase):
         result = review_falsification_plan(
             self.plan,
             [
-                TestObservation("test-1", True, "pass", "Run yielded 103 accepted units"),
-                TestObservation("test-2", True, "pass", "Independent run yielded 101 units"),
+                TestObservation("test-1", True, "pass", "Run yielded 103 accepted units", ("e1",)),
+                TestObservation("test-2", True, "pass", "Independent run yielded 101 units", ("e2",)),
             ],
             [
                 self.evidence("e1", "machine-log"),

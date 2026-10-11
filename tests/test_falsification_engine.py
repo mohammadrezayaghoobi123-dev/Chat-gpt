@@ -65,7 +65,7 @@ class FalsificationEngineTests(unittest.TestCase):
             self.plan,
             [
                 TestObservation("test-1", True, "pass", "Run yielded 103 units", ("e1",)),
-                TestObservation("test-2", True, "contradiction", "Independent run yielded 72 units", ("e2",)),
+                TestObservation("test-2", True, "counterexample", "Independent run yielded 72 units", ("e2",)),
             ],
             [
                 self.evidence("e1", "machine-log"),
@@ -75,6 +75,23 @@ class FalsificationEngineTests(unittest.TestCase):
         )
         self.assertEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
         self.assertEqual(result.counterexample_evidence_ids, ("e2",))
+        self.assertFalse(result.truth_established)
+
+
+    def test_contradiction_is_not_automatically_labeled_counterexample(self):
+        result = review_falsification_plan(
+            self.plan,
+            [
+                TestObservation("test-1", True, "pass", "Run yielded 103 units", ("e1",)),
+                TestObservation("test-2", True, "contradiction", "Independent run yielded 72 units", ("e2",)),
+            ],
+            [
+                self.evidence("e1", "machine-log"),
+                self.evidence("e2", "independent-inspector", EvidencePolarity.COUNTERS),
+            ],
+            self.policy,
+        )
+        self.assertEqual(result.status, FalsificationStatus.CONTRADICTION_REMAINS)
         self.assertFalse(result.truth_established)
 
     def test_unexecuted_test_evidence_is_excluded(self):

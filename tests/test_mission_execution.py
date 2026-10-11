@@ -346,6 +346,32 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
         self.assertEqual(adapter.calls, 0)
         self.assertIsNone(self.registry.get("invalid-timestamp-key"))
 
+    def test_malformed_timestamp_is_rejected_before_reserving_execution(self):
+        adapter = Adapter()
+        result = execute_mission_idempotently(
+            self.contract, self.store, self.receipt, descriptor(), self.requirement,
+            adapter, self.payload, self.registry,
+            idempotency_key="malformed-timestamp-key", event_id_prefix="valid-prefix",
+            recorded_at="yesterday-ish", actor="system:test",
+        )
+        self.assertEqual(result.status, "rejected")
+        self.assertEqual(result.reason, "invalid_recorded_at")
+        self.assertEqual(adapter.calls, 0)
+        self.assertIsNone(self.registry.get("malformed-timestamp-key"))
+
+    def test_timezone_naive_timestamp_is_rejected_before_reserving_execution(self):
+        adapter = Adapter()
+        result = execute_mission_idempotently(
+            self.contract, self.store, self.receipt, descriptor(), self.requirement,
+            adapter, self.payload, self.registry,
+            idempotency_key="naive-timestamp-key", event_id_prefix="valid-prefix",
+            recorded_at="2026-10-12T00:01:00", actor="system:test",
+        )
+        self.assertEqual(result.status, "rejected")
+        self.assertEqual(result.reason, "invalid_recorded_at")
+        self.assertEqual(adapter.calls, 0)
+        self.assertIsNone(self.registry.get("naive-timestamp-key"))
+
     def test_blank_idempotency_key_is_rejected_as_input_error(self):
         adapter = Adapter()
         result = execute_mission_idempotently(

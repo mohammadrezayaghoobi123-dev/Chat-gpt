@@ -379,7 +379,12 @@ def evaluate_execution_gate(
         reasons.append("mission objective is empty and requires clarification")
     if contract.clarification_questions:
         reasons.append("mission requires clarification before dispatch")
-    if contract.requires_approval:
+    approval_required = (
+        contract.requires_approval
+        or contract.review_level is MissionReviewLevel.HUMAN_GATED
+        or contract.risk_tier in {MissionRiskTier.HIGH, MissionRiskTier.CRITICAL}
+    )
+    if approval_required:
         reasons.append(
             "audited approval receipt is required; boolean approval assertions are not accepted"
         )

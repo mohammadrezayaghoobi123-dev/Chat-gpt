@@ -185,10 +185,20 @@ def execute_mission_idempotently(
             reason="claim_failed_adapter_not_invoked",
         )
 
-    result = execute_mission_once(
-        contract, store, receipt, integration, requirement, adapter, payload,
-        event_id_prefix=event_id_prefix, recorded_at=recorded_at, actor=actor,
-    )
+    try:
+        result = execute_mission_once(
+            contract, store, receipt, integration, requirement, adapter, payload,
+            event_id_prefix=event_id_prefix, recorded_at=recorded_at, actor=actor,
+        )
+    except Exception:
+        # Once the dispatch boundary may have been crossed, an unexpected
+        # exception cannot prove that the external effect did not happen.
+        # Preserve the reservation and fail closed: never auto-retry this key.
+        result = MissionExecutionResult(
+            contract.mission_id,
+            "outcome_unknown",
+            reason="execution_exception_after_claim; external_effect_may_have_occurred",
+        )
     # These outcomes are known to have stopped before dispatch; all other
     # outcomes may have crossed the external side-effect boundary.
     target = State.FAILED if result.status in {"rejected", "audit_unavailable"} else State.OUTCOME_UNKNOWN

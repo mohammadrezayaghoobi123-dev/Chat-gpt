@@ -54,3 +54,24 @@ The current architecture and MVP artifacts are present in GitHub, but the old do
 - `src/master_brain/ctp.py` is a real but small **planning/validation scaffold**: it defines rival hypotheses, falsifiers, proposed discriminating tests, status tracking, and structural validation. It explicitly does not run experiments or convert unexecuted tests into evidence. Its unit tests are source code only; they have not been executed in this inspection.
 - The architecture reconciliation document says the reported earlier ~3,000-line implementation remains inaccessible/recovery pending, not confirmed lost. It also distinguishes the current scaffold from the original implementation.
 - Therefore, based on the GitHub history currently exposed, the old detailed domain research is **not present in the visible commit history inspected so far**. Next sources to investigate are the connected Notion/ChatGPT Library artifacts mentioned in the reconciliation document, followed by the Codespaces workspace when access is permitted. This is a stronger finding than the earlier commit-message search, but it still does not establish that the research was lost.
+
+
+## Connected Notion and Library source discovery (2026-10-11)
+
+The recovery sweep has now located and read the connected Notion continuity records and Library audit artifacts. These provide better historical requirements, but they are not the missing original implementation:
+
+- Notion contains a **central conceptual architecture** page, an **integrated mother document**, a **continuity archive**, and a **2026-10-10 continuation / CTP gate review**. They consistently state that the full “گپ درباره موتور فرصت” threads 1–32 and “دسترسی آسترولوژی” transcript were not retrieved in full.
+- The Notion continuation record says the reported original ~3,000-line source remains inaccessible/recovery pending, not confirmed lost. It records a separate detached CTP prototype and reports 31 local prototype unit tests passed, while all 21 `MB-PROOF-002A` cases remain `NOT_RUN` against the live Master Brain. Those results are historical claims recorded in the source document; they were not rerun in this audit.
+- The Library contains `MASTER_BRAIN_DETAILED_ARCHITECTURE_FA.md`, multiple versions of `MASTER_BRAIN_PROJECT_MASTER_2026-10-09/10.md`, `MASTER_BRAIN_TIMELINE_RECOVERY_AUDIT_2026-10-10.md`, and `MASTER_BRAIN_CONTINUATION_SUMMARY_2026-10-10.md`. Several similarly named project-master files are duplicate/versioned copies; preserve them separately until hashes/content comparison establishes which sections differ.
+- The mother/continuity records point to a Library file described as `MASTER_BRAIN_PROJECT_MASTER_2026-10-10.md` (about 73 KB) and to a detached prototype archive named `MASTER_BRAIN_CTP_PROTOTYPE_0.1.0.zip`. Their presence in a document reference does not by itself mean the original live implementation is restored.
+- The recovered documents describe the intended architecture in more detail: separate Intelligence and Proof planes, Opportunity Engine, contradiction-driven testing, evidence maturity/reproducibility, benchmark/evaluator governance, controlled self-repair, and a preserve-first migration rule. These requirements should be used to evaluate recovered source, not substituted for it.
+
+## Revised recovery decision
+
+1. **Do not refactor or replace the live/original project yet.** The recorded project stop point explicitly requires recovery and external snapshot before refactoring.
+2. Use the accessible Notion/Library artifacts now to establish a source-of-truth inventory and a discrepancy ledger; retain all versions and record their actual content hashes before deduplicating.
+3. The connected records state that live Codespaces/Desktop Commander reconnection is deferred until **2026-11-01**. Respect that constraint: do not attempt live connection, reset, rebuild, delete, revoke, or workspace mutation before then.
+4. At the permitted session, snapshot the existing Codespace and OpenClaw runtime/state before starting or repairing anything. Include Git metadata, dirty/untracked/ignored files, stashes/reflogs, OpenClaw workspace and session/runtime state, and Codex task/home data where accessible. Inspect copies only.
+5. After the original source is actually found, map it against the preserved architecture, then decide what to retain, adapt, test, or replace. Do not treat the detached CTP scaffold as the recovered ~3,000-line implementation.
+
+This update supersedes any implication that Notion/Library had not yet been searched in the current recovery pass. It does **not** change the conclusion that the original implementation and full historical conversations remain unrecovered.

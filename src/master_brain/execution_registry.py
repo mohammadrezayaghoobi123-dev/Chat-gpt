@@ -122,6 +122,33 @@ class SQLiteExecutionRegistry:
         except sqlite3.Error as exc:
             raise RegistryError("registry read failed") from exc
 
+    def list_recovery_candidates(self) -> list[Record]:
+        """List executions needing inspection; never dispatch or mutate them.
+
+        RUNNING can mean the worker died before or after an external side effect.
+        OUTCOME_UNKNOWN and RECONCILIATION_REQUIRED also require evidence-based
+        review. Listing candidates is deliberately read-only and does not infer
+        success or failure from age, process death, or a missing local receipt.
+        """
+        states = (
+            State.RUNNING.value,
+            State.OUTCOME_UNKNOWN.value,
+            State.RECONCILIATION_REQUIRED.value,
+        )
+        placeholders = ",".join("?" for _ in states)
+        try:
+            with closing(self._db()) as db:
+                rows = db.execute(
+                    f"SELECT * FROM executions WHERE state IN ({placeholders}) "
+                    "ORDER BY updated_at ASC, key ASC",
+                    states,
+                ).fetchall()
+                return [self._record(row) for row in rows]
+        except RegistryError:
+            raise
+        except sqlite3.Error as exc:
+            raise RegistryError("recovery candidate listing failed") from exc
+
     def transition(self, *, key: str, expected_version: int, target: State,
                    recorded_at: str) -> Record:
         """Atomically enforce state-machine edges and reject stale writers."""

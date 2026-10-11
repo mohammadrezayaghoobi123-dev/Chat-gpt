@@ -9,6 +9,7 @@ from master_brain.evidence_protocol import (
 from master_brain.falsification_engine import (
     FalsificationPlan, RivalHypothesis, TestObservation, review_falsification_plan,
 )
+from master_brain.mission_contract import MissionContract, MissionRiskTier, MissionReviewLevel
 from master_brain.falsification_audit import (
     falsification_review_payload, record_falsification_review,
     run_and_record_falsification_review,
@@ -46,6 +47,12 @@ class FalsificationAuditTests(unittest.TestCase):
                 reliability=1, relevance=1, is_directly_verified=True,
             ),
         ]
+        self.mission = MissionContract(
+            mission_id="mission-test-001", objective="Validate device throughput",
+            risk_tier=MissionRiskTier.HIGH, review_level=MissionReviewLevel.HUMAN_GATED,
+            selected_islands=("industrial", "science_research"), requires_approval=True,
+            traceability=("planner=test",),
+        )
         self.review = review_falsification_plan(
             self.plan,
             [
@@ -131,6 +138,30 @@ class FalsificationAuditTests(unittest.TestCase):
                 if item["evidence_id"] == "counter-1"
             )
             self.assertEqual(counter_record["polarity"], "counters")
+
+    def test_mission_context_is_audited_without_claiming_dispatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = AuditStore(Path(directory) / "events.jsonl")
+            _, event = run_and_record_falsification_review(
+                store, self.plan,
+                [
+                    TestObservation("test-1", True, "pass", "Machine log: 103 units", ("support-1",)),
+                    TestObservation("test-2", True, "contradiction", "Independent count: 72 units", ("counter-1",)),
+                ],
+                self.evidence,
+                event_id="audit-mission-1",
+                recorded_at="2026-10-11T12:50:00Z",
+                actor="master-brain-test",
+                policy=self.policy,
+                mission_contract=self.mission,
+            )
+            self.assertEqual(event.subject_ref, "mission:mission-test-001/claim:claim-1")
+            context = event.payload["mission_context"]
+            self.assertEqual(context["mission_id"], "mission-test-001")
+            self.assertEqual(context["risk_tier"], "high")
+            self.assertTrue(context["requires_approval"])
+            self.assertEqual(context["selected_islands"], ["industrial", "science_research"])
+            self.assertFalse(context["dispatch_performed"])
 
     def test_review_is_appended_and_survives_reload(self):
         with tempfile.TemporaryDirectory() as directory:

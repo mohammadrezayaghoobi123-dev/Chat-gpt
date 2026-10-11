@@ -10,6 +10,7 @@ from typing import Any, Iterable
 
 from master_brain.audit_store import AuditStore
 from master_brain.evidence_protocol import EvidenceRecord, ProtocolPolicy
+from master_brain.mission_contract import MissionContract
 from master_brain.falsification_engine import (
     FalsificationPlan, FalsificationReview, TestObservation,
     review_falsification_plan, TEST_OUTCOME_MAPPING_VERSION,
@@ -21,6 +22,7 @@ def falsification_review_payload(
     *,
     previous_decision: str | None = None,
     decision_change_reason: str | None = None,
+    mission_contract: MissionContract | None = None,
 ) -> dict[str, Any]:
     """Convert a review into JSON-safe, traceable audit data."""
     current_decision = review.status.value
@@ -33,10 +35,26 @@ def falsification_review_payload(
         raise ValueError("decision_change_reason must not be blank")
 
     assessment = review.evidence_assessment
+    mission_context = None
+    if mission_contract is not None:
+        mission_context = {
+            "schema_version": mission_contract.schema_version,
+            "mission_id": mission_contract.mission_id,
+            "objective": mission_contract.objective,
+            "risk_tier": mission_contract.risk_tier.value,
+            "review_level": mission_contract.review_level.value,
+            "requires_approval": mission_contract.requires_approval,
+            "selected_islands": list(mission_contract.selected_islands),
+            "budget_units": mission_contract.budget_units,
+            "deadline_seconds": mission_contract.deadline_seconds,
+            "traceability": list(mission_contract.traceability),
+            "dispatch_performed": False,
+        }
     return {
         "schema_version": 1,
         "outcome_mapping_version": TEST_OUTCOME_MAPPING_VERSION,
         "claim_id": review.claim_id,
+        "mission_context": mission_context,
         "status": current_decision,
         "previous_decision": previous_decision,
         "decision_changed": changed,
@@ -104,19 +122,24 @@ def record_falsification_review(
     actor: str,
     previous_decision: str | None = None,
     decision_change_reason: str | None = None,
+    mission_contract: MissionContract | None = None,
 ):
     """Append one falsification review to the verified audit chain."""
     payload = falsification_review_payload(
         review,
         previous_decision=previous_decision,
         decision_change_reason=decision_change_reason,
+        mission_contract=mission_contract,
     )
+    subject_ref = f"claim:{review.claim_id}"
+    if mission_contract is not None:
+        subject_ref = f"mission:{mission_contract.mission_id}/claim:{review.claim_id}"
     return store.append(
         event_id=event_id,
         event_type="falsification.reviewed",
         recorded_at=recorded_at,
         actor=actor,
-        subject_ref=f"claim:{review.claim_id}",
+        subject_ref=subject_ref,
         payload=payload,
     )
 
@@ -134,6 +157,7 @@ def run_and_record_falsification_review(
     policy: ProtocolPolicy = ProtocolPolicy(),
     previous_decision: str | None = None,
     decision_change_reason: str | None = None,
+    mission_contract: MissionContract | None = None,
 ) -> tuple[FalsificationReview, Any]:
     """Run the review and persist it as one explicit application-level operation.
 
@@ -152,5 +176,6 @@ def run_and_record_falsification_review(
         actor=actor,
         previous_decision=previous_decision,
         decision_change_reason=decision_change_reason,
+        mission_contract=mission_contract,
     )
     return review, event

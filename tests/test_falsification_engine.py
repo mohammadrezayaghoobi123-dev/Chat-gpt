@@ -6,7 +6,7 @@ from master_brain.evidence_protocol import (
 )
 from master_brain.falsification_engine import (
     FalsificationPlan, FalsificationStatus, RivalHypothesis, TestObservation,
-    review_falsification_plan,
+    review_falsification_plan, TestOutcome,
 )
 
 
@@ -148,6 +148,35 @@ class FalsificationEngineTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "reviewed claim"):
             review_falsification_plan(self.plan, [], [item], self.policy)
+
+
+    def test_unknown_outcome_is_preserved_and_fails_closed(self):
+        unknown = TestObservation(
+            "test-1", True, "maybe_passed_after_manual_override",
+            "Operator reports completion but protocol mapping is unknown",
+        )
+        self.assertEqual(unknown.outcome, "maybe_passed_after_manual_override")
+        self.assertEqual(unknown.outcome_kind, TestOutcome.UNKNOWN)
+        result = review_falsification_plan(
+            self.plan,
+            [
+                unknown,
+                TestObservation("test-2", True, "pass", "Independent run yielded 101 units"),
+            ],
+            [
+                self.evidence("e1", "machine-log"),
+                self.evidence("e2", "independent-inspector"),
+            ],
+            self.policy,
+        )
+        self.assertEqual(result.status, FalsificationStatus.TESTS_INCOMPLETE)
+        self.assertFalse(result.truth_established)
+        self.assertTrue(any("unknown outcome" in reason.lower() for reason in result.reasons))
+
+    def test_known_outcome_mapping_is_case_and_whitespace_insensitive(self):
+        observation = TestObservation("test-1", True, "  PASS  ", "Observed")
+        self.assertEqual(observation.outcome_kind, TestOutcome.PASS)
+        self.assertEqual(observation.outcome, "  PASS  ")
 
 
 if __name__ == "__main__":

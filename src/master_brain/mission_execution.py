@@ -8,6 +8,8 @@ unique event IDs/timestamps.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 from typing import Any, Mapping
 
 from master_brain.audit_store import AuditStore, AuditStoreError
@@ -19,6 +21,9 @@ from master_brain.mission_approval import (
     mission_contract_digest,
 )
 from master_brain.mission_contract import MissionContract
+from master_brain.execution_registry import (
+    IdempotencyConflict, RegistryError, SQLiteExecutionRegistry, State,
+)
 
 
 @dataclass(frozen=True)
@@ -119,4 +124,92 @@ def execute_mission_once(
     )
 
 
-__all__ = ["MissionExecutionResult", "execute_mission_once"]
+def execute_mission_idempotently(
+    contract: MissionContract,
+    store: AuditStore,
+    receipt: MissionApprovalReceipt | None,
+    integration: IntegrationDescriptor,
+    requirement: IntegrationRequirement,
+    adapter: IntegrationAdapter | None,
+    payload: Mapping[str, Any],
+    registry: SQLiteExecutionRegistry,
+    *,
+    idempotency_key: str,
+    event_id_prefix: str,
+    recorded_at: str,
+    actor: str,
+) -> MissionExecutionResult:
+    """Reserve a stable key before dispatch; duplicates never invoke the adapter.
+
+    This local prototype is deliberately conservative: any result after the
+    dispatch boundary is recorded as OUTCOME_UNKNOWN until provider-specific
+    completion evidence can be verified. It is not distributed exactly-once.
+    """
+    gate = evaluate_approved_execution_gate(contract, store, receipt)
+    if not gate.allowed:
+        return MissionExecutionResult(contract.mission_id, "rejected", reason="; ".join(gate.reasons))
+
+    try:
+        payload_bytes = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        ).encode("utf-8")
+        payload_digest = hashlib.sha256(payload_bytes).hexdigest()
+        contract_digest = mission_contract_digest(contract)
+        record, created = registry.reserve(
+            key=idempotency_key,
+            mission_id=contract.mission_id,
+            contract_digest=contract_digest,
+            payload_digest=payload_digest,
+            recorded_at=recorded_at,
+        )
+    except IdempotencyConflict:
+        return MissionExecutionResult(contract.mission_id, "idempotency_conflict", reason="key_reused_with_different_request")
+    except (RegistryError, TypeError, ValueError):
+        return MissionExecutionResult(contract.mission_id, "registry_unavailable", reason="reservation_failed")
+
+    if not created:
+        return MissionExecutionResult(
+            contract.mission_id,
+            "duplicate_existing_execution",
+            reason=f"existing_execution_state:{record.state.value}",
+        )
+
+    try:
+        running = registry.transition(
+            key=idempotency_key, expected_version=record.version, target=State.RUNNING,
+            recorded_at=recorded_at,
+        )
+    except RegistryError:
+        return MissionExecutionResult(
+            contract.mission_id, "registry_unavailable",
+            reason="claim_failed_adapter_not_invoked",
+        )
+
+    result = execute_mission_once(
+        contract, store, receipt, integration, requirement, adapter, payload,
+        event_id_prefix=event_id_prefix, recorded_at=recorded_at, actor=actor,
+    )
+    # These outcomes are known to have stopped before dispatch; all other
+    # outcomes may have crossed the external side-effect boundary.
+    target = State.FAILED if result.status in {"rejected", "audit_unavailable"} else State.OUTCOME_UNKNOWN
+    try:
+        registry.transition(
+            key=idempotency_key, expected_version=running.version, target=target,
+            recorded_at=recorded_at,
+        )
+    except RegistryError:
+        return MissionExecutionResult(
+            contract.mission_id, "execution_registry_incomplete",
+            dispatch_result=result.dispatch_result,
+            reason="registry_update_failed_do_not_retry_blindly",
+        )
+    return MissionExecutionResult(
+        contract.mission_id,
+        result.status,
+        dispatch_result=result.dispatch_result,
+        reason=(result.reason + "; registry_state:" + target.value).strip("; "),
+    )
+
+
+
+__all__ = ["MissionExecutionResult", "execute_mission_once", "execute_mission_idempotently"]

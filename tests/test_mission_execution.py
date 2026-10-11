@@ -310,6 +310,30 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
             recorded_at="2026-10-12T00:01:00Z", actor="system:test",
         )
 
+    def test_invalid_actor_is_rejected_before_reserving_execution(self):
+        adapter = Adapter()
+        result = execute_mission_idempotently(
+            self.contract, self.store, self.receipt, descriptor(), self.requirement,
+            adapter, self.payload, self.registry,
+            idempotency_key="invalid-actor-key", event_id_prefix="valid-prefix",
+            recorded_at="2026-10-12T00:01:00Z", actor="   ",
+        )
+        self.assertEqual(result.status, "rejected")
+        self.assertEqual(adapter.calls, 0)
+        self.assertIsNone(self.registry.get("invalid-actor-key"))
+
+    def test_invalid_event_prefix_is_rejected_before_reserving_execution(self):
+        adapter = Adapter()
+        result = execute_mission_idempotently(
+            self.contract, self.store, self.receipt, descriptor(), self.requirement,
+            adapter, self.payload, self.registry,
+            idempotency_key="invalid-prefix-key", event_id_prefix="   ",
+            recorded_at="2026-10-12T00:01:00Z", actor="system:test",
+        )
+        self.assertEqual(result.status, "rejected")
+        self.assertEqual(adapter.calls, 0)
+        self.assertIsNone(self.registry.get("invalid-prefix-key"))
+
     def test_duplicate_request_never_invokes_adapter_twice(self):
         from master_brain.execution_registry import State
         adapter = Adapter()

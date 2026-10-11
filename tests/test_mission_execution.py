@@ -119,6 +119,15 @@ class MissionExecutionPipelineTests(unittest.TestCase):
         self.assertEqual(result.status, "audit_unavailable")
         self.assertEqual(adapter.calls, 0)
 
+    def test_reused_event_prefix_blocks_second_dispatch(self):
+        receipt = self.approve()
+        adapter = Adapter()
+        first = self.execute(adapter, receipt, prefix="stable-run-key")
+        second = self.execute(adapter, receipt, prefix="stable-run-key")
+        self.assertEqual(first.status, "response_received")
+        self.assertEqual(second.status, "audit_unavailable")
+        self.assertEqual(adapter.calls, 1)
+
     def test_unexpected_post_dispatch_audit_error_marks_outcome_incomplete(self):
         receipt = self.approve()
         adapter = Adapter()

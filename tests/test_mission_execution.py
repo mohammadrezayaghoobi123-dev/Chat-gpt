@@ -427,6 +427,34 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
             self.registry.get("post-audit-fail-key").state, State.OUTCOME_UNKNOWN
         )
 
+    def test_invalid_adapter_output_after_possible_side_effect_is_unknown_and_not_retried(self):
+        from master_brain.execution_registry import State
+
+        class SideEffectThenInvalidOutput:
+            def __init__(self):
+                self.calls = 0
+                self.side_effects = 0
+
+            def invoke(self, payload):
+                self.calls += 1
+                self.side_effects += 1
+                # The external action may have completed, but the adapter's
+                # response cannot be safely serialized/validated.
+                return {"accepted": object()}
+
+        adapter = SideEffectThenInvalidOutput()
+        first = self.execute(adapter, key="invalid-output-key", prefix="invalid-output-run")
+        second = self.execute(adapter, key="invalid-output-key", prefix="invalid-output-run-retry")
+
+        self.assertEqual(first.status, "outcome_unknown")
+        self.assertIn("registry_state:OUTCOME_UNKNOWN", first.reason)
+        self.assertEqual(second.status, "duplicate_existing_execution")
+        self.assertEqual(adapter.calls, 1)
+        self.assertEqual(adapter.side_effects, 1)
+        self.assertEqual(
+            self.registry.get("invalid-output-key").state, State.OUTCOME_UNKNOWN
+        )
+
     def test_adapter_exception_is_unknown_and_duplicate_is_not_retried(self):
         from master_brain.execution_registry import State
 

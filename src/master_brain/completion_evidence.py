@@ -42,6 +42,7 @@ class VerifiedEvidence:
     execution_key: str
     verifier_id: str
     evidence_type: str
+    verifier_version: str = ""
 
 
 ProviderEvidenceVerifier = Callable[[CompletionEvidence], bool]
@@ -86,6 +87,7 @@ def validate_completion_evidence(
     evidence: CompletionEvidence,
     verifier_id: str,
     provider_verifier: ProviderEvidenceVerifier,
+    verifier_version: str = "",
 ) -> VerifiedEvidence:
     """Validate exact bindings and invoke a trusted provider-specific verifier.
 
@@ -97,6 +99,7 @@ def validate_completion_evidence(
         raise EvidenceValidationError("execution is not awaiting evidence reconciliation")
     for name, value in (
         ("verifier_id", verifier_id),
+        *((("verifier_version", verifier_version),) if verifier_version else ()),
         ("attempt_id", evidence.attempt_id),
         ("execution_key", evidence.execution_key),
         ("mission_id", evidence.mission_id),
@@ -146,6 +149,7 @@ def validate_completion_evidence(
         execution_key=execution.key,
         verifier_id=verifier_id,
         evidence_type=evidence.evidence_type,
+        verifier_version=verifier_version,
     )
 
 
@@ -189,6 +193,7 @@ def validate_registered_completion_evidence(
         evidence=evidence,
         verifier_id=verifier_id,
         provider_verifier=verifier,
+        verifier_version=verifier_version,
     )
 
 

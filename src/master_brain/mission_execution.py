@@ -120,6 +120,16 @@ def execute_mission_once(
             contract.mission_id, "outcome_unknown", dispatch_result=result,
             reason="adapter_exception_external_effect_may_have_occurred",
         )
+    if (
+        result.status is DispatchStatus.INVALID_OUTPUT
+        and result.reason == "output_not_json_compatible_object"
+    ):
+        # The adapter was invoked and may already have caused an external
+        # effect; malformed output is not proof that the effect did not occur.
+        return MissionExecutionResult(
+            contract.mission_id, "outcome_unknown", dispatch_result=result,
+            reason="invalid_adapter_output_external_effect_may_have_occurred",
+        )
     return MissionExecutionResult(
         contract.mission_id, "dispatch_failed", dispatch_result=result, reason=result.reason
     )

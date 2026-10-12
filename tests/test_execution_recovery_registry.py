@@ -198,6 +198,24 @@ class RecoveryCandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(RegistryError, "receipt conflicts with uncertain execution"):
             self.registry.list_recovery_candidates()
 
+
+    def test_recovery_inventory_fails_closed_on_orphan_completion_receipt(self):
+        from master_brain.execution_registry import RegistryError
+
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute(
+                """INSERT INTO completion_receipts
+                (execution_key, attempt_id, evidence_digest, verifier_id,
+                 verifier_version, evidence_type, observed_at, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                ("missing-execution", "missing-attempt", "digest",
+                 "verifier", "1", "operation-receipt",
+                 "2026-10-12T00:00:02Z", "2026-10-12T00:00:03Z"),
+            )
+
+        with self.assertRaisesRegex(RegistryError, "orphan or inconsistent completion receipt"):
+            self.registry.list_recovery_candidates()
+
     def test_empty_registry_returns_empty_candidates(self):
         self.assertEqual(self.registry.list_recovery_candidates(), [])
 

@@ -59,17 +59,48 @@ def _build_audit_records(mission: Mission, run: MissionRun) -> tuple[AuditRecord
     # Preserve the proof plane's exact first-seen claim ordering, even when an
     # upstream executor supplies a malformed/blank ID. References are filtered
     # separately so a bad identifier cannot shift another claim's review status.
-    claims_by_id: dict[object, Claim] = {}
-    evidence_by_claim: dict[object, list[Evidence]] = {}
+    claims_by_id: dict[str, Claim] = {}
+    ambiguous_claim_ids: set[str] = set()
+    evidence_by_claim: dict[str, list[Evidence]] = {}
 
-    for result in run.results:
-        for claim in result.claims:
-            claims_by_id.setdefault(claim.claim_id, claim)
-        for evidence in result.evidence:
-            evidence_by_claim.setdefault(evidence.claim_id, []).append(evidence)
+    all_claims = tuple(claim for result in run.results for claim in result.claims)
+    for claim in all_claims:
+        if not isinstance(claim, Claim):
+            continue
+        claim_id = claim.claim_id
+        if not isinstance(claim_id, str) or not claim_id.strip():
+            continue
+        previous = claims_by_id.get(claim_id)
+        if previous is None and claim_id not in ambiguous_claim_ids:
+            claims_by_id[claim_id] = claim
+        elif previous != claim:
+            ambiguous_claim_ids.add(claim_id)
+    # Keep audit ordering aligned with proof review, which excludes conflicting IDs.
+    for claim_id in ambiguous_claim_ids:
+        claims_by_id.pop(claim_id, None)
 
     all_evidence = tuple(item for result in run.results for item in result.evidence)
-    all_claim_ids = tuple(claim.claim_id for claim in claims_by_id.values())
+    evidence_id_counts: dict[str, int] = {}
+    for item in all_evidence:
+        evidence_id = getattr(item, "evidence_id", None)
+        if isinstance(evidence_id, str) and evidence_id.strip():
+            evidence_id_counts[evidence_id] = evidence_id_counts.get(evidence_id, 0) + 1
+    duplicate_evidence_ids = {
+        evidence_id for evidence_id, count in evidence_id_counts.items() if count > 1
+    }
+    for item in all_evidence:
+        evidence_id = getattr(item, "evidence_id", None)
+        claim_id = getattr(item, "claim_id", None)
+        if (
+            isinstance(item, Evidence)
+            and isinstance(evidence_id, str) and evidence_id.strip()
+            and evidence_id not in duplicate_evidence_ids
+            and isinstance(claim_id, str) and claim_id.strip()
+            and claim_id in claims_by_id
+        ):
+            evidence_by_claim.setdefault(claim_id, []).append(item)
+
+    all_claim_ids = tuple(claims_by_id.keys())
     executed_islands = tuple(result.island_id for result in run.results)
     allowed_risk_tiers = {"low", "medium", "high", "critical"}
     risk_tier = mission.risk_tier.casefold()

@@ -314,6 +314,11 @@ class SQLiteExecutionRegistry:
                 if attempt.dispatch_boundary_entered:
                     db.commit()
                     return attempt
+                execution_row = db.execute(
+                    "SELECT * FROM executions WHERE key=?", (attempt.key,)
+                ).fetchone()
+                if execution_row is None or self._record(execution_row).state is not State.RUNNING:
+                    raise InvalidTransition("execution must remain RUNNING before dispatch boundary entry")
                 db.execute(
                     """UPDATE execution_attempts SET dispatch_boundary_entered=1, updated_at=?
                     WHERE attempt_id=? AND dispatch_boundary_entered=0""",

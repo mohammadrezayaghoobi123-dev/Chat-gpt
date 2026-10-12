@@ -66,10 +66,16 @@ class SQLiteExecutionRegistry:
 
     def __init__(self, path: str, timeout: float = 5.0):
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-            raise ValueError("timeout must be a finite non-negative number")
-        if not math.isfinite(timeout) or timeout < 0:
-            raise ValueError("timeout must be a finite non-negative number")
-        self.path, self.timeout = path, float(timeout)
+            raise ValueError("timeout must be a finite non-negative number within SQLite's supported range")
+        try:
+            timeout_value = float(timeout)
+        except (OverflowError, ValueError) as exc:
+            raise ValueError("timeout must be a finite non-negative number within SQLite's supported range") from exc
+        # PRAGMA busy_timeout accepts a signed 32-bit millisecond value.
+        max_timeout_seconds = 2_147_483_647 / 1000
+        if not math.isfinite(timeout_value) or timeout_value < 0 or timeout_value > max_timeout_seconds:
+            raise ValueError("timeout must be a finite non-negative number within SQLite's supported range")
+        self.path, self.timeout = path, timeout_value
         with closing(self._db()) as db, db:
             db.execute("""CREATE TABLE IF NOT EXISTS executions (
                 key TEXT PRIMARY KEY, mission_id TEXT NOT NULL,

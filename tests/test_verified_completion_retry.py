@@ -171,10 +171,11 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
             **self.evidence.__dict__,
             "observed_at": _iso(3600),
         })
+        # Keep the recording timestamp valid so this test isolates observed_at.
         with self.assertRaisesRegex(
             EvidenceValidationError, "observed_at is too far in the future"
         ):
-            self.complete(future_evidence, _iso(3601))
+            self.complete(future_evidence, _iso(-2))
 
         self.assertEqual(self.registry.get(self.key), before)
         with sqlite3.connect(self.registry.path) as db:

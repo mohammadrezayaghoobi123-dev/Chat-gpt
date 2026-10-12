@@ -52,5 +52,33 @@ class ProofPlaneTests(unittest.TestCase):
         self.assertEqual(report.ctp_cases, ())
 
 
+    def test_model_agreement_with_one_shared_group_is_not_independent_support(self):
+        claim = Claim("c-models", "market", "demand", "high", "region", "2026", "survey")
+        evidence = (
+            Evidence("m1", "model-a", "c-models", True, independent_group="same-training-corpus"),
+            Evidence("m2", "model-b", "c-models", True, independent_group="same-training-corpus"),
+            Evidence("m3", "model-c", "c-models", True, independent_group="same-training-corpus"),
+        )
+
+        decision = review_proof((claim,), evidence).claim_reviews[0]
+
+        self.assertEqual(decision.status, "supported_by_recorded_evidence")
+        self.assertEqual(decision.independent_supporting_group_count, 1)
+        self.assertFalse(decision.independent_support_demonstrated)
+        self.assertTrue(any("independent" in issue.lower() for issue in decision.unresolved_questions))
+
+    def test_independent_support_requires_two_distinct_supporting_groups(self):
+        claim = Claim("c-independent", "plant", "output", "1 ton/day", "line-a", "2026", "measured")
+        evidence = (
+            Evidence("e1", "calibrated sensor", "c-independent", True, independent_group="sensor-run"),
+            Evidence("e2", "independent inspector", "c-independent", True, independent_group="inspector-run"),
+        )
+
+        decision = review_proof((claim,), evidence).claim_reviews[0]
+
+        self.assertEqual(decision.independent_supporting_group_count, 2)
+        self.assertTrue(decision.independent_support_demonstrated)
+
+
 if __name__ == "__main__":
     unittest.main()

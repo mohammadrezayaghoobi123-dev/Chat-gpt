@@ -535,7 +535,7 @@ class RecoveryCandidateTests(unittest.TestCase):
         with sqlite3.connect(path) as db:
             self._create_legacy_attempt_table(db)
             db.execute(
-                "INSERT INTO execution_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO execution_attempts (attempt_id, execution_key, attempt_number, integration_id, adapter_version, provider_id, dispatch_boundary_entered, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 ("a1", "exec-1", 1, "int", "v1", "provider", 0, "t", "t"),
             )
 

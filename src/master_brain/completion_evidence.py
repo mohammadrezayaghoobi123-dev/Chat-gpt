@@ -7,7 +7,7 @@ transition executions to SUCCEEDED.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from typing import Callable
@@ -46,6 +46,9 @@ class VerifiedEvidence:
 
 
 ProviderEvidenceVerifier = Callable[[CompletionEvidence], bool]
+
+# Allow bounded clock skew, but never accept receipts dated implausibly in the future.
+_MAX_FUTURE_OBSERVATION_SKEW = timedelta(minutes=5)
 
 
 def _valid_timestamp(value: str) -> bool:
@@ -146,6 +149,8 @@ def validate_completion_evidence(
         raise EvidenceValidationError("dispatch boundary predates attempt creation")
     if observed_at < dispatch_boundary_at:
         raise EvidenceValidationError("observed_at predates dispatch boundary")
+    if observed_at > datetime.now(timezone.utc) + _MAX_FUTURE_OBSERVATION_SKEW:
+        raise EvidenceValidationError("observed_at is too far in the future")
     if evidence.attempt_id != attempt.attempt_id:
         raise EvidenceValidationError("attempt ID mismatch")
     if evidence.execution_key != execution.key or evidence.execution_key != attempt.key:

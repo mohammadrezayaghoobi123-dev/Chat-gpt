@@ -196,6 +196,15 @@ class CTPCaseTests(unittest.TestCase):
                 case, "test-01", TestStatus.PASS, "Passed", ("evidence-001",), None,
             )
 
+    def test_status_properties_ignore_malformed_test_entries(self):
+        case = self.make_case()
+        malformed = CTPCase(
+            case.case_id, case.question, case.claim_ids, case.hypotheses,
+            case.falsifiers, (None, case.tests[0]),
+        )
+        self.assertEqual(malformed.unresolved_test_ids, ("test-01",))
+        self.assertFalse(malformed.has_executed_evidence)
+
     def test_has_executed_evidence_is_safe_for_malformed_observed_result(self):
         case = self.make_case()
         malformed_test = DiscriminatingTest(

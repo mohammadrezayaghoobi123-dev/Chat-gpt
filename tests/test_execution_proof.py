@@ -125,7 +125,7 @@ class OperationalProofLaneTests(unittest.TestCase):
             evidence_type="operation-receipt", verify=lambda _evidence: True,
         )])
         before = self.registry.get("exec-1")
-        with self.assertRaisesRegex(EvidenceValidationError, "recorded_at predates current execution state"):
+        with self.assertRaisesRegex(EvidenceValidationError, "recorded_at predates evidence observation"):
             self.registry.complete_with_verified_evidence(
                 key="exec-1", expected_version=before.version,
                 attempt_id=self.attempt.attempt_id, evidence=self.evidence,

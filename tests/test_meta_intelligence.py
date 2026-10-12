@@ -50,6 +50,15 @@ class MetaIntelligenceTests(unittest.TestCase):
         self.assertTrue(any("duplicate island profile id" in item.lower()
                             for item in plan.unknowns))
 
+    def test_malformed_profile_keywords_are_reported_and_skipped(self):
+        profiles = (
+            IslandProfile("broken", (None, "factory")),
+            IslandProfile("industrial", ("factory",)),
+        )
+        plan = plan_coordination(Mission("factory production planning"), profiles=profiles)
+        self.assertIn("industrial", {item.island_id for item in plan.selections})
+        self.assertTrue(any("invalid island profile" in item.lower() for item in plan.unknowns))
+
     def test_disabled_island_is_not_selected(self):
         plan = plan_coordination(Mission("factory production machine planning"), profiles=(
             IslandProfile("industrial", ("factory",), enabled=False),

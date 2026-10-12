@@ -579,6 +579,19 @@ class SQLiteExecutionRegistry:
         self._required(key=key, recorded_at=recorded_at)
         if not isinstance(target, State):
             raise TypeError("target must be a State")
+        from datetime import datetime
+        try:
+            transition_dt = datetime.fromisoformat(
+                recorded_at.strip().replace("Z", "+00:00")
+            )
+        except (AttributeError, ValueError) as exc:
+            raise InvalidTransition(
+                "transition timestamp must be timezone-aware ISO-8601"
+            ) from exc
+        if transition_dt.tzinfo is None or transition_dt.utcoffset() is None:
+            raise InvalidTransition(
+                "transition timestamp must be timezone-aware ISO-8601"
+            )
         try:
             with closing(self._db()) as db, db:
                 db.execute("BEGIN IMMEDIATE")
@@ -586,6 +599,23 @@ class SQLiteExecutionRegistry:
                 if row is None:
                     raise InvalidTransition("unknown execution key")
                 current = self._record(row)
+                try:
+                    current_updated_dt = datetime.fromisoformat(
+                        current.updated_at.strip().replace("Z", "+00:00")
+                    )
+                except (AttributeError, ValueError) as exc:
+                    raise RegistryError(
+                        "current execution timestamp is invalid"
+                    ) from exc
+                if (
+                    current_updated_dt.tzinfo is None
+                    or current_updated_dt.utcoffset() is None
+                ):
+                    raise RegistryError("current execution timestamp is invalid")
+                if transition_dt < current_updated_dt:
+                    raise InvalidTransition(
+                        "transition timestamp predates current execution update"
+                    )
                 if current.version != expected_version:
                     raise InvalidTransition("stale execution version")
                 # This prototype has no provider-specific evidence verifier yet.

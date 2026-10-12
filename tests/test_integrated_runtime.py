@@ -46,12 +46,22 @@ class IntegratedRuntimeTests(unittest.TestCase):
         self.assertIn("supplier quotation", run.provenance)
         self.assertEqual(run.plan.original_objective, objective)
 
+        self.assertEqual(len(run.ctp_cases), 1)
+        self.assertEqual(run.ctp_cases[0].claim_ids, ("capacity-a", "capacity-b"))
+        self.assertTrue(run.ctp_cases[0].validate() == ())
+        self.assertEqual(run.ctp_cases[0].tests[0].status.value, "not_run")
+
         records = run.audit_records
         self.assertTrue(any(record.event_type == "mission_run" and record.status == run.status for record in records))
         self.assertTrue(any(record.event_type == "claim_review" and record.output_refs == ("capacity-a",) for record in records))
         self.assertTrue(any(
             record.event_type == "contradiction_detected"
             and set(record.input_refs) == {"capacity-a", "capacity-b"}
+            for record in records
+        ))
+        self.assertTrue(any(
+            record.event_type == "ctp_case_planned"
+            and record.status == "planned_not_run"
             for record in records
         ))
         self.assertTrue(all(objective not in record.to_stable_json() for record in records))

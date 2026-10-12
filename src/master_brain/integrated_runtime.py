@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from .audit import AuditRecord
 from .core import Claim, Contradiction, Decision, Evidence
+from .ctp import CTPCase
 from .meta_intelligence import Mission, CoordinationPlan, ReviewLevel, plan_coordination
 from .proof_plane import review_proof
 from .observability import observation
@@ -43,6 +44,7 @@ class MissionRun:
     provenance: tuple[str, ...] = ()
     unresolved_issues: tuple[str, ...] = ()
     audit_records: tuple[AuditRecord, ...] = ()
+    ctp_cases: tuple[CTPCase, ...] = ()
 
 
 def _safe_refs(values) -> tuple[str, ...]:
@@ -51,7 +53,7 @@ def _safe_refs(values) -> tuple[str, ...]:
 
 
 def _build_audit_records(mission: Mission, run: MissionRun) -> tuple[AuditRecord, ...]:
-    """Create in-memory mission/proof audit events without raw objectives or outputs."""
+    """Create in-memory mission/proof events without raw objectives or outputs."""
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     records: list[AuditRecord] = []
     # Preserve the proof plane's exact first-seen claim ordering, even when an
@@ -93,6 +95,7 @@ def _build_audit_records(mission: Mission, run: MissionRun) -> tuple[AuditRecord
             "evidence_count": len(all_evidence),
             "contradiction_count": len(run.contradictions),
             "claim_review_count": len(run.claim_reviews),
+            "ctp_case_count": len(run.ctp_cases),
             "unresolved_issue_count": len(run.unresolved_issues),
         },
     ))
@@ -125,6 +128,24 @@ def _build_audit_records(mission: Mission, run: MissionRun) -> tuple[AuditRecord
             status=contradiction.status,
             input_refs=_safe_refs((contradiction.claim_a, contradiction.claim_b)),
             metadata={"review_required": True},
+        ))
+
+    for case in run.ctp_cases:
+        records.append(AuditRecord(
+            event_id=f"evt-{uuid4().hex}",
+            event_type="ctp_case_planned",
+            occurred_at=now,
+            component="ctp",
+            status="planned_not_run",
+            input_refs=_safe_refs(case.claim_ids),
+            output_refs=_safe_refs((case.case_id,)),
+            metadata={
+                "hypothesis_count": len(case.hypotheses),
+                "falsifier_count": len(case.falsifiers),
+                "test_count": len(case.tests),
+                "unresolved_test_count": len(case.unresolved_test_ids),
+                "executed_test_count": 0,
+            },
         ))
 
     return tuple(records)
@@ -222,6 +243,7 @@ def _execute_mission_untraced(
         claim_reviews=reviews,
         provenance=provenance,
         unresolved_issues=tuple(unresolved),
+        ctp_cases=proof_report.ctp_cases,
     )
 
 
@@ -234,6 +256,7 @@ def execute_mission(
     Mission objective text, evidence content, and raw executor outputs are not
     sent to telemetry or included in audit metadata. Audit events are returned
     in memory only; this function does not persist them to durable storage.
+    CTP cases are proposed plans; their tests are not run by this runtime.
     """
     with observation(
         name="master-brain-mission",
@@ -258,6 +281,7 @@ def execute_mission(
                     "execution_error_count": len(run.execution_errors),
                     "contradiction_count": len(run.contradictions),
                     "claim_review_count": len(run.claim_reviews),
+                    "ctp_case_count": len(run.ctp_cases),
                     "unresolved_issue_count": len(run.unresolved_issues),
                     "audit_record_count": len(run.audit_records),
                 },

@@ -1,14 +1,21 @@
 # Audit records (MVP)
 
-The `master_brain.audit.AuditRecord` contract provides a validated event format and deterministic JSON serialization. The integrated runtime now returns in-memory audit events alongside each `MissionRun`.
+The `master_brain.audit.AuditRecord` contract provides a validated event format and deterministic JSON serialization. The integrated runtime returns in-memory audit events alongside each `MissionRun`.
 
 ## Emitted event types
 
-- `mission_run`: final run status, review level, and counts for selected/executed/missing islands, errors, claims, evidence, contradictions, reviews, and unresolved issues.
+- `mission_run`: final run status, review level, and counts for selected/executed/missing islands, errors, claims, evidence, contradictions, reviews, CTP cases, and unresolved issues.
 - `claim_review`: one event per distinct claim review, with evidence identifiers and counts of supporting and counterevidence.
 - `contradiction_detected`: one event per detected potential conflict, linked to the two claim identifiers.
+- `ctp_case_planned`: one event per generated Contradiction-to-Proof case, with counts of hypotheses, falsifiers, and proposed tests.
 
-Events are available as `MissionRun.audit_records`. Each record has a generated event ID and timezone-aware UTC timestamp. A run blocked by an unknown risk tier or a missing approval mechanism still emits a `mission_run` event.
+Events are available as `MissionRun.audit_records`. CTP plans are available separately as `MissionRun.ctp_cases`. Each audit record has a generated event ID and timezone-aware UTC timestamp. A run blocked by an unknown risk tier or a missing approval mechanism still emits a `mission_run` event.
+
+## CTP planning behavior
+
+When the proof plane detects a potential conflict, it proposes a CTP case containing two rival hypotheses, a falsifier for each hypothesis, and a discriminating test. The test remains `not_run`; the planner does not conduct experiments, fetch external evidence, or decide which hypothesis is true. The proposed procedure calls for scope/unit normalization and independent measurement, and explicitly notes that acceptance criteria should be defined before interpreting an outcome.
+
+This first slice creates CTP plans for detected contradictions only. It does not yet guarantee a CTP case for every important claim, and it does not automatically update a test status from later evidence.
 
 ## Privacy and limits
 
@@ -16,8 +23,8 @@ Events are available as `MissionRun.audit_records`. Each record has a generated 
 - Metadata contains only status labels, review level, counts, and other bounded fields; references contain non-empty identifiers only.
 - Key-name checks reject credential-like metadata keys, including nested keys. They cannot detect a secret embedded inside an arbitrary string.
 - Callers should continue to minimize data and redact sensitive values before constructing records.
-- These events are returned in memory only. They are not durably stored, tamper-evident, signed, access-controlled, or guaranteed to survive a process exit.
-- The event stream is a first integration seam, not a complete audit pipeline or independent verification of the underlying claims.
+- Audit events are returned in memory only. They are not durably stored, tamper-evident, signed, access-controlled, or guaranteed to survive a process exit.
+- Neither a generated CTP plan nor a successful fixture test is independent verification of the underlying claims.
 
 ## Standalone example
 

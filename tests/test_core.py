@@ -66,6 +66,11 @@ class EvidenceTests(unittest.TestCase):
 
 
 class OpportunityTests(unittest.TestCase):
+    def test_score_rejects_non_finite_inputs(self):
+        item = Opportunity("invalid", float("nan"), 0.5, 0.5, 0.5, 0.5)
+        with self.assertRaisesRegex(ValueError, "finite numbers"):
+            score_opportunity(item)
+
     def test_score_is_bounded(self):
         item = Opportunity("option", 1.5, -1, 0.5, 0.5, 0.5, 2)
         score = score_opportunity(item)

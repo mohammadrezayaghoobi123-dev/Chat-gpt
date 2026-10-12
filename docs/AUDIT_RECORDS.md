@@ -13,9 +13,9 @@ Events are available as `MissionRun.audit_records`. CTP plans are available sepa
 
 ## CTP planning behavior
 
-When the proof plane detects a potential conflict, it proposes a CTP case containing two rival hypotheses, a falsifier for each hypothesis, and a discriminating test. The test remains `not_run`; the planner does not conduct experiments, fetch external evidence, or decide which hypothesis is true. The proposed procedure calls for scope/unit normalization and independent measurement, and explicitly notes that acceptance criteria should be defined before interpreting an outcome.
+When the proof plane detects a potential conflict, it proposes a CTP case containing two rival hypotheses, a falsifier for each hypothesis, and a discriminating test. A claim explicitly marked `high` or `critical` also receives a standalone CTP case when no detected contradiction already covers it. The test remains `not_run`; the planner does not conduct experiments, fetch external evidence, or decide which hypothesis is true. The proposed procedure calls for scope/unit normalization and independent measurement, and explicitly notes that acceptance criteria should be defined before interpreting an outcome.
 
-This first slice creates CTP plans for detected contradictions only. It does not yet guarantee a CTP case for every important claim, and it does not automatically update a test status from later evidence.
+Importance is explicitly supplied by the caller using the `ClaimImportance` tier (`routine`, `high`, or `critical`); the system does not infer criticality from claim wording in this slice. CTP plans are not automatically updated from later evidence, and there is no automated test-execution service yet.
 
 ## Privacy and limits
 

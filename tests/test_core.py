@@ -60,6 +60,17 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(any("duplicate evidence id" in issue.lower()
                             for issue in result.unresolved_questions))
 
+    def test_non_evidence_objects_are_excluded_from_direct_claim_review(self):
+        from types import SimpleNamespace
+
+        claim = Claim("c-invalid", "plant", "output", "100")
+        result = evaluate_claim(
+            claim, (SimpleNamespace(evidence_id="e1", claim_id="c-invalid"),)
+        )
+        self.assertEqual(result.status, "unverified")
+        self.assertTrue(any("invalid evidence record" in issue.lower()
+                            for issue in result.unresolved_questions))
+
     def test_no_evidence_is_unverified(self):
         claim = Claim("c1", "claim", "predicate", "value")
         self.assertEqual(evaluate_claim(claim, []).status, "unverified")

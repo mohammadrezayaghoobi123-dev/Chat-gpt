@@ -275,6 +275,11 @@ class SQLiteExecutionRegistry:
 
         The parent execution must already be RUNNING at the supplied version.
         This is a local durable record, not proof that a provider was contacted.
+
+        Security boundary: this low-level primitive does not authenticate the
+        origin of provider_scope or receipt_namespace. Production entry points
+        must use master_brain.attempt_configuration.reserve_configured_attempt
+        so those values come from reviewed deployment-owned configuration.
         """
         self._required(
             key=key, integration_id=integration_id,

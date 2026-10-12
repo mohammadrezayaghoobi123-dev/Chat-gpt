@@ -12,7 +12,7 @@ The current attempt record stores `provider_id` but not a provider account/proje
 
 ## Decision
 
-Do not add a global UNIQUE constraint on `provider_receipt_id`, and do not claim cross-execution replay prevention is implemented.
+Do not add a global UNIQUE constraint on `provider_receipt_id`. The generic registry now enforces cross-execution uniqueness for complete, scoped identities returned by a typed verifier; do not claim production provider-backed replay protection until a real deployment-owned verifier and trusted scope configuration are implemented and reviewed.
 
 The generic persistence and enforcement path is implemented. The remaining provider-specific trust chain must be completed before production use:
 
@@ -48,4 +48,4 @@ Do not retrofit a NOT NULL scope or uniqueness constraint in-place without a ver
 
 ## Consequences
 
-The registry now rejects duplicate canonical receipt identities across execution keys when their trusted provider scope and namespace match, while permitting the same receipt string in distinct scopes. The protection is only as sound as the deployment-owned scope and provider verifier; this repository still has no real provider integration. Legacy receipts remain unscoped and are not retroactively replay-protected. Do not claim production replay protection until the deployment configuration and legacy-database migration have been reviewed and exercised.
+The registry now rejects duplicate canonical receipt identities across execution keys when their persisted scope and namespace match, while permitting the same receipt string in distinct scopes. This core behavior is covered by automated tests, including concurrent competing claims. However, the protection is only as sound as the deployment-owned scope and provider verifier; this repository still has no real provider integration, and the deployment entry point fails closed. Legacy receipts remain unscoped and are not retroactively replay-protected. Production replay protection must not be claimed until deployment configuration and legacy-database migration have been reviewed and exercised.

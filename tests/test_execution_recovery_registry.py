@@ -159,6 +159,48 @@ class RecoveryCandidateTests(unittest.TestCase):
         self.assertEqual(self.registry.get("concurrent-key").version, 0)
         self.assertEqual(self.registry.get("concurrent-key").state, State.PENDING)
 
+
+    def test_concurrent_reservations_across_registry_instances_are_idempotent(self):
+        # Separate instances model independent callers sharing the same SQLite file.
+        path = str(Path(self.tmp.name) / "shared-registry.sqlite3")
+        registries = [SQLiteExecutionRegistry(path, timeout=2.0) for _ in range(8)]
+        barrier = threading.Barrier(len(registries))
+        results = []
+        errors = []
+        lock = threading.Lock()
+
+        def reserve_from_instance(registry):
+            try:
+                barrier.wait(timeout=3)
+                result = registry.reserve(
+                    key="shared-concurrent-key",
+                    mission_id="mission-shared",
+                    contract_digest="contract",
+                    payload_digest="payload",
+                    recorded_at="2026-10-12T00:00:10Z",
+                )
+                with lock:
+                    results.append(result)
+            except Exception as exc:
+                with lock:
+                    errors.append(exc)
+
+        workers = [
+            threading.Thread(target=reserve_from_instance, args=(registry,))
+            for registry in registries
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=5)
+
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), len(registries))
+        self.assertEqual(sum(1 for _, created in results if created), 1)
+        self.assertEqual(sum(1 for _, created in results if not created), len(registries) - 1)
+        self.assertEqual(registries[0].get("shared-concurrent-key").state, State.PENDING)
+
     def test_empty_registry_returns_empty_candidates(self):
         self.assertEqual(self.registry.list_recovery_candidates(), [])
 

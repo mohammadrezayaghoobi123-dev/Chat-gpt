@@ -80,5 +80,19 @@ class ProofPlaneTests(unittest.TestCase):
         self.assertTrue(decision.independent_support_demonstrated)
 
 
+    def test_counterevidence_group_does_not_inflate_independent_support_count(self):
+        claim = Claim("c-mixed", "reactor", "temperature", "180 C", "line-a", "2026", "calibrated")
+        evidence = (
+            Evidence("support-1", "sensor", "c-mixed", True, independent_group="supporting-run"),
+            Evidence("counter-1", "inspection", "c-mixed", False, independent_group="counter-run"),
+        )
+
+        decision = review_proof((claim,), evidence).claim_reviews[0]
+
+        self.assertEqual(decision.status, "contested")
+        self.assertEqual(decision.independent_supporting_group_count, 1)
+        self.assertFalse(decision.independent_support_demonstrated)
+
+
 if __name__ == "__main__":
     unittest.main()

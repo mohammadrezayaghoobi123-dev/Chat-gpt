@@ -454,6 +454,24 @@ class SQLiteExecutionRegistry:
                     raise RegistryError(
                         "orphan or inconsistent completion receipt"
                     )
+                # The invariant is bidirectional: every receipt must belong to a
+                # successful execution, and every successful execution must have
+                # its atomically committed receipt. A SUCCESS state without a
+                # receipt is corruption, not evidence that completion occurred.
+                missing_receipt = db.execute(
+                    """SELECT 1
+                    FROM executions AS e
+                    LEFT JOIN completion_receipts AS r
+                      ON r.execution_key = e.key
+                    WHERE e.state = ?
+                      AND r.execution_key IS NULL
+                    LIMIT 1""",
+                    (State.SUCCEEDED.value,),
+                ).fetchone()
+                if missing_receipt is not None:
+                    raise RegistryError(
+                        "succeeded execution is missing completion receipt"
+                    )
                 return candidates
         except RegistryError:
             raise

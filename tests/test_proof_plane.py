@@ -79,7 +79,7 @@ class ProofPlaneTests(unittest.TestCase):
         report = review_proof((claim,), ())
 
         self.assertEqual(report.claim_reviews, ())
-        self.assertTrue(any("invalid claim ID" in issue.lower()
+        self.assertTrue(any("invalid claim id" in issue.lower()
                             for issue in report.unresolved_issues))
 
     def test_conflicting_duplicate_claim_ids_are_excluded_from_review(self):

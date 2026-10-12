@@ -6,6 +6,13 @@ from master_brain.proof_plane import review_proof
 
 
 class ProofPlaneTests(unittest.TestCase):
+    def test_malformed_claim_fields_are_excluded_before_contradiction_analysis(self):
+        malformed = Claim("bad-subject", None, "output", "100")
+        report = review_proof((malformed,), ())
+        self.assertEqual(report.claim_reviews, ())
+        self.assertTrue(any("invalid claim field" in issue.lower()
+                            for issue in report.unresolved_issues))
+
     def test_non_iterable_proof_inputs_are_reported_without_crashing(self):
         report = review_proof(None, None)
         self.assertEqual(report.claim_reviews, ())

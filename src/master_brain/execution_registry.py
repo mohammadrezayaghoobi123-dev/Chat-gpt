@@ -336,6 +336,185 @@ class SQLiteExecutionRegistry:
         except sqlite3.Error as exc:
             raise RegistryError("recovery candidate listing failed") from exc
 
+    def complete_with_verified_evidence(
+        self, *, key: str, expected_version: int, attempt_id: str,
+        evidence: object, verifier_id: str, verifier_version: str,
+        verifier_registry: object, recorded_at: str,
+    ) -> Record:
+        """Atomically persist trusted completion evidence and mark an uncertain execution successful.
+
+        Provider verification runs before acquiring the SQLite writer lock. Inside
+        the transaction, the execution version/state and full attempt snapshot are
+        re-read and compared, then the receipt and SUCCEEDED transition commit
+        together. The generic transition API intentionally cannot bypass this path.
+        """
+        from datetime import datetime
+        from master_brain.completion_evidence import (
+            CompletionEvidence, EvidenceValidationError, evidence_digest,
+            validate_registered_completion_evidence,
+        )
+
+        self._required(
+            key=key, attempt_id=attempt_id, verifier_id=verifier_id,
+            verifier_version=verifier_version, recorded_at=recorded_at,
+        )
+        if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 0:
+            raise ValueError("expected_version must be a non-negative integer")
+        if not isinstance(evidence, CompletionEvidence):
+            raise EvidenceValidationError("evidence must be a CompletionEvidence record")
+        try:
+            recorded_dt = datetime.fromisoformat(
+                recorded_at.strip().replace("Z", "+00:00")
+            )
+        except (AttributeError, ValueError) as exc:
+            raise ValueError("recorded_at must be timezone-aware ISO-8601") from exc
+        if recorded_dt.tzinfo is None or recorded_dt.utcoffset() is None:
+            raise ValueError("recorded_at must be timezone-aware ISO-8601")
+        if evidence.attempt_id != attempt_id or evidence.execution_key != key:
+            raise EvidenceValidationError("evidence does not match requested execution and attempt")
+
+        # A previously committed exact receipt makes a retry safe even though
+        # normal evidence validation correctly rejects terminal SUCCEEDED records.
+        current = self.get(key)
+        if current is None:
+            raise InvalidTransition("unknown execution key")
+        if current.state is State.SUCCEEDED:
+            try:
+                with closing(self._db()) as db:
+                    receipt = db.execute(
+                        "SELECT * FROM completion_receipts WHERE execution_key=?", (key,)
+                    ).fetchone()
+            except sqlite3.Error as exc:
+                raise RegistryError("completion receipt read failed") from exc
+            if (
+                receipt is not None
+                and receipt["attempt_id"] == attempt_id
+                and receipt["evidence_digest"] == evidence_digest(evidence)
+                and receipt["verifier_id"] == verifier_id
+                and receipt["verifier_version"] == verifier_version
+            ):
+                return current
+            raise InvalidTransition("execution already succeeded with different or missing completion evidence")
+        if current.version != expected_version:
+            raise InvalidTransition("stale execution version")
+
+        attempt = self.get_attempt(attempt_id)
+        if attempt is None:
+            raise InvalidTransition("unknown attempt ID")
+        if attempt.key != key:
+            raise InvalidTransition("attempt does not belong to execution")
+
+        # Enforce chronology here as well as binding: this branch may be used
+        # before the separate completion-evidence hardening branch is integrated.
+        def parse_aware_timestamp(name: str, value: object):
+            if not isinstance(value, str) or not value.strip():
+                raise EvidenceValidationError(f"{name} must be timezone-aware ISO-8601")
+            normalized = value.strip()
+            if normalized.endswith("Z"):
+                normalized = normalized[:-1] + "+00:00"
+            try:
+                parsed = datetime.fromisoformat(normalized)
+            except ValueError as exc:
+                raise EvidenceValidationError(f"{name} must be timezone-aware ISO-8601") from exc
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                raise EvidenceValidationError(f"{name} must be timezone-aware ISO-8601")
+            return parsed
+
+        observed_at = parse_aware_timestamp("observed_at", evidence.observed_at)
+        attempt_created_at = parse_aware_timestamp("attempt creation timestamp", attempt.created_at)
+        dispatch_boundary_at = parse_aware_timestamp("dispatch boundary timestamp", attempt.updated_at)
+        if dispatch_boundary_at < attempt_created_at:
+            raise EvidenceValidationError("dispatch boundary predates attempt creation")
+        if observed_at < dispatch_boundary_at:
+            raise EvidenceValidationError("observed_at predates dispatch boundary")
+        if recorded_dt < observed_at:
+            raise EvidenceValidationError("recorded_at predates evidence observation")
+        execution_updated_at = parse_aware_timestamp("execution update timestamp", current.updated_at)
+        if recorded_dt < execution_updated_at:
+            raise EvidenceValidationError("recorded_at predates current execution state")
+
+        verified = validate_registered_completion_evidence(
+            execution=current,
+            attempt=attempt,
+            evidence=evidence,
+            verifier_id=verifier_id,
+            verifier_version=verifier_version,
+            registry=verifier_registry,
+        )
+
+        stage = "begin_immediate"
+        try:
+            with closing(self._db()) as db, db:
+                self._begin_immediate_with_retry(db)
+                stage = "recheck_execution"
+                row = db.execute("SELECT * FROM executions WHERE key=?", (key,)).fetchone()
+                if row is None:
+                    raise InvalidTransition("unknown execution key")
+                persisted = self._record(row)
+                attempt_row = db.execute(
+                    "SELECT * FROM execution_attempts WHERE attempt_id=?", (attempt_id,)
+                ).fetchone()
+                if attempt_row is None:
+                    raise InvalidTransition("unknown attempt ID")
+                persisted_attempt = self._attempt(attempt_row)
+
+                # Handle a racing exact retry after another caller committed.
+                if persisted.state is State.SUCCEEDED:
+                    receipt = db.execute(
+                        "SELECT * FROM completion_receipts WHERE execution_key=?", (key,)
+                    ).fetchone()
+                    if (
+                        receipt is not None
+                        and receipt["attempt_id"] == attempt_id
+                        and receipt["evidence_digest"] == verified.evidence_digest
+                        and receipt["verifier_id"] == verified.verifier_id
+                        and receipt["verifier_version"] == verified.verifier_version
+                    ):
+                        db.commit()
+                        return persisted
+                    raise InvalidTransition("execution already succeeded with different or missing completion evidence")
+                if persisted.version != expected_version or persisted != current:
+                    raise InvalidTransition("execution changed during evidence verification")
+                if persisted.state not in {State.OUTCOME_UNKNOWN, State.RECONCILIATION_REQUIRED}:
+                    raise InvalidTransition("execution is not awaiting evidence reconciliation")
+                if persisted_attempt != attempt:
+                    raise InvalidTransition("attempt changed during evidence verification")
+                if not persisted_attempt.dispatch_boundary_entered:
+                    raise InvalidTransition("dispatch boundary was not entered")
+
+                stage = "insert_completion_receipt"
+                db.execute(
+                    """INSERT INTO completion_receipts
+                    (execution_key, attempt_id, evidence_digest, verifier_id,
+                     verifier_version, evidence_type, observed_at, recorded_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        key, attempt_id, verified.evidence_digest, verified.verifier_id,
+                        verified.verifier_version, verified.evidence_type,
+                        evidence.observed_at, recorded_at,
+                    ),
+                )
+                stage = "update_execution"
+                changed = db.execute(
+                    """UPDATE executions SET state=?, version=version+1, updated_at=?
+                    WHERE key=? AND version=? AND state IN (?, ?)""",
+                    (
+                        State.SUCCEEDED.value, recorded_at, key, expected_version,
+                        State.OUTCOME_UNKNOWN.value, State.RECONCILIATION_REQUIRED.value,
+                    ),
+                )
+                if changed.rowcount != 1:
+                    raise InvalidTransition("concurrent state change")
+                stage = "read_completed_execution"
+                row = db.execute("SELECT * FROM executions WHERE key=?", (key,)).fetchone()
+                result = self._record(row)
+                db.commit()
+                return result
+        except (InvalidTransition, RegistryError, EvidenceValidationError):
+            raise
+        except sqlite3.Error as exc:
+            raise RegistryError(f"evidence-authorized completion failed during {stage}") from exc
+
     def transition(self, *, key: str, expected_version: int, target: State,
                    recorded_at: str) -> Record:
         """Atomically enforce state-machine edges and reject stale writers.
@@ -359,7 +538,7 @@ class SQLiteExecutionRegistry:
                 # This prototype has no provider-specific evidence verifier yet.
                 # Fail closed rather than let callers assert success by changing state.
                 if target is State.SUCCEEDED:
-                    raise InvalidTransition("SUCCEEDED requires verified completion evidence; API not implemented")
+                    raise InvalidTransition("SUCCEEDED requires verified completion evidence; use complete_with_verified_evidence")
                 if target not in _ALLOWED[current.state]:
                     raise InvalidTransition(f"disallowed transition {current.state.value}->{target.value}")
                 cur = db.execute("""UPDATE executions SET state=?, version=version+1, updated_at=?

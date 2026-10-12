@@ -131,6 +131,22 @@ class CTPCaseTests(unittest.TestCase):
         self.assertEqual(completed.validate(), ())
         self.assertEqual(case.tests[0].status, TestStatus.NOT_RUN)
 
+    def test_record_execution_rejects_missing_provenance_object(self):
+        case = self.make_case()
+        with self.assertRaisesRegex(ValueError, "provenance must be an ExecutionProvenance"):
+            record_test_execution(
+                case, "test-01", TestStatus.PASS, "Passed", ("evidence-001",), None,
+            )
+
+    def test_case_validation_reports_non_text_case_id(self):
+        case = self.make_case()
+        malformed = CTPCase(
+            None, case.question, case.claim_ids, case.hypotheses,
+            case.falsifiers, case.tests,
+        )
+        self.assertTrue(any("case_id must be a non-empty string" in issue
+                            for issue in malformed.validate()))
+
     def test_record_execution_rejects_untyped_status(self):
         case = self.make_case()
         provenance = ExecutionProvenance(

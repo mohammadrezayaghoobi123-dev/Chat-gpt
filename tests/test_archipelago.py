@@ -32,6 +32,11 @@ class ArchipelagoPlanningTests(unittest.TestCase):
         ])
         self.assertNotIn("industrial", {a.island_id for a in plan.assignments})
 
+    def test_keyword_matching_does_not_match_inside_unrelated_words(self):
+        plan = plan_mission("I need a comfortable chair for my office")
+        selected = {assignment.island_id for assignment in plan.assignments}
+        self.assertNotIn("software_ai", selected)
+
     def test_empty_objective_is_non_destructive_and_flagged(self):
         plan = plan_mission("")
         self.assertTrue(any("empty" in note.lower() for note in plan.rationale))

@@ -447,6 +447,7 @@ class SQLiteExecutionRegistry:
                     WHERE e.key IS NULL
                        OR e.state != ?
                        OR a.attempt_id IS NULL
+                       OR a.dispatch_boundary_entered != 1
                     LIMIT 1""",
                     (State.SUCCEEDED.value,),
                 ).fetchone()

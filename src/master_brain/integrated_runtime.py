@@ -54,20 +54,25 @@ def _build_audit_records(mission: Mission, run: MissionRun) -> tuple[AuditRecord
     """Create in-memory mission/proof audit events without raw objectives or outputs."""
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     records: list[AuditRecord] = []
-    claims_by_id: dict[str, Claim] = {}
-    evidence_by_claim: dict[str, list[Evidence]] = {}
+    # Preserve the proof plane's exact first-seen claim ordering, even when an
+    # upstream executor supplies a malformed/blank ID. References are filtered
+    # separately so a bad identifier cannot shift another claim's review status.
+    claims_by_id: dict[object, Claim] = {}
+    evidence_by_claim: dict[object, list[Evidence]] = {}
 
     for result in run.results:
         for claim in result.claims:
-            if isinstance(claim.claim_id, str) and claim.claim_id.strip():
-                claims_by_id.setdefault(claim.claim_id, claim)
+            claims_by_id.setdefault(claim.claim_id, claim)
         for evidence in result.evidence:
-            if isinstance(evidence.claim_id, str) and evidence.claim_id.strip():
-                evidence_by_claim.setdefault(evidence.claim_id, []).append(evidence)
+            evidence_by_claim.setdefault(evidence.claim_id, []).append(evidence)
 
     all_evidence = tuple(item for result in run.results for item in result.evidence)
-    all_claim_ids = tuple(claims_by_id.keys())
+    all_claim_ids = tuple(claim.claim_id for claim in claims_by_id.values())
     executed_islands = tuple(result.island_id for result in run.results)
+    allowed_risk_tiers = {"low", "medium", "high", "critical"}
+    risk_tier = mission.risk_tier.casefold()
+    if risk_tier not in allowed_risk_tiers:
+        risk_tier = "unrecognized"
 
     records.append(AuditRecord(
         event_id=f"evt-{uuid4().hex}",
@@ -78,7 +83,7 @@ def _build_audit_records(mission: Mission, run: MissionRun) -> tuple[AuditRecord
         input_refs=_safe_refs(executed_islands),
         output_refs=_safe_refs(all_claim_ids),
         metadata={
-            "risk_tier": mission.risk_tier,
+            "risk_tier": risk_tier,
             "review_level": run.plan.review_level.value,
             "selected_island_count": len(run.plan.selections),
             "executed_island_count": len(run.results),

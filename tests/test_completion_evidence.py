@@ -150,6 +150,13 @@ class CompletionEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceValidationError, "contract digest mismatch"):
             self.validate(altered)
 
+    def test_rejects_dispatch_boundary_timestamp_before_attempt_creation(self):
+        self.attempt = ExecutionAttempt(**{
+            **self.attempt.__dict__, "updated_at": "2026-10-12T00:00:00Z"
+        })
+        with self.assertRaisesRegex(EvidenceValidationError, "dispatch boundary predates attempt creation"):
+            self.validate()
+
     def test_rejects_receipt_timestamp_before_dispatch_boundary(self):
         altered = CompletionEvidence(**{
             **self.evidence.__dict__, "observed_at": "2026-10-12T00:00:01Z"

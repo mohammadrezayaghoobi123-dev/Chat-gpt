@@ -5,6 +5,7 @@ references and summaries rather than raw user inputs or model outputs.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 import json
@@ -67,7 +68,8 @@ class AuditRecord:
     schema_version: int = 1
 
     def __post_init__(self) -> None:
-        """Reject invalid records at construction, not only at serialization."""
+        """Defensively copy nested metadata and validate at construction."""
+        object.__setattr__(self, "metadata", deepcopy(self.metadata))
         self.validate()
 
     def validate(self) -> None:
@@ -110,7 +112,7 @@ class AuditRecord:
         result = asdict(self)
         result["input_refs"] = list(self.input_refs)
         result["output_refs"] = list(self.output_refs)
-        result["metadata"] = dict(self.metadata)
+        result["metadata"] = deepcopy(dict(self.metadata))
         return result
 
     def to_stable_json(self) -> str:

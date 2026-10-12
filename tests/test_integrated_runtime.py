@@ -90,6 +90,16 @@ class IntegratedRuntimeTests(unittest.TestCase):
         }
         self.assertEqual(by_ref["claim-valid"], "supported_by_recorded_evidence")
 
+    def test_unresolved_planning_gaps_prevent_false_completed_status(self):
+        run = execute_mission(
+            Mission("hello there", risk_tier="low"),
+            executors={},
+        )
+        self.assertNotEqual(run.status, "completed_with_recorded_results")
+        self.assertTrue(run.unresolved_issues)
+        self.assertTrue(any("specialist" in issue.lower() or "context" in issue.lower()
+                            for issue in run.unresolved_issues))
+
     def test_missing_executor_is_reported_not_claimed_as_executed(self):
         run = execute_mission(
             Mission("Research scientific evidence for factory materials", risk_tier="low"),
@@ -112,6 +122,16 @@ class IntegratedRuntimeTests(unittest.TestCase):
         self.assertEqual(run.audit_records[0].event_type, "mission_run")
         self.assertEqual(run.audit_records[0].status, "approval_required")
 
+    def test_non_string_risk_tier_fails_closed_before_dispatch(self):
+        calls = []
+        run = execute_mission(
+            Mission("Research scientific evidence for a material", risk_tier=None),
+            executors={"science_research": lambda mission: calls.append(mission) or IslandResult("science_research", "done")},
+        )
+        self.assertEqual(calls, [])
+        self.assertEqual(run.status, "needs_clarification")
+        self.assertTrue(run.unresolved_issues)
+
     def test_unknown_risk_tier_fails_closed_before_dispatch(self):
         calls = []
         run = execute_mission(
@@ -121,6 +141,19 @@ class IntegratedRuntimeTests(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertEqual(run.status, "needs_clarification")
         self.assertTrue(run.unresolved_issues)
+
+    def test_malformed_island_result_is_recorded_without_crashing_review(self):
+        run = execute_mission(
+            Mission("Research scientific evidence for a material", risk_tier="low"),
+            executors={
+                "science_research": lambda mission: IslandResult(
+                    "science_research", "malformed result", claims=None
+                )
+            },
+        )
+        self.assertEqual(run.results, ())
+        self.assertTrue(run.execution_errors)
+        self.assertEqual(run.status, "incomplete")
 
     def test_executor_failure_is_recorded_as_partial_not_success(self):
         def broken(mission):

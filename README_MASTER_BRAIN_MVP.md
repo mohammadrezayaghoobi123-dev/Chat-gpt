@@ -5,7 +5,7 @@ This branch is an incremental implementation of the existing Master Brain vision
 ## Current slice
 
 - Deterministic task routing and risk-based approval flags.
-- Evidence-linked claim review and conservative contradiction flags.
+- Evidence-linked claim review and conservative contradiction flags, with an explicit count of distinct caller-declared supporting provenance groups; multiple model outputs sharing one group do not count as independent corroboration.
 - Proposed Contradiction-to-Proof (CTP) cases for detected conflicts and explicitly high-importance claims, including rival hypotheses, falsifiers, and a discriminating test that remains explicitly not run.
 - Typed CTP execution outcomes require timestamped provenance, source, method, an independence group and rationale; PASS/FAIL also require evidence references. Recording an outcome updates a new immutable case and does not execute the test.
 - Claims can declare a routine, high, or critical importance tier; high/critical claims without a detected contradiction receive a standalone falsification plan.

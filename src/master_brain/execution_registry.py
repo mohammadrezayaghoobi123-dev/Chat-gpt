@@ -454,6 +454,41 @@ class SQLiteExecutionRegistry:
                     raise RegistryError(
                         "orphan or inconsistent completion receipt"
                     )
+                # Validate every attempt's persisted chronology before relying
+                # on its dispatch marker. The marker's update timestamp is the
+                # durable boundary time; malformed or regressing timestamps must
+                # never be interpreted as proof that dispatch was entered.
+                from datetime import datetime
+                attempt_rows = db.execute(
+                    "SELECT * FROM execution_attempts ORDER BY execution_key, attempt_number"
+                ).fetchall()
+                for attempt_row in attempt_rows:
+                    attempt = self._attempt(attempt_row)
+                    try:
+                        created_at = datetime.fromisoformat(
+                            attempt.created_at.strip().replace("Z", "+00:00")
+                        )
+                        updated_at = datetime.fromisoformat(
+                            attempt.updated_at.strip().replace("Z", "+00:00")
+                        )
+                    except (AttributeError, ValueError) as exc:
+                        raise RegistryError(
+                            "execution attempt timestamp is inconsistent"
+                        ) from exc
+                    if (
+                        created_at.tzinfo is None
+                        or created_at.utcoffset() is None
+                        or updated_at.tzinfo is None
+                        or updated_at.utcoffset() is None
+                        or updated_at < created_at
+                        or (
+                            not attempt.dispatch_boundary_entered
+                            and updated_at != created_at
+                        )
+                    ):
+                        raise RegistryError(
+                            "execution attempt timestamp is inconsistent"
+                        )
                 # Attempts are created only after an execution reaches RUNNING.
                 # A dangling attempt, or one attached to an execution that never
                 # entered work (PENDING) or was failed before dispatch (FAILED),

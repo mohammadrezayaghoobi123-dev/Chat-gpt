@@ -93,6 +93,8 @@ def _build_audit_records(mission: Mission, run: MissionRun) -> tuple[AuditRecord
         claim_id = getattr(item, "claim_id", None)
         if (
             isinstance(item, Evidence)
+            and isinstance(item.source, str) and item.source.strip()
+            and isinstance(item.supports, bool)
             and isinstance(evidence_id, str) and evidence_id.strip()
             and evidence_id not in duplicate_evidence_ids
             and isinstance(claim_id, str) and claim_id.strip()

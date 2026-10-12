@@ -12,6 +12,14 @@ class RoutingTests(unittest.TestCase):
         self.assertTrue(route.requires_approval)
         self.assertEqual(route.specialist, "research_and_proof")
 
+    def test_malformed_external_action_flag_fails_closed_for_approval(self):
+        task = Task(
+            "ordinary planning request",
+            risk=RiskTier.LOW,
+            requires_external_action=1,
+        )
+        self.assertTrue(route_task(task).requires_approval)
+
     def test_unknown_risk_fails_closed_for_approval(self):
         route = route_task(Task("help with a plan", risk="unrecognized"))
         self.assertTrue(route.requires_approval)

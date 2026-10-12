@@ -32,6 +32,10 @@ class IslandResult:
 IslandExecutor = Callable[[Mission], IslandResult]
 
 
+class _InvalidIslandResult(ValueError):
+    """Safe validation failure for malformed specialist output."""
+
+
 @dataclass(frozen=True)
 class MissionRun:
     plan: CoordinationPlan
@@ -229,18 +233,10 @@ def _execute_mission_untraced(
                 metadata={"component": "specialist-island"},
             ) as island_trace:
                 result = executor(mission)
-                if island_trace is not None and isinstance(result, IslandResult):
-                    island_trace.update(output={
-                        "status": "completed",
-                        "claim_count": len(result.claims),
-                        "evidence_count": len(result.evidence),
-                        "provenance_count": len(result.provenance),
-                        "limitation_count": len(result.limitations),
-                    })
             if not isinstance(result, IslandResult):
-                raise TypeError("executor must return IslandResult")
+                raise _InvalidIslandResult("executor must return IslandResult")
             if result.island_id != island_id:
-                raise ValueError("result island_id does not match dispatched island")
+                raise _InvalidIslandResult("result island_id does not match dispatched island")
             invalid_fields = []
             if not isinstance(result.summary, str) or not result.summary.strip():
                 invalid_fields.append("summary must be a non-empty string")
@@ -261,8 +257,18 @@ def _execute_mission_untraced(
             ):
                 invalid_fields.append("limitations must be a sequence of non-empty strings")
             if invalid_fields:
-                raise ValueError("invalid IslandResult: " + "; ".join(invalid_fields))
+                raise _InvalidIslandResult("invalid IslandResult: " + "; ".join(invalid_fields))
+            if island_trace is not None:
+                island_trace.update(output={
+                    "status": "completed",
+                    "claim_count": len(result.claims),
+                    "evidence_count": len(result.evidence),
+                    "provenance_count": len(result.provenance),
+                    "limitation_count": len(result.limitations),
+                })
             results.append(result)
+        except _InvalidIslandResult as exc:
+            errors.append(f"{island_id}: {exc}")
         except Exception as exc:
             errors.append(f"{island_id}: execution failed ({type(exc).__name__})")
 

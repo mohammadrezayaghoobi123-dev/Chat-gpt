@@ -311,6 +311,25 @@ class RecoveryCandidateTests(unittest.TestCase):
             ).fetchall()
             self.assertEqual(rows, [("a1",), ("a2",)])
 
+    def test_recovery_can_resolve_attempt_by_execution_key(self):
+        running = self.reserve("recover-attempt", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:02Z",
+        )
+
+        # Recovery starts with an execution key, not an attempt ID. It must be
+        # possible to inspect the unique durable attempt without guessing IDs.
+        self.assertEqual(
+            self.registry.get_attempt_for_execution(running.key), attempt
+        )
+        self.assertIsNone(
+            self.registry.get_attempt_for_execution("no-such-execution")
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
 

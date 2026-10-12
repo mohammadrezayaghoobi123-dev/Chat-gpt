@@ -337,7 +337,9 @@ class RecoveryCandidateTests(unittest.TestCase):
         registry = SQLiteExecutionRegistry(
             str(Path(self.tmp.name) / "transient-lock.sqlite3"), timeout=0.01
         )
-        blocker = sqlite3.connect(registry.path, timeout=0.01, isolation_level=None)
+        blocker = sqlite3.connect(
+            registry.path, timeout=0.01, isolation_level=None, check_same_thread=False
+        )
         self.addCleanup(blocker.close)
         blocker.execute("BEGIN IMMEDIATE")
         blocker.execute(

@@ -90,6 +90,16 @@ class IntegratedRuntimeTests(unittest.TestCase):
         }
         self.assertEqual(by_ref["claim-valid"], "supported_by_recorded_evidence")
 
+    def test_unresolved_planning_gaps_prevent_false_completed_status(self):
+        run = execute_mission(
+            Mission("hello there", risk_tier="low"),
+            executors={},
+        )
+        self.assertNotEqual(run.status, "completed_with_recorded_results")
+        self.assertTrue(run.unresolved_issues)
+        self.assertTrue(any("specialist" in issue.lower() or "context" in issue.lower()
+                            for issue in run.unresolved_issues))
+
     def test_missing_executor_is_reported_not_claimed_as_executed(self):
         run = execute_mission(
             Mission("Research scientific evidence for factory materials", risk_tier="low"),

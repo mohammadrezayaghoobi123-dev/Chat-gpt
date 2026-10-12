@@ -6,7 +6,8 @@ This branch is an incremental implementation of the existing Master Brain vision
 
 - Deterministic task routing and risk-based approval flags.
 - Evidence-linked claim review and conservative contradiction flags.
-- Proposed Contradiction-to-Proof (CTP) cases for detected conflicts, including rival hypotheses, falsifiers, and a discriminating test that remains explicitly not run.
+- Proposed Contradiction-to-Proof (CTP) cases for detected conflicts and explicitly high-importance claims, including rival hypotheses, falsifiers, and a discriminating test that remains explicitly not run.
+- Claims can declare a routine, high, or critical importance tier; high/critical claims without a detected contradiction receive a standalone falsification plan.
 - Transparent illustrative opportunity scoring.
 - Initial archipelago mission planner:
   - Supreme Command Core
@@ -29,14 +30,13 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 - Routing is keyword-based and may miss implied or multilingual intent.
 - No model providers, external retrieval, database, or action execution are wired in yet.
 - The planner produces a collaboration plan; it does not claim that an island actually ran.
-- CTP plans are generated for detected conflicts only; the proposed tests are not executed and do not determine which claim is true.
+- CTP plans are generated for detected conflicts and explicitly high/critical claims; importance is caller-supplied, not inferred by the model. Proposed tests are not executed and do not determine which claim is true.
 - Audit events are in-memory only; durable storage, tamper evidence, and a complete audit pipeline are not implemented.
 - Opportunity scores are illustrative, not calibrated forecasts.
 - All external or consequential actions remain out of scope for this slice.
 
 ## Next engineering steps
 
-1. Expand falsification planning to high-importance claims even when no direct contradiction has been detected.
-2. Bind executed test outcomes to verified evidence with provenance, independence, and explicit PASS/FAIL/INCONCLUSIVE rules.
+1. Bind executed test outcomes to verified evidence with provenance, independence, and explicit PASS/FAIL/INCONCLUSIVE rules.
 3. Add a typed request/result contract for each island and explicit per-island state.
 4. Map requirements from historical architecture documents before widening the implementation.

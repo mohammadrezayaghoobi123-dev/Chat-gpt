@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 import json
 import re
+import unicodedata
 from typing import Any, Mapping
 
 
@@ -45,7 +46,7 @@ def _check_sensitive_keys(value: Any, path: str = "metadata", _active: set[int] 
             for key, child in value.items():
                 if not isinstance(key, str):
                     raise AuditValidationError(f"{path} keys must be strings")
-                normalized = re.sub(r"[^a-z0-9]", "", key.lower())
+                normalized = re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKC", key).casefold())
                 sensitive_parts = (re.sub(r"[^a-z0-9]", "", part) for part in _SENSITIVE_KEY_PARTS)
                 if any(part in normalized for part in sensitive_parts):
                     raise AuditValidationError(

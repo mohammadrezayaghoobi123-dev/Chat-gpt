@@ -213,7 +213,7 @@ def validate_completion_evidence(
             raise EvidenceValidationError("verified provider scope disagrees with trusted attempt configuration")
         identity = identity_values
     else:
-        raise EvidenceValidationError("provider evidence verifier returned an invalid result")
+        raise EvidenceValidationError("provider evidence was not verified: verifier returned an invalid result")
     return VerifiedEvidence(
         evidence_digest=evidence_digest(evidence),
         attempt_id=attempt.attempt_id,

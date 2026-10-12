@@ -71,6 +71,14 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(any("invalid evidence record" in issue.lower()
                             for issue in result.unresolved_questions))
 
+    def test_invalid_evidence_polarity_cannot_be_counted_as_support(self):
+        claim = Claim("c-invalid-polarity", "plant", "output", "100")
+        malformed = Evidence("e-invalid", "measurement", "c-invalid-polarity", "yes")
+        result = evaluate_claim(claim, (malformed,))
+        self.assertEqual(result.status, "unverified")
+        self.assertTrue(any("invalid evidence record" in issue.lower()
+                            for issue in result.unresolved_questions))
+
     def test_no_evidence_is_unverified(self):
         claim = Claim("c1", "claim", "predicate", "value")
         self.assertEqual(evaluate_claim(claim, []).status, "unverified")

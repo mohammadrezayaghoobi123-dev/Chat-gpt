@@ -496,6 +496,8 @@ class SQLiteExecutionRegistry:
         observed_at = parse_aware_timestamp("observed_at", evidence.observed_at)
         attempt_created_at = parse_aware_timestamp("attempt creation timestamp", attempt.created_at)
         dispatch_boundary_at = parse_aware_timestamp("dispatch boundary timestamp", attempt.updated_at)
+        if not attempt.dispatch_boundary_entered:
+            raise EvidenceValidationError("dispatch boundary was not entered")
         if dispatch_boundary_at < attempt_created_at:
             raise EvidenceValidationError("dispatch boundary predates attempt creation")
         if observed_at < dispatch_boundary_at:

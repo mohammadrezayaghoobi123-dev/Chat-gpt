@@ -142,6 +142,23 @@ class CTPCaseTests(unittest.TestCase):
         self.assertTrue(any("missing expected prediction" in issue.lower()
                             for issue in incomplete.validate()))
 
+    def test_discriminating_test_rejects_duplicate_predictions_for_same_hypothesis(self):
+        case = self.make_case()
+        ambiguous_test = DiscriminatingTest(
+            "test-01", "Measure output", "Witness the run",
+            (
+                ("h-a", "Output reaches 1 ton/day"),
+                ("h-a", "Output remains near 700 kg/day"),
+                ("h-b", "Output remains near 700 kg/day"),
+            ),
+        )
+        invalid = CTPCase(
+            case.case_id, case.question, case.claim_ids, case.hypotheses,
+            case.falsifiers, (ambiguous_test,),
+        )
+        self.assertTrue(any("duplicate expected prediction" in issue.lower()
+                            for issue in invalid.validate()))
+
     def test_unknown_hypothesis_reference_is_invalid(self):
         case = self.make_case()
         bad_falsifier = Falsifier("h-missing", "Something observable")

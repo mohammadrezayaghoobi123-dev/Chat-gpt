@@ -253,3 +253,29 @@ class RegisteredCompletionEvidenceTests(CompletionEvidenceTests):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AdditionalAdversarialCompletionEvidenceTests(CompletionEvidenceTests):
+    def test_integer_one_is_not_accepted_as_verifier_approval(self):
+        # bool is a singleton type in Python, but int(1) is merely truthy.
+        with self.assertRaisesRegex(EvidenceValidationError, "not verified"):
+            self.validate(verifier=lambda item: 1)
+
+    def test_receipt_observed_before_dispatch_boundary_never_reaches_verifier(self):
+        from dataclasses import replace
+
+        called = []
+        stale = replace(self.evidence, observed_at="2026-10-12T00:00:01Z")
+        with self.assertRaisesRegex(EvidenceValidationError, "predates dispatch boundary"):
+            self.validate(stale, verifier=lambda item: called.append(item) or True)
+        self.assertEqual(called, [])
+
+    def test_invalid_provider_decision_is_rejected_without_mutating_execution_record(self):
+        from dataclasses import replace
+
+        before = self.execution
+        for decision in (None, False, 0, 1, "verified", {"verified": True}):
+            with self.subTest(decision=decision):
+                with self.assertRaises(EvidenceValidationError):
+                    self.validate(verifier=lambda item, value=decision: value)
+                self.assertEqual(self.execution, before)

@@ -72,9 +72,27 @@ def _review_level(mission: Mission, unknown_count: int, selection_count: int) ->
 def plan_coordination(mission: Mission, profiles: Iterable[IslandProfile] = DEFAULT_PROFILES) -> CoordinationPlan:
     """Return a traceable plan; selected islands are not claimed to have run."""
     objective = " ".join(mission.objective.casefold().split())
-    enabled = tuple(p for p in profiles if p.enabled)
+    enabled = []
+    seen_profile_ids = set()
+    duplicate_profile_ids = set()
+    invalid_profile_count = 0
+    for profile in profiles:
+        if not isinstance(profile, IslandProfile) or not isinstance(profile.island_id, str) or not profile.island_id.strip():
+            invalid_profile_count += 1
+            continue
+        if not profile.enabled:
+            continue
+        if profile.island_id in seen_profile_ids:
+            duplicate_profile_ids.add(profile.island_id)
+            continue
+        seen_profile_ids.add(profile.island_id)
+        enabled.append(profile)
     selections = []
-    gaps, assumptions, unknowns, questions = [], [], [], []
+    gaps, assumptions = [], []
+    unknowns = [f"Duplicate island profile ID: {profile_id}" for profile_id in sorted(duplicate_profile_ids)]
+    if invalid_profile_count:
+        unknowns.append(f"{invalid_profile_count} invalid island profile(s) were excluded.")
+    questions = []
     rationale = [
         "The Supreme Command Core retains policy authority and final synthesis.",
         "This is a routing proposal; selected islands have not yet been executed or consulted.",

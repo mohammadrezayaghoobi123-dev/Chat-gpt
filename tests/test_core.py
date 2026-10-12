@@ -66,6 +66,12 @@ class EvidenceTests(unittest.TestCase):
 
 
 class OpportunityTests(unittest.TestCase):
+    def test_score_clamps_large_finite_integer_inputs(self):
+        item = Opportunity("large-integer", 10 ** 1000, 0.5, 0.5, 0.5, 0.5)
+        score = score_opportunity(item)
+        self.assertGreaterEqual(score, 0.0)
+        self.assertLessEqual(score, 1.0)
+
     def test_score_rejects_non_finite_inputs(self):
         item = Opportunity("invalid", float("nan"), 0.5, 0.5, 0.5, 0.5)
         with self.assertRaisesRegex(ValueError, "finite numbers"):

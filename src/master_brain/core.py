@@ -170,7 +170,12 @@ def evaluate_claim(claim: Claim, evidence: Iterable[Evidence]) -> Decision:
     invalid_id_count = 0
     invalid_record_count = 0
     for item in evidence_items:
-        if not isinstance(item, Evidence):
+        if (
+            not isinstance(item, Evidence)
+            or not isinstance(item.source, str) or not item.source.strip()
+            or not isinstance(item.claim_id, str) or not item.claim_id.strip()
+            or not isinstance(item.supports, bool)
+        ):
             invalid_record_count += 1
             continue
         evidence_id = item.evidence_id
@@ -185,6 +190,9 @@ def evaluate_claim(claim: Claim, evidence: Iterable[Evidence]) -> Decision:
     usable_evidence = [
         item for item in evidence_items
         if isinstance(item, Evidence)
+        and isinstance(item.source, str) and item.source.strip()
+        and isinstance(item.claim_id, str) and item.claim_id.strip()
+        and isinstance(item.supports, bool)
         and isinstance(item.evidence_id, str)
         and item.evidence_id.strip()
         and item.evidence_id not in duplicate_ids

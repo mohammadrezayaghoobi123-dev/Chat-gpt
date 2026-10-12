@@ -56,6 +56,23 @@ class CompletionEvidenceTests(unittest.TestCase):
             provider_verifier=verifier,
         )
 
+    def test_malformed_top_level_inputs_raise_validation_error(self):
+        for kwargs in (
+            {"execution": None},
+            {"attempt": None},
+            {"evidence": None},
+        ):
+            args = {
+                "execution": self.execution,
+                "attempt": self.attempt,
+                "evidence": self.evidence,
+                "verifier_id": "provider-x-receipt-verifier-v1",
+                "provider_verifier": lambda item: True,
+            }
+            args.update(kwargs)
+            with self.subTest(kwargs=kwargs), self.assertRaises(EvidenceValidationError):
+                validate_completion_evidence(**args)
+
     def test_valid_attempt_bound_evidence_returns_verification_record(self):
         verified = self.validate()
         self.assertEqual(verified.attempt_id, self.attempt.attempt_id)

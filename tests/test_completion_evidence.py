@@ -1,12 +1,16 @@
 """Fail-closed tests for attempt-bound completion evidence validation."""
 import unittest
+import tempfile
+from pathlib import Path
 
 from master_brain.completion_evidence import (
     CompletionEvidence,
     EvidenceValidationError,
     validate_completion_evidence,
 )
-from master_brain.execution_registry import ExecutionAttempt, Record, State
+from master_brain.execution_registry import (
+    ExecutionAttempt, Record, SQLiteExecutionRegistry, State, InvalidTransition,
+)
 
 
 class CompletionEvidenceTests(unittest.TestCase):
@@ -250,6 +254,131 @@ class RegisteredCompletionEvidenceTests(CompletionEvidenceTests):
     def test_verified_record_binds_exact_verifier_version(self):
         verified = self._validate_registered(self._registry(version="2026.10.1"), version="2026.10.1")
         self.assertEqual(verified.verifier_version, "2026.10.1")
+
+
+class PersistedCompletionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.registry = SQLiteExecutionRegistry(str(Path(self.tmp.name) / "completion.sqlite3"))
+        pending, _ = self.registry.reserve(
+            key="exec-persisted", mission_id="mission-persisted",
+            contract_digest="contract-sha256", payload_digest="payload-sha256",
+            recorded_at="2026-10-12T00:00:00Z",
+        )
+        running = self.registry.transition(
+            key=pending.key, expected_version=pending.version,
+            target=State.RUNNING, recorded_at="2026-10-12T00:00:01Z",
+        )
+        self.attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="payments-v1", adapter_version="1.2.0",
+            provider_id="provider-x", recorded_at="2026-10-12T00:00:02Z",
+        )
+        self.attempt = self.registry.mark_attempt_dispatch_boundary(
+            attempt_id=self.attempt.attempt_id, recorded_at="2026-10-12T00:00:03Z"
+        )
+        uncertain = self.registry.transition(
+            key=running.key, expected_version=running.version,
+            target=State.OUTCOME_UNKNOWN, recorded_at="2026-10-12T00:00:04Z",
+        )
+        self.expected_version = uncertain.version
+        self.evidence = CompletionEvidence(
+            attempt_id=self.attempt.attempt_id,
+            execution_key=uncertain.key,
+            mission_id=uncertain.mission_id,
+            contract_digest=uncertain.contract_digest,
+            payload_digest=uncertain.payload_digest,
+            integration_id=self.attempt.integration_id,
+            adapter_version=self.attempt.adapter_version,
+            provider_id=self.attempt.provider_id,
+            evidence_type="provider_operation_receipt",
+            evidence_ref="receipt://provider-x/abc",
+            provider_receipt_id="receipt-abc",
+            observed_at="2026-10-12T00:00:05Z",
+        )
+        from master_brain.verifier_registry import ConfiguredVerifierRegistry, VerifierDescriptor
+        self.verifiers = ConfiguredVerifierRegistry([VerifierDescriptor(
+            verifier_id="provider-x-receipt-verifier", version="1",
+            provider_id="provider-x", evidence_type="provider_operation_receipt",
+            verify=lambda item: True,
+        )])
+
+    def complete(self, evidence=None, registry=None, expected_version=None):
+        return self.registry.complete_with_verified_evidence(
+            key="exec-persisted",
+            expected_version=self.expected_version if expected_version is None else expected_version,
+            attempt_id=self.attempt.attempt_id,
+            evidence=self.evidence if evidence is None else evidence,
+            verifier_id="provider-x-receipt-verifier",
+            verifier_version="1",
+            verifier_registry=self.verifiers if registry is None else registry,
+            recorded_at="2026-10-12T00:00:06Z",
+        )
+
+    def test_verified_completion_persists_receipt_and_state_atomically(self):
+        result = self.complete()
+        self.assertEqual(result.state, State.SUCCEEDED)
+        self.assertEqual(result.version, self.expected_version + 1)
+        with self.registry._db() as db:
+            receipt = db.execute(
+                "SELECT * FROM completion_receipts WHERE execution_key=?",
+                ("exec-persisted",),
+            ).fetchone()
+        self.assertIsNotNone(receipt)
+        self.assertEqual(receipt["attempt_id"], self.attempt.attempt_id)
+        self.assertEqual(len(receipt["evidence_digest"]), 64)
+        self.assertEqual(receipt["verifier_id"], "provider-x-receipt-verifier")
+        self.assertEqual(self.registry.get("exec-persisted").state, State.SUCCEEDED)
+
+    def test_untrusted_or_unmatched_verifier_cannot_complete_execution(self):
+        from master_brain.verifier_registry import ConfiguredVerifierRegistry
+        with self.assertRaisesRegex(ValueError, "no enabled trusted verifier"):
+            self.complete(registry=ConfiguredVerifierRegistry([]))
+        self.assertEqual(self.registry.get("exec-persisted").state, State.OUTCOME_UNKNOWN)
+        with self.registry._db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM completion_receipts").fetchone()[0], 0)
+
+    def test_generic_transition_cannot_bypass_evidence_gate(self):
+        with self.assertRaisesRegex(InvalidTransition, "verified completion evidence"):
+            self.registry.transition(
+                key="exec-persisted", expected_version=self.expected_version,
+                target=State.SUCCEEDED, recorded_at="2026-10-12T00:00:06Z",
+            )
+        self.assertEqual(self.registry.get("exec-persisted").state, State.OUTCOME_UNKNOWN)
+
+    def test_exact_repeat_is_idempotent_but_different_evidence_is_rejected(self):
+        first = self.complete()
+        repeated = self.complete()
+        self.assertEqual(repeated, first)
+        changed = CompletionEvidence(**{
+            **self.evidence.__dict__, "provider_receipt_id": "different-receipt"
+        })
+        with self.assertRaisesRegex(InvalidTransition, "different or missing completion evidence"):
+            self.complete(evidence=changed)
+        self.assertEqual(self.registry.get("exec-persisted"), first)
+        with self.registry._db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM completion_receipts").fetchone()[0], 1)
+
+    def test_stale_version_fails_without_receipt_or_state_change(self):
+        with self.assertRaisesRegex(InvalidTransition, "stale execution version"):
+            self.complete(expected_version=self.expected_version - 1)
+        self.assertEqual(self.registry.get("exec-persisted").state, State.OUTCOME_UNKNOWN)
+        with self.registry._db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM completion_receipts").fetchone()[0], 0)
+
+    def test_execution_cannot_complete_when_dispatch_boundary_was_not_entered(self):
+        with self.registry._db() as db:
+            db.execute(
+                "UPDATE execution_attempts SET dispatch_boundary_entered=0 WHERE attempt_id=?",
+                (self.attempt.attempt_id,),
+            )
+        with self.assertRaisesRegex(ValueError, "dispatch boundary was not entered"):
+            self.complete()
+        self.assertEqual(self.registry.get("exec-persisted").state, State.OUTCOME_UNKNOWN)
+        with self.registry._db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM completion_receipts").fetchone()[0], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

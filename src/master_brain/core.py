@@ -97,6 +97,9 @@ class Decision:
     counterevidence: tuple[str, ...] = ()
     unresolved_questions: tuple[str, ...] = ()
     maturity: Maturity = Maturity.PROPOSED
+    # These count caller-declared groups; they are not authenticated independence proof.
+    independent_supporting_group_count: int = 0
+    independent_support_demonstrated: bool = False
 
 
 def route_task(task: Task) -> Route:
@@ -158,7 +161,13 @@ def evaluate_claim(claim: Claim, evidence: Iterable[Evidence]) -> Decision:
     matching = [item for item in evidence if item.claim_id == claim.claim_id]
     supporting = tuple(item.evidence_id for item in matching if item.supports)
     opposing = tuple(item.evidence_id for item in matching if not item.supports)
-    groups = {item.independent_group for item in matching if item.independent_group}
+    supporting_groups = {
+        item.independent_group
+        for item in matching
+        if item.supports and item.independent_group
+    }
+    independent_supporting_group_count = len(supporting_groups)
+    independent_support_demonstrated = independent_supporting_group_count >= 2
     unresolved: list[str] = []
     if not matching:
         unresolved.append("No evidence attached to claim.")
@@ -172,6 +181,17 @@ def evaluate_claim(claim: Claim, evidence: Iterable[Evidence]) -> Decision:
         status = "challenged_by_recorded_evidence"
     else:
         status = "unverified"
-    if len(groups) < 2:
-        unresolved.append("Independent corroboration has not been demonstrated.")
-    return Decision(status, f"Evidence review for claim {claim.claim_id}.", supporting, opposing, tuple(unresolved), Maturity.TESTED)
+    if not independent_support_demonstrated:
+        unresolved.append(
+            "Independent corroboration has not been demonstrated by at least two distinct supporting provenance groups."
+        )
+    return Decision(
+        status=status,
+        summary=f"Evidence review for claim {claim.claim_id}.",
+        supporting_evidence=supporting,
+        counterevidence=opposing,
+        unresolved_questions=tuple(unresolved),
+        maturity=Maturity.TESTED,
+        independent_supporting_group_count=independent_supporting_group_count,
+        independent_support_demonstrated=independent_support_demonstrated,
+    )

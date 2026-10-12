@@ -241,6 +241,27 @@ def _execute_mission_untraced(
                 raise TypeError("executor must return IslandResult")
             if result.island_id != island_id:
                 raise ValueError("result island_id does not match dispatched island")
+            invalid_fields = []
+            if not isinstance(result.summary, str) or not result.summary.strip():
+                invalid_fields.append("summary must be a non-empty string")
+            if not isinstance(result.claims, (tuple, list)) or isinstance(result.claims, str) or any(
+                not isinstance(item, Claim) for item in result.claims
+            ):
+                invalid_fields.append("claims must be a sequence of Claim records")
+            if not isinstance(result.evidence, (tuple, list)) or isinstance(result.evidence, str) or any(
+                not isinstance(item, Evidence) for item in result.evidence
+            ):
+                invalid_fields.append("evidence must be a sequence of Evidence records")
+            if not isinstance(result.provenance, (tuple, list)) or isinstance(result.provenance, str) or any(
+                not isinstance(item, str) or not item.strip() for item in result.provenance
+            ):
+                invalid_fields.append("provenance must be a sequence of non-empty strings")
+            if not isinstance(result.limitations, (tuple, list)) or isinstance(result.limitations, str) or any(
+                not isinstance(item, str) or not item.strip() for item in result.limitations
+            ):
+                invalid_fields.append("limitations must be a sequence of non-empty strings")
+            if invalid_fields:
+                raise ValueError("invalid IslandResult: " + "; ".join(invalid_fields))
             results.append(result)
         except Exception as exc:
             errors.append(f"{island_id}: execution failed ({type(exc).__name__})")

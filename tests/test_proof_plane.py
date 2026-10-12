@@ -27,7 +27,7 @@ class ProofPlaneTests(unittest.TestCase):
         self.assertEqual(case.tests[0].status, TestStatus.NOT_RUN)
         self.assertEqual(len(case.unresolved_test_ids), 1)
         self.assertFalse(case.has_executed_evidence)
-        self.assertIn("not executed", " ".join(case.notes).lower())
+        self.assertIn("has been run", " ".join(case.notes).lower())
 
     def test_orphan_evidence_is_reported(self):
         report = review_proof((), (Evidence("e1", "report", "unknown-claim", True),))

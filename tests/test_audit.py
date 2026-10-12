@@ -26,6 +26,18 @@ class AuditRecordTests(unittest.TestCase):
         self.assertIn("آزمون", first)
         self.assertEqual(json.loads(first)["input_refs"], ["claim-1"])
 
+    def test_nested_metadata_is_copied_in_to_dict(self):
+        record = self.make_record(metadata={"nested": {"count": 1}})
+        exported = record.to_dict()
+        exported["metadata"]["nested"]["count"] = 99
+        self.assertEqual(record.to_dict()["metadata"]["nested"]["count"], 1)
+
+    def test_input_metadata_mutation_does_not_change_existing_record(self):
+        metadata = {"nested": {"count": 1}}
+        record = self.make_record(metadata=metadata)
+        metadata["nested"]["count"] = 99
+        self.assertEqual(record.to_dict()["metadata"]["nested"]["count"], 1)
+
     def test_rejects_missing_required_text(self):
         with self.assertRaisesRegex(AuditValidationError, "event_id"):
             self.make_record(event_id=" ")

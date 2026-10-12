@@ -154,6 +154,19 @@ class SQLiteExecutionRegistry:
         """Return (record, created); identical duplicate requests never reclaim RUNNING."""
         self._required(key=key, mission_id=mission_id, contract_digest=contract_digest,
                        payload_digest=payload_digest, recorded_at=recorded_at)
+        from datetime import datetime
+        try:
+            reservation_dt = datetime.fromisoformat(
+                recorded_at.strip().replace("Z", "+00:00")
+            )
+        except (AttributeError, ValueError) as exc:
+            raise InvalidTransition(
+                "reservation timestamp must be timezone-aware ISO-8601"
+            ) from exc
+        if reservation_dt.tzinfo is None or reservation_dt.utcoffset() is None:
+            raise InvalidTransition(
+                "reservation timestamp must be timezone-aware ISO-8601"
+            )
         try:
             with closing(self._db()) as db, db:
                 self._begin_immediate_with_retry(db)

@@ -94,3 +94,17 @@ class ConfiguredVerifierRegistryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeploymentVerifierConfigurationTests(unittest.TestCase):
+    def test_missing_reviewed_deployment_configuration_fails_closed(self):
+        from master_brain.verifier_registry import (
+            load_deployment_verifier_registry,
+        )
+
+        with self.assertRaisesRegex(
+            VerifierRegistryError, "deployment verifier configuration is unavailable"
+        ):
+            load_deployment_verifier_registry()
+
+

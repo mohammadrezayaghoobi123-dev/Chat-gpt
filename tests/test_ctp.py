@@ -93,6 +93,16 @@ class CTPCaseTests(unittest.TestCase):
         self.assertTrue(any("claim_ids must contain non-empty strings" in issue
                             for issue in malformed.validate()))
 
+    def test_validation_reports_malformed_nested_contract_objects_without_crashing(self):
+        case = self.make_case()
+        malformed = CTPCase(
+            case.case_id, case.question, case.claim_ids,
+            (case.hypotheses[0], None), case.falsifiers, (case.tests[0], None),
+        )
+        issues = malformed.validate()
+        self.assertTrue(any("invalid hypothesis" in issue.lower() for issue in issues))
+        self.assertTrue(any("invalid test" in issue.lower() for issue in issues))
+
     def test_case_requires_a_falsifier_for_each_rival_hypothesis(self):
         case = self.make_case()
         incomplete = CTPCase(

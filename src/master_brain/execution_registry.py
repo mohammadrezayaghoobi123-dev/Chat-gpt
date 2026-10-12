@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 import math
 import sqlite3
+import time
 import uuid
 
 
@@ -99,6 +100,16 @@ class SQLiteExecutionRegistry:
                     "legacy execution_attempts contains duplicate execution keys; "
                     "manual evidence-based reconciliation is required"
                 ) from exc
+            db.execute("""CREATE TABLE IF NOT EXISTS completion_receipts (
+                execution_key TEXT PRIMARY KEY,
+                attempt_id TEXT NOT NULL UNIQUE,
+                evidence_digest TEXT NOT NULL,
+                verifier_id TEXT NOT NULL,
+                verifier_version TEXT NOT NULL,
+                evidence_type TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                recorded_at TEXT NOT NULL
+            )""")
             db.execute("CREATE INDEX IF NOT EXISTS idx_attempts_execution ON execution_attempts(execution_key, attempt_number)")
             db.execute("PRAGMA journal_mode=WAL")
 
@@ -123,6 +134,20 @@ class SQLiteExecutionRegistry:
         for name, value in values.items():
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
+
+    def _begin_immediate_with_retry(self, db: sqlite3.Connection) -> None:
+        """Retry only transient SQLite BUSY/LOCKED failures before writes begin."""
+        delays = (0.01, 0.025, 0.05, 0.1)
+        for delay in (*delays, None):
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                return
+            except sqlite3.OperationalError as exc:
+                code = getattr(exc, "sqlite_errorcode", None)
+                primary_code = (code & 0xFF) if isinstance(code, int) else None
+                if primary_code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or delay is None:
+                    raise
+                time.sleep(delay)
 
     def reserve(self, *, key: str, mission_id: str, contract_digest: str,
                 payload_digest: str, recorded_at: str) -> tuple[Record, bool]:

@@ -120,6 +120,123 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
 
         self.assertEqual(self.registry.get(self.key), succeeded)
 
+    def _prepare_second_execution(self, *, provider_scope):
+        record, _ = self.registry.reserve(
+            key="second-execution",
+            mission_id="mission-second",
+            contract_digest="contract-digest-second",
+            payload_digest="payload-digest-second",
+            recorded_at=_iso(-50),
+        )
+        record = self.registry.transition(
+            key=record.key, expected_version=record.version,
+            target=State.RUNNING, recorded_at=_iso(-40),
+        )
+        attempt = self.registry.reserve_attempt(
+            key=record.key, expected_version=record.version,
+            integration_id="payments-v1", adapter_version="1.0",
+            provider_id="provider-x", provider_scope=provider_scope,
+            receipt_namespace="operation-receipt", recorded_at=_iso(-30),
+        )
+        attempt = self.registry.mark_attempt_dispatch_boundary(
+            attempt_id=attempt.attempt_id, recorded_at=_iso(-20),
+        )
+        record = self.registry.get(record.key)
+        record = self.registry.transition(
+            key=record.key, expected_version=record.version,
+            target=State.OUTCOME_UNKNOWN, recorded_at=_iso(-10),
+        )
+        evidence = CompletionEvidence(
+            attempt_id=attempt.attempt_id,
+            execution_key=record.key,
+            mission_id=record.mission_id,
+            contract_digest=record.contract_digest,
+            payload_digest=record.payload_digest,
+            integration_id=attempt.integration_id,
+            adapter_version=attempt.adapter_version,
+            provider_id=attempt.provider_id,
+            evidence_type="operation-receipt",
+            evidence_ref="receipt://provider-x/receipt-1",
+            provider_receipt_id="receipt-1",
+            observed_at=_iso(-5),
+        )
+        return record, attempt, evidence
+
+    def test_same_scoped_receipt_cannot_complete_a_second_execution(self):
+        self.complete(self.evidence, _iso(-2))
+        second, attempt, evidence = self._prepare_second_execution(
+            provider_scope="merchant-account-1/production"
+        )
+        with self.assertRaisesRegex(
+            InvalidTransition, "provider receipt identity is already claimed"
+        ):
+            self.registry.complete_with_verified_evidence(
+                key=second.key, expected_version=second.version,
+                attempt_id=attempt.attempt_id, evidence=evidence,
+                verifier_id="payments-receipt", verifier_version="1",
+                verifier_registry=self.trusted_verifiers, recorded_at=_iso(-1),
+            )
+        self.assertEqual(self.registry.get(second.key), second)
+        with sqlite3.connect(self.registry.path) as db:
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                           (second.key,)).fetchone()[0],
+                0,
+            )
+
+    def test_same_receipt_id_in_a_different_trusted_scope_is_allowed(self):
+        self.complete(self.evidence, _iso(-2))
+        second, attempt, evidence = self._prepare_second_execution(
+            provider_scope="merchant-account-2/production"
+        )
+        other_scope_registry = ConfiguredVerifierRegistry([
+            VerifierDescriptor(
+                verifier_id="payments-receipt", version="1",
+                provider_id="provider-x", evidence_type="operation-receipt",
+                verify=lambda item: ProviderVerificationResult(
+                    True, item.provider_id, "merchant-account-2/production",
+                    "operation-receipt", item.provider_receipt_id,
+                ),
+                enabled=True,
+            )
+        ])
+        result = self.registry.complete_with_verified_evidence(
+            key=second.key, expected_version=second.version,
+            attempt_id=attempt.attempt_id, evidence=evidence,
+            verifier_id="payments-receipt", verifier_version="1",
+            verifier_registry=other_scope_registry, recorded_at=_iso(-1),
+        )
+        self.assertEqual(result.state, State.SUCCEEDED)
+        with sqlite3.connect(self.registry.path) as db:
+            identities = db.execute(
+                "SELECT provider_scope, provider_receipt_id FROM completion_receipts "
+                "WHERE provider_receipt_id=? ORDER BY provider_scope",
+                ("receipt-1",),
+            ).fetchall()
+        self.assertEqual(
+            identities,
+            [("merchant-account-1/production", "receipt-1"),
+             ("merchant-account-2/production", "receipt-1")],
+        )
+
+    def test_completion_fails_closed_when_trusted_scope_is_missing(self):
+        before = self.registry.get(self.key)
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute("UPDATE execution_attempts SET provider_scope=NULL WHERE attempt_id=?",
+                       (self.attempt.attempt_id,))
+        calls_before = len(self.verifier_calls)
+        with self.assertRaisesRegex(
+            EvidenceValidationError, "requires trusted provider scope"
+        ):
+            self.complete(self.evidence, _iso(-2))
+        self.assertEqual(len(self.verifier_calls), calls_before)
+        self.assertEqual(self.registry.get(self.key), before)
+        with sqlite3.connect(self.registry.path) as db:
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                (self.key,),
+            ).fetchone()[0], 0)
+
     def test_rejected_provider_evidence_leaves_state_and_receipts_unchanged(self):
         rejecting_registry = ConfiguredVerifierRegistry([
             VerifierDescriptor(

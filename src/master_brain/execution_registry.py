@@ -117,7 +117,8 @@ class SQLiteExecutionRegistry:
                 provider_id TEXT,
                 provider_scope TEXT,
                 receipt_namespace TEXT,
-                provider_receipt_id TEXT
+                provider_receipt_id TEXT,
+                identity_version INTEGER
             )""")
             # Additive migration preserves historical rows as explicitly unscoped.
             for table, column, declaration in (
@@ -127,6 +128,7 @@ class SQLiteExecutionRegistry:
                 ("completion_receipts", "provider_scope", "TEXT"),
                 ("completion_receipts", "receipt_namespace", "TEXT"),
                 ("completion_receipts", "provider_receipt_id", "TEXT"),
+                ("completion_receipts", "identity_version", "INTEGER"),
             ):
                 existing_columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                 if column not in existing_columns:
@@ -489,6 +491,15 @@ class SQLiteExecutionRegistry:
                     raise RegistryError(
                         "orphan or inconsistent completion receipt"
                     )
+                malformed_scoped_receipt = db.execute(
+                    """SELECT 1 FROM completion_receipts
+                    WHERE identity_version = 1 AND (
+                        provider_id IS NULL OR provider_scope IS NULL
+                        OR receipt_namespace IS NULL OR provider_receipt_id IS NULL
+                    ) LIMIT 1"""
+                ).fetchone()
+                if malformed_scoped_receipt is not None:
+                    raise RegistryError("scoped completion receipt identity is incomplete")
                 # Receipt timestamps are evidence-bearing fields, not mere
                 # metadata. Validate their timezone awareness and causal ordering
                 # against the durable dispatch marker and successful state commit.
@@ -708,6 +719,7 @@ class SQLiteExecutionRegistry:
                 and receipt["provider_scope"] == attempt.provider_scope
                 and receipt["receipt_namespace"] == attempt.receipt_namespace
                 and receipt["provider_receipt_id"] == evidence.provider_receipt_id
+                and receipt["identity_version"] == 1
             ):
                 return current
             raise InvalidTransition("execution already succeeded with different or missing completion evidence")
@@ -810,6 +822,7 @@ class SQLiteExecutionRegistry:
                         and receipt["provider_scope"] == verified.provider_scope
                         and receipt["receipt_namespace"] == verified.receipt_namespace
                         and receipt["provider_receipt_id"] == verified.provider_receipt_id
+                        and receipt["identity_version"] == 1
                     ):
                         db.commit()
                         return persisted
@@ -829,14 +842,15 @@ class SQLiteExecutionRegistry:
                         """INSERT INTO completion_receipts
                     (execution_key, attempt_id, evidence_digest, verifier_id,
                      verifier_version, evidence_type, observed_at, recorded_at,
-                     provider_id, provider_scope, receipt_namespace, provider_receipt_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     provider_id, provider_scope, receipt_namespace, provider_receipt_id,
+                     identity_version)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         key, attempt_id, verified.evidence_digest, verified.verifier_id,
                         verified.verifier_version, verified.evidence_type,
                         evidence.observed_at, recorded_at, verified.provider_id,
                         verified.provider_scope, verified.receipt_namespace,
-                        verified.provider_receipt_id,
+                        verified.provider_receipt_id, 1,
                         ),
                     )
                 except sqlite3.IntegrityError as exc:

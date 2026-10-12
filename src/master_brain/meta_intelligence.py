@@ -83,7 +83,7 @@ def plan_coordination(mission: Mission, profiles: Iterable[IslandProfile] = DEFA
     for profile in enabled:
         matched = tuple(
             keyword for keyword in profile.keywords
-            if re.search(r"(?<!\\w)" + re.escape(keyword.casefold()) + r"(?!\\w)", objective)
+            if re.search(r"(?<!\w)" + re.escape(keyword.casefold()) + r"(?!\w)", objective)
         )
         if matched:
             selections.append(Selection(profile.island_id, matched[:6], "Matched terms: " + ", ".join(matched[:6])))

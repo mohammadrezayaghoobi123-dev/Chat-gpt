@@ -156,7 +156,7 @@ class SQLiteExecutionRegistry:
                        payload_digest=payload_digest, recorded_at=recorded_at)
         try:
             with closing(self._db()) as db, db:
-                db.execute("BEGIN IMMEDIATE")
+                self._begin_immediate_with_retry(db)
                 row = db.execute("SELECT * FROM executions WHERE key=?", (key,)).fetchone()
                 if row:
                     record = self._record(row)
@@ -242,7 +242,7 @@ class SQLiteExecutionRegistry:
             raise InvalidTransition("attempt timestamp must be timezone-aware ISO-8601")
         try:
             with closing(self._db()) as db, db:
-                db.execute("BEGIN IMMEDIATE")
+                self._begin_immediate_with_retry(db)
                 row = db.execute("SELECT * FROM executions WHERE key=?", (key,)).fetchone()
                 if row is None:
                     raise InvalidTransition("unknown execution key")
@@ -342,7 +342,7 @@ class SQLiteExecutionRegistry:
             )
         try:
             with closing(self._db()) as db, db:
-                db.execute("BEGIN IMMEDIATE")
+                self._begin_immediate_with_retry(db)
                 row = db.execute(
                     "SELECT * FROM execution_attempts WHERE attempt_id=?", (attempt_id,)
                 ).fetchone()
@@ -616,7 +616,7 @@ class SQLiteExecutionRegistry:
             )
         try:
             with closing(self._db()) as db, db:
-                db.execute("BEGIN IMMEDIATE")
+                self._begin_immediate_with_retry(db)
                 row = db.execute("SELECT * FROM executions WHERE key=?", (key,)).fetchone()
                 if row is None:
                     raise InvalidTransition("unknown execution key")

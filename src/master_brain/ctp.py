@@ -69,7 +69,9 @@ class ExecutionProvenance:
                     issues.append("execution provenance executed_at must include a timezone")
             except ValueError:
                 issues.append("execution provenance executed_at must be ISO-8601 with timezone")
-        if any(not isinstance(item, str) or not item.strip() for item in self.limitations):
+        if not isinstance(self.limitations, (tuple, list)) or isinstance(self.limitations, str):
+            issues.append("execution provenance limitations must be a tuple or list")
+        elif any(not isinstance(item, str) or not item.strip() for item in self.limitations):
             issues.append("execution provenance limitations must be non-empty strings")
         return tuple(issues)
 
@@ -137,7 +139,9 @@ class CTPCase:
                     issues.extend(test.execution_provenance.validate())
                 if test.status in (TestStatus.PASS, TestStatus.FAIL) and not test.evidence_ids:
                     issues.append(f"test {test.test_id} is {test.status.value} but has no evidence references")
-            if any(not isinstance(ref, str) or not ref.strip() for ref in test.evidence_ids):
+            if not isinstance(test.evidence_ids, (tuple, list)) or isinstance(test.evidence_ids, str):
+                issues.append(f"test {test.test_id} evidence_ids must be a tuple or list")
+            elif any(not isinstance(ref, str) or not ref.strip() for ref in test.evidence_ids):
                 issues.append(f"test {test.test_id} evidence references must be non-empty strings")
         if not self.tests:
             issues.append("at least one discriminating test should be proposed")
@@ -329,6 +333,8 @@ def record_test_execution(
     provenance_issues = provenance.validate()
     if provenance_issues:
         raise ValueError("; ".join(provenance_issues))
+    if not isinstance(evidence_ids, (tuple, list)) or isinstance(evidence_ids, str):
+        raise ValueError("evidence_ids must be a tuple or list")
     if status in (TestStatus.PASS, TestStatus.FAIL) and not evidence_ids:
         raise ValueError("PASS/FAIL outcomes require at least one evidence reference")
     if any(not isinstance(ref, str) or not ref.strip() for ref in evidence_ids):

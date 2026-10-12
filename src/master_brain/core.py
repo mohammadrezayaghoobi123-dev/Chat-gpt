@@ -176,7 +176,14 @@ def score_opportunity(item: Opportunity) -> float:
 
 def evaluate_claim(claim: Claim, evidence: Iterable[Evidence]) -> Decision:
     """Return a conservative evidence summary; does not establish objective truth."""
-    evidence_items = tuple(evidence)
+    if not isinstance(claim, Claim):
+        raise ValueError("claim must be a Claim instance")
+    if not isinstance(claim.claim_id, str) or not claim.claim_id.strip():
+        raise ValueError("claim_id must be a non-empty string")
+    try:
+        evidence_items = tuple(evidence)
+    except TypeError as exc:
+        raise ValueError("evidence must be iterable") from exc
     seen_ids: set[str] = set()
     duplicate_ids: set[str] = set()
     invalid_id_count = 0

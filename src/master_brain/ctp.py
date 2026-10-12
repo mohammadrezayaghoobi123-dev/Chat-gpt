@@ -56,6 +56,8 @@ class ExecutionProvenance:
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 issues.append(f"execution provenance {name} must be non-empty")
+        if not isinstance(self.executed_at, str):
+            return tuple(issues)
         if self.executed_at.strip():
             from datetime import datetime
             try:
@@ -315,6 +317,8 @@ def record_test_execution(
     provenance: ExecutionProvenance,
 ) -> CTPCase:
     """Return a new case with a recorded outcome; never execute the test itself."""
+    if not isinstance(status, TestStatus):
+        raise ValueError("status must be a TestStatus")
     if status == TestStatus.NOT_RUN:
         raise ValueError("an execution record cannot set status to NOT_RUN")
     if not isinstance(observed_result, str) or not observed_result.strip():

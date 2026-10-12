@@ -344,6 +344,24 @@ class RecoveryCandidateTests(unittest.TestCase):
         self.assertEqual(persisted.state, State.RUNNING)
         self.assertEqual(persisted.version, pending.version + 1)
 
+    def test_dispatch_boundary_cannot_be_entered_after_execution_becomes_uncertain(self):
+        from master_brain.execution_registry import InvalidTransition
+
+        pending = self.reserve("late-dispatch", "2026-10-12T00:00:00Z")
+        running = self.transition(pending, State.RUNNING, "2026-10-12T00:00:01Z")
+        attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration", adapter_version="v1",
+            provider_id="provider", recorded_at="2026-10-12T00:00:02Z",
+        )
+        self.transition(running, State.OUTCOME_UNKNOWN, "2026-10-12T00:00:03Z")
+
+        with self.assertRaisesRegex(InvalidTransition, "execution must remain RUNNING"):
+            self.registry.mark_attempt_dispatch_boundary(
+                attempt_id=attempt.attempt_id, recorded_at="2026-10-12T00:00:04Z"
+            )
+        self.assertFalse(self.registry.get_attempt(attempt.attempt_id).dispatch_boundary_entered)
+
     def test_concurrent_attempt_reservation_and_dispatch_mark_are_safe(self):
         from master_brain.execution_registry import InvalidTransition, RegistryError
 

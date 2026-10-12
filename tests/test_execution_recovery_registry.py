@@ -159,6 +159,25 @@ class RecoveryCandidateTests(unittest.TestCase):
         self.assertEqual(self.registry.get("concurrent-key").version, 0)
         self.assertEqual(self.registry.get("concurrent-key").state, State.PENDING)
 
+
+    def test_reservation_rejects_invalid_or_naive_timestamps_without_persisting(self):
+        from master_brain.execution_registry import InvalidTransition
+
+        invalid_values = ("not-a-timestamp", "2026-10-12T00:00:00")
+        for index, timestamp in enumerate(invalid_values):
+            key = f"invalid-reservation-time-{index}"
+            with self.subTest(timestamp=timestamp):
+                with self.assertRaisesRegex(
+                    InvalidTransition, "reservation timestamp must be timezone-aware ISO-8601"
+                ):
+                    self.registry.reserve(
+                        key=key, mission_id=f"mission-{key}",
+                        contract_digest="contract", payload_digest="payload",
+                        recorded_at=timestamp,
+                    )
+                self.assertIsNone(self.registry.get(key))
+
+
     def test_empty_registry_returns_empty_candidates(self):
         self.assertEqual(self.registry.list_recovery_candidates(), [])
 

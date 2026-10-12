@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from master_brain.execution_registry import SQLiteExecutionRegistry
+from master_brain.execution_registry import RegistryError, SQLiteExecutionRegistry
 
 
 class ReceiptIdentityMigrationTests(unittest.TestCase):
@@ -103,6 +103,61 @@ class ReceiptIdentityMigrationTests(unittest.TestCase):
                 None, None, None, None, None,
             ),
         )
+
+    def test_duplicate_legacy_scoped_receipts_fail_closed_without_deleting_rows(self):
+        # Simulate a database where the identity columns were introduced by an
+        # earlier/manual migration but the unique index was never installed.
+        with sqlite3.connect(self.db_path) as db:
+            db.executescript(
+                """
+                CREATE TABLE completion_receipts (
+                    execution_key TEXT PRIMARY KEY,
+                    attempt_id TEXT NOT NULL UNIQUE,
+                    evidence_digest TEXT NOT NULL,
+                    verifier_id TEXT NOT NULL,
+                    verifier_version TEXT NOT NULL,
+                    evidence_type TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL,
+                    provider_id TEXT,
+                    provider_scope TEXT,
+                    receipt_namespace TEXT,
+                    provider_receipt_id TEXT,
+                    identity_version INTEGER
+                );
+                INSERT INTO completion_receipts VALUES
+                    ('exec-a', 'attempt-a', 'digest-a', 'verifier-x', '1',
+                     'operation-receipt', '2026-01-01T00:00:01+00:00',
+                     '2026-01-01T00:00:02+00:00', 'provider-x', 'account-1',
+                     'payments', 'receipt-duplicate', 1),
+                    ('exec-b', 'attempt-b', 'digest-b', 'verifier-x', '1',
+                     'operation-receipt', '2026-01-01T00:00:01+00:00',
+                     '2026-01-01T00:00:02+00:00', 'provider-x', 'account-1',
+                     'payments', 'receipt-duplicate', 1);
+                """
+            )
+
+        with self.assertRaisesRegex(
+            RegistryError, "duplicate scoped identities"
+        ):
+            SQLiteExecutionRegistry(self.db_path)
+
+        # A failed migration must preserve both records for manual reconciliation.
+        with sqlite3.connect(self.db_path) as db:
+            rows = db.execute(
+                "SELECT execution_key, provider_receipt_id FROM completion_receipts "
+                "ORDER BY execution_key"
+            ).fetchall()
+            identity_index = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='index' "
+                "AND name='idx_completion_receipts_scoped_identity'"
+            ).fetchone()
+
+        self.assertEqual(
+            rows,
+            [("exec-a", "receipt-duplicate"), ("exec-b", "receipt-duplicate")],
+        )
+        self.assertIsNone(identity_index)
 
     def test_migration_is_idempotent(self):
         self._create_legacy_database()

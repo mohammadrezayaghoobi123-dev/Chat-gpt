@@ -142,6 +142,20 @@ class IntegratedRuntimeTests(unittest.TestCase):
         self.assertEqual(run.status, "needs_clarification")
         self.assertTrue(run.unresolved_issues)
 
+    def test_malformed_island_result_is_recorded_without_crashing_review(self):
+        run = execute_mission(
+            Mission("Research scientific evidence for a material", risk_tier="low"),
+            executors={
+                "science_research": lambda mission: IslandResult(
+                    "science_research", "malformed result", claims=None
+                )
+            },
+        )
+        self.assertEqual(run.results, ())
+        self.assertTrue(run.execution_errors)
+        self.assertEqual(run.status, "incomplete")
+        self.assertTrue(any("invalid IslandResult" in issue for issue in run.execution_errors))
+
     def test_executor_failure_is_recorded_as_partial_not_success(self):
         def broken(mission):
             raise TimeoutError("provider timeout")

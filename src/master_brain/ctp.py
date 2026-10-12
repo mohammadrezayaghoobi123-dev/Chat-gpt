@@ -101,6 +101,24 @@ class CTPCase:
     def validate(self) -> tuple[str, ...]:
         """Return structural issues without deciding which hypothesis is true."""
         issues: list[str] = []
+        raw_hypotheses = hypotheses if isinstance(hypotheses, (tuple, list)) else ()
+        raw_falsifiers = falsifiers if isinstance(falsifiers, (tuple, list)) else ()
+        raw_tests = tests if isinstance(tests, (tuple, list)) else ()
+        if not isinstance(hypotheses, (tuple, list)):
+            issues.append("hypotheses must be a tuple or list")
+        if not isinstance(falsifiers, (tuple, list)):
+            issues.append("falsifiers must be a tuple or list")
+        if not isinstance(tests, (tuple, list)):
+            issues.append("tests must be a tuple or list")
+        hypotheses = tuple(item for item in raw_hypotheses if isinstance(item, RivalHypothesis))
+        falsifiers = tuple(item for item in raw_falsifiers if isinstance(item, Falsifier))
+        tests = tuple(item for item in raw_tests if isinstance(item, DiscriminatingTest))
+        if len(hypotheses) != len(raw_hypotheses):
+            issues.append("invalid hypothesis record; expected RivalHypothesis")
+        if len(falsifiers) != len(raw_falsifiers):
+            issues.append("invalid falsifier record; expected Falsifier")
+        if len(tests) != len(raw_tests):
+            issues.append("invalid test record; expected DiscriminatingTest")
         if not isinstance(self.case_id, str) or not self.case_id.strip():
             issues.append("case_id must be a non-empty string")
         if not isinstance(self.question, str) or not self.question.strip():
@@ -114,14 +132,14 @@ class CTPCase:
             issues.append("claim_ids must contain non-empty strings")
         elif len(set(self.claim_ids)) != len(self.claim_ids):
             issues.append("claim_ids must be unique")
-        if len(self.hypotheses) < 2:
+        if len(hypotheses) < 2:
             issues.append("at least two rival hypotheses are required")
-        hypothesis_ids = [item.hypothesis_id for item in self.hypotheses]
+        hypothesis_ids = [item.hypothesis_id for item in hypotheses]
         if len(set(hypothesis_ids)) != len(hypothesis_ids):
             issues.append("hypothesis IDs must be unique")
         known = set(hypothesis_ids)
         falsified_hypotheses = set()
-        for item in self.falsifiers:
+        for item in falsifiers:
             if item.hypothesis_id not in known:
                 issues.append(f"falsifier references unknown hypothesis: {item.hypothesis_id}")
             else:
@@ -131,10 +149,10 @@ class CTPCase:
         missing_falsifiers = known - falsified_hypotheses
         if missing_falsifiers:
             issues.append("missing falsifier for hypothesis: " + ", ".join(sorted(missing_falsifiers)))
-        test_ids = [item.test_id for item in self.tests]
+        test_ids = [item.test_id for item in tests]
         if len(set(test_ids)) != len(test_ids):
             issues.append("test IDs must be unique")
-        for test in self.tests:
+        for test in tests:
             if not isinstance(test.status, TestStatus):
                 issues.append(f"test {test.test_id} status must be a TestStatus")
                 continue
@@ -180,7 +198,7 @@ class CTPCase:
                 issues.append(f"test {test.test_id} evidence_ids must be a tuple or list")
             elif any(not isinstance(ref, str) or not ref.strip() for ref in test.evidence_ids):
                 issues.append(f"test {test.test_id} evidence references must be non-empty strings")
-        if not self.tests:
+        if not tests:
             issues.append("at least one discriminating test should be proposed")
         return tuple(issues)
 

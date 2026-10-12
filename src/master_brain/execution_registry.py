@@ -688,6 +688,9 @@ class SQLiteExecutionRegistry:
         if current is None:
             raise InvalidTransition("unknown execution key")
         if current.state is State.SUCCEEDED:
+            attempt = self.get_attempt(attempt_id)
+            if attempt is None or attempt.key != key:
+                raise InvalidTransition("successful execution has no matching attempt")
             try:
                 with closing(self._db()) as db:
                     receipt = db.execute(

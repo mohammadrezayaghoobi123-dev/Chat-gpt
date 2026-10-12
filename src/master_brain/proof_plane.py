@@ -76,6 +76,7 @@ def review_proof(claims, evidence):
     usable_evidence = tuple(
         item for index, item in enumerate(evidence)
         if index not in invalid_evidence_objects
+        and isinstance(item, Evidence)
         and isinstance(getattr(item, "claim_id", None), str)
         and bool(item.claim_id.strip())
         and isinstance(getattr(item, "evidence_id", None), str)

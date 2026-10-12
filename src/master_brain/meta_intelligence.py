@@ -2,6 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
+import re
 from typing import Iterable
 
 class ReviewLevel(str, Enum):
@@ -80,7 +81,10 @@ def plan_coordination(mission: Mission, profiles: Iterable[IslandProfile] = DEFA
         "Keyword matching is a transparent baseline, not proof of semantic relevance.",
     ]
     for profile in enabled:
-        matched = tuple(k for k in profile.keywords if k.casefold() in objective)
+        matched = tuple(
+            keyword for keyword in profile.keywords
+            if re.search(r"(?<!\\w)" + re.escape(keyword.casefold()) + r"(?!\\w)", objective)
+        )
         if matched:
             selections.append(Selection(profile.island_id, matched[:6], "Matched terms: " + ", ".join(matched[:6])))
     if not mission.objective.strip():

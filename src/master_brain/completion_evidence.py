@@ -48,14 +48,23 @@ class VerifiedEvidence:
 ProviderEvidenceVerifier = Callable[[CompletionEvidence], bool]
 
 
-def _valid_timestamp(value: str) -> bool:
+def _parse_timestamp(value: str) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
-        return False
+        return None
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
     try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(normalized)
     except ValueError:
-        return False
-    return parsed.tzinfo is not None and parsed.utcoffset() is not None
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed
+
+
+def _valid_timestamp(value: str) -> bool:
+    return _parse_timestamp(value) is not None
 
 
 def evidence_digest(evidence: CompletionEvidence) -> str:
@@ -125,8 +134,14 @@ def validate_completion_evidence(
     ):
         if not isinstance(value, str) or not value.strip():
             raise EvidenceValidationError(f"{name} must be non-empty")
-    if not _valid_timestamp(evidence.observed_at):
+    observed_at = _parse_timestamp(evidence.observed_at)
+    if observed_at is None:
         raise EvidenceValidationError("observed_at must be timezone-aware ISO-8601")
+    dispatch_boundary_at = _parse_timestamp(attempt.updated_at)
+    if dispatch_boundary_at is None:
+        raise EvidenceValidationError("attempt dispatch boundary timestamp must be timezone-aware ISO-8601")
+    if observed_at < dispatch_boundary_at:
+        raise EvidenceValidationError("observed_at predates dispatch boundary")
     if evidence.attempt_id != attempt.attempt_id:
         raise EvidenceValidationError("attempt ID mismatch")
     if evidence.execution_key != execution.key or evidence.execution_key != attempt.key:

@@ -28,6 +28,12 @@ class RecoveryCandidateTests(unittest.TestCase):
             target=target, recorded_at=timestamp,
         )
 
+    def test_constructor_rejects_non_persistent_database_paths(self):
+        for path in ("", "   ", ":memory:"):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(ValueError, "file-backed database path"):
+                    SQLiteExecutionRegistry(path)
+
     def test_constructor_rejects_timeouts_that_overflow_sqlite_busy_timeout(self):
         for timeout in (1e308, 10 ** 1000):
             with self.subTest(timeout_type=type(timeout).__name__):

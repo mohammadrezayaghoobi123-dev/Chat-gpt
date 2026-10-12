@@ -54,6 +54,24 @@ class CTPCaseTests(unittest.TestCase):
         )
         self.assertTrue(any("NOT_RUN" in issue for issue in invalid.validate()))
 
+    def test_case_validation_rejects_untyped_test_status(self):
+        case = self.make_case()
+        malformed_test = DiscriminatingTest(
+            "test-01", "Question", "Procedure",
+            (("h-a", "prediction"),), "PASS",
+            observed_result="Observed result",
+            evidence_ids=("evidence-001",),
+            execution_provenance=ExecutionProvenance(
+                "run-typed-status", "2026-10-12T10:00:00Z", "sensor",
+                "measurement", "group-a", "separate operator",
+            ),
+        )
+        malformed = CTPCase(
+            case.case_id, case.question, case.claim_ids, case.hypotheses,
+            case.falsifiers, (malformed_test,),
+        )
+        self.assertTrue(any("status must be a TestStatus" in issue for issue in malformed.validate()))
+
     def test_pass_without_observed_result_is_invalid(self):
         case = self.make_case()
         bad_test = DiscriminatingTest(

@@ -81,6 +81,7 @@ class DiscriminatingTest:
     status: TestStatus = TestStatus.NOT_RUN
     observed_result: str = ""
     evidence_ids: tuple[str, ...] = ()
+    execution_provenance: ExecutionProvenance | None = None
 
 
 @dataclass(frozen=True)
@@ -118,10 +119,21 @@ class CTPCase:
             for hypothesis_id, _prediction in test.expected_if:
                 if hypothesis_id not in known:
                     issues.append(f"test {test.test_id} references unknown hypothesis: {hypothesis_id}")
-            if test.status == TestStatus.NOT_RUN and (test.observed_result or test.evidence_ids):
-                issues.append(f"test {test.test_id} is NOT_RUN but has result/evidence; reconcile status")
-            if test.status in (TestStatus.PASS, TestStatus.FAIL) and not test.observed_result.strip():
-                issues.append(f"test {test.test_id} is {test.status.value} but has no observed result")
+            if test.status == TestStatus.NOT_RUN and (
+                test.observed_result or test.evidence_ids or test.execution_provenance is not None
+            ):
+                issues.append(f"test {test.test_id} is NOT_RUN but has result/evidence/provenance; reconcile status")
+            if test.status != TestStatus.NOT_RUN:
+                if not test.observed_result.strip():
+                    issues.append(f"test {test.test_id} is {test.status.value} but has no observed result")
+                if test.execution_provenance is None:
+                    issues.append(f"test {test.test_id} is {test.status.value} but has no execution provenance")
+                else:
+                    issues.extend(test.execution_provenance.validate())
+                if test.status in (TestStatus.PASS, TestStatus.FAIL) and not test.evidence_ids:
+                    issues.append(f"test {test.test_id} is {test.status.value} but has no evidence references")
+            if any(not isinstance(ref, str) or not ref.strip() for ref in test.evidence_ids):
+                issues.append(f"test {test.test_id} evidence references must be non-empty strings")
         if not self.tests:
             issues.append("at least one discriminating test should be proposed")
         return tuple(issues)
@@ -141,6 +153,8 @@ class CTPCase:
             item.status in (TestStatus.PASS, TestStatus.FAIL)
             and item.observed_result.strip()
             and item.evidence_ids
+            and item.execution_provenance is not None
+            and not item.execution_provenance.validate()
             for item in self.tests
         )
 

@@ -118,6 +118,28 @@ class OperationalProofLaneTests(unittest.TestCase):
             self.registry.complete_with_verified_evidence(**{**kwargs, "evidence": altered})
 
 
+    def test_recorded_at_before_current_execution_update_is_rejected(self):
+        from master_brain.completion_evidence import EvidenceValidationError
+        registry = ConfiguredVerifierRegistry([VerifierDescriptor(
+            verifier_id="receipt-check", version="1", provider_id="provider-x",
+            evidence_type="operation-receipt", verify=lambda _evidence: True,
+        )])
+        before = self.registry.get("exec-1")
+        with self.assertRaisesRegex(EvidenceValidationError, "recorded_at predates current execution state"):
+            self.registry.complete_with_verified_evidence(
+                key="exec-1", expected_version=before.version,
+                attempt_id=self.attempt.attempt_id, evidence=self.evidence,
+                verifier_id="receipt-check", verifier_version="1",
+                verifier_registry=registry, recorded_at="2026-10-12T10:00:03Z",
+            )
+        self.assertEqual(self.registry.get("exec-1"), before)
+        with __import__("sqlite3").connect(self.registry.path) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                ("exec-1",),
+            ).fetchone()[0]
+        self.assertEqual(count, 0)
+
     def test_concurrent_exact_completion_retries_commit_one_receipt(self):
         verification_barrier = Barrier(2)
 

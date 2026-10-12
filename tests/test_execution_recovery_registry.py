@@ -217,6 +217,35 @@ class RecoveryCandidateTests(unittest.TestCase):
             self.registry.list_recovery_candidates()
 
 
+
+    def test_recovery_inventory_rejects_receipt_without_dispatch_boundary(self):
+        from master_brain.execution_registry import RegistryError
+
+        running = self.reserve("receipt-without-dispatch", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:02Z",
+        )
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute(
+                "UPDATE executions SET state=? WHERE key=?",
+                (State.SUCCEEDED.value, running.key),
+            )
+            db.execute(
+                """INSERT INTO completion_receipts
+                (execution_key, attempt_id, evidence_digest, verifier_id,
+                 verifier_version, evidence_type, observed_at, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (running.key, attempt.attempt_id, "digest", "verifier", "1",
+                 "operation-receipt", "2026-10-12T00:00:03Z",
+                 "2026-10-12T00:00:04Z"),
+            )
+
+        with self.assertRaisesRegex(RegistryError, "orphan or inconsistent completion receipt"):
+            self.registry.list_recovery_candidates()
+
     def test_recovery_inventory_fails_closed_on_succeeded_without_receipt(self):
         from master_brain.execution_registry import RegistryError
 

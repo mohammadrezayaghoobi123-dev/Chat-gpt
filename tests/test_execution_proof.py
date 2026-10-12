@@ -130,7 +130,7 @@ class OperationalProofLaneTests(unittest.TestCase):
                 key="exec-1", expected_version=before.version,
                 attempt_id=self.attempt.attempt_id, evidence=self.evidence,
                 verifier_id="receipt-check", verifier_version="1",
-                verifier_registry=registry, recorded_at="2026-10-12T10:00:03Z",
+                verifier_registry=registry, recorded_at="2026-10-12T10:00:04Z",
             )
         self.assertEqual(self.registry.get("exec-1"), before)
         with __import__("sqlite3").connect(self.registry.path) as db:

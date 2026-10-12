@@ -133,12 +133,21 @@ class SQLiteExecutionRegistry:
                 existing_columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                 if column not in existing_columns:
                     db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
-            db.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_completion_receipts_scoped_identity "
-                "ON completion_receipts(provider_id, provider_scope, receipt_namespace, provider_receipt_id) "
-                "WHERE provider_id IS NOT NULL AND provider_scope IS NOT NULL "
-                "AND receipt_namespace IS NOT NULL AND provider_receipt_id IS NOT NULL"
-            )
+            try:
+                db.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_completion_receipts_scoped_identity "
+                    "ON completion_receipts(provider_id, provider_scope, receipt_namespace, provider_receipt_id) "
+                    "WHERE provider_id IS NOT NULL AND provider_scope IS NOT NULL "
+                    "AND receipt_namespace IS NOT NULL AND provider_receipt_id IS NOT NULL"
+                )
+            except sqlite3.IntegrityError as exc:
+                # Do not guess which historical receipt is authoritative. The
+                # surrounding transaction rolls back the migration; preserve all
+                # rows and require evidence-based operator reconciliation.
+                raise RegistryError(
+                    "legacy completion receipts contain duplicate scoped identities; "
+                    "manual evidence-based reconciliation is required"
+                ) from exc
             db.execute("CREATE INDEX IF NOT EXISTS idx_attempts_execution ON execution_attempts(execution_key, attempt_number)")
             db.execute("PRAGMA journal_mode=WAL")
 

@@ -4,10 +4,17 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from pathlib import Path
 
-from master_brain.completion_evidence import CompletionEvidence
+from master_brain.completion_evidence import CompletionEvidence, ProviderVerificationResult
 from master_brain.execution_proof import review_operational_completion
 from master_brain.execution_registry import SQLiteExecutionRegistry, State
 from master_brain.verifier_registry import ConfiguredVerifierRegistry, VerifierDescriptor
+
+
+def _verify_scoped_receipt(evidence):
+    return ProviderVerificationResult(
+        True, evidence.provider_id, "merchant-account-1/production",
+        "operation-receipt", evidence.provider_receipt_id,
+    )
 
 
 class OperationalProofLaneTests(unittest.TestCase):
@@ -26,6 +33,7 @@ class OperationalProofLaneTests(unittest.TestCase):
         self.attempt = self.registry.reserve_attempt(
             key=self.record.key, expected_version=self.record.version,
             integration_id="payments", adapter_version="v1", provider_id="provider-x",
+            provider_scope="merchant-account-1/production", receipt_namespace="operation-receipt",
             recorded_at="2026-10-12T10:00:02Z",
         )
         self.attempt = self.registry.mark_attempt_dispatch_boundary(
@@ -47,7 +55,7 @@ class OperationalProofLaneTests(unittest.TestCase):
     def test_valid_evidence_is_reviewed_but_does_not_mutate_execution_state(self):
         registry = ConfiguredVerifierRegistry([VerifierDescriptor(
             verifier_id="receipt-check", version="1", provider_id="provider-x",
-            evidence_type="operation-receipt", verify=lambda _evidence: True,
+            evidence_type="operation-receipt", verify=_verify_scoped_receipt,
         )])
         before = self.registry.get("exec-1")
         report = review_operational_completion(
@@ -197,7 +205,7 @@ class OperationalProofLaneTests(unittest.TestCase):
 
         def verify(_evidence):
             verification_barrier.wait(timeout=5)
-            return True
+            return _verify_scoped_receipt(_evidence)
 
         verifier_registry = ConfiguredVerifierRegistry([VerifierDescriptor(
             verifier_id="receipt-check", version="1", provider_id="provider-x",

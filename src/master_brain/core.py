@@ -158,19 +158,43 @@ def score_opportunity(item: Opportunity) -> float:
 
 def evaluate_claim(claim: Claim, evidence: Iterable[Evidence]) -> Decision:
     """Return a conservative evidence summary; does not establish objective truth."""
-    matching = [item for item in evidence if item.claim_id == claim.claim_id]
+    evidence_items = tuple(evidence)
+    seen_ids: set[str] = set()
+    duplicate_ids: set[str] = set()
+    invalid_id_count = 0
+    for item in evidence_items:
+        evidence_id = item.evidence_id
+        if not isinstance(evidence_id, str) or not evidence_id.strip():
+            invalid_id_count += 1
+        elif evidence_id in seen_ids:
+            duplicate_ids.add(evidence_id)
+        else:
+            seen_ids.add(evidence_id)
+    # Duplicate IDs are ambiguous globally, so exclude all occurrences instead
+    # of allowing the first record to win based on input ordering.
+    usable_evidence = [
+        item for item in evidence_items
+        if isinstance(item.evidence_id, str)
+        and item.evidence_id.strip()
+        and item.evidence_id not in duplicate_ids
+    ]
+    matching = [item for item in usable_evidence if item.claim_id == claim.claim_id]
     supporting = tuple(item.evidence_id for item in matching if item.supports)
     opposing = tuple(item.evidence_id for item in matching if not item.supports)
     supporting_groups = {
         item.independent_group
         for item in matching
-        if item.supports and item.independent_group
+        if item.supports and isinstance(item.independent_group, str) and item.independent_group.strip()
     }
     independent_supporting_group_count = len(supporting_groups)
     independent_support_demonstrated = independent_supporting_group_count >= 2
     unresolved: list[str] = []
+    if duplicate_ids:
+        unresolved.append("Duplicate evidence IDs were excluded from claim review: " + ", ".join(sorted(duplicate_ids)))
+    if invalid_id_count:
+        unresolved.append(f"{invalid_id_count} evidence record(s) with invalid IDs were excluded.")
     if not matching:
-        unresolved.append("No evidence attached to claim.")
+        unresolved.append("No usable evidence attached to claim.")
     if supporting and opposing:
         status = "contested"
         unresolved.append("Supporting and counterevidence both exist; inspect provenance and independence.")

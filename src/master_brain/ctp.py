@@ -101,10 +101,10 @@ class CTPCase:
     def validate(self) -> tuple[str, ...]:
         """Return structural issues without deciding which hypothesis is true."""
         issues: list[str] = []
-        if not self.case_id.strip():
-            issues.append("case_id must not be empty")
-        if not self.question.strip():
-            issues.append("question must not be empty")
+        if not isinstance(self.case_id, str) or not self.case_id.strip():
+            issues.append("case_id must be a non-empty string")
+        if not isinstance(self.question, str) or not self.question.strip():
+            issues.append("question must be a non-empty string")
         if len(self.hypotheses) < 2:
             issues.append("at least two rival hypotheses are required")
         hypothesis_ids = [item.hypothesis_id for item in self.hypotheses]
@@ -131,7 +131,7 @@ class CTPCase:
             ):
                 issues.append(f"test {test.test_id} is NOT_RUN but has result/evidence/provenance; reconcile status")
             if test.status != TestStatus.NOT_RUN:
-                if not test.observed_result.strip():
+                if not isinstance(test.observed_result, str) or not test.observed_result.strip():
                     issues.append(f"test {test.test_id} is {test.status.value} but has no observed result")
                 if test.execution_provenance is None:
                     issues.append(f"test {test.test_id} is {test.status.value} but has no execution provenance")
@@ -330,6 +330,8 @@ def record_test_execution(
         raise ValueError("an execution record cannot set status to NOT_RUN")
     if not isinstance(observed_result, str) or not observed_result.strip():
         raise ValueError("observed_result must be non-empty for an executed test")
+    if not isinstance(provenance, ExecutionProvenance):
+        raise ValueError("provenance must be an ExecutionProvenance")
     provenance_issues = provenance.validate()
     if provenance_issues:
         raise ValueError("; ".join(provenance_issues))

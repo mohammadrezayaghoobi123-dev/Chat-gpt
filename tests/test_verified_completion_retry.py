@@ -406,5 +406,78 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
         self.assertEqual(count, 1)
 
 
+    def test_concurrent_cross_execution_replay_allows_only_one_claim(self):
+        second, second_attempt, second_evidence = self._prepare_second_execution(
+            provider_scope="merchant-account-1/production"
+        )
+        barrier = Barrier(2)
+        call_lock = Lock()
+        calls = []
+
+        def synchronized_verifier(evidence):
+            with call_lock:
+                calls.append((evidence.execution_key, evidence.provider_receipt_id))
+            barrier.wait(timeout=5)
+            return ProviderVerificationResult(
+                True, evidence.provider_id, "merchant-account-1/production",
+                "operation-receipt", evidence.provider_receipt_id,
+            )
+
+        verifier_registry = ConfiguredVerifierRegistry([
+            VerifierDescriptor(
+                verifier_id="payments-receipt", version="1",
+                provider_id="provider-x", evidence_type="operation-receipt",
+                verify=synchronized_verifier, enabled=True,
+            )
+        ])
+
+        def complete_first():
+            try:
+                result = self.registry.complete_with_verified_evidence(
+                    key=self.key, expected_version=self.record.version,
+                    attempt_id=self.attempt.attempt_id, evidence=self.evidence,
+                    verifier_id="payments-receipt", verifier_version="1",
+                    verifier_registry=verifier_registry, recorded_at=_iso(-2),
+                )
+                return ("success", result.key)
+            except Exception as exc:
+                return ("error", exc)
+
+        def complete_second():
+            try:
+                result = self.registry.complete_with_verified_evidence(
+                    key=second.key, expected_version=second.version,
+                    attempt_id=second_attempt.attempt_id, evidence=second_evidence,
+                    verifier_id="payments-receipt", verifier_version="1",
+                    verifier_registry=verifier_registry, recorded_at=_iso(-1),
+                )
+                return ("success", result.key)
+            except Exception as exc:
+                return ("error", exc)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda fn: fn(), (complete_first, complete_second)))
+
+        successes = [value for kind, value in results if kind == "success"]
+        errors = [value for kind, value in results if kind == "error"]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(successes), 1)
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], InvalidTransition)
+        self.assertRegex(str(errors[0]), "provider receipt identity is already claimed")
+        self.assertEqual(self.registry.get(successes[0]).state, State.SUCCEEDED)
+        loser_key = second.key if successes[0] == self.key else self.key
+        loser = self.registry.get(loser_key)
+        self.assertNotEqual(loser.state, State.SUCCEEDED)
+        with sqlite3.connect(self.registry.path) as db:
+            receipt_rows = db.execute(
+                "SELECT execution_key, provider_scope, receipt_namespace, provider_receipt_id "
+                "FROM completion_receipts WHERE provider_receipt_id=?",
+                ("receipt-1",),
+            ).fetchall()
+        self.assertEqual(len(receipt_rows), 1)
+        self.assertEqual(receipt_rows[0][0], successes[0])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,6 +16,12 @@ class RiskTier(str, Enum):
     CRITICAL = "critical"
 
 
+class ClaimImportance(str, Enum):
+    ROUTINE = "routine"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
 class Maturity(str, Enum):
     PROPOSED = "proposed"
     SPECIFIED = "specified"
@@ -61,6 +67,7 @@ class Claim:
     context: str = ""
     time_scope: str = ""
     definition: str = ""
+    importance: ClaimImportance = ClaimImportance.ROUTINE
 
 
 @dataclass(frozen=True)

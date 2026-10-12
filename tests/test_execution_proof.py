@@ -29,7 +29,7 @@ class OperationalProofLaneTests(unittest.TestCase):
             recorded_at="2026-10-12T10:00:02Z",
         )
         self.attempt = self.registry.mark_attempt_dispatch_boundary(
-            attempt_id=self.attempt.attempt_id, recorded_at="2026-10-12T10:00:03Z",
+            attempt_id=self.attempt.attempt_id, recorded_at="2026-10-12T10:00:04Z",
         )
         self.record = self.registry.transition(
             key=self.record.key, expected_version=self.record.version,

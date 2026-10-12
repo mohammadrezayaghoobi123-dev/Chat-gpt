@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from master_brain.core import Claim, Evidence
@@ -31,22 +32,37 @@ class IntegratedRuntimeTests(unittest.TestCase):
                 provenance=("independent inspection report",),
             )
 
+        objective = "Compare factory production capacity, market price and cash flow"
         run = execute_mission(
             Mission(
-                "Compare factory production capacity, market price and cash flow",
+                objective,
                 success_criteria=("show evidence and conflicts",),
                 risk_tier="medium",
             ),
             executors={"industrial": industrial, "accounting": accounting},
         )
 
-        self.assertIn(("industrial", "Compare factory production capacity, market price and cash flow"), calls)
-        self.assertIn(("accounting", "Compare factory production capacity, market price and cash flow"), calls)
+        self.assertIn(("industrial", objective), calls)
+        self.assertIn(("accounting", objective), calls)
         self.assertEqual({result.island_id for result in run.results}, {"industrial", "accounting"})
         self.assertEqual(len(run.contradictions), 1)
         self.assertEqual(run.status, "needs_review")
         self.assertIn("supplier quotation", run.provenance)
-        self.assertEqual(run.plan.original_objective, "Compare factory production capacity, market price and cash flow")
+        self.assertEqual(run.plan.original_objective, objective)
+
+        records = run.audit_records
+        self.assertTrue(any(record.event_type == "mission_run" and record.status == run.status for record in records))
+        self.assertTrue(any(
+            record.event_type == "claim_review" and record.output_refs == ("capacity-a",)
+            for record in records
+        ))
+        self.assertTrue(any(
+            record.event_type == "contradiction_detected"
+            and set(record.input_refs) == {"capacity-a", "capacity-b"}
+            for record in records
+        ))
+        self.assertTrue(all(objective not in record.to_stable_json() for record in records))
+        self.assertTrue(all(json.loads(record.to_stable_json())["schema_version"] == 1 for record in records))
 
     def test_missing_executor_is_reported_not_claimed_as_executed(self):
         run = execute_mission(
@@ -67,6 +83,8 @@ class IntegratedRuntimeTests(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertEqual(run.status, "approval_required")
         self.assertEqual(run.results, ())
+        self.assertEqual(run.audit_records[0].event_type, "mission_run")
+        self.assertEqual(run.audit_records[0].status, "approval_required")
 
     def test_unknown_risk_tier_fails_closed_before_dispatch(self):
         calls = []

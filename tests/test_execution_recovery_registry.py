@@ -267,6 +267,136 @@ class RecoveryCandidateTests(unittest.TestCase):
             self.assertEqual(sum(1 for _, created in results if not created), 1, f"iteration {iteration}")
             self.assertEqual(self.registry.get(key).state, State.PENDING)
 
+    def test_concurrent_transitions_use_compare_and_swap_across_instances(self):
+        from master_brain.execution_registry import InvalidTransition, RegistryError
+
+        path = str(Path(self.tmp.name) / "shared-transition.sqlite3")
+        registries = [SQLiteExecutionRegistry(path, timeout=0.25) for _ in range(6)]
+        pending = registries[0].reserve(
+            key="transition-race", mission_id="mission-transition-race",
+            contract_digest="contract", payload_digest="payload",
+            recorded_at="2026-10-12T00:00:00Z",
+        )[0]
+        barrier = threading.Barrier(len(registries))
+        successes = []
+        errors = []
+        lock = threading.Lock()
+
+        def transition_from_instance(registry):
+            try:
+                barrier.wait(timeout=3)
+                result = registry.transition(
+                    key=pending.key, expected_version=pending.version,
+                    target=State.RUNNING, recorded_at="2026-10-12T00:00:01Z",
+                )
+                with lock:
+                    successes.append(result)
+            except Exception as exc:
+                with lock:
+                    errors.append(exc)
+
+        workers = [
+            threading.Thread(target=transition_from_instance, args=(registry,))
+            for registry in registries
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=5)
+
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(len(successes), 1)
+        self.assertEqual(len(errors), len(registries) - 1)
+        self.assertTrue(all(isinstance(exc, InvalidTransition) for exc in errors), errors)
+        self.assertFalse(any(isinstance(exc, RegistryError) and not isinstance(exc, InvalidTransition)
+                             for exc in errors), errors)
+        persisted = registries[0].get(pending.key)
+        self.assertEqual(persisted.state, State.RUNNING)
+        self.assertEqual(persisted.version, pending.version + 1)
+
+    def test_concurrent_attempt_reservation_and_dispatch_mark_are_safe(self):
+        from master_brain.execution_registry import InvalidTransition, RegistryError
+
+        path = str(Path(self.tmp.name) / "shared-attempts.sqlite3")
+        registries = [SQLiteExecutionRegistry(path, timeout=0.25) for _ in range(6)]
+        pending = registries[0].reserve(
+            key="attempt-race", mission_id="mission-attempt-race",
+            contract_digest="contract", payload_digest="payload",
+            recorded_at="2026-10-12T00:00:00Z",
+        )[0]
+        running = registries[0].transition(
+            key=pending.key, expected_version=pending.version,
+            target=State.RUNNING, recorded_at="2026-10-12T00:00:01Z",
+        )
+        barrier = threading.Barrier(len(registries))
+        attempts = []
+        errors = []
+        lock = threading.Lock()
+
+        def reserve_attempt_from_instance(registry):
+            try:
+                barrier.wait(timeout=3)
+                attempt = registry.reserve_attempt(
+                    key=running.key, expected_version=running.version,
+                    integration_id="integration", adapter_version="v1",
+                    provider_id="provider", recorded_at="2026-10-12T00:00:02Z",
+                )
+                with lock:
+                    attempts.append(attempt)
+            except Exception as exc:
+                with lock:
+                    errors.append(exc)
+
+        workers = [
+            threading.Thread(target=reserve_attempt_from_instance, args=(registry,))
+            for registry in registries
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=5)
+
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(len(errors), len(registries) - 1)
+        self.assertTrue(all(isinstance(exc, InvalidTransition) for exc in errors), errors)
+        self.assertFalse(any(isinstance(exc, RegistryError) and not isinstance(exc, InvalidTransition)
+                             for exc in errors), errors)
+        attempt_id = attempts[0].attempt_id
+
+        # Concurrent repeated marking is intentionally idempotent.
+        barrier = threading.Barrier(len(registries))
+        marked = []
+        errors = []
+
+        def mark_from_instance(registry):
+            try:
+                barrier.wait(timeout=3)
+                result = registry.mark_attempt_dispatch_boundary(
+                    attempt_id=attempt_id, recorded_at="2026-10-12T00:00:03Z"
+                )
+                with lock:
+                    marked.append(result)
+            except Exception as exc:
+                with lock:
+                    errors.append(exc)
+
+        workers = [
+            threading.Thread(target=mark_from_instance, args=(registry,))
+            for registry in registries
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=5)
+
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(errors, [])
+        self.assertEqual(len(marked), len(registries))
+        self.assertTrue(all(item.dispatch_boundary_entered for item in marked))
+        persisted_attempt = registries[0].get_attempt(attempt_id)
+        self.assertTrue(persisted_attempt.dispatch_boundary_entered)
+
     def test_empty_registry_returns_empty_candidates(self):
         self.assertEqual(self.registry.list_recovery_candidates(), [])
 

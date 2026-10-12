@@ -281,6 +281,19 @@ class SQLiteExecutionRegistry:
     ) -> ExecutionAttempt:
         """Durably mark conservative entry into the dispatch boundary, idempotently."""
         self._required(attempt_id=attempt_id, recorded_at=recorded_at)
+        from datetime import datetime
+        try:
+            boundary_dt = datetime.fromisoformat(
+                recorded_at.strip().replace("Z", "+00:00")
+            )
+        except (AttributeError, ValueError) as exc:
+            raise InvalidTransition(
+                "dispatch boundary timestamp must be timezone-aware ISO-8601"
+            ) from exc
+        if boundary_dt.tzinfo is None or boundary_dt.utcoffset() is None:
+            raise InvalidTransition(
+                "dispatch boundary timestamp must be timezone-aware ISO-8601"
+            )
         try:
             with closing(self._db()) as db, db:
                 db.execute("BEGIN IMMEDIATE")
@@ -293,6 +306,20 @@ class SQLiteExecutionRegistry:
                 if attempt.dispatch_boundary_entered:
                     db.commit()
                     return attempt
+                try:
+                    created_dt = datetime.fromisoformat(
+                        attempt.created_at.strip().replace("Z", "+00:00")
+                    )
+                except (AttributeError, ValueError) as exc:
+                    raise RegistryError(
+                        "attempt creation timestamp is invalid"
+                    ) from exc
+                if created_dt.tzinfo is None or created_dt.utcoffset() is None:
+                    raise RegistryError("attempt creation timestamp is invalid")
+                if boundary_dt < created_dt:
+                    raise InvalidTransition(
+                        "dispatch boundary timestamp predates attempt creation"
+                    )
                 db.execute(
                     """UPDATE execution_attempts SET dispatch_boundary_entered=1, updated_at=?
                     WHERE attempt_id=? AND dispatch_boundary_entered=0""",

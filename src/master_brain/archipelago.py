@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import re
 from typing import Iterable
 
 
@@ -81,7 +82,10 @@ def plan_mission(
     for island in available:
         if island.island_id == "general":
             continue
-        matched = tuple(keyword for keyword in island.keywords if keyword in normalized)
+        matched = tuple(
+            keyword for keyword in island.keywords
+            if re.search(r"(?<!\\w)" + re.escape(keyword.casefold()) + r"(?!\\w)", normalized)
+        )
         if matched:
             assignments.append(IslandAssignment(
                 island.island_id,

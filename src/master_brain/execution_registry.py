@@ -433,6 +433,27 @@ class SQLiteExecutionRegistry:
                         raise RegistryError(
                             "completion receipt conflicts with uncertain execution"
                         )
+                # Validate every receipt, not just receipts attached to candidates.
+                # Otherwise a dangling receipt (missing execution/attempt) or a
+                # receipt attached to a non-success terminal state could remain
+                # invisible while the inventory misleadingly appears healthy.
+                inconsistent_receipt = db.execute(
+                    """SELECT 1
+                    FROM completion_receipts AS r
+                    LEFT JOIN executions AS e ON e.key = r.execution_key
+                    LEFT JOIN execution_attempts AS a
+                      ON a.attempt_id = r.attempt_id
+                     AND a.execution_key = r.execution_key
+                    WHERE e.key IS NULL
+                       OR e.state != ?
+                       OR a.attempt_id IS NULL
+                    LIMIT 1""",
+                    (State.SUCCEEDED.value,),
+                ).fetchone()
+                if inconsistent_receipt is not None:
+                    raise RegistryError(
+                        "orphan or inconsistent completion receipt"
+                    )
                 return candidates
         except RegistryError:
             raise

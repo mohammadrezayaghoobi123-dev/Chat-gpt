@@ -6,6 +6,8 @@ from master_brain.ctp import (
     Falsifier,
     RivalHypothesis,
     TestStatus,
+    ExecutionProvenance,
+    record_test_execution,
 )
 
 
@@ -86,6 +88,50 @@ class CTPCaseTests(unittest.TestCase):
             case.falsifiers, (completed_test,),
         )
         self.assertTrue(any("execution provenance" in issue.lower() for issue in completed_case.validate()))
+
+
+    def test_recorded_execution_requires_and_preserves_provenance(self):
+        case = self.make_case()
+        provenance = ExecutionProvenance(
+            execution_id="run-001",
+            executed_at="2026-10-12T10:00:00Z",
+            source="calibrated production sensor",
+            method="witnessed full-shift measurement",
+            independent_group="independent-inspector-1",
+            independence_basis="inspector is not employed by the equipment supplier",
+            limitations=("single production shift",),
+        )
+        completed = record_test_execution(
+            case, "test-01", TestStatus.PASS,
+            "Output met the predeclared criterion",
+            ("artifact-sha256:abc123",), provenance,
+        )
+        recorded = completed.tests[0]
+        self.assertEqual(recorded.status, TestStatus.PASS)
+        self.assertEqual(recorded.execution_provenance, provenance)
+        self.assertTrue(completed.has_executed_evidence)
+        self.assertEqual(completed.validate(), ())
+        self.assertEqual(case.tests[0].status, TestStatus.NOT_RUN)
+
+    def test_pass_without_evidence_reference_is_rejected(self):
+        case = self.make_case()
+        provenance = ExecutionProvenance(
+            "run-002", "2026-10-12T10:00:00Z", "sensor",
+            "measurement", "group-a", "separate operator",
+        )
+        with self.assertRaisesRegex(ValueError, "evidence reference"):
+            record_test_execution(
+                case, "test-01", TestStatus.PASS, "Passed", (), provenance,
+            )
+
+    def test_execution_provenance_requires_timezone_and_independence_basis(self):
+        invalid = ExecutionProvenance(
+            "run-003", "2026-10-12T10:00:00", "sensor",
+            "measurement", "group-a", "",
+        )
+        issues = invalid.validate()
+        self.assertTrue(any("timezone" in issue for issue in issues))
+        self.assertTrue(any("independence_basis" in issue for issue in issues))
 
 
 if __name__ == "__main__":

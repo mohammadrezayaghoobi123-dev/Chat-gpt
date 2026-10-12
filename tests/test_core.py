@@ -45,6 +45,21 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(result.supporting_evidence, ("e1",))
         self.assertEqual(result.counterevidence, ("e2",))
 
+    def test_duplicate_evidence_ids_cannot_inflate_direct_claim_review(self):
+        claim = Claim("c-duplicate", "plant", "output", "100")
+        evidence = (
+            Evidence("same-id", "source-a", "c-duplicate", True, independent_group="group-a"),
+            Evidence("same-id", "source-b", "c-duplicate", True, independent_group="group-b"),
+        )
+
+        result = evaluate_claim(claim, evidence)
+
+        self.assertEqual(result.supporting_evidence, ())
+        self.assertEqual(result.independent_supporting_group_count, 0)
+        self.assertFalse(result.independent_support_demonstrated)
+        self.assertTrue(any("duplicate evidence ID" in issue.lower()
+                            for issue in result.unresolved_questions))
+
     def test_no_evidence_is_unverified(self):
         claim = Claim("c1", "claim", "predicate", "value")
         self.assertEqual(evaluate_claim(claim, []).status, "unverified")

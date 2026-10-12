@@ -38,6 +38,18 @@ class MetaIntelligenceTests(unittest.TestCase):
         self.assertTrue(plan.clarification_questions)
         self.assertTrue(plan.unknowns)
 
+    def test_duplicate_profile_ids_do_not_duplicate_dispatch_selections(self):
+        profiles = (
+            IslandProfile("industrial", ("factory",)),
+            IslandProfile("industrial", ("production",)),
+            IslandProfile("general", ("plan",)),
+        )
+        plan = plan_coordination(Mission("factory production planning"), profiles=profiles)
+        selected_ids = [selection.island_id for selection in plan.selections]
+        self.assertEqual(selected_ids.count("industrial"), 1)
+        self.assertTrue(any("duplicate island profile ID" in item.lower()
+                            for item in plan.unknowns))
+
     def test_disabled_island_is_not_selected(self):
         plan = plan_coordination(Mission("factory production machine planning"), profiles=(
             IslandProfile("industrial", ("factory",), enabled=False),

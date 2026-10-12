@@ -5,9 +5,12 @@ unconfigured island, model, provider, tool, or external action was used.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import Callable, Mapping
+from uuid import uuid4
 
+from .audit import AuditRecord
 from .core import Claim, Contradiction, Decision, Evidence
 from .meta_intelligence import Mission, CoordinationPlan, ReviewLevel, plan_coordination
 from .proof_plane import review_proof
@@ -39,6 +42,92 @@ class MissionRun:
     claim_reviews: tuple[Decision, ...] = ()
     provenance: tuple[str, ...] = ()
     unresolved_issues: tuple[str, ...] = ()
+    audit_records: tuple[AuditRecord, ...] = ()
+
+
+def _safe_refs(values) -> tuple[str, ...]:
+    """Keep only non-empty string identifiers; never place raw content in refs."""
+    return tuple(value for value in values if isinstance(value, str) and value.strip())
+
+
+def _build_audit_records(mission: Mission, run: MissionRun) -> tuple[AuditRecord, ...]:
+    """Create in-memory mission/proof audit events without raw objectives or outputs."""
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    records: list[AuditRecord] = []
+    # Preserve the proof plane's exact first-seen claim ordering, even when an
+    # upstream executor supplies a malformed/blank ID. References are filtered
+    # separately so a bad identifier cannot shift another claim's review status.
+    claims_by_id: dict[object, Claim] = {}
+    evidence_by_claim: dict[object, list[Evidence]] = {}
+
+    for result in run.results:
+        for claim in result.claims:
+            claims_by_id.setdefault(claim.claim_id, claim)
+        for evidence in result.evidence:
+            evidence_by_claim.setdefault(evidence.claim_id, []).append(evidence)
+
+    all_evidence = tuple(item for result in run.results for item in result.evidence)
+    all_claim_ids = tuple(claim.claim_id for claim in claims_by_id.values())
+    executed_islands = tuple(result.island_id for result in run.results)
+    allowed_risk_tiers = {"low", "medium", "high", "critical"}
+    risk_tier = mission.risk_tier.casefold()
+    if risk_tier not in allowed_risk_tiers:
+        risk_tier = "unrecognized"
+
+    records.append(AuditRecord(
+        event_id=f"evt-{uuid4().hex}",
+        event_type="mission_run",
+        occurred_at=now,
+        component="integrated_runtime",
+        status=run.status,
+        input_refs=_safe_refs(executed_islands),
+        output_refs=_safe_refs(all_claim_ids),
+        metadata={
+            "risk_tier": risk_tier,
+            "review_level": run.plan.review_level.value,
+            "selected_island_count": len(run.plan.selections),
+            "executed_island_count": len(run.results),
+            "missing_island_count": len(run.missing_islands),
+            "execution_error_count": len(run.execution_errors),
+            "claim_count": len(all_claim_ids),
+            "evidence_count": len(all_evidence),
+            "contradiction_count": len(run.contradictions),
+            "claim_review_count": len(run.claim_reviews),
+            "unresolved_issue_count": len(run.unresolved_issues),
+        },
+    ))
+
+    for claim, decision in zip(claims_by_id.values(), run.claim_reviews):
+        matching_evidence = evidence_by_claim.get(claim.claim_id, [])
+        supporting_count = sum(1 for item in matching_evidence if item.supports)
+        counterevidence_count = sum(1 for item in matching_evidence if not item.supports)
+        records.append(AuditRecord(
+            event_id=f"evt-{uuid4().hex}",
+            event_type="claim_review",
+            occurred_at=now,
+            component="proof_plane",
+            status=decision.status,
+            input_refs=_safe_refs(item.evidence_id for item in matching_evidence),
+            output_refs=_safe_refs((claim.claim_id,)),
+            metadata={
+                "supporting_evidence_count": supporting_count,
+                "counterevidence_count": counterevidence_count,
+                "maturity": decision.maturity.value,
+            },
+        ))
+
+    for contradiction in run.contradictions:
+        records.append(AuditRecord(
+            event_id=f"evt-{uuid4().hex}",
+            event_type="contradiction_detected",
+            occurred_at=now,
+            component="proof_plane",
+            status=contradiction.status,
+            input_refs=_safe_refs((contradiction.claim_a, contradiction.claim_b)),
+            metadata={"review_required": True},
+        ))
+
+    return tuple(records)
 
 
 def _execute_mission_untraced(
@@ -136,7 +225,6 @@ def _execute_mission_untraced(
     )
 
 
-
 def execute_mission(
     mission: Mission,
     executors: Mapping[str, IslandExecutor],
@@ -144,7 +232,8 @@ def execute_mission(
     """Execute a mission with optional, privacy-conscious Langfuse tracing.
 
     Mission objective text, evidence content, and raw executor outputs are not
-    sent to telemetry. Tracing remains optional and must not alter mission state.
+    sent to telemetry or included in audit metadata. Audit events are returned
+    in memory only; this function does not persist them to durable storage.
     """
     with observation(
         name="master-brain-mission",
@@ -159,6 +248,7 @@ def execute_mission(
         metadata={"component": "master-brain", "trace_schema_version": "1"},
     ) as mission_trace:
         run = _execute_mission_untraced(mission, executors)
+        run = replace(run, audit_records=_build_audit_records(mission, run))
         if mission_trace is not None:
             mission_trace.update(
                 output={
@@ -169,6 +259,7 @@ def execute_mission(
                     "contradiction_count": len(run.contradictions),
                     "claim_review_count": len(run.claim_reviews),
                     "unresolved_issue_count": len(run.unresolved_issues),
+                    "audit_record_count": len(run.audit_records),
                 },
                 metadata={"review_level": run.plan.review_level.value},
             )

@@ -38,13 +38,24 @@ def review_proof(claims, evidence):
     known = set(by_id)
     evidence_ids = {}
     duplicate_evidence_ids = set()
-    for item in evidence:
-        if item.claim_id not in known:
-            issues.append("Evidence is not linked to a known claim: " + item.evidence_id)
-        if item.evidence_id in evidence_ids:
-            duplicate_evidence_ids.add(item.evidence_id)
+    invalid_evidence_objects = set()
+    for index, item in enumerate(evidence):
+        evidence_id = getattr(item, "evidence_id", None)
+        claim_id = getattr(item, "claim_id", None)
+        valid_evidence_id = isinstance(evidence_id, str) and bool(evidence_id.strip())
+        valid_claim_id = isinstance(claim_id, str) and bool(claim_id.strip())
+        if not valid_evidence_id:
+            issues.append("Evidence record has an invalid evidence ID; excluded.")
+            invalid_evidence_objects.add(index)
+        if not valid_claim_id or claim_id not in known:
+            label = evidence_id if valid_evidence_id else "<invalid-id>"
+            issues.append("Evidence is not linked to a known claim: " + label)
+        if not valid_evidence_id:
+            continue
+        if evidence_id in evidence_ids:
+            duplicate_evidence_ids.add(evidence_id)
         else:
-            evidence_ids[item.evidence_id] = item
+            evidence_ids[evidence_id] = item
     for evidence_id in sorted(duplicate_evidence_ids):
         issues.append("Duplicate evidence ID: " + evidence_id)
 
@@ -52,7 +63,13 @@ def review_proof(claims, evidence):
     # Exclude every occurrence, rather than keeping the first and making the
     # outcome depend on input ordering.
     usable_evidence = tuple(
-        item for item in evidence if item.evidence_id not in duplicate_evidence_ids
+        item for index, item in enumerate(evidence)
+        if index not in invalid_evidence_objects
+        and isinstance(getattr(item, "claim_id", None), str)
+        and bool(item.claim_id.strip())
+        and isinstance(getattr(item, "evidence_id", None), str)
+        and bool(item.evidence_id.strip())
+        and item.evidence_id not in duplicate_evidence_ids
     )
     conflicts = tuple(assess_contradictions(unique))
     reviews = tuple(evaluate_claim(claim, usable_evidence) for claim in unique)

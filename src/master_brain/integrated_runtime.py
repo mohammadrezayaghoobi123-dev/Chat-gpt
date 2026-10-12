@@ -59,17 +59,43 @@ def _build_audit_records(mission: Mission, run: MissionRun) -> tuple[AuditRecord
     # Preserve the proof plane's exact first-seen claim ordering, even when an
     # upstream executor supplies a malformed/blank ID. References are filtered
     # separately so a bad identifier cannot shift another claim's review status.
-    claims_by_id: dict[object, Claim] = {}
-    evidence_by_claim: dict[object, list[Evidence]] = {}
+    claims_by_id: dict[str, Claim] = {}
+    ambiguous_claim_ids: set[str] = set()
+    evidence_by_claim: dict[str, list[Evidence]] = {}
 
     for result in run.results:
         for claim in result.claims:
-            claims_by_id.setdefault(claim.claim_id, claim)
+            if not isinstance(claim, Claim):
+                continue
+            claim_id = claim.claim_id
+            if not isinstance(claim_id, str) or not claim_id.strip():
+                continue
+            if any(
+                not isinstance(getattr(claim, name), str)
+                for name in ("subject", "predicate", "value", "context", "time_scope", "definition")
+            ):
+                continue
+            previous = claims_by_id.get(claim_id)
+            if previous is None and claim_id not in ambiguous_claim_ids:
+                claims_by_id[claim_id] = claim
+            elif previous != claim:
+                # Match proof_plane policy: an ID reused for different claims
+                # is ambiguous, so neither interpretation receives a review.
+                ambiguous_claim_ids.add(claim_id)
         for evidence in result.evidence:
-            evidence_by_claim.setdefault(evidence.claim_id, []).append(evidence)
+            if (
+                isinstance(evidence, Evidence)
+                and isinstance(evidence.claim_id, str)
+                and evidence.claim_id.strip()
+            ):
+                evidence_by_claim.setdefault(evidence.claim_id, []).append(evidence)
+
+    for claim_id in ambiguous_claim_ids:
+        claims_by_id.pop(claim_id, None)
+    reviewable_claims = tuple(claims_by_id.values())
 
     all_evidence = tuple(item for result in run.results for item in result.evidence)
-    all_claim_ids = tuple(claim.claim_id for claim in claims_by_id.values())
+    all_claim_ids = tuple(claim.claim_id for claim in reviewable_claims)
     executed_islands = tuple(result.island_id for result in run.results)
     allowed_risk_tiers = {"low", "medium", "high", "critical"}
     risk_tier = mission.risk_tier.casefold()
@@ -100,7 +126,9 @@ def _build_audit_records(mission: Mission, run: MissionRun) -> tuple[AuditRecord
         },
     ))
 
-    for claim, decision in zip(claims_by_id.values(), run.claim_reviews):
+    # The proof plane omits malformed and ambiguous claims. Pair decisions
+    # only with that same validated sequence; never zip against raw inputs.
+    for claim, decision in zip(reviewable_claims, run.claim_reviews):
         matching_evidence = evidence_by_claim.get(claim.claim_id, [])
         supporting_count = sum(1 for item in matching_evidence if item.supports)
         counterevidence_count = sum(1 for item in matching_evidence if not item.supports)

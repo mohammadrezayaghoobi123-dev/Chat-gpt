@@ -45,6 +45,8 @@ class ConfiguredAttemptScopeRegistry:
             ):
                 if not isinstance(value, str) or not value.strip():
                     raise AttemptConfigurationError(f"{name} must be a non-empty string")
+                if value != value.strip():
+                    raise AttemptConfigurationError(f"{name} must not have leading or trailing whitespace")
             if type(item.enabled) is not bool:
                 raise AttemptConfigurationError("enabled must be a boolean")
             key = (item.integration_id, item.adapter_version, item.provider_id)
@@ -61,6 +63,8 @@ class ConfiguredAttemptScopeRegistry:
         ):
             if not isinstance(value, str) or not value.strip():
                 raise AttemptConfigurationError(f"{name} must be a non-empty string")
+            if value != value.strip():
+                raise AttemptConfigurationError(f"{name} must not have leading or trailing whitespace")
         item = self._entries.get((integration_id, adapter_version, provider_id))
         if item is None or item.enabled is not True:
             raise AttemptConfigurationError("no enabled attempt scope matches approved configuration")

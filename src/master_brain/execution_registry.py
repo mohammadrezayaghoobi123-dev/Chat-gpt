@@ -416,7 +416,24 @@ class SQLiteExecutionRegistry:
                     "SELECT * FROM executions ORDER BY updated_at ASC, key ASC"
                 ).fetchall()
                 records = [self._record(row) for row in rows]
-                return [record for record in records if record.state in candidate_states]
+                candidates = [
+                    record for record in records
+                    if record.state in candidate_states
+                ]
+                # A completion receipt and an uncertain execution state cannot
+                # both be authoritative: normal completion commits both atomically.
+                # If storage was manually altered or partially corrupted, fail
+                # closed instead of presenting the row as an ordinary recovery case.
+                for record in candidates:
+                    receipt = db.execute(
+                        "SELECT attempt_id FROM completion_receipts WHERE execution_key=?",
+                        (record.key,),
+                    ).fetchone()
+                    if receipt is not None:
+                        raise RegistryError(
+                            "completion receipt conflicts with uncertain execution"
+                        )
+                return candidates
         except RegistryError:
             raise
         except sqlite3.Error as exc:

@@ -21,13 +21,20 @@ def review_proof(claims, evidence):
     evidence = tuple(evidence)
     unique = []
     by_id = {}
+    ambiguous_claim_ids = set()
     for claim in claims:
         previous = by_id.get(claim.claim_id)
-        if previous is None:
+        if previous is None and claim.claim_id not in ambiguous_claim_ids:
             by_id[claim.claim_id] = claim
             unique.append(claim)
         elif previous != claim:
             issues.append("Duplicate claim ID with different content: " + claim.claim_id)
+            ambiguous_claim_ids.add(claim.claim_id)
+    if ambiguous_claim_ids:
+        # Do not let evidence attach to an arbitrary first-seen interpretation.
+        by_id = {claim_id: claim for claim_id, claim in by_id.items()
+                 if claim_id not in ambiguous_claim_ids}
+        unique = [claim for claim in unique if claim.claim_id not in ambiguous_claim_ids]
     known = set(by_id)
     evidence_ids = {}
     duplicate_evidence_ids = set()

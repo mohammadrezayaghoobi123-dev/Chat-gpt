@@ -395,6 +395,16 @@ class PersistedCompletionTests(unittest.TestCase):
         with self.registry._db() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM completion_receipts").fetchone()[0], 1)
 
+    def test_evidence_observed_before_dispatch_boundary_is_rejected(self):
+        altered = CompletionEvidence(**{
+            **self.evidence.__dict__, "observed_at": "2026-10-12T00:00:02Z"
+        })
+        with self.assertRaisesRegex(EvidenceValidationError, "predates dispatch boundary"):
+            self.complete(evidence=altered)
+        self.assertEqual(self.registry.get("exec-persisted").state, State.OUTCOME_UNKNOWN)
+        with self.registry._db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM completion_receipts").fetchone()[0], 0)
+
     def test_naive_recorded_at_is_rejected_before_state_change(self):
         with self.assertRaisesRegex(ValueError, "recorded_at must be timezone-aware"):
             self.registry.complete_with_verified_evidence(

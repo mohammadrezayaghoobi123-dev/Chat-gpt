@@ -1,6 +1,8 @@
 """Public-seam tests for idempotent verified completion retries."""
 import sqlite3
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Lock
 from datetime import datetime, timedelta, timezone
 
 from master_brain.completion_evidence import CompletionEvidence, EvidenceValidationError
@@ -146,6 +148,53 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
                 (self.key,),
             ).fetchone()[0]
         self.assertEqual(count, 0)
+
+    def test_concurrent_exact_completion_creates_one_receipt(self):
+        barrier = Barrier(2)
+        call_lock = Lock()
+        calls = []
+
+        def synchronized_verifier(evidence):
+            with call_lock:
+                calls.append(evidence.provider_receipt_id)
+            barrier.wait(timeout=5)
+            return True
+
+        concurrent_registry = ConfiguredVerifierRegistry([
+            VerifierDescriptor(
+                verifier_id="payments-receipt",
+                version="1",
+                provider_id="provider-x",
+                evidence_type="operation-receipt",
+                verify=synchronized_verifier,
+                enabled=True,
+            )
+        ])
+
+        def complete(offset):
+            return self.registry.complete_with_verified_evidence(
+                key=self.key,
+                expected_version=self.record.version,
+                attempt_id=self.attempt.attempt_id,
+                evidence=self.evidence,
+                verifier_id="payments-receipt",
+                verifier_version="1",
+                verifier_registry=concurrent_registry,
+                recorded_at=_iso(offset),
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(complete, (-2, -1)))
+
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(results[0].state, State.SUCCEEDED)
+        self.assertEqual(len(calls), 2)
+        with sqlite3.connect(self.registry.path) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                (self.key,),
+            ).fetchone()[0]
+        self.assertEqual(count, 1)
 
 
 if __name__ == "__main__":

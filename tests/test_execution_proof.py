@@ -256,5 +256,36 @@ class OperationalProofLaneTests(unittest.TestCase):
         self.assertIn("not verified", report.unresolved_issue)
 
 
+    def test_deployment_entry_point_fails_closed_without_provider_verifier_and_does_not_mutate(self):
+        from unittest.mock import patch
+        from master_brain.completion_evidence import EvidenceValidationError
+
+        before = self.registry.get("exec-1")
+        # The fixed deployment module is deliberately absent until a real
+        # provider contract and authenticity verifier are implemented/reviewed.
+        with patch.dict("sys.modules", {"master_brain.deployment_verifiers": None}):
+            with self.assertRaisesRegex(
+                EvidenceValidationError,
+                "deployment verifier configuration is unavailable",
+            ):
+                self.registry.complete_with_deployment_verified_evidence(
+                    key="exec-1",
+                    expected_version=before.version,
+                    attempt_id=self.attempt.attempt_id,
+                    evidence=self.evidence,
+                    verifier_id="receipt-check",
+                    verifier_version="1",
+                    recorded_at="2026-10-12T10:00:06Z",
+                )
+
+        self.assertEqual(self.registry.get("exec-1"), before)
+        with __import__("sqlite3").connect(self.registry.path) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                ("exec-1",),
+            ).fetchone()[0]
+        self.assertEqual(count, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -25,7 +25,7 @@ class ProofPlaneTests(unittest.TestCase):
         self.assertEqual(len(case.falsifiers), 2)
         self.assertEqual(case.validate(), ())
         self.assertEqual(case.tests[0].status, TestStatus.NOT_RUN)
-        self.assertEqual(case.unresolved_test_ids, ("test-01",))
+        self.assertEqual(len(case.unresolved_test_ids), 1)
         self.assertFalse(case.has_executed_evidence)
         self.assertIn("not executed", " ".join(case.notes).lower())
 

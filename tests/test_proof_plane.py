@@ -10,8 +10,8 @@ class ProofPlaneTests(unittest.TestCase):
         report = review_proof(None, None)
         self.assertEqual(report.claim_reviews, ())
         self.assertEqual(report.contradictions, ())
-        self.assertTrue(any("claims must be iterable" in issue for issue in report.unresolved_issues))
-        self.assertTrue(any("evidence must be iterable" in issue for issue in report.unresolved_issues))
+        self.assertTrue(any("claims must be iterable" in issue.lower() for issue in report.unresolved_issues))
+        self.assertTrue(any("evidence must be iterable" in issue.lower() for issue in report.unresolved_issues))
 
     def test_conflict_is_preserved_and_generates_unexecuted_ctp_plan(self):
         claims = (

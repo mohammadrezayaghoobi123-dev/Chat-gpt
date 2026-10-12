@@ -138,7 +138,8 @@ class SQLiteExecutionRegistry:
 
     def _begin_immediate_with_retry(self, db: sqlite3.Connection) -> None:
         """Retry only transient SQLite BUSY/LOCKED failures before writes begin."""
-        delays = (0.01, 0.025, 0.05, 0.1)
+        # Keep retries bounded but tolerate brief scheduler contention on CI and busy hosts.
+        delays = (0.01, 0.025, 0.05, 0.1, 0.2, 0.4)
         for delay in (*delays, None):
             try:
                 db.execute("BEGIN IMMEDIATE")

@@ -87,6 +87,19 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(any("invalid evidence record" in issue.lower()
                             for issue in result.unresolved_questions))
 
+    def test_direct_claim_review_rejects_invalid_claim_contract(self):
+        with self.assertRaisesRegex(ValueError, "claim must be a Claim instance"):
+            evaluate_claim(None, ())
+
+        malformed = Claim(None, "plant", "output", "100")
+        with self.assertRaisesRegex(ValueError, "claim_id must be a non-empty string"):
+            evaluate_claim(malformed, ())
+
+    def test_direct_claim_review_rejects_non_iterable_evidence_cleanly(self):
+        claim = Claim("claim-evidence-input", "plant", "output", "100")
+        with self.assertRaisesRegex(ValueError, "evidence must be iterable"):
+            evaluate_claim(claim, None)
+
     def test_no_evidence_is_unverified(self):
         claim = Claim("c1", "claim", "predicate", "value")
         self.assertEqual(evaluate_claim(claim, []).status, "unverified")

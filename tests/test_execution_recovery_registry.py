@@ -152,7 +152,17 @@ class RecoveryCandidateTests(unittest.TestCase):
             worker.join(timeout=5)
 
         self.assertTrue(all(not worker.is_alive() for worker in workers))
-        self.assertEqual(errors, [])
+        if errors:
+            details = [
+                {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "cause_type": type(exc.__cause__).__name__ if exc.__cause__ else None,
+                    "cause_message": str(exc.__cause__) if exc.__cause__ else None,
+                }
+                for exc in errors
+            ]
+            self.fail(f"concurrent reservation errors (including chained SQLite causes): {details!r}")
         self.assertEqual(len(results), 2)
         self.assertEqual(sum(1 for _, created in results if created), 1)
         self.assertEqual(sum(1 for _, created in results if not created), 1)

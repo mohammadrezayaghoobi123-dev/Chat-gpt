@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from pathlib import Path
 
 from master_brain.completion_evidence import CompletionEvidence
@@ -115,6 +117,38 @@ class OperationalProofLaneTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "different or missing completion evidence"):
             self.registry.complete_with_verified_evidence(**{**kwargs, "evidence": altered})
 
+
+    def test_concurrent_exact_completion_retries_commit_one_receipt(self):
+        verification_barrier = Barrier(2)
+
+        def verify(_evidence):
+            verification_barrier.wait(timeout=5)
+            return True
+
+        verifier_registry = ConfiguredVerifierRegistry([VerifierDescriptor(
+            verifier_id="receipt-check", version="1", provider_id="provider-x",
+            evidence_type="operation-receipt", verify=verify,
+        )])
+        kwargs = dict(
+            key="exec-1", expected_version=self.record.version,
+            attempt_id=self.attempt.attempt_id, evidence=self.evidence,
+            verifier_id="receipt-check", verifier_version="1",
+            verifier_registry=verifier_registry,
+            recorded_at="2026-10-12T10:00:06Z",
+        )
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(self.registry.complete_with_verified_evidence, **kwargs)
+                       for _ in range(2)]
+            results = [future.result(timeout=10) for future in futures]
+
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(results[0].state, State.SUCCEEDED)
+        with __import__("sqlite3").connect(self.registry.path) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                ("exec-1",),
+            ).fetchone()[0]
+        self.assertEqual(count, 1)
 
     def test_evidence_observed_before_dispatch_boundary_is_rejected(self):
         registry = ConfiguredVerifierRegistry([VerifierDescriptor(

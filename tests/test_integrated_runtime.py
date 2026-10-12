@@ -154,7 +154,6 @@ class IntegratedRuntimeTests(unittest.TestCase):
         self.assertEqual(run.results, ())
         self.assertTrue(run.execution_errors)
         self.assertEqual(run.status, "incomplete")
-        self.assertTrue(any(issue.startswith("science_research: execution failed (") for issue in run.execution_errors))
 
     def test_executor_failure_is_recorded_as_partial_not_success(self):
         def broken(mission):

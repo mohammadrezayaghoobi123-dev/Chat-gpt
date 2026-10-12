@@ -135,6 +135,8 @@ class CTPCase:
                     issues.append(f"test {test.test_id} is {test.status.value} but has no observed result")
                 if test.execution_provenance is None:
                     issues.append(f"test {test.test_id} is {test.status.value} but has no execution provenance")
+                elif not isinstance(test.execution_provenance, ExecutionProvenance):
+                    issues.append(f"test {test.test_id} execution_provenance must be an ExecutionProvenance")
                 else:
                     issues.extend(test.execution_provenance.validate())
                 if test.status in (TestStatus.PASS, TestStatus.FAIL) and not test.evidence_ids:
@@ -159,10 +161,14 @@ class CTPCase:
     def has_executed_evidence(self) -> bool:
         """True only when a test record contains an outcome and evidence reference."""
         return any(
-            item.status in (TestStatus.PASS, TestStatus.FAIL)
+            isinstance(item.status, TestStatus)
+            and item.status in (TestStatus.PASS, TestStatus.FAIL)
+            and isinstance(item.observed_result, str)
             and item.observed_result.strip()
-            and item.evidence_ids
-            and item.execution_provenance is not None
+            and isinstance(item.evidence_ids, (tuple, list))
+            and not isinstance(item.evidence_ids, str)
+            and bool(item.evidence_ids)
+            and isinstance(item.execution_provenance, ExecutionProvenance)
             and not item.execution_provenance.validate()
             for item in self.tests
         )

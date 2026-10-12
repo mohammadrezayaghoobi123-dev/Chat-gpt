@@ -55,3 +55,29 @@ Do not enable external actions until all of the following are reviewed and evide
 - operational rollback, timeout, reconciliation, audit, and secret-rotation procedures exist.
 
 Until then, keep `deployment_verifiers` absent and the production completion path fail-closed. Passing local unit tests alone does not establish a real external integration.
+
+## Trusted attempt-scope boundary
+
+The SQLite `reserve_attempt` method is a low-level persistence primitive. Its
+`provider_scope` and `receipt_namespace` arguments are not independently
+authenticated merely because they are non-empty strings; production callers
+must not pass values derived from mission, request, or provider evidence input.
+
+Use `master_brain.attempt_configuration.reserve_configured_attempt` at the
+deployment boundary. It accepts only the approved integration/version/provider
+tuple, loads scope and namespace from the fixed application-owned module
+`master_brain.deployment_attempt_config`, and fails closed if that module is
+missing, malformed, ambiguous, or unavailable. The module must define a
+non-empty `ATTEMPT_SCOPE_DESCRIPTORS` tuple/list of validated
+`AttemptScopeDescriptor` entries. The module is intentionally not checked into
+the repository: no real provider, account, environment, or namespace has been
+selected yet.
+
+The lower-level `reserve_attempt` remains available as a core persistence seam
+for focused unit tests and internal primitives, not as a production
+authorization boundary. Python module imports execute configuration code, so
+the deployment module and dependencies must be reviewed and controlled as
+trusted application code; this loader is not a sandbox. The configuration
+boundary supplements but does not replace provider-specific authentication,
+receipt verification, scope binding, or the existing fail-closed completion
+verifier gate.

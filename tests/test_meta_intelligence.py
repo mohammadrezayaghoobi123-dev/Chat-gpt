@@ -47,7 +47,7 @@ class MetaIntelligenceTests(unittest.TestCase):
         plan = plan_coordination(Mission("factory production planning"), profiles=profiles)
         selected_ids = [selection.island_id for selection in plan.selections]
         self.assertEqual(selected_ids.count("industrial"), 1)
-        self.assertTrue(any("duplicate island profile ID" in item.lower()
+        self.assertTrue(any("duplicate island profile id" in item.lower()
                             for item in plan.unknowns))
 
     def test_disabled_island_is_not_selected(self):

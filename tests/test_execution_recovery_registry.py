@@ -250,6 +250,14 @@ class RecoveryCandidateTests(unittest.TestCase):
         self.assertEqual(repeated, marked)
 
 
+    def test_transition_rejects_timestamp_before_current_record_update(self):
+        from master_brain.execution_registry import InvalidTransition
+
+        pending = self.reserve("state-time-order", "2026-10-12T00:00:10Z")
+        with self.assertRaisesRegex(InvalidTransition, "predates current execution update"):
+            self.transition(pending, State.RUNNING, "2026-10-12T00:00:09Z")
+        self.assertEqual(self.registry.get(pending.key), pending)
+
     def _create_legacy_attempt_table(self, db):
         db.execute("""CREATE TABLE execution_attempts (
             attempt_id TEXT PRIMARY KEY,

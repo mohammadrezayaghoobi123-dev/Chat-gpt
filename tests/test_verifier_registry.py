@@ -92,6 +92,40 @@ class ConfiguredVerifierRegistryTests(unittest.TestCase):
             )
 
 
+class DeploymentVerifierConfigurationValidationTests(unittest.TestCase):
+    def _load_from_module(self, descriptors):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from master_brain.verifier_registry import load_deployment_verifier_registry
+
+        module = SimpleNamespace(VERIFIER_DESCRIPTORS=descriptors)
+        with patch.dict(
+            "sys.modules", {"master_brain.deployment_verifiers": module}
+        ):
+            return load_deployment_verifier_registry()
+
+    def test_empty_deployment_configuration_fails_closed(self):
+        with self.assertRaisesRegex(
+            VerifierRegistryError, "must provide at least one verifier"
+        ):
+            self._load_from_module([])
+
+    def test_malformed_deployment_descriptor_fails_closed(self):
+        with self.assertRaisesRegex(VerifierRegistryError, "descriptor has invalid type"):
+            self._load_from_module([object()])
+
+    def test_duplicate_deployment_entries_fail_closed(self):
+        descriptor = VerifierDescriptor(
+            verifier_id="payments-receipt",
+            version="1",
+            provider_id="provider-x",
+            evidence_type="operation-receipt",
+            verify=verify_receipt,
+        )
+        with self.assertRaisesRegex(VerifierRegistryError, "duplicate"):
+            self._load_from_module([descriptor, descriptor])
+
+
 if __name__ == "__main__":
     unittest.main()
 

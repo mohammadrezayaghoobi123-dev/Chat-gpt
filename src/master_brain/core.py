@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import math
 from typing import Iterable, Sequence
 
 
@@ -145,7 +146,9 @@ def score_opportunity(item: Opportunity) -> float:
     clamped to [0, 1] for this MVP. A later version must calibrate weights.
     """
     def unit(value: float) -> float:
-        return max(0.0, min(1.0, value))
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError("opportunity score inputs must be finite numbers")
+        return max(0.0, min(1.0, float(value)))
     return (
         0.30 * unit(item.expected_value)
         + 0.20 * unit(item.feasibility)

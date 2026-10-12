@@ -74,6 +74,14 @@ class ProofPlaneTests(unittest.TestCase):
         self.assertEqual(decision.independent_supporting_group_count, 0)
         self.assertEqual(decision.supporting_evidence, ())
 
+    def test_claim_with_unhashable_importance_is_reported_without_crashing(self):
+        claim = Claim("claim-importance", "plant", "output", "100", importance=[])
+        report = review_proof((claim,), ())
+
+        self.assertTrue(any("unrecognized importance" in issue.lower()
+                            for issue in report.unresolved_issues))
+        self.assertEqual(report.ctp_cases, ())
+
     def test_claim_with_invalid_identifier_is_excluded_safely(self):
         claim = Claim(None, "plant", "output", "100")
         report = review_proof((claim,), ())

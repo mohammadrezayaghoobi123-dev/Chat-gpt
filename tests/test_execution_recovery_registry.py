@@ -211,6 +211,58 @@ class RecoveryCandidateTests(unittest.TestCase):
         self.assertEqual(sum(1 for _, created in results if not created), len(registries) - 1)
         self.assertEqual(registries[0].get("shared-concurrent-key").state, State.PENDING)
 
+    def test_same_registry_concurrent_reservations_stress_with_sqlite_cause(self):
+        # Reproduce the original 0.25s timeout / shared-instance scenario repeatedly.
+        # If SQLite contention escapes the busy timeout, preserve the chained cause.
+        for iteration in range(25):
+            barrier = threading.Barrier(2)
+            results = []
+            errors = []
+            lock = threading.Lock()
+            key = f"stress-concurrent-{iteration}"
+
+            def reserve_from_thread():
+                try:
+                    barrier.wait(timeout=2)
+                    result = self.registry.reserve(
+                        key=key,
+                        mission_id=f"mission-{key}",
+                        contract_digest="contract",
+                        payload_digest="payload",
+                        recorded_at="2026-10-12T00:00:10Z",
+                    )
+                    with lock:
+                        results.append(result)
+                except Exception as exc:
+                    with lock:
+                        errors.append(exc)
+
+            workers = [threading.Thread(target=reserve_from_thread) for _ in range(2)]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=5)
+
+            self.assertTrue(
+                all(not worker.is_alive() for worker in workers),
+                f"iteration {iteration}: a reservation thread did not finish",
+            )
+            if errors:
+                details = [
+                    {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                        "cause_type": type(exc.__cause__).__name__ if exc.__cause__ else None,
+                        "cause_message": str(exc.__cause__) if exc.__cause__ else None,
+                    }
+                    for exc in errors
+                ]
+                self.fail(f"iteration {iteration}: concurrent reservation errors: {details!r}")
+            self.assertEqual(len(results), 2, f"iteration {iteration}")
+            self.assertEqual(sum(1 for _, created in results if created), 1, f"iteration {iteration}")
+            self.assertEqual(sum(1 for _, created in results if not created), 1, f"iteration {iteration}")
+            self.assertEqual(self.registry.get(key).state, State.PENDING)
+
     def test_empty_registry_returns_empty_candidates(self):
         self.assertEqual(self.registry.list_recovery_candidates(), [])
 

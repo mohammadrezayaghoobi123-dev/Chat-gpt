@@ -153,6 +153,26 @@ class CTPCaseTests(unittest.TestCase):
                 case, "test-01", TestStatus.PASS, "Passed", (), provenance,
             )
 
+    def test_record_execution_rejects_string_instead_of_evidence_id_sequence(self):
+        case = self.make_case()
+        provenance = ExecutionProvenance(
+            "run-string-evidence", "2026-10-12T10:00:00Z", "sensor",
+            "measurement", "group-a", "separate operator",
+        )
+        with self.assertRaisesRegex(ValueError, "evidence_ids must be a tuple or list"):
+            record_test_execution(
+                case, "test-01", TestStatus.PASS, "Passed", "evidence-001", provenance,
+            )
+
+    def test_provenance_rejects_string_instead_of_limitations_sequence(self):
+        invalid = ExecutionProvenance(
+            "run-string-limitations", "2026-10-12T10:00:00Z", "sensor",
+            "measurement", "group-a", "separate operator",
+            limitations="not-a-sequence",
+        )
+        self.assertTrue(any("limitations must be a tuple or list" in issue
+                            for issue in invalid.validate()))
+
     def test_execution_provenance_requires_timezone_and_independence_basis(self):
         invalid = ExecutionProvenance(
             "run-003", "2026-10-12T10:00:00", "sensor",

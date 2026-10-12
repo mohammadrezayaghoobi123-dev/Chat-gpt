@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from master_brain.execution_registry import SQLiteExecutionRegistry, State
@@ -27,6 +28,43 @@ class RecoveryCandidateTests(unittest.TestCase):
             key=record.key, expected_version=record.version,
             target=target, recorded_at=timestamp,
         )
+
+    def test_begin_immediate_retries_only_transient_sqlite_lock_errors(self):
+        class FlakyConnection:
+            def __init__(self):
+                self.calls = 0
+
+            def execute(self, statement):
+                self.calls += 1
+                if self.calls < 3:
+                    error = sqlite3.OperationalError("database is locked")
+                    error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+                    raise error
+                return "transaction-started"
+
+        connection = FlakyConnection()
+        with patch("master_brain.execution_registry.time.sleep") as sleep:
+            self.registry._begin_immediate_with_retry(connection)
+        self.assertEqual(connection.calls, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [0.01, 0.025])
+
+    def test_begin_immediate_does_not_retry_non_lock_sqlite_errors(self):
+        class BrokenConnection:
+            def __init__(self):
+                self.calls = 0
+
+            def execute(self, statement):
+                self.calls += 1
+                error = sqlite3.OperationalError("disk I/O error")
+                error.sqlite_errorcode = sqlite3.SQLITE_IOERR
+                raise error
+
+        connection = BrokenConnection()
+        with patch("master_brain.execution_registry.time.sleep") as sleep:
+            with self.assertRaisesRegex(sqlite3.OperationalError, "disk I/O error"):
+                self.registry._begin_immediate_with_retry(connection)
+        self.assertEqual(connection.calls, 1)
+        sleep.assert_not_called()
 
     def test_constructor_rejects_non_persistent_database_paths(self):
         for path in ("", "   ", ":memory:"):

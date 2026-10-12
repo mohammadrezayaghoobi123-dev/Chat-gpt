@@ -29,6 +29,23 @@ class ProofPlaneTests(unittest.TestCase):
         self.assertFalse(case.has_executed_evidence)
         self.assertIn("has been run", " ".join(case.notes).lower())
 
+    def test_high_importance_claim_gets_ctp_plan_without_a_detected_conflict(self):
+        claim = Claim(
+            "critical-claim", "reactor", "maximum_temperature", "180 C",
+            "production", "2026", "degrees Celsius", importance="critical",
+        )
+        report = review_proof((claim,), ())
+
+        self.assertEqual(report.contradictions, ())
+        self.assertEqual(len(report.ctp_cases), 1)
+        case = report.ctp_cases[0]
+        self.assertEqual(case.claim_ids, ("critical-claim",))
+        self.assertEqual(len(case.hypotheses), 2)
+        self.assertEqual(len(case.falsifiers), 2)
+        self.assertEqual(case.tests[0].status, TestStatus.NOT_RUN)
+        self.assertFalse(case.has_executed_evidence)
+        self.assertEqual(case.validate(), ())
+
     def test_orphan_evidence_is_reported(self):
         report = review_proof((), (Evidence("e1", "report", "unknown-claim", True),))
         self.assertTrue(report.unresolved_issues)

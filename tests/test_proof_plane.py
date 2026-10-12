@@ -1,6 +1,6 @@
 import unittest
 
-from master_brain.core import Claim, Evidence
+from master_brain.core import Claim, ClaimImportance, Evidence
 from master_brain.ctp import TestStatus
 from master_brain.proof_plane import review_proof
 
@@ -32,7 +32,7 @@ class ProofPlaneTests(unittest.TestCase):
     def test_high_importance_claim_gets_ctp_plan_without_a_detected_conflict(self):
         claim = Claim(
             "critical-claim", "reactor", "maximum_temperature", "180 C",
-            "production", "2026", "degrees Celsius", importance="critical",
+            "production", "2026", "degrees Celsius", importance=ClaimImportance.CRITICAL,
         )
         report = review_proof((claim,), ())
 

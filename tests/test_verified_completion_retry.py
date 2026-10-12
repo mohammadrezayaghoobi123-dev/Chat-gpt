@@ -165,15 +165,16 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
         self.assertEqual(count, 0)
 
 
-    def test_future_observation_timestamp_is_rejected_without_state_change(self):
+    def test_future_observation_with_earlier_recording_is_rejected_without_state_change(self):
         before = self.registry.get(self.key)
         future_evidence = CompletionEvidence(**{
             **self.evidence.__dict__,
             "observed_at": _iso(3600),
         })
-        # Keep the recording timestamp valid so this test isolates observed_at.
+        # At the registry seam, recorded_at must not precede observed_at.
+        # The direct validator's future-skew guard is covered separately.
         with self.assertRaisesRegex(
-            EvidenceValidationError, "observed_at is too far in the future"
+            EvidenceValidationError, "recorded_at predates evidence observation"
         ):
             self.complete(future_evidence, _iso(-2))
 

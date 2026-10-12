@@ -48,6 +48,8 @@ class ExecutionAttempt:
     dispatch_boundary_entered: bool
     created_at: str
     updated_at: str
+    provider_scope: str | None = None
+    receipt_namespace: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,8 @@ class SQLiteExecutionRegistry:
                 integration_id TEXT NOT NULL,
                 adapter_version TEXT NOT NULL,
                 provider_id TEXT NOT NULL,
+                provider_scope TEXT,
+                receipt_namespace TEXT,
                 dispatch_boundary_entered INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -109,8 +113,30 @@ class SQLiteExecutionRegistry:
                 verifier_version TEXT NOT NULL,
                 evidence_type TEXT NOT NULL,
                 observed_at TEXT NOT NULL,
-                recorded_at TEXT NOT NULL
+                recorded_at TEXT NOT NULL,
+                provider_id TEXT,
+                provider_scope TEXT,
+                receipt_namespace TEXT,
+                provider_receipt_id TEXT
             )""")
+            # Additive migration preserves historical rows as explicitly unscoped.
+            for table, column, declaration in (
+                ("execution_attempts", "provider_scope", "TEXT"),
+                ("execution_attempts", "receipt_namespace", "TEXT"),
+                ("completion_receipts", "provider_id", "TEXT"),
+                ("completion_receipts", "provider_scope", "TEXT"),
+                ("completion_receipts", "receipt_namespace", "TEXT"),
+                ("completion_receipts", "provider_receipt_id", "TEXT"),
+            ):
+                existing_columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+                if column not in existing_columns:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+            db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_completion_receipts_scoped_identity "
+                "ON completion_receipts(provider_id, provider_scope, receipt_namespace, provider_receipt_id) "
+                "WHERE provider_id IS NOT NULL AND provider_scope IS NOT NULL "
+                "AND receipt_namespace IS NOT NULL AND provider_receipt_id IS NOT NULL"
+            )
             db.execute("CREATE INDEX IF NOT EXISTS idx_attempts_execution ON execution_attempts(execution_key, attempt_number)")
             db.execute("PRAGMA journal_mode=WAL")
 
@@ -224,6 +250,7 @@ class SQLiteExecutionRegistry:
                 row["attempt_id"], row["execution_key"], attempt_number,
                 row["integration_id"], row["adapter_version"], row["provider_id"],
                 boundary == 1, row["created_at"], row["updated_at"],
+                row["provider_scope"], row["receipt_namespace"],
             )
         except (ValueError, TypeError, KeyError) as exc:
             raise RegistryError("invalid execution attempt record") from exc
@@ -231,6 +258,7 @@ class SQLiteExecutionRegistry:
     def reserve_attempt(
         self, *, key: str, expected_version: int, integration_id: str,
         adapter_version: str, provider_id: str, recorded_at: str,
+        provider_scope: str | None = None, receipt_namespace: str | None = None,
     ) -> ExecutionAttempt:
         """Durably create a unique attempt before entering the external-call boundary.
 
@@ -242,6 +270,9 @@ class SQLiteExecutionRegistry:
             adapter_version=adapter_version, provider_id=provider_id,
             recorded_at=recorded_at,
         )
+        for name, value in (("provider_scope", provider_scope), ("receipt_namespace", receipt_namespace)):
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"{name} must be a non-empty string when supplied")
         if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 0:
             raise ValueError("expected_version must be a non-negative integer")
         from datetime import datetime
@@ -291,10 +322,11 @@ class SQLiteExecutionRegistry:
                 db.execute(
                     """INSERT INTO execution_attempts
                     (attempt_id, execution_key, attempt_number, integration_id,
-                     adapter_version, provider_id, dispatch_boundary_entered, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)""",
+                     adapter_version, provider_id, provider_scope, receipt_namespace,
+                     dispatch_boundary_entered, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
                     (attempt_id, key, number, integration_id, adapter_version,
-                     provider_id, recorded_at, recorded_at),
+                     provider_id, provider_scope, receipt_namespace, recorded_at, recorded_at),
                 )
                 row = db.execute(
                     "SELECT * FROM execution_attempts WHERE attempt_id=?", (attempt_id,)
@@ -669,6 +701,10 @@ class SQLiteExecutionRegistry:
                 and receipt["evidence_digest"] == evidence_digest(evidence)
                 and receipt["verifier_id"] == verifier_id
                 and receipt["verifier_version"] == verifier_version
+                and receipt["provider_id"] == attempt.provider_id
+                and receipt["provider_scope"] == attempt.provider_scope
+                and receipt["receipt_namespace"] == attempt.receipt_namespace
+                and receipt["provider_receipt_id"] == evidence.provider_receipt_id
             ):
                 return current
             raise InvalidTransition("execution already succeeded with different or missing completion evidence")
@@ -712,6 +748,11 @@ class SQLiteExecutionRegistry:
         if recorded_dt < execution_updated_at:
             raise EvidenceValidationError("recorded_at predates current execution state")
 
+        if not attempt.provider_scope or not attempt.receipt_namespace:
+            raise EvidenceValidationError(
+                "completion requires trusted provider scope and receipt namespace on the attempt"
+            )
+
         verified = validate_registered_completion_evidence(
             execution=current,
             attempt=attempt,
@@ -720,6 +761,20 @@ class SQLiteExecutionRegistry:
             verifier_version=verifier_version,
             registry=verifier_registry,
         )
+
+        if not all((verified.provider_id, verified.provider_scope, verified.receipt_namespace, verified.provider_receipt_id)):
+            raise EvidenceValidationError(
+                "trusted verifier must return a complete canonical provider receipt identity"
+            )
+        if (
+            verified.provider_id != attempt.provider_id
+            or verified.provider_scope != attempt.provider_scope
+            or verified.receipt_namespace != attempt.receipt_namespace
+            or verified.provider_receipt_id != evidence.provider_receipt_id
+        ):
+            raise EvidenceValidationError(
+                "verified provider receipt identity does not match trusted attempt scope and evidence"
+            )
 
         stage = "begin_immediate"
         try:
@@ -748,6 +803,10 @@ class SQLiteExecutionRegistry:
                         and receipt["evidence_digest"] == verified.evidence_digest
                         and receipt["verifier_id"] == verified.verifier_id
                         and receipt["verifier_version"] == verified.verifier_version
+                        and receipt["provider_id"] == verified.provider_id
+                        and receipt["provider_scope"] == verified.provider_scope
+                        and receipt["receipt_namespace"] == verified.receipt_namespace
+                        and receipt["provider_receipt_id"] == verified.provider_receipt_id
                     ):
                         db.commit()
                         return persisted
@@ -762,17 +821,25 @@ class SQLiteExecutionRegistry:
                     raise InvalidTransition("dispatch boundary was not entered")
 
                 stage = "insert_completion_receipt"
-                db.execute(
-                    """INSERT INTO completion_receipts
+                try:
+                    db.execute(
+                        """INSERT INTO completion_receipts
                     (execution_key, attempt_id, evidence_digest, verifier_id,
-                     verifier_version, evidence_type, observed_at, recorded_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                     verifier_version, evidence_type, observed_at, recorded_at,
+                     provider_id, provider_scope, receipt_namespace, provider_receipt_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         key, attempt_id, verified.evidence_digest, verified.verifier_id,
                         verified.verifier_version, verified.evidence_type,
-                        evidence.observed_at, recorded_at,
-                    ),
-                )
+                        evidence.observed_at, recorded_at, verified.provider_id,
+                        verified.provider_scope, verified.receipt_namespace,
+                        verified.provider_receipt_id,
+                        ),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    raise InvalidTransition(
+                        "provider receipt identity is already claimed by another execution"
+                    ) from exc
                 stage = "update_execution"
                 changed = db.execute(
                     """UPDATE executions SET state=?, version=version+1, updated_at=?

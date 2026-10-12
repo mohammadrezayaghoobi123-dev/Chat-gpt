@@ -13,7 +13,7 @@ Events are available as `MissionRun.audit_records`. CTP plans are available sepa
 
 ## CTP planning behavior
 
-When the proof plane detects a potential conflict, it proposes a CTP case containing two rival hypotheses, a falsifier for each hypothesis, and a discriminating test. A claim explicitly marked `high` or `critical` also receives a standalone CTP case when no detected contradiction already covers it. The test remains `not_run`; the planner does not conduct experiments, fetch external evidence, or decide which hypothesis is true. The proposed procedure calls for scope/unit normalization and independent measurement, and explicitly notes that acceptance criteria should be defined before interpreting an outcome.
+When the proof plane detects a potential conflict, it proposes a CTP case containing two rival hypotheses, a falsifier for each hypothesis, and a discriminating test. A claim explicitly marked `high` or `critical` also receives a standalone CTP case when no detected contradiction already covers it. The test remains `not_run`; the planner does not conduct experiments, fetch external evidence, or decide which hypothesis is true. An executed outcome can be recorded through `record_test_execution`, which requires timezone-aware execution time, source, method, an independence group and rationale. `PASS` and `FAIL` require evidence references; `INCONCLUSIVE` remains unresolved. A plan alone is never evidence. The proposed procedure calls for scope/unit normalization and independent measurement, and explicitly notes that acceptance criteria should be defined before interpreting an outcome.
 
 Importance is explicitly supplied by the caller using the `ClaimImportance` tier (`routine`, `high`, or `critical`); the system does not infer criticality from claim wording in this slice. CTP plans are not automatically updated from later evidence, and there is no automated test-execution service yet.
 
@@ -24,6 +24,7 @@ Importance is explicitly supplied by the caller using the `ClaimImportance` tier
 - Key-name checks reject credential-like metadata keys, including nested keys. They cannot detect a secret embedded inside an arbitrary string.
 - Callers should continue to minimize data and redact sensitive values before constructing records.
 - Audit events are returned in memory only. They are not durably stored, tamper-evident, signed, access-controlled, or guaranteed to survive a process exit.
+- Execution provenance is caller-supplied metadata, not authenticated proof that the named source or method was used. Evidence IDs are references only in this slice; artifact existence, content hashes, signatures, and independence are not independently verified. An `independent_group` label does not itself prove independence.
 - Neither a generated CTP plan nor a successful fixture test is independent verification of the underlying claims.
 
 ## Standalone example

@@ -5,7 +5,7 @@ It does not run experiments or turn an unexecuted test into evidence.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import hashlib
 import json
@@ -36,6 +36,43 @@ class Falsifier:
 
 
 @dataclass(frozen=True)
+class ExecutionProvenance:
+    """Minimal traceability metadata for an actually executed test."""
+
+    execution_id: str
+    executed_at: str
+    source: str
+    method: str
+    independent_group: str
+    independence_basis: str
+    limitations: tuple[str, ...] = ()
+
+    def validate(self) -> tuple[str, ...]:
+        issues: list[str] = []
+        for name in (
+            "execution_id", "executed_at", "source", "method",
+            "independent_group", "independence_basis",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                issues.append(f"execution provenance {name} must be non-empty")
+        if self.executed_at.strip():
+            from datetime import datetime
+            try:
+                parsed = datetime.fromisoformat(
+                    self.executed_at[:-1] + "+00:00"
+                    if self.executed_at.endswith("Z") else self.executed_at
+                )
+                if parsed.tzinfo is None or parsed.utcoffset() is None:
+                    issues.append("execution provenance executed_at must include a timezone")
+            except ValueError:
+                issues.append("execution provenance executed_at must be ISO-8601 with timezone")
+        if any(not isinstance(item, str) or not item.strip() for item in self.limitations):
+            issues.append("execution provenance limitations must be non-empty strings")
+        return tuple(issues)
+
+
+@dataclass(frozen=True)
 class DiscriminatingTest:
     test_id: str
     question: str
@@ -44,6 +81,7 @@ class DiscriminatingTest:
     status: TestStatus = TestStatus.NOT_RUN
     observed_result: str = ""
     evidence_ids: tuple[str, ...] = ()
+    execution_provenance: ExecutionProvenance | None = None
 
 
 @dataclass(frozen=True)
@@ -81,10 +119,21 @@ class CTPCase:
             for hypothesis_id, _prediction in test.expected_if:
                 if hypothesis_id not in known:
                     issues.append(f"test {test.test_id} references unknown hypothesis: {hypothesis_id}")
-            if test.status == TestStatus.NOT_RUN and (test.observed_result or test.evidence_ids):
-                issues.append(f"test {test.test_id} is NOT_RUN but has result/evidence; reconcile status")
-            if test.status in (TestStatus.PASS, TestStatus.FAIL) and not test.observed_result.strip():
-                issues.append(f"test {test.test_id} is {test.status.value} but has no observed result")
+            if test.status == TestStatus.NOT_RUN and (
+                test.observed_result or test.evidence_ids or test.execution_provenance is not None
+            ):
+                issues.append(f"test {test.test_id} is NOT_RUN but has result/evidence/provenance; reconcile status")
+            if test.status != TestStatus.NOT_RUN:
+                if not test.observed_result.strip():
+                    issues.append(f"test {test.test_id} is {test.status.value} but has no observed result")
+                if test.execution_provenance is None:
+                    issues.append(f"test {test.test_id} is {test.status.value} but has no execution provenance")
+                else:
+                    issues.extend(test.execution_provenance.validate())
+                if test.status in (TestStatus.PASS, TestStatus.FAIL) and not test.evidence_ids:
+                    issues.append(f"test {test.test_id} is {test.status.value} but has no evidence references")
+            if any(not isinstance(ref, str) or not ref.strip() for ref in test.evidence_ids):
+                issues.append(f"test {test.test_id} evidence references must be non-empty strings")
         if not self.tests:
             issues.append("at least one discriminating test should be proposed")
         return tuple(issues)
@@ -104,6 +153,8 @@ class CTPCase:
             item.status in (TestStatus.PASS, TestStatus.FAIL)
             and item.observed_result.strip()
             and item.evidence_ids
+            and item.execution_provenance is not None
+            and not item.execution_provenance.validate()
             for item in self.tests
         )
 
@@ -252,3 +303,39 @@ def plan_important_claim_case(claim: Claim) -> CTPCase:
             "A plan is not evidence. Record actual observations and provenance before changing the test status.",
         ),
     )
+
+
+
+def record_test_execution(
+    case: CTPCase,
+    test_id: str,
+    status: TestStatus,
+    observed_result: str,
+    evidence_ids: tuple[str, ...],
+    provenance: ExecutionProvenance,
+) -> CTPCase:
+    """Return a new case with a recorded outcome; never execute the test itself."""
+    if status == TestStatus.NOT_RUN:
+        raise ValueError("an execution record cannot set status to NOT_RUN")
+    if not isinstance(observed_result, str) or not observed_result.strip():
+        raise ValueError("observed_result must be non-empty for an executed test")
+    provenance_issues = provenance.validate()
+    if provenance_issues:
+        raise ValueError("; ".join(provenance_issues))
+    if status in (TestStatus.PASS, TestStatus.FAIL) and not evidence_ids:
+        raise ValueError("PASS/FAIL outcomes require at least one evidence reference")
+    if any(not isinstance(ref, str) or not ref.strip() for ref in evidence_ids):
+        raise ValueError("evidence references must be non-empty strings")
+    matches = [item for item in case.tests if item.test_id == test_id]
+    if len(matches) != 1:
+        raise ValueError("test_id must match exactly one proposed test")
+    updated = replace(
+        matches[0], status=status, observed_result=observed_result.strip(),
+        evidence_ids=tuple(evidence_ids), execution_provenance=provenance,
+    )
+    tests = tuple(updated if item.test_id == test_id else item for item in case.tests)
+    result = replace(case, tests=tests)
+    issues = result.validate()
+    if issues:
+        raise ValueError("recorded CTP case is invalid: " + "; ".join(issues))
+    return result

@@ -14,6 +14,8 @@ from .core import Claim, Contradiction
 
 
 class TestStatus(str, Enum):
+    __test__ = False  # Prevent pytest from treating this imported enum as a test class.
+
     NOT_RUN = "not_run"
     PASS = "pass"
     FAIL = "fail"
@@ -172,7 +174,7 @@ def plan_contradiction_case(
             ),
         ),
         notes=(
-            "Generated from a potential conflict; no experiment or external verification has been run.",
+            "Generated from a potential conflict; the proposed test has not been executed and no external verification has been run.",
             "Predefine measurement tolerance and acceptance criteria before interpreting an observed result.",
         ),
     )

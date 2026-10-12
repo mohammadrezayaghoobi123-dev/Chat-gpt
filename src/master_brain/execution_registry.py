@@ -348,6 +348,8 @@ class SQLiteExecutionRegistry:
         evidence; this generic transition API does not accept such evidence.
         """
         self._required(key=key, recorded_at=recorded_at)
+        if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 0:
+            raise ValueError("expected_version must be a non-negative integer")
         if not isinstance(target, State):
             raise TypeError("target must be a State")
         try:

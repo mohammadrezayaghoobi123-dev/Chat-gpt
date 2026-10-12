@@ -16,9 +16,18 @@ class ProofReport:
 def review_proof(claims, evidence):
     """Review evidence and create unexecuted CTP plans for detected conflicts."""
     issues = []
+    try:
+        claims = tuple(claims)
+    except TypeError:
+        claims = ()
+        issues.append("Claims must be iterable; no claims were reviewed.")
     # Materialize once: evidence may be a generator and is consumed by validation
     # as well as by each claim review below.
-    evidence = tuple(evidence)
+    try:
+        evidence = tuple(evidence)
+    except TypeError:
+        evidence = ()
+        issues.append("Evidence must be iterable; no evidence was reviewed.")
     unique = []
     by_id = {}
     ambiguous_claim_ids = set()

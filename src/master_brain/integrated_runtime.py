@@ -250,7 +250,12 @@ def _execute_mission_untraced(
     provenance = tuple(dict.fromkeys(
         item for result in results for item in result.provenance
     ))
+    # Planning uncertainty and capability gaps are part of the execution result;
+    # do not report completion when the planner itself says coverage is missing.
     unresolved: list[str] = list(proof_report.unresolved_issues)
+    unresolved.extend(plan.unknowns)
+    unresolved.extend(plan.capability_gaps)
+    unresolved.extend(plan.clarification_questions)
     if missing:
         unresolved.append("One or more selected islands were not executed because no executor was configured.")
     if errors:
@@ -273,7 +278,7 @@ def _execute_mission_untraced(
         contradictions=contradictions,
         claim_reviews=reviews,
         provenance=provenance,
-        unresolved_issues=tuple(unresolved),
+        unresolved_issues=tuple(dict.fromkeys(unresolved)),
         ctp_cases=proof_report.ctp_cases,
     )
 

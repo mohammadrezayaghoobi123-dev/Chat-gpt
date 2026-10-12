@@ -234,7 +234,7 @@ class SQLiteExecutionRegistry:
             raise ValueError("expected_version must be a non-negative integer")
         try:
             with closing(self._db()) as db, db:
-                db.execute("BEGIN IMMEDIATE")
+                self._begin_immediate_with_retry(db)
                 row = db.execute("SELECT * FROM executions WHERE key=?", (key,)).fetchone()
                 if row is None:
                     raise InvalidTransition("unknown execution key")
@@ -286,7 +286,7 @@ class SQLiteExecutionRegistry:
         self._required(attempt_id=attempt_id, recorded_at=recorded_at)
         try:
             with closing(self._db()) as db, db:
-                db.execute("BEGIN IMMEDIATE")
+                self._begin_immediate_with_retry(db)
                 row = db.execute(
                     "SELECT * FROM execution_attempts WHERE attempt_id=?", (attempt_id,)
                 ).fetchone()
@@ -352,7 +352,7 @@ class SQLiteExecutionRegistry:
             raise TypeError("target must be a State")
         try:
             with closing(self._db()) as db, db:
-                db.execute("BEGIN IMMEDIATE")
+                self._begin_immediate_with_retry(db)
                 row = db.execute("SELECT * FROM executions WHERE key=?", (key,)).fetchone()
                 if row is None:
                     raise InvalidTransition("unknown execution key")

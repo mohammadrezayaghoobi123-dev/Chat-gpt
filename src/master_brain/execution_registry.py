@@ -503,7 +503,6 @@ class SQLiteExecutionRegistry:
                 # on its dispatch marker. The marker's update timestamp is the
                 # durable boundary time; malformed or regressing timestamps must
                 # never be interpreted as proof that dispatch was entered.
-                from datetime import datetime
                 attempt_rows = db.execute(
                     "SELECT * FROM execution_attempts ORDER BY execution_key, attempt_number"
                 ).fetchall()

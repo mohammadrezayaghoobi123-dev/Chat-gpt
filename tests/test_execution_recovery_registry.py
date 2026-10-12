@@ -247,6 +247,38 @@ class RecoveryCandidateTests(unittest.TestCase):
             self.registry.list_recovery_candidates()
 
 
+
+    def test_recovery_inventory_rejects_receipt_recorded_before_execution_success(self):
+        from master_brain.execution_registry import RegistryError
+
+        running = self.reserve("receipt-recorded-before-success", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:02Z",
+        )
+        self.registry.mark_attempt_dispatch_boundary(
+            attempt_id=attempt.attempt_id, recorded_at="2026-10-12T00:00:03Z"
+        )
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute(
+                "UPDATE executions SET state=?, updated_at=? WHERE key=?",
+                (State.SUCCEEDED.value, "2026-10-12T00:00:05Z", running.key),
+            )
+            db.execute(
+                """INSERT INTO completion_receipts
+                (execution_key, attempt_id, evidence_digest, verifier_id,
+                 verifier_version, evidence_type, observed_at, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (running.key, attempt.attempt_id, "digest", "verifier", "1",
+                 "operation-receipt", "2026-10-12T00:00:04Z",
+                 "2026-10-12T00:00:04Z"),
+            )
+
+        with self.assertRaisesRegex(RegistryError, "completion receipt chronology is inconsistent"):
+            self.registry.list_recovery_candidates()
+
     def test_recovery_inventory_rejects_receipt_observed_before_dispatch_boundary(self):
         from master_brain.execution_registry import RegistryError
 

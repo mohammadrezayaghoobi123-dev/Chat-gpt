@@ -132,6 +132,16 @@ def route_task(task: Task) -> Route:
 
 def assess_contradictions(claims: Sequence[Claim]) -> list[Contradiction]:
     """Flag only opposite values with matching context keys; never infer truth."""
+    if not isinstance(claims, Sequence) or isinstance(claims, (str, bytes)):
+        raise ValueError("claims must be a sequence of Claim instances")
+    if any(not isinstance(claim, Claim) for claim in claims):
+        raise ValueError("claims must contain only Claim instances")
+    for claim in claims:
+        if not isinstance(claim.claim_id, str) or not claim.claim_id.strip():
+            raise ValueError("claim_id must be a non-empty string")
+        for name in ("subject", "predicate", "value", "context", "time_scope", "definition"):
+            if not isinstance(getattr(claim, name), str):
+                raise ValueError(f"claim {name} must be a string")
     results: list[Contradiction] = []
     for i, left in enumerate(claims):
         for right in claims[i + 1:]:

@@ -57,8 +57,9 @@ def review_operational_completion(
         status="verified_for_reconciliation",
         verified_evidence=verified,
         unresolved_issue=(
-            "Evidence validated; durable evidence persistence and an atomic, "
-            "state-bound success transition are not implemented."
+            "Evidence validated for review only; this function is read-only. "
+            "To persist evidence and transition atomically, call "
+            "complete_with_verified_evidence with the current execution version."
         ),
     )
 

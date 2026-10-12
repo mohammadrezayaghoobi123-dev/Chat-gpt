@@ -168,7 +168,11 @@ def evaluate_claim(claim: Claim, evidence: Iterable[Evidence]) -> Decision:
     seen_ids: set[str] = set()
     duplicate_ids: set[str] = set()
     invalid_id_count = 0
+    invalid_record_count = 0
     for item in evidence_items:
+        if not isinstance(item, Evidence):
+            invalid_record_count += 1
+            continue
         evidence_id = item.evidence_id
         if not isinstance(evidence_id, str) or not evidence_id.strip():
             invalid_id_count += 1
@@ -180,7 +184,8 @@ def evaluate_claim(claim: Claim, evidence: Iterable[Evidence]) -> Decision:
     # of allowing the first record to win based on input ordering.
     usable_evidence = [
         item for item in evidence_items
-        if isinstance(item.evidence_id, str)
+        if isinstance(item, Evidence)
+        and isinstance(item.evidence_id, str)
         and item.evidence_id.strip()
         and item.evidence_id not in duplicate_ids
     ]
@@ -199,6 +204,8 @@ def evaluate_claim(claim: Claim, evidence: Iterable[Evidence]) -> Decision:
         unresolved.append("Duplicate evidence IDs were excluded from claim review: " + ", ".join(sorted(duplicate_ids)))
     if invalid_id_count:
         unresolved.append(f"{invalid_id_count} evidence record(s) with invalid IDs were excluded.")
+    if invalid_record_count:
+        unresolved.append(f"{invalid_record_count} invalid evidence record(s) were excluded.")
     if not matching:
         unresolved.append("No usable evidence attached to claim.")
     if supporting and opposing:

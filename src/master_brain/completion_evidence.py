@@ -145,9 +145,14 @@ def validate_completion_evidence(
     observed_at = _parse_timestamp(evidence.observed_at)
     if observed_at is None:
         raise EvidenceValidationError("observed_at must be timezone-aware ISO-8601")
+    attempt_created_at = _parse_timestamp(attempt.created_at)
+    if attempt_created_at is None:
+        raise EvidenceValidationError("attempt creation timestamp must be timezone-aware ISO-8601")
     dispatch_boundary_at = _parse_timestamp(attempt.updated_at)
     if dispatch_boundary_at is None:
         raise EvidenceValidationError("attempt dispatch boundary timestamp must be timezone-aware ISO-8601")
+    if dispatch_boundary_at < attempt_created_at:
+        raise EvidenceValidationError("dispatch boundary predates attempt creation")
     if observed_at < dispatch_boundary_at:
         raise EvidenceValidationError("observed_at predates dispatch boundary")
     if evidence.attempt_id != attempt.attempt_id:

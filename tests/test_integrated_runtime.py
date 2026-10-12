@@ -122,6 +122,16 @@ class IntegratedRuntimeTests(unittest.TestCase):
         self.assertEqual(run.audit_records[0].event_type, "mission_run")
         self.assertEqual(run.audit_records[0].status, "approval_required")
 
+    def test_non_string_risk_tier_fails_closed_before_dispatch(self):
+        calls = []
+        run = execute_mission(
+            Mission("Research scientific evidence for a material", risk_tier=None),
+            executors={"science_research": lambda mission: calls.append(mission) or IslandResult("science_research", "done")},
+        )
+        self.assertEqual(calls, [])
+        self.assertEqual(run.status, "needs_clarification")
+        self.assertTrue(run.unresolved_issues)
+
     def test_unknown_risk_tier_fails_closed_before_dispatch(self):
         calls = []
         run = execute_mission(

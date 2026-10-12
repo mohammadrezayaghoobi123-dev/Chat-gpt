@@ -16,6 +16,9 @@ class ProofReport:
 def review_proof(claims, evidence):
     """Review evidence and create unexecuted CTP plans for detected conflicts."""
     issues = []
+    # Materialize once: evidence may be a generator and is consumed by validation
+    # as well as by each claim review below.
+    evidence = tuple(evidence)
     unique = []
     by_id = {}
     for claim in claims:
@@ -26,15 +29,26 @@ def review_proof(claims, evidence):
         elif previous != claim:
             issues.append("Duplicate claim ID with different content: " + claim.claim_id)
     known = set(by_id)
-    seen = set()
+    evidence_ids = {}
+    duplicate_evidence_ids = set()
     for item in evidence:
         if item.claim_id not in known:
             issues.append("Evidence is not linked to a known claim: " + item.evidence_id)
-        if item.evidence_id in seen:
-            issues.append("Duplicate evidence ID: " + item.evidence_id)
-        seen.add(item.evidence_id)
+        if item.evidence_id in evidence_ids:
+            duplicate_evidence_ids.add(item.evidence_id)
+        else:
+            evidence_ids[item.evidence_id] = item
+    for evidence_id in sorted(duplicate_evidence_ids):
+        issues.append("Duplicate evidence ID: " + evidence_id)
+
+    # An ambiguous ID must not contribute evidence or independence counts.
+    # Exclude every occurrence, rather than keeping the first and making the
+    # outcome depend on input ordering.
+    usable_evidence = tuple(
+        item for item in evidence if item.evidence_id not in duplicate_evidence_ids
+    )
     conflicts = tuple(assess_contradictions(unique))
-    reviews = tuple(evaluate_claim(claim, evidence) for claim in unique)
+    reviews = tuple(evaluate_claim(claim, usable_evidence) for claim in unique)
     if conflicts:
         issues.append("Potential conflicts remain unresolved.")
     if any(item.status in {"contested", "unverified", "challenged_by_recorded_evidence"} for item in reviews):

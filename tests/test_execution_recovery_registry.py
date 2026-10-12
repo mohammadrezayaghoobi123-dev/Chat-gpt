@@ -546,7 +546,7 @@ class RecoveryCandidateTests(unittest.TestCase):
             self.assertIn("idx_attempts_one_per_execution", unique_indexes)
             with self.assertRaises(sqlite3.IntegrityError):
                 db.execute(
-                    "INSERT INTO execution_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO execution_attempts (attempt_id, execution_key, attempt_number, integration_id, adapter_version, provider_id, dispatch_boundary_entered, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     ("a2", "exec-1", 2, "int", "v1", "provider", 0, "t2", "t2"),
                 )
 

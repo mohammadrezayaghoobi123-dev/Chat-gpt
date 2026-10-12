@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 import math
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import time
 import uuid
 
@@ -645,6 +645,8 @@ class SQLiteExecutionRegistry:
             raise ValueError("recorded_at must be timezone-aware ISO-8601") from exc
         if recorded_dt.tzinfo is None or recorded_dt.utcoffset() is None:
             raise ValueError("recorded_at must be timezone-aware ISO-8601")
+        if recorded_dt > datetime.now(timezone.utc) + timedelta(minutes=5):
+            raise EvidenceValidationError("recorded_at is too far in the future")
         if evidence.attempt_id != attempt_id or evidence.execution_key != key:
             raise EvidenceValidationError("evidence does not match requested execution and attempt")
 

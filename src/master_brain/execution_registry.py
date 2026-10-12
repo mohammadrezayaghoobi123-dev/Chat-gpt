@@ -119,9 +119,21 @@ class SQLiteExecutionRegistry:
     @staticmethod
     def _record(row):
         try:
-            return Record(row["key"], row["mission_id"], row["contract_digest"],
-                          row["payload_digest"], State(row["state"]), row["version"],
-                          row["created_at"], row["updated_at"])
+            text_values = (
+                row["key"], row["mission_id"], row["contract_digest"],
+                row["payload_digest"], row["created_at"], row["updated_at"],
+            )
+            if any(not isinstance(value, str) or not value.strip() for value in text_values):
+                raise RegistryError("invalid registry record")
+            version = row["version"]
+            if type(version) is not int or version < 0:
+                raise RegistryError("invalid registry record")
+            state = State(row["state"])
+            return Record(
+                row["key"], row["mission_id"], row["contract_digest"],
+                row["payload_digest"], state, version,
+                row["created_at"], row["updated_at"],
+            )
         except (ValueError, TypeError, KeyError) as exc:
             raise RegistryError("invalid registry record") from exc
 

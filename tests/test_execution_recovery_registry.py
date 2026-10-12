@@ -196,6 +196,24 @@ class RecoveryCandidateTests(unittest.TestCase):
                 provider_id="provider-a", recorded_at="2026-10-12T00:00:01Z",
             )
 
+    def test_dispatch_boundary_rejects_timestamp_before_attempt_creation(self):
+        from master_brain.execution_registry import InvalidTransition
+
+        running = self.reserve("attempt-time-order", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:02Z",
+        )
+        with self.assertRaisesRegex(InvalidTransition, "predates attempt creation"):
+            self.registry.mark_attempt_dispatch_boundary(
+                attempt_id=attempt.attempt_id, recorded_at="2026-10-12T00:00:01Z"
+            )
+        persisted = self.registry.get_attempt(attempt.attempt_id)
+        self.assertFalse(persisted.dispatch_boundary_entered)
+        self.assertEqual(persisted.updated_at, attempt.created_at)
+
     def test_dispatch_boundary_marker_is_idempotent_and_version_checked(self):
         running = self.reserve("attempt-boundary", "2026-10-12T00:00:00Z")
         running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")

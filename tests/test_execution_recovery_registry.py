@@ -76,6 +76,15 @@ class RecoveryCandidateTests(unittest.TestCase):
         self.assertEqual(self.registry.get(pending.key).state, State.PENDING)
         self.assertEqual(self.registry.get(failed.key).state, State.FAILED)
 
+    def test_corrupt_negative_version_is_rejected_by_record_reader(self):
+        from master_brain.execution_registry import RegistryError
+
+        record = self.reserve("corrupt-version", "2026-10-12T00:00:00Z")
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute("UPDATE executions SET version=-1 WHERE key=?", (record.key,))
+        with self.assertRaisesRegex(RegistryError, "invalid registry record"):
+            self.registry.get(record.key)
+
     def test_corrupt_unknown_state_blocks_recovery_inventory(self):
         from master_brain.execution_registry import RegistryError
         self.reserve("valid-running", "2026-10-12T00:00:00Z")

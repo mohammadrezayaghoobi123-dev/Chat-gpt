@@ -442,6 +442,31 @@ class SQLiteExecutionRegistry:
             raise InvalidTransition("unknown attempt ID")
         if attempt.key != key:
             raise InvalidTransition("attempt does not belong to execution")
+
+        # Enforce chronology here as well as binding: this branch may be used
+        # before the separate completion-evidence hardening branch is integrated.
+        def parse_aware_timestamp(name: str, value: object):
+            if not isinstance(value, str) or not value.strip():
+                raise EvidenceValidationError(f"{name} must be timezone-aware ISO-8601")
+            normalized = value.strip()
+            if normalized.endswith("Z"):
+                normalized = normalized[:-1] + "+00:00"
+            try:
+                parsed = datetime.fromisoformat(normalized)
+            except ValueError as exc:
+                raise EvidenceValidationError(f"{name} must be timezone-aware ISO-8601") from exc
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                raise EvidenceValidationError(f"{name} must be timezone-aware ISO-8601")
+            return parsed
+
+        observed_at = parse_aware_timestamp("observed_at", evidence.observed_at)
+        attempt_created_at = parse_aware_timestamp("attempt creation timestamp", attempt.created_at)
+        dispatch_boundary_at = parse_aware_timestamp("dispatch boundary timestamp", attempt.updated_at)
+        if dispatch_boundary_at < attempt_created_at:
+            raise EvidenceValidationError("dispatch boundary predates attempt creation")
+        if observed_at < dispatch_boundary_at:
+            raise EvidenceValidationError("observed_at predates dispatch boundary")
+
         verified = validate_registered_completion_evidence(
             execution=current,
             attempt=attempt,

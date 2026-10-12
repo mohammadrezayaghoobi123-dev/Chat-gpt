@@ -110,7 +110,7 @@ def route_task(task: Task) -> Route:
     evidence_terms = ("research", "prove", "evidence", "compare", "verify", "contradiction", "scientific")
     opportunity_terms = ("opportunity", "business", "prioritize", "investment", "market", "strategy")
     matches = lambda terms: any(
-        re.search(r"(?<!\\w)" + re.escape(term) + r"(?!\\w)", text)
+        re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text)
         for term in terms
     )
     if matches(opportunity_terms):

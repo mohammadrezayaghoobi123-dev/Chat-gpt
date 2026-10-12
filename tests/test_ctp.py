@@ -103,6 +103,23 @@ class CTPCaseTests(unittest.TestCase):
         self.assertTrue(any("invalid hypothesis" in issue.lower() for issue in issues))
         self.assertTrue(any("invalid test" in issue.lower() for issue in issues))
 
+    def test_validation_reports_unhashable_hypothesis_and_test_ids(self):
+        case = self.make_case()
+        bad_hypothesis = RivalHypothesis(["not", "hashable"], "Malformed ID")
+        bad_test = DiscriminatingTest(
+            ["not", "hashable"], "Question", "Procedure",
+            (("h-a", "prediction a"), ("h-b", "prediction b")),
+        )
+        malformed = CTPCase(
+            case.case_id, case.question, case.claim_ids,
+            (case.hypotheses[0], bad_hypothesis), case.falsifiers, (bad_test,),
+        )
+        issues = malformed.validate()
+        self.assertTrue(any("hypothesis id must be a non-empty string" in issue.lower()
+                            for issue in issues))
+        self.assertTrue(any("test id must be a non-empty string" in issue.lower()
+                            for issue in issues))
+
     def test_case_requires_a_falsifier_for_each_rival_hypothesis(self):
         case = self.make_case()
         incomplete = CTPCase(

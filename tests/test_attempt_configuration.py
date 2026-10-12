@@ -57,7 +57,7 @@ class ConfiguredAttemptScopeRegistryTests(unittest.TestCase):
 
     def test_missing_deployment_module_fails_closed(self):
         with patch(
-            "master_brain.attempt_configuration.importlib.import_module",
+            "importlib.import_module",
             side_effect=ModuleNotFoundError(
                 "missing", name="master_brain.deployment_attempt_config"
             ),
@@ -70,7 +70,7 @@ class ConfiguredAttemptScopeRegistryTests(unittest.TestCase):
     def test_import_failure_is_sanitized(self):
         secret = "token=must-not-leak"
         with patch(
-            "master_brain.attempt_configuration.importlib.import_module",
+            "importlib.import_module",
             side_effect=RuntimeError(secret),
         ):
             with self.assertRaisesRegex(
@@ -79,24 +79,27 @@ class ConfiguredAttemptScopeRegistryTests(unittest.TestCase):
                 load_deployment_attempt_scope_registry()
         self.assertNotIn(secret, str(caught.exception))
 
-    def test_configured_reservation_does_not_accept_caller_scope_values(self):
+    def test_configured_reservation_uses_only_loaded_deployment_scope(self):
         class RegistryStub:
             def reserve_attempt(self, **kwargs):
                 return kwargs
 
-        result = reserve_configured_attempt(
-            RegistryStub(),
-            key="exec-1",
-            expected_version=2,
-            integration_id="payments-v1",
-            adapter_version="1.0",
-            provider_id="provider-x",
-            recorded_at="2026-10-12T10:00:00+00:00",
-            scope_registry=ConfiguredAttemptScopeRegistry([self.descriptor]),
-        )
+        with patch(
+            "master_brain.attempt_configuration.load_deployment_attempt_scope_registry",
+            return_value=ConfiguredAttemptScopeRegistry([self.descriptor]),
+        ):
+            result = reserve_configured_attempt(
+                RegistryStub(),
+                key="exec-1",
+                expected_version=2,
+                integration_id="payments-v1",
+                adapter_version="1.0",
+                provider_id="provider-x",
+                recorded_at="2026-10-12T10:00:00+00:00",
+            )
         self.assertEqual(result["provider_scope"], "merchant-account-1/production")
         self.assertEqual(result["receipt_namespace"], "operation-receipt")
-        self.assertNotIn("caller_scope", result)
+        self.assertNotIn("scope_registry", result)
 
 
 if __name__ == "__main__":

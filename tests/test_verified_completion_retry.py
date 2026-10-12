@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Lock
 from datetime import datetime, timedelta, timezone
 
-from master_brain.completion_evidence import CompletionEvidence, EvidenceValidationError
+from master_brain.completion_evidence import CompletionEvidence, EvidenceValidationError, ProviderVerificationResult
 from master_brain.execution_registry import SQLiteExecutionRegistry, State, InvalidTransition
 from master_brain.verifier_registry import ConfiguredVerifierRegistry, VerifierDescriptor
 
@@ -26,7 +26,10 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
 
         def verify(evidence):
             self.verifier_calls.append(evidence.provider_receipt_id)
-            return True
+            return ProviderVerificationResult(
+                True, evidence.provider_id, "merchant-account-1/production",
+                "operation-receipt", evidence.provider_receipt_id,
+            )
 
         self.trusted_verifiers = ConfiguredVerifierRegistry([
             VerifierDescriptor(
@@ -53,7 +56,8 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
         attempt = self.registry.reserve_attempt(
             key=record.key, expected_version=record.version,
             integration_id="payments-v1", adapter_version="1.0",
-            provider_id="provider-x", recorded_at=_iso(-20),
+            provider_id="provider-x", provider_scope="merchant-account-1/production",
+            receipt_namespace="operation-receipt", recorded_at=_iso(-20),
         )
         attempt = self.registry.mark_attempt_dispatch_boundary(
             attempt_id=attempt.attempt_id, recorded_at=_iso(-15),
@@ -194,7 +198,10 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
                 target=State.RECONCILIATION_REQUIRED,
                 recorded_at=_iso(-3),
             )
-            return True
+            return ProviderVerificationResult(
+                True, _evidence.provider_id, "merchant-account-1/production",
+                "operation-receipt", _evidence.provider_receipt_id,
+            )
 
         racing_registry = ConfiguredVerifierRegistry([
             VerifierDescriptor(
@@ -240,7 +247,10 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
             with call_lock:
                 calls.append(evidence.provider_receipt_id)
             barrier.wait(timeout=5)
-            return True
+            return ProviderVerificationResult(
+                True, evidence.provider_id, "merchant-account-1/production",
+                "operation-receipt", evidence.provider_receipt_id,
+            )
 
         concurrent_registry = ConfiguredVerifierRegistry([
             VerifierDescriptor(

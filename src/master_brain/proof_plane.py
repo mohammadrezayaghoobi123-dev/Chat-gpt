@@ -47,6 +47,10 @@ def review_proof(claims, evidence):
     duplicate_evidence_ids = set()
     invalid_evidence_objects = set()
     for index, item in enumerate(evidence):
+        if not isinstance(item, Evidence):
+            issues.append("Invalid evidence record; expected an Evidence instance.")
+            invalid_evidence_objects.add(index)
+            continue
         evidence_id = getattr(item, "evidence_id", None)
         claim_id = getattr(item, "claim_id", None)
         valid_evidence_id = isinstance(evidence_id, str) and bool(evidence_id.strip())

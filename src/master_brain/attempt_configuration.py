@@ -108,10 +108,9 @@ def reserve_configured_attempt(
     adapter_version: str,
     provider_id: str,
     recorded_at: str,
-    scope_registry: ConfiguredAttemptScopeRegistry | None = None,
 ) -> ExecutionAttempt:
-    """Reserve an attempt using trusted configured scope/namespace, never caller values."""
-    approved = (scope_registry or load_deployment_attempt_scope_registry()).resolve(
+    """Reserve an attempt using trusted deployment config, never caller scope values."""
+    approved = load_deployment_attempt_scope_registry().resolve(
         integration_id=integration_id,
         adapter_version=adapter_version,
         provider_id=provider_id,

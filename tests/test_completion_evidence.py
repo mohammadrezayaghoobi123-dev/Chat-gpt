@@ -395,6 +395,22 @@ class PersistedCompletionTests(unittest.TestCase):
         with self.registry._db() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM completion_receipts").fetchone()[0], 1)
 
+    def test_recorded_at_cannot_predate_evidence_observation(self):
+        with self.assertRaisesRegex(EvidenceValidationError, "recorded_at predates evidence observation"):
+            self.registry.complete_with_verified_evidence(
+                key="exec-persisted",
+                expected_version=self.expected_version,
+                attempt_id=self.attempt.attempt_id,
+                evidence=self.evidence,
+                verifier_id="provider-x-receipt-verifier",
+                verifier_version="1",
+                verifier_registry=self.verifiers,
+                recorded_at="2026-10-12T00:00:04Z",
+            )
+        self.assertEqual(self.registry.get("exec-persisted").state, State.OUTCOME_UNKNOWN)
+        with self.registry._db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM completion_receipts").fetchone()[0], 0)
+
     def test_evidence_observed_before_dispatch_boundary_is_rejected(self):
         altered = CompletionEvidence(**{
             **self.evidence.__dict__, "observed_at": "2026-10-12T00:00:02Z"

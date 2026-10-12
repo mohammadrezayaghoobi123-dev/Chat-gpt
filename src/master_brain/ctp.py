@@ -183,6 +183,10 @@ class CTPCase:
                     elif hypothesis_id not in known:
                         issues.append(f"test {test.test_id} references unknown hypothesis: {hypothesis_id}")
                     else:
+                        if hypothesis_id in expected_hypothesis_ids:
+                            issues.append(
+                                f"test {test.test_id} has duplicate expected prediction for hypothesis: {hypothesis_id}"
+                            )
                         expected_hypothesis_ids.add(hypothesis_id)
                     if not isinstance(statement, str) or not statement.strip():
                         issues.append(f"test {test.test_id} has an empty expected prediction")

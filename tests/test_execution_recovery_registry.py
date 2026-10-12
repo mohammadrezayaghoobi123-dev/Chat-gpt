@@ -159,6 +159,8 @@ class RecoveryCandidateTests(unittest.TestCase):
                     "message": str(exc),
                     "cause_type": type(exc.__cause__).__name__ if exc.__cause__ else None,
                     "cause_message": str(exc.__cause__) if exc.__cause__ else None,
+                    "sqlite_errorcode": getattr(exc.__cause__, "sqlite_errorcode", None),
+                    "sqlite_errorname": getattr(exc.__cause__, "sqlite_errorname", None),
                 }
                 for exc in errors
             ]
@@ -254,6 +256,8 @@ class RecoveryCandidateTests(unittest.TestCase):
                         "message": str(exc),
                         "cause_type": type(exc.__cause__).__name__ if exc.__cause__ else None,
                         "cause_message": str(exc.__cause__) if exc.__cause__ else None,
+                        "sqlite_errorcode": getattr(exc.__cause__, "sqlite_errorcode", None),
+                        "sqlite_errorname": getattr(exc.__cause__, "sqlite_errorname", None),
                     }
                     for exc in errors
                 ]

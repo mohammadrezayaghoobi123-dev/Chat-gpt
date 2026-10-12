@@ -126,6 +126,28 @@ class DeploymentVerifierConfigurationValidationTests(unittest.TestCase):
             self._load_from_module([descriptor, descriptor])
 
 
+class DeploymentVerifierImportFailureTests(unittest.TestCase):
+    def test_import_time_failure_is_sanitized_and_fails_closed(self):
+        from unittest.mock import patch
+        from master_brain.verifier_registry import load_deployment_verifier_registry
+
+        secret_detail = "credential=should-not-leak"
+
+        def fail_during_module_initialization(_module_name):
+            raise RuntimeError(secret_detail)
+
+        with patch(
+            "importlib.import_module", side_effect=fail_during_module_initialization
+        ):
+            with self.assertRaisesRegex(
+                VerifierRegistryError,
+                "deployment verifier configuration could not be loaded",
+            ) as caught:
+                load_deployment_verifier_registry()
+
+        self.assertNotIn(secret_detail, str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
 

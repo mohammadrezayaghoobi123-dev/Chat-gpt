@@ -244,6 +244,7 @@ class CTPCase:
             and isinstance(item.evidence_ids, (tuple, list))
             and not isinstance(item.evidence_ids, str)
             and bool(item.evidence_ids)
+            and all(isinstance(ref, str) and ref.strip() for ref in item.evidence_ids)
             and isinstance(item.execution_provenance, ExecutionProvenance)
             and not item.execution_provenance.validate()
             for item in tests

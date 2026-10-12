@@ -95,3 +95,26 @@ external dispatch and MUST NOT expose caller-controlled `provider_scope` or
 enabling any provider-backed operation. Until then, the helper's unit tests
 verify the boundary in isolation only; they do not establish runtime
 enforcement.
+
+## Injected executor boundary
+
+The current `integrated_runtime.execute_mission` accepts an in-process mapping
+of Python callables for specialist islands. That mapping is an injection point,
+not a sandbox, permission system, or proof that a callback is analysis-only.
+Python callbacks execute with the process's privileges and can have side
+effects; the runtime cannot infer or enforce purity from the callable's type.
+
+Until a separately reviewed action broker exists, register only trusted,
+reviewed analysis-only executors in this mapping. Do not register payment,
+purchasing, messaging, deployment, filesystem mutation, or other external-action
+adapters here—even for low- or medium-risk missions. The high/critical mission
+gate is a policy check, not a containment boundary against a malicious or
+misconfigured callback.
+
+Any future provider-backed action path must be explicit and separate: authorize
+the requested capability, apply any authenticated/digest-bound approval policy,
+reserve the attempt through the trusted deployment-owned scope configuration,
+persist the dispatch boundary conservatively, use provider-side idempotency,
+and verify the resulting provider state through the fixed fail-closed verifier
+registry before recording durable completion. Add tests at that actual call site;
+unit tests for the reservation helper alone do not prove these controls are wired.

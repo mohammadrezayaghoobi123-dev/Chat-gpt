@@ -226,6 +226,22 @@ class CTPCaseTests(unittest.TestCase):
         self.assertTrue(any("evidence references must be non-empty strings" in issue
                             for issue in malformed_case.validate()))
 
+    def test_record_execution_rejects_malformed_case_without_internal_exception(self):
+        case = self.make_case()
+        malformed = CTPCase(
+            case.case_id, case.question, case.claim_ids, case.hypotheses,
+            case.falsifiers, None,
+        )
+        provenance = ExecutionProvenance(
+            "run-invalid-case", "2026-10-12T10:00:00Z", "sensor",
+            "measurement", "group-a", "separate operator",
+        )
+        with self.assertRaisesRegex(ValueError, "case must be valid before recording execution"):
+            record_test_execution(
+                malformed, "test-01", TestStatus.PASS, "Observed",
+                ("evidence-001",), provenance,
+            )
+
     def test_record_execution_rejects_missing_provenance_object(self):
         case = self.make_case()
         with self.assertRaisesRegex(ValueError, "provenance must be an ExecutionProvenance"):

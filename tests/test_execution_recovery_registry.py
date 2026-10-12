@@ -186,6 +186,24 @@ class RecoveryCandidateTests(unittest.TestCase):
             )
         self.assertFalse(self.registry.get_attempt(first.attempt_id).dispatch_boundary_entered)
 
+    def test_attempt_reservation_rejects_timestamp_before_running_transition(self):
+        from master_brain.execution_registry import InvalidTransition
+
+        running = self.reserve("attempt-parent-time", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:05Z")
+        with self.assertRaisesRegex(InvalidTransition, "predates execution update"):
+            self.registry.reserve_attempt(
+                key=running.key, expected_version=running.version,
+                integration_id="integration-a", adapter_version="v1",
+                provider_id="provider-a", recorded_at="2026-10-12T00:00:04Z",
+            )
+        with sqlite3.connect(self.registry.path) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM execution_attempts WHERE execution_key=?",
+                (running.key,),
+            ).fetchone()[0]
+        self.assertEqual(count, 0)
+
     def test_attempt_reservation_rejects_non_running_execution(self):
         from master_brain.execution_registry import InvalidTransition
         pending = self.reserve("attempt-pending", "2026-10-12T00:00:00Z")

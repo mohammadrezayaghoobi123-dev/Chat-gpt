@@ -152,6 +152,25 @@ class IntegratedRuntimeTests(unittest.TestCase):
         self.assertEqual(run.status, "needs_clarification")
         self.assertTrue(run.unresolved_issues)
 
+    def test_non_string_risk_tier_fails_closed_before_dispatch(self):
+        for malformed_risk_tier in (None, 7, True):
+            with self.subTest(risk_tier=malformed_risk_tier):
+                calls = []
+                run = execute_mission(
+                    Mission(
+                        "Research scientific evidence for this material",
+                        risk_tier=malformed_risk_tier,
+                    ),
+                    executors={
+                        "science_research": lambda mission: calls.append(mission)
+                        or IslandResult("science_research", "done")
+                    },
+                )
+                self.assertEqual(calls, [])
+                self.assertEqual(run.status, "needs_clarification")
+                self.assertTrue(run.unresolved_issues)
+                self.assertEqual(run.results, ())
+
     def test_executor_failure_is_recorded_as_partial_not_success(self):
         def broken(mission):
             raise TimeoutError("provider timeout")

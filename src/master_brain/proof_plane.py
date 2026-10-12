@@ -113,7 +113,7 @@ def review_proof(claims, evidence):
     valid_values = {item.value for item in ClaimImportance}
     for claim in unique:
         raw_importance = getattr(claim.importance, "value", claim.importance)
-        if raw_importance not in valid_values:
+        if not isinstance(raw_importance, str) or raw_importance not in valid_values:
             issues.append(f"Claim {claim.claim_id} has an unrecognized importance tier.")
             continue
         if raw_importance not in important_values or claim.claim_id in covered_claim_ids:

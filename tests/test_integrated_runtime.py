@@ -90,6 +90,36 @@ class IntegratedRuntimeTests(unittest.TestCase):
         }
         self.assertEqual(by_ref["claim-valid"], "supported_by_recorded_evidence")
 
+    def test_audit_review_excludes_ambiguous_claim_ids_without_shifting_later_reviews(self):
+        def science(mission):
+            return IslandResult(
+                island_id="science_research",
+                summary="Synthetic fixture with a reused claim ID.",
+                claims=(
+                    Claim("duplicate", "polymer", "safe", "yes"),
+                    Claim("duplicate", "polymer", "safe", "no"),
+                    Claim("claim-valid", "polymer", "safe", "yes"),
+                ),
+                evidence=(Evidence("evidence-valid", "fixture", "claim-valid", True),),
+            )
+
+        run = execute_mission(
+            Mission("Research scientific evidence for a polymer material", risk_tier="low"),
+            executors={"science_research": science},
+        )
+        reviews = [
+            record for record in run.audit_records
+            if record.event_type == "claim_review"
+        ]
+        self.assertEqual(len(reviews), 1)
+        self.assertEqual(reviews[0].output_refs, ("claim-valid",))
+        self.assertEqual(reviews[0].status, "supported_by_recorded_evidence")
+        mission_record = next(
+            record for record in run.audit_records
+            if record.event_type == "mission_run"
+        )
+        self.assertNotIn("duplicate", mission_record.output_refs)
+
     def test_missing_executor_is_reported_not_claimed_as_executed(self):
         run = execute_mission(
             Mission("Research scientific evidence for factory materials", risk_tier="low"),

@@ -1,18 +1,15 @@
 """Public-seam tests for idempotent verified completion retries."""
+import sqlite3
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from master_brain.completion_evidence import CompletionEvidence
+from master_brain.completion_evidence import CompletionEvidence, EvidenceValidationError
 from master_brain.execution_registry import SQLiteExecutionRegistry, State, InvalidTransition
 from master_brain.verifier_registry import ConfiguredVerifierRegistry, VerifierDescriptor
 
 
 def _iso(offset_seconds):
     return (datetime.now(timezone.utc) + timedelta(seconds=offset_seconds)).isoformat()
-
-
-def _trusted_verifier(_evidence):
-    return True
 
 
 class VerifiedCompletionRetryTests(unittest.TestCase):
@@ -116,6 +113,39 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
             self.complete(conflicting, _iso(-1))
 
         self.assertEqual(self.registry.get(self.key), succeeded)
+
+    def test_rejected_provider_evidence_leaves_state_and_receipts_unchanged(self):
+        rejecting_registry = ConfiguredVerifierRegistry([
+            VerifierDescriptor(
+                verifier_id="payments-receipt",
+                version="1",
+                provider_id="provider-x",
+                evidence_type="operation-receipt",
+                verify=lambda _evidence: False,
+                enabled=True,
+            )
+        ])
+        before = self.registry.get(self.key)
+
+        with self.assertRaisesRegex(EvidenceValidationError, "not verified"):
+            self.registry.complete_with_verified_evidence(
+                key=self.key,
+                expected_version=self.record.version,
+                attempt_id=self.attempt.attempt_id,
+                evidence=self.evidence,
+                verifier_id="payments-receipt",
+                verifier_version="1",
+                verifier_registry=rejecting_registry,
+                recorded_at=_iso(-2),
+            )
+
+        self.assertEqual(self.registry.get(self.key), before)
+        with sqlite3.connect(self.registry.path) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                (self.key,),
+            ).fetchone()[0]
+        self.assertEqual(count, 0)
 
 
 if __name__ == "__main__":

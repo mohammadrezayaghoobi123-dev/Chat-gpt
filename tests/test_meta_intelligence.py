@@ -68,6 +68,16 @@ class MetaIntelligenceTests(unittest.TestCase):
         plan = plan_coordination(Mission(objective))
         self.assertEqual(plan.original_objective, objective)
 
+    def test_invalid_objective_type_requests_clarification_instead_of_crashing(self):
+        plan = plan_coordination(Mission(None))
+        self.assertEqual(plan.original_objective, "")
+        self.assertTrue(plan.clarification_questions)
+        self.assertTrue(any("objective" in item.lower() for item in plan.unknowns))
+
+    def test_invalid_risk_tier_type_is_flagged_instead_of_crashing(self):
+        plan = plan_coordination(Mission("Plan a market analysis project", risk_tier=None))
+        self.assertTrue(any("risk tier" in item.lower() for item in plan.unknowns))
+
     def test_unrecognized_risk_tier_is_flagged(self):
         plan = plan_coordination(Mission("Plan a market analysis project", risk_tier="unknown"))
         self.assertTrue(any("risk tier" in item.lower() for item in plan.unknowns))

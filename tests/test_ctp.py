@@ -93,6 +93,19 @@ class CTPCaseTests(unittest.TestCase):
         self.assertTrue(any("missing falsifier" in issue.lower()
                             for issue in incomplete.validate()))
 
+    def test_discriminating_test_requires_prediction_for_each_hypothesis(self):
+        case = self.make_case()
+        incomplete_test = DiscriminatingTest(
+            "test-01", "Question", "Procedure",
+            (("h-a", "prediction for a"),),
+        )
+        incomplete = CTPCase(
+            case.case_id, case.question, case.claim_ids, case.hypotheses,
+            case.falsifiers, (incomplete_test,),
+        )
+        self.assertTrue(any("missing expected prediction" in issue.lower()
+                            for issue in incomplete.validate()))
+
     def test_unknown_hypothesis_reference_is_invalid(self):
         case = self.make_case()
         bad_falsifier = Falsifier("h-missing", "Something observable")

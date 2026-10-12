@@ -57,7 +57,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(result.supporting_evidence, ())
         self.assertEqual(result.independent_supporting_group_count, 0)
         self.assertFalse(result.independent_support_demonstrated)
-        self.assertTrue(any("duplicate evidence ID" in issue.lower()
+        self.assertTrue(any("duplicate evidence id" in issue.lower()
                             for issue in result.unresolved_questions))
 
     def test_no_evidence_is_unverified(self):

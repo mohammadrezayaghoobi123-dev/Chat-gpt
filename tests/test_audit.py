@@ -38,6 +38,12 @@ class AuditRecordTests(unittest.TestCase):
         metadata["nested"]["count"] = 99
         self.assertEqual(record.to_dict()["metadata"]["nested"]["count"], 1)
 
+    def test_cyclic_metadata_is_rejected_with_a_validation_error(self):
+        metadata = {}
+        metadata["self"] = metadata
+        with self.assertRaisesRegex(AuditValidationError, "cyclic metadata"):
+            self.make_record(metadata=metadata)
+
     def test_rejects_missing_required_text(self):
         with self.assertRaisesRegex(AuditValidationError, "event_id"):
             self.make_record(event_id=" ")

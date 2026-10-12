@@ -178,3 +178,77 @@ def plan_contradiction_case(
             "Predefine measurement tolerance and acceptance criteria before interpreting an observed result.",
         ),
     )
+
+def plan_important_claim_case(claim: Claim) -> CTPCase:
+    """Plan a falsification check for one explicitly high-importance claim.
+
+    This proposes a test only. It does not assume the claim is true or false,
+    execute a measurement, or create evidence.
+    """
+    identity = json.dumps(
+        ["important-claim", claim.claim_id],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+    accurate = f"h-{digest}-accurate"
+    inaccurate = f"h-{digest}-inaccurate"
+    tolerance = (
+        "A tolerance and acceptance criterion defined before observing results, "
+        "appropriate to the measurement method and decision risk"
+    )
+    prediction_accurate = (
+        f"An independent, matched-scope replication is consistent with {claim.value!r} "
+        "within the predeclared tolerance."
+    )
+    prediction_inaccurate = (
+        f"An independent, matched-scope replication differs materially from {claim.value!r} "
+        "or reveals a scope, definition, or provenance error."
+    )
+    procedure = (
+        "Before collecting results, define the operational definition, units, time/context scope, "
+        "measurement method, acceptance tolerance, and stop criteria. Obtain an independent "
+        "measurement or replication; preserve source provenance and raw observations; normalize "
+        "units; then compare against the predeclared criterion. Record evidence references and "
+        "the observed result before assigning PASS, FAIL, or INCONCLUSIVE."
+    )
+    return CTPCase(
+        case_id=f"ctp-{digest}",
+        question=f"What independent observation could falsify or corroborate claim {claim.claim_id}?",
+        claim_ids=(claim.claim_id,),
+        hypotheses=(
+            RivalHypothesis(
+                accurate,
+                f"Claim {claim.claim_id} is accurate for the declared scope and value {claim.value!r}.",
+                (prediction_accurate,),
+            ),
+            RivalHypothesis(
+                inaccurate,
+                f"Claim {claim.claim_id} is materially inaccurate, incomplete, or scoped incorrectly.",
+                (prediction_inaccurate,),
+            ),
+        ),
+        falsifiers=(
+            Falsifier(
+                accurate,
+                f"An independent matched-scope result falls outside {tolerance.lower()} for the claim.",
+            ),
+            Falsifier(
+                inaccurate,
+                "Independent replication supports the claim within the predeclared tolerance and no scope/provenance defect is found.",
+            ),
+        ),
+        tests=(
+            DiscriminatingTest(
+                test_id=f"test-{digest}",
+                question="Does an independent matched-scope check support the claim within predeclared criteria?",
+                procedure=procedure,
+                expected_if=((accurate, prediction_accurate), (inaccurate, prediction_inaccurate)),
+                status=TestStatus.NOT_RUN,
+            ),
+        ),
+        notes=(
+            "High-importance claim selected for falsification planning; the proposed test has not been executed.",
+            "A plan is not evidence. Record actual observations and provenance before changing the test status.",
+        ),
+    )

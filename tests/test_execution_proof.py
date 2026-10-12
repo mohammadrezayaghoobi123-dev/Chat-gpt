@@ -115,6 +115,24 @@ class OperationalProofLaneTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "different or missing completion evidence"):
             self.registry.complete_with_verified_evidence(**{**kwargs, "evidence": altered})
 
+
+    def test_evidence_observed_before_dispatch_boundary_is_rejected(self):
+        registry = ConfiguredVerifierRegistry([VerifierDescriptor(
+            verifier_id="receipt-check", version="1", provider_id="provider-x",
+            evidence_type="operation-receipt", verify=lambda _evidence: True,
+        )])
+        stale_evidence = CompletionEvidence(**{
+            **self.evidence.__dict__, "observed_at": "2026-10-12T10:00:02Z"
+        })
+        report = review_operational_completion(
+            execution=self.record, attempt=self.attempt, evidence=stale_evidence,
+            verifier_id="receipt-check", verifier_version="1",
+            verifier_registry=registry,
+        )
+        self.assertEqual(report.status, "unverified")
+        self.assertIsNone(report.verified_evidence)
+        self.assertIn("predates dispatch boundary", report.unresolved_issue)
+
     def test_false_verifier_result_is_not_accepted(self):
         registry = ConfiguredVerifierRegistry([VerifierDescriptor(
             verifier_id="receipt-check", version="1", provider_id="provider-x",

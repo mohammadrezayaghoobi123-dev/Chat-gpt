@@ -1,5 +1,4 @@
 import unittest
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from master_brain.attempt_configuration import (
@@ -55,6 +54,24 @@ class ConfiguredAttemptScopeRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(AttemptConfigurationError, "invalid type"):
             ConfiguredAttemptScopeRegistry([object()])
 
+    def test_descriptor_identifiers_reject_surrounding_whitespace(self):
+        malformed = AttemptScopeDescriptor(
+            integration_id=" payments-v1", adapter_version="1.0",
+            provider_id="provider-x", provider_scope="acct/prod",
+            receipt_namespace="receipt",
+        )
+        with self.assertRaisesRegex(AttemptConfigurationError, "whitespace"):
+            ConfiguredAttemptScopeRegistry([malformed])
+
+    def test_resolution_identifiers_reject_surrounding_whitespace(self):
+        registry = ConfiguredAttemptScopeRegistry([self.descriptor])
+        with self.assertRaisesRegex(AttemptConfigurationError, "whitespace"):
+            registry.resolve(
+                integration_id="payments-v1 ",
+                adapter_version="1.0",
+                provider_id="provider-x",
+            )
+
     def test_missing_deployment_module_fails_closed(self):
         with patch(
             "importlib.import_module",
@@ -100,6 +117,20 @@ class ConfiguredAttemptScopeRegistryTests(unittest.TestCase):
         self.assertEqual(result["provider_scope"], "merchant-account-1/production")
         self.assertEqual(result["receipt_namespace"], "operation-receipt")
         self.assertNotIn("scope_registry", result)
+
+    def test_configured_reservation_rejects_caller_scope_overrides(self):
+        with self.assertRaises(TypeError):
+            reserve_configured_attempt(
+                object(),
+                key="exec-1",
+                expected_version=2,
+                integration_id="payments-v1",
+                adapter_version="1.0",
+                provider_id="provider-x",
+                recorded_at="2026-10-12T10:00:00+00:00",
+                provider_scope="attacker-selected-scope",
+                receipt_namespace="attacker-selected-namespace",
+            )
 
 
 if __name__ == "__main__":

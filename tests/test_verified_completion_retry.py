@@ -164,6 +164,26 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(count, 0)
 
+
+    def test_future_observation_timestamp_is_rejected_without_state_change(self):
+        before = self.registry.get(self.key)
+        future_evidence = CompletionEvidence(**{
+            **self.evidence.__dict__,
+            "observed_at": _iso(3600),
+        })
+        with self.assertRaisesRegex(
+            EvidenceValidationError, "observed_at is too far in the future"
+        ):
+            self.complete(future_evidence, _iso(3601))
+
+        self.assertEqual(self.registry.get(self.key), before)
+        with sqlite3.connect(self.registry.path) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                (self.key,),
+            ).fetchone()[0]
+        self.assertEqual(count, 0)
+
     def test_state_change_during_verification_rejects_stale_completion(self):
         def verifier_with_intervening_state_change(_evidence):
             self.registry.transition(

@@ -10,6 +10,7 @@ This document defines the evidence a provider-specific verifier must establish b
 - `ConfiguredVerifierRegistry` is an allowlist, not a sandbox. Importing a verifier executes Python with the process's privileges. Deployment must control package provenance, filesystem permissions, dependency versions, startup environment, and secret access.
 - The current fixed import path `master_brain.deployment_verifiers` intentionally fails closed when absent. Do not add a permissive default verifier or treat a receipt-shaped JSON object as proof.
 - The current local SQLite registry is a single-host coordination primitive, not exactly-once external execution and not a substitute for provider-side idempotency.
+- Verification runs before the SQLite writer lock to avoid holding a database write lock across provider I/O. Concurrent callers can therefore invoke the verifier more than once for the same evidence. Verifiers must be read-only with respect to the external operation: they may query authoritative state, but must not trigger, retry, or mutate the provider operation. The provider's idempotency mechanism—not this verifier callback—must protect any operation submission path.
 
 ## Required verifier decisions
 

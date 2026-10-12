@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 import math
 import sqlite3
+import time
 import uuid
 
 
@@ -124,6 +125,27 @@ class SQLiteExecutionRegistry:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
 
+    def _begin_immediate_with_retry(self, db: sqlite3.Connection) -> None:
+        """Acquire SQLite's writer lock with bounded retries for transient contention.
+
+        busy_timeout handles ordinary waits inside SQLite. This retry handles a
+        BUSY/LOCKED result that still escapes that wait; it never retries arbitrary
+        database errors and never retries a transaction after writes have started.
+        """
+        delays = (0.01, 0.025, 0.05, 0.1)
+        for attempt, delay in enumerate((*delays, None)):
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                return
+            except sqlite3.OperationalError as exc:
+                code = getattr(exc, "sqlite_errorcode", None)
+                primary_code = (code & 0xFF) if isinstance(code, int) else None
+                if primary_code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                    raise
+                if delay is None:
+                    raise
+                time.sleep(delay)
+
     def reserve(self, *, key: str, mission_id: str, contract_digest: str,
                 payload_digest: str, recorded_at: str) -> tuple[Record, bool]:
         """Return (record, created); identical duplicate requests never reclaim RUNNING."""
@@ -133,7 +155,7 @@ class SQLiteExecutionRegistry:
         try:
             with closing(self._db()) as db, db:
                 stage = "begin_immediate"
-                db.execute("BEGIN IMMEDIATE")
+                self._begin_immediate_with_retry(db)
                 stage = "select_existing"
                 row = db.execute("SELECT * FROM executions WHERE key=?", (key,)).fetchone()
                 if row:

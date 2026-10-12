@@ -73,6 +73,20 @@ class CTPCaseTests(unittest.TestCase):
         )
         self.assertTrue(any("unknown hypothesis" in issue for issue in invalid.validate()))
 
+    def test_pass_with_result_and_evidence_but_no_execution_provenance_is_invalid(self):
+        case = self.make_case()
+        completed_test = DiscriminatingTest(
+            "test-01", "Question", "Procedure",
+            (("h-a", "prediction"),), TestStatus.PASS,
+            observed_result="Observed value matches the predeclared criterion",
+            evidence_ids=("evidence-001",),
+        )
+        completed_case = CTPCase(
+            case.case_id, case.question, case.claim_ids, case.hypotheses,
+            case.falsifiers, (completed_test,),
+        )
+        self.assertTrue(any("execution provenance" in issue.lower() for issue in completed_case.validate()))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -84,6 +84,15 @@ class CTPCaseTests(unittest.TestCase):
         )
         self.assertTrue(any("no observed result" in issue for issue in invalid.validate()))
 
+    def test_case_requires_a_falsifier_for_each_rival_hypothesis(self):
+        case = self.make_case()
+        incomplete = CTPCase(
+            case.case_id, case.question, case.claim_ids, case.hypotheses,
+            case.falsifiers[:1], case.tests,
+        )
+        self.assertTrue(any("missing falsifier" in issue.lower()
+                            for issue in incomplete.validate()))
+
     def test_unknown_hypothesis_reference_is_invalid(self):
         case = self.make_case()
         bad_falsifier = Falsifier("h-missing", "Something observable")

@@ -29,6 +29,10 @@ class MetaIntelligenceTests(unittest.TestCase):
         self.assertEqual(plan.review_level, ReviewLevel.HUMAN_GATED)
         self.assertTrue(any("approval" in step.lower() for step in plan.verification_steps))
 
+    def test_keyword_matching_does_not_match_inside_unrelated_words(self):
+        plan = plan_coordination(Mission("I need a comfortable chair for my office"))
+        self.assertNotIn("software_ai", {selection.island_id for selection in plan.selections})
+
     def test_empty_objective_requests_clarification(self):
         plan = plan_coordination(Mission(""))
         self.assertTrue(plan.clarification_questions)

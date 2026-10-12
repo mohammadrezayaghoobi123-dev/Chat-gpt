@@ -134,22 +134,35 @@ class CTPCase:
             issues.append("claim_ids must be unique")
         if len(hypotheses) < 2:
             issues.append("at least two rival hypotheses are required")
-        hypothesis_ids = [item.hypothesis_id for item in hypotheses]
+        hypothesis_ids = []
+        for item in hypotheses:
+            if not isinstance(item.hypothesis_id, str) or not item.hypothesis_id.strip():
+                issues.append("hypothesis ID must be a non-empty string")
+            else:
+                hypothesis_ids.append(item.hypothesis_id)
         if len(set(hypothesis_ids)) != len(hypothesis_ids):
             issues.append("hypothesis IDs must be unique")
         known = set(hypothesis_ids)
         falsified_hypotheses = set()
         for item in falsifiers:
-            if item.hypothesis_id not in known:
-                issues.append(f"falsifier references unknown hypothesis: {item.hypothesis_id}")
+            hypothesis_id = item.hypothesis_id
+            if not isinstance(hypothesis_id, str) or not hypothesis_id.strip():
+                issues.append("falsifier hypothesis ID must be a non-empty string")
+            elif hypothesis_id not in known:
+                issues.append(f"falsifier references unknown hypothesis: {hypothesis_id}")
             else:
-                falsified_hypotheses.add(item.hypothesis_id)
+                falsified_hypotheses.add(hypothesis_id)
             if not isinstance(item.observation_that_would_weaken_it, str) or not item.observation_that_would_weaken_it.strip():
-                issues.append(f"falsifier for {item.hypothesis_id} has no observation")
+                issues.append(f"falsifier for {hypothesis_id!r} has no observation")
         missing_falsifiers = known - falsified_hypotheses
         if missing_falsifiers:
             issues.append("missing falsifier for hypothesis: " + ", ".join(sorted(missing_falsifiers)))
-        test_ids = [item.test_id for item in tests]
+        test_ids = []
+        for item in tests:
+            if not isinstance(item.test_id, str) or not item.test_id.strip():
+                issues.append("test ID must be a non-empty string")
+            else:
+                test_ids.append(item.test_id)
         if len(set(test_ids)) != len(test_ids):
             issues.append("test IDs must be unique")
         for test in tests:

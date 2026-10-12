@@ -214,7 +214,7 @@ class RecoveryCandidateTests(unittest.TestCase):
     def test_same_registry_concurrent_reservations_stress_with_sqlite_cause(self):
         # Reproduce the original 0.25s timeout / shared-instance scenario repeatedly.
         # If SQLite contention escapes the busy timeout, preserve the chained cause.
-        for iteration in range(25):
+        for iteration in range(100):
             barrier = threading.Barrier(2)
             results = []
             errors = []

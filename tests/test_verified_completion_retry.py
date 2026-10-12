@@ -237,6 +237,37 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
                 (self.key,),
             ).fetchone()[0], 0)
 
+    def test_boolean_true_cannot_authorize_durable_completion(self):
+        before = self.registry.get(self.key)
+        boolean_only_registry = ConfiguredVerifierRegistry([
+            VerifierDescriptor(
+                verifier_id="payments-receipt",
+                version="1",
+                provider_id="provider-x",
+                evidence_type="operation-receipt",
+                verify=lambda _evidence: True,
+                enabled=True,
+            )
+        ])
+
+        with self.assertRaisesRegex(
+            EvidenceValidationError, "complete canonical provider receipt identity"
+        ):
+            self.registry.complete_with_verified_evidence(
+                key=self.key, expected_version=self.record.version,
+                attempt_id=self.attempt.attempt_id, evidence=self.evidence,
+                verifier_id="payments-receipt", verifier_version="1",
+                verifier_registry=boolean_only_registry, recorded_at=_iso(-2),
+            )
+
+        self.assertEqual(self.registry.get(self.key), before)
+        with sqlite3.connect(self.registry.path) as db:
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                           (self.key,)).fetchone()[0],
+                0,
+            )
+
     def test_verifier_cannot_spoof_persisted_provider_scope(self):
         before = self.registry.get(self.key)
         spoofed_registry = ConfiguredVerifierRegistry([

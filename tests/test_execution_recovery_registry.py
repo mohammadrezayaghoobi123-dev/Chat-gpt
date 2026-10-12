@@ -216,6 +216,20 @@ class RecoveryCandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(RegistryError, "orphan or inconsistent completion receipt"):
             self.registry.list_recovery_candidates()
 
+
+    def test_recovery_inventory_fails_closed_on_succeeded_without_receipt(self):
+        from master_brain.execution_registry import RegistryError
+
+        succeeded = self.reserve("success-without-receipt", "2026-10-12T00:00:00Z")
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute(
+                "UPDATE executions SET state=? WHERE key=?",
+                (State.SUCCEEDED.value, succeeded.key),
+            )
+
+        with self.assertRaisesRegex(RegistryError, "succeeded execution is missing completion receipt"):
+            self.registry.list_recovery_candidates()
+
     def test_empty_registry_returns_empty_candidates(self):
         self.assertEqual(self.registry.list_recovery_candidates(), [])
 

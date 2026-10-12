@@ -26,6 +26,16 @@ class RoutingTests(unittest.TestCase):
 
 
 class ContradictionTests(unittest.TestCase):
+    def test_contradiction_assessment_rejects_malformed_claim_inputs(self):
+        with self.assertRaisesRegex(ValueError, "claims must be a sequence of Claim instances"):
+            assess_contradictions(None)
+        with self.assertRaisesRegex(ValueError, "claims must contain only Claim instances"):
+            assess_contradictions((None,))
+
+        malformed = Claim("claim-x", "plant", "output", None)
+        with self.assertRaisesRegex(ValueError, "claim value must be a string"):
+            assess_contradictions((malformed,))
+
     def test_same_scope_different_values_flagged(self):
         claims = [
             Claim("c1", "material", "density", "0.20", "batch-A", "2026-Q3", "g/cm3"),

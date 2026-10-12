@@ -454,6 +454,23 @@ class SQLiteExecutionRegistry:
                     raise RegistryError(
                         "orphan or inconsistent completion receipt"
                     )
+                # Attempts are created only after an execution reaches RUNNING.
+                # A dangling attempt, or one attached to an execution that never
+                # entered work (PENDING) or was failed before dispatch (FAILED),
+                # signals broken local invariants and must not be silently ignored.
+                inconsistent_attempt = db.execute(
+                    """SELECT 1
+                    FROM execution_attempts AS a
+                    LEFT JOIN executions AS e ON e.key = a.execution_key
+                    WHERE e.key IS NULL
+                       OR e.state IN (?, ?)
+                    LIMIT 1""",
+                    (State.PENDING.value, State.FAILED.value),
+                ).fetchone()
+                if inconsistent_attempt is not None:
+                    raise RegistryError(
+                        "orphan or inconsistent execution attempt"
+                    )
                 # The invariant is bidirectional: every receipt must belong to a
                 # successful execution, and every successful execution must have
                 # its atomically committed receipt. A SUCCESS state without a

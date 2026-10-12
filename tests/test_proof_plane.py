@@ -46,6 +46,34 @@ class ProofPlaneTests(unittest.TestCase):
         self.assertFalse(case.has_executed_evidence)
         self.assertEqual(case.validate(), ())
 
+    def test_generator_evidence_is_preserved_for_claim_review(self):
+        claim = Claim("generator-claim", "plant", "output", "100")
+        evidence = (
+            Evidence("generator-e1", "source-a", "generator-claim", True, independent_group="group-a"),
+            Evidence("generator-e2", "source-b", "generator-claim", True, independent_group="group-b"),
+        )
+
+        report = review_proof((claim,), (item for item in evidence))
+
+        self.assertEqual(len(report.claim_reviews), 1)
+        self.assertEqual(report.claim_reviews[0].supporting_evidence, ("generator-e1", "generator-e2"))
+        self.assertTrue(report.claim_reviews[0].independent_support_demonstrated)
+
+    def test_duplicate_evidence_ids_cannot_manufacture_independent_support(self):
+        claim = Claim("duplicate-evidence-claim", "plant", "output", "100")
+        evidence = (
+            Evidence("duplicate-id", "source-a", "duplicate-evidence-claim", True, independent_group="group-a"),
+            Evidence("duplicate-id", "source-b", "duplicate-evidence-claim", True, independent_group="group-b"),
+        )
+
+        report = review_proof((claim,), evidence)
+
+        self.assertTrue(any("Duplicate evidence ID" in issue for issue in report.unresolved_issues))
+        decision = report.claim_reviews[0]
+        self.assertFalse(decision.independent_support_demonstrated)
+        self.assertEqual(decision.independent_supporting_group_count, 0)
+        self.assertEqual(decision.supporting_evidence, ())
+
     def test_orphan_evidence_is_reported(self):
         report = review_proof((), (Evidence("e1", "report", "unknown-claim", True),))
         self.assertTrue(report.unresolved_issues)

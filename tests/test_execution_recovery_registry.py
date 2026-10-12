@@ -28,6 +28,30 @@ class RecoveryCandidateTests(unittest.TestCase):
             target=target, recorded_at=timestamp,
         )
 
+    def test_deployment_completion_fails_closed_without_reviewed_verifiers(self):
+        from master_brain.completion_evidence import EvidenceValidationError
+
+        running = self.reserve("deployment-config-missing", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        uncertain = self.transition(
+            running, State.OUTCOME_UNKNOWN, "2026-10-12T00:00:02Z"
+        )
+
+        with self.assertRaisesRegex(
+            EvidenceValidationError, "deployment verifier configuration is unavailable"
+        ):
+            self.registry.complete_with_deployment_verified_evidence(
+                key=uncertain.key,
+                expected_version=uncertain.version,
+                attempt_id="attempt-not-needed-before-config-check",
+                evidence=None,
+                verifier_id="unconfigured",
+                verifier_version="1",
+                recorded_at="2026-10-12T00:00:03Z",
+            )
+
+        self.assertEqual(self.registry.get(uncertain.key), uncertain)
+
     def test_lists_only_uncertain_nonterminal_states_without_mutating_them(self):
         pending = self.reserve("pending", "2026-10-12T00:00:00Z")
 

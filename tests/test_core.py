@@ -12,6 +12,14 @@ class RoutingTests(unittest.TestCase):
         self.assertTrue(route.requires_approval)
         self.assertEqual(route.specialist, "research_and_proof")
 
+    def test_unknown_risk_fails_closed_for_approval(self):
+        route = route_task(Task("help with a plan", risk="unrecognized"))
+        self.assertTrue(route.requires_approval)
+
+    def test_keyword_matching_uses_word_boundaries(self):
+        route = route_task(Task("I am reinvesting in a factory"))
+        self.assertNotEqual(route.specialist, "opportunity_engine")
+
     def test_opportunity_routes_to_opportunity_engine(self):
         route = route_task(Task("prioritize business opportunities"))
         self.assertEqual(route.specialist, "opportunity_engine")

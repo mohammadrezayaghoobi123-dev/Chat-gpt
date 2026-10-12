@@ -64,8 +64,32 @@ def plan_mission(
     This is an initial keyword baseline, not semantic understanding. It always
     includes the general island and shared proof/memory/policy foundations.
     """
+    if not isinstance(objective, str):
+        raise ValueError("objective must be a string")
+    try:
+        supplied_islands = tuple(islands)
+    except TypeError as exc:
+        raise ValueError("islands must be an iterable of Island profiles") from exc
+
+    seen_ids: set[str] = set()
+    for island in supplied_islands:
+        if (
+            not isinstance(island, Island)
+            or not isinstance(island.island_id, str) or not island.island_id.strip()
+            or not isinstance(island.display_name, str) or not island.display_name.strip()
+            or not isinstance(island.description, str) or not island.description.strip()
+            or not isinstance(island.keywords, (tuple, list))
+            or isinstance(island.keywords, str)
+            or any(not isinstance(keyword, str) or not keyword.strip() for keyword in island.keywords)
+            or not isinstance(island.enabled, bool)
+        ):
+            raise ValueError("invalid island profile; check ID, display name, description, keywords, and enabled flag")
+        if island.island_id in seen_ids:
+            raise ValueError(f"duplicate island ID: {island.island_id}")
+        seen_ids.add(island.island_id)
+
     normalized = " ".join(objective.casefold().split())
-    available = tuple(island for island in islands if island.enabled)
+    available = tuple(island for island in supplied_islands if island.enabled)
     assignments: list[IslandAssignment] = []
     gaps: list[str] = []
     rationale: list[str] = [

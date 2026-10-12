@@ -79,6 +79,18 @@ class RecoveryCandidateTests(unittest.TestCase):
             self.registry.list_recovery_candidates()
 
 
+    def test_transition_rejects_boolean_expected_version(self):
+        running = self.reserve("boolean-version", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        from master_brain.execution_registry import InvalidTransition
+
+        with self.assertRaisesRegex(ValueError, "expected_version must be a non-negative integer"):
+            self.registry.transition(
+                key=running.key, expected_version=True,
+                target=State.OUTCOME_UNKNOWN, recorded_at="2026-10-12T00:00:02Z",
+            )
+        self.assertEqual(self.registry.get(running.key), running)
+
     def test_succeeded_is_blocked_without_verified_evidence_from_uncertain_states(self):
         from master_brain.execution_registry import InvalidTransition
 

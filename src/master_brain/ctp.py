@@ -129,9 +129,29 @@ class CTPCase:
             if not isinstance(test.status, TestStatus):
                 issues.append(f"test {test.test_id} status must be a TestStatus")
                 continue
-            for hypothesis_id, _prediction in test.expected_if:
-                if hypothesis_id not in known:
-                    issues.append(f"test {test.test_id} references unknown hypothesis: {hypothesis_id}")
+            expected_hypothesis_ids = set()
+            if not isinstance(test.expected_if, (tuple, list)) or isinstance(test.expected_if, str):
+                issues.append(f"test {test.test_id} expected_if must be a tuple or list")
+            else:
+                for prediction in test.expected_if:
+                    if not isinstance(prediction, (tuple, list)) or len(prediction) != 2:
+                        issues.append(f"test {test.test_id} expected_if entries must be (hypothesis_id, prediction) pairs")
+                        continue
+                    hypothesis_id, statement = prediction
+                    if not isinstance(hypothesis_id, str) or not hypothesis_id.strip():
+                        issues.append(f"test {test.test_id} has an invalid expected hypothesis ID")
+                    elif hypothesis_id not in known:
+                        issues.append(f"test {test.test_id} references unknown hypothesis: {hypothesis_id}")
+                    else:
+                        expected_hypothesis_ids.add(hypothesis_id)
+                    if not isinstance(statement, str) or not statement.strip():
+                        issues.append(f"test {test.test_id} has an empty expected prediction")
+                missing_predictions = known - expected_hypothesis_ids
+                if missing_predictions:
+                    issues.append(
+                        f"test {test.test_id} missing expected prediction for hypothesis: "
+                        + ", ".join(sorted(missing_predictions))
+                    )
             if test.status == TestStatus.NOT_RUN and (
                 test.observed_result or test.evidence_ids or test.execution_provenance is not None
             ):

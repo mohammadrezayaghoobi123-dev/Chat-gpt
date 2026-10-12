@@ -146,9 +146,12 @@ def score_opportunity(item: Opportunity) -> float:
     clamped to [0, 1] for this MVP. A later version must calibrate weights.
     """
     def unit(value: float) -> float:
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError("opportunity score inputs must be finite numbers")
-        return max(0.0, min(1.0, float(value)))
+        # Every Python integer is finite, including values too large for float.
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("opportunity score inputs must be finite numbers")
+        return float(max(0, min(1, value)))
     return (
         0.30 * unit(item.expected_value)
         + 0.20 * unit(item.feasibility)

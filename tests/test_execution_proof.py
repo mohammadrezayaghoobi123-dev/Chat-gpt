@@ -118,6 +118,58 @@ class OperationalProofLaneTests(unittest.TestCase):
             self.registry.complete_with_verified_evidence(**{**kwargs, "evidence": altered})
 
 
+    def test_completion_rejects_attempt_without_dispatch_boundary(self):
+        from master_brain.completion_evidence import EvidenceValidationError
+
+        attempt = self.registry.get_attempt(self.attempt.attempt_id)
+        self.assertTrue(attempt.dispatch_boundary_entered)
+        # Create a separate uncertain execution whose attempt has not crossed
+        # the dispatch boundary; completion must not accept any receipt for it.
+        record, _ = self.registry.reserve(
+            key="exec-no-dispatch", mission_id="mission-no-dispatch",
+            contract_digest="contract-sha", payload_digest="payload-sha",
+            recorded_at="2026-10-12T10:00:00Z",
+        )
+        record = self.registry.transition(
+            key=record.key, expected_version=record.version, target=State.RUNNING,
+            recorded_at="2026-10-12T10:00:01Z",
+        )
+        attempt = self.registry.reserve_attempt(
+            key=record.key, expected_version=record.version,
+            integration_id="payments", adapter_version="v1", provider_id="provider-x",
+            recorded_at="2026-10-12T10:00:02Z",
+        )
+        record = self.registry.transition(
+            key=record.key, expected_version=record.version,
+            target=State.OUTCOME_UNKNOWN, recorded_at="2026-10-12T10:00:03Z",
+        )
+        evidence = CompletionEvidence(
+            attempt_id=attempt.attempt_id, execution_key=record.key,
+            mission_id=record.mission_id, contract_digest=record.contract_digest,
+            payload_digest=record.payload_digest, integration_id=attempt.integration_id,
+            adapter_version=attempt.adapter_version, provider_id=attempt.provider_id,
+            evidence_type="operation-receipt", evidence_ref="receipt://no-dispatch",
+            provider_receipt_id="receipt-no-dispatch", observed_at="2026-10-12T10:00:04Z",
+        )
+        verifier_registry = ConfiguredVerifierRegistry([VerifierDescriptor(
+            verifier_id="receipt-check", version="1", provider_id="provider-x",
+            evidence_type="operation-receipt", verify=lambda _evidence: True,
+        )])
+        with self.assertRaisesRegex(EvidenceValidationError, "dispatch boundary was not entered"):
+            self.registry.complete_with_verified_evidence(
+                key=record.key, expected_version=record.version,
+                attempt_id=attempt.attempt_id, evidence=evidence,
+                verifier_id="receipt-check", verifier_version="1",
+                verifier_registry=verifier_registry, recorded_at="2026-10-12T10:00:05Z",
+            )
+        self.assertEqual(self.registry.get(record.key).state, State.OUTCOME_UNKNOWN)
+        with __import__("sqlite3").connect(self.registry.path) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                (record.key,),
+            ).fetchone()[0]
+        self.assertEqual(count, 0)
+
     def test_recorded_at_before_current_execution_update_is_rejected(self):
         from master_brain.completion_evidence import EvidenceValidationError
         registry = ConfiguredVerifierRegistry([VerifierDescriptor(

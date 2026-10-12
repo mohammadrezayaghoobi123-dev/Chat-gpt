@@ -81,3 +81,17 @@ trusted application code; this loader is not a sandbox. The configuration
 boundary supplements but does not replace provider-specific authentication,
 receipt verification, scope binding, or the existing fail-closed completion
 verifier gate.
+
+## Runtime adoption status (important limitation)
+
+The configured reservation helper is a guarded API boundary, not proof that all
+runtime paths already use it. In this repository revision, the current
+application orchestration modules reviewed (`integrated_runtime.py`,
+`core.py`, and `demo.py`) do not call either reservation method. The
+provider-dispatch path is therefore not yet wired to this helper. When that
+path is implemented, it MUST call `reserve_configured_attempt` before any
+external dispatch and MUST NOT expose caller-controlled `provider_scope` or
+`receipt_namespace`. Add an integration test at that call site before
+enabling any provider-backed operation. Until then, the helper's unit tests
+verify the boundary in isolation only; they do not establish runtime
+enforcement.

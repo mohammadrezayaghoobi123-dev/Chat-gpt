@@ -206,6 +206,26 @@ class CTPCaseTests(unittest.TestCase):
         self.assertEqual(completed.validate(), ())
         self.assertEqual(case.tests[0].status, TestStatus.NOT_RUN)
 
+    def test_has_executed_evidence_rejects_malformed_evidence_references(self):
+        case = self.make_case()
+        provenance = ExecutionProvenance(
+            "run-malformed-ref", "2026-10-12T10:00:00Z", "sensor",
+            "measurement", "group-a", "separate operator",
+        )
+        malformed_test = DiscriminatingTest(
+            "test-01", "Measure output", "Witness the run",
+            (("h-a", "prediction a"), ("h-b", "prediction b")),
+            TestStatus.PASS, observed_result="Observed", evidence_ids=(None,),
+            execution_provenance=provenance,
+        )
+        malformed_case = CTPCase(
+            case.case_id, case.question, case.claim_ids, case.hypotheses,
+            case.falsifiers, (malformed_test,),
+        )
+        self.assertFalse(malformed_case.has_executed_evidence)
+        self.assertTrue(any("evidence references must be non-empty strings" in issue
+                            for issue in malformed_case.validate()))
+
     def test_record_execution_rejects_missing_provenance_object(self):
         case = self.make_case()
         with self.assertRaisesRegex(ValueError, "provenance must be an ExecutionProvenance"):

@@ -118,6 +118,9 @@ class CTPCase:
         if len(set(test_ids)) != len(test_ids):
             issues.append("test IDs must be unique")
         for test in self.tests:
+            if not isinstance(test.status, TestStatus):
+                issues.append(f"test {test.test_id} status must be a TestStatus")
+                continue
             for hypothesis_id, _prediction in test.expected_if:
                 if hypothesis_id not in known:
                     issues.append(f"test {test.test_id} references unknown hypothesis: {hypothesis_id}")

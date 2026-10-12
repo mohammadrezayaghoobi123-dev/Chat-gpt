@@ -229,6 +229,17 @@ class SQLiteExecutionRegistry:
         )
         if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 0:
             raise ValueError("expected_version must be a non-negative integer")
+        from datetime import datetime
+        try:
+            attempt_created_dt = datetime.fromisoformat(
+                recorded_at.strip().replace("Z", "+00:00")
+            )
+        except (AttributeError, ValueError) as exc:
+            raise InvalidTransition(
+                "attempt timestamp must be timezone-aware ISO-8601"
+            ) from exc
+        if attempt_created_dt.tzinfo is None or attempt_created_dt.utcoffset() is None:
+            raise InvalidTransition("attempt timestamp must be timezone-aware ISO-8601")
         try:
             with closing(self._db()) as db, db:
                 db.execute("BEGIN IMMEDIATE")
@@ -240,6 +251,21 @@ class SQLiteExecutionRegistry:
                     raise InvalidTransition("stale execution version")
                 if execution.state is not State.RUNNING:
                     raise InvalidTransition("attempt requires RUNNING execution")
+                try:
+                    execution_updated_dt = datetime.fromisoformat(
+                        execution.updated_at.strip().replace("Z", "+00:00")
+                    )
+                except (AttributeError, ValueError) as exc:
+                    raise RegistryError("execution update timestamp is invalid") from exc
+                if (
+                    execution_updated_dt.tzinfo is None
+                    or execution_updated_dt.utcoffset() is None
+                ):
+                    raise RegistryError("execution update timestamp is invalid")
+                if attempt_created_dt < execution_updated_dt:
+                    raise InvalidTransition(
+                        "attempt timestamp predates execution update"
+                    )
                 existing = db.execute(
                     "SELECT attempt_id FROM execution_attempts WHERE execution_key=?", (key,)
                 ).fetchone()

@@ -6,6 +6,13 @@ from master_brain.proof_plane import review_proof
 
 
 class ProofPlaneTests(unittest.TestCase):
+    def test_non_iterable_proof_inputs_are_reported_without_crashing(self):
+        report = review_proof(None, None)
+        self.assertEqual(report.claim_reviews, ())
+        self.assertEqual(report.contradictions, ())
+        self.assertTrue(any("claims must be iterable" in issue for issue in report.unresolved_issues))
+        self.assertTrue(any("evidence must be iterable" in issue for issue in report.unresolved_issues))
+
     def test_conflict_is_preserved_and_generates_unexecuted_ctp_plan(self):
         claims = (
             Claim("a", "line", "capacity", "1 ton/day", "site", "2026", "output"),

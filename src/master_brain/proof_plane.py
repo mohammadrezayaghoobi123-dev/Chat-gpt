@@ -39,6 +39,16 @@ def review_proof(claims, evidence):
         if not isinstance(claim_id, str) or not claim_id.strip():
             issues.append("Claim has an invalid claim ID and was excluded.")
             continue
+        invalid_fields = [
+            name for name in ("subject", "predicate", "value", "context", "time_scope", "definition")
+            if not isinstance(getattr(claim, name), str)
+        ]
+        if invalid_fields:
+            issues.append(
+                "Claim has invalid claim field(s) and was excluded: "
+                + ", ".join(invalid_fields)
+            )
+            continue
         previous = by_id.get(claim_id)
         if previous is None and claim_id not in ambiguous_claim_ids:
             by_id[claim_id] = claim

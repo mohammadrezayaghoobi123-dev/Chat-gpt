@@ -495,6 +495,7 @@ class SQLiteExecutionRegistry:
                         observed_at < dispatch_at
                         or recorded_at < observed_at
                         or recorded_at < execution_updated_at
+                        or recorded_at != execution_updated_at
                     ):
                         raise RegistryError(
                             "completion receipt chronology is inconsistent"

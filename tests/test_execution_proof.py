@@ -83,7 +83,7 @@ class OperationalProofLaneTests(unittest.TestCase):
     def test_verified_evidence_and_success_transition_commit_atomically(self):
         verifier_registry = ConfiguredVerifierRegistry([VerifierDescriptor(
             verifier_id="receipt-check", version="1", provider_id="provider-x",
-            evidence_type="operation-receipt", verify=lambda _evidence: True,
+            evidence_type="operation-receipt", verify=_verify_scoped_receipt,
         )])
         completed = self.registry.complete_with_verified_evidence(
             key="exec-1",

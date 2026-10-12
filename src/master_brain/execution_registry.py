@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 import math
 import sqlite3
+from datetime import datetime
 import time
 import uuid
 
@@ -455,6 +456,49 @@ class SQLiteExecutionRegistry:
                     raise RegistryError(
                         "orphan or inconsistent completion receipt"
                     )
+                # Receipt timestamps are evidence-bearing fields, not mere
+                # metadata. Validate their timezone awareness and causal ordering
+                # against the durable dispatch marker and successful state commit.
+                receipt_rows = db.execute(
+                    """SELECT r.observed_at, r.recorded_at,
+                              a.updated_at AS dispatch_at,
+                              e.updated_at AS execution_updated_at
+                    FROM completion_receipts AS r
+                    JOIN executions AS e ON e.key = r.execution_key
+                    JOIN execution_attempts AS a
+                      ON a.attempt_id = r.attempt_id
+                     AND a.execution_key = r.execution_key"""
+                ).fetchall()
+                for receipt_row in receipt_rows:
+                    try:
+                        observed_at = datetime.fromisoformat(
+                            receipt_row["observed_at"].strip().replace("Z", "+00:00")
+                        )
+                        recorded_at = datetime.fromisoformat(
+                            receipt_row["recorded_at"].strip().replace("Z", "+00:00")
+                        )
+                        dispatch_at = datetime.fromisoformat(
+                            receipt_row["dispatch_at"].strip().replace("Z", "+00:00")
+                        )
+                        execution_updated_at = datetime.fromisoformat(
+                            receipt_row["execution_updated_at"].strip().replace("Z", "+00:00")
+                        )
+                    except (AttributeError, ValueError) as exc:
+                        raise RegistryError(
+                            "completion receipt chronology is inconsistent"
+                        ) from exc
+                    timestamps = (observed_at, recorded_at, dispatch_at, execution_updated_at)
+                    if any(
+                        timestamp.tzinfo is None or timestamp.utcoffset() is None
+                        for timestamp in timestamps
+                    ) or (
+                        observed_at < dispatch_at
+                        or recorded_at < observed_at
+                        or recorded_at < execution_updated_at
+                    ):
+                        raise RegistryError(
+                            "completion receipt chronology is inconsistent"
+                        )
                 # Validate every attempt's persisted chronology before relying
                 # on its dispatch marker. The marker's update timestamp is the
                 # durable boundary time; malformed or regressing timestamps must

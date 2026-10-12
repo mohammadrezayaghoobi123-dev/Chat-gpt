@@ -367,6 +367,48 @@ class PersistedCompletionTests(unittest.TestCase):
         with self.registry._db() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM completion_receipts").fetchone()[0], 0)
 
+    def test_concurrent_exact_completion_attempts_commit_one_receipt(self):
+        import threading
+
+        barrier = threading.Barrier(2)
+        results = []
+        errors = []
+
+        def finish():
+            try:
+                barrier.wait(timeout=3)
+                results.append(self.complete())
+            except Exception as exc:
+                errors.append(exc)
+
+        workers = [threading.Thread(target=finish) for _ in range(2)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=5)
+
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(results[0].state, State.SUCCEEDED)
+        with self.registry._db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM completion_receipts").fetchone()[0], 1)
+
+    def test_naive_recorded_at_is_rejected_before_state_change(self):
+        with self.assertRaisesRegex(ValueError, "recorded_at must be timezone-aware"):
+            self.registry.complete_with_verified_evidence(
+                key="exec-persisted",
+                expected_version=self.expected_version,
+                attempt_id=self.attempt.attempt_id,
+                evidence=self.evidence,
+                verifier_id="provider-x-receipt-verifier",
+                verifier_version="1",
+                verifier_registry=self.verifiers,
+                recorded_at="2026-10-12T00:00:06",
+            )
+        self.assertEqual(self.registry.get("exec-persisted").state, State.OUTCOME_UNKNOWN)
+
     def test_execution_cannot_complete_when_dispatch_boundary_was_not_entered(self):
         with self.registry._db() as db:
             db.execute(

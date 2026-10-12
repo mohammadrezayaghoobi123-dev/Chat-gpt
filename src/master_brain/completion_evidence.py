@@ -112,6 +112,14 @@ def validate_completion_evidence(
         raise EvidenceValidationError("evidence must be a CompletionEvidence record")
     if not callable(provider_verifier):
         raise EvidenceValidationError("provider evidence verifier must be callable")
+    if not isinstance(execution.state, State):
+        raise EvidenceValidationError("execution state must be a State")
+    if type(execution.version) is not int or execution.version < 0:
+        raise EvidenceValidationError("execution version must be a non-negative integer")
+    if type(attempt.attempt_number) is not int or attempt.attempt_number < 1:
+        raise EvidenceValidationError("attempt number must be a positive integer")
+    if not isinstance(attempt.dispatch_boundary_entered, bool):
+        raise EvidenceValidationError("dispatch boundary flag must be boolean")
     if execution.state not in {State.OUTCOME_UNKNOWN, State.RECONCILIATION_REQUIRED}:
         raise EvidenceValidationError("execution is not awaiting evidence reconciliation")
     for name, value in (

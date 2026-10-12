@@ -82,6 +82,9 @@ def review_proof(claims, evidence):
         and isinstance(getattr(item, "evidence_id", None), str)
         and bool(item.evidence_id.strip())
         and item.evidence_id not in duplicate_evidence_ids
+        and isinstance(getattr(item, "source", None), str)
+        and bool(item.source.strip())
+        and isinstance(getattr(item, "supports", None), bool)
     )
     conflicts = tuple(assess_contradictions(unique))
     reviews = tuple(evaluate_claim(claim, usable_evidence) for claim in unique)

@@ -79,7 +79,14 @@ def plan_coordination(mission: Mission, profiles: Iterable[IslandProfile] = DEFA
     duplicate_profile_ids = set()
     invalid_profile_count = 0
     for profile in profiles:
-        if not isinstance(profile, IslandProfile) or not isinstance(profile.island_id, str) or not profile.island_id.strip():
+        if (
+            not isinstance(profile, IslandProfile)
+            or not isinstance(profile.island_id, str) or not profile.island_id.strip()
+            or not isinstance(profile.keywords, (tuple, list))
+            or isinstance(profile.keywords, str)
+            or any(not isinstance(keyword, str) or not keyword.strip() for keyword in profile.keywords)
+            or not isinstance(profile.enabled, bool)
+        ):
             invalid_profile_count += 1
             continue
         if not profile.enabled:

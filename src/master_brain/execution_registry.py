@@ -302,6 +302,26 @@ class SQLiteExecutionRegistry:
         except sqlite3.Error as exc:
             raise RegistryError("attempt read failed") from exc
 
+    def get_attempt_for_execution(self, key: str) -> ExecutionAttempt | None:
+        """Return the unique durable attempt associated with an execution key.
+
+        Recovery inventories start from execution records, so callers must be
+        able to inspect the attempt and its dispatch-boundary marker without
+        knowing or guessing the attempt ID. The lookup is read-only.
+        """
+        self._required(key=key)
+        try:
+            with closing(self._db()) as db:
+                row = db.execute(
+                    "SELECT * FROM execution_attempts WHERE execution_key=?",
+                    (key,),
+                ).fetchone()
+                return None if row is None else self._attempt(row)
+        except RegistryError:
+            raise
+        except sqlite3.Error as exc:
+            raise RegistryError("attempt lookup by execution failed") from exc
+
     def mark_attempt_dispatch_boundary(
         self, *, attempt_id: str, recorded_at: str
     ) -> ExecutionAttempt:

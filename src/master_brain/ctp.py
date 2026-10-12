@@ -105,6 +105,15 @@ class CTPCase:
             issues.append("case_id must be a non-empty string")
         if not isinstance(self.question, str) or not self.question.strip():
             issues.append("question must be a non-empty string")
+        if (
+            not isinstance(self.claim_ids, (tuple, list))
+            or isinstance(self.claim_ids, str)
+            or not self.claim_ids
+            or any(not isinstance(claim_id, str) or not claim_id.strip() for claim_id in self.claim_ids)
+        ):
+            issues.append("claim_ids must contain non-empty strings")
+        elif len(set(self.claim_ids)) != len(self.claim_ids):
+            issues.append("claim_ids must be unique")
         if len(self.hypotheses) < 2:
             issues.append("at least two rival hypotheses are required")
         hypothesis_ids = [item.hypothesis_id for item in self.hypotheses]

@@ -65,6 +65,8 @@ class SQLiteExecutionRegistry:
     """Atomic per-key reservations and compare-and-swap transitions."""
 
     def __init__(self, path: str, timeout: float = 5.0):
+        if not isinstance(path, str) or not path.strip() or path.strip() == ":memory:":
+            raise ValueError("path must be a non-empty file-backed database path")
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
             raise ValueError("timeout must be a finite non-negative number within SQLite's supported range")
         try:

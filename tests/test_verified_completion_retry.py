@@ -149,6 +149,51 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(count, 0)
 
+    def test_state_change_during_verification_rejects_stale_completion(self):
+        def verifier_with_intervening_state_change(_evidence):
+            self.registry.transition(
+                key=self.key,
+                expected_version=self.record.version,
+                target=State.RECONCILIATION_REQUIRED,
+                recorded_at=_iso(-3),
+            )
+            return True
+
+        racing_registry = ConfiguredVerifierRegistry([
+            VerifierDescriptor(
+                verifier_id="payments-receipt",
+                version="1",
+                provider_id="provider-x",
+                evidence_type="operation-receipt",
+                verify=verifier_with_intervening_state_change,
+                enabled=True,
+            )
+        ])
+
+        with self.assertRaisesRegex(
+            InvalidTransition, "execution changed during evidence verification"
+        ):
+            self.registry.complete_with_verified_evidence(
+                key=self.key,
+                expected_version=self.record.version,
+                attempt_id=self.attempt.attempt_id,
+                evidence=self.evidence,
+                verifier_id="payments-receipt",
+                verifier_version="1",
+                verifier_registry=racing_registry,
+                recorded_at=_iso(-1),
+            )
+
+        current = self.registry.get(self.key)
+        self.assertEqual(current.state, State.RECONCILIATION_REQUIRED)
+        self.assertEqual(current.version, self.record.version + 1)
+        with sqlite3.connect(self.registry.path) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                (self.key,),
+            ).fetchone()[0]
+        self.assertEqual(count, 0)
+
     def test_concurrent_exact_completion_creates_one_receipt(self):
         barrier = Barrier(2)
         call_lock = Lock()

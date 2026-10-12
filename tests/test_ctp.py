@@ -113,6 +113,17 @@ class CTPCaseTests(unittest.TestCase):
         self.assertEqual(completed.validate(), ())
         self.assertEqual(case.tests[0].status, TestStatus.NOT_RUN)
 
+    def test_record_execution_rejects_untyped_status(self):
+        case = self.make_case()
+        provenance = ExecutionProvenance(
+            "run-invalid-status", "2026-10-12T10:00:00Z", "sensor",
+            "measurement", "group-a", "separate operator",
+        )
+        with self.assertRaisesRegex(ValueError, "status must be a TestStatus"):
+            record_test_execution(
+                case, "test-01", "PASS", "Passed", ("evidence-001",), provenance,
+            )
+
     def test_pass_without_evidence_reference_is_rejected(self):
         case = self.make_case()
         provenance = ExecutionProvenance(

@@ -60,7 +60,7 @@ DEFAULT_PROFILES = (
 )
 
 def _review_level(mission: Mission, unknown_count: int, selection_count: int) -> ReviewLevel:
-    risk = mission.risk_tier.casefold()
+    risk = mission.risk_tier.casefold() if isinstance(mission.risk_tier, str) else "unrecognized"
     if mission.irreversible_action or risk == "critical":
         return ReviewLevel.HUMAN_GATED
     if risk == "high" or unknown_count >= 3:
@@ -71,7 +71,9 @@ def _review_level(mission: Mission, unknown_count: int, selection_count: int) ->
 
 def plan_coordination(mission: Mission, profiles: Iterable[IslandProfile] = DEFAULT_PROFILES) -> CoordinationPlan:
     """Return a traceable plan; selected islands are not claimed to have run."""
-    objective = " ".join(mission.objective.casefold().split())
+    original_objective = mission.objective if isinstance(mission.objective, str) else ""
+    objective = " ".join(original_objective.casefold().split())
+    risk_tier = mission.risk_tier.casefold() if isinstance(mission.risk_tier, str) else "unrecognized"
     enabled = []
     seen_profile_ids = set()
     duplicate_profile_ids = set()
@@ -105,10 +107,10 @@ def plan_coordination(mission: Mission, profiles: Iterable[IslandProfile] = DEFA
         )
         if matched:
             selections.append(Selection(profile.island_id, matched[:6], "Matched terms: " + ", ".join(matched[:6])))
-    if not mission.objective.strip():
+    if not original_objective.strip():
         unknowns.append("The mission objective is empty.")
         questions.append("What outcome should Master Brain achieve?")
-    elif len(mission.objective.split()) < 4:
+    elif len(original_objective.split()) < 4:
         unknowns.append("The objective may not contain enough context for reliable routing.")
         questions.append("What context, constraints and success criteria should govern this task?")
     if not mission.success_criteria:
@@ -118,8 +120,8 @@ def plan_coordination(mission: Mission, profiles: Iterable[IslandProfile] = DEFA
     if not any(s.island_id != "general" for s in selections):
         gaps.append("No specialist island matched; clarify the objective or extend the registry.")
         unknowns.append("Specialist coverage is not established for this objective.")
-    if mission.risk_tier.casefold() not in {"low", "medium", "high", "critical"}:
-        unknowns.append("Unrecognized risk tier: " + mission.risk_tier)
+    if risk_tier not in {"low", "medium", "high", "critical"}:
+        unknowns.append("Unrecognized risk tier: " + repr(mission.risk_tier))
         questions.append("Confirm the risk tier before dispatch.")
     verification = [
         "Confirm selected islands are enabled and available before dispatch.",
@@ -127,13 +129,13 @@ def plan_coordination(mission: Mission, profiles: Iterable[IslandProfile] = DEFA
         "Preserve counterevidence and unresolved disagreement; consensus is not ground truth.",
         "Evaluate the final result against success criteria and policy constraints.",
     ]
-    if mission.risk_tier.casefold() in {"high", "critical"} or mission.irreversible_action:
+    if risk_tier in {"high", "critical"} or mission.irreversible_action:
         verification += [
             "Require explicit approval before consequential external actions.",
             "Independently check critical claims and calculations.",
         ]
     return CoordinationPlan(
-        planner_version="0.1.0", original_objective=mission.objective,
+        planner_version="0.1.0", original_objective=original_objective,
         selections=tuple(selections), assumptions=tuple(assumptions), unknowns=tuple(unknowns),
         clarification_questions=tuple(questions), verification_steps=tuple(verification),
         capability_gaps=tuple(gaps), review_level=_review_level(mission, len(unknowns), len(selections)),

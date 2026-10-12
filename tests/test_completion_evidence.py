@@ -114,6 +114,13 @@ class CompletionEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceValidationError, "verifier failed"):
             self.validate(verifier=broken_verifier)
 
+    def test_rejects_non_boolean_dispatch_boundary_flag(self):
+        self.attempt = ExecutionAttempt(**{
+            **self.attempt.__dict__, "dispatch_boundary_entered": 1
+        })
+        with self.assertRaisesRegex(EvidenceValidationError, "dispatch boundary flag must be boolean"):
+            self.validate()
+
     def test_rejects_evidence_when_dispatch_boundary_not_entered(self):
         self.attempt = ExecutionAttempt(**{
             **self.attempt.__dict__, "dispatch_boundary_entered": False

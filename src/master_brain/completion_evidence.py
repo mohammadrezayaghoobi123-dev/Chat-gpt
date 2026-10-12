@@ -107,7 +107,7 @@ def validate_completion_evidence(
         raise EvidenceValidationError("execution is not awaiting evidence reconciliation")
     for name, value in (
         ("verifier_id", verifier_id),
-        *((("verifier_version", verifier_version),) if verifier_version else ()),
+        *((("verifier_version", verifier_version),) if verifier_version != "" else ()),
         ("attempt_id", evidence.attempt_id),
         ("execution_key", evidence.execution_key),
         ("mission_id", evidence.mission_id),

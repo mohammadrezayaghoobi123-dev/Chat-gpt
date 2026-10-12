@@ -407,6 +407,11 @@ def record_test_execution(
     provenance: ExecutionProvenance,
 ) -> CTPCase:
     """Return a new case with a recorded outcome; never execute the test itself."""
+    if not isinstance(case, CTPCase):
+        raise ValueError("case must be a CTPCase")
+    case_issues = case.validate()
+    if case_issues:
+        raise ValueError("case must be valid before recording execution: " + "; ".join(case_issues))
     if not isinstance(status, TestStatus):
         raise ValueError("status must be a TestStatus")
     if status == TestStatus.NOT_RUN:

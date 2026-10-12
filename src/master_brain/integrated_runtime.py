@@ -103,7 +103,7 @@ def _build_audit_records(mission: Mission, run: MissionRun) -> tuple[AuditRecord
     all_claim_ids = tuple(claim.claim_id for claim in reviewable_claims)
     executed_islands = tuple(result.island_id for result in run.results)
     allowed_risk_tiers = {"low", "medium", "high", "critical"}
-    risk_tier = mission.risk_tier.casefold()
+    risk_tier = mission.risk_tier.casefold() if isinstance(mission.risk_tier, str) else "unrecognized"
     if risk_tier not in allowed_risk_tiers:
         risk_tier = "unrecognized"
 
@@ -199,13 +199,14 @@ def _execute_mission_untraced(
     digest-bound approval service. An approval must not be simulated by a bool.
     """
     plan = plan_coordination(mission)
-    if mission.risk_tier.casefold() not in {"low", "medium", "high", "critical"}:
+    risk_tier = mission.risk_tier.casefold() if isinstance(mission.risk_tier, str) else "unrecognized"
+    if risk_tier not in {"low", "medium", "high", "critical"}:
         return MissionRun(
             plan=plan,
             status="needs_clarification",
             unresolved_issues=("Mission not dispatched because its risk tier is unrecognized.",),
         )
-    if mission.risk_tier.casefold() in {"high", "critical"} or mission.irreversible_action or plan.review_level is ReviewLevel.HUMAN_GATED:
+    if risk_tier in {"high", "critical"} or mission.irreversible_action or plan.review_level is ReviewLevel.HUMAN_GATED:
         return MissionRun(
             plan=plan,
             status="approval_required",

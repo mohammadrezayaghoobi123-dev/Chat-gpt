@@ -1,14 +1,20 @@
-"""Shared proof review for mission results."""
+"""Shared proof review and falsification planning for mission results."""
 from dataclasses import dataclass
+
 from .core import Claim, Contradiction, Decision, Evidence, assess_contradictions, evaluate_claim
+from .ctp import CTPCase, plan_contradiction_case
+
 
 @dataclass(frozen=True)
 class ProofReport:
     contradictions: tuple[Contradiction, ...] = ()
     claim_reviews: tuple[Decision, ...] = ()
     unresolved_issues: tuple[str, ...] = ()
+    ctp_cases: tuple[CTPCase, ...] = ()
+
 
 def review_proof(claims, evidence):
+    """Review evidence and create unexecuted CTP plans for detected conflicts."""
     issues = []
     unique = []
     by_id = {}
@@ -35,4 +41,22 @@ def review_proof(claims, evidence):
         issues.append("Some claims need further review.")
     if any(item.status == "supported_by_recorded_evidence" for item in reviews):
         issues.append("Recorded support still requires source and independence checks.")
-    return ProofReport(conflicts, reviews, tuple(dict.fromkeys(issues)))
+
+    ctp_cases = []
+    for conflict in conflicts:
+        claim_a = by_id.get(conflict.claim_a)
+        claim_b = by_id.get(conflict.claim_b)
+        if claim_a is None or claim_b is None:
+            issues.append("A detected conflict could not be linked to both original claims for CTP planning.")
+            continue
+        case = plan_contradiction_case(claim_a, claim_b, conflict)
+        if case.validate():
+            issues.append("A generated CTP case failed structural validation.")
+        ctp_cases.append(case)
+
+    return ProofReport(
+        conflicts,
+        reviews,
+        tuple(dict.fromkeys(issues)),
+        tuple(ctp_cases),
+    )

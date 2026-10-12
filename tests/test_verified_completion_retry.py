@@ -474,6 +474,55 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(count, 0)
 
+    def test_attempt_scope_change_during_verification_rejects_stale_completion(self):
+        def verifier_with_intervening_scope_change(evidence):
+            # Simulate an out-of-band writer changing trusted attempt configuration
+            # after the initial read but before the completion transaction recheck.
+            with sqlite3.connect(self.registry.path) as db:
+                db.execute(
+                    "UPDATE execution_attempts SET provider_scope=? WHERE attempt_id=?",
+                    ("attacker/account", self.attempt.attempt_id),
+                )
+            return ProviderVerificationResult(
+                True, evidence.provider_id, "merchant-account-1/production",
+                "operation-receipt", evidence.provider_receipt_id,
+            )
+
+        racing_registry = ConfiguredVerifierRegistry([
+            VerifierDescriptor(
+                verifier_id="payments-receipt",
+                version="1",
+                provider_id="provider-x",
+                evidence_type="operation-receipt",
+                verify=verifier_with_intervening_scope_change,
+                enabled=True,
+            )
+        ])
+
+        with self.assertRaisesRegex(
+            InvalidTransition, "attempt changed during evidence verification"
+        ):
+            self.registry.complete_with_verified_evidence(
+                key=self.key,
+                expected_version=self.record.version,
+                attempt_id=self.attempt.attempt_id,
+                evidence=self.evidence,
+                verifier_id="payments-receipt",
+                verifier_version="1",
+                verifier_registry=racing_registry,
+                recorded_at=_iso(-1),
+            )
+
+        current = self.registry.get(self.key)
+        self.assertEqual(current.state, self.record.state)
+        self.assertEqual(current.version, self.record.version)
+        with sqlite3.connect(self.registry.path) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                (self.key,),
+            ).fetchone()[0]
+        self.assertEqual(count, 0)
+
     def test_concurrent_exact_completion_creates_one_receipt(self):
         barrier = Barrier(2)
         call_lock = Lock()

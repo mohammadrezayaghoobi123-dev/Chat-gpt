@@ -74,6 +74,14 @@ class ProofPlaneTests(unittest.TestCase):
         self.assertEqual(decision.independent_supporting_group_count, 0)
         self.assertEqual(decision.supporting_evidence, ())
 
+    def test_claim_with_invalid_identifier_is_excluded_safely(self):
+        claim = Claim(None, "plant", "output", "100")
+        report = review_proof((claim,), ())
+
+        self.assertEqual(report.claim_reviews, ())
+        self.assertTrue(any("invalid claim ID" in issue.lower()
+                            for issue in report.unresolved_issues))
+
     def test_conflicting_duplicate_claim_ids_are_excluded_from_review(self):
         claims = (
             Claim("ambiguous-claim", "plant", "output", "100"),

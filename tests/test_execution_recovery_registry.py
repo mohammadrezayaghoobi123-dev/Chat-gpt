@@ -249,6 +249,26 @@ class RecoveryCandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(RegistryError, "orphan or inconsistent execution attempt"):
             self.registry.list_recovery_candidates()
 
+
+    def test_recovery_inventory_fails_closed_on_attempt_timestamp_regression(self):
+        from master_brain.execution_registry import RegistryError
+
+        running = self.reserve("bad-attempt-chronology", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:02Z",
+        )
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute(
+                "UPDATE execution_attempts SET dispatch_boundary_entered=1, updated_at=? WHERE attempt_id=?",
+                ("2026-10-12T00:00:01Z", attempt.attempt_id),
+            )
+
+        with self.assertRaisesRegex(RegistryError, "execution attempt timestamp is inconsistent"):
+            self.registry.list_recovery_candidates()
+
     def test_empty_registry_returns_empty_candidates(self):
         self.assertEqual(self.registry.list_recovery_candidates(), [])
 

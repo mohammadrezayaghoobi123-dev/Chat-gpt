@@ -70,6 +70,51 @@ class OperationalProofLaneTests(unittest.TestCase):
         self.assertIn("no enabled trusted verifier", report.unresolved_issue)
         self.assertEqual(self.registry.get("exec-1").state, State.OUTCOME_UNKNOWN)
 
+    def test_verified_evidence_and_success_transition_commit_atomically(self):
+        verifier_registry = ConfiguredVerifierRegistry([VerifierDescriptor(
+            verifier_id="receipt-check", version="1", provider_id="provider-x",
+            evidence_type="operation-receipt", verify=lambda _evidence: True,
+        )])
+        completed = self.registry.complete_with_verified_evidence(
+            key="exec-1",
+            expected_version=self.record.version,
+            attempt_id=self.attempt.attempt_id,
+            evidence=self.evidence,
+            verifier_id="receipt-check",
+            verifier_version="1",
+            verifier_registry=verifier_registry,
+            recorded_at="2026-10-12T10:00:06Z",
+        )
+        self.assertEqual(completed.state, State.SUCCEEDED)
+        self.assertEqual(completed.version, self.record.version + 1)
+        with __import__("sqlite3").connect(self.registry.path) as db:
+            receipt = db.execute(
+                "SELECT attempt_id, verifier_id, verifier_version FROM completion_receipts WHERE execution_key=?",
+                ("exec-1",),
+            ).fetchone()
+        self.assertEqual(receipt, (self.attempt.attempt_id, "receipt-check", "1"))
+
+    def test_exact_completion_retry_is_idempotent_but_different_evidence_is_rejected(self):
+        verifier_registry = ConfiguredVerifierRegistry([VerifierDescriptor(
+            verifier_id="receipt-check", version="1", provider_id="provider-x",
+            evidence_type="operation-receipt", verify=lambda _evidence: True,
+        )])
+        kwargs = dict(
+            key="exec-1", expected_version=self.record.version,
+            attempt_id=self.attempt.attempt_id, evidence=self.evidence,
+            verifier_id="receipt-check", verifier_version="1",
+            verifier_registry=verifier_registry,
+            recorded_at="2026-10-12T10:00:06Z",
+        )
+        first = self.registry.complete_with_verified_evidence(**kwargs)
+        repeated = self.registry.complete_with_verified_evidence(**kwargs)
+        self.assertEqual(first, repeated)
+        altered = CompletionEvidence(**{
+            **self.evidence.__dict__, "provider_receipt_id": "different-receipt"
+        })
+        with self.assertRaisesRegex(Exception, "different or missing completion evidence"):
+            self.registry.complete_with_verified_evidence(**{**kwargs, "evidence": altered})
+
     def test_false_verifier_result_is_not_accepted(self):
         registry = ConfiguredVerifierRegistry([VerifierDescriptor(
             verifier_id="receipt-check", version="1", provider_id="provider-x",

@@ -59,7 +59,7 @@ DEFAULT_PROFILES = (
 )
 
 def _review_level(mission: Mission, unknown_count: int, selection_count: int) -> ReviewLevel:
-    risk = mission.risk_tier.casefold()
+    risk = mission.risk_tier.casefold() if isinstance(mission.risk_tier, str) else "unrecognized"
     if mission.irreversible_action or risk == "critical":
         return ReviewLevel.HUMAN_GATED
     if risk == "high" or unknown_count >= 3:
@@ -96,7 +96,10 @@ def plan_coordination(mission: Mission, profiles: Iterable[IslandProfile] = DEFA
     if not any(s.island_id != "general" for s in selections):
         gaps.append("No specialist island matched; clarify the objective or extend the registry.")
         unknowns.append("Specialist coverage is not established for this objective.")
-    if mission.risk_tier.casefold() not in {"low", "medium", "high", "critical"}:
+    if not isinstance(mission.risk_tier, str):
+        unknowns.append("The mission risk tier must be a string.")
+        questions.append("Provide a recognized risk tier before dispatch.")
+    elif mission.risk_tier.casefold() not in {"low", "medium", "high", "critical"}:
         unknowns.append("Unrecognized risk tier: " + mission.risk_tier)
         questions.append("Confirm the risk tier before dispatch.")
     verification = [
@@ -105,7 +108,7 @@ def plan_coordination(mission: Mission, profiles: Iterable[IslandProfile] = DEFA
         "Preserve counterevidence and unresolved disagreement; consensus is not ground truth.",
         "Evaluate the final result against success criteria and policy constraints.",
     ]
-    if mission.risk_tier.casefold() in {"high", "critical"} or mission.irreversible_action:
+    if (isinstance(mission.risk_tier, str) and mission.risk_tier.casefold() in {"high", "critical"}) or mission.irreversible_action:
         verification += [
             "Require explicit approval before consequential external actions.",
             "Independently check critical claims and calculations.",

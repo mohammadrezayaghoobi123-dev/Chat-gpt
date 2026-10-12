@@ -119,6 +119,33 @@ def validate_completion_evidence(
             raise EvidenceValidationError(f"{name} must be non-empty")
     if not _valid_timestamp(evidence.observed_at):
         raise EvidenceValidationError("observed_at must be timezone-aware ISO-8601")
+    # A receipt cannot predate the durable attempt/dispatch boundary it claims
+    # to prove. Compare parsed aware datetimes, not ISO strings (offsets vary).
+    try:
+        observed_at = datetime.fromisoformat(
+            evidence.observed_at.strip().replace("Z", "+00:00")
+        )
+        attempt_created_at = datetime.fromisoformat(
+            attempt.created_at.strip().replace("Z", "+00:00")
+        )
+        dispatch_boundary_at = datetime.fromisoformat(
+            attempt.updated_at.strip().replace("Z", "+00:00")
+        )
+    except (AttributeError, ValueError) as exc:
+        raise EvidenceValidationError(
+            "attempt timestamps must be timezone-aware ISO-8601"
+        ) from exc
+    if any(
+        timestamp.tzinfo is None or timestamp.utcoffset() is None
+        for timestamp in (attempt_created_at, dispatch_boundary_at)
+    ):
+        raise EvidenceValidationError(
+            "attempt timestamps must be timezone-aware ISO-8601"
+        )
+    if dispatch_boundary_at < attempt_created_at:
+        raise EvidenceValidationError("dispatch boundary predates attempt creation")
+    if observed_at < dispatch_boundary_at:
+        raise EvidenceValidationError("observed_at predates dispatch boundary")
     if evidence.attempt_id != attempt.attempt_id:
         raise EvidenceValidationError("attempt ID mismatch")
     if evidence.execution_key != execution.key or evidence.execution_key != attempt.key:

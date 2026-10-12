@@ -99,6 +99,17 @@ class ProofPlaneTests(unittest.TestCase):
         self.assertTrue(any("not linked to a known claim" in issue
                             for issue in report.unresolved_issues))
 
+    def test_non_evidence_objects_are_reported_and_excluded(self):
+        from types import SimpleNamespace
+
+        claim = Claim("claim-a", "plant", "output", "100")
+        malformed = SimpleNamespace(evidence_id="e-1", claim_id="claim-a")
+        report = review_proof((claim,), (malformed,))
+
+        self.assertEqual(report.claim_reviews[0].status, "unverified")
+        self.assertTrue(any("invalid evidence record" in issue.lower()
+                            for issue in report.unresolved_issues))
+
     def test_malformed_orphan_evidence_id_is_reported_without_crashing(self):
         report = review_proof((), (Evidence(None, "untrusted source", "unknown", True),))
 

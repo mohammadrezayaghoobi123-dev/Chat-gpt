@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 import math
+import re
 from typing import Iterable, Sequence
 
 
@@ -105,17 +106,28 @@ class Decision:
 
 def route_task(task: Task) -> Route:
     """Conservative deterministic routing; specialist selection is a rule, not AI."""
-    text = task.objective.lower()
+    text = task.objective.casefold() if isinstance(task.objective, str) else ""
     evidence_terms = ("research", "prove", "evidence", "compare", "verify", "contradiction", "scientific")
     opportunity_terms = ("opportunity", "business", "prioritize", "investment", "market", "strategy")
-    if any(term in text for term in opportunity_terms):
+    matches = lambda terms: any(
+        re.search(r"(?<!\\w)" + re.escape(term) + r"(?!\\w)", text)
+        for term in terms
+    )
+    if matches(opportunity_terms):
         specialist, rationale = "opportunity_engine", "Objective signals option generation or prioritization."
-    elif any(term in text for term in evidence_terms):
+    elif matches(evidence_terms):
         specialist, rationale = "research_and_proof", "Objective requires evidence, comparison or verification."
     else:
         specialist, rationale = "general_planner", "Default route when no specialized rule matches."
-    approval = task.requires_external_action or task.risk in (RiskTier.HIGH, RiskTier.CRITICAL)
-    return Route(specialist, any(term in text for term in evidence_terms), approval, rationale)
+    risk_value = task.risk.value if isinstance(task.risk, RiskTier) else task.risk
+    known_risks = {"low", "medium", "high", "critical"}
+    risk_value = risk_value.casefold() if isinstance(risk_value, str) else "unrecognized"
+    approval = (
+        task.requires_external_action is True
+        or risk_value in {"high", "critical"}
+        or risk_value not in known_risks
+    )
+    return Route(specialist, matches(evidence_terms), approval, rationale)
 
 
 def assess_contradictions(claims: Sequence[Claim]) -> list[Contradiction]:

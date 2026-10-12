@@ -111,11 +111,17 @@ class CTPCase:
         if len(set(hypothesis_ids)) != len(hypothesis_ids):
             issues.append("hypothesis IDs must be unique")
         known = set(hypothesis_ids)
+        falsified_hypotheses = set()
         for item in self.falsifiers:
             if item.hypothesis_id not in known:
                 issues.append(f"falsifier references unknown hypothesis: {item.hypothesis_id}")
-            if not item.observation_that_would_weaken_it.strip():
+            else:
+                falsified_hypotheses.add(item.hypothesis_id)
+            if not isinstance(item.observation_that_would_weaken_it, str) or not item.observation_that_would_weaken_it.strip():
                 issues.append(f"falsifier for {item.hypothesis_id} has no observation")
+        missing_falsifiers = known - falsified_hypotheses
+        if missing_falsifiers:
+            issues.append("missing falsifier for hypothesis: " + ", ".join(sorted(missing_falsifiers)))
         test_ids = [item.test_id for item in self.tests]
         if len(set(test_ids)) != len(test_ids):
             issues.append("test IDs must be unique")

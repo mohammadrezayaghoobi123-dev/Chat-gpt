@@ -16,6 +16,7 @@ This branch combines **A (intelligence and opportunity discovery)** with **B (pr
 - Opportunity scores are illustrative, not calibrated forecasts.
 - Passing synthetic tests does not establish real-world correctness.
 - Do not put API keys, passwords, tokens, private business data, or personal secrets in this repository.
+- **Execution/evidence code is still a prototype, not a production authorization boundary.** `ConfiguredVerifierRegistry` validates an allowlist tuple, but it cannot prove that a caller-created registry or verifier callable came from reviewed deployment configuration. Python-level type checks are not a sandbox. Do not connect this path to real external actions until a trusted startup/configuration path, real provider-specific authenticity-and-semantics verifiers, and adversarial integration tests are implemented and reviewed.
 
 ## Run locally
 

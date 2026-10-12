@@ -1,6 +1,11 @@
 """Integrated, offline-testable mission execution across the Master Brain planning and proof core.
 
-Executors are explicit injected boundaries. This module never implies that an
+Executors are explicit injected boundaries. Injected Python callables are
+trusted in-process code, NOT a sandbox or authorization boundary. Register only
+reviewed analysis-only executors here; do not use this mapping to submit external
+provider actions. Such actions require a separate, reviewed action broker that
+uses trusted attempt configuration, authenticated approval where applicable,
+and provider-specific completion verification. This module never implies that an
 unconfigured island, model, provider, tool, or external action was used.
 """
 from __future__ import annotations
@@ -186,6 +191,10 @@ def _execute_mission_untraced(
     """Plan, dispatch configured islands, and review returned claims together.
 
     This is a synchronous orchestration seam, not a provider integration.
+    The caller-supplied executor mapping is executable code and is not sandboxed;
+    this function cannot prove a callback has no side effects. Only register
+    reviewed analysis-only callbacks here. Provider actions must use a separate
+    broker with trusted attempt scope and provider-specific verification.
     Human-gated missions fail closed because this prototype has no authenticated,
     digest-bound approval service. An approval must not be simulated by a bool.
     """

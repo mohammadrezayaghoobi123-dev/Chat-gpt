@@ -330,6 +330,61 @@ class RecoveryCandidateTests(unittest.TestCase):
         )
 
 
+    def test_reservation_retries_transient_sqlite_writer_lock(self):
+        """A transient writer lock clears within the bounded retry window."""
+        import time
+
+        registry = SQLiteExecutionRegistry(
+            str(Path(self.tmp.name) / "transient-lock.sqlite3"), timeout=0.01
+        )
+        blocker = sqlite3.connect(registry.path, timeout=0.01, isolation_level=None)
+        self.addCleanup(blocker.close)
+        blocker.execute("BEGIN IMMEDIATE")
+        blocker.execute(
+            "INSERT INTO executions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("lock-holder", "mission-lock", "contract", "payload", "PENDING", 0,
+             "2026-10-12T00:00:00Z", "2026-10-12T00:00:00Z"),
+        )
+
+        def release_lock():
+            time.sleep(0.06)
+            blocker.commit()
+
+        releaser = threading.Thread(target=release_lock)
+        releaser.start()
+        try:
+            record, created = registry.reserve(
+                key="after-lock", mission_id="mission-after-lock",
+                contract_digest="contract", payload_digest="payload",
+                recorded_at="2026-10-12T00:00:01Z",
+            )
+        finally:
+            releaser.join(timeout=2)
+
+        self.assertFalse(releaser.is_alive(), "lock-release thread did not finish")
+        self.assertTrue(created)
+        self.assertEqual(record.key, "after-lock")
+        self.assertEqual(registry.get("after-lock"), record)
+
+    def test_reservation_fails_cleanly_when_writer_lock_exceeds_retry_window(self):
+        from master_brain.execution_registry import RegistryError
+
+        registry = SQLiteExecutionRegistry(
+            str(Path(self.tmp.name) / "persistent-lock.sqlite3"), timeout=0.01
+        )
+        blocker = sqlite3.connect(registry.path, timeout=0.01, isolation_level=None)
+        self.addCleanup(blocker.close)
+        blocker.execute("BEGIN IMMEDIATE")
+        with self.assertRaisesRegex(RegistryError, "reservation failed"):
+            registry.reserve(
+                key="blocked", mission_id="mission-blocked",
+                contract_digest="contract", payload_digest="payload",
+                recorded_at="2026-10-12T00:00:01Z",
+            )
+        blocker.rollback()
+        self.assertIsNone(registry.get("blocked"))
+
+
 if __name__ == "__main__":
     unittest.main()
 

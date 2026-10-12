@@ -237,6 +237,94 @@ class VerifiedCompletionRetryTests(unittest.TestCase):
                 (self.key,),
             ).fetchone()[0], 0)
 
+    def test_verifier_cannot_spoof_persisted_provider_scope(self):
+        before = self.registry.get(self.key)
+        spoofed_registry = ConfiguredVerifierRegistry([
+            VerifierDescriptor(
+                verifier_id="payments-receipt",
+                version="1",
+                provider_id="provider-x",
+                evidence_type="operation-receipt",
+                verify=lambda evidence: ProviderVerificationResult(
+                    True, evidence.provider_id, "attacker-controlled/account",
+                    "operation-receipt", evidence.provider_receipt_id,
+                ),
+                enabled=True,
+            )
+        ])
+
+        with self.assertRaisesRegex(
+            EvidenceValidationError, "scope disagrees with trusted attempt configuration"
+        ):
+            self.registry.complete_with_verified_evidence(
+                key=self.key, expected_version=self.record.version,
+                attempt_id=self.attempt.attempt_id, evidence=self.evidence,
+                verifier_id="payments-receipt", verifier_version="1",
+                verifier_registry=spoofed_registry, recorded_at=_iso(-2),
+            )
+
+        self.assertEqual(self.registry.get(self.key), before)
+        with sqlite3.connect(self.registry.path) as db:
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                           (self.key,)).fetchone()[0],
+                0,
+            )
+
+    def test_verifier_cannot_return_different_canonical_receipt_id(self):
+        before = self.registry.get(self.key)
+        mismatched_registry = ConfiguredVerifierRegistry([
+            VerifierDescriptor(
+                verifier_id="payments-receipt",
+                version="1",
+                provider_id="provider-x",
+                evidence_type="operation-receipt",
+                verify=lambda evidence: ProviderVerificationResult(
+                    True, evidence.provider_id, "merchant-account-1/production",
+                    "operation-receipt", "different-canonical-receipt",
+                ),
+                enabled=True,
+            )
+        ])
+
+        with self.assertRaisesRegex(
+            EvidenceValidationError, "canonical identity"
+        ):
+            self.registry.complete_with_verified_evidence(
+                key=self.key, expected_version=self.record.version,
+                attempt_id=self.attempt.attempt_id, evidence=self.evidence,
+                verifier_id="payments-receipt", verifier_version="1",
+                verifier_registry=mismatched_registry, recorded_at=_iso(-2),
+            )
+
+        self.assertEqual(self.registry.get(self.key), before)
+        with sqlite3.connect(self.registry.path) as db:
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                           (self.key,)).fetchone()[0],
+                0,
+            )
+
+    def test_deployment_entry_point_fails_closed_without_reviewed_configuration(self):
+        before = self.registry.get(self.key)
+        with self.assertRaisesRegex(
+            EvidenceValidationError, "deployment verifier configuration is unavailable"
+        ):
+            self.registry.complete_with_deployment_verified_evidence(
+                key=self.key, expected_version=self.record.version,
+                attempt_id=self.attempt.attempt_id, evidence=self.evidence,
+                verifier_id="payments-receipt", verifier_version="1",
+                recorded_at=_iso(-2),
+            )
+
+        self.assertEqual(self.registry.get(self.key), before)
+        with sqlite3.connect(self.registry.path) as db:
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM completion_receipts WHERE execution_key=?",
+                           (self.key,)).fetchone()[0],
+                0,
+            )
+
     def test_rejected_provider_evidence_leaves_state_and_receipts_unchanged(self):
         rejecting_registry = ConfiguredVerifierRegistry([
             VerifierDescriptor(

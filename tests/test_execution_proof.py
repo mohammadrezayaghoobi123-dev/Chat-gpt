@@ -55,7 +55,7 @@ class OperationalProofLaneTests(unittest.TestCase):
         )
         self.assertEqual(report.status, "verified_for_reconciliation")
         self.assertIsNotNone(report.verified_evidence)
-        self.assertIn("not implemented", report.unresolved_issue)
+        self.assertIn("read-only", report.unresolved_issue)
         self.assertEqual(self.registry.get("exec-1"), before)
         self.assertEqual(self.registry.get("exec-1").state, State.OUTCOME_UNKNOWN)
 

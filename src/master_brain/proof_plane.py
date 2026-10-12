@@ -1,8 +1,8 @@
 """Shared proof review and falsification planning for mission results."""
 from dataclasses import dataclass
 
-from .core import Claim, Contradiction, Decision, Evidence, assess_contradictions, evaluate_claim
-from .ctp import CTPCase, plan_contradiction_case
+from .core import Claim, ClaimImportance, Contradiction, Decision, Evidence, assess_contradictions, evaluate_claim
+from .ctp import CTPCase, plan_contradiction_case, plan_important_claim_case
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,7 @@ def review_proof(claims, evidence):
         issues.append("Recorded support still requires source and independence checks.")
 
     ctp_cases = []
+    covered_claim_ids = set()
     for conflict in conflicts:
         claim_a = by_id.get(conflict.claim_a)
         claim_b = by_id.get(conflict.claim_b)
@@ -52,6 +53,24 @@ def review_proof(claims, evidence):
         case = plan_contradiction_case(claim_a, claim_b, conflict)
         if case.validate():
             issues.append("A generated CTP case failed structural validation.")
+        ctp_cases.append(case)
+        covered_claim_ids.update(case.claim_ids)
+
+    important_values = {ClaimImportance.HIGH.value, ClaimImportance.CRITICAL.value}
+    valid_values = {item.value for item in ClaimImportance}
+    for claim in unique:
+        raw_importance = getattr(claim.importance, "value", claim.importance)
+        if raw_importance not in valid_values:
+            issues.append(f"Claim {claim.claim_id} has an unrecognized importance tier.")
+            continue
+        if raw_importance not in important_values or claim.claim_id in covered_claim_ids:
+            continue
+        if not isinstance(claim.claim_id, str) or not claim.claim_id.strip():
+            issues.append("A high-importance claim without a valid ID could not receive a CTP plan.")
+            continue
+        case = plan_important_claim_case(claim)
+        if case.validate():
+            issues.append(f"CTP plan for high-importance claim {claim.claim_id} failed structural validation.")
         ctp_cases.append(case)
 
     return ProofReport(

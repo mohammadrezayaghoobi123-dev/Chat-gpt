@@ -95,6 +95,14 @@ def validate_completion_evidence(
     is trusted, provider-specific, and verifies authenticity plus operation
     semantics (not merely the presence of a receipt-shaped object).
     """
+    if not isinstance(execution, Record):
+        raise EvidenceValidationError("execution must be a Record")
+    if not isinstance(attempt, ExecutionAttempt):
+        raise EvidenceValidationError("attempt must be an ExecutionAttempt")
+    if not isinstance(evidence, CompletionEvidence):
+        raise EvidenceValidationError("evidence must be a CompletionEvidence record")
+    if not callable(provider_verifier):
+        raise EvidenceValidationError("provider evidence verifier must be callable")
     if execution.state not in {State.OUTCOME_UNKNOWN, State.RECONCILIATION_REQUIRED}:
         raise EvidenceValidationError("execution is not awaiting evidence reconciliation")
     for name, value in (
@@ -176,6 +184,12 @@ def validate_registered_completion_evidence(
         VerifierRegistryError,
     )
 
+    if not isinstance(execution, Record):
+        raise EvidenceValidationError("execution must be a Record")
+    if not isinstance(attempt, ExecutionAttempt):
+        raise EvidenceValidationError("attempt must be an ExecutionAttempt")
+    if not isinstance(evidence, CompletionEvidence):
+        raise EvidenceValidationError("evidence must be a CompletionEvidence record")
     if not isinstance(registry, ConfiguredVerifierRegistry):
         raise EvidenceValidationError("trusted verifier registry is required")
     try:

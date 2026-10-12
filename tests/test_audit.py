@@ -52,6 +52,10 @@ class AuditRecordTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditValidationError, "timezone"):
             self.make_record(occurred_at="2026-10-12T09:30:00")
 
+    def test_rejects_unicode_compatibility_secret_key(self):
+        with self.assertRaises(AuditValidationError):
+            self.make_record(metadata={"ａｐｉ＿ｋｅｙ": "redacted"})
+
     def test_rejects_secret_like_metadata_keys_recursively(self):
         for key in ("api_key", "APIKey", "api-key", "access-token", "refresh-token", "private-key"):
             with self.subTest(key=key):

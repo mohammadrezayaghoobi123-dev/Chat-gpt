@@ -575,6 +575,41 @@ class SQLiteExecutionRegistry:
         except sqlite3.Error as exc:
             raise RegistryError("recovery candidate listing failed") from exc
 
+    def complete_with_deployment_verified_evidence(
+        self, *, key: str, expected_version: int, attempt_id: str,
+        evidence: object, verifier_id: str, verifier_version: str,
+        recorded_at: str,
+    ) -> Record:
+        """Complete only through the application-owned deployment verifier set.
+
+        Unlike the lower-level prototype/testing seam, this method does not
+        accept a caller-supplied registry. It resolves verifiers from the fixed
+        deployment configuration module and fails closed when that reviewed
+        configuration is absent or invalid. No provider verifier is bundled
+        by default, so production completion remains unavailable until one is
+        implemented and reviewed.
+        """
+        from master_brain.verifier_registry import (
+            VerifierRegistryError,
+            load_deployment_verifier_registry,
+        )
+        from master_brain.completion_evidence import EvidenceValidationError
+
+        try:
+            registry = load_deployment_verifier_registry()
+        except VerifierRegistryError as exc:
+            raise EvidenceValidationError(str(exc)) from exc
+        return self.complete_with_verified_evidence(
+            key=key,
+            expected_version=expected_version,
+            attempt_id=attempt_id,
+            evidence=evidence,
+            verifier_id=verifier_id,
+            verifier_version=verifier_version,
+            verifier_registry=registry,
+            recorded_at=recorded_at,
+        )
+
     def complete_with_verified_evidence(
         self, *, key: str, expected_version: int, attempt_id: str,
         evidence: object, verifier_id: str, verifier_version: str,

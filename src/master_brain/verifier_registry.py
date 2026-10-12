@@ -10,14 +10,14 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Callable, Mapping
 
-from master_brain.completion_evidence import CompletionEvidence
+from master_brain.completion_evidence import CompletionEvidence, ProviderVerificationResult
 
 
 class VerifierRegistryError(ValueError):
     """Verifier configuration is invalid or no approved verifier matches."""
 
 
-Verifier = Callable[[CompletionEvidence], bool]
+Verifier = Callable[[CompletionEvidence], bool | ProviderVerificationResult]
 
 
 @dataclass(frozen=True)

@@ -107,7 +107,7 @@ class OperationalProofLaneTests(unittest.TestCase):
     def test_exact_completion_retry_is_idempotent_but_different_evidence_is_rejected(self):
         verifier_registry = ConfiguredVerifierRegistry([VerifierDescriptor(
             verifier_id="receipt-check", version="1", provider_id="provider-x",
-            evidence_type="operation-receipt", verify=lambda _evidence: True,
+            evidence_type="operation-receipt", verify=_verify_scoped_receipt,
         )])
         kwargs = dict(
             key="exec-1", expected_version=self.record.version,
@@ -161,7 +161,7 @@ class OperationalProofLaneTests(unittest.TestCase):
         )
         verifier_registry = ConfiguredVerifierRegistry([VerifierDescriptor(
             verifier_id="receipt-check", version="1", provider_id="provider-x",
-            evidence_type="operation-receipt", verify=lambda _evidence: True,
+            evidence_type="operation-receipt", verify=_verify_scoped_receipt,
         )])
         with self.assertRaisesRegex(EvidenceValidationError, "dispatch boundary was not entered"):
             self.registry.complete_with_verified_evidence(
@@ -182,7 +182,7 @@ class OperationalProofLaneTests(unittest.TestCase):
         from master_brain.completion_evidence import EvidenceValidationError
         registry = ConfiguredVerifierRegistry([VerifierDescriptor(
             verifier_id="receipt-check", version="1", provider_id="provider-x",
-            evidence_type="operation-receipt", verify=lambda _evidence: True,
+            evidence_type="operation-receipt", verify=_verify_scoped_receipt,
         )])
         before = self.registry.get("exec-1")
         with self.assertRaisesRegex(EvidenceValidationError, "recorded_at predates evidence observation"):
@@ -235,7 +235,7 @@ class OperationalProofLaneTests(unittest.TestCase):
     def test_evidence_observed_before_dispatch_boundary_is_rejected(self):
         registry = ConfiguredVerifierRegistry([VerifierDescriptor(
             verifier_id="receipt-check", version="1", provider_id="provider-x",
-            evidence_type="operation-receipt", verify=lambda _evidence: True,
+            evidence_type="operation-receipt", verify=_verify_scoped_receipt,
         )])
         stale_evidence = CompletionEvidence(**{
             **self.evidence.__dict__, "observed_at": "2026-10-12T10:00:02Z"

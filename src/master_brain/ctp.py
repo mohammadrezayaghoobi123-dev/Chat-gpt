@@ -218,16 +218,22 @@ class CTPCase:
     @property
     def unresolved_test_ids(self) -> tuple[str, ...]:
         """Tests still requiring execution or interpretation."""
+        tests = self.tests if isinstance(self.tests, (tuple, list)) else ()
         return tuple(
-            item.test_id for item in self.tests
-            if item.status in (TestStatus.NOT_RUN, TestStatus.INCONCLUSIVE)
+            item.test_id for item in tests
+            if isinstance(item, DiscriminatingTest)
+            and isinstance(item.test_id, str) and item.test_id.strip()
+            and isinstance(item.status, TestStatus)
+            and item.status in (TestStatus.NOT_RUN, TestStatus.INCONCLUSIVE)
         )
 
     @property
     def has_executed_evidence(self) -> bool:
         """True only when a test record contains an outcome and evidence reference."""
+        tests = self.tests if isinstance(self.tests, (tuple, list)) else ()
         return any(
-            isinstance(item.status, TestStatus)
+            isinstance(item, DiscriminatingTest)
+            and isinstance(item.status, TestStatus)
             and item.status in (TestStatus.PASS, TestStatus.FAIL)
             and isinstance(item.observed_result, str)
             and item.observed_result.strip()
@@ -236,7 +242,7 @@ class CTPCase:
             and bool(item.evidence_ids)
             and isinstance(item.execution_provenance, ExecutionProvenance)
             and not item.execution_provenance.validate()
-            for item in self.tests
+            for item in tests
         )
 
 

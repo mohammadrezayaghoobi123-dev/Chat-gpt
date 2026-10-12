@@ -23,13 +23,20 @@ def review_proof(claims, evidence):
     by_id = {}
     ambiguous_claim_ids = set()
     for claim in claims:
-        previous = by_id.get(claim.claim_id)
-        if previous is None and claim.claim_id not in ambiguous_claim_ids:
-            by_id[claim.claim_id] = claim
+        if not isinstance(claim, Claim):
+            issues.append("Invalid claim record; expected a Claim instance.")
+            continue
+        claim_id = claim.claim_id
+        if not isinstance(claim_id, str) or not claim_id.strip():
+            issues.append("Claim has an invalid claim ID and was excluded.")
+            continue
+        previous = by_id.get(claim_id)
+        if previous is None and claim_id not in ambiguous_claim_ids:
+            by_id[claim_id] = claim
             unique.append(claim)
         elif previous != claim:
-            issues.append("Duplicate claim ID with different content: " + claim.claim_id)
-            ambiguous_claim_ids.add(claim.claim_id)
+            issues.append("Duplicate claim ID with different content: " + claim_id)
+            ambiguous_claim_ids.add(claim_id)
     if ambiguous_claim_ids:
         # Do not let evidence attach to an arbitrary first-seen interpretation.
         by_id = {claim_id: claim for claim_id, claim in by_id.items()

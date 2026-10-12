@@ -138,6 +138,24 @@ class CTPCaseTests(unittest.TestCase):
                 case, "test-01", TestStatus.PASS, "Passed", ("evidence-001",), None,
             )
 
+    def test_has_executed_evidence_is_safe_for_malformed_observed_result(self):
+        case = self.make_case()
+        malformed_test = DiscriminatingTest(
+            "test-01", "Question", "Procedure",
+            (("h-a", "prediction"),), TestStatus.PASS,
+            observed_result=None, evidence_ids=("evidence-001",),
+            execution_provenance=ExecutionProvenance(
+                "run-malformed-result", "2026-10-12T10:00:00Z", "sensor",
+                "measurement", "group-a", "separate operator",
+            ),
+        )
+        malformed = CTPCase(
+            case.case_id, case.question, case.claim_ids, case.hypotheses,
+            case.falsifiers, (malformed_test,),
+        )
+        self.assertFalse(malformed.has_executed_evidence)
+        self.assertTrue(any("no observed result" in issue for issue in malformed.validate()))
+
     def test_case_validation_reports_non_text_case_id(self):
         case = self.make_case()
         malformed = CTPCase(

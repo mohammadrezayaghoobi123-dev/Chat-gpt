@@ -28,6 +28,15 @@ class RecoveryCandidateTests(unittest.TestCase):
             target=target, recorded_at=timestamp,
         )
 
+    def test_constructor_rejects_timeouts_that_overflow_sqlite_busy_timeout(self):
+        for timeout in (1e308, 10 ** 1000):
+            with self.subTest(timeout_type=type(timeout).__name__):
+                with self.assertRaisesRegex(ValueError, "timeout"):
+                    SQLiteExecutionRegistry(
+                        str(Path(self.tmp.name) / "invalid-timeout.sqlite3"),
+                        timeout=timeout,
+                    )
+
     def test_lists_only_uncertain_nonterminal_states_without_mutating_them(self):
         pending = self.reserve("pending", "2026-10-12T00:00:00Z")
 

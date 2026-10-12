@@ -84,7 +84,7 @@ def plan_mission(
             continue
         matched = tuple(
             keyword for keyword in island.keywords
-            if re.search(r"(?<!\\w)" + re.escape(keyword.casefold()) + r"(?!\\w)", normalized)
+            if re.search(r"(?<!\w)" + re.escape(keyword.casefold()) + r"(?!\w)", normalized)
         )
         if matched:
             assignments.append(IslandAssignment(

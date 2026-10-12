@@ -129,9 +129,12 @@ class SQLiteExecutionRegistry:
         """Return (record, created); identical duplicate requests never reclaim RUNNING."""
         self._required(key=key, mission_id=mission_id, contract_digest=contract_digest,
                        payload_digest=payload_digest, recorded_at=recorded_at)
+        stage = "connect"
         try:
             with closing(self._db()) as db, db:
+                stage = "begin_immediate"
                 db.execute("BEGIN IMMEDIATE")
+                stage = "select_existing"
                 row = db.execute("SELECT * FROM executions WHERE key=?", (key,)).fetchone()
                 if row:
                     record = self._record(row)
@@ -141,16 +144,19 @@ class SQLiteExecutionRegistry:
                         raise IdempotencyConflict("key reused with different request digests")
                     db.commit()
                     return record, False
+                stage = "insert_execution"
                 db.execute("INSERT INTO executions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                            (key, mission_id, contract_digest, payload_digest,
                             State.PENDING.value, 0, recorded_at, recorded_at))
+                stage = "select_inserted"
                 row = db.execute("SELECT * FROM executions WHERE key=?", (key,)).fetchone()
+                stage = "commit"
                 db.commit()
                 return self._record(row), True
         except (IdempotencyConflict, RegistryError):
             raise
         except sqlite3.Error as exc:
-            raise RegistryError("reservation failed") from exc
+            raise RegistryError(f"reservation failed during {stage}") from exc
 
     def get(self, key: str) -> Record | None:
         self._required(key=key)

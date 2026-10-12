@@ -123,7 +123,7 @@ def route_task(task: Task) -> Route:
     known_risks = {"low", "medium", "high", "critical"}
     risk_value = risk_value.casefold() if isinstance(risk_value, str) else "unrecognized"
     approval = (
-        task.requires_external_action is True
+        task.requires_external_action is not False
         or risk_value in {"high", "critical"}
         or risk_value not in known_risks
     )

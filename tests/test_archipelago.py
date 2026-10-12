@@ -37,6 +37,23 @@ class ArchipelagoPlanningTests(unittest.TestCase):
         selected = {assignment.island_id for assignment in plan.assignments}
         self.assertNotIn("software_ai", selected)
 
+    def test_non_string_objective_is_rejected_with_clear_error(self):
+        with self.assertRaisesRegex(ValueError, "objective must be a string"):
+            plan_mission(None)
+
+    def test_invalid_island_profile_is_rejected_with_clear_error(self):
+        malformed = Island("industrial", "Industrial", (None,), "Manufacturing")
+        with self.assertRaisesRegex(ValueError, "invalid island profile"):
+            plan_mission("factory production", islands=[malformed])
+
+    def test_duplicate_island_ids_are_rejected(self):
+        islands = [
+            Island("general", "General", ("plan",), "General"),
+            Island("general", "Duplicate", ("decision",), "Duplicate"),
+        ]
+        with self.assertRaisesRegex(ValueError, "duplicate island ID"):
+            plan_mission("make a plan", islands=islands)
+
     def test_empty_objective_is_non_destructive_and_flagged(self):
         plan = plan_mission("")
         self.assertTrue(any("empty" in note.lower() for note in plan.rationale))

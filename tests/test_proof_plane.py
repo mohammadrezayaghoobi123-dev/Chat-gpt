@@ -74,6 +74,23 @@ class ProofPlaneTests(unittest.TestCase):
         self.assertEqual(decision.independent_supporting_group_count, 0)
         self.assertEqual(decision.supporting_evidence, ())
 
+    def test_conflicting_duplicate_claim_ids_are_excluded_from_review(self):
+        claims = (
+            Claim("ambiguous-claim", "plant", "output", "100"),
+            Claim("ambiguous-claim", "plant", "output", "200"),
+        )
+        evidence = (
+            Evidence("ambiguous-evidence", "sensor", "ambiguous-claim", True, independent_group="sensor"),
+        )
+
+        report = review_proof(claims, evidence)
+
+        self.assertTrue(any("Duplicate claim ID with different content" in issue
+                            for issue in report.unresolved_issues))
+        self.assertEqual(report.claim_reviews, ())
+        self.assertTrue(any("not linked to a known claim" in issue
+                            for issue in report.unresolved_issues))
+
     def test_orphan_evidence_is_reported(self):
         report = review_proof((), (Evidence("e1", "report", "unknown-claim", True),))
         self.assertTrue(report.unresolved_issues)

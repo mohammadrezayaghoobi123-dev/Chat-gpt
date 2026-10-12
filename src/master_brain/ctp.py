@@ -101,14 +101,14 @@ class CTPCase:
     def validate(self) -> tuple[str, ...]:
         """Return structural issues without deciding which hypothesis is true."""
         issues: list[str] = []
-        raw_hypotheses = hypotheses if isinstance(hypotheses, (tuple, list)) else ()
-        raw_falsifiers = falsifiers if isinstance(falsifiers, (tuple, list)) else ()
-        raw_tests = tests if isinstance(tests, (tuple, list)) else ()
-        if not isinstance(hypotheses, (tuple, list)):
+        raw_hypotheses = self.hypotheses if isinstance(self.hypotheses, (tuple, list)) else ()
+        raw_falsifiers = self.falsifiers if isinstance(self.falsifiers, (tuple, list)) else ()
+        raw_tests = self.tests if isinstance(self.tests, (tuple, list)) else ()
+        if not isinstance(self.hypotheses, (tuple, list)):
             issues.append("hypotheses must be a tuple or list")
-        if not isinstance(falsifiers, (tuple, list)):
+        if not isinstance(self.falsifiers, (tuple, list)):
             issues.append("falsifiers must be a tuple or list")
-        if not isinstance(tests, (tuple, list)):
+        if not isinstance(self.tests, (tuple, list)):
             issues.append("tests must be a tuple or list")
         hypotheses = tuple(item for item in raw_hypotheses if isinstance(item, RivalHypothesis))
         falsifiers = tuple(item for item in raw_falsifiers if isinstance(item, Falsifier))

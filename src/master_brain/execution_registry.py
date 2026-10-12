@@ -466,6 +466,11 @@ class SQLiteExecutionRegistry:
             raise EvidenceValidationError("dispatch boundary predates attempt creation")
         if observed_at < dispatch_boundary_at:
             raise EvidenceValidationError("observed_at predates dispatch boundary")
+        if recorded_dt < observed_at:
+            raise EvidenceValidationError("recorded_at predates evidence observation")
+        execution_updated_at = parse_aware_timestamp("execution update timestamp", current.updated_at)
+        if recorded_dt < execution_updated_at:
+            raise EvidenceValidationError("recorded_at predates current execution state")
 
         verified = validate_registered_completion_evidence(
             execution=current,

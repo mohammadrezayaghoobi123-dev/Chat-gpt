@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import json
+import math
+import threading
 from typing import Any, Mapping, Protocol
 
 from master_brain.integrations import (
@@ -24,6 +26,7 @@ class DispatchStatus(str, Enum):
     ADAPTER_MISSING = "adapter_missing"
     ADAPTER_ERROR = "adapter_error"
     INVALID_OUTPUT = "invalid_output"
+    TIMEOUT = "timeout"
 
 
 @dataclass(frozen=True)
@@ -52,13 +55,45 @@ def _is_json_object(value: Any) -> bool:
     return True
 
 
+class _AdapterTimeout(Exception):
+    """Internal: adapter did not return within the caller's wait budget."""
+
+
+def _invoke_with_timeout(adapter: IntegrationAdapter, payload: Mapping[str, Any], timeout: float):
+    box: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            box["output"] = adapter.invoke(payload)
+        except BaseException as exc:  # re-raised in the caller's thread
+            box["error"] = exc
+
+    worker = threading.Thread(target=run, name="dispatch-adapter", daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise _AdapterTimeout
+    if "error" in box:
+        raise box["error"]
+    return box["output"]
+
+
 def dispatch_once(
     integration: IntegrationDescriptor,
     requirement: IntegrationRequirement,
     adapter: IntegrationAdapter | None,
     payload: Mapping[str, Any],
+    *,
+    timeout_seconds: float | None = None,
 ) -> DispatchResult:
     """Validate, assess, and invoke an eligible injected adapter at most once.
+
+    ``timeout_seconds`` (default None = wait indefinitely, the legacy behavior)
+    bounds how long the caller waits. A TIMEOUT result means the OUTCOME IS
+    UNKNOWN, not that the adapter failed: Python cannot cancel the adapter
+    thread, which may still finish and cause an external effect later. Its late
+    return value is discarded. Callers must treat TIMEOUT like an adapter
+    exception after the side-effect boundary (never retry blindly).
 
     Rejected inputs/candidates are never invoked. Exceptions are represented
     by type only to avoid copying potentially sensitive exception messages.
@@ -84,6 +119,17 @@ def dispatch_once(
             reason="; ".join(assessment.reasons),
         )
 
+    if timeout_seconds is not None and (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not math.isfinite(timeout_seconds)
+        or timeout_seconds <= 0
+    ):
+        return DispatchResult(
+            DispatchStatus.REJECTED, integration.integration_id,
+            reason="timeout_seconds_must_be_positive_finite_number",
+        )
+
     if adapter is None or not callable(getattr(adapter, "invoke", None)):
         return DispatchResult(
             DispatchStatus.ADAPTER_MISSING,
@@ -94,7 +140,15 @@ def dispatch_once(
     try:
         # JSON round-trip creates a detached copy, including nested containers.
         safe_payload = json.loads(json.dumps(dict(payload), allow_nan=False))
-        output = adapter.invoke(safe_payload)
+        if timeout_seconds is None:
+            output = adapter.invoke(safe_payload)
+        else:
+            output = _invoke_with_timeout(adapter, safe_payload, timeout_seconds)
+    except _AdapterTimeout:
+        return DispatchResult(
+            DispatchStatus.TIMEOUT, integration.integration_id,
+            reason="adapter_timeout_outcome_unknown",
+        )
     except (TypeError, ValueError, OverflowError):
         return DispatchResult(
             DispatchStatus.INVALID_OUTPUT,

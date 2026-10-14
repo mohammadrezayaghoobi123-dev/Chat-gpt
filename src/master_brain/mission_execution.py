@@ -70,6 +70,7 @@ def execute_mission_once(
     actor: str,
     before_dispatch: Callable[[], None] | None = None,
     attempt_id: str | None = None,
+    dispatch_timeout_seconds: float | None = None,
 ) -> MissionExecutionResult:
     """Gate, write a pre-dispatch audit event, dispatch once, then record outcome.
 
@@ -120,7 +121,10 @@ def execute_mission_once(
                 reason="dispatch_boundary_persistence_failed_adapter_not_invoked",
             )
 
-    result = dispatch_once(integration, requirement, adapter, payload)
+    result = dispatch_once(
+        integration, requirement, adapter, payload,
+        timeout_seconds=dispatch_timeout_seconds,
+    )
     try:
         store.append(
             event_id=f"{event_id_prefix}:dispatch-finished",
@@ -157,6 +161,12 @@ def execute_mission_once(
             contract.mission_id, "outcome_unknown", dispatch_result=result,
             reason="adapter_exception_external_effect_may_have_occurred",
         )
+    if result.status is DispatchStatus.TIMEOUT:
+        # The adapter was invoked and may still be running or may complete later.
+        return MissionExecutionResult(
+            contract.mission_id, "outcome_unknown", dispatch_result=result,
+            reason="adapter_timeout_external_effect_may_have_occurred",
+        )
     if (
         result.status is DispatchStatus.INVALID_OUTPUT
         and result.reason == "output_not_json_compatible_object"
@@ -186,6 +196,7 @@ def execute_mission_idempotently(
     event_id_prefix: str,
     recorded_at: str,
     actor: str,
+    dispatch_timeout_seconds: float | None = None,
 ) -> MissionExecutionResult:
     """Reserve a stable key before dispatch; duplicates never invoke the adapter.
 
@@ -284,6 +295,7 @@ def execute_mission_idempotently(
                 attempt_id=attempt.attempt_id, recorded_at=recorded_at
             ),
             attempt_id=attempt.attempt_id,
+            dispatch_timeout_seconds=dispatch_timeout_seconds,
         )
     except Exception:
         result = MissionExecutionResult(

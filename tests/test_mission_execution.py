@@ -10,6 +10,7 @@ from master_brain.integrations import (
     IntegrationDescriptor, IntegrationHealth, IntegrationKind,
     IntegrationMaturity, IntegrationRequirement,
 )
+from master_brain.execution_registry import SQLiteExecutionRegistry
 from master_brain.mission_approval import record_mission_approval
 from master_brain.mission_contract import MissionContract, MissionRiskTier
 from master_brain.mission_execution import execute_mission_once, execute_mission_idempotently
@@ -690,6 +691,56 @@ class ActionBoundApprovalTests(MissionExecutionPipelineTests):
         self.payload = {"anything": "else"}
         adapter = Adapter()
         self.assertEqual(self.execute(adapter, receipt).status, "response_received")
+
+
+class DispatchTimeoutPipelineTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = AuditStore(Path(self.tmp.name) / "audit.jsonl")
+        self.registry = SQLiteExecutionRegistry(str(Path(self.tmp.name) / "registry.sqlite3"))
+        self.contract = MissionContract(
+            mission_id="mission-timeout", objective="Timeout test",
+            risk_tier=MissionRiskTier.HIGH, requires_approval=True,
+        )
+        self.requirement = IntegrationRequirement(("text_reasoning",), required_kind=IntegrationKind.MODEL)
+        self.payload = {"mission_id": "mission-timeout"}
+        self.receipt = record_mission_approval(
+            self.store, self.contract, event_id="approval-timeout",
+            recorded_at="2026-10-12T00:00:00Z",
+            approver_subject="user:reviewer", authentication_method="upstream-session",
+        )
+
+    def test_timeout_is_outcome_unknown_and_registry_blocks_blind_retry(self):
+        import threading
+        release = threading.Event()
+
+        class Hung:
+            calls = 0
+
+            def invoke(self, payload):
+                Hung.calls += 1
+                release.wait(5)
+                return {"ok": True}
+
+        self.addCleanup(release.set)
+        first = execute_mission_idempotently(
+            self.contract, self.store, self.receipt, descriptor(), self.requirement,
+            Hung(), self.payload, self.registry, idempotency_key="timeout-key",
+            event_id_prefix="timeout-run", recorded_at="2026-10-12T00:01:00Z",
+            actor="system:test", dispatch_timeout_seconds=0.1,
+        )
+        self.assertEqual(first.status, "outcome_unknown")
+        self.assertEqual(first.dispatch_result.status, DispatchStatus.TIMEOUT)
+        self.assertEqual(self.registry.get("timeout-key").state.value, "OUTCOME_UNKNOWN")
+        second = execute_mission_idempotently(
+            self.contract, self.store, self.receipt, descriptor(), self.requirement,
+            Hung(), self.payload, self.registry, idempotency_key="timeout-key",
+            event_id_prefix="timeout-run-2", recorded_at="2026-10-12T00:02:00Z",
+            actor="system:test", dispatch_timeout_seconds=0.1,
+        )
+        self.assertEqual(second.status, "duplicate_existing_execution")
+        self.assertEqual(Hung.calls, 1)
 
 
 if __name__ == "__main__":

@@ -101,5 +101,65 @@ class DispatchContractTests(unittest.TestCase):
         self.assertIn("not enabled", result.reason)
 
 
+class DispatchTimeoutTests(unittest.TestCase):
+    """Finding EXE (no timeout): a hung adapter blocked the caller forever."""
+
+    def setUp(self):
+        self.requirement = IntegrationRequirement(("text_reasoning",))
+        self.payload = {"mission_id": "m-1"}
+
+    def test_hung_adapter_returns_timeout_unknown_outcome_and_late_result_is_discarded(self):
+        import threading
+        import time
+        release = threading.Event()
+        finished = threading.Event()
+
+        class Slow:
+            calls = 0
+
+            def invoke(self, payload):
+                Slow.calls += 1
+                release.wait(5)
+                finished.set()
+                return {"late": True}
+
+        started = time.monotonic()
+        result = dispatch_once(descriptor(), self.requirement, Slow(), self.payload, timeout_seconds=0.1)
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.status, DispatchStatus.TIMEOUT)
+        self.assertIsNone(result.output)
+        self.assertEqual(result.reason, "adapter_timeout_outcome_unknown")
+        self.assertLess(elapsed, 1.0)
+        self.assertEqual(Slow.calls, 1)  # never invoked twice
+        release.set()
+        self.assertTrue(finished.wait(2))  # adapter really kept running; result unused
+
+    def test_fast_adapter_succeeds_within_timeout(self):
+        adapter = FakeAdapter()
+        result = dispatch_once(descriptor(), self.requirement, adapter, self.payload, timeout_seconds=2)
+        self.assertEqual(result.status, DispatchStatus.SUCCEEDED)
+        self.assertEqual(adapter.calls, 1)
+
+    def test_adapter_exception_inside_timeout_mode_is_still_adapter_error(self):
+        result = dispatch_once(
+            descriptor(), self.requirement, FakeAdapter(error=RuntimeError("secret")),
+            self.payload, timeout_seconds=2,
+        )
+        self.assertEqual(result.status, DispatchStatus.ADAPTER_ERROR)
+        self.assertEqual(result.reason, "RuntimeError")
+
+    def test_invalid_timeout_values_are_rejected_without_invoking_adapter(self):
+        for bad in (0, -1, float("nan"), float("inf"), True, "1"):
+            with self.subTest(timeout=bad):
+                adapter = FakeAdapter()
+                result = dispatch_once(descriptor(), self.requirement, adapter, self.payload, timeout_seconds=bad)
+                self.assertEqual(result.status, DispatchStatus.REJECTED)
+                self.assertEqual(adapter.calls, 0)
+
+    def test_default_without_timeout_keeps_legacy_blocking_behavior(self):
+        adapter = FakeAdapter()
+        self.assertTrue(dispatch_once(descriptor(), self.requirement, adapter, self.payload).successful)
+
+
 if __name__ == "__main__":
     unittest.main()

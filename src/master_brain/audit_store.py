@@ -1,10 +1,15 @@
 """Append-only JSONL persistence for Master Brain audit events.
 
-Single-writer local prototype. Hashes detect changes in stored history, but
-cannot detect a complete rewrite unless a checkpoint is retained elsewhere.
+Appends are serialized with an exclusive advisory file lock on a sidecar
+``<path>.lock`` file, so concurrent writers (threads or processes on the same
+host) cannot fork the hash chain. The lock is advisory and local: it does not
+protect against non-cooperating writers or network filesystems without lock
+support. Hashes detect changes in stored history, but cannot detect a complete
+rewrite unless a checkpoint is retained elsewhere.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict
 import json
 import os
@@ -62,7 +67,41 @@ class AuditStore:
             )
         return tuple(events)
 
+    @contextmanager
+    def _exclusive_lock(self):
+        """Hold an exclusive cross-process lock for one read-modify-append cycle."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.path.with_name(self.path.name + ".lock")
+        try:
+            handle = lock_path.open("a+b")
+        except OSError as exc:
+            raise AuditStoreError("failed to open audit store lock") from exc
+        try:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            except OSError as exc:
+                raise AuditStoreError("failed to acquire audit store lock") from exc
+            yield
+        finally:
+            handle.close()  # closing releases the lock
+
     def append(
+        self, *, event_id: str, event_type: str, recorded_at: str, actor: str,
+        subject_ref: str, payload: dict[str, Any],
+    ) -> AuditEvent:
+        with self._exclusive_lock():
+            return self._append_locked(
+                event_id=event_id, event_type=event_type, recorded_at=recorded_at,
+                actor=actor, subject_ref=subject_ref, payload=payload,
+            )
+
+    def _append_locked(
         self, *, event_id: str, event_type: str, recorded_at: str, actor: str,
         subject_ref: str, payload: dict[str, Any],
     ) -> AuditEvent:

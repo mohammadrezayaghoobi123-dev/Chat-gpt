@@ -10,14 +10,14 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Callable, Mapping
 
-from master_brain.completion_evidence import CompletionEvidence
+from master_brain.completion_evidence import CompletionEvidence, ProviderVerificationResult
 
 
 class VerifierRegistryError(ValueError):
     """Verifier configuration is invalid or no approved verifier matches."""
 
 
-Verifier = Callable[[CompletionEvidence], bool]
+Verifier = Callable[[CompletionEvidence], bool | ProviderVerificationResult]
 
 
 @dataclass(frozen=True)
@@ -75,4 +75,39 @@ class ConfiguredVerifierRegistry:
         return item.verify
 
 
-__all__ = ["ConfiguredVerifierRegistry", "VerifierDescriptor", "VerifierRegistryError"]
+
+def load_deployment_verifier_registry() -> ConfiguredVerifierRegistry:
+    """Load only the application-owned deployment verifier configuration.
+
+    The fixed module name is part of the trusted application package. Mission
+    and request data must never choose the module path or supply callables.
+    This is a deployment configuration boundary, not a Python sandbox. If the
+    reviewed module is absent, malformed, or empty, callers must fail closed.
+    """
+    from importlib import import_module
+
+    module_name = "master_brain.deployment_verifiers"
+    try:
+        module = import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name == module_name:
+            raise VerifierRegistryError(
+                "deployment verifier configuration is unavailable"
+            ) from exc
+        raise VerifierRegistryError(
+            "deployment verifier configuration could not be loaded"
+        ) from exc
+    except Exception as exc:
+        raise VerifierRegistryError(
+            "deployment verifier configuration could not be loaded"
+        ) from exc
+
+    descriptors = getattr(module, "VERIFIER_DESCRIPTORS", None)
+    if not isinstance(descriptors, (tuple, list)) or not descriptors:
+        raise VerifierRegistryError(
+            "deployment verifier configuration must provide at least one verifier"
+        )
+    return ConfiguredVerifierRegistry(descriptors)
+
+
+__all__ = ["ConfiguredVerifierRegistry", "VerifierDescriptor", "VerifierRegistryError", "load_deployment_verifier_registry"]

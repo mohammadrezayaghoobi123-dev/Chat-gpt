@@ -80,6 +80,29 @@ class RecoveryCandidateTests(unittest.TestCase):
                         str(Path(self.tmp.name) / "invalid-timeout.sqlite3"),
                         timeout=timeout,
                     )
+    def test_deployment_completion_fails_closed_without_reviewed_verifiers(self):
+        from master_brain.completion_evidence import EvidenceValidationError
+
+        running = self.reserve("deployment-config-missing", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        uncertain = self.transition(
+            running, State.OUTCOME_UNKNOWN, "2026-10-12T00:00:02Z"
+        )
+
+        with self.assertRaisesRegex(
+            EvidenceValidationError, "deployment verifier configuration is unavailable"
+        ):
+            self.registry.complete_with_deployment_verified_evidence(
+                key=uncertain.key,
+                expected_version=uncertain.version,
+                attempt_id="attempt-not-needed-before-config-check",
+                evidence=None,
+                verifier_id="unconfigured",
+                verifier_version="1",
+                recorded_at="2026-10-12T00:00:03Z",
+            )
+
+        self.assertEqual(self.registry.get(uncertain.key), uncertain)
 
     def test_lists_only_uncertain_nonterminal_states_without_mutating_them(self):
         pending = self.reserve("pending", "2026-10-12T00:00:00Z")
@@ -488,6 +511,239 @@ class RecoveryCandidateTests(unittest.TestCase):
         self.assertTrue(all(item.dispatch_boundary_entered for item in marked))
         persisted_attempt = registries[0].get_attempt(attempt_id)
         self.assertTrue(persisted_attempt.dispatch_boundary_entered)
+    def test_reservation_rejects_invalid_or_naive_timestamps_without_persisting(self):
+        from master_brain.execution_registry import InvalidTransition
+
+        invalid_values = ("not-a-timestamp", "2026-10-12T00:00:00")
+        for index, timestamp in enumerate(invalid_values):
+            key = f"invalid-reservation-time-{index}"
+            with self.subTest(timestamp=timestamp):
+                with self.assertRaisesRegex(
+                    InvalidTransition, "reservation timestamp must be timezone-aware ISO-8601"
+                ):
+                    self.registry.reserve(
+                        key=key, mission_id=f"mission-{key}",
+                        contract_digest="contract", payload_digest="payload",
+                        recorded_at=timestamp,
+                    )
+                self.assertIsNone(self.registry.get(key))
+
+
+
+    def test_recovery_inventory_fails_closed_on_receipt_for_uncertain_execution(self):
+        from master_brain.execution_registry import RegistryError
+
+        running = self.reserve("receipt-state-mismatch", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute(
+                """INSERT INTO completion_receipts
+                (execution_key, attempt_id, evidence_digest, verifier_id,
+                 verifier_version, evidence_type, observed_at, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                ("receipt-state-mismatch", "orphan-attempt", "digest",
+                 "verifier", "1", "operation-receipt",
+                 "2026-10-12T00:00:02Z", "2026-10-12T00:00:03Z"),
+            )
+
+        with self.assertRaisesRegex(RegistryError, "receipt conflicts with uncertain execution"):
+            self.registry.list_recovery_candidates()
+
+
+    def test_recovery_inventory_fails_closed_on_orphan_completion_receipt(self):
+        from master_brain.execution_registry import RegistryError
+
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute(
+                """INSERT INTO completion_receipts
+                (execution_key, attempt_id, evidence_digest, verifier_id,
+                 verifier_version, evidence_type, observed_at, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                ("missing-execution", "missing-attempt", "digest",
+                 "verifier", "1", "operation-receipt",
+                 "2026-10-12T00:00:02Z", "2026-10-12T00:00:03Z"),
+            )
+
+        with self.assertRaisesRegex(RegistryError, "orphan or inconsistent completion receipt"):
+            self.registry.list_recovery_candidates()
+
+
+
+    def test_recovery_inventory_rejects_receipt_without_dispatch_boundary(self):
+        from master_brain.execution_registry import RegistryError
+
+        running = self.reserve("receipt-without-dispatch", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:02Z",
+        )
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute(
+                "UPDATE executions SET state=? WHERE key=?",
+                (State.SUCCEEDED.value, running.key),
+            )
+            db.execute(
+                """INSERT INTO completion_receipts
+                (execution_key, attempt_id, evidence_digest, verifier_id,
+                 verifier_version, evidence_type, observed_at, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (running.key, attempt.attempt_id, "digest", "verifier", "1",
+                 "operation-receipt", "2026-10-12T00:00:03Z",
+                 "2026-10-12T00:00:04Z"),
+            )
+
+        with self.assertRaisesRegex(RegistryError, "orphan or inconsistent completion receipt"):
+            self.registry.list_recovery_candidates()
+
+
+
+    def test_recovery_inventory_rejects_receipt_recorded_before_execution_success(self):
+        from master_brain.execution_registry import RegistryError
+
+        running = self.reserve("receipt-recorded-before-success", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:02Z",
+        )
+        self.registry.mark_attempt_dispatch_boundary(
+            attempt_id=attempt.attempt_id, recorded_at="2026-10-12T00:00:03Z"
+        )
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute(
+                "UPDATE executions SET state=?, updated_at=? WHERE key=?",
+                (State.SUCCEEDED.value, "2026-10-12T00:00:05Z", running.key),
+            )
+            db.execute(
+                """INSERT INTO completion_receipts
+                (execution_key, attempt_id, evidence_digest, verifier_id,
+                 verifier_version, evidence_type, observed_at, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (running.key, attempt.attempt_id, "digest", "verifier", "1",
+                 "operation-receipt", "2026-10-12T00:00:04Z",
+                 "2026-10-12T00:00:04Z"),
+            )
+
+        with self.assertRaisesRegex(RegistryError, "completion receipt chronology is inconsistent"):
+            self.registry.list_recovery_candidates()
+
+    def test_recovery_inventory_rejects_receipt_observed_before_dispatch_boundary(self):
+        from master_brain.execution_registry import RegistryError
+
+        running = self.reserve("receipt-time-before-dispatch", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:02Z",
+        )
+        self.registry.mark_attempt_dispatch_boundary(
+            attempt_id=attempt.attempt_id, recorded_at="2026-10-12T00:00:03Z"
+        )
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute(
+                "UPDATE executions SET state=?, updated_at=? WHERE key=?",
+                (State.SUCCEEDED.value, "2026-10-12T00:00:05Z", running.key),
+            )
+            db.execute(
+                """INSERT INTO completion_receipts
+                (execution_key, attempt_id, evidence_digest, verifier_id,
+                 verifier_version, evidence_type, observed_at, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (running.key, attempt.attempt_id, "digest", "verifier", "1",
+                 "operation-receipt", "2026-10-12T00:00:02Z",
+                 "2026-10-12T00:00:05Z"),
+            )
+
+        with self.assertRaisesRegex(RegistryError, "completion receipt chronology is inconsistent"):
+            self.registry.list_recovery_candidates()
+
+
+    def test_recovery_inventory_rejects_naive_completion_receipt_timestamps(self):
+        from master_brain.execution_registry import RegistryError
+
+        running = self.reserve("naive-receipt-time", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:02Z",
+        )
+        self.registry.mark_attempt_dispatch_boundary(
+            attempt_id=attempt.attempt_id, recorded_at="2026-10-12T00:00:03Z"
+        )
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute(
+                "UPDATE executions SET state=?, updated_at=? WHERE key=?",
+                (State.SUCCEEDED.value, "2026-10-12T00:00:05Z", running.key),
+            )
+            db.execute(
+                """INSERT INTO completion_receipts
+                (execution_key, attempt_id, evidence_digest, verifier_id,
+                 verifier_version, evidence_type, observed_at, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (running.key, attempt.attempt_id, "digest", "verifier", "1",
+                 "operation-receipt", "2026-10-12T00:00:04",
+                 "2026-10-12T00:00:05Z"),
+            )
+
+        with self.assertRaisesRegex(RegistryError, "completion receipt chronology is inconsistent"):
+            self.registry.list_recovery_candidates()
+
+    def test_recovery_inventory_fails_closed_on_succeeded_without_receipt(self):
+        from master_brain.execution_registry import RegistryError
+
+        succeeded = self.reserve("success-without-receipt", "2026-10-12T00:00:00Z")
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute(
+                "UPDATE executions SET state=? WHERE key=?",
+                (State.SUCCEEDED.value, succeeded.key),
+            )
+
+        with self.assertRaisesRegex(RegistryError, "succeeded execution is missing completion receipt"):
+            self.registry.list_recovery_candidates()
+
+
+    def test_recovery_inventory_fails_closed_on_orphan_attempt(self):
+        from master_brain.execution_registry import RegistryError
+
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute(
+                """INSERT INTO execution_attempts
+                (attempt_id, execution_key, attempt_number, integration_id,
+                 adapter_version, provider_id, dispatch_boundary_entered,
+                 created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ("orphan-attempt", "missing-execution", 1, "integration",
+                 "v1", "provider", 0,
+                 "2026-10-12T00:00:00Z", "2026-10-12T00:00:00Z"),
+            )
+
+        with self.assertRaisesRegex(RegistryError, "orphan or inconsistent execution attempt"):
+            self.registry.list_recovery_candidates()
+
+
+    def test_recovery_inventory_fails_closed_on_attempt_timestamp_regression(self):
+        from master_brain.execution_registry import RegistryError
+
+        running = self.reserve("bad-attempt-chronology", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:02Z",
+        )
+        with sqlite3.connect(self.registry.path) as db:
+            db.execute(
+                "UPDATE execution_attempts SET dispatch_boundary_entered=1, updated_at=? WHERE attempt_id=?",
+                ("2026-10-12T00:00:01Z", attempt.attempt_id),
+            )
+
+        with self.assertRaisesRegex(RegistryError, "execution attempt timestamp is inconsistent"):
+            self.registry.list_recovery_candidates()
 
     def test_empty_registry_returns_empty_candidates(self):
         self.assertEqual(self.registry.list_recovery_candidates(), [])
@@ -516,6 +772,24 @@ class RecoveryCandidateTests(unittest.TestCase):
             )
         self.assertFalse(self.registry.get_attempt(first.attempt_id).dispatch_boundary_entered)
 
+    def test_attempt_reservation_rejects_timestamp_before_running_transition(self):
+        from master_brain.execution_registry import InvalidTransition
+
+        running = self.reserve("attempt-parent-time", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:05Z")
+        with self.assertRaisesRegex(InvalidTransition, "predates execution update"):
+            self.registry.reserve_attempt(
+                key=running.key, expected_version=running.version,
+                integration_id="integration-a", adapter_version="v1",
+                provider_id="provider-a", recorded_at="2026-10-12T00:00:04Z",
+            )
+        with sqlite3.connect(self.registry.path) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM execution_attempts WHERE execution_key=?",
+                (running.key,),
+            ).fetchone()[0]
+        self.assertEqual(count, 0)
+
     def test_attempt_reservation_rejects_non_running_execution(self):
         from master_brain.execution_registry import InvalidTransition
         pending = self.reserve("attempt-pending", "2026-10-12T00:00:00Z")
@@ -525,6 +799,24 @@ class RecoveryCandidateTests(unittest.TestCase):
                 integration_id="integration-a", adapter_version="v1",
                 provider_id="provider-a", recorded_at="2026-10-12T00:00:01Z",
             )
+
+    def test_dispatch_boundary_rejects_timestamp_before_attempt_creation(self):
+        from master_brain.execution_registry import InvalidTransition
+
+        running = self.reserve("attempt-time-order", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:02Z",
+        )
+        with self.assertRaisesRegex(InvalidTransition, "predates attempt creation"):
+            self.registry.mark_attempt_dispatch_boundary(
+                attempt_id=attempt.attempt_id, recorded_at="2026-10-12T00:00:01Z"
+            )
+        persisted = self.registry.get_attempt(attempt.attempt_id)
+        self.assertFalse(persisted.dispatch_boundary_entered)
+        self.assertEqual(persisted.updated_at, attempt.created_at)
 
     def test_dispatch_boundary_marker_is_idempotent_and_version_checked(self):
         running = self.reserve("attempt-boundary", "2026-10-12T00:00:00Z")
@@ -544,6 +836,14 @@ class RecoveryCandidateTests(unittest.TestCase):
         self.assertEqual(repeated, marked)
 
 
+    def test_transition_rejects_timestamp_before_current_record_update(self):
+        from master_brain.execution_registry import InvalidTransition
+
+        pending = self.reserve("state-time-order", "2026-10-12T00:00:10Z")
+        with self.assertRaisesRegex(InvalidTransition, "predates current execution update"):
+            self.transition(pending, State.RUNNING, "2026-10-12T00:00:09Z")
+        self.assertEqual(self.registry.get(pending.key), pending)
+
     def _create_legacy_attempt_table(self, db):
         db.execute("""CREATE TABLE execution_attempts (
             attempt_id TEXT PRIMARY KEY,
@@ -562,7 +862,7 @@ class RecoveryCandidateTests(unittest.TestCase):
         with sqlite3.connect(path) as db:
             self._create_legacy_attempt_table(db)
             db.execute(
-                "INSERT INTO execution_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO execution_attempts (attempt_id, execution_key, attempt_number, integration_id, adapter_version, provider_id, dispatch_boundary_entered, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 ("a1", "exec-1", 1, "int", "v1", "provider", 0, "t", "t"),
             )
 
@@ -573,7 +873,7 @@ class RecoveryCandidateTests(unittest.TestCase):
             self.assertIn("idx_attempts_one_per_execution", unique_indexes)
             with self.assertRaises(sqlite3.IntegrityError):
                 db.execute(
-                    "INSERT INTO execution_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO execution_attempts (attempt_id, execution_key, attempt_number, integration_id, adapter_version, provider_id, dispatch_boundary_entered, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     ("a2", "exec-1", 2, "int", "v1", "provider", 0, "t2", "t2"),
                 )
 
@@ -597,5 +897,82 @@ class RecoveryCandidateTests(unittest.TestCase):
             ).fetchall()
             self.assertEqual(rows, [("a1",), ("a2",)])
 
+    def test_recovery_can_resolve_attempt_by_execution_key(self):
+        running = self.reserve("recover-attempt", "2026-10-12T00:00:00Z")
+        running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
+        attempt = self.registry.reserve_attempt(
+            key=running.key, expected_version=running.version,
+            integration_id="integration-a", adapter_version="v1",
+            provider_id="provider-a", recorded_at="2026-10-12T00:00:02Z",
+        )
+
+        # Recovery starts with an execution key, not an attempt ID. It must be
+        # possible to inspect the unique durable attempt without guessing IDs.
+        self.assertEqual(
+            self.registry.get_attempt_for_execution(running.key), attempt
+        )
+        self.assertIsNone(
+            self.registry.get_attempt_for_execution("no-such-execution")
+        )
+
+
+    def test_reservation_retries_transient_sqlite_writer_lock(self):
+        """A transient writer lock clears within the bounded retry window."""
+        import time
+
+        registry = SQLiteExecutionRegistry(
+            str(Path(self.tmp.name) / "transient-lock.sqlite3"), timeout=0.01
+        )
+        blocker = sqlite3.connect(
+            registry.path, timeout=0.01, isolation_level=None, check_same_thread=False
+        )
+        self.addCleanup(blocker.close)
+        blocker.execute("BEGIN IMMEDIATE")
+        blocker.execute(
+            "INSERT INTO executions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("lock-holder", "mission-lock", "contract", "payload", "PENDING", 0,
+             "2026-10-12T00:00:00Z", "2026-10-12T00:00:00Z"),
+        )
+
+        def release_lock():
+            time.sleep(0.06)
+            blocker.commit()
+
+        releaser = threading.Thread(target=release_lock)
+        releaser.start()
+        try:
+            record, created = registry.reserve(
+                key="after-lock", mission_id="mission-after-lock",
+                contract_digest="contract", payload_digest="payload",
+                recorded_at="2026-10-12T00:00:01Z",
+            )
+        finally:
+            releaser.join(timeout=2)
+
+        self.assertFalse(releaser.is_alive(), "lock-release thread did not finish")
+        self.assertTrue(created)
+        self.assertEqual(record.key, "after-lock")
+        self.assertEqual(registry.get("after-lock"), record)
+
+    def test_reservation_fails_cleanly_when_writer_lock_exceeds_retry_window(self):
+        from master_brain.execution_registry import RegistryError
+
+        registry = SQLiteExecutionRegistry(
+            str(Path(self.tmp.name) / "persistent-lock.sqlite3"), timeout=0.01
+        )
+        blocker = sqlite3.connect(registry.path, timeout=0.01, isolation_level=None)
+        self.addCleanup(blocker.close)
+        blocker.execute("BEGIN IMMEDIATE")
+        with self.assertRaisesRegex(RegistryError, "reservation failed"):
+            registry.reserve(
+                key="blocked", mission_id="mission-blocked",
+                contract_digest="contract", payload_digest="payload",
+                recorded_at="2026-10-12T00:00:01Z",
+            )
+        blocker.rollback()
+        self.assertIsNone(registry.get("blocked"))
+
+
 if __name__ == "__main__":
     unittest.main()
+

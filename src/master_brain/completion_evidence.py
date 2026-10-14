@@ -7,7 +7,7 @@ transition executions to SUCCEEDED.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from typing import Callable
@@ -36,6 +36,17 @@ class CompletionEvidence:
 
 
 @dataclass(frozen=True)
+class ProviderVerificationResult:
+    """Trusted verifier output binding a verified receipt to its canonical scope."""
+
+    verified: bool
+    provider_id: str
+    provider_scope: str
+    receipt_namespace: str
+    canonical_receipt_id: str
+
+
+@dataclass(frozen=True)
 class VerifiedEvidence:
     evidence_digest: str
     attempt_id: str
@@ -43,9 +54,16 @@ class VerifiedEvidence:
     verifier_id: str
     evidence_type: str
     verifier_version: str = ""
+    provider_id: str = ""
+    provider_scope: str = ""
+    receipt_namespace: str = ""
+    provider_receipt_id: str = ""
 
 
-ProviderEvidenceVerifier = Callable[[CompletionEvidence], bool]
+ProviderEvidenceVerifier = Callable[[CompletionEvidence], object]
+
+# Allow bounded clock skew, but never accept receipts dated implausibly in the future.
+_MAX_FUTURE_OBSERVATION_SKEW = timedelta(minutes=5)
 
 
 def _parse_timestamp(value: str) -> datetime | None:
@@ -155,6 +173,8 @@ def validate_completion_evidence(
         raise EvidenceValidationError("dispatch boundary predates attempt creation")
     if observed_at < dispatch_boundary_at:
         raise EvidenceValidationError("observed_at predates dispatch boundary")
+    if observed_at > datetime.now(timezone.utc) + _MAX_FUTURE_OBSERVATION_SKEW:
+        raise EvidenceValidationError("observed_at is too far in the future")
     if evidence.attempt_id != attempt.attempt_id:
         raise EvidenceValidationError("attempt ID mismatch")
     if evidence.execution_key != execution.key or evidence.execution_key != attempt.key:
@@ -177,8 +197,32 @@ def validate_completion_evidence(
         trusted = provider_verifier(evidence)
     except Exception as exc:
         raise EvidenceValidationError("provider evidence verifier failed") from exc
-    if trusted is not True:
-        raise EvidenceValidationError("provider evidence was not verified")
+    if type(trusted) is bool:
+        # Boolean results remain supported for validation-only callers. They do
+        # not carry the identity needed to authorize a durable completion.
+        if trusted is not True:
+            raise EvidenceValidationError("provider evidence was not verified")
+        identity = ("", "", "", "")
+    elif isinstance(trusted, ProviderVerificationResult):
+        if type(trusted.verified) is not bool or trusted.verified is not True:
+            raise EvidenceValidationError("provider evidence was not verified")
+        identity_values = (
+            trusted.provider_id, trusted.provider_scope,
+            trusted.receipt_namespace, trusted.canonical_receipt_id,
+        )
+        if any(not isinstance(value, str) or not value.strip() for value in identity_values):
+            raise EvidenceValidationError("verified provider receipt identity is malformed")
+        if trusted.provider_id != evidence.provider_id:
+            raise EvidenceValidationError("verified provider identity disagrees with evidence")
+        if trusted.canonical_receipt_id != evidence.provider_receipt_id:
+            raise EvidenceValidationError("receipt ID must match verifier-confirmed canonical identity")
+        attempt_scope = getattr(attempt, "provider_scope", None)
+        attempt_namespace = getattr(attempt, "receipt_namespace", None)
+        if trusted.provider_scope != attempt_scope or trusted.receipt_namespace != attempt_namespace:
+            raise EvidenceValidationError("verified provider scope disagrees with trusted attempt configuration")
+        identity = identity_values
+    else:
+        raise EvidenceValidationError("provider evidence was not verified: verifier returned an invalid result")
     return VerifiedEvidence(
         evidence_digest=evidence_digest(evidence),
         attempt_id=attempt.attempt_id,
@@ -186,6 +230,8 @@ def validate_completion_evidence(
         verifier_id=verifier_id,
         evidence_type=evidence.evidence_type,
         verifier_version=verifier_version,
+        provider_id=identity[0], provider_scope=identity[1],
+        receipt_namespace=identity[2], provider_receipt_id=identity[3],
     )
 
 
@@ -240,7 +286,7 @@ def validate_registered_completion_evidence(
 
 
 __all__ = [
-    "CompletionEvidence", "EvidenceValidationError", "VerifiedEvidence",
+    "CompletionEvidence", "EvidenceValidationError", "ProviderVerificationResult", "VerifiedEvidence",
     "evidence_digest", "validate_completion_evidence",
     "validate_registered_completion_evidence",
 ]

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 import math
 import sqlite3
+from datetime import datetime, timedelta, timezone
 import time
 import uuid
 
@@ -47,6 +48,8 @@ class ExecutionAttempt:
     dispatch_boundary_entered: bool
     created_at: str
     updated_at: str
+    provider_scope: str | None = None
+    receipt_namespace: str | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +94,8 @@ class SQLiteExecutionRegistry:
                 integration_id TEXT NOT NULL,
                 adapter_version TEXT NOT NULL,
                 provider_id TEXT NOT NULL,
+                provider_scope TEXT,
+                receipt_namespace TEXT,
                 dispatch_boundary_entered INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -108,7 +113,6 @@ class SQLiteExecutionRegistry:
                     "legacy execution_attempts contains duplicate execution keys; "
                     "manual evidence-based reconciliation is required"
                 ) from exc
-
             db.execute("""CREATE TABLE IF NOT EXISTS completion_receipts (
                 execution_key TEXT PRIMARY KEY,
                 attempt_id TEXT NOT NULL UNIQUE,
@@ -117,8 +121,41 @@ class SQLiteExecutionRegistry:
                 verifier_version TEXT NOT NULL,
                 evidence_type TEXT NOT NULL,
                 observed_at TEXT NOT NULL,
-                recorded_at TEXT NOT NULL
+                recorded_at TEXT NOT NULL,
+                provider_id TEXT,
+                provider_scope TEXT,
+                receipt_namespace TEXT,
+                provider_receipt_id TEXT,
+                identity_version INTEGER
             )""")
+            # Additive migration preserves historical rows as explicitly unscoped.
+            for table, column, declaration in (
+                ("execution_attempts", "provider_scope", "TEXT"),
+                ("execution_attempts", "receipt_namespace", "TEXT"),
+                ("completion_receipts", "provider_id", "TEXT"),
+                ("completion_receipts", "provider_scope", "TEXT"),
+                ("completion_receipts", "receipt_namespace", "TEXT"),
+                ("completion_receipts", "provider_receipt_id", "TEXT"),
+                ("completion_receipts", "identity_version", "INTEGER"),
+            ):
+                existing_columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+                if column not in existing_columns:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+            try:
+                db.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_completion_receipts_scoped_identity "
+                    "ON completion_receipts(provider_id, provider_scope, receipt_namespace, provider_receipt_id) "
+                    "WHERE provider_id IS NOT NULL AND provider_scope IS NOT NULL "
+                    "AND receipt_namespace IS NOT NULL AND provider_receipt_id IS NOT NULL"
+                )
+            except sqlite3.IntegrityError as exc:
+                # Do not guess which historical receipt is authoritative. The
+                # surrounding transaction rolls back the migration; preserve all
+                # rows and require evidence-based operator reconciliation.
+                raise RegistryError(
+                    "legacy completion receipts contain duplicate scoped identities; "
+                    "manual evidence-based reconciliation is required"
+                ) from exc
             db.execute("CREATE INDEX IF NOT EXISTS idx_attempts_execution ON execution_attempts(execution_key, attempt_number)")
             db.execute("PRAGMA journal_mode=WAL")
 
@@ -157,23 +194,17 @@ class SQLiteExecutionRegistry:
                 raise ValueError(f"{name} must be a non-empty string")
 
     def _begin_immediate_with_retry(self, db: sqlite3.Connection) -> None:
-        """Acquire SQLite's writer lock with bounded retries for transient contention.
-
-        busy_timeout handles ordinary waits inside SQLite. This retry handles a
-        BUSY/LOCKED result that still escapes that wait; it never retries arbitrary
-        database errors and never retries a transaction after writes have started.
-        """
+        """Retry only transient SQLite BUSY/LOCKED failures before writes begin."""
+        # Bounded retry window: total added latency stays well under the configured busy timeout.
         delays = (0.01, 0.025, 0.05, 0.1)
-        for attempt, delay in enumerate((*delays, None)):
+        for delay in (*delays, None):
             try:
                 db.execute("BEGIN IMMEDIATE")
                 return
             except sqlite3.OperationalError as exc:
                 code = getattr(exc, "sqlite_errorcode", None)
                 primary_code = (code & 0xFF) if isinstance(code, int) else None
-                if primary_code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
-                    raise
-                if delay is None:
+                if primary_code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or delay is None:
                     raise
                 time.sleep(delay)
 
@@ -182,6 +213,19 @@ class SQLiteExecutionRegistry:
         """Return (record, created); identical duplicate requests never reclaim RUNNING."""
         self._required(key=key, mission_id=mission_id, contract_digest=contract_digest,
                        payload_digest=payload_digest, recorded_at=recorded_at)
+        from datetime import datetime
+        try:
+            reservation_dt = datetime.fromisoformat(
+                recorded_at.strip().replace("Z", "+00:00")
+            )
+        except (AttributeError, ValueError) as exc:
+            raise InvalidTransition(
+                "reservation timestamp must be timezone-aware ISO-8601"
+            ) from exc
+        if reservation_dt.tzinfo is None or reservation_dt.utcoffset() is None:
+            raise InvalidTransition(
+                "reservation timestamp must be timezone-aware ISO-8601"
+            )
         stage = "connect"
         try:
             with closing(self._db()) as db, db:
@@ -243,6 +287,7 @@ class SQLiteExecutionRegistry:
                 row["attempt_id"], row["execution_key"], attempt_number,
                 row["integration_id"], row["adapter_version"], row["provider_id"],
                 boundary == 1, row["created_at"], row["updated_at"],
+                row["provider_scope"], row["receipt_namespace"],
             )
         except (ValueError, TypeError, KeyError) as exc:
             raise RegistryError("invalid execution attempt record") from exc
@@ -250,19 +295,39 @@ class SQLiteExecutionRegistry:
     def reserve_attempt(
         self, *, key: str, expected_version: int, integration_id: str,
         adapter_version: str, provider_id: str, recorded_at: str,
+        provider_scope: str | None = None, receipt_namespace: str | None = None,
     ) -> ExecutionAttempt:
         """Durably create a unique attempt before entering the external-call boundary.
 
         The parent execution must already be RUNNING at the supplied version.
         This is a local durable record, not proof that a provider was contacted.
+
+        Security boundary: this low-level primitive does not authenticate the
+        origin of provider_scope or receipt_namespace. Production entry points
+        must use master_brain.attempt_configuration.reserve_configured_attempt
+        so those values come from reviewed deployment-owned configuration.
         """
         self._required(
             key=key, integration_id=integration_id,
             adapter_version=adapter_version, provider_id=provider_id,
             recorded_at=recorded_at,
         )
+        for name, value in (("provider_scope", provider_scope), ("receipt_namespace", receipt_namespace)):
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"{name} must be a non-empty string when supplied")
         if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 0:
             raise ValueError("expected_version must be a non-negative integer")
+        from datetime import datetime
+        try:
+            attempt_created_dt = datetime.fromisoformat(
+                recorded_at.strip().replace("Z", "+00:00")
+            )
+        except (AttributeError, ValueError) as exc:
+            raise InvalidTransition(
+                "attempt timestamp must be timezone-aware ISO-8601"
+            ) from exc
+        if attempt_created_dt.tzinfo is None or attempt_created_dt.utcoffset() is None:
+            raise InvalidTransition("attempt timestamp must be timezone-aware ISO-8601")
         try:
             with closing(self._db()) as db, db:
                 self._begin_immediate_with_retry(db)
@@ -274,6 +339,21 @@ class SQLiteExecutionRegistry:
                     raise InvalidTransition("stale execution version")
                 if execution.state is not State.RUNNING:
                     raise InvalidTransition("attempt requires RUNNING execution")
+                try:
+                    execution_updated_dt = datetime.fromisoformat(
+                        execution.updated_at.strip().replace("Z", "+00:00")
+                    )
+                except (AttributeError, ValueError) as exc:
+                    raise RegistryError("execution update timestamp is invalid") from exc
+                if (
+                    execution_updated_dt.tzinfo is None
+                    or execution_updated_dt.utcoffset() is None
+                ):
+                    raise RegistryError("execution update timestamp is invalid")
+                if attempt_created_dt < execution_updated_dt:
+                    raise InvalidTransition(
+                        "attempt timestamp predates execution update"
+                    )
                 existing = db.execute(
                     "SELECT attempt_id FROM execution_attempts WHERE execution_key=?", (key,)
                 ).fetchone()
@@ -284,10 +364,11 @@ class SQLiteExecutionRegistry:
                 db.execute(
                     """INSERT INTO execution_attempts
                     (attempt_id, execution_key, attempt_number, integration_id,
-                     adapter_version, provider_id, dispatch_boundary_entered, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)""",
+                     adapter_version, provider_id, provider_scope, receipt_namespace,
+                     dispatch_boundary_entered, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
                     (attempt_id, key, number, integration_id, adapter_version,
-                     provider_id, recorded_at, recorded_at),
+                     provider_id, provider_scope, receipt_namespace, recorded_at, recorded_at),
                 )
                 row = db.execute(
                     "SELECT * FROM execution_attempts WHERE attempt_id=?", (attempt_id,)
@@ -310,11 +391,44 @@ class SQLiteExecutionRegistry:
         except sqlite3.Error as exc:
             raise RegistryError("attempt read failed") from exc
 
+    def get_attempt_for_execution(self, key: str) -> ExecutionAttempt | None:
+        """Return the unique durable attempt associated with an execution key.
+
+        Recovery inventories start from execution records, so callers must be
+        able to inspect the attempt and its dispatch-boundary marker without
+        knowing or guessing the attempt ID. The lookup is read-only.
+        """
+        self._required(key=key)
+        try:
+            with closing(self._db()) as db:
+                row = db.execute(
+                    "SELECT * FROM execution_attempts WHERE execution_key=?",
+                    (key,),
+                ).fetchone()
+                return None if row is None else self._attempt(row)
+        except RegistryError:
+            raise
+        except sqlite3.Error as exc:
+            raise RegistryError("attempt lookup by execution failed") from exc
+
     def mark_attempt_dispatch_boundary(
         self, *, attempt_id: str, recorded_at: str
     ) -> ExecutionAttempt:
         """Durably mark conservative entry into the dispatch boundary, idempotently."""
         self._required(attempt_id=attempt_id, recorded_at=recorded_at)
+        from datetime import datetime
+        try:
+            boundary_dt = datetime.fromisoformat(
+                recorded_at.strip().replace("Z", "+00:00")
+            )
+        except (AttributeError, ValueError) as exc:
+            raise InvalidTransition(
+                "dispatch boundary timestamp must be timezone-aware ISO-8601"
+            ) from exc
+        if boundary_dt.tzinfo is None or boundary_dt.utcoffset() is None:
+            raise InvalidTransition(
+                "dispatch boundary timestamp must be timezone-aware ISO-8601"
+            )
         try:
             with closing(self._db()) as db, db:
                 self._begin_immediate_with_retry(db)
@@ -332,6 +446,20 @@ class SQLiteExecutionRegistry:
                 ).fetchone()
                 if execution_row is None or self._record(execution_row).state is not State.RUNNING:
                     raise InvalidTransition("execution must remain RUNNING before dispatch boundary entry")
+                try:
+                    created_dt = datetime.fromisoformat(
+                        attempt.created_at.strip().replace("Z", "+00:00")
+                    )
+                except (AttributeError, ValueError) as exc:
+                    raise RegistryError(
+                        "attempt creation timestamp is invalid"
+                    ) from exc
+                if created_dt.tzinfo is None or created_dt.utcoffset() is None:
+                    raise RegistryError("attempt creation timestamp is invalid")
+                if boundary_dt < created_dt:
+                    raise InvalidTransition(
+                        "dispatch boundary timestamp predates attempt creation"
+                    )
                 db.execute(
                     """UPDATE execution_attempts SET dispatch_boundary_entered=1, updated_at=?
                     WHERE attempt_id=? AND dispatch_boundary_entered=0""",
@@ -369,11 +497,207 @@ class SQLiteExecutionRegistry:
                     "SELECT * FROM executions ORDER BY updated_at ASC, key ASC"
                 ).fetchall()
                 records = [self._record(row) for row in rows]
-                return [record for record in records if record.state in candidate_states]
+                candidates = [
+                    record for record in records
+                    if record.state in candidate_states
+                ]
+                # A completion receipt and an uncertain execution state cannot
+                # both be authoritative: normal completion commits both atomically.
+                # If storage was manually altered or partially corrupted, fail
+                # closed instead of presenting the row as an ordinary recovery case.
+                for record in candidates:
+                    receipt = db.execute(
+                        "SELECT attempt_id FROM completion_receipts WHERE execution_key=?",
+                        (record.key,),
+                    ).fetchone()
+                    if receipt is not None:
+                        raise RegistryError(
+                            "completion receipt conflicts with uncertain execution"
+                        )
+                # Validate every receipt, not just receipts attached to candidates.
+                # Otherwise a dangling receipt (missing execution/attempt) or a
+                # receipt attached to a non-success terminal state could remain
+                # invisible while the inventory misleadingly appears healthy.
+                inconsistent_receipt = db.execute(
+                    """SELECT 1
+                    FROM completion_receipts AS r
+                    LEFT JOIN executions AS e ON e.key = r.execution_key
+                    LEFT JOIN execution_attempts AS a
+                      ON a.attempt_id = r.attempt_id
+                     AND a.execution_key = r.execution_key
+                    WHERE e.key IS NULL
+                       OR e.state != ?
+                       OR a.attempt_id IS NULL
+                       OR a.dispatch_boundary_entered != 1
+                    LIMIT 1""",
+                    (State.SUCCEEDED.value,),
+                ).fetchone()
+                if inconsistent_receipt is not None:
+                    raise RegistryError(
+                        "orphan or inconsistent completion receipt"
+                    )
+                malformed_scoped_receipt = db.execute(
+                    """SELECT 1 FROM completion_receipts
+                    WHERE identity_version = 1 AND (
+                        provider_id IS NULL OR provider_scope IS NULL
+                        OR receipt_namespace IS NULL OR provider_receipt_id IS NULL
+                    ) LIMIT 1"""
+                ).fetchone()
+                if malformed_scoped_receipt is not None:
+                    raise RegistryError("scoped completion receipt identity is incomplete")
+                # Receipt timestamps are evidence-bearing fields, not mere
+                # metadata. Validate their timezone awareness and causal ordering
+                # against the durable dispatch marker and successful state commit.
+                receipt_rows = db.execute(
+                    """SELECT r.observed_at, r.recorded_at,
+                              a.updated_at AS dispatch_at,
+                              e.updated_at AS execution_updated_at
+                    FROM completion_receipts AS r
+                    JOIN executions AS e ON e.key = r.execution_key
+                    JOIN execution_attempts AS a
+                      ON a.attempt_id = r.attempt_id
+                     AND a.execution_key = r.execution_key"""
+                ).fetchall()
+                for receipt_row in receipt_rows:
+                    try:
+                        observed_at = datetime.fromisoformat(
+                            receipt_row["observed_at"].strip().replace("Z", "+00:00")
+                        )
+                        recorded_at = datetime.fromisoformat(
+                            receipt_row["recorded_at"].strip().replace("Z", "+00:00")
+                        )
+                        dispatch_at = datetime.fromisoformat(
+                            receipt_row["dispatch_at"].strip().replace("Z", "+00:00")
+                        )
+                        execution_updated_at = datetime.fromisoformat(
+                            receipt_row["execution_updated_at"].strip().replace("Z", "+00:00")
+                        )
+                    except (AttributeError, ValueError) as exc:
+                        raise RegistryError(
+                            "completion receipt chronology is inconsistent"
+                        ) from exc
+                    timestamps = (observed_at, recorded_at, dispatch_at, execution_updated_at)
+                    if any(
+                        timestamp.tzinfo is None or timestamp.utcoffset() is None
+                        for timestamp in timestamps
+                    ) or (
+                        observed_at < dispatch_at
+                        or recorded_at < observed_at
+                        or recorded_at < execution_updated_at
+                        or recorded_at != execution_updated_at
+                    ):
+                        raise RegistryError(
+                            "completion receipt chronology is inconsistent"
+                        )
+                # Validate every attempt's persisted chronology before relying
+                # on its dispatch marker. The marker's update timestamp is the
+                # durable boundary time; malformed or regressing timestamps must
+                # never be interpreted as proof that dispatch was entered.
+                attempt_rows = db.execute(
+                    "SELECT * FROM execution_attempts ORDER BY execution_key, attempt_number"
+                ).fetchall()
+                for attempt_row in attempt_rows:
+                    attempt = self._attempt(attempt_row)
+                    try:
+                        created_at = datetime.fromisoformat(
+                            attempt.created_at.strip().replace("Z", "+00:00")
+                        )
+                        updated_at = datetime.fromisoformat(
+                            attempt.updated_at.strip().replace("Z", "+00:00")
+                        )
+                    except (AttributeError, ValueError) as exc:
+                        raise RegistryError(
+                            "execution attempt timestamp is inconsistent"
+                        ) from exc
+                    if (
+                        created_at.tzinfo is None
+                        or created_at.utcoffset() is None
+                        or updated_at.tzinfo is None
+                        or updated_at.utcoffset() is None
+                        or updated_at < created_at
+                        or (
+                            not attempt.dispatch_boundary_entered
+                            and updated_at != created_at
+                        )
+                    ):
+                        raise RegistryError(
+                            "execution attempt timestamp is inconsistent"
+                        )
+                # Attempts are created only after an execution reaches RUNNING.
+                # A dangling attempt, or one attached to an execution that never
+                # entered work (PENDING) or was failed before dispatch (FAILED),
+                # signals broken local invariants and must not be silently ignored.
+                inconsistent_attempt = db.execute(
+                    """SELECT 1
+                    FROM execution_attempts AS a
+                    LEFT JOIN executions AS e ON e.key = a.execution_key
+                    WHERE e.key IS NULL
+                       OR e.state IN (?, ?)
+                    LIMIT 1""",
+                    (State.PENDING.value, State.FAILED.value),
+                ).fetchone()
+                if inconsistent_attempt is not None:
+                    raise RegistryError(
+                        "orphan or inconsistent execution attempt"
+                    )
+                # The invariant is bidirectional: every receipt must belong to a
+                # successful execution, and every successful execution must have
+                # its atomically committed receipt. A SUCCESS state without a
+                # receipt is corruption, not evidence that completion occurred.
+                missing_receipt = db.execute(
+                    """SELECT 1
+                    FROM executions AS e
+                    LEFT JOIN completion_receipts AS r
+                      ON r.execution_key = e.key
+                    WHERE e.state = ?
+                      AND r.execution_key IS NULL
+                    LIMIT 1""",
+                    (State.SUCCEEDED.value,),
+                ).fetchone()
+                if missing_receipt is not None:
+                    raise RegistryError(
+                        "succeeded execution is missing completion receipt"
+                    )
+                return candidates
         except RegistryError:
             raise
         except sqlite3.Error as exc:
             raise RegistryError("recovery candidate listing failed") from exc
+
+    def complete_with_deployment_verified_evidence(
+        self, *, key: str, expected_version: int, attempt_id: str,
+        evidence: object, verifier_id: str, verifier_version: str,
+        recorded_at: str,
+    ) -> Record:
+        """Complete only through the application-owned deployment verifier set.
+
+        Unlike the lower-level prototype/testing seam, this method does not
+        accept a caller-supplied registry. It resolves verifiers from the fixed
+        deployment configuration module and fails closed when that reviewed
+        configuration is absent or invalid. No provider verifier is bundled
+        by default, so production completion remains unavailable until one is
+        implemented and reviewed.
+        """
+        from master_brain.verifier_registry import (
+            VerifierRegistryError,
+            load_deployment_verifier_registry,
+        )
+        from master_brain.completion_evidence import EvidenceValidationError
+
+        try:
+            registry = load_deployment_verifier_registry()
+        except VerifierRegistryError as exc:
+            raise EvidenceValidationError(str(exc)) from exc
+        return self.complete_with_verified_evidence(
+            key=key,
+            expected_version=expected_version,
+            attempt_id=attempt_id,
+            evidence=evidence,
+            verifier_id=verifier_id,
+            verifier_version=verifier_version,
+            verifier_registry=registry,
+            recorded_at=recorded_at,
+        )
 
     def complete_with_verified_evidence(
         self, *, key: str, expected_version: int, attempt_id: str,
@@ -409,6 +733,8 @@ class SQLiteExecutionRegistry:
             raise ValueError("recorded_at must be timezone-aware ISO-8601") from exc
         if recorded_dt.tzinfo is None or recorded_dt.utcoffset() is None:
             raise ValueError("recorded_at must be timezone-aware ISO-8601")
+        if recorded_dt > datetime.now(timezone.utc) + timedelta(minutes=5):
+            raise EvidenceValidationError("recorded_at is too far in the future")
         if evidence.attempt_id != attempt_id or evidence.execution_key != key:
             raise EvidenceValidationError("evidence does not match requested execution and attempt")
 
@@ -418,6 +744,9 @@ class SQLiteExecutionRegistry:
         if current is None:
             raise InvalidTransition("unknown execution key")
         if current.state is State.SUCCEEDED:
+            attempt = self.get_attempt(attempt_id)
+            if attempt is None or attempt.key != key:
+                raise InvalidTransition("successful execution has no matching attempt")
             try:
                 with closing(self._db()) as db:
                     receipt = db.execute(
@@ -431,6 +760,11 @@ class SQLiteExecutionRegistry:
                 and receipt["evidence_digest"] == evidence_digest(evidence)
                 and receipt["verifier_id"] == verifier_id
                 and receipt["verifier_version"] == verifier_version
+                and receipt["provider_id"] == attempt.provider_id
+                and receipt["provider_scope"] == attempt.provider_scope
+                and receipt["receipt_namespace"] == attempt.receipt_namespace
+                and receipt["provider_receipt_id"] == evidence.provider_receipt_id
+                and receipt["identity_version"] == 1
             ):
                 return current
             raise InvalidTransition("execution already succeeded with different or missing completion evidence")
@@ -462,6 +796,8 @@ class SQLiteExecutionRegistry:
         observed_at = parse_aware_timestamp("observed_at", evidence.observed_at)
         attempt_created_at = parse_aware_timestamp("attempt creation timestamp", attempt.created_at)
         dispatch_boundary_at = parse_aware_timestamp("dispatch boundary timestamp", attempt.updated_at)
+        if not attempt.dispatch_boundary_entered:
+            raise EvidenceValidationError("dispatch boundary was not entered")
         if dispatch_boundary_at < attempt_created_at:
             raise EvidenceValidationError("dispatch boundary predates attempt creation")
         if observed_at < dispatch_boundary_at:
@@ -472,6 +808,11 @@ class SQLiteExecutionRegistry:
         if recorded_dt < execution_updated_at:
             raise EvidenceValidationError("recorded_at predates current execution state")
 
+        if not attempt.provider_scope or not attempt.receipt_namespace:
+            raise EvidenceValidationError(
+                "completion requires trusted provider scope and receipt namespace on the attempt"
+            )
+
         verified = validate_registered_completion_evidence(
             execution=current,
             attempt=attempt,
@@ -480,6 +821,20 @@ class SQLiteExecutionRegistry:
             verifier_version=verifier_version,
             registry=verifier_registry,
         )
+
+        if not all((verified.provider_id, verified.provider_scope, verified.receipt_namespace, verified.provider_receipt_id)):
+            raise EvidenceValidationError(
+                "trusted verifier must return a complete canonical provider receipt identity"
+            )
+        if (
+            verified.provider_id != attempt.provider_id
+            or verified.provider_scope != attempt.provider_scope
+            or verified.receipt_namespace != attempt.receipt_namespace
+            or verified.provider_receipt_id != evidence.provider_receipt_id
+        ):
+            raise EvidenceValidationError(
+                "verified provider receipt identity does not match trusted attempt scope and evidence"
+            )
 
         stage = "begin_immediate"
         try:
@@ -508,6 +863,11 @@ class SQLiteExecutionRegistry:
                         and receipt["evidence_digest"] == verified.evidence_digest
                         and receipt["verifier_id"] == verified.verifier_id
                         and receipt["verifier_version"] == verified.verifier_version
+                        and receipt["provider_id"] == verified.provider_id
+                        and receipt["provider_scope"] == verified.provider_scope
+                        and receipt["receipt_namespace"] == verified.receipt_namespace
+                        and receipt["provider_receipt_id"] == verified.provider_receipt_id
+                        and receipt["identity_version"] == 1
                     ):
                         db.commit()
                         return persisted
@@ -522,17 +882,26 @@ class SQLiteExecutionRegistry:
                     raise InvalidTransition("dispatch boundary was not entered")
 
                 stage = "insert_completion_receipt"
-                db.execute(
-                    """INSERT INTO completion_receipts
+                try:
+                    db.execute(
+                        """INSERT INTO completion_receipts
                     (execution_key, attempt_id, evidence_digest, verifier_id,
-                     verifier_version, evidence_type, observed_at, recorded_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                     verifier_version, evidence_type, observed_at, recorded_at,
+                     provider_id, provider_scope, receipt_namespace, provider_receipt_id,
+                     identity_version)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         key, attempt_id, verified.evidence_digest, verified.verifier_id,
                         verified.verifier_version, verified.evidence_type,
-                        evidence.observed_at, recorded_at,
-                    ),
-                )
+                        evidence.observed_at, recorded_at, verified.provider_id,
+                        verified.provider_scope, verified.receipt_namespace,
+                        verified.provider_receipt_id, 1,
+                        ),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    raise InvalidTransition(
+                        "provider receipt identity is already claimed by another execution"
+                    ) from exc
                 stage = "update_execution"
                 changed = db.execute(
                     """UPDATE executions SET state=?, version=version+1, updated_at=?
@@ -567,6 +936,19 @@ class SQLiteExecutionRegistry:
             raise ValueError("expected_version must be a non-negative integer")
         if not isinstance(target, State):
             raise TypeError("target must be a State")
+        from datetime import datetime
+        try:
+            transition_dt = datetime.fromisoformat(
+                recorded_at.strip().replace("Z", "+00:00")
+            )
+        except (AttributeError, ValueError) as exc:
+            raise InvalidTransition(
+                "transition timestamp must be timezone-aware ISO-8601"
+            ) from exc
+        if transition_dt.tzinfo is None or transition_dt.utcoffset() is None:
+            raise InvalidTransition(
+                "transition timestamp must be timezone-aware ISO-8601"
+            )
         try:
             with closing(self._db()) as db, db:
                 self._begin_immediate_with_retry(db)
@@ -574,6 +956,23 @@ class SQLiteExecutionRegistry:
                 if row is None:
                     raise InvalidTransition("unknown execution key")
                 current = self._record(row)
+                try:
+                    current_updated_dt = datetime.fromisoformat(
+                        current.updated_at.strip().replace("Z", "+00:00")
+                    )
+                except (AttributeError, ValueError) as exc:
+                    raise RegistryError(
+                        "current execution timestamp is invalid"
+                    ) from exc
+                if (
+                    current_updated_dt.tzinfo is None
+                    or current_updated_dt.utcoffset() is None
+                ):
+                    raise RegistryError("current execution timestamp is invalid")
+                if transition_dt < current_updated_dt:
+                    raise InvalidTransition(
+                        "transition timestamp predates current execution update"
+                    )
                 if current.version != expected_version:
                     raise InvalidTransition("stale execution version")
                 # This prototype has no provider-specific evidence verifier yet.

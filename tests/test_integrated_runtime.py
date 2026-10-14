@@ -99,6 +99,35 @@ class IntegratedRuntimeTests(unittest.TestCase):
         self.assertTrue(run.unresolved_issues)
         self.assertTrue(any("specialist" in issue.lower() or "context" in issue.lower()
                             for issue in run.unresolved_issues))
+    def test_audit_review_excludes_ambiguous_claim_ids_without_shifting_later_reviews(self):
+        def science(mission):
+            return IslandResult(
+                island_id="science_research",
+                summary="Synthetic fixture with a reused claim ID.",
+                claims=(
+                    Claim("duplicate", "polymer", "safe", "yes"),
+                    Claim("duplicate", "polymer", "safe", "no"),
+                    Claim("claim-valid", "polymer", "safe", "yes"),
+                ),
+                evidence=(Evidence("evidence-valid", "fixture", "claim-valid", True),),
+            )
+
+        run = execute_mission(
+            Mission("Research scientific evidence for a polymer material", risk_tier="low"),
+            executors={"science_research": science},
+        )
+        reviews = [
+            record for record in run.audit_records
+            if record.event_type == "claim_review"
+        ]
+        self.assertEqual(len(reviews), 1)
+        self.assertEqual(reviews[0].output_refs, ("claim-valid",))
+        self.assertEqual(reviews[0].status, "supported_by_recorded_evidence")
+        mission_record = next(
+            record for record in run.audit_records
+            if record.event_type == "mission_run"
+        )
+        self.assertNotIn("duplicate", mission_record.output_refs)
 
     def test_missing_executor_is_reported_not_claimed_as_executed(self):
         run = execute_mission(
@@ -122,16 +151,6 @@ class IntegratedRuntimeTests(unittest.TestCase):
         self.assertEqual(run.audit_records[0].event_type, "mission_run")
         self.assertEqual(run.audit_records[0].status, "approval_required")
 
-    def test_non_string_risk_tier_fails_closed_before_dispatch(self):
-        calls = []
-        run = execute_mission(
-            Mission("Research scientific evidence for a material", risk_tier=None),
-            executors={"science_research": lambda mission: calls.append(mission) or IslandResult("science_research", "done")},
-        )
-        self.assertEqual(calls, [])
-        self.assertEqual(run.status, "needs_clarification")
-        self.assertTrue(run.unresolved_issues)
-
     def test_unknown_risk_tier_fails_closed_before_dispatch(self):
         calls = []
         run = execute_mission(
@@ -154,6 +173,24 @@ class IntegratedRuntimeTests(unittest.TestCase):
         self.assertEqual(run.results, ())
         self.assertTrue(run.execution_errors)
         self.assertEqual(run.status, "incomplete")
+    def test_non_string_risk_tier_fails_closed_before_dispatch(self):
+        for malformed_risk_tier in (None, 7, True):
+            with self.subTest(risk_tier=malformed_risk_tier):
+                calls = []
+                run = execute_mission(
+                    Mission(
+                        "Research scientific evidence for this material",
+                        risk_tier=malformed_risk_tier,
+                    ),
+                    executors={
+                        "science_research": lambda mission: calls.append(mission)
+                        or IslandResult("science_research", "done")
+                    },
+                )
+                self.assertEqual(calls, [])
+                self.assertEqual(run.status, "needs_clarification")
+                self.assertTrue(run.unresolved_issues)
+                self.assertEqual(run.results, ())
 
     def test_executor_failure_is_recorded_as_partial_not_success(self):
         def broken(mission):

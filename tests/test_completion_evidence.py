@@ -3,6 +3,7 @@ import unittest
 import tempfile
 from pathlib import Path
 
+from master_brain.completion_evidence import ProviderVerificationResult
 from master_brain.completion_evidence import (
     CompletionEvidence,
     EvidenceValidationError,
@@ -214,6 +215,7 @@ class RegisteredCompletionEvidenceTests(CompletionEvidenceTests):
     """Adversarial tests for the trusted-registry entry point."""
 
     def _registry(self, *, enabled=True, provider_id="provider-x", evidence_type="provider_operation_receipt", version="1"):
+        from master_brain.completion_evidence import ProviderVerificationResult
         from master_brain.verifier_registry import ConfiguredVerifierRegistry, VerifierDescriptor
 
         return ConfiguredVerifierRegistry([VerifierDescriptor(
@@ -322,7 +324,8 @@ class PersistedCompletionTests(unittest.TestCase):
         self.attempt = self.registry.reserve_attempt(
             key=running.key, expected_version=running.version,
             integration_id="payments-v1", adapter_version="1.2.0",
-            provider_id="provider-x", recorded_at="2026-10-12T00:00:02Z",
+            provider_id="provider-x", provider_scope="merchant-account-1/production",
+            receipt_namespace="operation-receipt", recorded_at="2026-10-12T00:00:02Z",
         )
         self.attempt = self.registry.mark_attempt_dispatch_boundary(
             attempt_id=self.attempt.attempt_id, recorded_at="2026-10-12T00:00:03Z"
@@ -350,7 +353,10 @@ class PersistedCompletionTests(unittest.TestCase):
         self.verifiers = ConfiguredVerifierRegistry([VerifierDescriptor(
             verifier_id="provider-x-receipt-verifier", version="1",
             provider_id="provider-x", evidence_type="provider_operation_receipt",
-            verify=lambda item: True,
+            verify=lambda item: ProviderVerificationResult(
+                True, item.provider_id, "merchant-account-1/production",
+                "operation-receipt", item.provider_receipt_id,
+            ),
         )])
 
     def complete(self, evidence=None, registry=None, expected_version=None):
@@ -499,3 +505,29 @@ class PersistedCompletionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AdditionalAdversarialCompletionEvidenceTests(CompletionEvidenceTests):
+    def test_integer_one_is_not_accepted_as_verifier_approval(self):
+        # bool is a singleton type in Python, but int(1) is merely truthy.
+        with self.assertRaisesRegex(EvidenceValidationError, "not verified"):
+            self.validate(verifier=lambda item: 1)
+
+    def test_receipt_observed_before_dispatch_boundary_never_reaches_verifier(self):
+        from dataclasses import replace
+
+        called = []
+        stale = replace(self.evidence, observed_at="2026-10-12T00:00:01Z")
+        with self.assertRaisesRegex(EvidenceValidationError, "predates dispatch boundary"):
+            self.validate(stale, verifier=lambda item: called.append(item) or True)
+        self.assertEqual(called, [])
+
+    def test_invalid_provider_decision_is_rejected_without_mutating_execution_record(self):
+        from dataclasses import replace
+
+        before = self.execution
+        for decision in (None, False, 0, 1, "verified", {"verified": True}):
+            with self.subTest(decision=decision):
+                with self.assertRaises(EvidenceValidationError):
+                    self.validate(verifier=lambda item, value=decision: value)
+                self.assertEqual(self.execution, before)

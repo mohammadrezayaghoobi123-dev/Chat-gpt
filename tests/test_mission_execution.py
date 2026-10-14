@@ -794,5 +794,26 @@ class SingleUseApprovalTests(PipelineFixture):
         self.assertEqual(adapter.calls, 2)
 
 
+class AdapterErrorAfterEffectPipelineTests(PipelineFixture):
+    __test__ = True
+
+    def test_parsing_errors_after_effect_are_outcome_unknown_not_dispatch_failed(self):
+        import json
+        receipt = self.approve()  # contract-only approval is reusable across subtests
+        for error in (ValueError("x"), TypeError("x"), json.JSONDecodeError("m", "d", 0),
+                      UnicodeDecodeError("utf-8", b"", 0, 1, "r"), OverflowError("x")):
+            with self.subTest(error=type(error).__name__):
+                class Effect:
+                    effects = 0
+
+                    def invoke(self, payload):
+                        Effect.effects += 1
+                        raise error
+
+                result = self.execute(Effect(), receipt, prefix=f"e-{type(error).__name__}")
+                self.assertEqual(Effect.effects, 1)
+                self.assertEqual(result.status, "outcome_unknown")
+
+
 if __name__ == "__main__":
     unittest.main()

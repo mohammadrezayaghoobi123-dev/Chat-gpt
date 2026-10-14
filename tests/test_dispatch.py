@@ -161,5 +161,38 @@ class DispatchTimeoutTests(unittest.TestCase):
         self.assertTrue(dispatch_once(descriptor(), self.requirement, adapter, self.payload).successful)
 
 
+class AdapterExceptionClassificationTests(unittest.TestCase):
+    """Finding EXE-03/C6: exceptions raised INSIDE invoke() were reported as
+    'invalid input' (clean failure) for 5 of 6 classes, hiding a possible effect."""
+
+    def setUp(self):
+        self.requirement = IntegrationRequirement(("text_reasoning",))
+
+    def test_every_exception_class_raised_by_adapter_is_adapter_error(self):
+        import json
+        classes = (
+            ValueError("x"), TypeError("x"), OverflowError("x"),
+            json.JSONDecodeError("m", "d", 0), UnicodeDecodeError("utf-8", b"", 0, 1, "r"),
+            RuntimeError("x"), KeyError("x"), TimeoutError("x"), OSError("x"),
+        )
+        for error in classes:
+            for timeout in (None, 2):
+                with self.subTest(error=type(error).__name__, timeout=timeout):
+                    adapter = FakeAdapter(error=error)
+                    result = dispatch_once(
+                        descriptor(), self.requirement, adapter, {"a": 1}, timeout_seconds=timeout,
+                    )
+                    self.assertEqual(adapter.calls, 1)
+                    self.assertEqual(result.status, DispatchStatus.ADAPTER_ERROR)
+                    self.assertEqual(result.reason, type(error).__name__)
+
+    def test_bad_input_is_still_rejected_before_the_adapter_runs(self):
+        adapter = FakeAdapter()
+        result = dispatch_once(descriptor(), self.requirement, adapter, {"bad": object()})
+        self.assertEqual(result.status, DispatchStatus.INVALID_OUTPUT)
+        self.assertEqual(result.reason, "input_not_json_compatible_object")
+        self.assertEqual(adapter.calls, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

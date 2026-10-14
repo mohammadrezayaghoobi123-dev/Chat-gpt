@@ -137,9 +137,22 @@ def dispatch_once(
             reason="adapter_missing_or_invalid",
         )
 
+    # Input preparation happens strictly BEFORE the adapter is invoked, outside the
+    # try that covers invoke(): only here may a TypeError/ValueError mean "bad input".
     try:
         # JSON round-trip creates a detached copy, including nested containers.
         safe_payload = json.loads(json.dumps(dict(payload), allow_nan=False))
+    except (TypeError, ValueError, OverflowError):
+        return DispatchResult(
+            DispatchStatus.INVALID_OUTPUT,
+            integration.integration_id,
+            reason="input_not_json_compatible_object",
+        )
+
+    # From here on the adapter may already have caused an external effect, so EVERY
+    # exception it raises (including TypeError/ValueError/JSON/Unicode/Overflow
+    # errors from its own response parsing) is an adapter error: outcome unknown.
+    try:
         if timeout_seconds is None:
             output = adapter.invoke(safe_payload)
         else:
@@ -148,12 +161,6 @@ def dispatch_once(
         return DispatchResult(
             DispatchStatus.TIMEOUT, integration.integration_id,
             reason="adapter_timeout_outcome_unknown",
-        )
-    except (TypeError, ValueError, OverflowError):
-        return DispatchResult(
-            DispatchStatus.INVALID_OUTPUT,
-            integration.integration_id,
-            reason="input_not_json_compatible_object",
         )
     except Exception as exc:
         return DispatchResult(

@@ -5,6 +5,7 @@ on:
     branches:
       - master-brain/integrated-mvp
       - master-brain/proof-protocol-v0
+      - master-brain/integrated
   pull_request:
     branches:
       - main

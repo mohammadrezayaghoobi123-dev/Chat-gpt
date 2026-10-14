@@ -134,6 +134,19 @@ class AuditStoreTests(unittest.TestCase):
         self.assertEqual([p.wait() for p in procs], [0] * 6)
         self.assertEqual(len(self.store.read_all()), 6)
 
+    def test_precondition_rejection_appends_nothing_and_sees_verified_history(self):
+        from master_brain.audit_store import AuditPreconditionError
+        self._append_one(self.store, 0)
+        seen = []
+        with self.assertRaises(AuditPreconditionError):
+            self.store.append(
+                event_id="blocked", event_type="unit_test", recorded_at="2026-10-14T00:00:00Z",
+                actor="a", subject_ref="s", payload={},
+                precondition=lambda history: seen.append(len(history)) or "nope",
+            )
+        self.assertEqual(seen, [1])
+        self.assertEqual(len(self.store.read_all()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

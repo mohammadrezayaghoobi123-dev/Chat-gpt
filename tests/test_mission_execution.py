@@ -34,7 +34,9 @@ def descriptor():
     )
 
 
-class MissionExecutionPipelineTests(unittest.TestCase):
+class PipelineFixture(unittest.TestCase):
+    __test__ = False
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -62,6 +64,10 @@ class MissionExecutionPipelineTests(unittest.TestCase):
             adapter, self.payload, event_id_prefix=prefix,
             recorded_at="2026-10-12T00:01:00Z", actor="system:test",
         )
+
+
+class MissionExecutionPipelineTests(PipelineFixture):
+    __test__ = True
 
     def test_missing_approval_never_invokes_adapter_or_audits_dispatch(self):
         adapter = Adapter()
@@ -642,7 +648,8 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
         self.assertEqual(attempt.key, "attempt-audit-correlation-key")
 
 
-class ActionBoundApprovalTests(MissionExecutionPipelineTests):
+class ActionBoundApprovalTests(PipelineFixture):
+    __test__ = True
     """Finding APPR: a contract-only approval authorized any payload/integration."""
 
     def bound_receipt(self):
@@ -741,6 +748,50 @@ class DispatchTimeoutPipelineTests(unittest.TestCase):
         )
         self.assertEqual(second.status, "duplicate_existing_execution")
         self.assertEqual(Hung.calls, 1)
+
+
+class SingleUseApprovalTests(PipelineFixture):
+    __test__ = True
+    """Finding APPR-replay: one approved action ran 3x sequentially, 6x concurrently."""
+
+    def bound(self):
+        from master_brain.mission_approval import action_digest
+        return record_mission_approval(
+            self.store, self.contract, event_id="approval-once",
+            recorded_at="2026-10-12T00:00:00Z", approver_subject="user:reviewer",
+            authentication_method="upstream-session",
+            action_digest=action_digest("test-model", self.payload),
+        )
+
+    def test_bound_approval_is_consumed_by_first_dispatch(self):
+        receipt, adapter = self.bound(), Adapter()
+        self.assertEqual(self.execute(adapter, receipt, prefix="a").status, "response_received")
+        again = self.execute(adapter, receipt, prefix="b")
+        self.assertEqual((again.status, again.reason), ("rejected", "approval_already_consumed"))
+        self.assertEqual(adapter.calls, 1)
+
+    def test_concurrent_replays_dispatch_exactly_once(self):
+        import threading
+        receipt, adapter = self.bound(), Adapter()
+        barrier, statuses = threading.Barrier(6), []
+
+        def run(i):
+            barrier.wait()
+            statuses.append(self.execute(adapter, receipt, prefix=f"c{i}").status)
+
+        threads = [threading.Thread(target=run, args=(i,)) for i in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(adapter.calls, 1)
+        self.assertEqual(sorted(statuses), ["rejected"] * 5 + ["response_received"])
+
+    def test_contract_only_approval_stays_reusable(self):
+        receipt, adapter = self.approve(), Adapter()
+        self.execute(adapter, receipt, prefix="x")
+        self.execute(adapter, receipt, prefix="y")
+        self.assertEqual(adapter.calls, 2)
 
 
 if __name__ == "__main__":

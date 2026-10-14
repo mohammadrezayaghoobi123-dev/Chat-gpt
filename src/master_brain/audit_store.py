@@ -14,13 +14,17 @@ from dataclasses import asdict
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from master_brain.audit_ledger import GENESIS_HASH, AuditEvent, create_event, verify_chain
 
 
 class AuditStoreError(RuntimeError):
     """Raised when the audit store cannot safely be read or extended."""
+
+
+class AuditPreconditionError(AuditStoreError):
+    """Raised when an append's precondition rejects the current verified history."""
 
 
 class AuditStore:
@@ -94,18 +98,28 @@ class AuditStore:
     def append(
         self, *, event_id: str, event_type: str, recorded_at: str, actor: str,
         subject_ref: str, payload: dict[str, Any],
+        precondition: Callable[[tuple[AuditEvent, ...]], str | None] | None = None,
     ) -> AuditEvent:
+        """Append one event. ``precondition`` is evaluated on the verified history
+        while the exclusive lock is held (atomic check-and-append); a returned
+        string rejects the append with AuditPreconditionError."""
         with self._exclusive_lock():
             return self._append_locked(
                 event_id=event_id, event_type=event_type, recorded_at=recorded_at,
                 actor=actor, subject_ref=subject_ref, payload=payload,
+                precondition=precondition,
             )
 
     def _append_locked(
         self, *, event_id: str, event_type: str, recorded_at: str, actor: str,
         subject_ref: str, payload: dict[str, Any],
+        precondition: Callable[[tuple[AuditEvent, ...]], str | None] | None = None,
     ) -> AuditEvent:
         history = self.read_all()
+        if precondition is not None:
+            reason = precondition(history)
+            if reason:
+                raise AuditPreconditionError(reason)
         if any(item.event_id == event_id for item in history):
             raise AuditStoreError(f"duplicate event_id: {event_id}")
         previous = history[-1].event_hash if history else GENESIS_HASH

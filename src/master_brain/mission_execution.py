@@ -13,7 +13,7 @@ import hashlib
 import json
 from typing import Any, Callable, Mapping
 
-from master_brain.audit_store import AuditStore, AuditStoreError
+from master_brain.audit_store import AuditPreconditionError, AuditStore, AuditStoreError
 from master_brain.dispatch import DispatchResult, DispatchStatus, IntegrationAdapter, dispatch_once
 from master_brain.integrations import IntegrationDescriptor, IntegrationRequirement
 from master_brain.mission_approval import (
@@ -93,8 +93,26 @@ def execute_mission_once(
     if not isinstance(actor, str) or not actor.strip():
         return MissionExecutionResult(contract.mission_id, "rejected", reason="invalid_actor")
 
+    # An approval bound to one concrete action is single-use: it is consumed
+    # atomically (under the audit store lock) by the first dispatch-started event
+    # that references it. Contract-only approvals remain reusable.
+    consumes_approval = (
+        isinstance(receipt, MissionApprovalReceipt) and receipt.action_digest is not None
+    )
+    approval_event_id = receipt.event_id if consumes_approval else None
+
+    def _approval_unused(history):
+        for event in history:
+            if (
+                event.event_type == "mission.dispatch_started"
+                and event.payload.get("approval_event_id") == approval_event_id
+            ):
+                return "approval_already_consumed"
+        return None
+
     try:
         store.append(
+            precondition=_approval_unused if consumes_approval else None,
             event_id=f"{event_id_prefix}:dispatch-started",
             event_type="mission.dispatch_started",
             recorded_at=recorded_at,
@@ -105,7 +123,12 @@ def execute_mission_once(
                 "contract_digest": mission_contract_digest(contract),
                 "integration_id": getattr(integration, "integration_id", "unknown"),
                 "attempt_id": attempt_id,
+                **({"approval_event_id": approval_event_id} if consumes_approval else {}),
             },
+        )
+    except AuditPreconditionError:
+        return MissionExecutionResult(
+            contract.mission_id, "rejected", reason="approval_already_consumed"
         )
     except Exception:
         return MissionExecutionResult(

@@ -17,6 +17,10 @@ When the proof plane detects a potential conflict, it proposes a CTP case contai
 
 Importance is explicitly supplied by the caller using the `ClaimImportance` tier (`routine`, `high`, or `critical`); the system does not infer criticality from claim wording in this slice. CTP plans are not automatically updated from later evidence, and there is no automated test-execution service yet.
 
+## Claim evidence independence gate
+
+`Decision.independent_supporting_group_count` counts distinct non-empty `independent_group` labels attached to supporting evidence only; counterevidence groups do not inflate the supporting count. `Decision.independent_support_demonstrated` is true when that count is at least two. Multiple models or reports assigned to the same group count as one group, regardless of how many outputs they produce. This is a conservative bookkeeping gate, not a claim-truth verdict: group labels and source descriptions are caller-supplied and are not authenticated, and correlated sources may be mislabeled as independent.
+
 ## Privacy and limits
 
 - Raw mission objectives, island summaries, evidence text, model outputs, and credentials are not copied into audit metadata.

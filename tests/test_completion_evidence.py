@@ -60,6 +60,34 @@ class CompletionEvidenceTests(unittest.TestCase):
             provider_verifier=verifier,
         )
 
+    def test_malformed_top_level_inputs_raise_validation_error(self):
+        for kwargs in (
+            {"execution": None},
+            {"attempt": None},
+            {"evidence": None},
+        ):
+            args = {
+                "execution": self.execution,
+                "attempt": self.attempt,
+                "evidence": self.evidence,
+                "verifier_id": "provider-x-receipt-verifier-v1",
+                "provider_verifier": lambda item: True,
+            }
+            args.update(kwargs)
+            with self.subTest(kwargs=kwargs), self.assertRaises(EvidenceValidationError):
+                validate_completion_evidence(**args)
+
+    def test_non_string_verifier_version_is_rejected(self):
+        with self.assertRaisesRegex(EvidenceValidationError, "verifier_version must be non-empty"):
+            validate_completion_evidence(
+                execution=self.execution,
+                attempt=self.attempt,
+                evidence=self.evidence,
+                verifier_id="provider-x-receipt-verifier-v1",
+                provider_verifier=lambda item: True,
+                verifier_version=0,
+            )
+
     def test_valid_attempt_bound_evidence_returns_verification_record(self):
         verified = self.validate()
         self.assertEqual(verified.attempt_id, self.attempt.attempt_id)
@@ -90,6 +118,13 @@ class CompletionEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceValidationError, "verifier failed"):
             self.validate(verifier=broken_verifier)
 
+    def test_rejects_non_boolean_dispatch_boundary_flag(self):
+        self.attempt = ExecutionAttempt(**{
+            **self.attempt.__dict__, "dispatch_boundary_entered": 1
+        })
+        with self.assertRaisesRegex(EvidenceValidationError, "dispatch boundary flag must be boolean"):
+            self.validate()
+
     def test_rejects_evidence_when_dispatch_boundary_not_entered(self):
         self.attempt = ExecutionAttempt(**{
             **self.attempt.__dict__, "dispatch_boundary_entered": False
@@ -117,6 +152,20 @@ class CompletionEvidenceTests(unittest.TestCase):
             **self.evidence.__dict__, "contract_digest": "different-contract"
         })
         with self.assertRaisesRegex(EvidenceValidationError, "contract digest mismatch"):
+            self.validate(altered)
+
+    def test_rejects_dispatch_boundary_timestamp_before_attempt_creation(self):
+        self.attempt = ExecutionAttempt(**{
+            **self.attempt.__dict__, "updated_at": "2026-10-12T00:00:00Z"
+        })
+        with self.assertRaisesRegex(EvidenceValidationError, "dispatch boundary predates attempt creation"):
+            self.validate()
+
+    def test_rejects_receipt_timestamp_before_dispatch_boundary(self):
+        altered = CompletionEvidence(**{
+            **self.evidence.__dict__, "observed_at": "2026-10-12T00:00:01Z"
+        })
+        with self.assertRaisesRegex(EvidenceValidationError, "predates dispatch boundary"):
             self.validate(altered)
 
     def test_rejects_timezone_naive_observed_at(self):

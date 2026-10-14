@@ -18,6 +18,7 @@ from master_brain.dispatch import DispatchResult, DispatchStatus, IntegrationAda
 from master_brain.integrations import IntegrationDescriptor, IntegrationRequirement
 from master_brain.mission_approval import (
     MissionApprovalReceipt,
+    action_digest,
     evaluate_approved_execution_gate,
     mission_contract_digest,
 )
@@ -46,6 +47,15 @@ def _is_timezone_aware_timestamp(value: Any) -> bool:
     return parsed.tzinfo is not None and parsed.utcoffset() is not None
 
 
+def _safe_action_digest(integration: Any, payload: Any) -> str | None:
+    """Digest of the concrete action; None if it cannot be canonicalized (fails closed
+    only when the approval is action-bound)."""
+    try:
+        return action_digest(getattr(integration, "integration_id", ""), payload)
+    except (TypeError, ValueError):
+        return None
+
+
 def execute_mission_once(
     contract: MissionContract,
     store: AuditStore,
@@ -67,7 +77,9 @@ def execute_mission_once(
     post-dispatch persistence fails, the returned status explicitly says the
     outcome is not fully audited; callers must not blindly retry side effects.
     """
-    gate = evaluate_approved_execution_gate(contract, store, receipt)
+    gate = evaluate_approved_execution_gate(
+        contract, store, receipt, _safe_action_digest(integration, payload)
+    )
     if not gate.allowed:
         return MissionExecutionResult(
             contract.mission_id, "rejected", reason="; ".join(gate.reasons)
@@ -181,7 +193,9 @@ def execute_mission_idempotently(
     dispatch boundary is recorded as OUTCOME_UNKNOWN until provider-specific
     completion evidence can be verified. It is not distributed exactly-once.
     """
-    gate = evaluate_approved_execution_gate(contract, store, receipt)
+    gate = evaluate_approved_execution_gate(
+        contract, store, receipt, _safe_action_digest(integration, payload)
+    )
     if not gate.allowed:
         return MissionExecutionResult(contract.mission_id, "rejected", reason="; ".join(gate.reasons))
 

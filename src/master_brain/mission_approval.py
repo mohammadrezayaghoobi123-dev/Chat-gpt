@@ -70,6 +70,21 @@ def mission_contract_digest(contract: MissionContract) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def action_digest(integration_id: str, payload: Any) -> str:
+    """Return SHA-256 of the canonical (integration_id, payload) pair.
+
+    Lets an approval cover the concrete external action, not only the contract.
+    Raises TypeError/ValueError if the payload is not canonical-JSON compatible.
+    """
+    if not isinstance(integration_id, str) or not integration_id.strip():
+        raise ValueError("integration_id must be a non-empty string")
+    canonical = json.dumps(
+        {"integration_id": integration_id, "payload": _json_value(payload)},
+        sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True)
 class MissionApprovalReceipt:
     """Receipt for an approval event; not an independently signed credential."""
@@ -82,6 +97,9 @@ class MissionApprovalReceipt:
     authentication_method: str
     recorded_at: str
     event_hash: str
+    # Optional action binding. None means the approval covers the contract only
+    # (legacy scope): any integration/payload is then permitted under it.
+    action_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +118,7 @@ def record_mission_approval(
     recorded_at: str,
     approver_subject: str,
     authentication_method: str,
+    action_digest: str | None = None,
 ) -> MissionApprovalReceipt:
     """Persist an approval assertion bound to the exact contract digest.
 
@@ -121,6 +140,10 @@ def record_mission_approval(
             raise ValueError(f"{name} must be a non-empty string")
     if not _approval_required(contract):
         raise ValueError("mission contract does not require human approval")
+    if action_digest is not None and (
+        not isinstance(action_digest, str) or not action_digest.strip()
+    ):
+        raise ValueError("action_digest must be a non-empty string when supplied")
 
     digest = mission_contract_digest(contract)
     payload = {
@@ -134,6 +157,9 @@ def record_mission_approval(
         "scope": "exact_contract_digest",
         "identity_verified_by_this_module": False,
     }
+    if action_digest is not None:
+        payload["scope"] = "exact_contract_digest_and_action"
+        payload["action_digest"] = action_digest
     event = store.append(
         event_id=event_id,
         event_type=APPROVAL_EVENT_TYPE,
@@ -151,6 +177,7 @@ def record_mission_approval(
         authentication_method=authentication_method,
         recorded_at=event.recorded_at,
         event_hash=event.event_hash,
+        action_digest=action_digest,
     )
 
 
@@ -158,8 +185,14 @@ def evaluate_approved_execution_gate(
     contract: MissionContract,
     store: AuditStore,
     receipt: MissionApprovalReceipt | None,
+    action_digest: str | None = None,
 ) -> ApprovedExecutionGateResult:
-    """Fail closed unless a matching approval is present in verified audit history."""
+    """Fail closed unless a matching approval is present in verified audit history.
+
+    If the receipt carries an action binding, the caller's ``action_digest`` (see
+    ``action_digest()``) must be supplied and equal it; otherwise the approval
+    only covers the contract.
+    """
     reasons: list[str] = []
     integrity_error = _contract_integrity_error(contract)
     if integrity_error:
@@ -189,8 +222,15 @@ def evaluate_approved_execution_gate(
     ):
         if not isinstance(value, str):
             reasons.append(f"approval receipt field {name} must be a string")
+    if receipt.action_digest is not None and not isinstance(receipt.action_digest, str):
+        reasons.append("approval receipt field action_digest must be a string")
     if reasons:
         return ApprovedExecutionGateResult(False, tuple(reasons))
+    if receipt.action_digest is not None:
+        if action_digest is None:
+            reasons.append("approval is bound to a specific action but no action digest was supplied")
+        elif action_digest != receipt.action_digest:
+            reasons.append("action (integration or payload) differs from the approved action")
 
     current_digest = mission_contract_digest(contract)
     if receipt.mission_id != contract.mission_id:
@@ -224,6 +264,9 @@ def evaluate_approved_execution_gate(
             "scope": "exact_contract_digest",
             "identity_verified_by_this_module": False,
         }
+        if receipt.action_digest is not None:
+            expected_payload["scope"] = "exact_contract_digest_and_action"
+            expected_payload["action_digest"] = receipt.action_digest
         if event.event_type != APPROVAL_EVENT_TYPE:
             reasons.append("receipt does not reference a mission approval event")
         if event.subject_ref != f"mission:{contract.mission_id}":
@@ -242,6 +285,7 @@ def evaluate_approved_execution_gate(
 
 __all__ = [
     "APPROVAL_EVENT_TYPE",
+    "action_digest",
     "ApprovedExecutionGateResult",
     "MissionApprovalReceipt",
     "evaluate_approved_execution_gate",

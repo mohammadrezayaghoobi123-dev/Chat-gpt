@@ -641,5 +641,56 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
         self.assertEqual(attempt.key, "attempt-audit-correlation-key")
 
 
+class ActionBoundApprovalTests(MissionExecutionPipelineTests):
+    """Finding APPR: a contract-only approval authorized any payload/integration."""
+
+    def bound_receipt(self):
+        from master_brain.mission_approval import action_digest
+        return record_mission_approval(
+            self.store, self.contract, event_id="approval-bound",
+            recorded_at="2026-10-12T00:00:00Z",
+            approver_subject="user:reviewer", authentication_method="upstream-session",
+            action_digest=action_digest("test-model", self.payload),
+        )
+
+    def test_bound_approval_allows_exactly_the_approved_action(self):
+        adapter = Adapter()
+        result = self.execute(adapter, self.bound_receipt())
+        self.assertEqual(result.status, "response_received")
+        self.assertEqual(adapter.calls, 1)
+
+    def test_bound_approval_rejects_changed_payload(self):
+        receipt = self.bound_receipt()
+        self.payload = {"mission_id": "mission-42", "prompt": "SOMETHING ELSE"}
+        adapter = Adapter()
+        result = self.execute(adapter, receipt)
+        self.assertEqual(result.status, "rejected")
+        self.assertIn("differs from the approved action", result.reason)
+        self.assertEqual(adapter.calls, 0)
+
+    def test_bound_approval_rejects_unserializable_payload(self):
+        receipt = self.bound_receipt()
+        self.payload = {"bad": object()}
+        adapter = Adapter()
+        self.assertEqual(self.execute(adapter, receipt).status, "rejected")
+        self.assertEqual(adapter.calls, 0)
+
+    def test_tampered_receipt_binding_is_rejected_by_audit_history(self):
+        from dataclasses import replace
+        from master_brain.mission_approval import action_digest
+        legacy = self.approve()
+        forged = replace(legacy, action_digest=action_digest("test-model", self.payload))
+        adapter = Adapter()
+        self.assertEqual(self.execute(adapter, forged).status, "rejected")
+        self.assertEqual(adapter.calls, 0)
+
+    def test_contract_only_approval_remains_unbound_legacy_behavior(self):
+        # Documents the residual weakness: an unbound approval covers any payload.
+        receipt = self.approve()
+        self.payload = {"anything": "else"}
+        adapter = Adapter()
+        self.assertEqual(self.execute(adapter, receipt).status, "response_received")
+
+
 if __name__ == "__main__":
     unittest.main()

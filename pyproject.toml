@@ -9,6 +9,9 @@ description = "Provider-independent deterministic core for the integrated Master
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+observability = ["langfuse>=4.7.0,<5"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

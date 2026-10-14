@@ -1,0 +1,175 @@
+"""Integrated, offline-testable mission execution across the Master Brain planning and proof core.
+
+Executors are explicit injected boundaries. This module never implies that an
+unconfigured island, model, provider, tool, or external action was used.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Callable, Mapping
+
+from .core import Claim, Contradiction, Decision, Evidence
+from .meta_intelligence import Mission, CoordinationPlan, ReviewLevel, plan_coordination
+from .proof_plane import review_proof
+from .observability import observation
+
+
+@dataclass(frozen=True)
+class IslandResult:
+    """Typed result returned by an island executor that actually ran."""
+    island_id: str
+    summary: str
+    claims: tuple[Claim, ...] = ()
+    evidence: tuple[Evidence, ...] = ()
+    provenance: tuple[str, ...] = ()
+    limitations: tuple[str, ...] = ()
+
+
+IslandExecutor = Callable[[Mission], IslandResult]
+
+
+@dataclass(frozen=True)
+class MissionRun:
+    plan: CoordinationPlan
+    status: str
+    results: tuple[IslandResult, ...] = ()
+    missing_islands: tuple[str, ...] = ()
+    execution_errors: tuple[str, ...] = ()
+    contradictions: tuple[Contradiction, ...] = ()
+    claim_reviews: tuple[Decision, ...] = ()
+    provenance: tuple[str, ...] = ()
+    unresolved_issues: tuple[str, ...] = ()
+
+
+def _execute_mission_untraced(
+    mission: Mission,
+    executors: Mapping[str, IslandExecutor],
+) -> MissionRun:
+    """Plan, dispatch configured islands, and review returned claims together.
+
+    This is a synchronous orchestration seam, not a provider integration.
+    Human-gated missions fail closed because this prototype has no authenticated,
+    digest-bound approval service. An approval must not be simulated by a bool.
+    """
+    plan = plan_coordination(mission)
+    if mission.risk_tier.casefold() not in {"low", "medium", "high", "critical"}:
+        return MissionRun(
+            plan=plan,
+            status="needs_clarification",
+            unresolved_issues=("Mission not dispatched because its risk tier is unrecognized.",),
+        )
+    if mission.risk_tier.casefold() in {"high", "critical"} or mission.irreversible_action or plan.review_level is ReviewLevel.HUMAN_GATED:
+        return MissionRun(
+            plan=plan,
+            status="approval_required",
+            unresolved_issues=(
+                "Mission was not dispatched because an approval mechanism is not configured.",
+            ),
+        )
+
+    selected = tuple(selection.island_id for selection in plan.selections)
+    results: list[IslandResult] = []
+    missing: list[str] = []
+    errors: list[str] = []
+
+    for island_id in selected:
+        executor = executors.get(island_id)
+        if executor is None:
+            missing.append(f"{island_id}: not executed (no executor configured)")
+            continue
+        try:
+            with observation(
+                name=f"master-brain-island-{island_id}",
+                as_type="agent",
+                input_data={"island_id": island_id, "risk_tier": mission.risk_tier},
+                metadata={"component": "specialist-island"},
+            ) as island_trace:
+                result = executor(mission)
+                if island_trace is not None and isinstance(result, IslandResult):
+                    island_trace.update(output={
+                        "status": "completed",
+                        "claim_count": len(result.claims),
+                        "evidence_count": len(result.evidence),
+                        "provenance_count": len(result.provenance),
+                        "limitation_count": len(result.limitations),
+                    })
+            if not isinstance(result, IslandResult):
+                raise TypeError("executor must return IslandResult")
+            if result.island_id != island_id:
+                raise ValueError("result island_id does not match dispatched island")
+            results.append(result)
+        except Exception as exc:
+            errors.append(f"{island_id}: execution failed ({type(exc).__name__})")
+
+    claims = tuple(claim for result in results for claim in result.claims)
+    evidence = tuple(item for result in results for item in result.evidence)
+    proof_report = review_proof(claims, evidence)
+    contradictions = proof_report.contradictions
+    reviews = proof_report.claim_reviews
+    provenance = tuple(dict.fromkeys(
+        item for result in results for item in result.provenance
+    ))
+    unresolved: list[str] = list(proof_report.unresolved_issues)
+    if missing:
+        unresolved.append("One or more selected islands were not executed because no executor was configured.")
+    if errors:
+        unresolved.append("One or more selected islands failed; partial results must not be treated as complete.")
+    if contradictions:
+        status = "needs_review"
+    elif missing or errors:
+        status = "incomplete"
+    elif unresolved:
+        status = "needs_review"
+    else:
+        status = "completed_with_recorded_results"
+
+    return MissionRun(
+        plan=plan,
+        status=status,
+        results=tuple(results),
+        missing_islands=tuple(missing),
+        execution_errors=tuple(errors),
+        contradictions=contradictions,
+        claim_reviews=reviews,
+        provenance=provenance,
+        unresolved_issues=tuple(unresolved),
+    )
+
+
+
+def execute_mission(
+    mission: Mission,
+    executors: Mapping[str, IslandExecutor],
+) -> MissionRun:
+    """Execute a mission with optional, privacy-conscious Langfuse tracing.
+
+    Mission objective text, evidence content, and raw executor outputs are not
+    sent to telemetry. Tracing remains optional and must not alter mission state.
+    """
+    with observation(
+        name="master-brain-mission",
+        as_type="agent",
+        input_data={
+            "risk_tier": mission.risk_tier,
+            "irreversible_action": mission.irreversible_action,
+            "budget_units": mission.budget_units,
+            "deadline_seconds": mission.deadline_seconds,
+            "configured_executor_ids": sorted(executors.keys()),
+        },
+        metadata={"component": "master-brain", "trace_schema_version": "1"},
+    ) as mission_trace:
+        run = _execute_mission_untraced(mission, executors)
+        if mission_trace is not None:
+            mission_trace.update(
+                output={
+                    "status": run.status,
+                    "executed_islands": [result.island_id for result in run.results],
+                    "missing_island_count": len(run.missing_islands),
+                    "execution_error_count": len(run.execution_errors),
+                    "contradiction_count": len(run.contradictions),
+                    "claim_review_count": len(run.claim_reviews),
+                    "unresolved_issue_count": len(run.unresolved_issues),
+                },
+                metadata={"review_level": run.plan.review_level.value},
+            )
+        return run

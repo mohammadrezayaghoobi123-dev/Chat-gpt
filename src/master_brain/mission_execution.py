@@ -47,6 +47,20 @@ def _is_timezone_aware_timestamp(value: Any) -> bool:
     return parsed.tzinfo is not None and parsed.utcoffset() is not None
 
 
+def _snapshot_payload(payload: Any) -> Any:
+    """Detached JSON copy taken ONCE at the entry point (closes check/use races).
+
+    The approval digest, registry digest and dispatch must all see the same bytes;
+    otherwise a shared mutable mapping could be changed after the gate approved it.
+    Non-JSON payloads are returned unchanged so existing validation still rejects
+    them (and an action-bound approval fails closed because no digest can be made).
+    """
+    try:
+        return json.loads(json.dumps(dict(payload), allow_nan=False))
+    except (TypeError, ValueError, OverflowError):
+        return payload
+
+
 def _safe_action_digest(integration: Any, payload: Any) -> str | None:
     """Digest of the concrete action; None if it cannot be canonicalized (fails closed
     only when the approval is action-bound)."""
@@ -78,6 +92,7 @@ def execute_mission_once(
     post-dispatch persistence fails, the returned status explicitly says the
     outcome is not fully audited; callers must not blindly retry side effects.
     """
+    payload = _snapshot_payload(payload)
     gate = evaluate_approved_execution_gate(
         contract, store, receipt, _safe_action_digest(integration, payload)
     )
@@ -227,6 +242,7 @@ def execute_mission_idempotently(
     dispatch boundary is recorded as OUTCOME_UNKNOWN until provider-specific
     completion evidence can be verified. It is not distributed exactly-once.
     """
+    payload = _snapshot_payload(payload)
     gate = evaluate_approved_execution_gate(
         contract, store, receipt, _safe_action_digest(integration, payload)
     )

@@ -815,5 +815,97 @@ class AdapterErrorAfterEffectPipelineTests(PipelineFixture):
                 self.assertEqual(result.status, "outcome_unknown")
 
 
+class FlipMapping(__import__("collections.abc", fromlist=["Mapping"]).Mapping):
+    """Returns the approved value on first read and a different one on every later read."""
+
+    def __init__(self):
+        self.reads = 0
+
+    def __getitem__(self, key):
+        if key != "amount":
+            raise KeyError(key)
+        self.reads += 1
+        return 10 if self.reads == 1 else 99999
+
+    def __iter__(self):
+        return iter(("amount",))
+
+    def __len__(self):
+        return 1
+
+
+class PayloadSnapshotTests(PipelineFixture):
+    """Finding TOCTOU: the gate approved one payload, dispatch re-read a mutated one
+    (adapter received amount=99999 under an approval for amount=10)."""
+    __test__ = True
+
+    def _bound_receipt(self, payload):
+        from master_brain.mission_approval import action_digest
+        return record_mission_approval(
+            self.store, self.contract, event_id="approval-snap",
+            recorded_at="2026-10-12T00:00:00Z", approver_subject="user:reviewer",
+            authentication_method="upstream-session",
+            action_digest=action_digest("test-model", payload),
+        )
+
+    def test_mutation_between_gate_and_dispatch_cannot_change_approved_payload(self):
+        self.payload = {"amount": 10}
+        receipt = self._bound_receipt(self.payload)
+        seen = []
+
+        class Recorder:
+            def invoke(self, payload):
+                seen.append(dict(payload))
+                return {"ok": True}
+
+        result = execute_mission_once(
+            self.contract, self.store, receipt, descriptor(), self.requirement,
+            Recorder(), self.payload, event_id_prefix="snap",
+            recorded_at="2026-10-12T00:01:00Z", actor="system:test",
+            before_dispatch=lambda: self.payload.__setitem__("amount", 99999),
+        )
+        self.assertEqual(result.status, "response_received")
+        self.assertEqual(seen, [{"amount": 10}])
+
+    def test_mapping_that_changes_after_first_read_dispatches_the_approved_value(self):
+        receipt = self._bound_receipt({"amount": 10})
+        seen = []
+
+        class Recorder:
+            def invoke(self, payload):
+                seen.append(dict(payload))
+                return {"ok": True}
+
+        flip = FlipMapping()
+        result = execute_mission_once(
+            self.contract, self.store, receipt, descriptor(), self.requirement,
+            Recorder(), flip, event_id_prefix="flip",
+            recorded_at="2026-10-12T00:01:00Z", actor="system:test",
+        )
+        self.assertEqual(result.status, "response_received")
+        self.assertEqual(seen, [{"amount": 10}])
+        self.assertEqual(flip.reads, 1)  # exactly one read pass: snapshot, then reuse
+
+    def test_idempotent_path_also_dispatches_the_approved_value(self):
+        import tempfile as _t
+        from pathlib import Path as _P
+        registry = SQLiteExecutionRegistry(str(_P(self.tmp.name) / "snap.sqlite3"))
+        receipt = self._bound_receipt({"amount": 10})
+        seen = []
+
+        class Recorder:
+            def invoke(self, payload):
+                seen.append(dict(payload))
+                return {"ok": True}
+
+        result = execute_mission_idempotently(
+            self.contract, self.store, receipt, descriptor(), self.requirement,
+            Recorder(), FlipMapping(), registry, idempotency_key="snap-key",
+            event_id_prefix="snapi", recorded_at="2026-10-12T00:01:00Z", actor="system:test",
+        )
+        self.assertIn(result.status, ("response_received", "outcome_unknown"))
+        self.assertEqual(seen, [{"amount": 10}])
+
+
 if __name__ == "__main__":
     unittest.main()

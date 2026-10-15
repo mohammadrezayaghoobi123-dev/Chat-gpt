@@ -6,6 +6,7 @@ from pathlib import Path
 from master_brain.audit_store import AuditStore, AuditStoreError
 from master_brain.core import RiskTier, Task
 from master_brain.mission_approval import (
+    action_digest,
     evaluate_approved_execution_gate,
     mission_contract_digest,
     record_mission_approval,
@@ -178,6 +179,39 @@ class MissionApprovalTests(unittest.TestCase):
     def test_approval_requires_nonblank_metadata(self):
         with self.assertRaisesRegex(ValueError, "event_id"):
             self.approve(event_id="")
+
+    def test_blank_or_non_string_action_digest_is_rejected_with_value_error(self):
+        for bad in ("", "   ", 5, b"abc", ["x"]):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "action_digest"):
+                record_mission_approval(
+                    self.store, self.contract, event_id=f"bad-{id(bad)}",
+                    recorded_at="2026-10-11T12:00:00Z", approver_subject="user:r",
+                    authentication_method="upstream-session", action_digest=bad,
+                )
+        self.assertEqual(self.store.read_all(), ())
+
+
+class ActionDigestPinningTests(unittest.TestCase):
+    """The canonical form of action_digest is a persisted contract; pin it independently."""
+
+    def test_digest_is_sha256_of_the_documented_canonical_json(self):
+        import hashlib
+        canonical = '{"integration_id":"integ","payload":{"a":1,"b":"\u00e9\u4e2d"}}'
+        expected = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        self.assertEqual(action_digest("integ", {"b": "é中", "a": 1}), expected)
+
+    def test_key_order_does_not_change_the_digest_but_content_does(self):
+        self.assertEqual(action_digest("i", {"a": 1, "b": 2}), action_digest("i", {"b": 2, "a": 1}))
+        self.assertNotEqual(action_digest("i", {"a": 1}), action_digest("i", {"a": 2}))
+        self.assertNotEqual(action_digest("i", {"a": 1}), action_digest("j", {"a": 1}))
+
+    def test_invalid_integration_and_non_finite_payload_are_rejected(self):
+        for bad in ("", "   ", None, 5):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                action_digest(bad, {})
+        for payload in ({"x": float("nan")}, {"x": float("inf")}):
+            with self.subTest(payload=payload), self.assertRaises((TypeError, ValueError)):
+                action_digest("i", payload)
 
 
 if __name__ == "__main__":

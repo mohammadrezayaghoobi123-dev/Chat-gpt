@@ -49,6 +49,9 @@ class EvidenceProtocolTests(unittest.TestCase):
                 self.assertEqual(result.counterevidence_ids, ())
                 self.assertIn("zero_effective_weight",
                               [c.excluded_reason for c in result.contributions])
+                self.assertTrue(any("zero effective weight" in r for r in result.reasons))
+        clean = assess_claim(self.claim, base, self.policy)
+        self.assertFalse(any("zero effective weight" in r for r in clean.reasons))
 
     def test_zero_weight_only_evidence_is_insufficient_not_contested(self):
         noise = self.evidence("n", "z", EvidencePolarity.COUNTERS, relevance=0.0)

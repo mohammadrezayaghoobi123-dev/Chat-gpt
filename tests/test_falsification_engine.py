@@ -94,6 +94,19 @@ class FalsificationEngineTests(unittest.TestCase):
         )
         self.assertEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
         self.assertEqual(result.counterexample_evidence_ids, ("e2",))
+        self.assertFalse(any("unsupported" in r for r in result.reasons))
+
+    def test_mixed_evidence_on_a_counterexample_test_is_backed_by_its_counters_record(self):
+        result = review_falsification_plan(
+            self.plan,
+            [TestObservation("test-1", True, "pass", "ok", ("e1",)),
+             TestObservation("test-2", True, "counterexample", "72 units", ("e3", "e2"))],
+            [self.evidence("e1", "machine-log"), self.evidence("e3", "other-log"),
+             self.evidence("e2", "inspector", EvidencePolarity.COUNTERS)], self.policy,
+        )
+        self.assertEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
+        self.assertEqual(result.counterexample_evidence_ids, ("e2",))
+        self.assertFalse(any("unsupported" in r for r in result.reasons))
 
     def test_counterevidence_keeps_claim_contested(self):
         result = review_falsification_plan(

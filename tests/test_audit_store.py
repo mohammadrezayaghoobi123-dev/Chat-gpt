@@ -32,6 +32,58 @@ class AuditStoreTests(unittest.TestCase):
         self.assertEqual(loaded[1].previous_hash, first.event_hash)
         self.assertEqual(loaded[1].event_hash, second.event_hash)
 
+    def test_tail_truncation_is_detected(self):
+        for i in range(3):
+            self.append(f"e-{i}")
+        lines = self.path.read_text(encoding="utf-8").splitlines(True)
+        self.path.write_text("".join(lines[:1]), encoding="utf-8")
+        with self.assertRaisesRegex(AuditStoreError, "truncated"):
+            self.store.read_all()
+        with self.assertRaises(AuditStoreError):
+            self.append("e-new")
+
+    def test_full_truncation_to_empty_is_detected(self):
+        self.append("e-1")
+        self.path.write_text("", encoding="utf-8")
+        with self.assertRaisesRegex(AuditStoreError, "truncated"):
+            self.store.read_all()
+
+    def test_replacing_tail_event_is_detected_by_anchor(self):
+        self.append("e-1")
+        self.append("e-2")
+        other = AuditStore(Path(self.tempdir.name) / "other.jsonl")
+        other.append(event_id="e-1", event_type="claim.reviewed", recorded_at="2026-10-11T12:00:00Z",
+                     actor="unit-test", subject_ref="claim:c-1", payload={"status": "contested"})
+        other.append(event_id="e-2", event_type="claim.reviewed", recorded_at="2026-10-11T12:00:00Z",
+                     actor="unit-test", subject_ref="claim:c-1", payload={"status": "other"})
+        self.path.write_text(other.path.read_text(encoding="utf-8"), encoding="utf-8")
+        with self.assertRaisesRegex(AuditStoreError, "anchor"):
+            self.store.read_all()
+
+    def test_corrupt_anchor_fails_closed(self):
+        self.append("e-1")
+        for bad in ("not json", '{"count": true, "head_hash": "x"}', '{"count": -1, "head_hash": "x"}'):
+            with self.subTest(bad=bad):
+                self.store.anchor_path.write_text(bad, encoding="utf-8")
+                with self.assertRaisesRegex(AuditStoreError, "anchor"):
+                    self.store.read_all()
+
+    def test_anchor_one_behind_after_crash_is_accepted_and_healed(self):
+        self.append("e-1")
+        saved = self.store.anchor_path.read_text(encoding="utf-8")
+        self.append("e-2")
+        self.store.anchor_path.write_text(saved, encoding="utf-8")  # crash before anchor update
+        self.assertEqual(len(self.store.read_all()), 2)
+        self.append("e-3")
+        self.assertEqual(len(self.store.read_all()), 3)
+
+    def test_legacy_log_without_anchor_is_accepted_then_anchored(self):
+        self.append("e-1")
+        self.store.anchor_path.unlink()
+        self.assertEqual(len(self.store.read_all()), 1)
+        self.append("e-2")
+        self.assertTrue(self.store.anchor_path.exists())
+
     def test_missing_store_is_empty(self):
         self.assertEqual(self.store.read_all(), ())
 

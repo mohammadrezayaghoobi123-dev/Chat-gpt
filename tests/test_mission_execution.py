@@ -814,6 +814,16 @@ class SingleUseApprovalTests(PipelineFixture):
         self.assertEqual((again.status, again.reason), ("rejected", "approval_already_consumed"))
         self.assertEqual(adapter.calls, 1)
 
+    def test_audit_rollback_cannot_unconsume_approval(self):
+        """Finding C2: truncating the audit tail used to re-arm a consumed approval."""
+        receipt, adapter = self.bound(), Adapter()
+        self.assertEqual(self.execute(adapter, receipt, prefix="a").status, "response_received")
+        lines = self.store.path.read_text(encoding="utf-8").splitlines(True)
+        self.store.path.write_text("".join(lines[:1]), encoding="utf-8")  # keep approval only
+        again = self.execute(adapter, receipt, prefix="b")
+        self.assertNotEqual(again.status, "response_received")
+        self.assertEqual(adapter.calls, 1)
+
     def test_concurrent_replays_dispatch_exactly_once(self):
         import threading
         receipt, adapter = self.bound(), Adapter()

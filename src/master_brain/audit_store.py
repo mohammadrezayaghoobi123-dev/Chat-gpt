@@ -6,6 +6,14 @@ host) cannot fork the hash chain. The lock is advisory and local: it does not
 protect against non-cooperating writers or network filesystems without lock
 support. Hashes detect changes in stored history, but cannot detect a complete
 rewrite unless a checkpoint is retained elsewhere.
+
+A head anchor sidecar ``<path>.head`` records ``{count, head_hash}`` after every
+append. ``read_all`` fails closed if the log is shorter than the anchor or the
+event at ``count`` no longer has ``head_hash`` (tail truncation / rollback).
+Limits: the anchor sits beside the log, so an attacker who rewrites BOTH files
+consistently, or deletes the anchor of a non-empty log (treated as a legacy log
+and re-anchored on the next append), is not detected. Defeating that needs an
+anchor held elsewhere (external copy or signature), which is a key-custody decision.
 """
 from __future__ import annotations
 
@@ -69,7 +77,44 @@ class AuditStore:
             raise AuditStoreError(
                 f"audit chain verification failed at {check.failing_event_id}: {check.reason}"
             )
+        self._verify_anchor(events)
         return tuple(events)
+
+    @property
+    def anchor_path(self) -> Path:
+        return self.path.with_name(self.path.name + ".head")
+
+    def _verify_anchor(self, events: list[AuditEvent]) -> None:
+        anchor = self.anchor_path
+        if not anchor.exists():
+            return  # legacy / never-anchored log; anchored on next append
+        try:
+            raw = json.loads(anchor.read_text(encoding="utf-8"))
+            count, head = raw["count"], raw["head_hash"]
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0 \
+                    or not isinstance(head, str):
+                raise TypeError("bad anchor fields")
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            raise AuditStoreError("audit head anchor is unreadable") from exc
+        if len(events) < count:
+            raise AuditStoreError(
+                f"audit log truncated: anchor records {count} events, found {len(events)}"
+            )
+        actual = events[count - 1].event_hash if count else GENESIS_HASH
+        if actual != head:
+            raise AuditStoreError("audit log does not match its head anchor")
+
+    def _write_anchor(self, events_count: int, head_hash: str) -> None:
+        tmp = self.anchor_path.with_name(self.anchor_path.name + ".tmp")
+        try:
+            with tmp.open("w", encoding="utf-8", newline="") as handle:
+                handle.write(json.dumps({"count": events_count, "head_hash": head_hash},
+                                        sort_keys=True, separators=(",", ":")))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, self.anchor_path)
+        except OSError as exc:
+            raise AuditStoreError("failed to write audit head anchor") from exc
 
     @contextmanager
     def _exclusive_lock(self):
@@ -140,4 +185,5 @@ class AuditStore:
                 os.fsync(handle.fileno())
         except (OSError, ValueError) as exc:
             raise AuditStoreError("failed to append audit event") from exc
+        self._write_anchor(len(history) + 1, event.event_hash)
         return event

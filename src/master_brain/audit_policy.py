@@ -108,7 +108,7 @@ def _walk(value: Any, where: str, depth: int, active: set[int]) -> None:
 
 
 def enforce_payload_policy(
-    event_type: str, payload: Any, *, strict_event_types: bool = False
+    event_type: str, payload: Any, *, strict_event_types: bool = True
 ) -> None:
     """Raise AuditPayloadRejected unless the payload may be persisted."""
     if not isinstance(payload, Mapping):

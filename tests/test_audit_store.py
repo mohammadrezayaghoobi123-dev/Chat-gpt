@@ -84,6 +84,28 @@ class AuditStoreTests(unittest.TestCase):
         self.append("e-2")
         self.assertTrue(self.store.anchor_path.exists())
 
+    def test_unterminated_final_record_fails_closed_and_blocks_append(self):
+        """Finding AUD-03: a valid last row missing its newline made the next append
+        report success while concatenating two rows into an unreadable line."""
+        self.append("e-1")
+        self.path.write_bytes(self.path.read_bytes().rstrip(b"\n"))
+        self.store.anchor_path.unlink()  # isolate from the head anchor
+        with self.assertRaisesRegex(AuditStoreError, "unterminated"):
+            self.store.read_all()
+        before = self.path.read_bytes()
+        with self.assertRaises(AuditStoreError):
+            self.append("e-2")
+        self.assertEqual(self.path.read_bytes(), before)  # nothing written
+
+    def test_partial_json_final_record_fails_closed(self):
+        self.append("e-1")
+        with self.path.open("ab") as handle:
+            handle.write(b'{"event_id": "e-2", "event_ty')
+        with self.assertRaises(AuditStoreError):
+            self.store.read_all()
+        with self.assertRaises(AuditStoreError):
+            self.append("e-3")
+
     def test_missing_store_is_empty(self):
         self.assertEqual(self.store.read_all(), ())
 

@@ -67,6 +67,8 @@ class AuditStore:
         try:
             with self.path.open("r", encoding="utf-8") as handle:
                 for number, line in enumerate(handle, start=1):
+                    if not line.endswith("\n"):
+                        raise AuditStoreError(f"unterminated audit record at line {number}")
                     if not line.strip():
                         raise AuditStoreError(f"blank audit record at line {number}")
                     events.append(self._decode(line, number))

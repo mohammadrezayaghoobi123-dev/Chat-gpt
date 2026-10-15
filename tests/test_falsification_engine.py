@@ -60,6 +60,41 @@ class FalsificationEngineTests(unittest.TestCase):
         self.assertFalse(result.truth_established)
         self.assertTrue(any("not proof" in reason for reason in result.reasons))
 
+    def test_counterexample_label_without_evidence_is_not_accepted(self):
+        """Finding B3: a bare outcome label produced counterexample_found with no evidence ids."""
+        for label in ("counterexample", "falsified", "refuted"):
+            with self.subTest(label=label):
+                result = review_falsification_plan(
+                    self.plan,
+                    [TestObservation("test-1", True, "pass", "ok", ("e1",)),
+                     TestObservation("test-2", True, label, "I say it failed")],
+                    [self.evidence("e1", "machine-log")], self.policy,
+                )
+                self.assertNotEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
+                self.assertNotEqual(result.status, FalsificationStatus.SURVIVED_TESTS_PROVISIONALLY)
+                self.assertEqual(result.counterexample_evidence_ids, ())
+                self.assertTrue(any("unsupported" in r for r in result.reasons))
+
+    def test_counterexample_with_only_supporting_evidence_is_not_accepted(self):
+        result = review_falsification_plan(
+            self.plan,
+            [TestObservation("test-1", True, "pass", "ok", ("e1",)),
+             TestObservation("test-2", True, "counterexample", "claimed", ("e2",))],
+            [self.evidence("e1", "machine-log"), self.evidence("e2", "other-log")], self.policy,
+        )
+        self.assertNotEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
+
+    def test_counterexample_with_counters_evidence_is_still_accepted(self):
+        result = review_falsification_plan(
+            self.plan,
+            [TestObservation("test-1", True, "pass", "ok", ("e1",)),
+             TestObservation("test-2", True, "counterexample", "72 units", ("e2",))],
+            [self.evidence("e1", "machine-log"),
+             self.evidence("e2", "inspector", EvidencePolarity.COUNTERS)], self.policy,
+        )
+        self.assertEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
+        self.assertEqual(result.counterexample_evidence_ids, ("e2",))
+
     def test_counterevidence_keeps_claim_contested(self):
         result = review_falsification_plan(
             self.plan,

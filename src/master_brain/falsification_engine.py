@@ -263,12 +263,24 @@ def review_falsification_plan(
     blocking_outcomes = (
         unresolved_outcomes + failed_outcomes + non_decisive_outcomes
     )
-    explicit_counterexample = any(
-        item.executed and item.outcome_kind in {
-            TestOutcome.COUNTEREXAMPLE, TestOutcome.FALSIFIED, TestOutcome.REFUTED
-        }
-        for item in observed
+    # A counterexample must be backed by counters-polarity evidence attached to the
+    # reporting test; a bare outcome label is an unsupported assertion. It is not
+    # accepted as a counterexample, but it still blocks a survival decision.
+    explicit_counterexample = bool(counterexamples)
+    unsupported_counterexample_claims = tuple(
+        item for item in observed
+        if item.executed and item.test_id in explicit_counterexample_test_ids
+        and not any(
+            evidence_id in explicit_counterexample_evidence_ids
+            for evidence_id in item.evidence_ids
+        )
     )
+    for item in unsupported_counterexample_claims:
+        reasons.append(
+            f"Test {item.test_id} reported {item.outcome!r} without counters-polarity "
+            "evidence; the counterexample is unsupported, was not accepted, and the "
+            "review remains incomplete until evidence is attached."
+        )
     explicit_contradiction = any(
         item.executed and item.outcome_kind in {
             TestOutcome.CONTRADICTION, TestOutcome.CONFLICT
@@ -284,7 +296,7 @@ def review_falsification_plan(
     elif assessment.status is ReviewStatus.CONTESTED or explicit_contradiction:
         status = FalsificationStatus.CONTRADICTION_REMAINS
         reasons.append("Supporting and counterevidence conflict or an observation explicitly reports contradiction.")
-    elif missing or unexecuted or unexpected or blocking_outcomes:
+    elif missing or unexecuted or unexpected or blocking_outcomes or unsupported_counterexample_claims:
         status = FalsificationStatus.TESTS_INCOMPLETE
         reasons.append(
             "The planned test set is incomplete, includes unexecuted tests, "

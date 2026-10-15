@@ -963,3 +963,257 @@ class PayloadSnapshotTests(PipelineFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _Boom(__import__("collections.abc", fromlist=["Mapping"]).Mapping):
+    def __init__(self, exc):
+        self.exc = exc
+
+    def __iter__(self):
+        raise self.exc
+
+    def __getitem__(self, key):
+        raise self.exc
+
+    def __len__(self):
+        return 1
+
+
+class MissionExecutionHelperTests(unittest.TestCase):
+    """Pins the module's small pure helpers (found unguarded by mutation testing)."""
+
+    def test_timezone_aware_timestamp_validation(self):
+        from master_brain.mission_execution import _is_timezone_aware_timestamp as check
+        for ok in ("2026-10-12T00:00:00Z", "2026-10-12T00:00:00+03:30", " 2026-10-12T00:00:00Z "):
+            with self.subTest(ok=ok):
+                self.assertIs(check(ok), True)
+        for bad in ("", "   ", None, 5, "garbage", "2026-10-12T00:00:00", "2026-10-12"):
+            with self.subTest(bad=bad):
+                self.assertIs(check(bad), False)
+
+    def test_result_is_immutable(self):
+        from dataclasses import FrozenInstanceError
+        from master_brain.mission_execution import MissionExecutionResult
+        result = MissionExecutionResult("m", "ok")
+        with self.assertRaises(FrozenInstanceError):
+            result.status = "other"
+
+    def test_snapshot_detaches_json_and_returns_non_json_unchanged(self):
+        from master_brain.mission_execution import _snapshot_payload
+        original = {"a": {"b": [1]}}
+        copy_ = _snapshot_payload(original)
+        self.assertEqual(copy_, original)
+        self.assertIsNot(copy_, original)
+        self.assertIsNot(copy_["a"], original["a"])
+        for bad in ({"x": float("nan")}, {"x": object()}, _Boom(TypeError()), _Boom(ValueError()),
+                    _Boom(OverflowError()), [1, 2], None):
+            with self.subTest(bad=type(bad).__name__):
+                self.assertIs(_snapshot_payload(bad), bad)
+
+    def test_safe_action_digest_is_none_when_not_canonicalizable(self):
+        from master_brain.mission_approval import action_digest
+        from master_brain.mission_execution import _safe_action_digest
+        self.assertEqual(_safe_action_digest(descriptor(), {"a": 1}),
+                         action_digest("test-model", {"a": 1}))
+        self.assertIsNone(_safe_action_digest(descriptor(), {"x": object()}))   # TypeError
+        self.assertIsNone(_safe_action_digest(object(), {"a": 1}))              # empty id -> ValueError
+        self.assertIsNone(_safe_action_digest(descriptor(), {"x": float("nan")}))
+
+
+class MissionExecutionOnceHardeningTests(PipelineFixture):
+    __test__ = True
+
+    def run_once(self, receipt, **metadata):
+        args = dict(event_id_prefix="run-x", recorded_at="2026-10-12T00:01:00Z", actor="system:test")
+        args.update(metadata)
+        self._adapter = Adapter()
+        return execute_mission_once(
+            self.contract, self.store, receipt, descriptor(), self.requirement, self._adapter,
+            self.payload, **args,
+        )
+
+    def test_invalid_metadata_is_rejected_before_any_audit_or_dispatch(self):
+        receipt = self.approve()
+        reasons = {"event_id_prefix": "invalid_event_id_prefix",
+                   "recorded_at": "invalid_recorded_at", "actor": "invalid_actor"}
+        for field, reason in reasons.items():
+            for bad in ("", "   ", None, 5):
+                with self.subTest(field=field, bad=bad):
+                    before = len(self.store.read_all())
+                    result = self.run_once(receipt, **{field: bad})
+                    self.assertEqual((result.status, result.reason), ("rejected", reason))
+                    self.assertEqual(self._adapter.calls, 0)
+                    self.assertEqual(len(self.store.read_all()), before)
+
+    def test_dispatch_failures_are_reported_as_failed_not_unknown(self):
+        receipt = self.approve()
+        result = execute_mission_once(
+            self.contract, self.store, receipt, descriptor(), self.requirement, None, self.payload,
+            event_id_prefix="no-adapter", recorded_at="2026-10-12T00:01:00Z", actor="system:test")
+        self.assertEqual((result.status, result.reason),
+                         ("dispatch_failed", "adapter_missing_or_invalid"))
+        bad_input = execute_mission_once(
+            self.contract, self.store, receipt, descriptor(), self.requirement, Adapter(),
+            {"x": object()}, event_id_prefix="bad-input", recorded_at="2026-10-12T00:01:00Z",
+            actor="system:test")
+        self.assertEqual((bad_input.status, bad_input.reason),
+                         ("dispatch_failed", "input_not_json_compatible_object"))
+
+    def test_before_dispatch_failure_never_invokes_adapter(self):
+        receipt, adapter = self.approve(), Adapter()
+
+        def boom():
+            raise RuntimeError("persist failed")
+
+        result = execute_mission_once(
+            self.contract, self.store, receipt, descriptor(), self.requirement, adapter, self.payload,
+            event_id_prefix="bd", recorded_at="2026-10-12T00:01:00Z", actor="system:test",
+            before_dispatch=boom)
+        self.assertEqual((result.status, result.reason), (
+            "registry_unavailable", "dispatch_boundary_persistence_failed_adapter_not_invoked"))
+        self.assertEqual(adapter.calls, 0)
+
+    def test_consumption_is_per_approval_not_global(self):
+        """A consumed approval must not block a different, independently approved action."""
+        from master_brain.mission_approval import action_digest
+        adapter = Adapter()
+        digests = [action_digest("test-model", {"mission_id": "mission-42", "n": n}) for n in (1, 2)]
+        receipts = [record_mission_approval(
+            self.store, self.contract, event_id=f"approval-n{n}",
+            recorded_at="2026-10-12T00:00:00Z", approver_subject="user:reviewer",
+            authentication_method="upstream-session", action_digest=digests[n - 1])
+            for n in (1, 2)]
+        for n, receipt in enumerate(receipts, start=1):
+            result = execute_mission_once(
+                self.contract, self.store, receipt, descriptor(), self.requirement, adapter,
+                {"mission_id": "mission-42", "n": n}, event_id_prefix=f"run-n{n}",
+                recorded_at="2026-10-12T00:01:00Z", actor="system:test")
+            self.assertEqual(result.status, "response_received", result.reason)
+        self.assertEqual(adapter.calls, 2)
+        started = [e for e in self.store.read_all() if e.event_type == "mission.dispatch_started"]
+        self.assertEqual([e.payload["approval_event_id"] for e in started],
+                         ["approval-n1", "approval-n2"])
+
+
+class _FaultRegistry:
+    """Delegates to a real registry but raises on chosen calls (fault injection)."""
+
+    def __init__(self, inner, faults):
+        self.inner, self.faults = inner, faults  # faults: {"reserve": exc, "claim": exc, "attempt": exc}
+
+    def reserve(self, **kwargs):
+        if "reserve" in self.faults:
+            raise self.faults["reserve"]
+        return self.inner.reserve(**kwargs)
+
+    def transition(self, **kwargs):
+        from master_brain.execution_registry import State as _State
+        if "claim" in self.faults and kwargs.get("target") is _State.RUNNING:
+            raise self.faults["claim"]
+        return self.inner.transition(**kwargs)
+
+    def reserve_attempt(self, **kwargs):
+        if "attempt" in self.faults:
+            raise self.faults["attempt"]
+        return self.inner.reserve_attempt(**kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+class IdempotentMutationHardeningTests(unittest.TestCase):
+    """Pins the idempotent pipeline's validation, canonical digest and fault handling."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.store = AuditStore(root / "audit.jsonl")
+        self.registry = SQLiteExecutionRegistry(str(root / "executions.sqlite3"), timeout=0.25)
+        self.contract = MissionContract(
+            mission_id="mission-h", objective="Execute once",
+            risk_tier=MissionRiskTier.HIGH, requires_approval=True,
+        )
+        self.requirement = IntegrationRequirement(("text_reasoning",), required_kind=IntegrationKind.MODEL)
+        self.payload = {"mission_id": "mission-h", "prompt": "stable"}
+        self.receipt = record_mission_approval(
+            self.store, self.contract, event_id="approval-h", recorded_at="2026-10-12T00:00:00Z",
+            approver_subject="user:reviewer", authentication_method="upstream-session")
+
+    def run_idem(self, adapter=None, registry=None, receipt="default", payload=None, **meta):
+        args = dict(idempotency_key="key-h", event_id_prefix="prefix-h",
+                    recorded_at="2026-10-12T00:01:00Z", actor="system:test")
+        args.update(meta)
+        return execute_mission_idempotently(
+            self.contract, self.store, self.receipt if receipt == "default" else receipt,
+            descriptor(), self.requirement, adapter, self.payload if payload is None else payload,
+            registry or self.registry, **args)
+
+    def test_unapproved_execution_is_rejected_without_touching_registry(self):
+        adapter = Adapter()
+        result = self.run_idem(adapter, receipt=None)
+        self.assertEqual(result.status, "rejected")
+        self.assertEqual(adapter.calls, 0)
+        self.assertIsNone(self.registry.get("key-h"))
+
+    def test_every_metadata_field_is_validated_before_reservation(self):
+        for field in ("idempotency_key", "event_id_prefix", "actor"):
+            for bad in ("", "   ", None, 5):
+                with self.subTest(field=field, bad=bad):
+                    adapter = Adapter()
+                    result = self.run_idem(adapter, **{field: bad})
+                    self.assertEqual((result.status, result.reason), ("rejected", f"invalid_{field}"))
+                    self.assertEqual(adapter.calls, 0)
+        for bad in ("", "garbage", "2026-10-12T00:00:00", None, 5):
+            with self.subTest(field="recorded_at", bad=bad):
+                result = self.run_idem(Adapter(), recorded_at=bad)
+                self.assertEqual((result.status, result.reason), ("rejected", "invalid_recorded_at"))
+        self.assertIsNone(self.registry.get("key-h"))
+
+    def test_registered_payload_digest_is_canonical(self):
+        import hashlib, json
+        payload = {"mission_id": "mission-h", "z": 1, "a": "café", "m": {"y": 2, "x": 1}}
+        self.run_idem(Adapter(), payload=payload)
+        expected = hashlib.sha256(json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")).hexdigest()
+        self.assertEqual(self.registry.get("key-h").payload_digest, expected)
+
+    def test_payloads_that_cannot_be_digested_never_reserve_or_dispatch(self):
+        for bad in ({"x": float("nan")}, {"x": object()}):
+            with self.subTest(bad=repr(bad)[:20]):
+                adapter = Adapter()
+                result = self.run_idem(adapter, payload=bad)
+                self.assertEqual((result.status, result.reason),
+                                 ("registry_unavailable", "reservation_failed"))
+                self.assertEqual(adapter.calls, 0)
+                self.assertIsNone(self.registry.get("key-h"))
+
+    def test_registry_faults_never_invoke_the_adapter(self):
+        from master_brain.execution_registry import RegistryError
+        cases = (
+            ({"reserve": RegistryError("down")}, "reservation_failed"),
+            ({"reserve": TypeError("t")}, "reservation_failed"),
+            ({"reserve": ValueError("v")}, "reservation_failed"),
+            ({"claim": RegistryError("down")}, "claim_failed_adapter_not_invoked"),
+            ({"attempt": RegistryError("down")}, "attempt_reservation_or_boundary_failed_adapter_not_invoked"),
+            ({"attempt": TypeError("t")}, "attempt_reservation_or_boundary_failed_adapter_not_invoked"),
+            ({"attempt": ValueError("v")}, "attempt_reservation_or_boundary_failed_adapter_not_invoked"),
+        )
+        for index, (faults, reason) in enumerate(cases):
+            with self.subTest(faults=sorted(faults), exc=type(next(iter(faults.values()))).__name__):
+                adapter = Adapter()
+                # distinct payload per case: a faulted run can leave a RUNNING row, and the
+                # same intent under another key is (correctly) rejected as duplicate_intent
+                result = self.run_idem(adapter, registry=_FaultRegistry(self.registry, faults),
+                                       idempotency_key=f"fault-{index}",
+                                       payload={"mission_id": self.contract.mission_id, "case": index})
+                self.assertEqual((result.status, result.reason), ("registry_unavailable", reason))
+                self.assertEqual(adapter.calls, 0)
+
+    def test_audit_event_ids_use_a_sixteen_character_key_hash(self):
+        import hashlib
+        self.run_idem(Adapter())
+        suffix = hashlib.sha256(b"key-h").hexdigest()[:16]
+        ids = [e.event_id for e in self.store.read_all() if e.event_type.startswith("mission.dispatch")]
+        self.assertEqual(ids, [f"prefix-h:{suffix}:dispatch-started", f"prefix-h:{suffix}:dispatch-finished"])

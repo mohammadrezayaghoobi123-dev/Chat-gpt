@@ -241,5 +241,152 @@ class AuditStoreTests(unittest.TestCase):
         self.assertEqual(len(self.store.read_all()), 1)
 
 
+class AuditStoreMutationHardeningTests(unittest.TestCase):
+    """Pins behaviour found unguarded by mutation testing (C2, AUD-03, C5, lock, I/O errors)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "a" / "b" / "c" / "events.jsonl"  # nested: parents must be created
+        self.store = AuditStore(self.path, strict_event_types=False)
+        self.n = 0
+
+    def append(self, at="2026-10-12T00:00:00Z", payload=None, **kw):
+        self.n += 1
+        args = dict(event_id=f"e-{self.n}", event_type="unit.test", recorded_at=at,
+                    actor="a", subject_ref="s", payload=payload or {})
+        args.update(kw)
+        return self.store.append(**args)
+
+    def raw_lines(self):
+        return self.path.read_text(encoding="utf-8").splitlines(True)
+
+    # --- decoding / line numbers -------------------------------------------------
+    def test_decode_errors_report_the_failing_line_number(self):
+        self.append()
+        good = self.raw_lines()[0]
+        cases = {
+            "invalid audit record at line 2": good + "{not json\n",
+            "blank audit record at line 2": good + "\n",
+            "unterminated audit record at line 2": good + good.rstrip("\n"),
+        }
+        for message, content in cases.items():
+            with self.subTest(message=message):
+                self.path.write_text(content, encoding="utf-8")
+                self.store.anchor_path.unlink(missing_ok=True)
+                with self.assertRaisesRegex(AuditStoreError, message):
+                    self.store.read_all()
+
+    def test_structurally_bad_records_become_store_errors(self):
+        import json as _json
+        self.append()
+        good = _json.loads(self.raw_lines()[0])
+        missing = {k: v for k, v in good.items() if k != "event_id"}
+        bad_time = {**good, "recorded_at": "garbage"}
+        for label, content in (("missing key", missing), ("bad timestamp value", bad_time),
+                               ("non-object", ["x"]), ("scalar", 5)):
+            with self.subTest(label=label):
+                self.path.write_text(_json.dumps(content) + "\n", encoding="utf-8")
+                self.store.anchor_path.unlink(missing_ok=True)
+                with self.assertRaisesRegex(AuditStoreError, "invalid audit record at line 1"):
+                    self.store.read_all()
+
+    def test_invalid_utf8_is_a_store_error(self):
+        self.append()
+        self.path.write_bytes(b"\xff\xfe\xfa\n")
+        self.store.anchor_path.unlink(missing_ok=True)
+        with self.assertRaisesRegex(AuditStoreError, "UTF-8"):
+            self.store.read_all()
+
+    # --- head anchor -------------------------------------------------------------
+    def test_anchor_content_is_canonical_and_tracks_each_append(self):
+        import json as _json
+        first = self.append()
+        self.assertEqual(self.store.anchor_path.read_text(encoding="utf-8"),
+                         '{"count":1,"head_hash":"%s"}' % first.event_hash)
+        second = self.append()
+        self.assertEqual(_json.loads(self.store.anchor_path.read_text(encoding="utf-8")),
+                         {"count": 2, "head_hash": second.event_hash})
+        self.assertFalse(self.store.anchor_path.with_name(self.store.anchor_path.name + ".tmp").exists())
+
+    def test_anchor_failure_modes_fail_closed(self):
+        from master_brain.audit_ledger import GENESIS_HASH
+        self.append()
+        anchor = self.store.anchor_path
+        anchor.write_text("{}", encoding="utf-8")  # KeyError path
+        with self.assertRaisesRegex(AuditStoreError, "unreadable"):
+            self.store.read_all()
+        anchor.write_text('{"count": 0, "head_hash": "%s"}' % GENESIS_HASH, encoding="utf-8")
+        self.assertEqual(len(self.store.read_all()), 1)  # count 0 is a valid (stale) anchor
+        anchor.write_text('{"count": 1, "head_hash": 5}', encoding="utf-8")
+        with self.assertRaisesRegex(AuditStoreError, "unreadable"):
+            self.store.read_all()
+        anchor.unlink()
+        anchor.mkdir()  # OSError on read
+        with self.assertRaisesRegex(AuditStoreError, "unreadable"):
+            self.store.read_all()
+
+    def test_anchor_write_failure_is_reported(self):
+        from unittest import mock
+        with mock.patch("master_brain.audit_store.os.replace", side_effect=OSError("boom")):
+            with self.assertRaisesRegex(AuditStoreError, "head anchor"):
+                self.append()
+
+    # --- append I/O and lock failures -------------------------------------------
+    def test_event_write_failures_are_reported_not_swallowed(self):
+        from unittest import mock
+        for exc in (OSError("disk"), ValueError("closed")):
+            with self.subTest(exc=type(exc).__name__):
+                with mock.patch("master_brain.audit_store.os.fsync", side_effect=exc):
+                    with self.assertRaisesRegex(AuditStoreError, "failed to append"):
+                        self.append()
+
+    def test_lock_failures_are_store_errors(self):
+        from unittest import mock
+        self.append()
+        lock = self.path.with_name(self.path.name + ".lock")
+        lock.unlink()
+        lock.mkdir()  # cannot be opened as a file
+        with self.assertRaisesRegex(AuditStoreError, "lock"):
+            self.append()
+        lock.rmdir()
+        with mock.patch("fcntl.flock", side_effect=OSError("nolock")):
+            with self.assertRaisesRegex(AuditStoreError, "acquire audit store lock"):
+                self.append()
+
+    # --- serialisation -----------------------------------------------------------
+    def test_rows_are_canonical_utf8_json(self):
+        import json as _json
+        self.append(payload={"name": "café ✓", "b": 1, "a": 2})
+        line = self.raw_lines()[0]
+        self.assertIn("café ✓", line)  # ensure_ascii=False
+        record = _json.loads(line)
+        self.assertEqual(line, _json.dumps(record, sort_keys=True, separators=(",", ":"),
+                                           ensure_ascii=False) + "\n")
+
+    def test_non_finite_numbers_never_reach_the_file(self):
+        with self.assertRaises(ValueError):
+            self.append(payload={"x": float("nan")})
+        self.assertFalse(self.path.exists() and self.path.read_text(encoding="utf-8"))
+
+    # --- backdating (C5) ---------------------------------------------------------
+    def test_backdating_is_checked_against_the_last_event_not_the_first(self):
+        self.append(at="2026-10-12T00:00:00Z")
+        self.append(at="2026-10-12T00:10:00Z")
+        with self.assertRaisesRegex(AuditStoreError, r"precedes the last event \(2026-10-12T00:10:00Z\)"):
+            self.append(at="2026-10-12T00:05:00Z")  # after the first, before the last
+
+    def test_malformed_timestamps_are_value_errors_not_ordering_errors(self):
+        self.append()
+        for bad in ("garbage", "2026-10-12T00:00:00", "", None, 5):
+            with self.subTest(bad=bad):
+                with self.assertRaises((ValueError, TypeError)) as ctx:
+                    self.append(at=bad)
+                self.assertNotIsInstance(ctx.exception, AuditStoreError)
+        self.assertEqual(len(self.store.read_all()), 1)
+        with self.assertRaisesRegex(ValueError, "ISO-8601"):
+            self.append(at="garbage")
+
+
 if __name__ == "__main__":
     unittest.main()

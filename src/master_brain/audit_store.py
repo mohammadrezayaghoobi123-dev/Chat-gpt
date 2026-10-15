@@ -7,6 +7,9 @@ protect against non-cooperating writers or network filesystems without lock
 support. Hashes detect changes in stored history, but cannot detect a complete
 rewrite unless a checkpoint is retained elsewhere.
 
+Appends reject a ``recorded_at`` earlier than the last stored event (backdating).
+Future-dated values still need a trusted clock and are not rejected here.
+
 A head anchor sidecar ``<path>.head`` records ``{count, head_hash}`` after every
 append. ``read_all`` fails closed if the log is shorter than the anchor or the
 event at ``count`` no longer has ``head_hash`` (tail truncation / rollback).
@@ -19,6 +22,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import asdict
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -169,6 +173,17 @@ class AuditStore:
                 raise AuditPreconditionError(reason)
         if any(item.event_id == event_id for item in history):
             raise AuditStoreError(f"duplicate event_id: {event_id}")
+        if history:
+            try:
+                new_at = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+                last_at = datetime.fromisoformat(history[-1].recorded_at.replace("Z", "+00:00"))
+                regressed = new_at.tzinfo is not None and last_at.tzinfo is not None and new_at < last_at
+            except (ValueError, AttributeError):
+                regressed = False  # malformed values are rejected by create_event below
+            if regressed:
+                raise AuditStoreError(
+                    f"recorded_at {recorded_at} precedes the last event ({history[-1].recorded_at})"
+                )
         previous = history[-1].event_hash if history else GENESIS_HASH
         event = create_event(
             event_id=event_id, event_type=event_type, recorded_at=recorded_at,

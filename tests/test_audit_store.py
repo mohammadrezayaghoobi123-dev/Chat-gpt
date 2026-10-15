@@ -106,6 +106,24 @@ class AuditStoreTests(unittest.TestCase):
         with self.assertRaises(AuditStoreError):
             self.append("e-3")
 
+    def test_backdated_event_is_rejected(self):
+        """Finding C5: a 2020 timestamp was accepted after a 2026 one."""
+        self.store.append(event_id="t-1", event_type="x", recorded_at="2026-10-12T00:00:05Z",
+                          actor="a", subject_ref="s", payload={})
+        for bad in ("2020-01-01T00:00:00Z", "2026-10-12T00:00:04Z", "2026-10-12T05:00:00+05:30"):
+            with self.subTest(bad=bad), self.assertRaisesRegex(AuditStoreError, "precedes"):
+                self.store.append(event_id=f"b-{bad}", event_type="x", recorded_at=bad,
+                                  actor="a", subject_ref="s", payload={})
+        self.assertEqual(len(self.store.read_all()), 1)
+
+    def test_equal_and_later_and_offset_equivalent_timestamps_are_accepted(self):
+        self.store.append(event_id="t-1", event_type="x", recorded_at="2026-10-12T00:00:05Z",
+                          actor="a", subject_ref="s", payload={})
+        for i, ok in enumerate(("2026-10-12T00:00:05Z", "2026-10-12T05:30:05+05:30", "2026-10-12T00:00:06Z")):
+            self.store.append(event_id=f"ok-{i}", event_type="x", recorded_at=ok,
+                              actor="a", subject_ref="s", payload={})
+        self.assertEqual(len(self.store.read_all()), 4)
+
     def test_missing_store_is_empty(self):
         self.assertEqual(self.store.read_all(), ())
 

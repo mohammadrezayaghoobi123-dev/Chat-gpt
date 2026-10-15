@@ -237,7 +237,8 @@ class ExecutionRegistryTests(unittest.TestCase):
         for corrupt_value in (2, -1):
             with self.subTest(corrupt_value=corrupt_value):
                 key = f"corrupt-boundary-{corrupt_value}"
-                record, _ = self.reserve(key=key)
+                # distinct payload per subtest: identical intents under different keys are rejected (finding A3)
+                record, _ = self.reserve(key=key, payload=f"payload-{corrupt_value}")
                 running = self.registry.transition(
                     key=key, expected_version=record.version, target=State.RUNNING,
                     recorded_at="2026-10-12T00:00:01Z",
@@ -427,11 +428,54 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
 
     def test_distinct_idempotency_keys_can_share_event_prefix_without_audit_collision(self):
         adapter = Adapter()
-        first = self.execute(adapter, key="separate-key-one", prefix="reused-human-prefix")
-        second = self.execute(adapter, key="separate-key-two", prefix="reused-human-prefix")
+        # Different intents (payloads) so A3 same-intent uniqueness does not apply;
+        # the test's purpose is audit-id collision safety with a shared prefix.
+        first = self.execute(adapter, key="separate-key-one", prefix="reused-human-prefix",
+                             payload={"mission_id": self.contract.mission_id, "prompt": "one"})
+        second = self.execute(adapter, key="separate-key-two", prefix="reused-human-prefix",
+                              payload={"mission_id": self.contract.mission_id, "prompt": "two"})
         self.assertEqual(first.status, "response_received")
         self.assertEqual(second.status, "response_received")
         self.assertEqual(adapter.calls, 2)
+
+    def test_same_intent_under_other_keys_never_repeats_effect(self):
+        from master_brain.execution_registry import State
+        adapter = Adapter()
+        results = [self.execute(adapter, key=f"dup-key-{i}", prefix=f"dup-{i}") for i in range(3)]
+        self.assertEqual([r.status for r in results],
+                         ["response_received", "duplicate_intent", "duplicate_intent"])
+        self.assertEqual(adapter.calls, 1)
+        self.assertEqual(self.registry.get("dup-key-1").state, State.FAILED)
+
+    def test_different_payload_under_other_key_still_runs(self):
+        adapter = Adapter()
+        self.execute(adapter, key="intent-a", prefix="ia")
+        other = self.execute(adapter, key="intent-b", prefix="ib",
+                             payload={"mission_id": self.contract.mission_id, "prompt": "other"})
+        self.assertEqual(other.status, "response_received")
+        self.assertEqual(adapter.calls, 2)
+
+    def test_concurrent_distinct_keys_same_intent_run_once(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Lock
+
+        class CountingAdapter:
+            def __init__(self):
+                self.calls = 0
+                self.lock = Lock()
+
+            def invoke(self, payload):
+                with self.lock:
+                    self.calls += 1
+                time.sleep(0.03)
+                return {"accepted": True}
+
+        adapter = CountingAdapter()
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results = list(pool.map(
+                lambda i: self.execute(adapter, key=f"race-key-{i}", prefix=f"race-{i}"), range(6)))
+        self.assertEqual(adapter.calls, 1)
+        self.assertEqual(sum(r.status == "response_received" for r in results), 1)
 
     def test_concurrent_same_key_dispatches_adapter_exactly_once(self):
         from concurrent.futures import ThreadPoolExecutor

@@ -17,6 +17,7 @@ import uuid
 class RegistryError(RuntimeError): pass
 class IdempotencyConflict(RegistryError): pass
 class InvalidTransition(RegistryError): pass
+class DuplicateIntent(InvalidTransition): pass
 
 
 class State(str, Enum):
@@ -981,6 +982,23 @@ class SQLiteExecutionRegistry:
                     raise InvalidTransition("SUCCEEDED requires verified completion evidence; use complete_with_verified_evidence")
                 if target not in _ALLOWED[current.state]:
                     raise InvalidTransition(f"disallowed transition {current.state.value}->{target.value}")
+                if target is State.RUNNING:
+                    # Same intent (mission, contract, payload) under a DIFFERENT key must
+                    # not run again while an earlier run may have caused the effect.
+                    # Checked inside this BEGIN IMMEDIATE transaction, so two keys racing
+                    # for the same intent cannot both become RUNNING.
+                    clash = db.execute(
+                        """SELECT 1 FROM executions
+                        WHERE mission_id=? AND contract_digest=? AND payload_digest=?
+                          AND key<>? AND state IN (?, ?, ?, ?) LIMIT 1""",
+                        (current.mission_id, current.contract_digest, current.payload_digest, key,
+                         State.RUNNING.value, State.OUTCOME_UNKNOWN.value,
+                         State.RECONCILIATION_REQUIRED.value, State.SUCCEEDED.value),
+                    ).fetchone()
+                    if clash is not None:
+                        raise DuplicateIntent(
+                            "same mission, contract and payload already ran or may have run under another key"
+                        )
                 cur = db.execute("""UPDATE executions SET state=?, version=version+1, updated_at=?
                     WHERE key=? AND version=?""",
                     (target.value, recorded_at, key, expected_version))

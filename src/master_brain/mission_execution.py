@@ -24,7 +24,7 @@ from master_brain.mission_approval import (
 )
 from master_brain.mission_contract import MissionContract
 from master_brain.execution_registry import (
-    IdempotencyConflict, RegistryError, SQLiteExecutionRegistry, State,
+    DuplicateIntent, IdempotencyConflict, RegistryError, SQLiteExecutionRegistry, State,
 )
 
 
@@ -294,6 +294,20 @@ def execute_mission_idempotently(
         running = registry.transition(
             key=idempotency_key, expected_version=record.version, target=State.RUNNING,
             recorded_at=recorded_at,
+        )
+    except DuplicateIntent:
+        # No dispatch happened for this key: close it as FAILED (allowed from PENDING)
+        # so it does not linger, and never invoke the adapter.
+        try:
+            registry.transition(
+                key=idempotency_key, expected_version=record.version, target=State.FAILED,
+                recorded_at=recorded_at,
+            )
+        except RegistryError:
+            pass
+        return MissionExecutionResult(
+            contract.mission_id, "duplicate_intent",
+            reason="same_intent_already_ran_or_unknown_under_another_key_adapter_not_invoked",
         )
     except RegistryError:
         return MissionExecutionResult(

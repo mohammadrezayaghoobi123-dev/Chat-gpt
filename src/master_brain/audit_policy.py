@@ -12,8 +12,9 @@ Two layers, applied by ``AuditStore.append`` before anything is written:
 
 Limits: layer 2 is a deny-list. It cannot recognise unknown credential formats or
 low-entropy passwords inside free text of an allowed field; that residual risk is
-why unregistered event types are only screened, and why production stores should
-set ``strict_event_types=True``.
+why ``AuditStore`` rejects unregistered event types by default
+(``strict_event_types=True``); new event types must be registered here after review.
+Opt out (``False``) only for tests of generic store mechanics.
 """
 from __future__ import annotations
 

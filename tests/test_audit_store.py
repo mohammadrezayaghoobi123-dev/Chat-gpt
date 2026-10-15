@@ -11,7 +11,8 @@ class AuditStoreTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tempdir.cleanup)
         self.path = Path(self.tempdir.name) / "audit" / "events.jsonl"
-        self.store = AuditStore(self.path)
+        # store-mechanics tests use ad hoc event types; production stores default to strict
+        self.store = AuditStore(self.path, strict_event_types=False)
 
     def append(self, event_id, payload=None):
         return self.store.append(
@@ -51,7 +52,7 @@ class AuditStoreTests(unittest.TestCase):
     def test_replacing_tail_event_is_detected_by_anchor(self):
         self.append("e-1")
         self.append("e-2")
-        other = AuditStore(Path(self.tempdir.name) / "other.jsonl")
+        other = AuditStore(Path(self.tempdir.name) / "other.jsonl", strict_event_types=False)
         other.append(event_id="e-1", event_type="claim.reviewed", recorded_at="2026-10-11T12:00:00Z",
                      actor="unit-test", subject_ref="claim:c-1", payload={"status": "contested"})
         other.append(event_id="e-2", event_type="claim.reviewed", recorded_at="2026-10-11T12:00:00Z",
@@ -215,7 +216,7 @@ class AuditStoreTests(unittest.TestCase):
         import sys
         code = (
             "import sys; from master_brain.audit_store import AuditStore; "
-            "AuditStore(sys.argv[1]).append(event_id=sys.argv[2], event_type='unit_test', "
+            "AuditStore(sys.argv[1], strict_event_types=False).append(event_id=sys.argv[2], event_type='unit_test', "
             "recorded_at='2026-10-14T00:00:00Z', actor='p', subject_ref='s', payload={})"
         )
         env = {**__import__("os").environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}

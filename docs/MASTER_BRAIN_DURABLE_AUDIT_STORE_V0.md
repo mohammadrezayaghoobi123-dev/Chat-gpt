@@ -38,6 +38,12 @@ store.append(
 events = store.read_all()  # verifies the complete chain before returning
 ```
 
+> **Update (payload policy):** `AuditStore` now rejects event types that are not
+> registered in `master_brain.audit_policy.PAYLOAD_KEY_ALLOWLIST` and screens every
+> payload for secrets (`strict_event_types=True` by default). The example above uses
+> an illustrative event type; register new types (with their allowed top-level keys)
+> after review, or pass `strict_event_types=False` only for generic store tests.
+
 ## Maturity
 
 Prototype persistence layer for local single-writer workflows. Synthetic unit tests verify persistence and corruption detection; they do not establish production readiness.

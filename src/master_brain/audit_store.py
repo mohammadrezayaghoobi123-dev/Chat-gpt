@@ -8,7 +8,7 @@ support. Hashes detect changes in stored history, but cannot detect a complete
 rewrite unless a checkpoint is retained elsewhere.
 
 Payloads pass ``audit_policy`` first: a top-level key allow-list for registered
-event types and secret screening (key names and credential-shaped values) for all.
+event types (unregistered types are rejected unless ``strict_event_types=False``) and secret screening (key names and credential-shaped values) for all.
 
 Appends reject a ``recorded_at`` earlier than the last stored event (backdating).
 Future-dated values still need a trusted clock and are not rejected here.
@@ -50,7 +50,7 @@ class AuditPayloadError(AuditStoreError):
 class AuditStore:
     """Fail-closed, single-writer JSONL audit store; never auto-repairs history."""
 
-    def __init__(self, path: str | os.PathLike[str], *, strict_event_types: bool = False) -> None:
+    def __init__(self, path: str | os.PathLike[str], *, strict_event_types: bool = True) -> None:
         self.path = Path(path)
         self.strict_event_types = strict_event_types
 

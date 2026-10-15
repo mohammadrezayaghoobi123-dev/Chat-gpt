@@ -11,7 +11,7 @@ class AuditPayloadPolicyTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "a.jsonl"
-        self.store = AuditStore(self.path)
+        self.store = AuditStore(self.path, strict_event_types=False)
         self.n = 0
 
     def append(self, payload, event_type="claim.reviewed", store=None):
@@ -67,9 +67,11 @@ class AuditPayloadPolicyTests(unittest.TestCase):
                     event_type="mission.dispatch_finished")
 
     def test_strict_mode_rejects_unregistered_event_types(self):
-        strict = AuditStore(Path(self.tmp.name) / "s.jsonl", strict_event_types=True)
+        default = AuditStore(Path(self.tmp.name) / "s.jsonl")  # secure by default
+        self.assertTrue(default.strict_event_types)
         with self.assertRaisesRegex(AuditStoreError, "not registered"):
-            self.append({"a": 1}, event_type="made.up", store=strict)
+            self.append({"a": 1}, event_type="made.up", store=default)
+        self.assertFalse(Path(self.tmp.name, "s.jsonl").exists())
 
     def test_allow_list_covers_every_key_production_code_emits(self):
         """Drift guard: real payloads must fit their registered allow-list."""

@@ -7,6 +7,9 @@ protect against non-cooperating writers or network filesystems without lock
 support. Hashes detect changes in stored history, but cannot detect a complete
 rewrite unless a checkpoint is retained elsewhere.
 
+Payloads pass ``audit_policy`` first: a top-level key allow-list for registered
+event types and secret screening (key names and credential-shaped values) for all.
+
 Appends reject a ``recorded_at`` earlier than the last stored event (backdating).
 Future-dated values still need a trusted clock and are not rejected here.
 
@@ -29,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from master_brain.audit_ledger import GENESIS_HASH, AuditEvent, create_event, verify_chain
+from master_brain.audit_policy import AuditPayloadRejected, enforce_payload_policy
 
 
 class AuditStoreError(RuntimeError):
@@ -39,11 +43,16 @@ class AuditPreconditionError(AuditStoreError):
     """Raised when an append's precondition rejects the current verified history."""
 
 
+class AuditPayloadError(AuditStoreError):
+    """Raised when a payload violates the audit key allow-list or contains a secret."""
+
+
 class AuditStore:
     """Fail-closed, single-writer JSONL audit store; never auto-repairs history."""
 
-    def __init__(self, path: str | os.PathLike[str]) -> None:
+    def __init__(self, path: str | os.PathLike[str], *, strict_event_types: bool = False) -> None:
         self.path = Path(path)
+        self.strict_event_types = strict_event_types
 
     @staticmethod
     def _decode(line: str, number: int) -> AuditEvent:
@@ -153,7 +162,12 @@ class AuditStore:
     ) -> AuditEvent:
         """Append one event. ``precondition`` is evaluated on the verified history
         while the exclusive lock is held (atomic check-and-append); a returned
-        string rejects the append with AuditPreconditionError."""
+        string rejects the append with AuditPreconditionError. Payloads are checked
+        against the audit allow-list / secret policy before anything is written."""
+        try:
+            enforce_payload_policy(event_type, payload, strict_event_types=self.strict_event_types)
+        except AuditPayloadRejected as exc:
+            raise AuditPayloadError(str(exc)) from exc
         with self._exclusive_lock():
             return self._append_locked(
                 event_id=event_id, event_type=event_type, recorded_at=recorded_at,

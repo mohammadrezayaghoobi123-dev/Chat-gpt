@@ -36,6 +36,31 @@ class EvidenceProtocolTests(unittest.TestCase):
             **kwargs,
         )
 
+    def test_zero_weight_evidence_does_not_change_status(self):
+        """Finding B2: a zero-relevance/zero-reliability counter flipped supported -> contested."""
+        base = [self.evidence("s1", "a"), self.evidence("s2", "b")]
+        self.assertEqual(assess_claim(self.claim, base, self.policy).status,
+                         ReviewStatus.PROVISIONALLY_SUPPORTED)
+        for kwargs in ({"relevance": 0.0}, {"reliability": 0.0}):
+            with self.subTest(**kwargs):
+                noise = self.evidence("n", "z", EvidencePolarity.COUNTERS, **kwargs)
+                result = assess_claim(self.claim, base + [noise], self.policy)
+                self.assertEqual(result.status, ReviewStatus.PROVISIONALLY_SUPPORTED)
+                self.assertEqual(result.counterevidence_ids, ())
+                self.assertIn("zero_effective_weight",
+                              [c.excluded_reason for c in result.contributions])
+
+    def test_zero_weight_only_evidence_is_insufficient_not_contested(self):
+        noise = self.evidence("n", "z", EvidencePolarity.COUNTERS, relevance=0.0)
+        result = assess_claim(self.claim, [self.evidence("s1", "a"), noise], self.policy)
+        self.assertEqual(result.status, ReviewStatus.INSUFFICIENT_INDEPENDENCE)
+
+    def test_positive_weight_counterevidence_still_contests(self):
+        base = [self.evidence("s1", "a"), self.evidence("s2", "b")]
+        weak = self.evidence("n", "z", EvidencePolarity.COUNTERS, relevance=0.01)
+        self.assertEqual(assess_claim(self.claim, base + [weak], self.policy).status,
+                         ReviewStatus.CONTESTED)
+
     def test_empty_evidence_is_unverified_not_false(self):
         result = assess_claim(self.claim, [], self.policy)
         self.assertEqual(result.status, ReviewStatus.UNVERIFIED)

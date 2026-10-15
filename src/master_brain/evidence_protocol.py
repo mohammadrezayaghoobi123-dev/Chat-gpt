@@ -190,6 +190,13 @@ def assess_claim(
         base = _SOURCE_BASE_WEIGHT[item.source_kind]
         verified_factor = 1.0 if item.is_directly_verified else 0.8
         weight = base * item.reliability * item.relevance * verified_factor
+        if weight <= 0.0:
+            # Evidence with no effective weight (irrelevant or zero-reliability) must not
+            # change the review status, e.g. flip a supported claim to contested.
+            contributions.append(EvidenceContribution(
+                item.evidence_id, item.polarity, item.source_group, 0.0, "zero_effective_weight",
+            ))
+            continue
         key = (item.polarity, item.source_group)
         previous = group_best.get(key)
         if previous is None:
@@ -274,6 +281,8 @@ def assess_claim(
 
     if any(c.excluded_reason == "stale_or_expired" for c in contributions):
         reasons.append("One or more evidence records were stale or expired and were excluded from scoring.")
+    if any(c.excluded_reason == "zero_effective_weight" for c in contributions):
+        reasons.append("One or more records had zero effective weight and were excluded from the status.")
     if any(c.excluded_reason == "correlated_source_group_cap" for c in contributions):
         reasons.append("One or more records were discounted because their source group already contributed.")
     if limitations:

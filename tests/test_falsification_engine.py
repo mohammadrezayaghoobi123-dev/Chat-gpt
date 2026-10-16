@@ -108,6 +108,34 @@ class FalsificationEngineTests(unittest.TestCase):
         self.assertEqual(result.counterexample_evidence_ids, ("e2",))
         self.assertFalse(any("unsupported" in r for r in result.reasons))
 
+    def counters_review(self, groups, reliability=1.0):
+        evidence, observations = [], [TestObservation("test-1", True, "pass", "ok", ("e1",)),
+                                      TestObservation("test-2", True, "pass", "ok", ("e2",))]
+        for ident, group in zip(("e1", "e2"), groups):
+            record = self.evidence(ident, group, EvidencePolarity.COUNTERS)
+            evidence.append(type(record)(**{**record.__dict__, "reliability": reliability}))
+        return review_falsification_plan(self.plan, observations, evidence, self.policy)
+
+    def test_independent_counterevidence_crossing_the_gate_is_refuted_but_not_a_labelled_counterexample(self):
+        """Pins the PROVISIONALLY_REFUTED branch: status counterexample_found, yet no outcome
+        carried an explicit counterexample label, so counterexample_evidence_ids stays empty."""
+        result = self.counters_review(("inspector-a", "inspector-b"))
+        self.assertEqual(result.evidence_assessment.status, ReviewStatus.PROVISIONALLY_REFUTED)
+        self.assertEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
+        self.assertEqual(result.counterexample_evidence_ids, ())
+        self.assertTrue(any("disconfirmation signal" in r for r in result.reasons))
+        self.assertFalse(result.truth_established)
+
+    def test_counterevidence_from_one_source_group_does_not_refute(self):
+        result = self.counters_review(("same-group", "same-group"))
+        self.assertEqual(result.evidence_assessment.status, ReviewStatus.INSUFFICIENT_INDEPENDENCE)
+        self.assertNotEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
+
+    def test_weak_counterevidence_below_the_gate_does_not_refute(self):
+        result = self.counters_review(("inspector-a", "inspector-b"), reliability=0.2)
+        self.assertEqual(result.evidence_assessment.status, ReviewStatus.INSUFFICIENT_EVIDENCE)
+        self.assertNotEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
+
     def test_counterevidence_keeps_claim_contested(self):
         result = review_falsification_plan(
             self.plan,

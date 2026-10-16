@@ -826,6 +826,90 @@ class DispatchTimeoutPipelineTests(unittest.TestCase):
         self.assertEqual(Hung.calls, 1)
 
 
+class ContractRiskCeilingTests(unittest.TestCase):
+    """Effective risk comes from the contract; a caller requirement can only narrow it."""
+
+    EXPECTED_CEILING = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+
+    def run_case(self, tier, requested, idempotent=False):
+        from master_brain.execution_registry import SQLiteExecutionRegistry
+        from master_brain.mission_approval import action_digest
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        store = AuditStore(root / "audit.jsonl")
+        contract = MissionContract(mission_id="m-risk", objective="Risk ceiling",
+                                   risk_tier=tier, requires_approval=True)
+        payload = {"a": 1}
+        receipt = record_mission_approval(
+            store, contract, event_id="approval-risk", recorded_at="2026-10-12T00:00:00Z",
+            approver_subject="user:r", authentication_method="upstream-session",
+            action_digest=action_digest("test-model", payload),
+        )
+        integration = IntegrationDescriptor(
+            integration_id="test-model", version="1", kind=IntegrationKind.MODEL,
+            capabilities=("text_reasoning",), maturity=IntegrationMaturity.ENABLED,
+            health=IntegrationHealth.AVAILABLE, risk_level=0, estimated_cost_per_call=0.0,
+        )
+        requirement = IntegrationRequirement(("text_reasoning",), max_risk_level=requested)
+        adapter = Adapter()
+        kwargs = dict(event_id_prefix="p", recorded_at="2026-10-12T00:01:00Z", actor="system:test")
+        registry = None
+        if idempotent:
+            registry = SQLiteExecutionRegistry(str(root / "e.sqlite3"), timeout=0.25)
+            result = execute_mission_idempotently(
+                contract, store, receipt, integration, requirement, adapter, payload,
+                registry, idempotency_key="k-risk", **kwargs)
+        else:
+            result = execute_mission_once(
+                contract, store, receipt, integration, requirement, adapter, payload, **kwargs)
+        return result, adapter, store, registry
+
+    def test_ceiling_table_is_pinned(self):
+        from master_brain.mission_execution import MAX_INTEGRATION_RISK_BY_TIER
+        self.assertEqual({t.value: v for t, v in MAX_INTEGRATION_RISK_BY_TIER.items()},
+                         self.EXPECTED_CEILING)
+
+    def test_requirement_at_or_below_the_ceiling_runs_and_above_is_rejected(self):
+        for idempotent in (False, True):
+            for tier in MissionRiskTier:
+                ceiling = self.EXPECTED_CEILING[tier.value]
+                for requested in range(0, 5):
+                    with self.subTest(tier=tier.value, requested=requested, idempotent=idempotent):
+                        result, adapter, store, registry = self.run_case(tier, requested, idempotent)
+                        if requested <= ceiling:
+                            self.assertEqual(result.status, "response_received")
+                            self.assertEqual(adapter.calls, 1)
+                        else:
+                            self.assertEqual((result.status, result.reason),
+                                             ("rejected", "requirement_exceeds_contract_risk_ceiling"))
+                            self.assertEqual(adapter.calls, 0)
+                            self.assertEqual([e.event_type for e in store.read_all()],
+                                             ["mission.approval_granted"])
+                            if registry is not None:
+                                self.assertIsNone(registry.get("k-risk"))
+
+    def test_unknown_contract_tier_and_bad_requirement_types_are_rejected(self):
+        from master_brain.mission_execution import _requirement_exceeds_contract_risk
+        contract = MissionContract(mission_id="m", objective="o", risk_tier=MissionRiskTier.MEDIUM)
+        self.assertIsNone(_requirement_exceeds_contract_risk(contract, IntegrationRequirement(("x",))))
+
+        for bogus in ("bogus", None, 3):
+            class Fake:
+                risk_tier = bogus
+            with self.subTest(bogus=bogus):
+                self.assertEqual(
+                    _requirement_exceeds_contract_risk(Fake(), IntegrationRequirement(("x",))),
+                    "unknown_contract_risk_tier")
+
+        class BadReq:
+            max_risk_level = True
+        self.assertEqual(_requirement_exceeds_contract_risk(contract, BadReq()),
+                         "requirement_exceeds_contract_risk_ceiling")
+        self.assertEqual(_requirement_exceeds_contract_risk(contract, object()),
+                         "requirement_exceeds_contract_risk_ceiling")
+
+
 class SingleUseApprovalTests(PipelineFixture):
     __test__ = True
     """Finding APPR-replay: one approved action ran 3x sequentially, 6x concurrently."""

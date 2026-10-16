@@ -22,7 +22,7 @@ from master_brain.mission_approval import (
     evaluate_approved_execution_gate,
     mission_contract_digest,
 )
-from master_brain.mission_contract import MissionContract
+from master_brain.mission_contract import MissionContract, MissionRiskTier
 from master_brain.execution_registry import (
     DuplicateIntent, IdempotencyConflict, RegistryError, SQLiteExecutionRegistry, State,
 )
@@ -34,6 +34,26 @@ class MissionExecutionResult:
     status: str
     dispatch_result: DispatchResult | None = None
     reason: str = ""
+
+
+# Effective risk is taken from the mission contract only: a caller-supplied
+# requirement may narrow, but never raise, the integration risk the contract allows.
+MAX_INTEGRATION_RISK_BY_TIER = {
+    MissionRiskTier.LOW: 1,
+    MissionRiskTier.MEDIUM: 2,
+    MissionRiskTier.HIGH: 3,
+    MissionRiskTier.CRITICAL: 4,
+}
+
+
+def _requirement_exceeds_contract_risk(contract: Any, requirement: Any) -> str | None:
+    ceiling = MAX_INTEGRATION_RISK_BY_TIER.get(getattr(contract, "risk_tier", None))
+    if ceiling is None:
+        return "unknown_contract_risk_tier"
+    requested = getattr(requirement, "max_risk_level", None)
+    if type(requested) is not int or requested > ceiling:
+        return "requirement_exceeds_contract_risk_ceiling"
+    return None
 
 
 def _is_timezone_aware_timestamp(value: Any) -> bool:
@@ -100,6 +120,9 @@ def execute_mission_once(
         return MissionExecutionResult(
             contract.mission_id, "rejected", reason="; ".join(gate.reasons)
         )
+    risk_reason = _requirement_exceeds_contract_risk(contract, requirement)
+    if risk_reason:
+        return MissionExecutionResult(contract.mission_id, "rejected", reason=risk_reason)
 
     if not isinstance(event_id_prefix, str) or not event_id_prefix.strip():
         return MissionExecutionResult(contract.mission_id, "rejected", reason="invalid_event_id_prefix")
@@ -248,6 +271,9 @@ def execute_mission_idempotently(
     )
     if not gate.allowed:
         return MissionExecutionResult(contract.mission_id, "rejected", reason="; ".join(gate.reasons))
+    risk_reason = _requirement_exceeds_contract_risk(contract, requirement)
+    if risk_reason:
+        return MissionExecutionResult(contract.mission_id, "rejected", reason=risk_reason)
 
     # Validate all caller-controlled execution metadata before reserving or
     # claiming a registry record. Invalid metadata must not strand a mission

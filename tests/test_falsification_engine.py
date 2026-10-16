@@ -116,25 +116,42 @@ class FalsificationEngineTests(unittest.TestCase):
             evidence.append(type(record)(**{**record.__dict__, "reliability": reliability}))
         return review_falsification_plan(self.plan, observations, evidence, self.policy)
 
-    def test_independent_counterevidence_crossing_the_gate_is_refuted_but_not_a_labelled_counterexample(self):
-        """Pins the PROVISIONALLY_REFUTED branch: status counterexample_found, yet no outcome
-        carried an explicit counterexample label, so counterexample_evidence_ids stays empty."""
+    def test_independent_counterevidence_crossing_the_gate_is_refuted_but_not_a_counterexample(self):
+        """Finding (label conflation): this used to report counterexample_found with no
+        counterexample evidence ids; it now has its own status."""
         result = self.counters_review(("inspector-a", "inspector-b"))
         self.assertEqual(result.evidence_assessment.status, ReviewStatus.PROVISIONALLY_REFUTED)
-        self.assertEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
+        self.assertEqual(result.status, FalsificationStatus.REFUTED_BY_COUNTEREVIDENCE)
+        self.assertEqual(result.status.value, "refuted_by_counterevidence")
         self.assertEqual(result.counterexample_evidence_ids, ())
-        self.assertTrue(any("disconfirmation signal" in r for r in result.reasons))
+        self.assertTrue(any("no evidence-backed counterexample" in r for r in result.reasons))
+        self.assertFalse(any("disconfirmation signal" in r for r in result.reasons))
         self.assertFalse(result.truth_established)
+
+    def test_labelled_counterexample_takes_precedence_over_refutation_by_counterevidence(self):
+        result = review_falsification_plan(
+            self.plan,
+            [TestObservation("test-1", True, "counterexample", "72 units", ("e1",)),
+             TestObservation("test-2", True, "pass", "ok", ("e2",))],
+            [self.evidence("e1", "inspector-a", EvidencePolarity.COUNTERS),
+             self.evidence("e2", "inspector-b", EvidencePolarity.COUNTERS)], self.policy,
+        )
+        self.assertEqual(result.evidence_assessment.status, ReviewStatus.PROVISIONALLY_REFUTED)
+        self.assertEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
+        self.assertEqual(result.counterexample_evidence_ids, ("e1",))
+        self.assertTrue(any("disconfirmation signal" in r for r in result.reasons))
 
     def test_counterevidence_from_one_source_group_does_not_refute(self):
         result = self.counters_review(("same-group", "same-group"))
         self.assertEqual(result.evidence_assessment.status, ReviewStatus.INSUFFICIENT_INDEPENDENCE)
-        self.assertNotEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
+        self.assertNotIn(result.status, {FalsificationStatus.COUNTEREXAMPLE_FOUND,
+                                         FalsificationStatus.REFUTED_BY_COUNTEREVIDENCE})
 
     def test_weak_counterevidence_below_the_gate_does_not_refute(self):
         result = self.counters_review(("inspector-a", "inspector-b"), reliability=0.2)
         self.assertEqual(result.evidence_assessment.status, ReviewStatus.INSUFFICIENT_EVIDENCE)
-        self.assertNotEqual(result.status, FalsificationStatus.COUNTEREXAMPLE_FOUND)
+        self.assertNotIn(result.status, {FalsificationStatus.COUNTEREXAMPLE_FOUND,
+                                         FalsificationStatus.REFUTED_BY_COUNTEREVIDENCE})
 
     def test_counterevidence_keeps_claim_contested(self):
         result = review_falsification_plan(
@@ -170,6 +187,19 @@ class FalsificationEngineTests(unittest.TestCase):
         self.assertEqual(result.status, FalsificationStatus.CONTRADICTION_REMAINS)
         self.assertEqual(result.counterexample_evidence_ids, ())
         self.assertFalse(result.truth_established)
+
+    def test_contradiction_and_conflict_outcomes_alone_keep_the_contradiction_status(self):
+        """Without any counters evidence, the outcome label itself must drive the status."""
+        for label in ("contradiction", "conflict"):
+            with self.subTest(label=label):
+                result = review_falsification_plan(
+                    self.plan,
+                    [TestObservation("test-1", True, "pass", "ok", ("e1",)),
+                     TestObservation("test-2", True, label, "readings disagree")],
+                    [self.evidence("e1", "machine-log")], self.policy,
+                )
+                self.assertEqual(result.status, FalsificationStatus.CONTRADICTION_REMAINS)
+                self.assertEqual(result.counterexample_evidence_ids, ())
 
     def test_counterevidence_is_not_counterexample_without_explicit_result(self):
         result = review_falsification_plan(

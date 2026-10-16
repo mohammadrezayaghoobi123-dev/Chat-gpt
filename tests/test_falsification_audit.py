@@ -186,5 +186,30 @@ class FalsificationAuditTests(unittest.TestCase):
             )
 
 
+class RefutedByCounterevidenceAuditTests(unittest.TestCase):
+    def test_refuted_by_counterevidence_is_audited_with_its_own_status_and_no_counterexample_ids(self):
+        claim = ClaimRecord("claim-r", "Throughput target met", operational_definition="100 units/hour")
+        plan = FalsificationPlan(claim, (RivalHypothesis("rival", "Warm-up distorts"),),
+                                 ("A verified run below 100",), ("t1", "t2"))
+        policy = ProtocolPolicy(current_time="2026-10-11T12:00:00Z")
+        def counter(ident, group):
+            return EvidenceRecord(
+                evidence_id=ident, claim_id="claim-r", source_uri_or_reference="ref:" + ident,
+                source_group=group, source_kind=SourceKind.PRIMARY, polarity=EvidencePolarity.COUNTERS,
+                reliability=1, relevance=1, is_directly_verified=True)
+        review = review_falsification_plan(
+            plan,
+            [TestObservation("t1", True, "pass", "ok", ("c1",)),
+             TestObservation("t2", True, "pass", "ok", ("c2",))],
+            [counter("c1", "inspector-a"), counter("c2", "inspector-b")], policy)
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AuditStore(Path(tmp) / "audit.jsonl")
+            event = record_falsification_review(
+                store, review, event_id="fr-1", recorded_at="2026-10-11T12:00:00Z", actor="tester")
+            self.assertEqual(event.payload["status"], "refuted_by_counterevidence")
+            self.assertEqual(event.payload["counterexample_evidence_ids"], [])
+            self.assertEqual(len(store.read_all()), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

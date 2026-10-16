@@ -71,6 +71,7 @@ class FalsificationStatus(str, Enum):
     READY_TO_TEST = "ready_to_test"
     TESTS_INCOMPLETE = "tests_incomplete"
     COUNTEREXAMPLE_FOUND = "counterexample_found"
+    REFUTED_BY_COUNTEREVIDENCE = "refuted_by_counterevidence"
     CONTRADICTION_REMAINS = "contradiction_remains"
     SURVIVED_TESTS_PROVISIONALLY = "survived_tests_provisionally"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
@@ -288,11 +289,18 @@ def review_falsification_plan(
         for item in observed
     )
 
-    if explicit_counterexample or (
-        assessment.status is ReviewStatus.PROVISIONALLY_REFUTED
-    ):
+    if explicit_counterexample:
         status = FalsificationStatus.COUNTEREXAMPLE_FOUND
         reasons.append("A disconfirmation signal was recorded; inspect its scope and validity.")
+    elif assessment.status is ReviewStatus.PROVISIONALLY_REFUTED:
+        # Counterevidence and a demonstrated counterexample are distinct (see above):
+        # independent counterevidence crossed the review gate, but no executed test
+        # reported an evidence-backed counterexample.
+        status = FalsificationStatus.REFUTED_BY_COUNTEREVIDENCE
+        reasons.append(
+            "Independent counterevidence crossed the review gate; the claim is provisionally "
+            "refuted by evidence, but no evidence-backed counterexample was reported."
+        )
     elif assessment.status is ReviewStatus.CONTESTED or explicit_contradiction:
         status = FalsificationStatus.CONTRADICTION_REMAINS
         reasons.append("Supporting and counterevidence conflict or an observation explicitly reports contradiction.")

@@ -125,6 +125,59 @@ class AuditStoreTests(unittest.TestCase):
                               actor="a", subject_ref="s", payload={})
         self.assertEqual(len(self.store.read_all()), 4)
 
+    def clocked_store(self, now, skew=300.0, name="clocked"):
+        from datetime import datetime, timezone
+        box = {"now": datetime.fromisoformat(now.replace("Z", "+00:00"))}
+        store = AuditStore(Path(self.tempdir.name) / f"{name}.jsonl", strict_event_types=False,
+                           clock=lambda: box["now"], max_future_skew_seconds=skew)
+        return store, box
+
+    def put(self, store, event_id, at):
+        return store.append(event_id=event_id, event_type="x", recorded_at=at,
+                            actor="a", subject_ref="s", payload={})
+
+    def test_future_dated_event_is_rejected_and_cannot_lock_the_log(self):
+        """Finding C5 (future): one 2099 event used to be accepted and then reject every later event."""
+        store, _ = self.clocked_store("2026-10-12T00:00:00Z")
+        self.put(store, "e-1", "2026-10-12T00:00:00Z")
+        with self.assertRaisesRegex(AuditStoreError, "future"):
+            self.put(store, "e-bad", "2099-01-01T00:00:00Z")
+        self.put(store, "e-2", "2026-10-12T00:00:05Z")
+        self.assertEqual([e.event_id for e in store.read_all()], ["e-1", "e-2"])
+
+    def test_future_skew_boundary_is_inclusive(self):
+        store, _ = self.clocked_store("2026-10-12T00:00:00Z", skew=300)
+        self.put(store, "e-ok", "2026-10-12T00:05:00Z")          # exactly now + skew
+        with self.assertRaisesRegex(AuditStoreError, "future"):
+            self.put(store, "e-late", "2026-10-12T00:05:01Z")     # one second beyond
+        store0, _ = self.clocked_store("2026-10-12T00:00:00Z", skew=0, name="zero")
+        self.put(store0, "z-ok", "2026-10-12T00:00:00Z")
+        with self.assertRaisesRegex(AuditStoreError, "future"):
+            self.put(store0, "z-late", "2026-10-12T00:00:01Z")
+
+    def test_future_check_honours_utc_offsets_and_uses_the_clock_on_every_append(self):
+        store, box = self.clocked_store("2026-10-12T00:00:00Z", skew=60)
+        self.put(store, "e-1", "2026-10-12T05:30:00+05:30")       # == now in UTC
+        with self.assertRaisesRegex(AuditStoreError, "future"):
+            self.put(store, "e-2", "2026-10-12T06:30:00+05:30")   # one hour ahead in UTC
+        from datetime import datetime
+        box["now"] = datetime.fromisoformat("2026-10-12T02:00:00+00:00")
+        self.put(store, "e-3", "2026-10-12T01:30:00Z")            # fine once the clock moved on
+
+    def test_default_clock_is_the_system_clock(self):
+        from datetime import datetime, timedelta, timezone
+        store = AuditStore(Path(self.tempdir.name) / "sys.jsonl", strict_event_types=False)
+        now = datetime.now(timezone.utc)
+        self.put(store, "e-now", now.isoformat())
+        with self.assertRaisesRegex(AuditStoreError, "future"):
+            self.put(store, "e-day", (now + timedelta(days=1)).isoformat())
+
+    def test_skew_argument_is_validated(self):
+        for bad in (-1, float("inf"), float("nan"), True, "5", None):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                AuditStore(Path(self.tempdir.name) / "v.jsonl", max_future_skew_seconds=bad)
+        AuditStore(Path(self.tempdir.name) / "v.jsonl", max_future_skew_seconds=0)
+
     def test_missing_store_is_empty(self):
         self.assertEqual(self.store.read_all(), ())
 

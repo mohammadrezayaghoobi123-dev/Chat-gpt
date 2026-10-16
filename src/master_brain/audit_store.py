@@ -11,7 +11,9 @@ Payloads pass ``audit_policy`` first: a top-level key allow-list for registered
 event types (unregistered types are rejected unless ``strict_event_types=False``) and secret screening (key names and credential-shaped values) for all.
 
 Appends reject a ``recorded_at`` earlier than the last stored event (backdating).
-Future-dated values still need a trusted clock and are not rejected here.
+Values later than the store clock plus ``max_future_skew_seconds`` are rejected too,
+so one future-dated event cannot lock the log against later legitimate events. The
+clock is injectable; a trusted/attested time source can replace it later.
 
 A head anchor sidecar ``<path>.head`` records ``{count, head_hash}`` after every
 append. ``read_all`` fails closed if the log is shorter than the anchor or the
@@ -25,7 +27,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -50,9 +52,20 @@ class AuditPayloadError(AuditStoreError):
 class AuditStore:
     """Fail-closed, single-writer JSONL audit store; never auto-repairs history."""
 
-    def __init__(self, path: str | os.PathLike[str], *, strict_event_types: bool = True) -> None:
+    def __init__(
+        self, path: str | os.PathLike[str], *, strict_event_types: bool = True,
+        clock: Callable[[], datetime] | None = None, max_future_skew_seconds: float = 300.0,
+    ) -> None:
+        if isinstance(max_future_skew_seconds, bool) or not isinstance(
+            max_future_skew_seconds, (int, float)
+        ) or not 0 <= max_future_skew_seconds < float("inf"):
+            raise ValueError("max_future_skew_seconds must be a finite number >= 0")
         self.path = Path(path)
         self.strict_event_types = strict_event_types
+        # Injectable time source: production uses the system clock; tests and a future
+        # trusted-time service can supply their own without changing callers.
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self.max_future_skew_seconds = float(max_future_skew_seconds)
 
     @staticmethod
     def _decode(line: str, number: int) -> AuditEvent:
@@ -175,6 +188,19 @@ class AuditStore:
                 precondition=precondition,
             )
 
+    def _check_not_in_future(self, recorded_at: str) -> None:
+        try:
+            at = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return  # malformed values are rejected by create_event
+        if at.tzinfo is None:
+            return
+        now = self._clock()
+        if (at - now).total_seconds() > self.max_future_skew_seconds:
+            raise AuditStoreError(
+                f"recorded_at {recorded_at} is in the future beyond the allowed skew"
+            )
+
     def _append_locked(
         self, *, event_id: str, event_type: str, recorded_at: str, actor: str,
         subject_ref: str, payload: dict[str, Any],
@@ -187,6 +213,7 @@ class AuditStore:
                 raise AuditPreconditionError(reason)
         if any(item.event_id == event_id for item in history):
             raise AuditStoreError(f"duplicate event_id: {event_id}")
+        self._check_not_in_future(recorded_at)
         if history:
             try:
                 new_at = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))

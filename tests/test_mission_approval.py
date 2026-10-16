@@ -1,17 +1,21 @@
 import tempfile
 import unittest
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from master_brain.audit_store import AuditStore, AuditStoreError
+from tests.approval_expiry_helper import soon
 from master_brain.core import RiskTier, Task
 from master_brain.mission_approval import (
+    MAX_APPROVAL_LIFETIME_SECONDS,
     action_digest,
     evaluate_approved_execution_gate,
     mission_contract_digest,
     record_mission_approval,
 )
 from master_brain.mission_contract import (
+    MissionContract,
     MissionReviewLevel,
     MissionRiskTier,
     from_core_task,
@@ -36,8 +40,7 @@ class MissionApprovalTests(unittest.TestCase):
             event_id=kwargs.get("event_id", "approval-001"),
             recorded_at="2026-10-11T12:00:00Z",
             approver_subject=kwargs.get("approver_subject", "user:reviewer-7"),
-            authentication_method=kwargs.get("authentication_method", "upstream-session"),
-        )
+            authentication_method=kwargs.get("authentication_method", "upstream-session"), expires_at=soon())
 
     def test_missing_approval_fails_closed(self):
         result = evaluate_approved_execution_gate(self.contract, self.store, None)
@@ -48,8 +51,7 @@ class MissionApprovalTests(unittest.TestCase):
         return record_mission_approval(
             self.store, contract, event_id=event_id, recorded_at="2026-10-11T12:00:00Z",
             approver_subject="user:reviewer-7", authentication_method="upstream-session",
-            action_digest=digest,
-        )
+            action_digest=digest, expires_at=soon())
 
     def test_valid_approval_is_bound_to_exact_contract(self):
         digest = action_digest("integ", {"x": 1})
@@ -254,6 +256,163 @@ class ActionDigestPinningTests(unittest.TestCase):
         for payload in ({"x": float("nan")}, {"x": float("inf")}):
             with self.subTest(payload=payload), self.assertRaises((TypeError, ValueError)):
                 action_digest("i", payload)
+
+
+T0 = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def iso(moment):
+    return moment.isoformat().replace("+00:00", "Z")
+
+
+class ApprovalExpiryTests(unittest.TestCase):
+    """SAFE-001: an approval is only valid for a bounded time, judged by the store clock."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.now = T0
+        self.store = AuditStore(
+            Path(self.tempdir.name) / "audit.jsonl", clock=lambda: self.now,
+        )
+        self.contract = from_core_task(Task(objective="Deploy production", risk=RiskTier.HIGH))
+        self.digest = action_digest("integ", {"x": 1})
+
+    def approve(self, expires_at, contract=None, event_id="ap-1", digest="default"):
+        contract = contract or self.contract
+        return record_mission_approval(
+            self.store, contract, event_id=event_id,
+            recorded_at="2026-10-12T11:59:00Z", approver_subject="user:r",
+            authentication_method="upstream-session",
+            action_digest=self.digest if digest == "default" else digest,
+            expires_at=expires_at,
+        )
+
+    def gate(self, receipt, contract=None):
+        return evaluate_approved_execution_gate(
+            contract or self.contract, self.store, receipt, self.digest,
+        )
+
+    def test_maximum_lifetime_policy_is_pinned_to_seven_days(self):
+        """Pinned independently of the module so the constant cannot drift silently."""
+        self.assertEqual(MAX_APPROVAL_LIFETIME_SECONDS, 604800)
+
+    def test_store_now_returns_the_injected_clock(self):
+        self.assertEqual(self.store.now(), T0)
+        self.now = T0 + timedelta(seconds=5)
+        self.assertEqual(self.store.now(), T0 + timedelta(seconds=5))
+
+    def test_approval_is_valid_strictly_before_expiry_and_invalid_from_expiry_on(self):
+        expiry = T0 + timedelta(minutes=10)
+        receipt = self.approve(iso(expiry))
+        self.assertEqual(receipt.expires_at, iso(expiry))
+        for offset, allowed in ((0, True), (599, True), (600, False), (601, False), (86400, False)):
+            with self.subTest(offset=offset):
+                self.now = T0 + timedelta(seconds=offset)
+                result = self.gate(receipt)
+                self.assertEqual(result.allowed, allowed, result.reasons)
+                if not allowed:
+                    self.assertIn("approval has expired", result.reasons)
+
+    def test_expiry_is_recorded_in_the_audit_event(self):
+        receipt = self.approve(iso(T0 + timedelta(hours=1)))
+        event = self.store.read_all()[0]
+        self.assertEqual(event.payload["expires_at"], receipt.expires_at)
+
+    def test_high_and_critical_approvals_require_an_expiry(self):
+        for tier in (RiskTier.HIGH, RiskTier.CRITICAL):
+            with self.subTest(tier=tier):
+                contract = from_core_task(Task(objective=f"Ship {tier.value}", risk=tier))
+                with self.assertRaisesRegex(ValueError, "require an expires_at"):
+                    self.approve(None, contract=contract, event_id=f"no-exp-{tier.value}")
+        self.assertEqual(self.store.read_all(), ())
+
+    def test_gate_rejects_a_high_risk_receipt_without_expiry(self):
+        receipt = self.approve(iso(T0 + timedelta(hours=1)))
+        stripped = replace(receipt, expires_at=None)
+        result = self.gate(stripped)
+        self.assertFalse(result.allowed)
+        self.assertIn("high/critical-risk missions require an approval with an expiry", result.reasons)
+
+    def test_lower_risk_approval_without_expiry_is_still_accepted(self):
+        contract = MissionContract(
+            mission_id="m-med", objective="Run a controlled test",
+            risk_tier=MissionRiskTier.MEDIUM, requires_approval=True,
+        )
+        receipt = record_mission_approval(
+            self.store, contract, event_id="ap-med", recorded_at="2026-10-12T11:59:00Z",
+            approver_subject="user:r", authentication_method="upstream-session",
+        )
+        self.assertIsNone(receipt.expires_at)
+        self.now = T0 + timedelta(days=3650)
+        self.assertTrue(self.gate(receipt, contract).allowed)
+
+    def test_invalid_expiry_values_are_rejected_without_writing(self):
+        bad_values = (
+            "", "   ", "not-a-date", "2026-10-12T13:00:00",  # naive
+            5, b"2026-10-12T13:00:00Z", ["x"],
+            iso(T0),                                    # now: not in the future
+            iso(T0 - timedelta(seconds=1)),             # past
+            iso(T0 + timedelta(seconds=MAX_APPROVAL_LIFETIME_SECONDS + 1)),
+        )
+        for bad in bad_values:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                self.approve(bad, event_id=f"bad-{id(bad)}")
+        self.assertEqual(self.store.read_all(), ())
+
+    def test_maximum_lifetime_boundary_is_inclusive_and_offsets_are_honoured(self):
+        edge = T0 + timedelta(seconds=MAX_APPROVAL_LIFETIME_SECONDS)
+        self.approve(iso(edge), event_id="edge")
+        plus_two = timezone(timedelta(hours=2))
+        local = (T0 + timedelta(hours=1)).astimezone(plus_two).isoformat()
+        receipt = self.approve(local, event_id="offset")
+        self.now = T0 + timedelta(minutes=59)
+        self.assertTrue(self.gate(receipt).allowed)
+        self.now = T0 + timedelta(hours=1)
+        self.assertFalse(self.gate(receipt).allowed)
+
+    def test_tampering_with_the_receipt_expiry_is_detected(self):
+        receipt = self.approve(iso(T0 + timedelta(hours=1)))
+        extended = replace(receipt, expires_at=iso(T0 + timedelta(hours=5)))
+        result = self.gate(extended)
+        self.assertFalse(result.allowed)
+        self.assertIn("approval event payload does not match this contract and receipt", result.reasons)
+
+    def test_malformed_or_non_string_receipt_expiry_fails_closed(self):
+        receipt = self.approve(iso(T0 + timedelta(hours=1)))
+        malformed = self.gate(replace(receipt, expires_at="tomorrow"))
+        self.assertIn("approval expiry is malformed", malformed.reasons)
+        naive = self.gate(replace(receipt, expires_at="2026-10-12T13:00:00"))
+        self.assertIn("approval expiry is malformed", naive.reasons)
+        non_string = self.gate(replace(receipt, expires_at=12345))
+        self.assertFalse(non_string.allowed)
+        self.assertIn("approval receipt field expires_at must be a string", non_string.reasons)
+
+    def test_a_store_without_a_usable_clock_fails_closed_instead_of_crashing(self):
+        receipt = self.approve(iso(T0 + timedelta(hours=1)))
+        outer = self
+
+        class NoClock:
+            def read_all(inner):
+                return outer.store.read_all()
+
+        class BrokenClock(NoClock):
+            def now(inner):
+                raise RuntimeError("clock offline")
+
+        class NaiveClock(NoClock):
+            def now(inner):
+                return datetime(2026, 10, 12, 12, 0, 0)  # naive: not comparable
+
+        for store in (NoClock(), BrokenClock(), NaiveClock()):
+            with self.subTest(store=type(store).__name__):
+                result = evaluate_approved_execution_gate(
+                    self.contract, store, receipt, self.digest,
+                )
+                self.assertFalse(result.allowed)
+                self.assertIn(
+                    "approval expiry cannot be evaluated (no usable clock)", result.reasons,
+                )
 
 
 if __name__ == "__main__":

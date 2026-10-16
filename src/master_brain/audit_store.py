@@ -188,6 +188,10 @@ class AuditStore:
                 precondition=precondition,
             )
 
+    def now(self) -> datetime:
+        """Current time from the store's (injectable) clock; the single time seam."""
+        return self._clock()
+
     def _check_not_in_future(self, recorded_at: str) -> None:
         try:
             at = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))

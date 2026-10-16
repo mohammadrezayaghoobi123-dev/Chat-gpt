@@ -12,6 +12,7 @@ from master_brain.integrations import (
 )
 from master_brain.execution_registry import SQLiteExecutionRegistry
 from master_brain.mission_approval import record_mission_approval
+from tests.approval_expiry_helper import soon
 from master_brain.mission_contract import MissionContract, MissionRiskTier
 from master_brain.mission_execution import execute_mission_once, execute_mission_idempotently
 
@@ -55,8 +56,7 @@ class PipelineFixture(unittest.TestCase):
             self.store, self.contract, event_id="approval-42",
             recorded_at="2026-10-12T00:00:00Z",
             approver_subject="user:reviewer",
-            authentication_method="upstream-session",
-        )
+            authentication_method="upstream-session", expires_at=soon())
 
     def execute(self, adapter, receipt=None, prefix="run-42"):
         return execute_mission_once(
@@ -96,6 +96,9 @@ class MissionExecutionPipelineTests(PipelineFixture):
             def read_all(inner_self):
                 return self.store.read_all()
 
+            def now(inner_self):
+                return self.store.now()
+
             def append(inner_self, **kwargs):
                 raise AuditStoreError("simulated persistence outage")
 
@@ -115,6 +118,9 @@ class MissionExecutionPipelineTests(PipelineFixture):
         class UnexpectedFailureStore:
             def read_all(inner_self):
                 return self.store.read_all()
+
+            def now(inner_self):
+                return self.store.now()
 
             def append(inner_self, **kwargs):
                 raise RuntimeError("simulated unexpected backend error")
@@ -144,6 +150,9 @@ class MissionExecutionPipelineTests(PipelineFixture):
         class FailFinishedEventStore:
             def read_all(inner_self):
                 return self.store.read_all()
+
+            def now(inner_self):
+                return self.store.now()
 
             def append(inner_self, **kwargs):
                 if kwargs.get("event_type") == "mission.dispatch_finished":
@@ -331,8 +340,7 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
             self.store, self.contract, event_id="approval-idempotent",
             recorded_at="2026-10-12T00:00:00Z",
             approver_subject="user:reviewer",
-            authentication_method="upstream-session",
-        )
+            authentication_method="upstream-session", expires_at=soon())
 
     def execute(self, adapter, *, key="stable-key", payload=None, prefix="idempotent-run"):
         return execute_mission_idempotently(
@@ -529,6 +537,9 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
             def read_all(inner_self):
                 return self.store.read_all()
 
+            def now(inner_self):
+                return self.store.now()
+
             def append(inner_self, **kwargs):
                 if kwargs.get("event_type") == "mission.dispatch_started":
                     raise RuntimeError("simulated audit failure")
@@ -599,6 +610,9 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
         class FailFinishedEventStore:
             def read_all(inner_self):
                 return self.store.read_all()
+
+            def now(inner_self):
+                return self.store.now()
 
             def append(inner_self, **kwargs):
                 if kwargs.get("event_type") == "mission.dispatch_finished":
@@ -702,8 +716,7 @@ class ActionBoundApprovalTests(PipelineFixture):
             self.store, self.contract, event_id="approval-bound",
             recorded_at="2026-10-12T00:00:00Z",
             approver_subject="user:reviewer", authentication_method="upstream-session",
-            action_digest=action_digest("test-model", self.payload),
-        )
+            action_digest=action_digest("test-model", self.payload), expires_at=soon())
 
     def test_high_and_critical_missions_cannot_execute_on_a_contract_only_approval(self):
         """Mandatory action binding for HIGH/CRITICAL: no adapter call, nothing dispatched."""
@@ -715,7 +728,7 @@ class ActionBoundApprovalTests(PipelineFixture):
                 unbound = record_mission_approval(
                     self.store, self.contract, event_id=f"unbound-{tier.value}",
                     recorded_at="2026-10-12T00:00:00Z", approver_subject="user:reviewer",
-                    authentication_method="upstream-session")
+                    authentication_method="upstream-session", expires_at=soon())
                 adapter = Adapter()
                 result = self.execute(adapter, unbound, prefix=f"hi-{tier.value}")
                 self.assertEqual(result.status, "rejected")
@@ -732,7 +745,7 @@ class ActionBoundApprovalTests(PipelineFixture):
             self.store, self.contract, event_id="approval-high-bound",
             recorded_at="2026-10-12T00:00:00Z", approver_subject="user:reviewer",
             authentication_method="upstream-session",
-            action_digest=action_digest("test-model", self.payload))
+            action_digest=action_digest("test-model", self.payload), expires_at=soon())
         adapter = Adapter()
         self.assertEqual(self.execute(adapter, receipt).status, "response_received")
         self.assertEqual(adapter.calls, 1)
@@ -791,8 +804,7 @@ class DispatchTimeoutPipelineTests(unittest.TestCase):
         self.receipt = record_mission_approval(
             self.store, self.contract, event_id="approval-timeout",
             recorded_at="2026-10-12T00:00:00Z",
-            approver_subject="user:reviewer", authentication_method="upstream-session",
-        )
+            approver_subject="user:reviewer", authentication_method="upstream-session", expires_at=soon())
 
     def test_timeout_is_outcome_unknown_and_registry_blocks_blind_retry(self):
         import threading
@@ -844,8 +856,7 @@ class ContractRiskCeilingTests(unittest.TestCase):
         receipt = record_mission_approval(
             store, contract, event_id="approval-risk", recorded_at="2026-10-12T00:00:00Z",
             approver_subject="user:r", authentication_method="upstream-session",
-            action_digest=action_digest("test-model", payload),
-        )
+            action_digest=action_digest("test-model", payload), expires_at=soon())
         integration = IntegrationDescriptor(
             integration_id="test-model", version="1", kind=IntegrationKind.MODEL,
             capabilities=("text_reasoning",), maturity=IntegrationMaturity.ENABLED,
@@ -920,8 +931,7 @@ class SingleUseApprovalTests(PipelineFixture):
             self.store, self.contract, event_id="approval-once",
             recorded_at="2026-10-12T00:00:00Z", approver_subject="user:reviewer",
             authentication_method="upstream-session",
-            action_digest=action_digest("test-model", self.payload),
-        )
+            action_digest=action_digest("test-model", self.payload), expires_at=soon())
 
     def test_bound_approval_is_consumed_by_first_dispatch(self):
         receipt, adapter = self.bound(), Adapter()
@@ -1015,8 +1025,7 @@ class PayloadSnapshotTests(PipelineFixture):
             self.store, self.contract, event_id="approval-snap",
             recorded_at="2026-10-12T00:00:00Z", approver_subject="user:reviewer",
             authentication_method="upstream-session",
-            action_digest=action_digest("test-model", payload),
-        )
+            action_digest=action_digest("test-model", payload), expires_at=soon())
 
     def test_mutation_between_gate_and_dispatch_cannot_change_approved_payload(self):
         self.payload = {"amount": 10}
@@ -1075,6 +1084,74 @@ class PayloadSnapshotTests(PipelineFixture):
         )
         self.assertIn(result.status, ("response_received", "outcome_unknown"))
         self.assertEqual(seen, [{"amount": 10}])
+
+
+class ApprovalExpiryPipelineTests(unittest.TestCase):
+    """An expired approval stops execution before any audit write, reservation or dispatch."""
+
+    def setUp(self):
+        from datetime import datetime, timedelta, timezone
+        from master_brain.execution_registry import SQLiteExecutionRegistry
+        from master_brain.mission_approval import action_digest
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.t0 = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
+        self.now = self.t0
+        self.store = AuditStore(root / "audit.jsonl", clock=lambda: self.now)
+        self.registry = SQLiteExecutionRegistry(str(root / "executions.sqlite3"), timeout=0.25)
+        self.contract = MissionContract(
+            mission_id="mission-exp", objective="Execute before expiry",
+            risk_tier=MissionRiskTier.HIGH, requires_approval=True,
+        )
+        self.requirement = IntegrationRequirement(
+            ("text_reasoning",), required_kind=IntegrationKind.MODEL,
+        )
+        self.payload = {"mission_id": "mission-exp", "prompt": "p"}
+        self.receipt = record_mission_approval(
+            self.store, self.contract, event_id="approval-exp",
+            recorded_at="2026-10-12T11:59:00Z", approver_subject="user:reviewer",
+            authentication_method="upstream-session",
+            action_digest=action_digest("test-model", self.payload),
+            expires_at=(self.t0 + timedelta(minutes=5)).isoformat().replace("+00:00", "Z"),
+        )
+
+    def advance(self, seconds):
+        from datetime import timedelta
+        self.now = self.t0 + timedelta(seconds=seconds)
+
+    def run_once(self, adapter, prefix):
+        return execute_mission_once(
+            self.contract, self.store, self.receipt, descriptor(), self.requirement,
+            adapter, self.payload, event_id_prefix=prefix,
+            recorded_at="2026-10-12T12:00:30Z", actor="system:test",
+        )
+
+    def run_idem(self, adapter, key):
+        return execute_mission_idempotently(
+            self.contract, self.store, self.receipt, descriptor(), self.requirement,
+            adapter, self.payload, self.registry, idempotency_key=key,
+            event_id_prefix=f"p-{key}", recorded_at="2026-10-12T12:00:30Z", actor="system:test",
+        )
+
+    def test_expired_approval_never_dispatches_in_either_path(self):
+        self.advance(300)  # exactly at expiry
+        events_before = len(self.store.read_all())
+        for runner, arg in ((self.run_once, "once"), (self.run_idem, "key-expired")):
+            with self.subTest(path=arg):
+                adapter = Adapter()
+                result = runner(adapter, arg)
+                self.assertEqual(result.status, "rejected")
+                self.assertIn("approval has expired", result.reason)
+                self.assertEqual(adapter.calls, 0)
+        self.assertEqual(len(self.store.read_all()), events_before)
+        self.assertIsNone(self.registry.get("key-expired"))
+
+    def test_unexpired_approval_still_executes(self):
+        self.advance(299)
+        adapter = Adapter()
+        self.assertEqual(self.run_once(adapter, "ok").status, "response_received")
+        self.assertEqual(adapter.calls, 1)
 
 
 if __name__ == "__main__":
@@ -1197,7 +1274,7 @@ class MissionExecutionOnceHardeningTests(PipelineFixture):
         receipts = [record_mission_approval(
             self.store, self.contract, event_id=f"approval-n{n}",
             recorded_at="2026-10-12T00:00:00Z", approver_subject="user:reviewer",
-            authentication_method="upstream-session", action_digest=digests[n - 1])
+            authentication_method="upstream-session", action_digest=digests[n - 1], expires_at=soon())
             for n in (1, 2)]
         for n, receipt in enumerate(receipts, start=1):
             result = execute_mission_once(
@@ -1254,7 +1331,7 @@ class IdempotentMutationHardeningTests(unittest.TestCase):
         self.payload = {"mission_id": "mission-h", "prompt": "stable"}
         self.receipt = record_mission_approval(
             self.store, self.contract, event_id="approval-h", recorded_at="2026-10-12T00:00:00Z",
-            approver_subject="user:reviewer", authentication_method="upstream-session")
+            approver_subject="user:reviewer", authentication_method="upstream-session", expires_at=soon())
 
     def run_idem(self, adapter=None, registry=None, receipt="default", payload=None, **meta):
         args = dict(idempotency_key="key-h", event_id_prefix="prefix-h",

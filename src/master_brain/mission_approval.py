@@ -8,6 +8,7 @@ contract version. A changed contract invalidates the approval.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta
 from enum import Enum
 import hashlib
 import json
@@ -23,6 +24,24 @@ from master_brain.mission_contract import (
 
 APPROVAL_EVENT_TYPE = "mission.approval_granted"
 APPROVAL_SCHEMA_VERSION = 1
+# Upper bound on how long one approval may stay valid, measured from the store clock
+# at approval time. A far-future expiry would defeat the purpose of expiring.
+MAX_APPROVAL_LIFETIME_SECONDS = 7 * 24 * 3600
+
+
+def _high_risk(contract: MissionContract) -> bool:
+    return contract.risk_tier in {MissionRiskTier.HIGH, MissionRiskTier.CRITICAL}
+
+
+def _parse_expiry(value: Any) -> datetime | None:
+    """Parse a timezone-aware ISO-8601 instant; None if absent/naive/malformed."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        at = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return at if at.tzinfo is not None else None
 
 
 def _approval_required(contract: MissionContract) -> bool:
@@ -100,6 +119,8 @@ class MissionApprovalReceipt:
     # Optional action binding. None means the approval covers the contract only
     # (legacy scope): any integration/payload is then permitted under it.
     action_digest: str | None = None
+    # Optional validity bound (ISO-8601 with timezone). Mandatory for HIGH/CRITICAL.
+    expires_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +140,7 @@ def record_mission_approval(
     approver_subject: str,
     authentication_method: str,
     action_digest: str | None = None,
+    expires_at: str | None = None,
 ) -> MissionApprovalReceipt:
     """Persist an approval assertion bound to the exact contract digest.
 
@@ -145,6 +167,19 @@ def record_mission_approval(
     ):
         raise ValueError("action_digest must be a non-empty string when supplied")
 
+    if expires_at is None:
+        if _high_risk(contract):
+            raise ValueError("high/critical-risk approvals require an expires_at")
+    else:
+        expiry = _parse_expiry(expires_at)
+        if expiry is None:
+            raise ValueError("expires_at must be a timezone-aware ISO-8601 timestamp")
+        now = store.now()
+        if expiry <= now:
+            raise ValueError("expires_at is not in the future")
+        if expiry - now > timedelta(seconds=MAX_APPROVAL_LIFETIME_SECONDS):
+            raise ValueError("expires_at exceeds the maximum approval lifetime")
+
     digest = mission_contract_digest(contract)
     payload = {
         "approval_schema_version": APPROVAL_SCHEMA_VERSION,
@@ -160,6 +195,8 @@ def record_mission_approval(
     if action_digest is not None:
         payload["scope"] = "exact_contract_digest_and_action"
         payload["action_digest"] = action_digest
+    if expires_at is not None:
+        payload["expires_at"] = expires_at
     event = store.append(
         event_id=event_id,
         event_type=APPROVAL_EVENT_TYPE,
@@ -178,6 +215,7 @@ def record_mission_approval(
         recorded_at=event.recorded_at,
         event_hash=event.event_hash,
         action_digest=action_digest,
+        expires_at=expires_at,
     )
 
 
@@ -224,6 +262,8 @@ def evaluate_approved_execution_gate(
             reasons.append(f"approval receipt field {name} must be a string")
     if receipt.action_digest is not None and not isinstance(receipt.action_digest, str):
         reasons.append("approval receipt field action_digest must be a string")
+    if receipt.expires_at is not None and not isinstance(receipt.expires_at, str):
+        reasons.append("approval receipt field expires_at must be a string")
     if reasons:
         return ApprovedExecutionGateResult(False, tuple(reasons))
     if receipt.action_digest is None and contract.risk_tier in {
@@ -232,6 +272,22 @@ def evaluate_approved_execution_gate(
         reasons.append(
             "high/critical-risk missions require an approval bound to the exact action"
         )
+    if receipt.expires_at is None:
+        if _high_risk(contract):
+            reasons.append("high/critical-risk missions require an approval with an expiry")
+    else:
+        expiry = _parse_expiry(receipt.expires_at)
+        if expiry is None:
+            reasons.append("approval expiry is malformed")
+        else:
+            try:
+                now = store.now()
+                expired = now >= expiry
+            except Exception:  # no trusted clock or incomparable value: fail closed
+                reasons.append("approval expiry cannot be evaluated (no usable clock)")
+            else:
+                if expired:
+                    reasons.append("approval has expired")
     if receipt.action_digest is not None:
         if action_digest is None:
             reasons.append("approval is bound to a specific action but no action digest was supplied")
@@ -273,6 +329,8 @@ def evaluate_approved_execution_gate(
         if receipt.action_digest is not None:
             expected_payload["scope"] = "exact_contract_digest_and_action"
             expected_payload["action_digest"] = receipt.action_digest
+        if receipt.expires_at is not None:
+            expected_payload["expires_at"] = receipt.expires_at
         if event.event_type != APPROVAL_EVENT_TYPE:
             reasons.append("receipt does not reference a mission approval event")
         if event.subject_ref != f"mission:{contract.mission_id}":
@@ -295,6 +353,7 @@ __all__ = [
     "ApprovedExecutionGateResult",
     "MissionApprovalReceipt",
     "evaluate_approved_execution_gate",
+    "MAX_APPROVAL_LIFETIME_SECONDS",
     "mission_contract_digest",
     "record_mission_approval",
 ]

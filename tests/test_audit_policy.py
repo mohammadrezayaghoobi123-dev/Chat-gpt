@@ -95,7 +95,7 @@ EXPECTED_ALLOW_LIST = {
     "mission.approval_granted": {
         "approval_schema_version", "decision", "mission_id", "contract_schema_version",
         "contract_digest", "approver_subject", "authentication_method", "scope",
-        "identity_verified_by_this_module", "action_digest"},
+        "identity_verified_by_this_module", "action_digest", "expires_at"},
     "mission.dispatch_started": {
         "mission_id", "contract_digest", "integration_id", "attempt_id", "approval_event_id"},
     "mission.dispatch_finished": {
@@ -227,6 +227,7 @@ class AuditPolicyMutationHardeningTests(unittest.TestCase):
         """Drift guard for the action-bound / single-use path (action_digest, approval_event_id)."""
         from master_brain.mission_approval import action_digest, record_mission_approval
         from tests.test_mission_execution import PipelineFixture, Adapter
+        from tests.approval_expiry_helper import soon
         fixture = PipelineFixture("run")
         fixture.setUp()
         try:
@@ -234,8 +235,7 @@ class AuditPolicyMutationHardeningTests(unittest.TestCase):
                 fixture.store, fixture.contract, event_id="approval-guard",
                 recorded_at="2026-10-12T00:00:00Z", approver_subject="user:reviewer",
                 authentication_method="upstream-session",
-                action_digest=action_digest("test-model", fixture.payload),
-            )
+                action_digest=action_digest("test-model", fixture.payload), expires_at=soon())
             fixture.execute(Adapter(), receipt)
             events = fixture.store.read_all()
         finally:

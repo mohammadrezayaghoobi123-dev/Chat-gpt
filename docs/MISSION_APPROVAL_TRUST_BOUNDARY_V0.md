@@ -53,3 +53,17 @@ The current `record_mission_approval` API accepts identity metadata as strings. 
 ## Current disposition
 
 The current module is suitable only as a deterministic approval-record consistency prototype. Until a real identity/authorization adapter, independently protected checkpoint, and dispatch-time enforcement exist, an `allowed=True` result must not be represented as proof of human identity or used alone to authorize production side effects.
+
+## Addendum 2026-10-17 — approval expiry (SAFE-001)
+
+Implemented (additive, tested, mutation-checked on the changed lines):
+
+- `record_mission_approval(..., expires_at=...)` records a timezone-aware ISO-8601 expiry in the approval payload. It must be in the future and at most `MAX_APPROVAL_LIFETIME_SECONDS` (7 days, a policy value, not a derived fact) ahead, both judged by the store clock (`AuditStore.now()`, the single injectable time seam).
+- `expires_at` is mandatory for HIGH/CRITICAL contracts (record and gate); lower tiers may omit it (legacy scope, no expiry).
+- `evaluate_approved_execution_gate` rejects an approval at or after its expiry (the boundary is exclusive), a malformed expiry, a receipt whose expiry differs from the audited event, and fails closed when the store has no usable clock.
+
+Known limits (not closed by this change):
+
+- Expiry is checked at the gate, not again at the instant of dispatch; item 7 above (dispatch-time recheck) remains open.
+- The expiry is only as trustworthy as the store clock; a trusted external time source remains open.
+- Revocation, policy-version binding and approver authentication remain open.

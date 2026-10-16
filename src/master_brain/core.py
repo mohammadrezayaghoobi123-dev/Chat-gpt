@@ -265,7 +265,9 @@ def evaluate_claim(claim: Claim, evidence: Iterable[Evidence]) -> Decision:
         supporting_evidence=supporting,
         counterevidence=opposing,
         unresolved_questions=tuple(unresolved),
-        maturity=Maturity.TESTED,
+        # TESTED requires at least one usable evidence record for this claim; a claim
+        # with no matching evidence has not been tested at all.
+        maturity=Maturity.TESTED if matching else Maturity.PROPOSED,
         independent_supporting_group_count=independent_supporting_group_count,
         independent_support_demonstrated=independent_support_demonstrated,
     )

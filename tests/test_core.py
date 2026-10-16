@@ -1,7 +1,7 @@
 import unittest
 
 from master_brain.core import (
-    Claim, Evidence, Opportunity, RiskTier, Task,
+    Claim, Evidence, Maturity, Opportunity, RiskTier, Task,
     assess_contradictions, evaluate_claim, route_task, score_opportunity,
 )
 
@@ -70,6 +70,33 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(result.status, "contested")
         self.assertEqual(result.supporting_evidence, ("e1",))
         self.assertEqual(result.counterevidence, ("e2",))
+
+    def test_claim_without_matching_evidence_is_not_marked_tested(self):
+        """Finding (TESTED without evidence): every decision, even 'unverified', was TESTED."""
+        claim = Claim("c1", "plant", "capacity", "1 ton/day")
+        cases = {
+            "no evidence": [],
+            "evidence for another claim": [Evidence("x", "src", "other", True)],
+            "invalid record only": [object()],
+            "blank source": [Evidence("e1", "  ", "c1", True)],
+        }
+        for label, evidence in cases.items():
+            with self.subTest(label=label):
+                result = evaluate_claim(claim, evidence)
+                self.assertEqual(result.status, "unverified")
+                self.assertEqual(result.maturity, Maturity.PROPOSED)
+
+    def test_claim_with_matching_evidence_is_marked_tested_in_every_status(self):
+        claim = Claim("c1", "plant", "capacity", "1 ton/day")
+        for label, evidence, status in (
+            ("support", [Evidence("e1", "s", "c1", True)], "supported_by_recorded_evidence"),
+            ("oppose", [Evidence("e1", "s", "c1", False)], "challenged_by_recorded_evidence"),
+            ("both", [Evidence("e1", "s", "c1", True), Evidence("e2", "s2", "c1", False)], "contested"),
+        ):
+            with self.subTest(label=label):
+                result = evaluate_claim(claim, evidence)
+                self.assertEqual(result.status, status)
+                self.assertEqual(result.maturity, Maturity.TESTED)
 
     def test_duplicate_evidence_ids_cannot_inflate_direct_claim_review(self):
         claim = Claim("c-duplicate", "plant", "output", "100")

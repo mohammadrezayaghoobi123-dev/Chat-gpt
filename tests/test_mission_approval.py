@@ -44,12 +44,54 @@ class MissionApprovalTests(unittest.TestCase):
         self.assertFalse(result.allowed)
         self.assertIn("required human approval receipt is missing", result.reasons)
 
+    def approve_bound(self, contract, digest, event_id="approval-bound"):
+        return record_mission_approval(
+            self.store, contract, event_id=event_id, recorded_at="2026-10-11T12:00:00Z",
+            approver_subject="user:reviewer-7", authentication_method="upstream-session",
+            action_digest=digest,
+        )
+
     def test_valid_approval_is_bound_to_exact_contract(self):
-        receipt = self.approve()
-        result = evaluate_approved_execution_gate(self.contract, self.store, receipt)
+        digest = action_digest("integ", {"x": 1})
+        receipt = self.approve_bound(self.contract, digest)  # HIGH risk: binding is mandatory
+        result = evaluate_approved_execution_gate(self.contract, self.store, receipt, digest)
         self.assertTrue(result.allowed)
         self.assertEqual(result.reasons, ())
         self.assertEqual(receipt.contract_digest, mission_contract_digest(self.contract))
+
+    def test_high_and_critical_risk_require_an_action_bound_approval(self):
+        """Contract-only approvals covered any payload and could be reused; no longer allowed."""
+        message = "high/critical-risk missions require an approval bound to the exact action"
+        for tier in (RiskTier.HIGH, RiskTier.CRITICAL):
+            with self.subTest(tier=tier):
+                contract = from_core_task(Task(objective=f"Ship {tier.value}", risk=tier))
+                unbound = self.approve(contract, event_id=f"unbound-{tier.value}")
+                result = evaluate_approved_execution_gate(contract, self.store, unbound)
+                self.assertFalse(result.allowed)
+                self.assertIn(message, result.reasons)
+                digest = action_digest("integ", {"tier": tier.value})
+                bound = self.approve_bound(contract, digest, event_id=f"bound-{tier.value}")
+                ok = evaluate_approved_execution_gate(contract, self.store, bound, digest)
+                self.assertTrue(ok.allowed, ok.reasons)
+                self.assertNotIn(message, ok.reasons)
+
+    def test_bound_approval_still_rejects_a_different_action_or_missing_digest(self):
+        digest = action_digest("integ", {"x": 1})
+        receipt = self.approve_bound(self.contract, digest)
+        wrong = evaluate_approved_execution_gate(
+            self.contract, self.store, receipt, action_digest("integ", {"x": 2}))
+        self.assertFalse(wrong.allowed)
+        self.assertIn("action (integration or payload) differs from the approved action", wrong.reasons)
+        missing = evaluate_approved_execution_gate(self.contract, self.store, receipt)
+        self.assertFalse(missing.allowed)
+
+    def test_medium_risk_human_gated_contract_may_still_use_a_contract_only_approval(self):
+        from master_brain.mission_contract import MissionContract
+        contract = MissionContract(mission_id="mission-medium", objective="Publish a summary",
+                                   risk_tier=MissionRiskTier.MEDIUM, requires_approval=True)
+        receipt = self.approve(contract, event_id="medium-contract-only")
+        result = evaluate_approved_execution_gate(contract, self.store, receipt)
+        self.assertTrue(result.allowed, result.reasons)
 
     def test_changed_contract_invalidates_receipt(self):
         receipt = self.approve()

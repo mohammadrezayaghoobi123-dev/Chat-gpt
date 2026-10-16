@@ -226,6 +226,12 @@ def evaluate_approved_execution_gate(
         reasons.append("approval receipt field action_digest must be a string")
     if reasons:
         return ApprovedExecutionGateResult(False, tuple(reasons))
+    if receipt.action_digest is None and contract.risk_tier in {
+        MissionRiskTier.HIGH, MissionRiskTier.CRITICAL,
+    }:
+        reasons.append(
+            "high/critical-risk missions require an approval bound to the exact action"
+        )
     if receipt.action_digest is not None:
         if action_digest is None:
             reasons.append("approval is bound to a specific action but no action digest was supplied")

@@ -43,7 +43,7 @@ class PipelineFixture(unittest.TestCase):
         self.store = AuditStore(Path(self.tmp.name) / "audit.jsonl")
         self.contract = MissionContract(
             mission_id="mission-42", objective="Execute controlled test",
-            risk_tier=MissionRiskTier.HIGH, requires_approval=True,
+            risk_tier=MissionRiskTier.MEDIUM, requires_approval=True,
         )
         self.requirement = IntegrationRequirement(
             ("text_reasoning",), required_kind=IntegrationKind.MODEL,
@@ -321,7 +321,7 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
         self.registry = SQLiteExecutionRegistry(str(root / "executions.sqlite3"), timeout=0.25)
         self.contract = MissionContract(
             mission_id="mission-idempotent", objective="Execute once",
-            risk_tier=MissionRiskTier.HIGH, requires_approval=True,
+            risk_tier=MissionRiskTier.MEDIUM, requires_approval=True,
         )
         self.requirement = IntegrationRequirement(
             ("text_reasoning",), required_kind=IntegrationKind.MODEL,
@@ -705,6 +705,38 @@ class ActionBoundApprovalTests(PipelineFixture):
             action_digest=action_digest("test-model", self.payload),
         )
 
+    def test_high_and_critical_missions_cannot_execute_on_a_contract_only_approval(self):
+        """Mandatory action binding for HIGH/CRITICAL: no adapter call, nothing dispatched."""
+        for tier in (MissionRiskTier.HIGH, MissionRiskTier.CRITICAL):
+            with self.subTest(tier=tier):
+                self.contract = MissionContract(
+                    mission_id="mission-42", objective="Execute controlled test",
+                    risk_tier=tier, requires_approval=True)
+                unbound = record_mission_approval(
+                    self.store, self.contract, event_id=f"unbound-{tier.value}",
+                    recorded_at="2026-10-12T00:00:00Z", approver_subject="user:reviewer",
+                    authentication_method="upstream-session")
+                adapter = Adapter()
+                result = self.execute(adapter, unbound, prefix=f"hi-{tier.value}")
+                self.assertEqual(result.status, "rejected")
+                self.assertEqual(adapter.calls, 0)
+                self.assertFalse(any(e.event_type == "mission.dispatch_started"
+                                     for e in self.store.read_all()))
+
+    def test_high_risk_mission_executes_with_a_bound_approval(self):
+        from master_brain.mission_approval import action_digest
+        self.contract = MissionContract(
+            mission_id="mission-42", objective="Execute controlled test",
+            risk_tier=MissionRiskTier.HIGH, requires_approval=True)
+        receipt = record_mission_approval(
+            self.store, self.contract, event_id="approval-high-bound",
+            recorded_at="2026-10-12T00:00:00Z", approver_subject="user:reviewer",
+            authentication_method="upstream-session",
+            action_digest=action_digest("test-model", self.payload))
+        adapter = Adapter()
+        self.assertEqual(self.execute(adapter, receipt).status, "response_received")
+        self.assertEqual(adapter.calls, 1)
+
     def test_bound_approval_allows_exactly_the_approved_action(self):
         adapter = Adapter()
         result = self.execute(adapter, self.bound_receipt())
@@ -752,7 +784,7 @@ class DispatchTimeoutPipelineTests(unittest.TestCase):
         self.registry = SQLiteExecutionRegistry(str(Path(self.tmp.name) / "registry.sqlite3"))
         self.contract = MissionContract(
             mission_id="mission-timeout", objective="Timeout test",
-            risk_tier=MissionRiskTier.HIGH, requires_approval=True,
+            risk_tier=MissionRiskTier.MEDIUM, requires_approval=True,
         )
         self.requirement = IntegrationRequirement(("text_reasoning",), required_kind=IntegrationKind.MODEL)
         self.payload = {"mission_id": "mission-timeout"}
@@ -1132,7 +1164,7 @@ class IdempotentMutationHardeningTests(unittest.TestCase):
         self.registry = SQLiteExecutionRegistry(str(root / "executions.sqlite3"), timeout=0.25)
         self.contract = MissionContract(
             mission_id="mission-h", objective="Execute once",
-            risk_tier=MissionRiskTier.HIGH, requires_approval=True,
+            risk_tier=MissionRiskTier.MEDIUM, requires_approval=True,
         )
         self.requirement = IntegrationRequirement(("text_reasoning",), required_kind=IntegrationKind.MODEL)
         self.payload = {"mission_id": "mission-h", "prompt": "stable"}

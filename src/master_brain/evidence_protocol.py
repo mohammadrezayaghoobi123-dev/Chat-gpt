@@ -88,8 +88,16 @@ class ProtocolPolicy:
     minimum_independent_groups: int = 2
     stale_after_days: int | None = None
     current_time: str = ""
+    # When set, only evidence whose source_group is registered here can contribute;
+    # the caller-supplied label alone never establishes independence.
+    registered_source_groups: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
+        if self.registered_source_groups is not None:
+            if not isinstance(self.registered_source_groups, frozenset) or any(
+                not isinstance(g, str) or not g.strip() for g in self.registered_source_groups
+            ):
+                raise ValueError("registered_source_groups must be a frozenset of non-empty strings")
         if not isfinite(self.minimum_effective_weight) or not 0.0 <= self.minimum_effective_weight <= 1.0:
             raise ValueError("minimum_effective_weight must be within [0, 1]")
         if self.minimum_independent_groups < 1:
@@ -134,6 +142,21 @@ _SOURCE_BASE_WEIGHT = {
     SourceKind.USER_ASSERTION: 0.2,
     SourceKind.UNKNOWN: 0.1,
 }
+
+
+# Kinds whose provenance is not an independent observation of the world: all model
+# outputs share one origin class, as do bare user assertions and unclassified sources.
+# Their self-chosen source_group label must not manufacture independent corroboration.
+_POOLED_KINDS = frozenset({
+    SourceKind.MODEL_OUTPUT, SourceKind.USER_ASSERTION, SourceKind.UNKNOWN,
+})
+
+
+def _group_key(item: EvidenceRecord) -> str:
+    """Effective independence group: pooled per kind for ungrounded kinds."""
+    if item.source_kind in _POOLED_KINDS:
+        return f"<pooled:{item.source_kind.value}>"
+    return item.source_group
 
 
 def _parse_time(value: str, field_name: str) -> datetime:
@@ -187,6 +210,16 @@ def assess_claim(
                 "stale_or_expired",
             ))
             continue
+        if (
+            policy.registered_source_groups is not None
+            and item.source_kind not in _POOLED_KINDS
+            and item.source_group not in policy.registered_source_groups
+        ):
+            contributions.append(EvidenceContribution(
+                item.evidence_id, item.polarity, item.source_group, 0.0,
+                "unregistered_source_group",
+            ))
+            continue
         base = _SOURCE_BASE_WEIGHT[item.source_kind]
         verified_factor = 1.0 if item.is_directly_verified else 0.8
         weight = base * item.reliability * item.relevance * verified_factor
@@ -197,7 +230,7 @@ def assess_claim(
                 item.evidence_id, item.polarity, item.source_group, 0.0, "zero_effective_weight",
             ))
             continue
-        key = (item.polarity, item.source_group)
+        key = (item.polarity, _group_key(item))
         previous = group_best.get(key)
         if previous is None:
             group_best[key] = item
@@ -239,8 +272,8 @@ def assess_claim(
         _SOURCE_BASE_WEIGHT[i.source_kind] * i.reliability * i.relevance
         * (1.0 if i.is_directly_verified else 0.8) for i in counter_items
     ))
-    support_groups = tuple(sorted({i.source_group for i in support_items}))
-    counter_groups = tuple(sorted({i.source_group for i in counter_items}))
+    support_groups = tuple(sorted({_group_key(i) for i in support_items}))
+    counter_groups = tuple(sorted({_group_key(i) for i in counter_items}))
     reasons: list[str] = [
         "This assessment is a review-gate result, not a declaration of objective truth.",
         "Evidence from the same source group is capped at one strongest contribution per polarity.",
@@ -283,6 +316,8 @@ def assess_claim(
         reasons.append("One or more evidence records were stale or expired and were excluded from scoring.")
     if any(c.excluded_reason == "zero_effective_weight" for c in contributions):
         reasons.append("One or more records had zero effective weight and were excluded from the status.")
+    if any(c.excluded_reason == "unregistered_source_group" for c in contributions):
+        reasons.append("One or more records came from an unregistered source group and were excluded.")
     if any(c.excluded_reason == "correlated_source_group_cap" for c in contributions):
         reasons.append("One or more records were discounted because their source group already contributed.")
     if limitations:

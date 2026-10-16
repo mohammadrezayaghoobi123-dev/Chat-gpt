@@ -103,7 +103,106 @@ class EvidenceProtocolTests(unittest.TestCase):
             self.evidence("m1", "model-a", kind=SourceKind.MODEL_OUTPUT),
             self.evidence("m2", "model-b", kind=SourceKind.MODEL_OUTPUT),
         ], self.policy)
-        self.assertEqual(result.status, ReviewStatus.INSUFFICIENT_EVIDENCE)
+        # Both are model outputs: one pooled origin, so the stricter independence shortfall applies.
+        self.assertEqual(result.status, ReviewStatus.INSUFFICIENT_INDEPENDENCE)
+
+    def test_self_labelled_groups_cannot_make_ungrounded_kinds_independent(self):
+        """Finding B1: 3 model outputs / 4 user assertions / 8 unknown sources, each with its own
+        self-chosen source_group, reached provisionally_supported."""
+        for kind, count in ((SourceKind.MODEL_OUTPUT, 3), (SourceKind.USER_ASSERTION, 4),
+                            (SourceKind.UNKNOWN, 8)):
+            with self.subTest(kind=kind):
+                items = [self.evidence(f"x{i}", f"label-{i}", kind=kind) for i in range(count)]
+                result = assess_claim(self.claim, items, self.policy)
+                self.assertEqual(result.status, ReviewStatus.INSUFFICIENT_INDEPENDENCE)
+                self.assertEqual(result.independent_support_groups, (f"<pooled:{kind.value}>",))
+                self.assertEqual(sum(c.excluded_reason == "correlated_source_group_cap"
+                                     for c in result.contributions), count - 1)
+
+    def test_pooled_kind_plus_one_grounded_source_counts_as_two_groups(self):
+        result = assess_claim(self.claim, [
+            self.evidence("m1", "model-a", kind=SourceKind.MODEL_OUTPUT),
+            self.evidence("m2", "model-b", kind=SourceKind.MODEL_OUTPUT),
+            self.evidence("p1", "lab-measurement", kind=SourceKind.PRIMARY),
+        ], self.policy)
+        self.assertEqual(result.independent_support_groups,
+                         ("<pooled:model_output>", "lab-measurement"))
+        self.assertEqual(result.status, ReviewStatus.PROVISIONALLY_SUPPORTED)
+
+    def test_grounded_kinds_keep_their_own_group_labels(self):
+        result = assess_claim(self.claim, [
+            self.evidence("a", "lab-a", kind=SourceKind.PRIMARY),
+            self.evidence("b", "lab-b", kind=SourceKind.PEER_REVIEWED),
+            self.evidence("c", "lab-c", kind=SourceKind.OFFICIAL),
+            self.evidence("d", "lab-d", kind=SourceKind.SECONDARY),
+        ], self.policy)
+        self.assertEqual(result.independent_support_groups, ("lab-a", "lab-b", "lab-c", "lab-d"))
+
+    def test_pooled_kinds_apply_to_counterevidence_too(self):
+        items = [self.evidence(f"c{i}", f"label-{i}", EvidencePolarity.COUNTERS,
+                               kind=SourceKind.MODEL_OUTPUT) for i in range(3)]
+        result = assess_claim(self.claim, items, self.policy)
+        self.assertEqual(result.independent_counter_groups, ("<pooled:model_output>",))
+        self.assertEqual(result.status, ReviewStatus.INSUFFICIENT_INDEPENDENCE)
+
+    def test_registered_source_groups_exclude_unregistered_grounded_evidence(self):
+        policy = ProtocolPolicy(minimum_effective_weight=0.6, minimum_independent_groups=2,
+                                current_time="2026-10-11T12:00:00Z",
+                                registered_source_groups=frozenset({"lab-a", "lab-b"}))
+        items = [self.evidence("a", "lab-a"), self.evidence("b", "lab-b"),
+                 self.evidence("z", "invented-group")]
+        result = assess_claim(self.claim, items, policy)
+        reasons = {c.evidence_id: c.excluded_reason for c in result.contributions}
+        self.assertEqual(reasons["z"], "unregistered_source_group")
+        self.assertEqual(reasons["a"], "")
+        self.assertEqual(result.independent_support_groups, ("lab-a", "lab-b"))
+        self.assertEqual(result.status, ReviewStatus.PROVISIONALLY_SUPPORTED)
+        self.assertTrue(any("unregistered source group" in r for r in result.reasons))
+        only_fake = assess_claim(self.claim, [self.evidence("f1", "fake-1"),
+                                              self.evidence("f2", "fake-2")], policy)
+        self.assertEqual(only_fake.status, ReviewStatus.INSUFFICIENT_EVIDENCE)
+
+    def test_registry_does_not_apply_to_pooled_kinds_and_default_is_unrestricted(self):
+        policy = ProtocolPolicy(current_time="2026-10-11T12:00:00Z",
+                                registered_source_groups=frozenset({"lab-a"}))
+        result = assess_claim(self.claim, [self.evidence("m", "anything", kind=SourceKind.MODEL_OUTPUT)], policy)
+        self.assertEqual(dict((c.evidence_id, c.excluded_reason) for c in result.contributions)["m"], "")
+        self.assertIsNone(ProtocolPolicy().registered_source_groups)
+        open_result = assess_claim(self.claim, [self.evidence("a", "whatever-1"),
+                                                self.evidence("b", "whatever-2")], self.policy)
+        self.assertEqual(open_result.status, ReviewStatus.PROVISIONALLY_SUPPORTED)
+
+    def test_same_group_supporting_and_counter_evidence_both_count(self):
+        """Polarity is part of the group slot: one lab reporting both sides contests the claim."""
+        result = assess_claim(self.claim, [
+            self.evidence("s", "lab-a"),
+            self.evidence("c", "lab-a", EvidencePolarity.COUNTERS),
+        ], self.policy)
+        self.assertEqual(result.status, ReviewStatus.CONTESTED)
+        self.assertEqual(result.supporting_evidence_ids, ("s",))
+        self.assertEqual(result.counterevidence_ids, ("c",))
+
+    def test_unregistered_reason_is_reported_only_when_something_was_excluded(self):
+        policy = ProtocolPolicy(current_time="2026-10-11T12:00:00Z",
+                                registered_source_groups=frozenset({"lab-a", "lab-b"}))
+        clean = assess_claim(self.claim, [self.evidence("a", "lab-a"), self.evidence("b", "lab-b")], policy)
+        self.assertFalse(any("unregistered" in r for r in clean.reasons))
+
+    def test_invalid_protocol_policy_thresholds_are_rejected(self):
+        for bad in (float("nan"), float("inf"), -0.1, 1.1):
+            with self.subTest(minimum_effective_weight=bad), self.assertRaises(ValueError):
+                ProtocolPolicy(minimum_effective_weight=bad)
+        for ok in (0.0, 1.0):
+            ProtocolPolicy(minimum_effective_weight=ok)
+        with self.assertRaises(ValueError):
+            ProtocolPolicy(minimum_independent_groups=0)
+        ProtocolPolicy(minimum_independent_groups=1)
+
+    def test_registered_source_groups_must_be_a_frozenset_of_non_empty_strings(self):
+        for bad in ({"lab-a"}, ["lab-a"], frozenset({""}), frozenset({"  "}), frozenset({1})):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                ProtocolPolicy(registered_source_groups=bad)
+        ProtocolPolicy(registered_source_groups=frozenset())
 
     def test_expired_evidence_is_excluded(self):
         result = assess_claim(self.claim, [

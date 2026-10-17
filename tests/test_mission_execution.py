@@ -10,7 +10,7 @@ from master_brain.integrations import (
     IntegrationDescriptor, IntegrationHealth, IntegrationKind,
     IntegrationMaturity, IntegrationRequirement,
 )
-from master_brain.execution_registry import SQLiteExecutionRegistry
+from master_brain.execution_registry import SQLiteExecutionRegistry, State
 from master_brain.mission_approval import record_mission_approval
 from tests.approval_expiry_helper import soon
 from tests.mission_registration_helper import register_contract
@@ -175,7 +175,7 @@ class MissionExecutionPipelineTests(PipelineFixture):
 
 class ExecutionRegistryTests(unittest.TestCase):
     def setUp(self):
-        from master_brain.execution_registry import SQLiteExecutionRegistry
+        from master_brain.execution_registry import SQLiteExecutionRegistry, State
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.db_path = str(Path(self.tmp.name) / "executions.sqlite3")
@@ -236,7 +236,7 @@ class ExecutionRegistryTests(unittest.TestCase):
         self.assertEqual(self.registry.get("shared-key").state.value, "PENDING")
 
     def test_invalid_timeout_is_rejected(self):
-        from master_brain.execution_registry import SQLiteExecutionRegistry
+        from master_brain.execution_registry import SQLiteExecutionRegistry, State
         for value in (-1, float("inf"), float("nan"), True):
             with self.subTest(timeout=value):
                 with self.assertRaises(ValueError):
@@ -325,7 +325,7 @@ class ExecutionRegistryTests(unittest.TestCase):
 
 class IdempotentMissionExecutionTests(unittest.TestCase):
     def setUp(self):
-        from master_brain.execution_registry import SQLiteExecutionRegistry
+        from master_brain.execution_registry import SQLiteExecutionRegistry, State
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
@@ -851,7 +851,7 @@ class ContractRiskCeilingTests(unittest.TestCase):
     EXPECTED_CEILING = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 
     def run_case(self, tier, requested, idempotent=False):
-        from master_brain.execution_registry import SQLiteExecutionRegistry
+        from master_brain.execution_registry import SQLiteExecutionRegistry, State
         from master_brain.mission_approval import action_digest
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -988,10 +988,13 @@ class AdapterErrorAfterEffectPipelineTests(PipelineFixture):
 
     def test_parsing_errors_after_effect_are_outcome_unknown_not_dispatch_failed(self):
         import json
-        receipt = self.approve()  # contract-only approval is reusable across subtests
         for error in (ValueError("x"), TypeError("x"), json.JSONDecodeError("m", "d", 0),
                       UnicodeDecodeError("utf-8", b"", 0, 1, "r"), OverflowError("x")):
             with self.subTest(error=type(error).__name__):
+                # An unresolved attempt blocks the mission (by design), so each error
+                # kind is checked on its own fresh mission/store.
+                self.setUp()
+                receipt = self.approve()
                 class Effect:
                     effects = 0
 
@@ -1100,7 +1103,7 @@ class ApprovalExpiryPipelineTests(unittest.TestCase):
 
     def setUp(self):
         from datetime import datetime, timedelta, timezone
-        from master_brain.execution_registry import SQLiteExecutionRegistry
+        from master_brain.execution_registry import SQLiteExecutionRegistry, State
         from master_brain.mission_approval import action_digest
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -1164,8 +1167,9 @@ class ApprovalExpiryPipelineTests(unittest.TestCase):
         self.assertEqual(adapter.calls, 1)
 
 
-class RegisteredContractEnforcementTests(unittest.TestCase):
-    """MISSION-001/002: dispatch requires the exact contract to be registered (fail closed)."""
+class RegisteredExecutionBase(unittest.TestCase):
+    """Shared fixture: one unregistered MEDIUM contract, store, helpers (no tests)."""
+    __test__ = False
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -1206,6 +1210,11 @@ class RegisteredContractEnforcementTests(unittest.TestCase):
         self.assertNotIn("mission.dispatch_started", types)
         if registry is not None:
             self.assertIsNone(registry.get("k"))  # nothing reserved for a blocked mission
+
+
+class RegisteredContractEnforcementTests(RegisteredExecutionBase):
+    """MISSION-001/002: dispatch requires the exact contract to be registered (fail closed)."""
+    __test__ = True
 
     def test_unregistered_contract_is_never_dispatched(self):
         receipt = self.approved(self.contract)
@@ -1267,6 +1276,120 @@ class RegisteredContractEnforcementTests(unittest.TestCase):
                 result, adapter, _ = self.run_executor(self.contract, receipt, idempotent)
                 self.assertEqual(adapter.calls, 1)
                 self.assertNotEqual(result.status, "rejected")
+
+
+
+class UnresolvedMissionBlockTests(RegisteredExecutionBase):
+    """An unresolved earlier attempt blocks new dispatch until reconciled with evidence."""
+    __test__ = True
+
+    def setUp(self):
+        super().setUp()
+        register_contract(self.store, self.contract)
+        self.receipt = self.approved(self.contract)
+
+    def make_unresolved(self):
+        class Bad:
+            calls = 0
+
+            def invoke(self, payload):
+                Bad.calls += 1
+                raise RuntimeError("boom")
+        result = execute_mission_once(
+            self.contract, self.store, self.receipt, descriptor(), self.requirement, Bad(),
+            {"p": 0}, event_id_prefix="first", recorded_at="2026-10-12T00:01:00Z",
+            actor="system:test")
+        self.assertEqual(result.status, "outcome_unknown")
+        return Bad
+
+    def dispatch_starts(self):
+        return [e for e in self.store.read_all() if e.event_type == "mission.dispatch_started"]
+
+    def test_direct_runs_get_distinct_attempt_ids(self):
+        adapter = Adapter()
+        for n in range(2):
+            execute_mission_once(
+                self.contract, self.store, self.receipt, descriptor(), self.requirement, adapter,
+                {"p": n}, event_id_prefix=f"run-{n}", recorded_at="2026-10-12T00:01:00Z",
+                actor="system:test")
+        ids = [e.payload["attempt_id"] for e in self.dispatch_starts()]
+        self.assertEqual(len(ids), 2)
+        self.assertEqual(len(set(ids)), 2)
+        self.assertTrue(all(isinstance(i, str) and i for i in ids))
+
+    def test_unresolved_attempt_is_not_hidden_by_a_later_run(self):
+        # Regression for the collapsed attempt_id=None defect: error then success.
+        from master_brain.mission_lifecycle import MissionState, derive_mission_state
+        self.make_unresolved()
+        result, adapter, _ = self.run_executor(self.contract, self.receipt, False)
+        self.assertEqual((result.status, result.reason),
+                         ("rejected", "mission_dispatch_unresolved_requires_reconciliation"))
+        self.assertEqual(adapter.calls, 0)
+        self.assertIs(derive_mission_state(self.store, "mission-reg").state,
+                      MissionState.DISPATCH_UNRESOLVED)
+
+    def test_both_executors_are_blocked_with_no_new_dispatch_events(self):
+        self.make_unresolved()
+        before = len(self.dispatch_starts())
+        for idempotent in (False, True):
+            with self.subTest(idempotent=idempotent):
+                result, adapter, registry = self.run_executor(self.contract, self.receipt, idempotent)
+                self.assertEqual((result.status, result.reason),
+                                 ("rejected", "mission_dispatch_unresolved_requires_reconciliation"))
+                self.assertEqual(adapter.calls, 0)
+                self.assertEqual(len(self.dispatch_starts()), before)
+                if registry is not None:
+                    record = registry.get("k")
+                    self.assertIs(record.state, State.FAILED)  # closed, not stranded
+
+    def test_same_key_replay_still_reports_the_existing_execution(self):
+        # Idempotent replay semantics win over the unresolved block.
+        adapter = Adapter()
+        registry = SQLiteExecutionRegistry(str(self.root / "e.sqlite3"), timeout=0.25)
+        kwargs = dict(event_id_prefix="p", recorded_at="2026-10-12T00:01:00Z", actor="system:test")
+        first = execute_mission_idempotently(
+            self.contract, self.store, self.receipt, descriptor(), self.requirement, adapter,
+            self.payload, registry, idempotency_key="k1", **kwargs)
+        self.assertEqual(first.status, "response_received")
+        # make this mission unresolved afterwards, then replay the SAME key
+        self.make_unresolved()
+        replay = execute_mission_idempotently(
+            self.contract, self.store, self.receipt, descriptor(), self.requirement, adapter,
+            self.payload, registry, idempotency_key="k1", **kwargs)
+        self.assertEqual(replay.status, "duplicate_existing_execution")
+        self.assertEqual(adapter.calls, 1)
+
+    def test_reconciliation_with_evidence_reopens_dispatch(self):
+        from master_brain.mission_lifecycle import record_dispatch_reconciliation
+        self.make_unresolved()
+        attempt = self.dispatch_starts()[0].payload["attempt_id"]
+        record_dispatch_reconciliation(
+            self.store, "mission-reg", attempt, "effect_did_not_occur", "provider-receipt-9",
+            event_id="rec-1", recorded_at="2026-10-12T00:01:00Z", actor="ops")
+        result, adapter, _ = self.run_executor(self.contract, self.receipt, False)
+        self.assertEqual(adapter.calls, 1)
+        self.assertNotEqual(result.status, "rejected")
+
+    def test_race_is_closed_atomically_by_the_append_precondition(self):
+        # Even if the early check were bypassed (a concurrent dispatch started after it),
+        # the dispatch-started append itself refuses while an attempt is unresolved.
+        import master_brain.mission_execution as me
+        from unittest import mock
+        self.make_unresolved()
+        with mock.patch.object(me, "_unresolved_error", return_value=None):
+            result, adapter, _ = self.run_executor(self.contract, self.receipt, False)
+        self.assertEqual((result.status, result.reason),
+                         ("rejected", "mission_dispatch_unresolved_requires_reconciliation"))
+        self.assertEqual(adapter.calls, 0)
+
+    def test_unavailable_history_fails_closed(self):
+        import master_brain.mission_execution as me
+        from unittest import mock
+        with mock.patch.object(me, "unresolved_attempt_ids", side_effect=RuntimeError("io")):
+            result, adapter, _ = self.run_executor(self.contract, self.receipt, False)
+        self.assertEqual((result.status, result.reason),
+                         ("rejected", "mission_lifecycle_unavailable"))
+        self.assertEqual(adapter.calls, 0)
 
 
 if __name__ == "__main__":

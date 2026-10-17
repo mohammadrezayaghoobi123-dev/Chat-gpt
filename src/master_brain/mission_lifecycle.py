@@ -11,6 +11,9 @@ response is not proof the intended effect happened, and independent verification
 is a separate, not yet implemented stage. Outcomes whose external effect cannot be
 excluded (timeout, adapter error, invalid output, any attempt with no finish event)
 dominate later successes: such a mission needs reconciliation, not a retry.
+``record_dispatch_reconciliation`` is the only way to resolve one: it records an
+assertion (by an unauthenticated actor) with an evidence reference; it is not
+independent verification.
 
 Not provided here: authentication of ``actor`` (see mission_approval trust
 boundary) and any change to the executors; requiring a registered contract before
@@ -38,6 +41,8 @@ from master_brain.mission_contract import (
 CONTRACT_REGISTERED_EVENT_TYPE = "mission.contract_registered"
 _DISPATCH_STARTED = "mission.dispatch_started"
 _DISPATCH_FINISHED = "mission.dispatch_finished"
+RECONCILED_EVENT_TYPE = "mission.dispatch_reconciled"
+RECONCILIATION_RESOLUTIONS = frozenset({"effect_occurred", "effect_did_not_occur"})
 # Statuses where the adapter was never invoked, so no external effect can have happened.
 _NO_EFFECT_STATUSES = frozenset({"rejected", "adapter_missing"})
 _SUCCESS_STATUS = "succeeded"
@@ -63,6 +68,7 @@ class MissionState(str, Enum):
     APPROVED = "approved"
     DISPATCH_UNRESOLVED = "dispatch_unresolved"
     RESPONSE_RECEIVED = "response_received"
+    EFFECT_RECONCILED = "effect_reconciled"
     DISPATCH_FAILED_NO_EFFECT = "dispatch_failed_no_effect"
     INCONSISTENT = "inconsistent"
 
@@ -174,13 +180,124 @@ def load_mission_contract(store: AuditStore, mission_id: str) -> MissionContract
     return contract
 
 
+def _classify_attempts(history) -> tuple[dict[str, str], list[str]]:
+    """Per-attempt outcome from one mission's events, plus contradictions.
+
+    Outcomes: ``response`` (dispatch succeeded), ``no_effect`` (adapter never invoked,
+    or reconciled as having had no effect), ``effect_confirmed`` (reconciled as having
+    occurred) and ``unresolved`` (started with no finish, or an outcome whose external
+    effect cannot be excluded). Malformed attempt ids are kept as unresolved.
+    """
+    outcomes: dict[str, str] = {}
+    anomalies: list[str] = []
+    for e in history:
+        if e.event_type != _DISPATCH_STARTED:
+            continue
+        aid = e.payload.get("attempt_id")
+        if not isinstance(aid, str) or not aid.strip():
+            anomalies.append(f"dispatch {e.event_id} has no valid attempt id")
+            outcomes[f"<invalid:{e.event_id}>"] = "unresolved"
+        elif aid in outcomes:
+            anomalies.append(f"attempt {aid} was started more than once")
+        else:
+            outcomes[aid] = "unresolved"
+    resolved_by_finish: set[str] = set()
+    finished_attempts: set[str] = set()
+    for e in history:
+        if e.event_type != _DISPATCH_FINISHED:
+            continue
+        aid = e.payload.get("attempt_id")
+        if aid not in outcomes or aid.startswith("<invalid:"):
+            anomalies.append(f"dispatch finish {e.event_id} has no matching start")
+        elif aid in finished_attempts:
+            anomalies.append(f"attempt {aid} finished more than once")
+        else:
+            finished_attempts.add(aid)
+            status = e.payload.get("dispatch_status")
+            if status == _SUCCESS_STATUS:
+                outcomes[aid] = "response"
+                resolved_by_finish.add(aid)
+            elif status in _NO_EFFECT_STATUSES:
+                outcomes[aid] = "no_effect"
+                resolved_by_finish.add(aid)
+            # any other status keeps the attempt unresolved
+    reconciled: set[str] = set()
+    for e in history:
+        if e.event_type != RECONCILED_EVENT_TYPE:
+            continue
+        aid = e.payload.get("attempt_id")
+        resolution = e.payload.get("resolution")
+        if aid not in outcomes:
+            anomalies.append(f"reconciliation {e.event_id} has no matching attempt")
+        elif aid in resolved_by_finish:
+            anomalies.append(f"reconciliation {e.event_id} targets an attempt that was not unresolved")
+        elif aid in reconciled:
+            anomalies.append(f"attempt {aid} was reconciled more than once")
+        elif resolution not in RECONCILIATION_RESOLUTIONS:
+            anomalies.append(f"reconciliation {e.event_id} has an invalid resolution")
+        else:
+            reconciled.add(aid)
+            outcomes[aid] = "effect_confirmed" if resolution == "effect_occurred" else "no_effect"
+    return outcomes, anomalies
+
+
+def unresolved_attempt_ids(history, mission_id: str) -> tuple[str, ...]:
+    """Attempts of ``mission_id`` whose external effect is not yet resolved (pure)."""
+    mine = [e for e in history if e.subject_ref == _subject(mission_id)]
+    outcomes, _ = _classify_attempts(mine)
+    return tuple(sorted(a for a, o in outcomes.items() if o == "unresolved"))
+
+
+class ReconciliationRejected(MissionLifecycleError):
+    """The reconciliation claim is not admissible for the current history."""
+
+
+def record_dispatch_reconciliation(
+    store: AuditStore, mission_id: str, attempt_id: str, resolution: str, evidence_ref: str,
+    *, event_id: str, recorded_at: str, actor: str,
+) -> None:
+    """Resolve an unresolved attempt with an evidence reference (atomic).
+
+    ``resolution`` is ``effect_occurred`` or ``effect_did_not_occur``. The claim is
+    only an assertion by ``actor`` (unauthenticated here) pointing at ``evidence_ref``
+    (for example a provider receipt id); it is not independent verification.
+    """
+    if resolution not in RECONCILIATION_RESOLUTIONS:
+        raise ReconciliationRejected("resolution must be effect_occurred or effect_did_not_occur")
+    for name, value in (("attempt_id", attempt_id), ("evidence_ref", evidence_ref)):
+        if not isinstance(value, str) or not value.strip():
+            raise ReconciliationRejected(f"{name} must be a non-empty string")
+
+    def _admissible(history):
+        mine = [e for e in history if e.subject_ref == _subject(mission_id)]
+        if not _registrations(mine, mission_id):
+            return "mission_not_registered"
+        outcomes, anomalies = _classify_attempts(mine)
+        if anomalies:
+            return "mission_lifecycle_inconsistent"
+        if attempt_id not in outcomes:
+            return "unknown_attempt"
+        if outcomes[attempt_id] != "unresolved":
+            return "attempt_not_unresolved"
+        return None
+
+    try:
+        store.append(
+            event_id=event_id, event_type=RECONCILED_EVENT_TYPE, recorded_at=recorded_at,
+            actor=actor, subject_ref=_subject(mission_id),
+            payload={"mission_id": mission_id, "attempt_id": attempt_id,
+                     "resolution": resolution, "evidence_ref": evidence_ref},
+            precondition=_admissible,
+        )
+    except AuditPreconditionError as exc:
+        raise ReconciliationRejected(str(exc)) from None
+
+
 def derive_mission_state(store: AuditStore, mission_id: str) -> MissionLifecycleView:
     """Derive the mission state by replaying verified history. Fails closed:
     any contradiction yields INCONSISTENT with the reasons listed."""
     history = [e for e in store.read_all() if e.subject_ref == _subject(mission_id)]
     regs = _registrations(history, mission_id)
-    started = [e for e in history if e.event_type == _DISPATCH_STARTED]
-    finished = [e for e in history if e.event_type == _DISPATCH_FINISHED]
     approvals = [e for e in history if e.event_type == APPROVAL_EVENT_TYPE]
 
     if not regs:
@@ -196,24 +313,23 @@ def derive_mission_state(store: AuditStore, mission_id: str) -> MissionLifecycle
         digest = mission_contract_digest(load_mission_contract(store, mission_id))
     except MissionLifecycleError as exc:
         anomalies.append(str(exc))
-
-    started_attempts = {e.payload.get("attempt_id") for e in started}
-    for e in started:
-        if digest is not None and e.payload.get("contract_digest") != digest:
+    for e in history:
+        if (e.event_type == _DISPATCH_STARTED and digest is not None
+                and e.payload.get("contract_digest") != digest):
             anomalies.append(f"dispatch {e.event_id} used a different contract digest")
-    for e in finished:
-        if e.payload.get("attempt_id") not in started_attempts:
-            anomalies.append(f"dispatch finish {e.event_id} has no matching start")
+    outcomes, attempt_anomalies = _classify_attempts(history)
+    anomalies.extend(attempt_anomalies)
     if anomalies:
         return MissionLifecycleView(mission_id, MissionState.INCONSISTENT, digest, tuple(anomalies))
 
-    status_by_attempt = {e.payload.get("attempt_id"): e.payload.get("dispatch_status") for e in finished}
-    outcomes = [status_by_attempt.get(a) for a in started_attempts]  # None == no finish event
-    if any(o is None or o not in _NO_EFFECT_STATUSES and o != _SUCCESS_STATUS for o in outcomes):
+    values = set(outcomes.values())
+    if "unresolved" in values:
         state = MissionState.DISPATCH_UNRESOLVED
-    elif any(o == _SUCCESS_STATUS for o in outcomes):
+    elif "response" in values:
         state = MissionState.RESPONSE_RECEIVED
-    elif outcomes:
+    elif "effect_confirmed" in values:
+        state = MissionState.EFFECT_RECONCILED
+    elif values:
         state = MissionState.DISPATCH_FAILED_NO_EFFECT
     elif any(e.payload.get("contract_digest") == digest for e in approvals):
         state = MissionState.APPROVED
@@ -224,6 +340,8 @@ def derive_mission_state(store: AuditStore, mission_id: str) -> MissionLifecycle
 
 __all__ = [
     "CONTRACT_REGISTERED_EVENT_TYPE", "MissionContractConflict", "MissionLifecycleError",
-    "MissionLifecycleView", "MissionState", "RegisteredContract",
-    "derive_mission_state", "load_mission_contract", "register_mission_contract",
+    "MissionLifecycleView", "MissionState", "RECONCILED_EVENT_TYPE",
+    "RECONCILIATION_RESOLUTIONS", "ReconciliationRejected", "RegisteredContract",
+    "derive_mission_state", "load_mission_contract", "record_dispatch_reconciliation",
+    "register_mission_contract", "unresolved_attempt_ids",
 ]

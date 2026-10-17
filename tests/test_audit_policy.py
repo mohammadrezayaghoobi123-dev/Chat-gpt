@@ -98,6 +98,8 @@ EXPECTED_ALLOW_LIST = {
         "identity_verified_by_this_module", "action_digest", "expires_at"},
     "mission.contract_registered": {
         "mission_id", "contract_schema_version", "contract_digest", "contract"},
+    "mission.dispatch_reconciled": {
+        "mission_id", "attempt_id", "resolution", "evidence_ref"},
     "mission.dispatch_started": {
         "mission_id", "contract_digest", "integration_id", "attempt_id", "approval_event_id"},
     "mission.dispatch_finished": {

@@ -18,6 +18,7 @@ from master_brain.dispatch import DispatchResult, DispatchStatus, IntegrationAda
 from master_brain.integrations import IntegrationDescriptor, IntegrationRequirement
 from master_brain.mission_lifecycle import (
     MissionLifecycleError, MissionState, derive_mission_state, load_mission_contract,
+    unresolved_attempt_ids,
 )
 from master_brain.mission_approval import (
     MissionApprovalReceipt,
@@ -111,6 +112,22 @@ def _registration_error(contract: MissionContract, store: AuditStore) -> str | N
     return None
 
 
+UNRESOLVED_REASON = "mission_dispatch_unresolved_requires_reconciliation"
+
+
+def _unresolved_error(contract: MissionContract, store: AuditStore) -> str | None:
+    """Early (non-atomic) block: an earlier attempt's external effect is unresolved.
+
+    The authoritative, race-free check is the precondition on the dispatch-started
+    append; this one only avoids reserving work that would be refused."""
+    try:
+        if unresolved_attempt_ids(store.read_all(), contract.mission_id):
+            return UNRESOLVED_REASON
+    except Exception:
+        return "mission_lifecycle_unavailable"
+    return None
+
+
 def execute_mission_once(
     contract: MissionContract,
     store: AuditStore,
@@ -133,6 +150,10 @@ def execute_mission_once(
     post-dispatch persistence fails, the returned status explicitly says the
     outcome is not fully audited; callers must not blindly retry side effects.
     """
+    if attempt_id is None and isinstance(event_id_prefix, str) and event_id_prefix.strip():
+        # Direct runs still need a distinct attempt id: audit event ids are unique, so
+        # one derived from the prefix keeps separate runs from collapsing into one.
+        attempt_id = f"direct:{event_id_prefix}"
     payload = _snapshot_payload(payload)
     gate = evaluate_approved_execution_gate(
         contract, store, receipt, _safe_action_digest(integration, payload)
@@ -147,6 +168,9 @@ def execute_mission_once(
     registration_reason = _registration_error(contract, store)
     if registration_reason:
         return MissionExecutionResult(contract.mission_id, "rejected", reason=registration_reason)
+    unresolved_reason = _unresolved_error(contract, store)
+    if unresolved_reason:
+        return MissionExecutionResult(contract.mission_id, "rejected", reason=unresolved_reason)
 
     if not isinstance(event_id_prefix, str) or not event_id_prefix.strip():
         return MissionExecutionResult(contract.mission_id, "rejected", reason="invalid_event_id_prefix")
@@ -163,18 +187,21 @@ def execute_mission_once(
     )
     approval_event_id = receipt.event_id if consumes_approval else None
 
-    def _approval_unused(history):
-        for event in history:
-            if (
-                event.event_type == "mission.dispatch_started"
-                and event.payload.get("approval_event_id") == approval_event_id
-            ):
-                return "approval_already_consumed"
+    def _dispatch_admissible(history):
+        if consumes_approval:
+            for event in history:
+                if (
+                    event.event_type == "mission.dispatch_started"
+                    and event.payload.get("approval_event_id") == approval_event_id
+                ):
+                    return "approval_already_consumed"
+        if unresolved_attempt_ids(history, contract.mission_id):
+            return UNRESOLVED_REASON
         return None
 
     try:
         store.append(
-            precondition=_approval_unused if consumes_approval else None,
+            precondition=_dispatch_admissible,
             event_id=f"{event_id_prefix}:dispatch-started",
             event_type="mission.dispatch_started",
             recorded_at=recorded_at,
@@ -188,10 +215,8 @@ def execute_mission_once(
                 **({"approval_event_id": approval_event_id} if consumes_approval else {}),
             },
         )
-    except AuditPreconditionError:
-        return MissionExecutionResult(
-            contract.mission_id, "rejected", reason="approval_already_consumed"
-        )
+    except AuditPreconditionError as exc:
+        return MissionExecutionResult(contract.mission_id, "rejected", reason=str(exc))
     except Exception:
         return MissionExecutionResult(
             contract.mission_id, "audit_unavailable", reason="pre_dispatch_audit_failed"
@@ -342,6 +367,20 @@ def execute_mission_idempotently(
             contract.mission_id, "duplicate_existing_execution",
             reason=f"existing_execution_state:{record.state.value}",
         )
+
+    # A same-key replay is answered above; a NEW key must not start work while an
+    # earlier attempt of this mission is unresolved. No dispatch happened for this
+    # key, so close it as FAILED (allowed from PENDING) instead of stranding it.
+    unresolved_reason = _unresolved_error(contract, store)
+    if unresolved_reason:
+        try:
+            registry.transition(
+                key=idempotency_key, expected_version=record.version, target=State.FAILED,
+                recorded_at=recorded_at,
+            )
+        except RegistryError:
+            pass
+        return MissionExecutionResult(contract.mission_id, "rejected", reason=unresolved_reason)
 
     try:
         running = registry.transition(

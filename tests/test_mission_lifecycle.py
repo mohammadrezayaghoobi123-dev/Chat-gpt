@@ -15,7 +15,11 @@ from master_brain.mission_lifecycle import (
     MissionContractConflict,
     MissionLifecycleError,
     MissionState,
+    RECONCILED_EVENT_TYPE,
+    ReconciliationRejected,
     derive_mission_state,
+    record_dispatch_reconciliation,
+    unresolved_attempt_ids,
     load_mission_contract,
     register_mission_contract,
 )
@@ -272,6 +276,125 @@ class SnapshotValidationTests(LifecycleBase):
         for obj, attr in ((reg, "event_id"), (view, "state")):
             with self.assertRaises(Exception):
                 setattr(obj, attr, "x")
+
+
+class ReconciliationTests(LifecycleBase):
+    def state(self):
+        return derive_mission_state(self.store, self.contract.mission_id)
+
+    def reconcile(self, attempt="a1", resolution="effect_did_not_occur", evidence="receipt-123",
+                  event_id=None):
+        return record_dispatch_reconciliation(
+            self.store, self.contract.mission_id, attempt, resolution, evidence,
+            event_id=event_id or f"rec-{attempt}-{resolution}", recorded_at=T, actor="ops")
+
+    def unresolved(self, attempt="a1"):
+        self.started(attempt); self.finished(attempt, "timeout")
+
+    def test_attempt_without_id_is_inconsistent_not_collapsed(self):
+        self.register()
+        self.raw("s-none", "mission.dispatch_started", {
+            "mission_id": self.contract.mission_id,
+            "contract_digest": mission_contract_digest(self.contract),
+            "integration_id": "i", "attempt_id": None})
+        view = self.state()
+        self.assertIs(view.state, MissionState.INCONSISTENT)
+        self.assertTrue(any("attempt id" in a for a in view.anomalies))
+
+    def test_no_effect_resolution_reopens_the_mission(self):
+        self.register(); self.approve(); self.unresolved()
+        self.assertIs(self.state().state, MissionState.DISPATCH_UNRESOLVED)
+        self.reconcile(resolution="effect_did_not_occur")
+        self.assertIs(self.state().state, MissionState.DISPATCH_FAILED_NO_EFFECT)
+
+    def test_effect_occurred_resolution_is_its_own_state(self):
+        self.register(); self.approve(); self.unresolved()
+        self.reconcile(resolution="effect_occurred")
+        self.assertIs(self.state().state, MissionState.EFFECT_RECONCILED)
+
+    def test_started_without_finish_can_be_reconciled(self):
+        self.register(); self.approve(); self.started()
+        self.reconcile()
+        self.assertEqual(unresolved_attempt_ids(self.store.read_all(), self.contract.mission_id), ())
+
+    def test_other_unresolved_attempt_still_dominates(self):
+        self.register(); self.approve(); self.unresolved("a1"); self.unresolved("a2")
+        self.reconcile("a1")
+        self.assertIs(self.state().state, MissionState.DISPATCH_UNRESOLVED)
+        self.assertEqual(unresolved_attempt_ids(self.store.read_all(), self.contract.mission_id), ("a2",))
+
+    def test_response_outranks_reconciled_effect(self):
+        self.register(); self.approve(); self.unresolved("a1")
+        self.reconcile("a1", "effect_occurred")
+        self.started("a2"); self.finished("a2", "succeeded")
+        self.assertIs(self.state().state, MissionState.RESPONSE_RECEIVED)
+
+    def test_inadmissible_claims_are_rejected_and_write_nothing(self):
+        self.register(); self.approve(); self.unresolved("a1")
+        self.started("a2"); self.finished("a2", "succeeded")
+        self.reconcile("a1")
+        before = len(self.store.read_all())
+        cases = (
+            ("nope", "effect_occurred", "ev", "unknown_attempt"),
+            ("a2", "effect_occurred", "ev", "attempt_not_unresolved"),   # already succeeded
+            ("a1", "effect_occurred", "ev", "attempt_not_unresolved"),   # already reconciled
+            ("a1", "maybe", "ev", "resolution"),
+            ("a1", "effect_occurred", "  ", "evidence_ref"),
+            ("", "effect_occurred", "ev", "attempt_id"),
+        )
+        for attempt, resolution, evidence, fragment in cases:
+            with self.subTest(attempt=attempt, resolution=resolution, evidence=evidence):
+                with self.assertRaises(ReconciliationRejected) as ctx:
+                    self.reconcile(attempt, resolution, evidence, event_id=f"x-{attempt}-{resolution}-{evidence}")
+                self.assertIn(fragment, str(ctx.exception))
+        self.assertEqual(len(self.store.read_all()), before)
+
+    def test_unregistered_or_inconsistent_mission_cannot_be_reconciled(self):
+        with self.assertRaises(ReconciliationRejected) as ctx:
+            self.reconcile()
+        self.assertIn("mission_not_registered", str(ctx.exception))
+        self.register(); self.finished("zz")  # finish with no start => inconsistent
+        with self.assertRaises(ReconciliationRejected) as ctx:
+            self.reconcile("zz")
+        self.assertIn("mission_lifecycle_inconsistent", str(ctx.exception))
+
+    def test_secret_in_evidence_ref_is_refused(self):
+        self.register(); self.approve(); self.unresolved()
+        with self.assertRaises(Exception):
+            self.reconcile(evidence="sk-abcdefghijklmnopqrstuvwxyz123456")
+        self.assertIs(self.state().state, MissionState.DISPATCH_UNRESOLVED)
+
+    def test_replayed_log_with_contradicting_reconciliations_is_inconsistent(self):
+        self.register(); self.approve(); self.started("a1"); self.finished("a1", "succeeded")
+        # bypass the admissibility check by writing raw events
+        def rec(eid, attempt, resolution="effect_occurred"):
+            self.raw(eid, RECONCILED_EVENT_TYPE, {
+                "mission_id": self.contract.mission_id, "attempt_id": attempt,
+                "resolution": resolution, "evidence_ref": "e"})
+        rec("r1", "a1")                       # targets a resolved attempt
+        self.assertIs(self.state().state, MissionState.INCONSISTENT)
+        self.setUp(); self.register(); self.started("a1")
+        rec("r2", "ghost")                    # no matching attempt
+        self.assertIs(self.state().state, MissionState.INCONSISTENT)
+        self.setUp(); self.register(); self.started("a1")
+        rec("r3", "a1"); rec("r4", "a1")      # twice
+        self.assertIs(self.state().state, MissionState.INCONSISTENT)
+        self.setUp(); self.register(); self.started("a1")
+        rec("r5", "a1", "bogus")              # invalid resolution
+        self.assertIs(self.state().state, MissionState.INCONSISTENT)
+
+    def test_duplicate_start_or_finish_is_inconsistent(self):
+        self.register(); self.started("a1")
+        self.raw("s-dup", "mission.dispatch_started", {
+            "mission_id": self.contract.mission_id,
+            "contract_digest": mission_contract_digest(self.contract),
+            "integration_id": "i", "attempt_id": "a1"})
+        self.assertIs(self.state().state, MissionState.INCONSISTENT)
+        self.setUp(); self.register(); self.started("a1"); self.finished("a1", "timeout")
+        self.raw("f-dup", "mission.dispatch_finished", {
+            "mission_id": self.contract.mission_id, "integration_id": "i", "attempt_id": "a1",
+            "dispatch_status": "succeeded", "reason": "", "external_effect_confirmed": False})
+        self.assertIs(self.state().state, MissionState.INCONSISTENT)
 
 
 if __name__ == "__main__":

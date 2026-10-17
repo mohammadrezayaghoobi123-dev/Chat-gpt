@@ -14,6 +14,9 @@ import hashlib
 import json
 from typing import Any
 
+from master_brain.approval_signing import (
+    ApprovalSigner, ApprovalVerifier, SIGNATURE_FIELDS, sign_approval_payload, verify_approval_event,
+)
 from master_brain.audit_store import AuditStore, AuditStoreError
 from master_brain.mission_contract import (
     MissionContract,
@@ -121,6 +124,10 @@ class MissionApprovalReceipt:
     action_digest: str | None = None
     # Optional validity bound (ISO-8601 with timezone). Mandatory for HIGH/CRITICAL.
     expires_at: str | None = None
+    # Optional signature (SAFE-002). Present only for approvals recorded with a signer.
+    signature: str | None = None
+    signing_key_id: str | None = None
+    signature_alg: str | None = None
 
 
 @dataclass(frozen=True)
@@ -129,6 +136,8 @@ class ApprovedExecutionGateResult:
 
     allowed: bool
     reasons: tuple[str, ...]
+    # True only if a verifier confirmed a valid signature by a key bound to the approver.
+    approver_authenticated: bool = False
 
 
 def record_mission_approval(
@@ -141,6 +150,7 @@ def record_mission_approval(
     authentication_method: str,
     action_digest: str | None = None,
     expires_at: str | None = None,
+    signer: ApprovalSigner | None = None,
 ) -> MissionApprovalReceipt:
     """Persist an approval assertion bound to the exact contract digest.
 
@@ -197,6 +207,9 @@ def record_mission_approval(
         payload["action_digest"] = action_digest
     if expires_at is not None:
         payload["expires_at"] = expires_at
+    if signer is not None:
+        # Raises (before anything is written) if the signer is unusable.
+        payload = sign_approval_payload(signer, event_id, recorded_at, payload)
     event = store.append(
         event_id=event_id,
         event_type=APPROVAL_EVENT_TYPE,
@@ -216,6 +229,9 @@ def record_mission_approval(
         event_hash=event.event_hash,
         action_digest=action_digest,
         expires_at=expires_at,
+        signature=payload.get("signature"),
+        signing_key_id=payload.get("signing_key_id"),
+        signature_alg=payload.get("signature_alg"),
     )
 
 
@@ -224,8 +240,13 @@ def evaluate_approved_execution_gate(
     store: AuditStore,
     receipt: MissionApprovalReceipt | None,
     action_digest: str | None = None,
+    verifier: ApprovalVerifier | None = None,
 ) -> ApprovedExecutionGateResult:
     """Fail closed unless a matching approval is present in verified audit history.
+
+    With a ``verifier`` the approval must also carry a valid signature by a key bound
+    to the approver (``approver_authenticated``). Without one, the approver identity
+    remains an unauthenticated assertion (legacy behaviour).
 
     If the receipt carries an action binding, the caller's ``action_digest`` (see
     ``action_digest()``) must be supplied and equal it; otherwise the approval
@@ -331,6 +352,11 @@ def evaluate_approved_execution_gate(
             expected_payload["action_digest"] = receipt.action_digest
         if receipt.expires_at is not None:
             expected_payload["expires_at"] = receipt.expires_at
+        for field, value in (("signature", receipt.signature),
+                             ("signing_key_id", receipt.signing_key_id),
+                             ("signature_alg", receipt.signature_alg)):
+            if value is not None:
+                expected_payload[field] = value
         if event.event_type != APPROVAL_EVENT_TYPE:
             reasons.append("receipt does not reference a mission approval event")
         if event.subject_ref != f"mission:{contract.mission_id}":
@@ -343,8 +369,15 @@ def evaluate_approved_execution_gate(
             reasons.append("approval event hash does not match receipt")
         if event.payload != expected_payload:
             reasons.append("approval event payload does not match this contract and receipt")
+        if verifier is not None:
+            signature_reason = verify_approval_event(verifier, event)
+            if signature_reason:
+                reasons.append(signature_reason)
 
-    return ApprovedExecutionGateResult(not reasons, tuple(reasons))
+    return ApprovedExecutionGateResult(
+        not reasons, tuple(reasons),
+        approver_authenticated=verifier is not None and not reasons,
+    )
 
 
 __all__ = [

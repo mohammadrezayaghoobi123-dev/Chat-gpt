@@ -67,3 +67,8 @@ Known limits (not closed by this change):
 - Expiry is checked at the gate, not again at the instant of dispatch; item 7 above (dispatch-time recheck) remains open.
 - The expiry is only as trustworthy as the store clock; a trusted external time source remains open.
 - Revocation, policy-version binding and approver authentication remain open.
+
+## Signed approvals (SAFE-002, optional, additive)
+- `record_mission_approval(..., signer=...)` signs the audited approval payload together with the audit `event_id` and `recorded_at` (`approval_signing.py`). `evaluate_approved_execution_gate(..., verifier=...)` and both executors (`approval_verifier=`) then require a valid signature from a key bound to the approver subject; `approver_authenticated` is True only in that case.
+- Without a verifier the legacy behaviour is unchanged and the approver remains an unauthenticated assertion. Requiring a verifier for HIGH/CRITICAL missions by default is a separate, behavior-changing step.
+- Not provided: private-key custody, key provisioning/rotation, the trust registry's own integrity, trusted time. Ed25519 lives in `approval_signing_ed25519.py` behind the optional `signing` extra; the core stays dependency-free.

@@ -11,6 +11,7 @@ dependencies = []
 
 [project.optional-dependencies]
 observability = ["langfuse>=4.7.0,<5"]
+signing = ["cryptography>=42"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

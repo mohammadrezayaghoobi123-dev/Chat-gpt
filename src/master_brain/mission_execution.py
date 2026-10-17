@@ -20,6 +20,7 @@ from master_brain.mission_lifecycle import (
     MissionLifecycleError, MissionState, derive_mission_state, load_mission_contract,
     unresolved_attempt_ids,
 )
+from master_brain.approval_signing import ApprovalVerifier
 from master_brain.mission_approval import (
     MissionApprovalReceipt,
     action_digest,
@@ -143,6 +144,7 @@ def execute_mission_once(
     before_dispatch: Callable[[], None] | None = None,
     attempt_id: str | None = None,
     dispatch_timeout_seconds: float | None = None,
+    approval_verifier: ApprovalVerifier | None = None,
 ) -> MissionExecutionResult:
     """Gate, write a pre-dispatch audit event, dispatch once, then record outcome.
 
@@ -156,7 +158,8 @@ def execute_mission_once(
         attempt_id = f"direct:{event_id_prefix}"
     payload = _snapshot_payload(payload)
     gate = evaluate_approved_execution_gate(
-        contract, store, receipt, _safe_action_digest(integration, payload)
+        contract, store, receipt, _safe_action_digest(integration, payload),
+        verifier=approval_verifier,
     )
     if not gate.allowed:
         return MissionExecutionResult(
@@ -307,6 +310,7 @@ def execute_mission_idempotently(
     recorded_at: str,
     actor: str,
     dispatch_timeout_seconds: float | None = None,
+    approval_verifier: ApprovalVerifier | None = None,
 ) -> MissionExecutionResult:
     """Reserve a stable key before dispatch; duplicates never invoke the adapter.
 
@@ -316,7 +320,8 @@ def execute_mission_idempotently(
     """
     payload = _snapshot_payload(payload)
     gate = evaluate_approved_execution_gate(
-        contract, store, receipt, _safe_action_digest(integration, payload)
+        contract, store, receipt, _safe_action_digest(integration, payload),
+        verifier=approval_verifier,
     )
     if not gate.allowed:
         return MissionExecutionResult(contract.mission_id, "rejected", reason="; ".join(gate.reasons))
@@ -441,6 +446,7 @@ def execute_mission_idempotently(
             ),
             attempt_id=attempt.attempt_id,
             dispatch_timeout_seconds=dispatch_timeout_seconds,
+            approval_verifier=approval_verifier,
         )
     except Exception:
         result = MissionExecutionResult(

@@ -16,6 +16,9 @@ from typing import Any, Callable, Mapping
 from master_brain.audit_store import AuditPreconditionError, AuditStore, AuditStoreError
 from master_brain.dispatch import DispatchResult, DispatchStatus, IntegrationAdapter, dispatch_once
 from master_brain.integrations import IntegrationDescriptor, IntegrationRequirement
+from master_brain.mission_lifecycle import (
+    MissionLifecycleError, MissionState, derive_mission_state, load_mission_contract,
+)
 from master_brain.mission_approval import (
     MissionApprovalReceipt,
     action_digest,
@@ -90,6 +93,24 @@ def _safe_action_digest(integration: Any, payload: Any) -> str | None:
         return None
 
 
+def _registration_error(contract: MissionContract, store: AuditStore) -> str | None:
+    """Fail closed unless this exact contract is the one registered and the mission's
+    replayed lifecycle is consistent. Runs before any dispatch audit/reservation."""
+    try:
+        registered = load_mission_contract(store, contract.mission_id)
+        if mission_contract_digest(registered) != mission_contract_digest(contract):
+            return "registered_contract_mismatch"
+        if derive_mission_state(store, contract.mission_id).state is MissionState.INCONSISTENT:
+            return "mission_lifecycle_inconsistent"
+    except MissionLifecycleError as exc:
+        text = str(exc)
+        return "contract_not_registered" if text.startswith("no contract registered") \
+            else "mission_lifecycle_inconsistent"
+    except Exception:  # audit unreadable/invalid: no verified registration
+        return "mission_lifecycle_unavailable"
+    return None
+
+
 def execute_mission_once(
     contract: MissionContract,
     store: AuditStore,
@@ -123,6 +144,9 @@ def execute_mission_once(
     risk_reason = _requirement_exceeds_contract_risk(contract, requirement)
     if risk_reason:
         return MissionExecutionResult(contract.mission_id, "rejected", reason=risk_reason)
+    registration_reason = _registration_error(contract, store)
+    if registration_reason:
+        return MissionExecutionResult(contract.mission_id, "rejected", reason=registration_reason)
 
     if not isinstance(event_id_prefix, str) or not event_id_prefix.strip():
         return MissionExecutionResult(contract.mission_id, "rejected", reason="invalid_event_id_prefix")
@@ -274,6 +298,9 @@ def execute_mission_idempotently(
     risk_reason = _requirement_exceeds_contract_risk(contract, requirement)
     if risk_reason:
         return MissionExecutionResult(contract.mission_id, "rejected", reason=risk_reason)
+    registration_reason = _registration_error(contract, store)
+    if registration_reason:
+        return MissionExecutionResult(contract.mission_id, "rejected", reason=registration_reason)
 
     # Validate all caller-controlled execution metadata before reserving or
     # claiming a registry record. Invalid metadata must not strand a mission

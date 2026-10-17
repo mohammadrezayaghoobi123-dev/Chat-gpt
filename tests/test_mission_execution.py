@@ -13,6 +13,7 @@ from master_brain.integrations import (
 from master_brain.execution_registry import SQLiteExecutionRegistry
 from master_brain.mission_approval import record_mission_approval
 from tests.approval_expiry_helper import soon
+from tests.mission_registration_helper import register_contract
 from master_brain.mission_contract import MissionContract, MissionRiskTier
 from master_brain.mission_execution import execute_mission_once, execute_mission_idempotently
 
@@ -46,6 +47,7 @@ class PipelineFixture(unittest.TestCase):
             mission_id="mission-42", objective="Execute controlled test",
             risk_tier=MissionRiskTier.MEDIUM, requires_approval=True,
         )
+        register_contract(self.store, self.contract)
         self.requirement = IntegrationRequirement(
             ("text_reasoning",), required_kind=IntegrationKind.MODEL,
         )
@@ -74,7 +76,8 @@ class MissionExecutionPipelineTests(PipelineFixture):
         result = self.execute(adapter)
         self.assertEqual(result.status, "rejected")
         self.assertEqual(adapter.calls, 0)
-        self.assertEqual(len(self.store.read_all()), 0)
+        self.assertEqual([e.event_type for e in self.store.read_all()],
+                         ["mission.contract_registered"])  # nothing but the registration
 
     def test_approved_dispatch_audits_response_without_claiming_external_effect(self):
         receipt = self.approve()
@@ -332,6 +335,7 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
             mission_id="mission-idempotent", objective="Execute once",
             risk_tier=MissionRiskTier.MEDIUM, requires_approval=True,
         )
+        register_contract(self.store, self.contract)
         self.requirement = IntegrationRequirement(
             ("text_reasoning",), required_kind=IntegrationKind.MODEL,
         )
@@ -723,8 +727,9 @@ class ActionBoundApprovalTests(PipelineFixture):
         for tier in (MissionRiskTier.HIGH, MissionRiskTier.CRITICAL):
             with self.subTest(tier=tier):
                 self.contract = MissionContract(
-                    mission_id="mission-42", objective="Execute controlled test",
+                    mission_id=f"mission-42-{tier.value}", objective="Execute controlled test",
                     risk_tier=tier, requires_approval=True)
+                register_contract(self.store, self.contract, recorded_at="2026-10-12T00:00:00Z")
                 unbound = record_mission_approval(
                     self.store, self.contract, event_id=f"unbound-{tier.value}",
                     recorded_at="2026-10-12T00:00:00Z", approver_subject="user:reviewer",
@@ -739,8 +744,9 @@ class ActionBoundApprovalTests(PipelineFixture):
     def test_high_risk_mission_executes_with_a_bound_approval(self):
         from master_brain.mission_approval import action_digest
         self.contract = MissionContract(
-            mission_id="mission-42", objective="Execute controlled test",
+            mission_id="mission-42-high", objective="Execute controlled test",
             risk_tier=MissionRiskTier.HIGH, requires_approval=True)
+        register_contract(self.store, self.contract)
         receipt = record_mission_approval(
             self.store, self.contract, event_id="approval-high-bound",
             recorded_at="2026-10-12T00:00:00Z", approver_subject="user:reviewer",
@@ -799,6 +805,7 @@ class DispatchTimeoutPipelineTests(unittest.TestCase):
             mission_id="mission-timeout", objective="Timeout test",
             risk_tier=MissionRiskTier.MEDIUM, requires_approval=True,
         )
+        register_contract(self.store, self.contract)
         self.requirement = IntegrationRequirement(("text_reasoning",), required_kind=IntegrationKind.MODEL)
         self.payload = {"mission_id": "mission-timeout"}
         self.receipt = record_mission_approval(
@@ -852,6 +859,7 @@ class ContractRiskCeilingTests(unittest.TestCase):
         store = AuditStore(root / "audit.jsonl")
         contract = MissionContract(mission_id="m-risk", objective="Risk ceiling",
                                    risk_tier=tier, requires_approval=True)
+        register_contract(store, contract)
         payload = {"a": 1}
         receipt = record_mission_approval(
             store, contract, event_id="approval-risk", recorded_at="2026-10-12T00:00:00Z",
@@ -896,7 +904,8 @@ class ContractRiskCeilingTests(unittest.TestCase):
                                              ("rejected", "requirement_exceeds_contract_risk_ceiling"))
                             self.assertEqual(adapter.calls, 0)
                             self.assertEqual([e.event_type for e in store.read_all()],
-                                             ["mission.approval_granted"])
+                                             ["mission.contract_registered",
+                                              "mission.approval_granted"])
                             if registry is not None:
                                 self.assertIsNone(registry.get("k-risk"))
 
@@ -1104,6 +1113,7 @@ class ApprovalExpiryPipelineTests(unittest.TestCase):
             mission_id="mission-exp", objective="Execute before expiry",
             risk_tier=MissionRiskTier.HIGH, requires_approval=True,
         )
+        register_contract(self.store, self.contract)
         self.requirement = IntegrationRequirement(
             ("text_reasoning",), required_kind=IntegrationKind.MODEL,
         )
@@ -1152,6 +1162,111 @@ class ApprovalExpiryPipelineTests(unittest.TestCase):
         adapter = Adapter()
         self.assertEqual(self.run_once(adapter, "ok").status, "response_received")
         self.assertEqual(adapter.calls, 1)
+
+
+class RegisteredContractEnforcementTests(unittest.TestCase):
+    """MISSION-001/002: dispatch requires the exact contract to be registered (fail closed)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.store = AuditStore(self.root / "audit.jsonl")
+        self.contract = MissionContract(
+            mission_id="mission-reg", objective="Registered execution",
+            risk_tier=MissionRiskTier.MEDIUM, requires_approval=True)
+        self.requirement = IntegrationRequirement(("text_reasoning",), required_kind=IntegrationKind.MODEL)
+        self.payload = {"p": 1}
+
+    def approved(self, contract):
+        return record_mission_approval(
+            self.store, contract, event_id=f"ap-{contract.objective[:4]}",
+            recorded_at="2026-10-12T00:00:00Z", approver_subject="user:r",
+            authentication_method="upstream-session", expires_at=soon())
+
+    def run_executor(self, contract, receipt, idempotent):
+        adapter = Adapter()
+        kwargs = dict(event_id_prefix="p", recorded_at="2026-10-12T00:01:00Z", actor="system:test")
+        registry = None
+        if idempotent:
+            registry = SQLiteExecutionRegistry(str(self.root / "e.sqlite3"), timeout=0.25)
+            result = execute_mission_idempotently(
+                contract, self.store, receipt, descriptor(), self.requirement, adapter,
+                self.payload, registry, idempotency_key="k", **kwargs)
+        else:
+            result = execute_mission_once(
+                contract, self.store, receipt, descriptor(), self.requirement, adapter,
+                self.payload, **kwargs)
+        return result, adapter, registry
+
+    def assert_blocked(self, result, adapter, registry, reason):
+        self.assertEqual((result.status, result.reason), ("rejected", reason))
+        self.assertEqual(adapter.calls, 0)
+        types = [e.event_type for e in self.store.read_all()]
+        self.assertNotIn("mission.dispatch_started", types)
+        if registry is not None:
+            self.assertIsNone(registry.get("k"))  # nothing reserved for a blocked mission
+
+    def test_unregistered_contract_is_never_dispatched(self):
+        receipt = self.approved(self.contract)
+        for idempotent in (False, True):
+            with self.subTest(idempotent=idempotent):
+                result, adapter, registry = self.run_executor(self.contract, receipt, idempotent)
+                self.assert_blocked(result, adapter, registry, "contract_not_registered")
+
+    def test_changed_contract_does_not_match_the_registered_one(self):
+        from dataclasses import replace
+        register_contract(self.store, self.contract)
+        changed = replace(self.contract, objective="Registered execution v2")
+        receipt = self.approved(changed)  # a valid approval of the CHANGED contract
+        for idempotent in (False, True):
+            with self.subTest(idempotent=idempotent):
+                result, adapter, registry = self.run_executor(changed, receipt, idempotent)
+                self.assert_blocked(result, adapter, registry, "registered_contract_mismatch")
+
+    def test_inconsistent_lifecycle_blocks_dispatch(self):
+        register_contract(self.store, self.contract)
+        receipt = self.approved(self.contract)
+        self.store.append(  # a dispatch recorded against a different contract digest
+            event_id="rogue", event_type="mission.dispatch_started",
+            recorded_at="2026-10-12T00:00:30Z", actor="x", subject_ref="mission:mission-reg",
+            payload={"mission_id": "mission-reg", "contract_digest": "0" * 64,
+                     "integration_id": "i", "attempt_id": "rogue-attempt"})
+        for idempotent in (False, True):
+            with self.subTest(idempotent=idempotent):
+                result, adapter, registry = self.run_executor(self.contract, receipt, idempotent)
+                self.assertEqual((result.status, result.reason),
+                                 ("rejected", "mission_lifecycle_inconsistent"))
+                self.assertEqual(adapter.calls, 0)
+
+    def test_lifecycle_errors_and_unexpected_failures_fail_closed(self):
+        import master_brain.mission_execution as me
+        from unittest import mock
+        from master_brain.mission_lifecycle import MissionLifecycleError
+        register_contract(self.store, self.contract)
+        receipt = self.approved(self.contract)
+        cases = (
+            (MissionLifecycleError("snapshot corrupt"), "mission_lifecycle_inconsistent"),
+            (RuntimeError("disk"), "mission_lifecycle_unavailable"),
+        )
+        for exc, reason in cases:
+            for idempotent in (False, True):
+                with self.subTest(reason=reason, idempotent=idempotent), \
+                        mock.patch.object(me, "load_mission_contract", side_effect=exc):
+                    result, adapter, registry = self.run_executor(self.contract, receipt, idempotent)
+                    self.assertEqual((result.status, result.reason), ("rejected", reason))
+                    self.assertEqual(adapter.calls, 0)
+
+    def test_registered_matching_contract_dispatches(self):
+        register_contract(self.store, self.contract)
+        receipt = self.approved(self.contract)
+        for idempotent in (False, True):
+            with self.subTest(idempotent=idempotent):
+                self.setUp(); register_contract(self.store, self.contract)
+                receipt = self.approved(self.contract)
+                result, adapter, _ = self.run_executor(self.contract, receipt, idempotent)
+                self.assertEqual(adapter.calls, 1)
+                self.assertNotEqual(result.status, "rejected")
 
 
 if __name__ == "__main__":
@@ -1327,6 +1442,7 @@ class IdempotentMutationHardeningTests(unittest.TestCase):
             mission_id="mission-h", objective="Execute once",
             risk_tier=MissionRiskTier.MEDIUM, requires_approval=True,
         )
+        register_contract(self.store, self.contract)
         self.requirement = IntegrationRequirement(("text_reasoning",), required_kind=IntegrationKind.MODEL)
         self.payload = {"mission_id": "mission-h", "prompt": "stable"}
         self.receipt = record_mission_approval(

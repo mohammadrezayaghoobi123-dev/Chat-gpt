@@ -1,0 +1,12 @@
+{
+  "constraints": [
+    "بدون راز"
+  ],
+  "idempotency_key": "idem-key-0001",
+  "objective": "خلاصهٔ گزارش را بنویس\nبا ارجاع",
+  "requires_approval": true,
+  "risk_tier": "high",
+  "success_criteria": [
+    "دو بند"
+  ]
+}

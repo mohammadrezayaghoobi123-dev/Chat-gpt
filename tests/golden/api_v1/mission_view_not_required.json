@@ -1,0 +1,16 @@
+{
+  "anomalies": [],
+  "api_version": "1",
+  "approval_required": false,
+  "approval_status": "not_required",
+  "clarification_questions": [],
+  "contract_digest": "9eaac614bb8c3b2ecb03f823348a077224b0e413ff78c782c99d06eeae0e4a7b",
+  "contract_schema_version": "1.0",
+  "execution": "not_started",
+  "mission_id": "m-low",
+  "objective": "Draft the plan",
+  "result_verification": "not_independently_verified",
+  "risk_tier": "low",
+  "selected_islands": [],
+  "state": "planned"
+}

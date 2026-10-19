@@ -56,6 +56,11 @@ def _approval_required(contract: MissionContract) -> bool:
     )
 
 
+def approval_required(contract: MissionContract) -> bool:
+    """Public, single definition of "this mission needs human approval" (API layer uses it)."""
+    return _approval_required(contract)
+
+
 def _json_value(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
@@ -389,6 +394,7 @@ def evaluate_approved_execution_gate(
 __all__ = [
     "APPROVAL_EVENT_TYPE",
     "action_digest",
+    "approval_required",
     "ApprovedExecutionGateResult",
     "MissionApprovalReceipt",
     "evaluate_approved_execution_gate",

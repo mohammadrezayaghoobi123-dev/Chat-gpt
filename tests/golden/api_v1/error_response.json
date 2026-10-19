@@ -1,0 +1,9 @@
+{
+  "api_version": "1",
+  "error": {
+    "code": "approval_invalid",
+    "correlation_id": "corr-123",
+    "message": "The approval is invalid, expired or already used.",
+    "retryable": false
+  }
+}

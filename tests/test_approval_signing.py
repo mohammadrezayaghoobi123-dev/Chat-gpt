@@ -19,43 +19,11 @@ from master_brain.mission_contract import MissionContract, MissionRiskTier
 from master_brain.mission_execution import execute_mission_idempotently, execute_mission_once
 from master_brain.execution_registry import SQLiteExecutionRegistry
 from tests.approval_expiry_helper import soon
+from tests.approval_signing_helper import TEST_ALGORITHM, HmacSeamSigner, HmacSeamVerifier
 from tests.mission_registration_helper import register_contract
 from tests.test_mission_execution import Adapter, descriptor
 
 T = "2026-10-12T00:00:00Z"
-
-
-class HmacSeamSigner:
-    """Stdlib-only signer: proves the seam is algorithm-agnostic (not a production scheme)."""
-    algorithm = "test-hmac-sha256"
-
-    def __init__(self, key_id, secret):
-        self.key_id, self._secret = key_id, secret
-
-    def sign(self, message):
-        return hmac.new(self._secret, message, hashlib.sha256).digest()
-
-
-class HmacSeamVerifier:
-    def __init__(self):
-        self.keys, self.revoked, self.calls = {}, set(), 0
-
-    def add(self, key_id, secret, subject):
-        self.keys[key_id] = (secret, subject)
-
-    def verify(self, *, key_id, algorithm, subject, message, signature):
-        self.calls += 1
-        if algorithm != HmacSeamSigner.algorithm:
-            return "unsupported algorithm"
-        if key_id not in self.keys:
-            return "unknown key"
-        if key_id in self.revoked:
-            return "key revoked"
-        secret, bound = self.keys[key_id]
-        if bound != subject:
-            return "key not bound to this approver"
-        good = hmac.new(secret, message, hashlib.sha256).digest()
-        return None if hmac.compare_digest(good, signature) else "bad signature"
 
 
 class SigningBase(unittest.TestCase):
@@ -113,7 +81,7 @@ class SignedApprovalGateTests(SigningBase):
         self.approve()
         payload = self.event().payload
         self.assertEqual(payload["signing_key_id"], "k1")
-        self.assertEqual(payload["signature_alg"], HmacSeamSigner.algorithm)
+        self.assertEqual(payload["signature_alg"], TEST_ALGORITHM)
         bytes.fromhex(payload["signature"])  # hex: cannot trip the secret-value screens
         self.setUp(); self.approve(signer=None)
         for key in ("signature", "signing_key_id", "signature_alg"):

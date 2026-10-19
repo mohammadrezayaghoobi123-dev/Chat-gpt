@@ -245,8 +245,9 @@ def evaluate_approved_execution_gate(
     """Fail closed unless a matching approval is present in verified audit history.
 
     With a ``verifier`` the approval must also carry a valid signature by a key bound
-    to the approver (``approver_authenticated``). Without one, the approver identity
-    remains an unauthenticated assertion (legacy behaviour).
+    to the approver (``approver_authenticated``). HIGH/CRITICAL missions REQUIRE a
+    verifier (SAFE-002): without one they are refused. Lower tiers without a verifier
+    keep the legacy behaviour (approver identity is an unauthenticated assertion).
 
     If the receipt carries an action binding, the caller's ``action_digest`` (see
     ``action_digest()``) must be supplied and equal it; otherwise the approval
@@ -287,6 +288,11 @@ def evaluate_approved_execution_gate(
         reasons.append("approval receipt field expires_at must be a string")
     if reasons:
         return ApprovedExecutionGateResult(False, tuple(reasons))
+    if _high_risk(contract) and verifier is None:
+        reasons.append(
+            "high/critical-risk missions require a configured approval verifier "
+            "(authenticated approver)"
+        )
     if receipt.action_digest is None and contract.risk_tier in {
         MissionRiskTier.HIGH, MissionRiskTier.CRITICAL,
     }:

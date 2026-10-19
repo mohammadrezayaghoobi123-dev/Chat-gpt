@@ -6,6 +6,7 @@ from pathlib import Path
 
 from master_brain.audit_store import AuditStore, AuditStoreError
 from tests.approval_expiry_helper import soon
+from tests.approval_signing_helper import trusted_pair
 from master_brain.core import RiskTier, Task
 from master_brain.mission_approval import (
     MAX_APPROVAL_LIFETIME_SECONDS,
@@ -48,15 +49,18 @@ class MissionApprovalTests(unittest.TestCase):
         self.assertIn("required human approval receipt is missing", result.reasons)
 
     def approve_bound(self, contract, digest, event_id="approval-bound"):
+        # HIGH/CRITICAL approvals must be signed and verified (SAFE-002).
+        signer, self.verifier = trusted_pair("user:reviewer-7")
         return record_mission_approval(
             self.store, contract, event_id=event_id, recorded_at="2026-10-11T12:00:00Z",
             approver_subject="user:reviewer-7", authentication_method="upstream-session",
-            action_digest=digest, expires_at=soon())
+            action_digest=digest, expires_at=soon(), signer=signer)
 
     def test_valid_approval_is_bound_to_exact_contract(self):
         digest = action_digest("integ", {"x": 1})
         receipt = self.approve_bound(self.contract, digest)  # HIGH risk: binding is mandatory
-        result = evaluate_approved_execution_gate(self.contract, self.store, receipt, digest)
+        result = evaluate_approved_execution_gate(
+            self.contract, self.store, receipt, digest, verifier=self.verifier)
         self.assertTrue(result.allowed)
         self.assertEqual(result.reasons, ())
         self.assertEqual(receipt.contract_digest, mission_contract_digest(self.contract))
@@ -73,9 +77,34 @@ class MissionApprovalTests(unittest.TestCase):
                 self.assertIn(message, result.reasons)
                 digest = action_digest("integ", {"tier": tier.value})
                 bound = self.approve_bound(contract, digest, event_id=f"bound-{tier.value}")
-                ok = evaluate_approved_execution_gate(contract, self.store, bound, digest)
+                ok = evaluate_approved_execution_gate(
+                    contract, self.store, bound, digest, verifier=self.verifier)
                 self.assertTrue(ok.allowed, ok.reasons)
                 self.assertNotIn(message, ok.reasons)
+
+    def test_high_and_critical_risk_require_a_verifier_even_with_a_signed_bound_approval(self):
+        """SAFE-002: without a configured verifier the approver is unauthenticated => refuse."""
+        message = ("high/critical-risk missions require a configured approval verifier "
+                   "(authenticated approver)")
+        digest = action_digest("integ", {"x": 1})
+        for tier in (RiskTier.HIGH, RiskTier.CRITICAL):
+            with self.subTest(tier=tier):
+                contract = from_core_task(Task(objective=f"Ship {tier.value}", risk=tier))
+                receipt = self.approve_bound(contract, digest, event_id=f"nv-{tier.value}")
+                result = evaluate_approved_execution_gate(contract, self.store, receipt, digest)
+                self.assertFalse(result.allowed)
+                self.assertFalse(result.approver_authenticated)
+                self.assertIn(message, result.reasons)
+
+    def test_lower_tiers_do_not_require_a_verifier(self):
+        from master_brain.mission_contract import MissionContract
+        for tier in (MissionRiskTier.LOW, MissionRiskTier.MEDIUM):
+            with self.subTest(tier=tier):
+                contract = MissionContract(mission_id=f"m-{tier.value}", objective="o",
+                                           risk_tier=tier, requires_approval=True)
+                receipt = self.approve(contract, event_id=f"lt-{tier.value}")
+                result = evaluate_approved_execution_gate(contract, self.store, receipt)
+                self.assertTrue(result.allowed, result.reasons)
 
     def test_bound_approval_still_rejects_a_different_action_or_missing_digest(self):
         digest = action_digest("integ", {"x": 1})
@@ -277,6 +306,7 @@ class ApprovalExpiryTests(unittest.TestCase):
         )
         self.contract = from_core_task(Task(objective="Deploy production", risk=RiskTier.HIGH))
         self.digest = action_digest("integ", {"x": 1})
+        self.signer, self.verifier = trusted_pair("user:r")  # HIGH needs a signed approval
 
     def approve(self, expires_at, contract=None, event_id="ap-1", digest="default"):
         contract = contract or self.contract
@@ -285,12 +315,13 @@ class ApprovalExpiryTests(unittest.TestCase):
             recorded_at="2026-10-12T11:59:00Z", approver_subject="user:r",
             authentication_method="upstream-session",
             action_digest=self.digest if digest == "default" else digest,
-            expires_at=expires_at,
+            expires_at=expires_at, signer=self.signer,
         )
 
-    def gate(self, receipt, contract=None):
+    def gate(self, receipt, contract=None, verifier="configured"):
         return evaluate_approved_execution_gate(
             contract or self.contract, self.store, receipt, self.digest,
+            verifier=self.verifier if verifier == "configured" else verifier,
         )
 
     def test_maximum_lifetime_policy_is_pinned_to_seven_days(self):
@@ -345,7 +376,7 @@ class ApprovalExpiryTests(unittest.TestCase):
         )
         self.assertIsNone(receipt.expires_at)
         self.now = T0 + timedelta(days=3650)
-        self.assertTrue(self.gate(receipt, contract).allowed)
+        self.assertTrue(self.gate(receipt, contract, verifier=None).allowed)  # lower tier: no verifier needed
 
     def test_invalid_expiry_values_are_rejected_without_writing(self):
         bad_values = (

@@ -132,3 +132,131 @@ class RegistrationCreatedFlag(unittest.TestCase):
             again = register_mission_contract(store, contract, event_id="e2", **kw)
             self.assertEqual((first.created, again.created), (True, False))
             self.assertEqual(first.event_id, again.event_id)
+
+
+class ApprovalServiceEdgeTests(unittest.TestCase):
+    """Fail-closed edges of the approval service that HTTP tests cannot reach deterministically."""
+
+    def setUp(self):
+        from tests.approval_signing_helper import TEST_ALGORITHM, HmacSeamSigner, HmacSeamVerifier
+        from tests.test_http_approvals import FakeClock
+        self.alg = TEST_ALGORITHM
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = Path(tmp.name) / "a.jsonl"
+        self.clock = FakeClock()
+        self.store = AuditStore(self.path, clock=self.clock)
+        self.verifier = HmacSeamVerifier()
+        self.verifier.add("k1", b"secret-1", "user:alice")
+        self.signer = HmacSeamSigner("k1", b"secret-1")
+        self.service = MissionService(self.store, self.verifier)
+        self.view = self.service.create_mission(ALICE, dataclasses.replace(REQ, risk_tier="high")).view
+
+    def challenge(self, **kw):
+        from master_brain.api_contracts import ApprovalChallengeRequest
+        args = dict(contract_digest=self.view.contract_digest, signing_key_id="k1",
+                    signature_alg=self.alg, action_digest="a" * 64)
+        args.update(kw)
+        return self.service.request_approval_challenge(ALICE, self.view.mission_id, ApprovalChallengeRequest(**args))
+
+    def submit(self, ch, **kw):
+        from master_brain.api_contracts import SubmitApprovalRequest
+        sig = self.signer.sign(bytes.fromhex(ch.signing_message_hex)).hex()
+        args = dict(idempotency_key="idem-0001-abc", approval_event_id=ch.approval_event_id,
+                    signing_key_id="k1", signature_alg=self.alg, signature_hex=sig)
+        args.update(kw)
+        return self.service.submit_approval(ALICE, self.view.mission_id, SubmitApprovalRequest(**args))
+
+    def code(self, fn, *a, **k):
+        with self.assertRaises(ServiceError) as ctx:
+            fn(*a, **k)
+        return ctx.exception.code
+
+    def approvals(self):
+        return [e for e in self.store.read_all() if e.event_type == "mission.approval_granted"]
+
+    def test_the_right_challenge_is_selected_among_several(self):
+        first, second = self.challenge(), self.challenge()
+        self.assertNotEqual(first.approval_event_id, second.approval_event_id)
+        self.assertTrue(self.submit(second).created)
+        self.assertEqual([e.event_id for e in self.approvals()], [second.approval_event_id])
+        self.assertTrue(self.submit(first).created)  # still usable; selection by id, not by type
+        self.assertEqual({e.event_id for e in self.approvals()}, {first.approval_event_id, second.approval_event_id})
+        again = self.submit(second)  # replay picks ITS approval, not the first one
+        self.assertFalse(again.created)
+
+    def test_inconsistent_mission_cannot_be_challenged(self):
+        self.store.append(
+            event_id="bad-dispatch", event_type="mission.dispatch_started",
+            recorded_at=self.clock.now.isoformat().replace("+00:00", "Z"), actor="x",
+            subject_ref=f"mission:{self.view.mission_id}",
+            payload={"mission_id": self.view.mission_id, "contract_digest": "e" * 64,
+                     "integration_id": "i", "attempt_id": "a1"})
+        self.assertEqual(self.code(self.challenge), ErrorCode.CONFLICT)
+
+    def test_forged_challenge_for_another_contract_digest_is_stale(self):
+        ch = self.challenge()
+        forged_id = "approval-" + "f" * 32
+        self.store.append(
+            event_id=f"challenge:{forged_id}", event_type="mission.approval_challenged",
+            recorded_at=self.clock.now.isoformat().replace("+00:00", "Z"), actor="user:alice",
+            subject_ref=f"mission:{self.view.mission_id}",
+            payload={"mission_id": self.view.mission_id, "contract_digest": "0" * 64,
+                     "approval_event_id": forged_id, "signing_key_id": "k1", "signature_alg": self.alg,
+                     "expires_at": ch.expires_at})
+        sub = dict(approval_event_id=forged_id)
+        self.assertEqual(self.code(self.submit, ch, **sub), ErrorCode.STALE_CONTRACT)
+        self.assertEqual(self.approvals(), [])
+
+    def test_clock_passing_expiry_between_check_and_write_is_refused(self):
+        import master_brain.mission_service as ms
+        ch = self.challenge()
+        real = ms.record_mission_approval
+
+        def late(*a, **k):
+            self.clock.advance(hours=3)  # the approval window closes before the append
+            return real(*a, **k)
+        ms.record_mission_approval = late
+        self.addCleanup(setattr, ms, "record_mission_approval", real)
+        self.assertEqual(self.code(self.submit, ch), ErrorCode.APPROVAL_INVALID)
+        self.assertEqual(self.approvals(), [])
+
+    def test_lost_race_recovers_only_when_the_winner_signed_the_same_thing(self):
+        import master_brain.mission_service as ms
+        from master_brain.audit_store import AuditStoreError
+        real = ms.record_mission_approval
+        self.submit(self.challenge())  # an unrelated earlier approval must not be mistaken for the winner
+        ch = self.challenge()
+
+        def winner_then_error(*a, **k):
+            real(*a, **k)
+            raise AuditStoreError("duplicate event_id")
+        ms.record_mission_approval = winner_then_error
+        self.addCleanup(setattr, ms, "record_mission_approval", real)
+        result = self.submit(ch)
+        self.assertEqual((result.created, result.view.approval_status), (False, "granted"))
+
+        ch2 = self.challenge()
+
+        def error_without_winner(*a, **k):
+            raise AuditStoreError("disk full")
+        ms.record_mission_approval = error_without_winner
+        self.assertEqual(self.code(self.submit, ch2), ErrorCode.UNAVAILABLE)
+
+        ch3 = self.challenge()
+
+        def other_winner(*a, **k):
+            real(*a, **{**k, "signature": b"\x01" * 32})  # a different signature won
+            raise AuditStoreError("duplicate event_id")
+        ms.record_mission_approval = other_winner
+        self.assertEqual(self.code(self.submit, ch3), ErrorCode.UNAVAILABLE)
+
+    def test_unreadable_store_is_unavailable_for_approval_calls(self):
+        ch = self.challenge()
+        self.path.write_text("garbage\n", encoding="utf-8")
+        self.assertEqual(self.code(self.challenge), ErrorCode.UNAVAILABLE)
+        self.assertEqual(self.code(self.submit, ch), ErrorCode.UNAVAILABLE)
+
+    def test_secret_like_key_id_is_rejected_by_audit_policy_not_stored(self):
+        self.assertEqual(self.code(self.challenge, signing_key_id="sk-" + "a" * 40), ErrorCode.INVALID_REQUEST)
+        self.assertEqual([e for e in self.store.read_all() if e.event_type == "mission.approval_challenged"], [])

@@ -29,6 +29,10 @@ PAYLOAD_KEY_ALLOWLIST: dict[str, frozenset[str]] = {
         "identity_verified_by_this_module", "action_digest", "expires_at",
         "signature", "signing_key_id", "signature_alg",
     }),
+    "mission.approval_challenged": frozenset({
+        "mission_id", "contract_digest", "approval_event_id", "signing_key_id",
+        "signature_alg", "expires_at", "action_digest",
+    }),
     "mission.contract_registered": frozenset({
         "mission_id", "contract_schema_version", "contract_digest", "contract",
     }),

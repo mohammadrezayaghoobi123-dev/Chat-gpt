@@ -97,6 +97,9 @@ EXPECTED_ALLOW_LIST = {
         "contract_digest", "approver_subject", "authentication_method", "scope",
         "identity_verified_by_this_module", "action_digest", "expires_at",
         "signature", "signing_key_id", "signature_alg"},
+    "mission.approval_challenged": {
+        "mission_id", "contract_digest", "approval_event_id", "signing_key_id",
+        "signature_alg", "expires_at", "action_digest"},
     "mission.contract_registered": {
         "mission_id", "contract_schema_version", "contract_digest", "contract"},
     "mission.dispatch_reconciled": {

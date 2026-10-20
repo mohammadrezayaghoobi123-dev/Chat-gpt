@@ -22,7 +22,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from master_brain.api_contracts import (
-    API_VERSION, CreateMissionRequest, ContractError, ErrorCode, error_response,
+    API_VERSION, ApprovalChallengeRequest, CreateMissionRequest, ContractError, ErrorCode,
+    SubmitApprovalRequest, error_response,
 )
 from master_brain.identity import Authenticator
 from master_brain.mission_service import MISSION_ID_PATTERN, MissionService, ServiceError
@@ -32,6 +33,8 @@ SOCKET_TIMEOUT_SECONDS = 10.0
 _MISSIONS = re.compile(r"/v1/missions")
 _MISSION = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})")
 _AUDIT = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/audit")
+_CHALLENGES = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/approval-challenges")
+_APPROVALS = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/approvals")
 _LOOPBACK = {"127.0.0.1", "localhost"}  # IPv4 only: the server socket is AF_INET
 
 
@@ -127,6 +130,7 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
                 routes = (
                     ("POST", _MISSIONS, self._create), ("GET", _MISSION, self._get),
                     ("GET", _AUDIT, self._audit),
+                    ("POST", _CHALLENGES, self._challenge), ("POST", _APPROVALS, self._approve),
                 )
                 matched = [(m, rx.fullmatch(path), fn) for m, rx, fn in routes if rx.fullmatch(path)]
                 if not matched:
@@ -146,15 +150,34 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
 
         # ---------------------------------------------------------------- routes
         def _create(self, identity, _match, correlation_id: str) -> None:
+            request = self._json_request(CreateMissionRequest, correlation_id)
+            if request is not None:
+                result = service.create_mission(identity, request)
+                self._send(201 if result.created else 200, result.view.to_dict(), correlation_id)
+
+        def _json_request(self, cls, correlation_id: str):
+            """Parsed request object, or None after an invalid_request response was sent."""
             raw = self._read_body()
             if raw is None:
-                return self._error(ErrorCode.INVALID_REQUEST, correlation_id, close=True)
+                self._error(ErrorCode.INVALID_REQUEST, correlation_id, close=True)
+                return None
             try:
-                request = CreateMissionRequest.from_dict(parse_json_body(raw))
+                return cls.from_dict(parse_json_body(raw))
             except (_BadJson, ContractError):
-                return self._error(ErrorCode.INVALID_REQUEST, correlation_id)
-            result = service.create_mission(identity, request)
-            self._send(201 if result.created else 200, result.view.to_dict(), correlation_id)
+                self._error(ErrorCode.INVALID_REQUEST, correlation_id)
+                return None
+
+        def _challenge(self, identity, match, correlation_id: str) -> None:
+            request = self._json_request(ApprovalChallengeRequest, correlation_id)
+            if request is not None:
+                challenge = service.request_approval_challenge(identity, match.group(1), request)
+                self._send(201, challenge.to_dict(), correlation_id)
+
+        def _approve(self, identity, match, correlation_id: str) -> None:
+            request = self._json_request(SubmitApprovalRequest, correlation_id)
+            if request is not None:
+                result = service.submit_approval(identity, match.group(1), request)
+                self._send(201 if result.created else 200, result.view.to_dict(), correlation_id)
 
         def _get(self, identity, match, correlation_id: str) -> None:
             self._send(200, service.get_mission(identity, match.group(1)).to_dict(), correlation_id)

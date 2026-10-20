@@ -290,7 +290,9 @@ class ExecutionRegistryTests(unittest.TestCase):
                 self.reserve(key="blocked-key")
             elapsed = time.monotonic() - started
             self.assertGreaterEqual(elapsed, 0.15)
-            self.assertLess(elapsed, 1.5)
+            # Must stay well below the 5.0s default (proves the configured timeout is used);
+            # 1.5 was flaky under CI/load (observed 1.5086s), 3.0 keeps the 5.0s default detectable.
+            self.assertLess(elapsed, 3.0)
         finally:
             blocker.rollback()
 

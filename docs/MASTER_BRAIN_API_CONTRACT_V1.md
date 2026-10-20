@@ -15,16 +15,16 @@ Status: **TESTED (SCOPE-LIMITED)** schemas and validation only (`src/master_brai
 |---|---|---|
 | `CreateMissionRequest` | in | `idempotency_key`, `objective`; optional `constraints[]`, `success_criteria[]`, `risk_tier` (low/medium/high/critical, default medium), `requires_approval` (bool, default false) |
 | `MissionView` | out | `api_version, mission_id, objective, contract_schema_version, risk_tier, state, contract_digest, execution, approval_required, approval_status (not_required/required/granted), selected_islands[], clarification_questions[], anomalies[], result_verification` |
-| `ApprovalChallengeRequest` | in | `contract_digest`; optional `action_digest`, `expires_at` |
-| `ApprovalChallenge` | out | `mission_id, contract_digest, approval_event_id, recorded_at, expires_at, action_digest, signing_message_hex` |
+| `ApprovalChallengeRequest` | in | `contract_digest, signing_key_id, signature_alg`; optional `action_digest`, `expires_at` |
+| `ApprovalChallenge` | out | `mission_id, contract_digest, approval_event_id, expires_at, action_digest, signing_message_hex` |
 | `SubmitApprovalRequest` | in | `idempotency_key, approval_event_id, signing_key_id, signature_alg, signature_hex` |
 | `AuditEventView` | out | see principle 5 |
 | `ErrorResponse` | out | `{"api_version", "error": {code, message, retryable, correlation_id}}` |
 
 `state` values are exactly `MissionState` (`unregistered, planned, approved, dispatch_unresolved, response_received, effect_reconciled, dispatch_failed_no_effect, inconsistent`). There is deliberately no `completed`/`verified`.
 
-## Approval flow (two-phase, because the signature binds `event_id` and `recorded_at`)
-1. Client → `ApprovalChallengeRequest(contract_digest, …)`. The server compares `contract_digest` with the current contract (stale ⇒ `stale_contract`), takes the approver **from the authenticated session**, fixes `approval_event_id` and `recorded_at`, and returns the exact bytes to sign (`signing_message_hex`).
+## Approval flow (two-phase, because the signature binds `event_id` and the payload incl. key id/alg; `recorded_at` is NOT signed, signature v2)
+1. Client → `ApprovalChallengeRequest(contract_digest, …)`. The server compares `contract_digest` with the current contract (stale ⇒ `stale_contract`), takes the approver **from the authenticated session**, fixes `approval_event_id`, and returns the exact bytes to sign (`signing_message_hex`).
 2. Client signs those bytes with its key and sends `SubmitApprovalRequest`. The server records the approval through `record_mission_approval` and verifies it through the configured verifier; HIGH/CRITICAL missions are refused without one.
 3. Replay (same signed payload under another event id), wrong key/subject, revoked key, expired or already-consumed approval ⇒ `approval_invalid`; nothing executes.
 

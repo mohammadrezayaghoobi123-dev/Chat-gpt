@@ -13,7 +13,8 @@ from master_brain.approval_signing import (
 )
 from master_brain.integrations import IntegrationRequirement, IntegrationKind
 from master_brain.mission_approval import (
-    action_digest, evaluate_approved_execution_gate, record_mission_approval,
+    action_digest, approval_signing_message, evaluate_approved_execution_gate,
+    record_mission_approval,
 )
 from master_brain.mission_contract import MissionContract, MissionRiskTier
 from master_brain.mission_execution import execute_mission_idempotently, execute_mission_once
@@ -22,6 +23,8 @@ from tests.approval_expiry_helper import soon
 from tests.approval_signing_helper import TEST_ALGORITHM, HmacSeamSigner, HmacSeamVerifier
 from tests.mission_registration_helper import register_contract
 from tests.test_mission_execution import Adapter, descriptor
+
+DIGEST = "d" * 64  # filler digest for unrelated log events
 
 T = "2026-10-12T00:00:00Z"
 
@@ -139,19 +142,33 @@ class SignedApprovalGateTests(SigningBase):
                 self.assertFalse(result.allowed)
                 self.assertFalse(result.approver_authenticated)
 
-    def test_signing_message_binds_event_id_recorded_at_and_every_payload_field(self):
+    def test_signing_message_binds_event_id_and_every_payload_field(self):
         base = {"a": 1, "b": "x"}
-        ref = build_signing_message("e1", T, base)
+        ref = build_signing_message("e1", base)
         self.assertTrue(ref.startswith(SIGNATURE_DOMAIN))
+        self.assertEqual(SIGNATURE_DOMAIN, b"master-brain/approval-signature/v2\n")
         variants = (
-            build_signing_message("e2", T, base),
-            build_signing_message("e1", "2026-10-12T00:00:01Z", base),
-            build_signing_message("e1", T, {"a": 2, "b": "x"}),
-            build_signing_message("e1", T, {"a": 1, "b": "y"}),
-            build_signing_message("e1", T, {"a": 1, "b": "x", "c": 0}),
+            build_signing_message("e2", base),
+            build_signing_message("e1", {"a": 2, "b": "x"}),
+            build_signing_message("e1", {"a": 1, "b": "y"}),
+            build_signing_message("e1", {"a": 1, "b": "x", "c": 0}),
         )
-        self.assertEqual(len({ref, *variants}), 6)
-        self.assertEqual(ref, build_signing_message("e1", T, {"b": "x", "a": 1}))  # key order
+        self.assertEqual(len({ref, *variants}), 5)
+        self.assertEqual(ref, build_signing_message("e1", {"b": "x", "a": 1}))  # key order
+
+    def test_signature_does_not_depend_on_recorded_at(self):
+        """v2: recorded_at is not signed (a challenge/response flow cannot know it in advance)."""
+        r1 = self.approve(event_id="ap-t1")
+        self.store.append(event_id="other", event_type="mission.dispatch_started", recorded_at="2026-10-12T00:00:30Z",
+                          actor="x", subject_ref="mission:other",
+                          payload={"mission_id": "other", "contract_digest": DIGEST, "integration_id": "i",
+                                   "attempt_id": "a"})
+        r2 = record_mission_approval(
+            self.store, self.contract, event_id="ap-t2", recorded_at="2026-10-12T00:01:00Z",
+            approver_subject="user:alice", authentication_method="signed", expires_at=soon(), signer=self.signer)
+        self.assertNotEqual(r1.recorded_at, r2.recorded_at)
+        self.assertTrue(self.gate(r1).allowed)
+        self.assertTrue(self.gate(r2).allowed)
 
     def test_verify_approval_event_rejects_malformed_signature_fields(self):
         self.approve()
@@ -188,12 +205,97 @@ class SignedApprovalGateTests(SigningBase):
                 self.assertEqual(verify_approval_event(verifier_returning(value), event), expected)
 
     def test_signing_message_uses_raw_unicode_and_rejects_nan(self):
-        message = build_signing_message("e", T, {"n": "سلام"})
+        message = build_signing_message("e", {"n": "سلام"})
         self.assertEqual(
-            message,
-            SIGNATURE_DOMAIN + ('{"event_id":"e","payload":{"n":"سلام"},"recorded_at":"%s"}' % T).encode("utf-8"))
+            message, SIGNATURE_DOMAIN + '{"event_id":"e","payload":{"n":"سلام"}}'.encode("utf-8"))
         with self.assertRaises(ValueError):
-            build_signing_message("e", T, {"n": float("nan")})
+            build_signing_message("e", {"n": float("nan")})
+
+
+class TwoPhaseApprovalTests(SigningBase):
+    """Challenge/response: the message is fixed first, the event is appended later (SAFE-002)."""
+
+    def challenge(self, **kw):
+        args = dict(event_id="ap-2p", approver_subject="user:alice", authentication_method="signed",
+                    signing_key_id="k1", signature_alg=TEST_ALGORITHM, expires_at=soon())
+        args.update(kw)
+        return args, approval_signing_message(self.store, self.contract, **args)
+
+    def test_sign_first_append_later_after_other_events_authenticates(self):
+        args, message = self.challenge()
+        self.store.append(  # the log moves on between challenge and submit
+            event_id="other", event_type="mission.dispatch_started", recorded_at="2026-10-12T00:00:30Z",
+            actor="x", subject_ref="mission:other",
+            payload={"mission_id": "other", "contract_digest": DIGEST, "integration_id": "i", "attempt_id": "a"})
+        receipt = record_mission_approval(
+            self.store, self.contract, event_id=args["event_id"], recorded_at="2026-10-12T00:01:00Z",
+            approver_subject=args["approver_subject"], authentication_method=args["authentication_method"],
+            expires_at=args["expires_at"], signature=self.signer.sign(message),
+            signing_key_id="k1", signature_alg=TEST_ALGORITHM)
+        result = self.gate(receipt)
+        self.assertTrue(result.allowed, result.reasons)
+        self.assertTrue(result.approver_authenticated)
+
+    def test_externally_signed_equals_signer_signed(self):
+        args, message = self.challenge()
+        via_signer = record_mission_approval(
+            self.store, self.contract, event_id=args["event_id"], recorded_at=T,
+            approver_subject="user:alice", authentication_method="signed",
+            expires_at=args["expires_at"], signer=self.signer)
+        self.assertEqual(via_signer.signature, self.signer.sign(message).hex())
+
+    def test_any_difference_from_the_challenged_message_fails_verification(self):
+        args, message = self.challenge()
+        signature = self.signer.sign(message)
+        for field, value in (("event_id", "ap-other"), ("approver_subject", "user:alice2"),
+                             ("authentication_method", "other"), ("signing_key_id", "k2"),
+                             ("expires_at", soon(2.0))):
+            with self.subTest(field=field):
+                self.setUp()
+                recorded = {**args, **{field: value}}
+                receipt = record_mission_approval(
+                    self.store, self.contract, event_id=recorded["event_id"], recorded_at=T,
+                    approver_subject=recorded["approver_subject"],
+                    authentication_method=recorded["authentication_method"],
+                    expires_at=recorded["expires_at"], signature=signature,
+                    signing_key_id=recorded["signing_key_id"], signature_alg=TEST_ALGORITHM)
+                self.assertFalse(self.gate(receipt).allowed)
+
+    def test_challenge_message_applies_the_same_validation_as_recording(self):
+        for bad in ({"event_id": " "}, {"approver_subject": ""}, {"authentication_method": None},
+                    {"signing_key_id": ""}, {"signature_alg": " "}, {"expires_at": "2020-01-01T00:00:00Z"},
+                    {"expires_at": "soon"}, {"action_digest": " "}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                self.challenge(**bad)
+        high = MissionContract(mission_id="m-high-ch", objective="o", risk_tier=MissionRiskTier.HIGH,
+                               requires_approval=True)
+        with self.assertRaises(ValueError):  # HIGH needs an expiry
+            approval_signing_message(self.store, high, event_id="e", approver_subject="u",
+                                     authentication_method="m", signing_key_id="k", signature_alg="a")
+        low = MissionContract(mission_id="m-low-ch", objective="o")
+        with self.assertRaises(ValueError):  # nothing to approve
+            approval_signing_message(self.store, low, event_id="e", approver_subject="u",
+                                     authentication_method="m", signing_key_id="k", signature_alg="a")
+
+    def test_external_signature_arguments_are_validated_and_exclusive(self):
+        base = dict(event_id="ap-x", recorded_at=T, approver_subject="user:alice",
+                    authentication_method="signed", expires_at=soon())
+        before = len(self.store.read_all())
+        with self.assertRaises(ValueError):
+            record_mission_approval(self.store, self.contract, signer=self.signer, signature=b"s",
+                                    signing_key_id="k1", signature_alg="a", **base)
+        for sig, key, alg, exc in ((b"s", None, "a", ValueError), (b"s", "k1", " ", ValueError),
+                                   (b"", "k1", "a", ValueError), ("str", "k1", "a", TypeError),
+                                   (5, "k1", "a", TypeError)):
+            with self.subTest(sig=sig, key=key, alg=alg), self.assertRaises(exc):
+                record_mission_approval(self.store, self.contract, signature=sig, signing_key_id=key,
+                                        signature_alg=alg, **base)
+        with self.assertRaises(ValueError):
+            record_mission_approval(self.store, self.contract, **{**base, "recorded_at": " "})
+        self.assertEqual(len(self.store.read_all()), before)
+        receipt = record_mission_approval(self.store, self.contract, signature=bytearray(b"\x01\x02"),
+                                          signing_key_id="k1", signature_alg="a", **base)
+        self.assertEqual(receipt.signature, "0102")
 
 
 class SignerContractTests(SigningBase):
@@ -330,8 +432,7 @@ class Ed25519AdapterTests(SigningBase):
         event = self.event()
         key_id = event.payload["signing_key_id"]
         message = build_signing_message(
-            event.event_id, event.recorded_at,
-            {k: v for k, v in event.payload.items() if k != "signature"})
+            event.event_id, {k: v for k, v in event.payload.items() if k != "signature"})
         signature = bytes.fromhex(event.payload["signature"])
         kw = dict(key_id=key_id, algorithm="ed25519", subject="user:alice")
         self.assertIsNone(self.trust.verify(message=message, signature=signature, **kw))

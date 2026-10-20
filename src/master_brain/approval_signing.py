@@ -2,9 +2,15 @@
 
 A signature binds the approver's key to exactly what the audit log records: the
 approval payload (mission, contract digest, action digest, expiry, approver, scope,
-key id, algorithm) **and** the audit ``event_id`` and ``recorded_at``. Binding the
-event id means a signed payload cannot be copied into a new event by someone who can
-merely append to the log (that would otherwise mint a fresh single-use approval).
+key id, algorithm) **and** the audit ``event_id``. Binding the event id means a signed
+payload cannot be copied into a new event by someone who can merely append to the
+log (that would otherwise mint a fresh single-use approval).
+
+``recorded_at`` is deliberately NOT signed (v2): in a challenge/response flow the
+message is fixed before the event is appended, and the audit store forbids
+back-dated appends, so a signed timestamp makes the flow impossible. The replay
+window is bounded instead by the event id (unique, store-enforced) and the signed
+``expires_at`` (at most ``MAX_APPROVAL_LIFETIME_SECONDS``).
 
 Trust model, stated plainly: authentication is only as strong as the trust registry
 the verifier holds (which key belongs to which approver subject, and which are
@@ -17,7 +23,7 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping, Protocol, runtime_checkable
 
-SIGNATURE_DOMAIN = b"master-brain/approval-signature/v1\n"
+SIGNATURE_DOMAIN = b"master-brain/approval-signature/v2\n"
 SIGNATURE_FIELDS = ("signature", "signing_key_id", "signature_alg")
 
 
@@ -38,17 +44,17 @@ class ApprovalVerifier(Protocol):
         bound to ``subject``; otherwise a non-empty reason string."""
 
 
-def build_signing_message(event_id: str, recorded_at: str, unsigned_payload: Mapping[str, Any]) -> bytes:
-    """Canonical bytes that are signed: domain tag + event id + time + payload."""
+def build_signing_message(event_id: str, unsigned_payload: Mapping[str, Any]) -> bytes:
+    """Canonical bytes that are signed: domain tag + event id + payload."""
     body = json.dumps(
-        {"event_id": event_id, "recorded_at": recorded_at, "payload": dict(unsigned_payload)},
+        {"event_id": event_id, "payload": dict(unsigned_payload)},
         sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
     )
     return SIGNATURE_DOMAIN + body.encode("utf-8")
 
 
 def sign_approval_payload(
-    signer: ApprovalSigner, event_id: str, recorded_at: str, payload: dict[str, Any]
+    signer: ApprovalSigner, event_id: str, payload: dict[str, Any]
 ) -> dict[str, Any]:
     """Return ``payload`` plus signature fields. Raises (writing nothing) on a bad signer."""
     key_id = getattr(signer, "key_id", None)
@@ -57,12 +63,28 @@ def sign_approval_payload(
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"signer {name} must be a non-empty string")
     unsigned = {**payload, "signing_key_id": key_id, "signature_alg": algorithm}
-    signature = signer.sign(build_signing_message(event_id, recorded_at, unsigned))
+    signature = signer.sign(build_signing_message(event_id, unsigned))
     if not isinstance(signature, (bytes, bytearray)):
         raise TypeError("signer must return bytes")
     if not signature:
         raise ValueError("signer returned an empty signature")
     return {**unsigned, "signature": bytes(signature).hex()}
+
+
+def attach_external_signature(
+    payload: dict[str, Any], signing_key_id: str, signature_alg: str, signature: bytes
+) -> dict[str, Any]:
+    """Return ``payload`` plus signature fields for a signature produced elsewhere
+    (for example by an approver's device over ``build_signing_message`` output)."""
+    for name, value in (("signing_key_id", signing_key_id), ("signature_alg", signature_alg)):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+    if not isinstance(signature, (bytes, bytearray)):
+        raise TypeError("signature must be bytes")
+    if not signature:
+        raise ValueError("signature must not be empty")
+    return {**payload, "signing_key_id": signing_key_id, "signature_alg": signature_alg,
+            "signature": bytes(signature).hex()}
 
 
 def verify_approval_event(verifier: ApprovalVerifier, event: Any) -> str | None:
@@ -82,7 +104,7 @@ def verify_approval_event(verifier: ApprovalVerifier, event: Any) -> str | None:
     except ValueError:
         return "approval signature is not valid hex"
     unsigned = {k: v for k, v in payload.items() if k != "signature"}
-    message = build_signing_message(event.event_id, event.recorded_at, unsigned)
+    message = build_signing_message(event.event_id, unsigned)
     try:
         result = verifier.verify(
             key_id=key_id, algorithm=algorithm, subject=subject,
@@ -97,5 +119,6 @@ def verify_approval_event(verifier: ApprovalVerifier, event: Any) -> str | None:
 
 __all__ = [
     "ApprovalSigner", "ApprovalVerifier", "SIGNATURE_DOMAIN", "SIGNATURE_FIELDS",
-    "build_signing_message", "sign_approval_payload", "verify_approval_event",
+    "attach_external_signature", "build_signing_message", "sign_approval_payload",
+    "verify_approval_event",
 ]

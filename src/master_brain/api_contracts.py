@@ -141,15 +141,22 @@ class ApprovalChallengeRequest:
     """Ask the server for the exact bytes to sign; the approver is the session identity."""
 
     contract_digest: str
+    signing_key_id: str  # the signed message binds the key id and algorithm (SAFE-002)
+    signature_alg: str
     action_digest: str | None = None
     expires_at: str | None = None
 
     @classmethod
     def from_dict(cls, data: Any) -> "ApprovalChallengeRequest":
-        d = _object(data, "request", {"contract_digest"}, {"action_digest", "expires_at"})
+        d = _object(data, "request", {"contract_digest", "signing_key_id", "signature_alg"},
+                    {"action_digest", "expires_at"})
         return cls(
             contract_digest=_pattern(d["contract_digest"], "request.contract_digest",
                                      _DIGEST, "a 64-character lowercase hex SHA-256 digest"),
+            signing_key_id=_pattern(d["signing_key_id"], "request.signing_key_id",
+                                    _KEY_ID, "1-128 characters of [A-Za-z0-9._:-]"),
+            signature_alg=_pattern(d["signature_alg"], "request.signature_alg",
+                                   _KEY_ID, "1-128 characters of [A-Za-z0-9._:-]"),
             action_digest=(_pattern(d["action_digest"], "request.action_digest", _DIGEST,
                                     "a 64-character lowercase hex SHA-256 digest")
                            if d.get("action_digest") is not None else None),
@@ -269,7 +276,6 @@ class ApprovalChallenge:
     mission_id: str
     contract_digest: str
     approval_event_id: str
-    recorded_at: str
     expires_at: str
     action_digest: str | None
     signing_message_hex: str
@@ -278,7 +284,7 @@ class ApprovalChallenge:
         return {
             "api_version": API_VERSION, "mission_id": self.mission_id,
             "contract_digest": self.contract_digest, "approval_event_id": self.approval_event_id,
-            "recorded_at": self.recorded_at, "expires_at": self.expires_at,
+            "expires_at": self.expires_at,
             "action_digest": self.action_digest, "signing_message_hex": self.signing_message_hex,
         }
 

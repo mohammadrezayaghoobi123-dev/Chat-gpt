@@ -109,10 +109,10 @@ class DataclassContractTests(unittest.TestCase):
     def test_contract_objects_are_immutable(self):
         objects = [
             CreateMissionRequest(idempotency_key=KEY, objective="o"),
-            ApprovalChallengeRequest(contract_digest=DIGEST),
+            ApprovalChallengeRequest(contract_digest=DIGEST, signing_key_id="k1", signature_alg="alg"),
             SubmitApprovalRequest(KEY, "a1", "k1", "alg", "ab"),
             error_response(ErrorCode.CONFLICT, "c1"),
-            ApprovalChallenge("m", DIGEST, "a1", "t", "t", None, "6d"),
+            ApprovalChallenge("m", DIGEST, "a1", "t", None, "6d"),
             audit_event_view(type("E", (), dict(event_id="e", event_type="t", recorded_at="r",
                                                 actor="a", event_hash="h"))()),
         ]
@@ -124,13 +124,24 @@ class DataclassContractTests(unittest.TestCase):
     def test_timestamp_length_limit_is_exactly_64(self):
         for text, fragment in (("x" * 64, "ISO-8601"), ("x" * 65, "at most 64")):
             with self.subTest(length=len(text)), self.assertRaises(ContractError) as ctx:
-                ApprovalChallengeRequest.from_dict({"contract_digest": DIGEST, "expires_at": text})
+                ApprovalChallengeRequest.from_dict({"contract_digest": DIGEST, "signing_key_id": "k1", "signature_alg": "a", "expires_at": text})
             self.assertIn(fragment, str(ctx.exception))
 
 
 class ApprovalRequestTests(unittest.TestCase):
+    def test_challenge_request_requires_key_id_and_algorithm(self):
+        for missing in ("signing_key_id", "signature_alg"):
+            data = {"contract_digest": DIGEST, "signing_key_id": "k1", "signature_alg": "a"}
+            del data[missing]
+            with self.subTest(missing=missing), self.assertRaises(ContractError):
+                ApprovalChallengeRequest.from_dict(data)
+        for field in ("signing_key_id", "signature_alg"):
+            for bad in ("", "has space", "x" * 129, 5):
+                with self.subTest(field=field, bad=bad), self.assertRaises(ContractError):
+                    self.challenge(**{field: bad})
+
     def challenge(self, **kw):
-        return ApprovalChallengeRequest.from_dict({"contract_digest": DIGEST, **kw})
+        return ApprovalChallengeRequest.from_dict({"contract_digest": DIGEST, "signing_key_id": "k1", "signature_alg": "a", **kw})
 
     def test_challenge_request_defaults_and_optionals(self):
         req = self.challenge()
@@ -252,7 +263,7 @@ class ViewTests(unittest.TestCase):
                                 "event_hash": event.event_hash})
 
     def test_approval_challenge_matches_golden(self):
-        data = ApprovalChallenge("mission-api-1", DIGEST, "approval-1", "2026-10-19T00:00:00Z",
+        data = ApprovalChallenge("mission-api-1", DIGEST, "approval-1",
                                  "2026-10-19T01:00:00Z", None, "6d62").to_dict()
         self.assertEqual(data, golden("approval_challenge"))
 

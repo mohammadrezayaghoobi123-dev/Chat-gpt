@@ -15,7 +15,8 @@ import json
 from typing import Any
 
 from master_brain.approval_signing import (
-    ApprovalSigner, ApprovalVerifier, SIGNATURE_FIELDS, sign_approval_payload, verify_approval_event,
+    ApprovalSigner, ApprovalVerifier, SIGNATURE_FIELDS, attach_external_signature,
+    build_signing_message, sign_approval_payload, verify_approval_event,
 )
 from master_brain.audit_store import AuditStore, AuditStoreError
 from master_brain.mission_contract import (
@@ -145,31 +146,16 @@ class ApprovedExecutionGateResult:
     approver_authenticated: bool = False
 
 
-def record_mission_approval(
-    store: AuditStore,
-    contract: MissionContract,
-    *,
-    event_id: str,
-    recorded_at: str,
-    approver_subject: str,
-    authentication_method: str,
-    action_digest: str | None = None,
-    expires_at: str | None = None,
-    signer: ApprovalSigner | None = None,
-) -> MissionApprovalReceipt:
-    """Persist an approval assertion bound to the exact contract digest.
-
-    The caller MUST authenticate the approver before invoking this function.
-    The supplied subject/method are recorded assertions, not verified identity.
-    If audit persistence fails, no receipt is returned.
-    """
+def _prepare_approval(
+    store: AuditStore, contract: MissionContract, *, event_id: str, approver_subject: str,
+    authentication_method: str, action_digest: str | None, expires_at: str | None,
+) -> tuple[str, dict[str, Any]]:
+    """Validate approval inputs and build the (unsigned) audited payload."""
     integrity_error = _contract_integrity_error(contract)
     if integrity_error:
         raise ValueError(integrity_error)
-
     for name, value in (
         ("event_id", event_id),
-        ("recorded_at", recorded_at),
         ("approver_subject", approver_subject),
         ("authentication_method", authentication_method),
     ):
@@ -196,7 +182,7 @@ def record_mission_approval(
             raise ValueError("expires_at exceeds the maximum approval lifetime")
 
     digest = mission_contract_digest(contract)
-    payload = {
+    payload: dict[str, Any] = {
         "approval_schema_version": APPROVAL_SCHEMA_VERSION,
         "decision": "approved",
         "mission_id": contract.mission_id,
@@ -212,9 +198,69 @@ def record_mission_approval(
         payload["action_digest"] = action_digest
     if expires_at is not None:
         payload["expires_at"] = expires_at
+    return digest, payload
+
+
+def approval_signing_message(
+    store: AuditStore, contract: MissionContract, *, event_id: str, approver_subject: str,
+    authentication_method: str, signing_key_id: str, signature_alg: str,
+    action_digest: str | None = None, expires_at: str | None = None,
+) -> bytes:
+    """Exact bytes an approver must sign for ``record_mission_approval(signature=...)``.
+
+    Applies the same validation as recording, so an unsignable/invalid approval is
+    refused before the approver is asked to sign it."""
+    for name, value in (("signing_key_id", signing_key_id), ("signature_alg", signature_alg)):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+    _, payload = _prepare_approval(
+        store, contract, event_id=event_id, approver_subject=approver_subject,
+        authentication_method=authentication_method, action_digest=action_digest,
+        expires_at=expires_at,
+    )
+    payload = {**payload, "signing_key_id": signing_key_id, "signature_alg": signature_alg}
+    return build_signing_message(event_id, payload)
+
+
+def record_mission_approval(
+    store: AuditStore,
+    contract: MissionContract,
+    *,
+    event_id: str,
+    recorded_at: str,
+    approver_subject: str,
+    authentication_method: str,
+    action_digest: str | None = None,
+    expires_at: str | None = None,
+    signer: ApprovalSigner | None = None,
+    signature: bytes | None = None,
+    signing_key_id: str | None = None,
+    signature_alg: str | None = None,
+) -> MissionApprovalReceipt:
+    """Persist an approval assertion bound to the exact contract digest.
+
+    The caller MUST authenticate the approver before invoking this function.
+    The supplied subject/method are recorded assertions, not verified identity.
+    Signed approvals: pass ``signer`` (signed here) OR a ``signature`` produced
+    elsewhere over ``approval_signing_message`` with its ``signing_key_id`` and
+    ``signature_alg`` (never both). Recording does not verify the signature; the
+    execution gate does, using a configured verifier.
+    If audit persistence fails, no receipt is returned.
+    """
+    if not isinstance(recorded_at, str) or not recorded_at.strip():
+        raise ValueError("recorded_at must be a non-empty string")
+    if signer is not None and signature is not None:
+        raise ValueError("pass either signer or signature, not both")
+    digest, payload = _prepare_approval(
+        store, contract, event_id=event_id, approver_subject=approver_subject,
+        authentication_method=authentication_method, action_digest=action_digest,
+        expires_at=expires_at,
+    )
     if signer is not None:
         # Raises (before anything is written) if the signer is unusable.
-        payload = sign_approval_payload(signer, event_id, recorded_at, payload)
+        payload = sign_approval_payload(signer, event_id, payload)
+    elif signature is not None:
+        payload = attach_external_signature(payload, signing_key_id, signature_alg, signature)
     event = store.append(
         event_id=event_id,
         event_type=APPROVAL_EVENT_TYPE,
@@ -395,6 +441,7 @@ __all__ = [
     "APPROVAL_EVENT_TYPE",
     "action_digest",
     "approval_required",
+    "approval_signing_message",
     "ApprovedExecutionGateResult",
     "MissionApprovalReceipt",
     "evaluate_approved_execution_gate",

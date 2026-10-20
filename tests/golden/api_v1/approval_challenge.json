@@ -5,6 +5,5 @@
   "contract_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "expires_at": "2026-10-19T01:00:00Z",
   "mission_id": "mission-api-1",
-  "recorded_at": "2026-10-19T00:00:00Z",
   "signing_message_hex": "6d62"
 }

@@ -80,6 +80,7 @@ class RegisteredContract:
     contract_digest: str
     recorded_at: str
     event_hash: str
+    created: bool = True  # False when an identical registration already existed (idempotent replay)
 
 
 @dataclass(frozen=True)
@@ -151,11 +152,25 @@ def register_mission_contract(
         if existing.payload.get("contract_digest") == digest:
             return RegisteredContract(
                 existing.event_id, contract.mission_id, digest,
-                existing.recorded_at, existing.event_hash)
+                existing.recorded_at, existing.event_hash, created=False)
         raise MissionContractConflict(
             f"a different contract is already registered for {contract.mission_id}") from None
     return RegisteredContract(event.event_id, contract.mission_id, digest,
                               event.recorded_at, event.event_hash)
+
+
+def mission_registration(store: AuditStore, mission_id: str):
+    """The (single) registration event of a mission, or None. Duplicates fail closed
+    by raising MissionLifecycleError rather than guessing which one is authoritative."""
+    regs = _registrations(store.read_all(), mission_id)
+    if len(regs) > 1:
+        raise MissionLifecycleError(f"multiple contract registrations for mission {mission_id}")
+    return regs[0] if regs else None
+
+
+def mission_events(store: AuditStore, mission_id: str) -> tuple:
+    """All verified audit events of one mission, in log order."""
+    return tuple(e for e in store.read_all() if e.subject_ref == _subject(mission_id))
 
 
 def load_mission_contract(store: AuditStore, mission_id: str) -> MissionContract:
@@ -343,5 +358,6 @@ __all__ = [
     "MissionLifecycleView", "MissionState", "RECONCILED_EVENT_TYPE",
     "RECONCILIATION_RESOLUTIONS", "ReconciliationRejected", "RegisteredContract",
     "derive_mission_state", "load_mission_contract", "record_dispatch_reconciliation",
+    "mission_events", "mission_registration",
     "register_mission_contract", "unresolved_attempt_ids",
 ]

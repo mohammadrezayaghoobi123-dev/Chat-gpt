@@ -43,3 +43,18 @@ Domain → API mapping (`error_from_execution_result`): every status `MissionExe
 - `MissionView.approval_status` must be derived by the server from the verified audit gate; the builder only checks consistency with the contract.
 - Response parsing (`from_dict` for responses) is not provided; golden files pin the response shape instead.
 - HTTP status choices for `outcome_unknown` (500) and `dispatch_failed` (502) should be revisited before Gate 2 ships.
+
+## Gate 2a — local transport (implemented: `identity.py`, `mission_service.py`, `http_api.py`)
+Stdlib only (no new dependency). Start: `make_server(MissionService(AuditStore(path)), StaticTokenAuthenticator({token: subject}))`; loopback by default (`allow_non_loopback=True` is explicit; there is no TLS here).
+
+| Method + path | Success | Notes |
+|---|---|---|
+| `POST /v1/missions` | 201 created / 200 idempotent replay | same owner+`idempotency_key`+body ⇒ same mission; same key, different body ⇒ 409 `conflict` |
+| `GET /v1/missions/{id}` | 200 `MissionView` | owner only; foreign and unknown ids are both 404 (no existence oracle) |
+| `GET /v1/missions/{id}/audit` | 200 `{api_version, mission_id, events[]}` | payload-free events, owner only |
+
+- Identity: `Authorization: Bearer <token>` only; checked **before** the body is read; never from body/headers. `mission_id = "mission-" + sha256(subject NUL key)[:16]`, so two users cannot collide.
+- Intake: a mission without `success_criteria` is planned with a `clarification_questions` entry; creating a mission never executes anything (`state=planned`, `execution=not_started`). `approval_status` is `required` for approval-requiring missions and is never reported `granted` until Gate 2b derives it from the verified gate.
+- The closed error set has no 405/411/413: wrong method or query string ⇒ 400 `invalid_request`; unknown route ⇒ 404; oversize (>64 KiB), chunked/missing/odd `Content-Length`, wrong `Content-Type`, invalid UTF-8/JSON, duplicate keys, NaN/Infinity ⇒ 400 `invalid_request`. Any audit/IO failure or unexpected exception ⇒ 503 `unavailable` with a fixed message (no internals).
+- Every response: `X-Correlation-Id` (server generated), `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`; errors that leave an unread body (and 503) close the connection.
+- **Not in 2a:** approval/execute endpoints (Gate 2b), TLS, rate limiting, a real auth provider/session store (Gate 2c; open decisions §9).

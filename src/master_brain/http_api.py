@@ -10,7 +10,8 @@ Security posture (each item has a test):
 - unexpected failures become ``unavailable`` (503) without leaking internals.
 
 The closed error set has no 405/413/411: wrong method/route => ``not_found``/``invalid_request``.
-TLS, rate limiting and a real auth provider are NOT here (open decisions, Gate 2c).
+The web client is served read-only from ``/app/`` (strict CSP). TLS, rate limiting and a real
+auth provider are NOT here (open decisions, Gate 2c).
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ import re
 import sys
 import threading
 import uuid
+from importlib import resources
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -41,6 +43,21 @@ _RECONCILIATIONS = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/reconciliat
 _RESULT = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/result")
 _TASKS = re.compile(r"/v1/tasks")
 _LOOPBACK = {"127.0.0.1", "localhost"}  # IPv4 only: the server socket is AF_INET
+
+# Web client (Gate 3): static, public, no mission data; only GET. The page can only talk to this origin.
+_STATIC_FILES = {
+    "/app/": ("index.html", "text/html; charset=utf-8"),
+    "/app/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/app/app.css": ("app.css", "text/css; charset=utf-8"),
+    "/app/strings.json": ("strings.json", "application/json; charset=utf-8"),
+}
+WEB_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+           "img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+
+
+def _load_static() -> dict[str, tuple[bytes, str]]:
+    web = resources.files("master_brain").joinpath("web")
+    return {path: (web.joinpath(name).read_bytes(), ctype) for path, (name, ctype) in _STATIC_FILES.items()}
 
 
 class _BadJson(ValueError):
@@ -74,6 +91,8 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
         raise ValueError("refusing to bind a non-loopback address without allow_non_loopback=True "
                          "(no TLS/rate-limit in this transport)")
 
+    static = _load_static()  # fail fast at start-up if the client files are missing
+
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         timeout = SOCKET_TIMEOUT_SECONDS
@@ -106,6 +125,20 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
                 self.close_connection = True
             self._send(resp.http_status, resp.to_dict(), correlation_id, extra)
 
+        def _send_static(self, path: str, correlation_id: str) -> None:
+            data, ctype = static[path]
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Correlation-Id", correlation_id)
+            self.send_header("Content-Security-Policy", WEB_CSP)
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            self.wfile.write(data)
+
         def _identity(self):
             header = self.headers.get("Authorization")
             if not header or not header.startswith("Bearer "):
@@ -132,6 +165,10 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
                 path = self.path
                 if "?" in path:  # no query parameters in API v1
                     return self._error(ErrorCode.INVALID_REQUEST, correlation_id, close=True)
+                if path in static:
+                    if method != "GET":
+                        return self._error(ErrorCode.INVALID_REQUEST, correlation_id, close=True)
+                    return self._send_static(path, correlation_id)
                 routes = (
                     ("POST", _MISSIONS, self._create), ("GET", _MISSION, self._get),
                     ("GET", _AUDIT, self._audit),
@@ -249,4 +286,4 @@ def serve_in_thread(server: ThreadingHTTPServer) -> threading.Thread:
     return thread
 
 
-__all__ = ["MAX_BODY_BYTES", "make_server", "parse_json_body", "serve_in_thread"]
+__all__ = ["MAX_BODY_BYTES", "WEB_CSP", "make_server", "parse_json_body", "serve_in_thread"]

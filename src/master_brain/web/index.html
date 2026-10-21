@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Master Brain</title>
+<link rel="stylesheet" href="/app/app.css">
+<script src="/app/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main" data-i18n="skip_to_content"></a>
+<header class="bar">
+  <div>
+    <h1 data-i18n="app_title"></h1>
+    <p class="sub" data-i18n="app_subtitle"></p>
+  </div>
+  <div class="bar-actions">
+    <span id="conn" class="pill" role="status"></span>
+    <button type="button" id="lang" class="ghost"></button>
+  </div>
+</header>
+
+<div id="notice" class="notice" role="status" aria-live="polite" tabindex="-1" hidden></div>
+
+<main id="main">
+  <section id="signin" aria-labelledby="signin-h">
+    <h2 id="signin-h" data-i18n="signin_title"></h2>
+    <p class="help" data-i18n="signin_help"></p>
+    <form id="signin-form" autocomplete="off">
+      <label for="token" data-i18n="token_label"></label>
+      <input id="token" name="token" type="password" dir="ltr" autocomplete="off" spellcheck="false" required>
+      <div class="row">
+        <button type="submit" data-i18n="signin_button"></button>
+        <button type="button" id="signout" class="ghost" data-i18n="signout_button" hidden></button>
+      </div>
+    </form>
+  </section>
+
+  <div id="workspace" hidden>
+    <section aria-labelledby="create-h">
+      <h2 id="create-h" data-i18n="create_title"></h2>
+      <form id="create-form">
+        <label for="objective" data-i18n="objective_label"></label>
+        <textarea id="objective" rows="3" maxlength="2000" required></textarea>
+        <label for="constraints" data-i18n="constraints_label"></label>
+        <textarea id="constraints" rows="3"></textarea>
+        <label for="criteria" data-i18n="criteria_label"></label>
+        <textarea id="criteria" rows="3"></textarea>
+        <label for="risk" data-i18n="risk_label"></label>
+        <select id="risk"></select>
+        <label class="check" for="req-approval"><input type="checkbox" id="req-approval"> <span data-i18n="requires_approval_label"></span></label>
+        <button type="submit" data-i18n="create_button"></button>
+      </form>
+    </section>
+
+    <section aria-labelledby="open-h">
+      <h2 id="open-h" data-i18n="open_title"></h2>
+      <form id="open-form" class="inline">
+        <label for="mid" data-i18n="mission_id_label"></label>
+        <input id="mid" dir="ltr" spellcheck="false" autocomplete="off" required>
+        <button type="submit" data-i18n="open_button"></button>
+      </form>
+      <h3 data-i18n="recent_title"></h3>
+      <ul id="recent" class="plain"></ul>
+    </section>
+
+    <section id="mission" aria-labelledby="mission-h" hidden>
+      <div class="head">
+        <h2 id="mission-h" data-i18n="mission_title"></h2>
+        <button type="button" id="refresh" class="ghost" data-i18n="refresh_button"></button>
+      </div>
+      <p id="m-objective" class="objective"></p>
+      <dl id="m-fields" class="fields"></dl>
+      <div id="m-clar"></div>
+      <div id="m-anom"></div>
+
+      <section aria-labelledby="appr-h" class="sub-section">
+        <h3 id="appr-h" data-i18n="approval_title"></h3>
+        <p class="help" data-i18n="approval_help"></p>
+        <form id="challenge-form">
+          <label for="key-id" data-i18n="key_id_label"></label>
+          <input id="key-id" dir="ltr" spellcheck="false" required>
+          <label for="alg" data-i18n="alg_label"></label>
+          <input id="alg" dir="ltr" spellcheck="false" required>
+          <button type="submit" data-i18n="challenge_button"></button>
+        </form>
+        <div id="challenge-out" hidden>
+          <p><strong data-i18n="challenge_message"></strong></p>
+          <pre id="challenge-msg" dir="ltr" tabindex="0"></pre>
+          <p><strong data-i18n="challenge_expires"></strong>: <span id="challenge-exp" dir="ltr"></span></p>
+          <form id="approve-form">
+            <label for="sig" data-i18n="signature_label"></label>
+            <textarea id="sig" dir="ltr" rows="3" spellcheck="false" required></textarea>
+            <button type="submit" data-i18n="approve_button"></button>
+          </form>
+        </div>
+      </section>
+
+      <section aria-labelledby="exec-h" class="sub-section">
+        <h3 id="exec-h" data-i18n="execute_title"></h3>
+        <p class="help" data-i18n="execute_help"></p>
+        <form id="exec-form">
+          <label for="task" data-i18n="task_label"></label>
+          <select id="task"></select>
+          <p id="task-info" class="help"></p>
+          <button type="submit" id="exec-btn" data-i18n="execute_button"></button>
+        </form>
+      </section>
+
+      <section aria-labelledby="res-h" class="sub-section">
+        <h3 id="res-h" data-i18n="result_title"></h3>
+        <div id="result"></div>
+        <details>
+          <summary data-i18n="reconcile_title"></summary>
+          <form id="recon-form">
+            <label for="r-attempt" data-i18n="reconcile_attempt_label"></label>
+            <select id="r-attempt"></select>
+            <label for="r-res" data-i18n="reconcile_resolution_label"></label>
+            <select id="r-res"></select>
+            <label for="r-ev" data-i18n="reconcile_evidence_label"></label>
+            <input id="r-ev" dir="ltr" maxlength="500" required>
+            <button type="submit" data-i18n="reconcile_button"></button>
+          </form>
+        </details>
+      </section>
+
+      <section aria-labelledby="aud-h" class="sub-section">
+        <h3 id="aud-h" data-i18n="audit_title"></h3>
+        <div id="audit"></div>
+      </section>
+    </section>
+  </div>
+</main>
+</body>
+</html>

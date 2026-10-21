@@ -436,6 +436,7 @@ class ErrorCode(str, Enum):
     DISPATCH_FAILED = "dispatch_failed"
     UNAVAILABLE = "unavailable"
     OUTCOME_UNKNOWN = "outcome_unknown"
+    RATE_LIMITED = "rate_limited"
 
 
 # code -> (HTTP status for a future transport, fixed client-safe message)
@@ -454,8 +455,9 @@ ERROR_TABLE: dict[ErrorCode, tuple[int, str]] = {
     ErrorCode.DISPATCH_FAILED: (502, "The action could not be dispatched."),
     ErrorCode.UNAVAILABLE: (503, "The service is temporarily unavailable; nothing was executed."),
     ErrorCode.OUTCOME_UNKNOWN: (500, "The outcome is unknown; do not retry blindly."),
+    ErrorCode.RATE_LIMITED: (429, "Too many requests; nothing was executed. Wait and try again."),
 }
-_RETRYABLE = {ErrorCode.UNAVAILABLE}
+_RETRYABLE = {ErrorCode.UNAVAILABLE, ErrorCode.RATE_LIMITED}
 
 
 @dataclass(frozen=True)

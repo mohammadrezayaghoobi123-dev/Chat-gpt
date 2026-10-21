@@ -332,7 +332,8 @@ class ErrorModelTests(unittest.TestCase):
             "invalid_request": 400, "unauthenticated": 401, "forbidden": 403, "not_found": 404,
             "conflict": 409, "stale_contract": 409, "approval_required": 403, "approval_invalid": 403,
             "clarification_required": 422, "reconciliation_required": 409, "duplicate_request": 409,
-            "dispatch_failed": 502, "unavailable": 503, "outcome_unknown": 500})
+            "dispatch_failed": 502, "unavailable": 503, "outcome_unknown": 500,
+            "rate_limited": 429})
         for code in ErrorCode:
             message = ERROR_TABLE[code][1]
             self.assertTrue(message.endswith("."), message)
@@ -345,9 +346,11 @@ class ErrorModelTests(unittest.TestCase):
         self.assertEqual(error_response(ErrorCode.NOT_FOUND, "c").http_status, 404)
         self.assertEqual(error_response(ErrorCode.UNAVAILABLE, "c").http_status, 503)
 
-    def test_only_unavailable_is_retryable(self):
+    def test_only_unavailable_and_rate_limited_are_retryable(self):
+        # both are refusals made BEFORE anything was executed, so a retry cannot duplicate an effect
         for code in ErrorCode:
-            self.assertEqual(error_response(code, "c1").retryable, code is ErrorCode.UNAVAILABLE)
+            self.assertEqual(error_response(code, "c1").retryable,
+                             code in (ErrorCode.UNAVAILABLE, ErrorCode.RATE_LIMITED))
 
     def test_error_body_matches_golden_and_requires_a_correlation_id(self):
         self.assertEqual(error_response(ErrorCode.APPROVAL_INVALID, "corr-123").to_dict(), golden("error_response"))

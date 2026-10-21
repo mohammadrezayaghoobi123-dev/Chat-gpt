@@ -29,7 +29,7 @@ Status: **TESTED (SCOPE-LIMITED)** schemas and validation only (`src/master_brai
 3. Replay (same signed payload under another event id), wrong key/subject, revoked key, expired or already-consumed approval ⇒ `approval_invalid`; nothing executes.
 
 ## Error table (HTTP status is for a future transport; frozen now so clients can rely on it)
-`invalid_request 400 · unauthenticated 401 · forbidden 403 · not_found 404 · conflict 409 · stale_contract 409 · approval_required 403 · approval_invalid 403 · clarification_required 422 · reconciliation_required 409 · duplicate_request 409 · dispatch_failed 502 · unavailable 503 (only retryable code) · outcome_unknown 500`.
+`invalid_request 400 · unauthenticated 401 · forbidden 403 · not_found 404 · conflict 409 · stale_contract 409 · approval_required 403 · approval_invalid 403 · clarification_required 422 · reconciliation_required 409 · duplicate_request 409 · dispatch_failed 502 · unavailable 503 (retryable) · outcome_unknown 500 · rate_limited 429 (retryable)`.
 
 Domain → API mapping (`error_from_execution_result`): every status `MissionExecutionResult` can return is mapped, and a test parses `mission_execution.py` so a new status cannot be added without a mapping. `rejected` is refined by reason text (first matching rule wins; unmatched ⇒ `forbidden`).
 
@@ -97,3 +97,9 @@ Stdlib only (no new dependency). Start: `make_server(MissionService(AuditStore(p
 - سرو فقط‌خواندنی و بدون احراز: `GET /app/`, `/app/app.js`, `/app/app.css`, `/app/strings.json` (فایل‌های ثابت بدون هیچ دادهٔ ماموریت). روش‌های دیگر ⇒ `invalid_request`، مسیرهای دیگر ⇒ `not_found`، query ⇒ `invalid_request`. `GET /` همچنان `not_found` است.
 - سرصدها: CSP سخت (`default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`)، `X-Frame-Options: DENY`، `Referrer-Policy: no-referrer`، `nosniff`، `no-store`.
 - کلاینت هیچ حقیقتی نمی‌سازد: همهٔ مقادیر از API می‌آیند؛ مقدار ناشناخته به‌صورت «مقدار ناشناخته (خام)» نشان داده می‌شود؛ برچسب راستی‌آزمایی فقط از فیلد سرور.
+
+## Gate 2c-1 — محدودیت نرخ (`rate_limited`، 429)
+- کد جدید و بستهٔ خطا: `rate_limited` ⇒ HTTP 429 با هدر `Retry-After` (ثانیهٔ صحیح، رو به بالا، حداقل ۱). مثل `unavailable` قابل‌تکرار است، چون رد پیش از هر کاری رخ می‌دهد (بدنه خوانده نمی‌شود، چیزی ثبت یا اجرا نمی‌شود). تلاش دوباره با همان `idempotency_key` بی‌خطر است.
+- دو سد مستقل (ماژول `rate_limit.py`، ساعت تزریقی، حافظهٔ کران‌دار با حذف کم‌استفاده‌ترین): ۱) **ضدِ حدس‌زدن نشانه**: ورود ناموفق به‌ازای نشانی کلاینت در پنجرهٔ لغزان (پیش‌فرض ۲۰ در ۶۰ ثانیه)؛ پس از رسیدن به حد، همهٔ تلاش‌ها از آن نشانی، **حتی با نشانهٔ درست**، تا لغزیدن پنجره رد می‌شود (بدون oracle). ۲) **سطل توکن به‌ازای هویت**: پیش‌فرض ۲۰ درخواست در ثانیه، انفجار ۱۲۰.
+- فایل‌های ثابت `/app/` از سطل هویت کم نمی‌کنند (عمومی و بدون داده).
+- حدود شناخته‌شده: حافظهٔ فرایند (با راه‌اندازی دوباره صفر می‌شود)؛ نشانی کلاینت همان همتای TCP است (`X-Forwarded-For` عمداً قابل‌اعتماد نیست؛ پشت پراکسی همه یک نشانی‌اند)؛ مهاجم با نشانی‌های بسیار زیاد به‌ازای نشانی کند نمی‌شود؛ قفل‌شدنِ کاربر مشروع پشت NAT مشترک با مهاجم، بده‌بستان آگاهانه است.

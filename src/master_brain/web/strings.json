@@ -129,7 +129,8 @@
     "risk.high": "زیاد",
     "risk.critical": "بحرانی",
     "verification.not_independently_verified": "به‌طور مستقل راستی‌آزمایی نشده",
-    "unknown_value": "مقدار ناشناخته"
+    "unknown_value": "مقدار ناشناخته",
+    "error.rate_limited": "تعداد درخواست‌ها زیاد است؛ چیزی اجرا نشد. کمی صبر کنید و دوباره تلاش کنید."
   },
   "en": {
     "app_title": "Master Brain",
@@ -261,6 +262,7 @@
     "risk.high": "High",
     "risk.critical": "Critical",
     "verification.not_independently_verified": "Not independently verified",
-    "unknown_value": "Unknown value"
+    "unknown_value": "Unknown value",
+    "error.rate_limited": "Too many requests; nothing was executed. Wait a moment and try again."
   }
 }

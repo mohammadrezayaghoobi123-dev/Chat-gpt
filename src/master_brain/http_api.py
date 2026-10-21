@@ -10,8 +10,10 @@ Security posture (each item has a test):
 - unexpected failures become ``unavailable`` (503) without leaking internals.
 
 The closed error set has no 405/413/411: wrong method/route => ``not_found``/``invalid_request``.
-The web client is served read-only from ``/app/`` (strict CSP). TLS, rate limiting and a real
-auth provider are NOT here (open decisions, Gate 2c).
+Rate limiting (``rate_limit.py``): failed authentications are throttled per client address and
+authenticated requests per subject; refusals are ``rate_limited`` (429 + ``Retry-After``) and happen BEFORE the
+request body is read or any work is done. The web client is served read-only from ``/app/`` (strict CSP). TLS and a real auth provider are
+NOT here (open decisions, Gate 2c).
 """
 from __future__ import annotations
 
@@ -30,6 +32,7 @@ from master_brain.api_contracts import (
 )
 from master_brain.identity import Authenticator
 from master_brain.mission_service import MISSION_ID_PATTERN, MissionService, ServiceError
+from master_brain.rate_limit import RateGate, retry_after_header
 
 MAX_BODY_BYTES = 64 * 1024
 SOCKET_TIMEOUT_SECONDS = 10.0
@@ -86,7 +89,10 @@ def parse_json_body(raw: bytes) -> Any:
 
 
 def make_server(service: MissionService, authenticator: Authenticator, host: str = "127.0.0.1",
-                port: int = 0, *, allow_non_loopback: bool = False) -> ThreadingHTTPServer:
+                port: int = 0, *, allow_non_loopback: bool = False,
+                rate_gate: RateGate | None = None) -> ThreadingHTTPServer:
+    """``rate_gate`` defaults to ``RateGate()`` (limits ON); pass your own to tune or to inject a clock."""
+    gate = rate_gate if rate_gate is not None else RateGate()
     if host not in _LOOPBACK and not allow_non_loopback:
         raise ValueError("refusing to bind a non-loopback address without allow_non_loopback=True "
                          "(no TLS/rate-limit in this transport)")
@@ -117,9 +123,12 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
             self.end_headers()
             self.wfile.write(data)
 
-        def _error(self, code: ErrorCode, correlation_id: str, *, close: bool = False) -> None:
+        def _error(self, code: ErrorCode, correlation_id: str, *, close: bool = False,
+                   retry_after: float | None = None) -> None:
             resp = error_response(code, correlation_id)
             extra = {"WWW-Authenticate": "Bearer"} if code is ErrorCode.UNAUTHENTICATED else {}
+            if retry_after is not None:
+                extra["Retry-After"] = retry_after_header(retry_after)
             if close:
                 extra["Connection"] = "close"
                 self.close_connection = True
@@ -182,9 +191,17 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
                 allowed = [x for x in matched if x[0] == method]
                 if not allowed:
                     return self._error(ErrorCode.INVALID_REQUEST, correlation_id, close=True)
+                address = self.client_address[0]
+                blocked = gate.address_blocked_for(address)  # before authenticating: no oracle while blocked
+                if blocked > 0:
+                    return self._error(ErrorCode.RATE_LIMITED, correlation_id, close=True, retry_after=blocked)
                 identity = self._identity()
                 if identity is None:
+                    gate.record_auth_failure(address)
                     return self._error(ErrorCode.UNAUTHENTICATED, correlation_id, close=True)
+                wait = gate.identity_wait(identity.subject)
+                if wait > 0:
+                    return self._error(ErrorCode.RATE_LIMITED, correlation_id, close=True, retry_after=wait)
                 _, match, handler = allowed[0]
                 handler(identity, match, correlation_id)
             except ServiceError as exc:

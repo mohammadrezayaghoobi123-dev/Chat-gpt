@@ -36,6 +36,9 @@ PAYLOAD_KEY_ALLOWLIST: dict[str, frozenset[str]] = {
     "mission.contract_registered": frozenset({
         "mission_id", "contract_schema_version", "contract_digest", "contract",
     }),
+    "mission.result_recorded": frozenset({
+        "mission_id", "attempt_id", "integration_id", "output_digest", "output",
+    }),
     "mission.dispatch_reconciled": frozenset({
         "mission_id", "attempt_id", "resolution", "evidence_ref",
     }),

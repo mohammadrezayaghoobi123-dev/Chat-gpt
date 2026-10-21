@@ -23,7 +23,7 @@ from typing import Any
 
 from master_brain.api_contracts import (
     API_VERSION, ApprovalChallengeRequest, CreateMissionRequest, ContractError, ErrorCode,
-    SubmitApprovalRequest, error_response,
+    ExecuteMissionRequest, SubmitApprovalRequest, error_response,
 )
 from master_brain.identity import Authenticator
 from master_brain.mission_service import MISSION_ID_PATTERN, MissionService, ServiceError
@@ -35,6 +35,9 @@ _MISSION = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})")
 _AUDIT = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/audit")
 _CHALLENGES = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/approval-challenges")
 _APPROVALS = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/approvals")
+_EXECUTIONS = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/executions")
+_RESULT = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/result")
+_TASKS = re.compile(r"/v1/tasks")
 _LOOPBACK = {"127.0.0.1", "localhost"}  # IPv4 only: the server socket is AF_INET
 
 
@@ -131,6 +134,8 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
                     ("POST", _MISSIONS, self._create), ("GET", _MISSION, self._get),
                     ("GET", _AUDIT, self._audit),
                     ("POST", _CHALLENGES, self._challenge), ("POST", _APPROVALS, self._approve),
+                    ("POST", _EXECUTIONS, self._execute), ("GET", _RESULT, self._result),
+                    ("GET", _TASKS, self._tasks),
                 )
                 matched = [(m, rx.fullmatch(path), fn) for m, rx, fn in routes if rx.fullmatch(path)]
                 if not matched:
@@ -178,6 +183,19 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
             if request is not None:
                 result = service.submit_approval(identity, match.group(1), request)
                 self._send(201 if result.created else 200, result.view.to_dict(), correlation_id)
+
+        def _execute(self, identity, match, correlation_id: str) -> None:
+            request = self._json_request(ExecuteMissionRequest, correlation_id)
+            if request is not None:
+                result = service.execute_mission(identity, match.group(1), request)
+                self._send(201, result.to_dict(), correlation_id)
+
+        def _result(self, identity, match, correlation_id: str) -> None:
+            self._send(200, service.get_result(identity, match.group(1)).to_dict(), correlation_id)
+
+        def _tasks(self, identity, _match, correlation_id: str) -> None:
+            self._send(200, {"api_version": API_VERSION,
+                             "tasks": [t.to_dict() for t in service.list_tasks(identity)]}, correlation_id)
 
         def _get(self, identity, match, correlation_id: str) -> None:
             self._send(200, service.get_mission(identity, match.group(1)).to_dict(), correlation_id)

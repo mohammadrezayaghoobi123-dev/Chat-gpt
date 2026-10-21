@@ -195,6 +195,27 @@ class SubmitApprovalRequest:
         )
 
 
+_TASK_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+@dataclass(frozen=True)
+class ExecuteMissionRequest:
+    """Run one operator-defined task for a mission. No adapter/payload/identity in the body."""
+
+    idempotency_key: str
+    task_id: str
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "ExecuteMissionRequest":
+        d = _object(data, "request", {"idempotency_key", "task_id"}, set())
+        return cls(
+            idempotency_key=_pattern(d["idempotency_key"], "request.idempotency_key",
+                                     _IDEMPOTENCY_KEY, "8-128 characters of [A-Za-z0-9._:-]"),
+            task_id=_pattern(d["task_id"], "request.task_id", _TASK_ID,
+                             "1-64 characters of [a-z0-9._-] starting with a letter or digit"),
+        )
+
+
 # --------------------------------------------------------------------------- responses
 class ApprovalStatus(str, Enum):
     NOT_REQUIRED = "not_required"
@@ -269,6 +290,68 @@ def mission_view_from_domain(
         clarification_questions=contract.clarification_questions,
         anomalies=tuple(lifecycle.anomalies),
     )
+
+
+@dataclass(frozen=True)
+class TaskView:
+    task_id: str
+    description: str
+    action_digest: str
+    risk_level: int
+    limitations: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"task_id": self.task_id, "description": self.description,
+                "action_digest": self.action_digest, "risk_level": self.risk_level,
+                "limitations": list(self.limitations)}
+
+
+@dataclass(frozen=True)
+class AttemptView:
+    """One dispatch attempt. Free-text reasons are deliberately not exposed (they may carry
+    adapter-internal detail); ``dispatch_status`` is a closed set."""
+
+    attempt_id: str
+    integration_id: str
+    dispatch_status: str  # unresolved | one of DispatchStatus values
+    external_effect_confirmed: bool
+    output: Mapping[str, Any] | None
+    output_digest: str | None
+    reconciliation: str | None  # effect_occurred | effect_did_not_occur | None
+    limitations: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "attempt_id": self.attempt_id, "integration_id": self.integration_id,
+            "dispatch_status": self.dispatch_status,
+            "external_effect_confirmed": self.external_effect_confirmed,
+            "output": None if self.output is None else dict(self.output),
+            "output_digest": self.output_digest, "reconciliation": self.reconciliation,
+            "limitations": list(self.limitations),
+        }
+
+
+RESULT_NOTES = (
+    "A dispatch response is not independent verification of the result.",
+    "An external effect is confirmed only by reconciliation with evidence, never by the response.",
+)
+
+
+@dataclass(frozen=True)
+class ResultView:
+    mission_id: str
+    state: str
+    execution: str
+    attempts: tuple[AttemptView, ...]
+    result_verification: str = RESULT_NOT_VERIFIED
+    notes: tuple[str, ...] = RESULT_NOTES
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "api_version": API_VERSION, "mission_id": self.mission_id, "state": self.state,
+            "execution": self.execution, "attempts": [a.to_dict() for a in self.attempts],
+            "result_verification": self.result_verification, "notes": list(self.notes),
+        }
 
 
 @dataclass(frozen=True)
@@ -430,7 +513,8 @@ def error_from_execution_result(result: Any, correlation_id: str) -> ErrorRespon
 
 __all__ = [
     "API_VERSION", "ApprovalChallenge", "ApprovalChallengeRequest", "ApprovalStatus",
-    "AuditEventView", "ContractError", "CreateMissionRequest", "ERROR_TABLE", "EXECUTION_STATUSES",
+    "AttemptView", "AuditEventView", "ContractError", "CreateMissionRequest", "ExecuteMissionRequest",
+    "RESULT_NOTES", "ResultView", "TaskView", "ERROR_TABLE", "EXECUTION_STATUSES",
     "ErrorCode", "ErrorResponse", "ExecutionPhase", "MissionView", "RESULT_NOT_VERIFIED",
     "SubmitApprovalRequest", "audit_event_view", "error_from_execution_result",
     "error_response", "mission_view_from_domain",

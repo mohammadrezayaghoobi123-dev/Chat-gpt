@@ -295,6 +295,11 @@ def execute_mission_once(
     )
 
 
+def execution_event_id_prefix_for(event_id_prefix: str, idempotency_key: str) -> str:
+    """Audit event-id prefix of one idempotent execution (public so callers can locate its events)."""
+    return f"{event_id_prefix}:{hashlib.sha256(idempotency_key.encode('utf-8')).hexdigest()[:16]}"
+
+
 def execute_mission_idempotently(
     contract: MissionContract,
     store: AuditStore,
@@ -432,10 +437,7 @@ def execute_mission_idempotently(
     # Audit event IDs must be unique across distinct executions even when a
     # caller reuses a human-readable prefix. The stable key-derived suffix
     # preserves retry identity without exposing the raw idempotency key.
-    execution_event_id_prefix = (
-        f"{event_id_prefix}:"
-        f"{hashlib.sha256(idempotency_key.encode('utf-8')).hexdigest()[:16]}"
-    )
+    execution_event_id_prefix = execution_event_id_prefix_for(event_id_prefix, idempotency_key)
     try:
         result = execute_mission_once(
             contract, store, receipt, integration, requirement, adapter, payload,
@@ -475,4 +477,5 @@ def execute_mission_idempotently(
     )
 
 
-__all__ = ["MissionExecutionResult", "execute_mission_once", "execute_mission_idempotently"]
+__all__ = ["MissionExecutionResult", "execute_mission_once", "execute_mission_idempotently",
+           "execution_event_id_prefix_for"]

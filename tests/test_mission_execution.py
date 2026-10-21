@@ -359,6 +359,19 @@ class IdempotentMissionExecutionTests(unittest.TestCase):
             recorded_at="2026-10-12T00:01:00Z", actor="system:test",
         )
 
+    def test_execution_event_id_prefix_is_public_and_matches_the_audited_events(self):
+        import hashlib
+        from master_brain.mission_execution import execution_event_id_prefix_for
+        self.assertEqual(execution_event_id_prefix_for("p", "key-1"),
+                         "p:" + hashlib.sha256(b"key-1").hexdigest()[:16])
+        self.assertNotEqual(execution_event_id_prefix_for("p", "key-1"), execution_event_id_prefix_for("p", "key-2"))
+        self.assertNotEqual(execution_event_id_prefix_for("p", "key-1"), execution_event_id_prefix_for("q", "key-1"))
+        self.assertEqual(self.execute(Adapter(), key="key-1", prefix="p").status, "response_received")
+        ids = {e.event_id for e in self.store.read_all()}
+        prefix = execution_event_id_prefix_for("p", "key-1")
+        self.assertIn(f"{prefix}:dispatch-started", ids)
+        self.assertIn(f"{prefix}:dispatch-finished", ids)
+
     def test_invalid_actor_is_rejected_before_reserving_execution(self):
         adapter = Adapter()
         result = execute_mission_idempotently(

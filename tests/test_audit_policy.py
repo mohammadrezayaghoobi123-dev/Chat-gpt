@@ -102,6 +102,8 @@ EXPECTED_ALLOW_LIST = {
         "signature_alg", "expires_at", "action_digest"},
     "mission.contract_registered": {
         "mission_id", "contract_schema_version", "contract_digest", "contract"},
+    "mission.result_recorded": {
+        "mission_id", "attempt_id", "integration_id", "output_digest", "output"},
     "mission.dispatch_reconciled": {
         "mission_id", "attempt_id", "resolution", "evidence_ref"},
     "mission.dispatch_started": {

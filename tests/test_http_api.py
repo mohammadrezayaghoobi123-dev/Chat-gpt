@@ -18,9 +18,9 @@ KEY = "key-0001-abcdef"
 
 
 class Running:
-    def __init__(self, path, verifier=None, clock=None):
+    def __init__(self, path, verifier=None, clock=None, execution=None):
         self.store = AuditStore(path, clock=clock)
-        self.server = make_server(MissionService(self.store, verifier),
+        self.server = make_server(MissionService(self.store, verifier, execution),
                                   StaticTokenAuthenticator({ALICE: "user:alice", BOB: "user:bob"}))
         self.thread = serve_in_thread(self.server)
         self.port = self.server.server_address[1]

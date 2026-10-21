@@ -128,6 +128,41 @@ class DataclassContractTests(unittest.TestCase):
             self.assertIn(fragment, str(ctx.exception))
 
 
+class ExecutionContractTests(unittest.TestCase):
+    def test_execute_request_is_strict(self):
+        from master_brain.api_contracts import ExecuteMissionRequest
+        ok = ExecuteMissionRequest.from_dict({"idempotency_key": KEY, "task_id": "echo.v1-2_x"})
+        self.assertEqual((ok.idempotency_key, ok.task_id), (KEY, "echo.v1-2_x"))
+        for bad in ({}, {"idempotency_key": KEY}, {"task_id": "echo"},
+                    {"idempotency_key": KEY, "task_id": "echo", "payload": {}},
+                    {"idempotency_key": KEY, "task_id": "Echo"}, {"idempotency_key": KEY, "task_id": "-x"},
+                    {"idempotency_key": KEY, "task_id": "x" * 65}, {"idempotency_key": "short", "task_id": "echo"},
+                    {"idempotency_key": KEY, "task_id": ""}, {"idempotency_key": KEY, "task_id": 5}, []):
+            with self.subTest(bad=bad), self.assertRaises(ContractError):
+                ExecuteMissionRequest.from_dict(bad)
+        ExecuteMissionRequest.from_dict({"idempotency_key": KEY, "task_id": "x" * 64})
+        with self.assertRaises(Exception):
+            ok.task_id = "other"
+
+    def test_views_are_immutable_and_expose_only_closed_fields(self):
+        from master_brain.api_contracts import RESULT_NOTES, AttemptView, ResultView, TaskView
+        task = TaskView("echo", "d", DIGEST, 0, ("offline only",))
+        attempt = AttemptView("a1", "i", "succeeded", False, {"k": 1}, DIGEST, None, ("l",))
+        result = ResultView("m", "response_received", "started", (attempt,))
+        for obj in (task, attempt, result):
+            with self.subTest(type=type(obj).__name__), self.assertRaises(Exception):
+                setattr(obj, next(iter(vars(obj))), "changed")
+        self.assertEqual(set(task.to_dict()), {"task_id", "description", "action_digest", "risk_level", "limitations"})
+        self.assertEqual(set(attempt.to_dict()), {"attempt_id", "integration_id", "dispatch_status",
+                         "external_effect_confirmed", "output", "output_digest", "reconciliation", "limitations"})
+        data = result.to_dict()
+        self.assertEqual(data["result_verification"], "not_independently_verified")
+        self.assertEqual(data["notes"], list(RESULT_NOTES))
+        self.assertEqual(len(RESULT_NOTES), 2)
+        self.assertTrue(all("verif" in n or "confirmed" in n for n in RESULT_NOTES))
+        self.assertIsNone(AttemptView("a", "i", "unresolved", False, None, None, None, ()).to_dict()["output"])
+
+
 class ApprovalRequestTests(unittest.TestCase):
     def test_challenge_request_requires_key_id_and_algorithm(self):
         for missing in ("signing_key_id", "signature_alg"):

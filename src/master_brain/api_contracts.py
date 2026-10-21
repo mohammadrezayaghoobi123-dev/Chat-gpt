@@ -24,7 +24,7 @@ from typing import Any, Mapping
 
 from master_brain.mission_approval import approval_required
 from master_brain.mission_contract import MissionContract, MissionRiskTier
-from master_brain.mission_lifecycle import MissionLifecycleView, MissionState
+from master_brain.mission_lifecycle import RECONCILIATION_RESOLUTIONS, MissionLifecycleView, MissionState
 
 API_VERSION = "1"
 MAX_TEXT_CHARS = 4000
@@ -213,6 +213,33 @@ class ExecuteMissionRequest:
                                      _IDEMPOTENCY_KEY, "8-128 characters of [A-Za-z0-9._:-]"),
             task_id=_pattern(d["task_id"], "request.task_id", _TASK_ID,
                              "1-64 characters of [a-z0-9._-] starting with a letter or digit"),
+        )
+
+
+MAX_EVIDENCE_REF_CHARS = 500
+
+
+@dataclass(frozen=True)
+class ReconcileRequest:
+    """Operator claim about an unresolved attempt. The claim is an assertion, not verification."""
+
+    idempotency_key: str
+    attempt_id: str
+    resolution: str
+    evidence_ref: str
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "ReconcileRequest":
+        d = _object(data, "request", {"idempotency_key", "attempt_id", "resolution", "evidence_ref"}, set())
+        if d["resolution"] not in RECONCILIATION_RESOLUTIONS:
+            raise ContractError("request.resolution", "must be effect_occurred or effect_did_not_occur")
+        return cls(
+            idempotency_key=_pattern(d["idempotency_key"], "request.idempotency_key",
+                                     _IDEMPOTENCY_KEY, "8-128 characters of [A-Za-z0-9._:-]"),
+            attempt_id=_pattern(d["attempt_id"], "request.attempt_id", _KEY_ID,
+                                "1-128 characters of [A-Za-z0-9._:-]"),
+            resolution=d["resolution"],
+            evidence_ref=_text(d["evidence_ref"], "request.evidence_ref", max_chars=MAX_EVIDENCE_REF_CHARS),
         )
 
 
@@ -514,6 +541,7 @@ def error_from_execution_result(result: Any, correlation_id: str) -> ErrorRespon
 __all__ = [
     "API_VERSION", "ApprovalChallenge", "ApprovalChallengeRequest", "ApprovalStatus",
     "AttemptView", "AuditEventView", "ContractError", "CreateMissionRequest", "ExecuteMissionRequest",
+    "MAX_EVIDENCE_REF_CHARS", "RECONCILIATION_RESOLUTIONS", "ReconcileRequest",
     "RESULT_NOTES", "ResultView", "TaskView", "ERROR_TABLE", "EXECUTION_STATUSES",
     "ErrorCode", "ErrorResponse", "ExecutionPhase", "MissionView", "RESULT_NOT_VERIFIED",
     "SubmitApprovalRequest", "audit_event_view", "error_from_execution_result",

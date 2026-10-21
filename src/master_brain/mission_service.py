@@ -19,12 +19,12 @@ from typing import Iterator
 
 from master_brain.api_contracts import (
     ApprovalChallenge, ApprovalChallengeRequest, ApprovalStatus, AttemptView, AuditEventView,
-    CreateMissionRequest, ErrorCode, ExecuteMissionRequest, MissionView, ResultView,
+    CreateMissionRequest, ErrorCode, ExecuteMissionRequest, MissionView, ReconcileRequest, ResultView,
     SubmitApprovalRequest, TaskView, audit_event_view, error_from_execution_result,
     mission_view_from_domain, _EXECUTION_BY_STATE,
 )
 from master_brain.approval_signing import ApprovalVerifier
-from master_brain.audit_store import AuditPayloadError, AuditStore, AuditStoreError
+from master_brain.audit_store import NOW, AuditPayloadError, AuditStore, AuditStoreError
 from master_brain.identity import Identity
 from master_brain.execution_registry import SQLiteExecutionRegistry
 from master_brain.mission_execution import execute_mission_idempotently, execution_event_id_prefix_for
@@ -35,7 +35,8 @@ from master_brain.mission_approval import (
 )
 from master_brain.mission_contract import _build_contract
 from master_brain.mission_lifecycle import (
-    MissionContractConflict, MissionState, derive_mission_state, load_mission_contract,
+    MissionContractConflict, MissionState, RECONCILED_EVENT_TYPE,
+    ReconciliationRejected, record_dispatch_reconciliation, derive_mission_state, load_mission_contract,
     mission_events, mission_registration, register_mission_contract,
 )
 
@@ -58,7 +59,7 @@ class ServiceError(Exception):
 
 @dataclass(frozen=True)
 class CreateResult:
-    view: MissionView
+    view: "MissionView | ResultView"
     created: bool
 
 
@@ -100,10 +101,9 @@ class MissionService:
                 if existing.payload.get("contract_digest") != digest:
                     raise ServiceError(ErrorCode.CONFLICT)
                 return CreateResult(self._view(mission_id), created=False)
-            recorded_at = self._store.now().isoformat().replace("+00:00", "Z")
             registered = register_mission_contract(
                 self._store, contract, event_id=f"contract-registered:{mission_id}",
-                recorded_at=recorded_at, actor=identity.subject)
+                recorded_at=NOW, actor=identity.subject)
             # Under a race the loser's registration is the idempotent replay: not "created".
             return CreateResult(self._view(mission_id), created=registered.created)
         except ServiceError:
@@ -153,7 +153,7 @@ class MissionService:
                 payload["action_digest"] = request.action_digest
             self._store.append(
                 event_id=f"challenge:{event_id}", event_type=CHALLENGE_EVENT_TYPE,
-                recorded_at=now.isoformat().replace("+00:00", "Z"), actor=identity.subject,
+                recorded_at=NOW, actor=identity.subject,
                 subject_ref=f"mission:{mission_id}", payload=payload)
             return ApprovalChallenge(
                 mission_id=mission_id, contract_digest=request.contract_digest,
@@ -211,7 +211,7 @@ class MissionService:
             try:
                 record_mission_approval(
                     self._store, contract, event_id=request.approval_event_id,
-                    recorded_at=self._store.now().isoformat().replace("+00:00", "Z"),
+                    recorded_at=NOW,
                     approver_subject=identity.subject, authentication_method=API_AUTHENTICATION_METHOD,
                     action_digest=c.get("action_digest"), expires_at=c["expires_at"], signature=signature,
                     signing_key_id=c["signing_key_id"], signature_alg=c["signature_alg"])
@@ -260,7 +260,7 @@ class MissionService:
             result = execute_mission_idempotently(
                 contract, self._store, receipt, task.integration, task.requirement, task.adapter,
                 task.payload(), self._execution.registry, idempotency_key=key, event_id_prefix=prefix,
-                recorded_at=self._store.now().isoformat().replace("+00:00", "Z"),
+                recorded_at=NOW,
                 actor=identity.subject,
                 dispatch_timeout_seconds=self._execution.dispatch_timeout_seconds,
                 approval_verifier=self._verifier)
@@ -276,12 +276,68 @@ class MissionService:
 
     def get_result(self, identity: Identity, mission_id: str) -> ResultView:
         try:
-            self._require_owner(identity, mission_id)
+            self._require_reader(identity, mission_id)
             return self._result(mission_id)
         except ServiceError:
             raise
         except Exception:
             raise ServiceError(ErrorCode.UNAVAILABLE) from None
+
+    def reconcile_attempt(self, identity: Identity, mission_id: str,
+                          request: ReconcileRequest) -> CreateResult:
+        """Operator claim that an unresolved attempt did / did not have its effect, with evidence.
+
+        Separation of duties: only an operator, and never the mission's own owner (that would
+        be self-attestation). The claim stays an assertion: it is audited with the operator's
+        identity and never turns the result into "independently verified"."""
+        try:
+            registration = mission_registration(self._store, mission_id)
+            if not identity.is_operator:
+                if registration is None or registration.actor != identity.subject:
+                    raise ServiceError(ErrorCode.NOT_FOUND)
+                raise ServiceError(ErrorCode.FORBIDDEN)
+            if registration is None:
+                raise ServiceError(ErrorCode.NOT_FOUND)
+            if registration.actor == identity.subject:
+                raise ServiceError(ErrorCode.FORBIDDEN)
+            digest = hashlib.sha256(f"{mission_id}\0{request.attempt_id}".encode("utf-8")).hexdigest()[:32]
+            event_id = f"reconcile:{digest}"
+            replay = self._prior_claim(identity, mission_id, request)
+            if replay is not None:
+                return replay
+            try:
+                record_dispatch_reconciliation(
+                    self._store, mission_id, request.attempt_id, request.resolution, request.evidence_ref,
+                    event_id=event_id, recorded_at=NOW,
+                    actor=identity.subject)
+            except ReconciliationRejected:
+                # A concurrent identical claim may have just won the race: that is a replay, not a conflict.
+                replay = self._prior_claim(identity, mission_id, request)
+                if replay is not None:
+                    return replay
+                raise ServiceError(ErrorCode.CONFLICT) from None
+            except AuditPayloadError:
+                raise ServiceError(ErrorCode.INVALID_REQUEST) from None
+            return CreateResult(self._result(mission_id), created=True)
+        except ServiceError:
+            raise
+        except Exception:
+            raise ServiceError(ErrorCode.UNAVAILABLE) from None
+
+    def _prior_claim(self, identity: Identity, mission_id: str, request: ReconcileRequest) -> "CreateResult | None":
+        """The recorded reconciliation of this attempt: identical claim => replay result;
+        a different claim => CONFLICT; none => None."""
+        prior = next((e for e in mission_events(self._store, mission_id)
+                      if e.event_type == RECONCILED_EVENT_TYPE
+                      and e.payload.get("attempt_id") == request.attempt_id), None)
+        if prior is None:
+            return None
+        same = (prior.actor == identity.subject
+                and prior.payload.get("resolution") == request.resolution
+                and prior.payload.get("evidence_ref") == request.evidence_ref)
+        if not same:
+            raise ServiceError(ErrorCode.CONFLICT)
+        return CreateResult(self._result(mission_id), created=False)
 
     def _valid_receipts(self, contract, action_digest: str | None) -> Iterator[MissionApprovalReceipt]:
         """Recorded approvals that pass the real gate for this contract (and the given action;
@@ -326,7 +382,7 @@ class MissionService:
                             if e.event_id == f"{execution_prefix}:dispatch-finished")
             self._store.append(
                 event_id=f"{execution_prefix}:result-recorded", event_type=RESULT_EVENT_TYPE,
-                recorded_at=self._store.now().isoformat().replace("+00:00", "Z"),
+                recorded_at=NOW,
                 actor=finished.actor, subject_ref=f"mission:{mission_id}",
                 payload={"mission_id": mission_id, "attempt_id": finished.payload["attempt_id"],
                          "integration_id": finished.payload["integration_id"],
@@ -381,7 +437,7 @@ class MissionService:
 
     def list_audit(self, identity: Identity, mission_id: str) -> tuple[AuditEventView, ...]:
         try:
-            self._require_owner(identity, mission_id)
+            self._require_reader(identity, mission_id)
             return tuple(audit_event_view(e) for e in mission_events(self._store, mission_id))
         except ServiceError:
             raise
@@ -399,6 +455,14 @@ class MissionService:
             unknowns=unknowns, clarification_questions=questions,
             traceability=("planner=mission_service.intake",),
         )
+
+    def _require_reader(self, identity: Identity, mission_id: str) -> None:
+        """Owner, or an operator (who must be able to see an unresolved attempt to reconcile it)."""
+        if identity.is_operator:
+            if mission_registration(self._store, mission_id) is None:
+                raise ServiceError(ErrorCode.NOT_FOUND)
+            return
+        self._require_owner(identity, mission_id)
 
     def _require_owner(self, identity: Identity, mission_id: str) -> None:
         """Foreign and unknown missions are indistinguishable (NOT_FOUND): no existence oracle."""

@@ -14,6 +14,7 @@ from master_brain.mission_service import MissionService, mission_id_for
 
 ALICE = "alice-token-" + "a" * 32
 BOB = "bob-token---" + "b" * 32
+OPS = "ops-token----" + "o" * 32
 KEY = "key-0001-abcdef"
 
 
@@ -21,7 +22,7 @@ class Running:
     def __init__(self, path, verifier=None, clock=None, execution=None):
         self.store = AuditStore(path, clock=clock)
         self.server = make_server(MissionService(self.store, verifier, execution),
-                                  StaticTokenAuthenticator({ALICE: "user:alice", BOB: "user:bob"}))
+                                  StaticTokenAuthenticator({ALICE: "user:alice", BOB: "user:bob", OPS: ("user:ops", ("operator",))}))
         self.thread = serve_in_thread(self.server)
         self.port = self.server.server_address[1]
 
@@ -127,6 +128,23 @@ class MissionLifecycleOverHttp(HttpBase):
         self.assertEqual(sorted(results), [200] * 7 + [201])
         self.assertEqual(sum(e.event_type == "mission.contract_registered"
                              for e in AuditStore(self.path).read_all()), 1)
+
+
+class ConcurrentWriters(HttpBase):
+    def test_many_different_missions_created_at_once_all_succeed(self):
+        """Regression: timestamps taken outside the lock made valid concurrent writes fail (503)."""
+        results = []
+
+        def go(n):
+            body = {"idempotency_key": f"stress-key-{n:04d}", "objective": f"o{n}", "success_criteria": ["x"]}
+            results.append(self.app.json("POST", "/v1/missions", body)[0])
+        threads = [threading.Thread(target=go, args=(n,)) for n in range(24)]
+        [t.start() for t in threads]
+        [t.join(60) for t in threads]
+        self.assertEqual(sorted(results), [201] * 24)
+        events = AuditStore(self.path).read_all()
+        self.assertEqual(len(events), 24)
+        self.assertEqual([e.recorded_at for e in events], sorted(e.recorded_at for e in events))
 
 
 class OwnershipAndAuth(HttpBase):
@@ -421,3 +439,30 @@ class ServerConstruction(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ServerErrorHandling(unittest.TestCase):
+    def test_client_disconnects_are_silent_and_unexpected_errors_log_only_the_type(self):
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as tmp:
+            server = make_server(MissionService(AuditStore(Path(tmp) / "a.jsonl")),
+                                 StaticTokenAuthenticator({ALICE: "user:alice"}))
+            try:
+                for exc in (ConnectionResetError("x"), BrokenPipeError("x"), TimeoutError("x")):
+                    err = io.StringIO()
+                    with contextlib.redirect_stderr(err):
+                        try:
+                            raise exc
+                        except Exception:
+                            server.handle_error(None, ("127.0.0.1", 1))
+                    self.assertEqual(err.getvalue(), "")
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    try:
+                        raise RuntimeError("secret-token-abc")
+                    except Exception:
+                        server.handle_error(None, ("127.0.0.1", 1))
+                self.assertEqual(err.getvalue(), "unexpected server error: RuntimeError\n")
+            finally:
+                server.server_close()

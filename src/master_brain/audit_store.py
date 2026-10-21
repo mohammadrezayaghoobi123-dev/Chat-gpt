@@ -49,6 +49,26 @@ class AuditPayloadError(AuditStoreError):
     """Raised when a payload violates the audit key allow-list or contains a secret."""
 
 
+class _NowType:
+    """Sentinel: let the store stamp ``recorded_at`` from its clock *while holding the lock*.
+
+    A timestamp taken before the lock can be older than an event another writer appended in the
+    meantime, and the store (correctly) never backdates; stamping under the lock removes that race."""
+
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:
+        return "NOW"
+
+
+NOW = _NowType()
+
+
 class AuditStore:
     """Fail-closed, single-writer JSONL audit store; never auto-repairs history."""
 
@@ -169,11 +189,11 @@ class AuditStore:
             handle.close()  # closing releases the lock
 
     def append(
-        self, *, event_id: str, event_type: str, recorded_at: str, actor: str,
+        self, *, event_id: str, event_type: str, recorded_at: "str | _NowType", actor: str,
         subject_ref: str, payload: dict[str, Any],
         precondition: Callable[[tuple[AuditEvent, ...]], str | None] | None = None,
     ) -> AuditEvent:
-        """Append one event. ``precondition`` is evaluated on the verified history
+        """Append one event. ``recorded_at=NOW`` stamps the store clock under the lock. ``precondition`` is evaluated on the verified history
         while the exclusive lock is held (atomic check-and-append); a returned
         string rejects the append with AuditPreconditionError. Payloads are checked
         against the audit allow-list / secret policy before anything is written."""
@@ -206,11 +226,13 @@ class AuditStore:
             )
 
     def _append_locked(
-        self, *, event_id: str, event_type: str, recorded_at: str, actor: str,
+        self, *, event_id: str, event_type: str, recorded_at: "str | _NowType", actor: str,
         subject_ref: str, payload: dict[str, Any],
         precondition: Callable[[tuple[AuditEvent, ...]], str | None] | None = None,
     ) -> AuditEvent:
         history = self.read_all()
+        if recorded_at is NOW:
+            recorded_at = self.now().isoformat().replace("+00:00", "Z")
         if precondition is not None:
             reason = precondition(history)
             if reason:

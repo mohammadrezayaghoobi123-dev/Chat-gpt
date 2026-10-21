@@ -38,6 +38,25 @@ class IdentityTests(unittest.TestCase):
         with self.assertRaises(Exception):
             Identity("u").subject = "v"
 
+    def test_roles_are_closed_explicit_and_immutable(self):
+        from master_brain.identity import KNOWN_ROLES, ROLE_OPERATOR
+        self.assertEqual(KNOWN_ROLES, frozenset({"operator"}))
+        auth = StaticTokenAuthenticator({TOKEN: ("user:ops", ["operator"]), "u" * 40: "user:alice",
+                                         "v" * 40: ("user:bob", ())})
+        ops, alice, bob = auth.authenticate(TOKEN), auth.authenticate("u" * 40), auth.authenticate("v" * 40)
+        self.assertEqual((ops.roles, ops.is_operator), (frozenset({ROLE_OPERATOR}), True))
+        self.assertEqual((alice.roles, alice.is_operator, bob.is_operator), (frozenset(), False, False))
+        for bad in (("user:x", "operator"), ("user:x",), ("user:x", ["root"]), ("user:x", ["operator"], 1),
+                    ("user:x", [5])):
+            with self.subTest(bad=bad), self.assertRaises((ValueError, TypeError)):
+                StaticTokenAuthenticator({TOKEN: bad})
+        for roles in (["operator"], {"operator"}, "operator", frozenset({"admin"})):
+            with self.subTest(roles=roles), self.assertRaises(ValueError):
+                Identity("user:x", roles)
+        with self.assertRaises(Exception):
+            ops.roles = frozenset()
+        self.assertFalse(Identity("user:x").is_operator)
+
     def test_tokens_are_not_retained_in_clear(self):
         auth = StaticTokenAuthenticator({TOKEN: "user:alice"})
         self.assertNotIn(TOKEN, repr(vars(auth)))

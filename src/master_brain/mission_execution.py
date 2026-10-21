@@ -13,7 +13,7 @@ import hashlib
 import json
 from typing import Any, Callable, Mapping
 
-from master_brain.audit_store import AuditPreconditionError, AuditStore, AuditStoreError
+from master_brain.audit_store import NOW, AuditPreconditionError, AuditStore, AuditStoreError
 from master_brain.dispatch import DispatchResult, DispatchStatus, IntegrationAdapter, dispatch_once
 from master_brain.integrations import IntegrationDescriptor, IntegrationRequirement
 from master_brain.mission_lifecycle import (
@@ -177,7 +177,7 @@ def execute_mission_once(
 
     if not isinstance(event_id_prefix, str) or not event_id_prefix.strip():
         return MissionExecutionResult(contract.mission_id, "rejected", reason="invalid_event_id_prefix")
-    if not isinstance(recorded_at, str) or not recorded_at.strip():
+    if recorded_at is not NOW and (not isinstance(recorded_at, str) or not recorded_at.strip()):
         return MissionExecutionResult(contract.mission_id, "rejected", reason="invalid_recorded_at")
     if not isinstance(actor, str) or not actor.strip():
         return MissionExecutionResult(contract.mission_id, "rejected", reason="invalid_actor")
@@ -324,6 +324,12 @@ def execute_mission_idempotently(
     completion evidence can be verified. It is not distributed exactly-once.
     """
     payload = _snapshot_payload(payload)
+
+    def _rt() -> str:
+        """Registry timestamp. ``recorded_at=NOW`` means audit events are stamped under the store
+        lock (never backdated by a concurrent writer); the registry just gets the current time."""
+        return recorded_at if isinstance(recorded_at, str) else store.now().isoformat().replace("+00:00", "Z")
+
     gate = evaluate_approved_execution_gate(
         contract, store, receipt, _safe_action_digest(integration, payload),
         verifier=approval_verifier,
@@ -347,7 +353,7 @@ def execute_mission_idempotently(
         ("actor", actor),
     ):
         valid = (
-            _is_timezone_aware_timestamp(value)
+            value is NOW or _is_timezone_aware_timestamp(value)
             if name == "recorded_at"
             else isinstance(value, str) and bool(value.strip())
         )
@@ -365,7 +371,7 @@ def execute_mission_idempotently(
         record, created = registry.reserve(
             key=idempotency_key, mission_id=contract.mission_id,
             contract_digest=contract_digest, payload_digest=payload_digest,
-            recorded_at=recorded_at,
+            recorded_at=_rt(),
         )
     except IdempotencyConflict:
         return MissionExecutionResult(contract.mission_id, "idempotency_conflict", reason="key_reused_with_different_request")
@@ -386,7 +392,7 @@ def execute_mission_idempotently(
         try:
             registry.transition(
                 key=idempotency_key, expected_version=record.version, target=State.FAILED,
-                recorded_at=recorded_at,
+                recorded_at=_rt(),
             )
         except RegistryError:
             pass
@@ -395,7 +401,7 @@ def execute_mission_idempotently(
     try:
         running = registry.transition(
             key=idempotency_key, expected_version=record.version, target=State.RUNNING,
-            recorded_at=recorded_at,
+            recorded_at=_rt(),
         )
     except DuplicateIntent:
         # No dispatch happened for this key: close it as FAILED (allowed from PENDING)
@@ -403,7 +409,7 @@ def execute_mission_idempotently(
         try:
             registry.transition(
                 key=idempotency_key, expected_version=record.version, target=State.FAILED,
-                recorded_at=recorded_at,
+                recorded_at=_rt(),
             )
         except RegistryError:
             pass
@@ -426,7 +432,7 @@ def execute_mission_idempotently(
             integration_id=integration.integration_id,
             adapter_version=integration.version,
             provider_id=str(getattr(integration, "provider_id", "unspecified")),
-            recorded_at=recorded_at,
+            recorded_at=_rt(),
         )
     except (RegistryError, TypeError, ValueError):
         return MissionExecutionResult(
@@ -444,7 +450,7 @@ def execute_mission_idempotently(
             event_id_prefix=execution_event_id_prefix,
             recorded_at=recorded_at, actor=actor,
             before_dispatch=lambda: registry.mark_attempt_dispatch_boundary(
-                attempt_id=attempt.attempt_id, recorded_at=recorded_at
+                attempt_id=attempt.attempt_id, recorded_at=_rt()
             ),
             attempt_id=attempt.attempt_id,
             dispatch_timeout_seconds=dispatch_timeout_seconds,
@@ -463,7 +469,7 @@ def execute_mission_idempotently(
     try:
         registry.transition(
             key=idempotency_key, expected_version=running.version, target=target,
-            recorded_at=recorded_at,
+            recorded_at=_rt(),
         )
     except RegistryError:
         return MissionExecutionResult(

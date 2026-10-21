@@ -18,7 +18,7 @@ from master_brain.approval_signing import (
     ApprovalSigner, ApprovalVerifier, SIGNATURE_FIELDS, attach_external_signature,
     build_signing_message, sign_approval_payload, verify_approval_event,
 )
-from master_brain.audit_store import AuditStore, AuditStoreError
+from master_brain.audit_store import NOW, AuditStore, AuditStoreError
 from master_brain.mission_contract import (
     MissionContract,
     MissionReviewLevel,
@@ -247,7 +247,7 @@ def record_mission_approval(
     execution gate does, using a configured verifier.
     If audit persistence fails, no receipt is returned.
     """
-    if not isinstance(recorded_at, str) or not recorded_at.strip():
+    if recorded_at is not NOW and (not isinstance(recorded_at, str) or not recorded_at.strip()):
         raise ValueError("recorded_at must be a non-empty string")
     if signer is not None and signature is not None:
         raise ValueError("pass either signer or signature, not both")

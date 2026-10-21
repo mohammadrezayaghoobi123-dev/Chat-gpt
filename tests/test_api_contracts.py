@@ -163,6 +163,28 @@ class ExecutionContractTests(unittest.TestCase):
         self.assertIsNone(AttemptView("a", "i", "unresolved", False, None, None, None, ()).to_dict()["output"])
 
 
+class ReconcileRequestTests(unittest.TestCase):
+    base = {"idempotency_key": KEY, "attempt_id": "a1b2c3", "resolution": "effect_occurred",
+            "evidence_ref": "provider receipt 123"}
+
+    def test_valid_and_strict(self):
+        from master_brain.api_contracts import MAX_EVIDENCE_REF_CHARS, ReconcileRequest
+        ok = ReconcileRequest.from_dict(self.base)
+        self.assertEqual((ok.attempt_id, ok.resolution, ok.evidence_ref), ("a1b2c3", "effect_occurred", "provider receipt 123"))
+        self.assertEqual(MAX_EVIDENCE_REF_CHARS, 500)
+        ReconcileRequest.from_dict({**self.base, "resolution": "effect_did_not_occur", "evidence_ref": "x" * 500})
+        for bad in ({**self.base, "resolution": "done"}, {**self.base, "resolution": ""},
+                    {**self.base, "evidence_ref": "x" * 501}, {**self.base, "evidence_ref": "  "},
+                    {**self.base, "evidence_ref": "a\x00b"}, {**self.base, "attempt_id": "bad id"},
+                    {**self.base, "attempt_id": ""}, {**self.base, "idempotency_key": "short"},
+                    {**self.base, "actor": "x"}, {k: v for k, v in self.base.items() if k != "evidence_ref"},
+                    {k: v for k, v in self.base.items() if k != "resolution"}, [], None):
+            with self.subTest(bad=bad), self.assertRaises(ContractError):
+                ReconcileRequest.from_dict(bad)
+        with self.assertRaises(Exception):
+            ok.resolution = "effect_did_not_occur"
+
+
 class ApprovalRequestTests(unittest.TestCase):
     def test_challenge_request_requires_key_id_and_algorithm(self):
         for missing in ("signing_key_id", "signature_alg"):

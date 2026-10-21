@@ -13,19 +13,30 @@ import hashlib
 import hmac
 import re
 from dataclasses import dataclass
-from typing import Mapping, Protocol
+from typing import Iterable, Mapping, Protocol
 
 MIN_TOKEN_CHARS = 32
 _SUBJECT = re.compile(r"[A-Za-z0-9._:@-]{1,128}")
 
 
+ROLE_OPERATOR = "operator"  # trusted: may read any mission's result/audit and reconcile (never own missions)
+KNOWN_ROLES = frozenset({ROLE_OPERATOR})
+
+
 @dataclass(frozen=True)
 class Identity:
     subject: str
+    roles: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not isinstance(self.subject, str) or not _SUBJECT.fullmatch(self.subject):
             raise ValueError("identity subject must be 1-128 characters of [A-Za-z0-9._:@-]")
+        if not isinstance(self.roles, frozenset) or not self.roles <= KNOWN_ROLES:
+            raise ValueError("roles must be a frozenset of known roles")
+
+    @property
+    def is_operator(self) -> bool:
+        return ROLE_OPERATOR in self.roles
 
 
 class Authenticator(Protocol):
@@ -41,7 +52,7 @@ class StaticTokenAuthenticator:
     whole table (no early exit), so neither a heap dump nor timing reveals a token.
     """
 
-    def __init__(self, tokens: Mapping[str, str]) -> None:
+    def __init__(self, tokens: Mapping[str, "str | tuple[str, Iterable[str]]"]) -> None:
         if not tokens:
             raise ValueError("at least one token is required")
         digests: list[tuple[bytes, Identity]] = []
@@ -49,7 +60,13 @@ class StaticTokenAuthenticator:
             if not isinstance(token, str) or len(token) < MIN_TOKEN_CHARS or token != token.strip():
                 raise ValueError(f"tokens must be at least {MIN_TOKEN_CHARS} characters without surrounding spaces")
             digest = hashlib.sha256(token.encode("utf-8")).digest()
-            digests.append((digest, Identity(subject)))
+            if isinstance(subject, tuple):
+                if len(subject) != 2 or isinstance(subject[1], str):
+                    raise ValueError("a token entry is a subject or (subject, roles)")
+                identity = Identity(subject[0], frozenset(subject[1]))
+            else:
+                identity = Identity(subject)
+            digests.append((digest, identity))
         self._table = tuple(digests)
 
     def authenticate(self, credential: str | None) -> Identity | None:
@@ -74,4 +91,5 @@ def _encodable(text: str) -> bool:
     return True
 
 
-__all__ = ["Authenticator", "Identity", "MIN_TOKEN_CHARS", "StaticTokenAuthenticator"]
+__all__ = ["Authenticator", "Identity", "KNOWN_ROLES", "MIN_TOKEN_CHARS", "ROLE_OPERATOR",
+           "StaticTokenAuthenticator"]

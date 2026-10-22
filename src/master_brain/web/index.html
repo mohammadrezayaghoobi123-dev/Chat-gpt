@@ -59,6 +59,15 @@
       </form>
     </section>
 
+    <section id="queue" aria-labelledby="queue-h" hidden>
+      <div class="head">
+        <h2 id="queue-h" data-i18n="queue_title"></h2>
+        <button type="button" id="queue-refresh" class="ghost" data-i18n="refresh_button"></button>
+      </div>
+      <p class="help" data-i18n="queue_help"></p>
+      <ul id="queue-list" class="plain"></ul>
+    </section>
+
     <section aria-labelledby="open-h">
       <h2 id="open-h" data-i18n="open_title"></h2>
       <form id="open-form" class="inline">
@@ -83,7 +92,10 @@
       <section aria-labelledby="appr-h" class="sub-section">
         <h3 id="appr-h" data-i18n="approval_title"></h3>
         <p class="help" data-i18n="approval_help"></p>
+        <p id="approver-hint" class="help" data-i18n="approver_only_hint" hidden></p>
         <form id="challenge-form">
+          <label for="appr-action" data-i18n="approval_action_label"></label>
+          <select id="appr-action"></select>
           <label for="key-id" data-i18n="key_id_label"></label>
           <input id="key-id" dir="ltr" spellcheck="false" required>
           <label for="alg" data-i18n="alg_label"></label>

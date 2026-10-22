@@ -13,12 +13,14 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 from master_brain.accounts import AccountStore, SessionAuthenticator
+from master_brain.approvers import AccountApprovers
 from master_brain.audit_store import AuditStore
 from master_brain.execution_registry import SQLiteExecutionRegistry
 from master_brain.http_api import make_server, serve_in_thread
 from master_brain.identity import ChainAuthenticator, StaticTokenAuthenticator
 from master_brain.mission_service import ExecutionConfig, MissionService
 from master_brain.task_catalog import TaskCatalog
+from tests.approval_signing_helper import TEST_ALGORITHM, HmacSeamSigner, HmacSeamVerifier
 from tests.test_http_api import ALICE, BOB, OPS
 
 PW = "correct horse battery"
@@ -47,7 +49,11 @@ def main():
                           SQLiteExecutionRegistry(str(base / "reg.sqlite")), dispatch_timeout_seconds=5)
     accounts = AccountStore(base / "id.sqlite")
     accounts.create_account("user:carol", PW)
-    server = make_server(MissionService(store, None, cfg),
+    accounts.create_account("user:dave", PW)
+    accounts.create_account("user:boss", PW, roles=("approver",))
+    verifier = HmacSeamVerifier()
+    verifier.add("k-boss", b"boss-secret", "user:boss")
+    server = make_server(MissionService(store, verifier, cfg, AccountApprovers(accounts)),
                          ChainAuthenticator(StaticTokenAuthenticator({ALICE: "user:alice", BOB: "user:bob", OPS: ("user:ops", ("operator",))}),
                                             SessionAuthenticator(accounts)), accounts=accounts)
     serve_in_thread(server)
@@ -216,6 +222,62 @@ def main():
         check("a 401 mid-session signs the UI out with a clear message",
               "notice warn" in page.get_attribute("#notice", "class") and "نشست" in page.inner_text("#notice"), page.inner_text("#notice"))
         check("expired session hides the workspace", page.is_hidden("#workspace") and page.is_hidden("#mission"))
+
+        # --- designated approver: a different person approves what dave created (Gate 2c-3)
+        dave_ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+        dave = dave_ctx.new_page()
+        dave.goto(url)
+        dave.wait_for_selector("#signin-form")
+        dave.fill("#subject", "user:dave")
+        dave.fill("#password", PW)
+        dave.click("#signin-form button[type=submit]")
+        dave.wait_for_selector("#workspace:not([hidden])")
+        check("a non-approver sees no approval queue", dave.is_hidden("#queue"))
+        dave.fill("#objective", "پرداخت به تأمین‌کننده")
+        dave.fill("#criteria", "رسید پرداخت")
+        dave.select_option("#risk", "high")
+        dave.click("#create-form button[type=submit]")
+        dave.wait_for_selector("#mission:not([hidden])")
+        dave.wait_for_selector("#m-fields dd")
+        check("on a mission, a non-approver is told only a designated approver can approve",
+              dave.is_visible("#approver-hint") and dave.is_hidden("#challenge-form"))
+        check("high-risk mission needs approval (dave cannot grant it)", "تأییدشده" not in dave.inner_text("#m-fields"))
+        dave_ctx.close()
+
+        boss_ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+        boss = boss_ctx.new_page()
+        boss.goto(url)
+        boss.wait_for_selector("#signin-form")
+        boss.fill("#subject", "user:boss")
+        boss.fill("#password", PW)
+        boss.click("#signin-form button[type=submit]")
+        boss.wait_for_selector("#workspace:not([hidden])")
+        boss.wait_for_selector("#queue:not([hidden])")
+        check("the approver sees the queue with dave's mission", "پرداخت به تأمین‌کننده" in boss.inner_text("#queue-list"),
+              boss.inner_text("#queue"))
+        check("the approver badge is shown", "تأییدکننده" in boss.inner_text("#who"), boss.inner_text("#who"))
+        boss.click("#queue-list button")
+        boss.wait_for_selector("#mission:not([hidden])")
+        boss.wait_for_selector("#m-fields dd")
+        check("approving without choosing an action is refused for a high-risk mission",
+              (boss.fill("#key-id", "k-boss"), boss.fill("#alg", TEST_ALGORITHM),
+               boss.click("#challenge-form button[type=submit]"),
+               boss.wait_for_selector("#notice.warn"))[3] is not None and boss.is_hidden("#challenge-out"))
+        boss.select_option("#appr-action", index=1)
+        boss.fill("#key-id", "k-boss")
+        boss.fill("#alg", TEST_ALGORITHM)
+        boss.click("#challenge-form button[type=submit]")
+        boss.wait_for_selector("#challenge-out:not([hidden])")
+        message = bytes.fromhex(boss.inner_text("#challenge-msg").strip())
+        boss.fill("#sig", HmacSeamSigner("k-boss", b"boss-secret").sign(message).hex())
+        boss.click("#approve-form button[type=submit]")
+        boss.wait_for_selector("#notice.ok")
+        boss.wait_for_selector("#queue-list .help")
+        check("after approving, the mission leaves the queue", "ماموریتی در انتظار" in boss.inner_text("#queue-list"),
+              boss.inner_text("#queue-list"))
+        check("the approver sees the mission as approved", "تأییدشده" in boss.inner_text("#m-fields"),
+              boss.inner_text("#m-fields"))
+        boss_ctx.close()
 
         bad = [c for c in console if c[0] in ("error", "pageerror") and "ERR_CONNECTION_RESET" not in c[1]
                and "Failed to load resource" not in c[1]]

@@ -20,7 +20,8 @@ _SUBJECT = re.compile(r"[A-Za-z0-9._:@-]{1,128}")
 
 
 ROLE_OPERATOR = "operator"  # trusted: may read any mission's result/audit and reconcile (never own missions)
-KNOWN_ROLES = frozenset({ROLE_OPERATOR})
+ROLE_APPROVER = "approver"  # may approve missions that require approval (never granted by a request)
+KNOWN_ROLES = frozenset({ROLE_OPERATOR, ROLE_APPROVER})
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,10 @@ class Identity:
     @property
     def is_operator(self) -> bool:
         return ROLE_OPERATOR in self.roles
+
+    @property
+    def is_approver(self) -> bool:
+        return ROLE_APPROVER in self.roles
 
 
 class Authenticator(Protocol):
@@ -107,5 +112,5 @@ def _encodable(text: str) -> bool:
     return True
 
 
-__all__ = ["Authenticator", "ChainAuthenticator", "Identity", "KNOWN_ROLES", "MIN_TOKEN_CHARS", "ROLE_OPERATOR",
+__all__ = ["Authenticator", "ChainAuthenticator", "Identity", "KNOWN_ROLES", "MIN_TOKEN_CHARS", "ROLE_APPROVER", "ROLE_OPERATOR",
            "StaticTokenAuthenticator"]

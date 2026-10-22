@@ -19,7 +19,7 @@
   var RESOLUTIONS = ["effect_occurred", "effect_did_not_occur"];
 
   var S = { signedIn: false, who: null, lang: "fa", strings: null, mission: null, result: null, audit: null,
-            tasks: [], challenge: null, pending: {} };
+            tasks: [], challenge: null, pending: {}, queue: null };
 
   function $(id) { return document.getElementById(id); }
   function t(key) {
@@ -131,6 +131,30 @@
     });
   }
 
+  // -------------------------------------------------------------- approval queue
+  // null = the server says this account is not a designated approver (GET /approvals refused it).
+  function loadQueue() {
+    return api("GET", "/approvals").then(function (res) {
+      S.queue = res.ok && Array.isArray(res.data.missions) ? res.data.missions : null;
+      renderQueue();
+    });
+  }
+  function renderQueue() {
+    var isApprover = S.queue !== null;
+    $("queue").hidden = !isApprover;
+    $("approver-hint").hidden = isApprover || !S.signedIn;
+    $("challenge-form").hidden = !isApprover;
+    var ul = $("queue-list"); clear(ul);
+    if (!isApprover) return;
+    if (!S.queue.length) { ul.appendChild(el("li", { "class": "help", text: t("queue_empty") })); return; }
+    S.queue.forEach(function (m) {
+      var b = el("button", { type: "button", "class": "ghost" });
+      b.textContent = String(m.objective) + " — " + label("risk", m.risk_tier);
+      b.addEventListener("click", function () { openMission(m.mission_id); });
+      ul.appendChild(el("li", {}, [b]));
+    });
+  }
+
   // ---------------------------------------------------------------- rendering
   function field(dl, name, valueNode) {
     dl.appendChild(el("dt", { text: name }));
@@ -200,6 +224,11 @@
     var sel = $("task"); clear(sel);
     S.tasks.forEach(function (x) { sel.appendChild(el("option", { value: x.task_id, text: x.task_id + " — " + x.description })); });
     if (!S.tasks.length) sel.appendChild(el("option", { value: "", text: t("tasks_empty") }));
+    // an approval is bound to the exact action it authorises (required for high/critical risk)
+    var act = $("appr-action"), keep = act.value; clear(act);
+    act.appendChild(el("option", { value: "", text: t("approval_action_none") }));
+    S.tasks.forEach(function (x) { act.appendChild(el("option", { value: x.action_digest, text: x.task_id + " — " + x.description })); });
+    act.value = keep;
     showTaskInfo();
   }
   function showTaskInfo() {
@@ -223,7 +252,7 @@
     var keepRisk = $("risk").value, keepRes = $("r-res").value;
     fillSelects(); $("risk").value = keepRisk || "medium"; if (keepRes) $("r-res").value = keepRes;
     setConn($("conn").getAttribute("data-conn") || (S.signedIn ? "ok" : "out"));
-    renderRecent(); renderTasks(); renderMission();
+    renderRecent(); renderTasks(); renderQueue(); renderMission();
   }
 
   // ------------------------------------------------------------------ actions
@@ -258,6 +287,7 @@
   }
   function afterMutation(res, okMessage) {
     if (res.ok) { notice("ok", okMessage); } else { showFailure(res); }
+    if (S.signedIn && !res.network) loadQueue();
     if (S.mission && !res.network) { return loadMission(S.mission.mission_id, true); }
   }
   function lines(id) { return $(id).value.split("\n").map(function (s) { return s.trim(); }).filter(Boolean); }
@@ -265,11 +295,12 @@
   function showSignedIn(view) {
     S.signedIn = true; S.who = view;
     $("signin-form").hidden = true; $("whoami").hidden = false; $("workspace").hidden = false;
-    $("who").textContent = t("who_prefix") + ": " + view.subject + ((view.roles || []).indexOf("operator") >= 0 ? " (" + t("operator_badge") + ")" : "");
+    $("who").textContent = t("who_prefix") + ": " + view.subject + ((view.roles || []).indexOf("operator") >= 0 ? " (" + t("operator_badge") + ")" : "") +
+      (S.queue !== null ? " (" + t("approver_badge") + ")" : "");
     setConn("ok");
   }
   function showSignedOut() {
-    S.signedIn = false; S.who = null; S.mission = null; S.result = null; S.audit = null; S.tasks = []; S.pending = {}; S.challenge = null;
+    S.signedIn = false; S.who = null; S.mission = null; S.result = null; S.audit = null; S.tasks = []; S.pending = {}; S.challenge = null; S.queue = null;
     $("workspace").hidden = true; $("mission").hidden = true; $("whoami").hidden = true; $("signin-form").hidden = false;
     $("password").value = ""; setConn("out");
   }
@@ -279,11 +310,15 @@
     return api("GET", "/tasks").then(function (res) {
       if (!res.ok && res.status === 401) return;  // no valid session after all: stay signed out silently
       S.tasks = res.ok && Array.isArray(res.data.tasks) ? res.data.tasks : [];
-      showSignedIn(view);
-      renderTasks();
-      var m = /^#m=(.+)$/.exec(window.location.hash || "");
-      if (m) { try { return openMission(decodeURIComponent(m[1])); } catch (_e) { /* bad hash */ } }
+      return loadQueue().then(function () { return finishEnter(view); });
     });
+  }
+  function finishEnter(view) {
+    showSignedIn(view);
+    renderTasks();
+    renderQueue();  // after sign-in is marked: the "not an approver" hint depends on it
+    var m = /^#m=(.+)$/.exec(window.location.hash || "");
+    if (m) { try { return openMission(decodeURIComponent(m[1])); } catch (_e) { /* bad hash */ } }
   }
   function onSignin(ev) {
     ev.preventDefault();
@@ -316,6 +351,7 @@
       if (!res.ok) return showFailure(res);
       delete S.pending.create;
       notice("ok", t("done_created"));
+      loadQueue();
       openMission(res.data.mission_id);
     });
   }
@@ -324,7 +360,10 @@
     if (needSignedIn() || needMission()) return;
     var m = S.mission;
     if (!m.contract_digest) return notice("warn", t("err_bad_response"));
+    var action = $("appr-action").value;
+    if (!action && (m.risk_tier === "high" || m.risk_tier === "critical")) return notice("warn", t("err_action_required"));
     var body = { contract_digest: m.contract_digest, signing_key_id: $("key-id").value.trim(), signature_alg: $("alg").value.trim() };
+    if (action) body.action_digest = action;
     api("POST", "/missions/" + mid() + "/approval-challenges", body).then(function (res) {
       if (!res.ok) return showFailure(res);
       S.challenge = { event: res.data.approval_event_id, key: body.signing_key_id, alg: body.signature_alg };
@@ -390,6 +429,7 @@
     });
     $("create-form").addEventListener("submit", onCreate);
     $("open-form").addEventListener("submit", function (ev) { ev.preventDefault(); openMission($("mid").value); });
+    $("queue-refresh").addEventListener("click", function () { if (!needSignedIn()) loadQueue(); });
     $("refresh").addEventListener("click", function () { if (S.mission && !needSignedIn()) loadMission(S.mission.mission_id, false); });
     $("challenge-form").addEventListener("submit", onChallenge);
     $("approve-form").addEventListener("submit", onApprove);

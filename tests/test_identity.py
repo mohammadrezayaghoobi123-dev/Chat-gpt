@@ -40,7 +40,7 @@ class IdentityTests(unittest.TestCase):
 
     def test_roles_are_closed_explicit_and_immutable(self):
         from master_brain.identity import KNOWN_ROLES, ROLE_OPERATOR
-        self.assertEqual(KNOWN_ROLES, frozenset({"operator"}))
+        self.assertEqual(KNOWN_ROLES, frozenset({"operator", "approver"}))
         auth = StaticTokenAuthenticator({TOKEN: ("user:ops", ["operator"]), "u" * 40: "user:alice",
                                          "v" * 40: ("user:bob", ())})
         ops, alice, bob = auth.authenticate(TOKEN), auth.authenticate("u" * 40), auth.authenticate("v" * 40)

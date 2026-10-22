@@ -130,10 +130,10 @@ class ApprovalFlow(ApprovalBase):
         self.assertEqual(self.challenge(view, token=BOB, signing_key_id="k-bob")[0], 404)
         status, _, err = self.submit(view, ch, token=BOB, signer=HmacSeamSigner("k-bob", SECRET_B))
         self.assertEqual((status, err["error"]["code"]), (404, "not_found"))
-        # even on his OWN mission bob cannot use alice's challenge id
+        # on his OWN mission bob is the owner but not a designated approver (only alice is)
         bobs = self.mission(token=BOB, key="bob-key-0001")
         status, _, err = self.submit(bobs, ch, token=BOB, signer=HmacSeamSigner("k-bob", SECRET_B))
-        self.assertEqual((status, err["error"]["code"]), (404, "not_found"))
+        self.assertEqual((status, err["error"]["code"]), (403, "forbidden"))
 
     def test_stale_contract_digest_is_refused(self):
         view = self.mission()

@@ -148,6 +148,16 @@ class AccountStore:
             if not db.execute("UPDATE accounts SET roles=? WHERE subject=?", (",".join(sorted(roles)), subject)).rowcount:
                 raise AccountError("unknown subject")
 
+    def active_roles(self, subject: object) -> frozenset[str]:
+        """Roles of an existing, ENABLED account; empty for unknown/disabled/malformed subjects."""
+        if not isinstance(subject, str) or len(subject) > 128:
+            return frozenset()
+        with closing(self._connect()) as db:
+            row = db.execute("SELECT roles, disabled FROM accounts WHERE subject=?", (subject,)).fetchone()
+        if row is None or row[1]:
+            return frozenset()
+        return frozenset(filter(None, row[0].split(",")))
+
     # ------------------------------------------------------------------ login
     def verify_password(self, subject: object, password: object) -> Identity | None:
         """Identity on success; None for every failure (unknown, disabled, wrong password) at the same cost."""
@@ -229,6 +239,10 @@ class SessionAuthenticator:
         return self._accounts.authenticate_session(credential)
 
 
+def _roles(args: argparse.Namespace) -> tuple[str, ...]:
+    return tuple(r for r, on in (("operator", args.operator), ("approver", args.approver)) if on)
+
+
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m master_brain.accounts",
                                      description="Operator tool: manage local Master Brain accounts.")
@@ -240,6 +254,11 @@ def _main(argv: list[str] | None = None) -> int:
         p.add_argument("--password-stdin", action="store_true", help="read the password from stdin (no echo prompt)")
         if name == "add":
             p.add_argument("--operator", action="store_true", help="grant the operator role")
+            p.add_argument("--approver", action="store_true", help="grant the approver role")
+    roles = sub.add_parser("roles", help="set EXACTLY these roles (none given = remove all roles)")
+    roles.add_argument("--subject", required=True)
+    roles.add_argument("--operator", action="store_true")
+    roles.add_argument("--approver", action="store_true")
     for name in ("disable", "enable"):
         sub.add_parser(name).add_argument("--subject", required=True)
     args = parser.parse_args(argv)
@@ -248,9 +267,11 @@ def _main(argv: list[str] | None = None) -> int:
         if args.command in ("add", "passwd"):
             password = sys.stdin.readline().rstrip("\n") if args.password_stdin else getpass.getpass("Password: ")
             if args.command == "add":
-                store.create_account(args.subject, password, ("operator",) if args.operator else ())
+                store.create_account(args.subject, password, _roles(args))
             else:
                 store.set_password(args.subject, password)
+        elif args.command == "roles":
+            store.set_roles(args.subject, _roles(args))
         else:
             store.set_disabled(args.subject, args.command == "disable")
     except (AccountError, ValueError) as exc:

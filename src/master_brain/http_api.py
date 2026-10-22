@@ -47,6 +47,7 @@ _EXECUTIONS = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/executions")
 _RECONCILIATIONS = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/reconciliations")
 _RESULT = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/result")
 _TASKS = re.compile(r"/v1/tasks")
+_PENDING = re.compile(r"/v1/approvals")
 _SESSION = re.compile(r"/v1/session")
 COOKIE_NAME = "mb_session"
 _MAX_COOKIE_HEADER = 4096
@@ -221,7 +222,7 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
                     ("GET", _AUDIT, self._audit),
                     ("POST", _CHALLENGES, self._challenge), ("POST", _APPROVALS, self._approve),
                     ("POST", _RECONCILIATIONS, self._reconcile), ("POST", _EXECUTIONS, self._execute), ("GET", _RESULT, self._result),
-                    ("GET", _TASKS, self._tasks),
+                    ("GET", _TASKS, self._tasks), ("GET", _PENDING, self._pending),
                 ) + ((("GET", _SESSION, self._session_info), ("DELETE", _SESSION, self._logout))
                      if accounts is not None else ())
                 matched = [(m, rx.fullmatch(path), fn) for m, rx, fn in routes if rx.fullmatch(path)]
@@ -339,6 +340,11 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
         def _tasks(self, identity, _match, correlation_id: str) -> None:
             self._send(200, {"api_version": API_VERSION,
                              "tasks": [t.to_dict() for t in service.list_tasks(identity)]}, correlation_id)
+
+        def _pending(self, identity, _match, correlation_id: str) -> None:
+            self._send(200, {"api_version": API_VERSION,
+                             "missions": [m.to_dict() for m in service.list_pending_approvals(identity)]},
+                       correlation_id)
 
         def _get(self, identity, match, correlation_id: str) -> None:
             self._send(200, service.get_mission(identity, match.group(1)).to_dict(), correlation_id)

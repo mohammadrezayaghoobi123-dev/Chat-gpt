@@ -10,6 +10,7 @@ from master_brain.api_contracts import ERROR_TABLE, ErrorCode
 from master_brain.audit_store import AuditStore
 from master_brain.http_api import MAX_BODY_BYTES, make_server, serve_in_thread
 from master_brain.accounts import SessionAuthenticator
+from master_brain.approvers import StaticApprovers
 from master_brain.identity import ChainAuthenticator, Identity, StaticTokenAuthenticator
 from master_brain.mission_service import MissionService, mission_id_for
 
@@ -21,11 +22,13 @@ KEY = "key-0001-abcdef"
 
 class Running:
     def __init__(self, path, verifier=None, clock=None, execution=None, rate_gate=None, accounts=None,
-                 secure_cookies=False):
+                 secure_cookies=False, approvers=None):
         self.store = AuditStore(path, clock=clock)
         static = StaticTokenAuthenticator({ALICE: "user:alice", BOB: "user:bob", OPS: ("user:ops", ("operator",))})
         authenticator = static if accounts is None else ChainAuthenticator(static, SessionAuthenticator(accounts))
-        self.server = make_server(MissionService(self.store, verifier, execution), authenticator,
+        self.server = make_server(MissionService(self.store, verifier, execution,
+                                                   StaticApprovers({"user:alice"}) if approvers is None else approvers),
+                                  authenticator,
                                   rate_gate=rate_gate, accounts=accounts, secure_cookies=secure_cookies)
         self.thread = serve_in_thread(self.server)
         self.port = self.server.server_address[1]

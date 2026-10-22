@@ -6,6 +6,7 @@ from pathlib import Path
 
 from master_brain.api_contracts import CreateMissionRequest, ErrorCode
 from master_brain.audit_store import AuditStore
+from master_brain.approvers import StaticApprovers
 from master_brain.identity import Identity
 from master_brain.mission_service import MissionService, ServiceError, mission_id_for
 
@@ -149,7 +150,7 @@ class ApprovalServiceEdgeTests(unittest.TestCase):
         self.verifier = HmacSeamVerifier()
         self.verifier.add("k1", b"secret-1", "user:alice")
         self.signer = HmacSeamSigner("k1", b"secret-1")
-        self.service = MissionService(self.store, self.verifier)
+        self.service = MissionService(self.store, self.verifier, approvers=StaticApprovers({"user:alice"}))
         self.view = self.service.create_mission(ALICE, dataclasses.replace(REQ, risk_tier="high")).view
 
     def challenge(self, **kw):

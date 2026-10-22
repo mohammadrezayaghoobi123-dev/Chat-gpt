@@ -10,6 +10,7 @@ Honest scope: creating a mission *plans* it (state ``planned``, execution
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import uuid
@@ -24,6 +25,7 @@ from master_brain.api_contracts import (
     mission_view_from_domain, _EXECUTION_BY_STATE,
 )
 from master_brain.approval_signing import ApprovalVerifier
+from master_brain.approvers import ApproverPolicy, NoApprovers
 from master_brain.audit_store import NOW, AuditPayloadError, AuditStore, AuditStoreError
 from master_brain.identity import Identity
 from master_brain.execution_registry import SQLiteExecutionRegistry
@@ -37,7 +39,7 @@ from master_brain.mission_contract import _build_contract
 from master_brain.mission_lifecycle import (
     MissionContractConflict, MissionState, RECONCILED_EVENT_TYPE,
     ReconciliationRejected, record_dispatch_reconciliation, derive_mission_state, load_mission_contract,
-    mission_events, mission_registration, register_mission_contract,
+    mission_events, mission_registration, register_mission_contract, CONTRACT_REGISTERED_EVENT_TYPE,
 )
 
 MISSION_ID_PATTERN = r"mission-[0-9a-f]{16}"
@@ -47,6 +49,7 @@ RESULT_EVENT_TYPE = "mission.result_recorded"
 MAX_RECORDED_OUTPUT_BYTES = 16 * 1024
 API_AUTHENTICATION_METHOD = "signed_bearer_session"  # session identity + approver key signature
 DEFAULT_APPROVAL_LIFETIME = timedelta(hours=1)
+MAX_PENDING_APPROVALS = 100  # newest first; the queue is a work list, not an archive
 
 
 class ServiceError(Exception):
@@ -81,8 +84,11 @@ class ExecutionConfig:
 
 class MissionService:
     def __init__(self, store: AuditStore, approval_verifier: ApprovalVerifier | None = None,
-                 execution: ExecutionConfig | None = None) -> None:
+                 execution: ExecutionConfig | None = None,
+                 approvers: ApproverPolicy | None = None) -> None:
         self._store = store
+        # Approval is a designated duty: with no policy NOBODY may approve (fail closed).
+        self._approvers: ApproverPolicy = NoApprovers() if approvers is None else approvers
         self._execution = execution
         # Without a verifier the API accepts NO approvals (fail closed): over the API an
         # approval is only ever a signed one by a key bound to the authenticated session subject.
@@ -123,7 +129,7 @@ class MissionService:
     ) -> ApprovalChallenge:
         """Fix the exact bytes the approver must sign. Persists the challenge (audit)."""
         try:
-            self._require_owner(identity, mission_id)
+            self._require_approver(identity, mission_id)
             if self._verifier is None:
                 raise ServiceError(ErrorCode.UNAVAILABLE)
             contract = load_mission_contract(self._store, mission_id)
@@ -171,7 +177,7 @@ class MissionService:
     ) -> CreateResult:
         """Record a signed approval for a previously issued challenge (idempotent per challenge)."""
         try:
-            self._require_owner(identity, mission_id)
+            self._require_approver(identity, mission_id)
             if self._verifier is None:
                 raise ServiceError(ErrorCode.UNAVAILABLE)
             events = mission_events(self._store, mission_id)
@@ -352,6 +358,8 @@ class MissionService:
                 continue
             if p.get("action_digest") is not None and e.event_id in consumed:
                 continue
+            if not self._approvers.is_approver(e.actor):
+                continue  # the approver's duty was withdrawn: an unused approval no longer counts
             try:
                 receipt = MissionApprovalReceipt(
                     event_id=e.event_id, mission_id=contract.mission_id, contract_digest=digest,
@@ -428,8 +436,30 @@ class MissionService:
     # ------------------------------------------------------------------- queries
     def get_mission(self, identity: Identity, mission_id: str) -> MissionView:
         try:
-            self._require_owner(identity, mission_id)
+            self._require_owner_or_approver(identity, mission_id)
             return self._view(mission_id)
+        except ServiceError:
+            raise
+        except Exception:
+            raise ServiceError(ErrorCode.UNAVAILABLE) from None
+
+    def list_pending_approvals(self, identity: Identity) -> tuple[MissionView, ...]:
+        """The approver's work queue: missions that need an approval and have none that currently counts,
+        and where nothing has been dispatched yet. Approvers only; newest first, capped."""
+        try:
+            if not self._approvers.is_approver(identity.subject):
+                raise ServiceError(ErrorCode.FORBIDDEN)
+            ids = [e.subject_ref.split(":", 1)[1] for e in self._store.read_all()
+                   if e.event_type == CONTRACT_REGISTERED_EVENT_TYPE]
+            pending: list[MissionView] = []
+            for mission_id in reversed(ids):
+                if len(pending) >= MAX_PENDING_APPROVALS:
+                    break
+                view = self._view(mission_id)
+                if (view.approval_required and view.approval_status == ApprovalStatus.REQUIRED.value
+                        and view.state == MissionState.PLANNED.value):
+                    pending.append(view)
+            return tuple(pending)
         except ServiceError:
             raise
         except Exception:
@@ -470,11 +500,36 @@ class MissionService:
         if registration is None or registration.actor != identity.subject:
             raise ServiceError(ErrorCode.NOT_FOUND)
 
+    def _require_approver(self, identity: Identity, mission_id: str) -> None:
+        """Only a CURRENT designated approver may request/record an approval. A mission owner who is not
+        an approver learns why (FORBIDDEN, they know it exists); a stranger learns nothing (NOT_FOUND).
+        An approver need not own the mission; the owner is not forbidden from approving if designated."""
+        registration = mission_registration(self._store, mission_id)
+        if registration is None:
+            raise ServiceError(ErrorCode.NOT_FOUND)
+        if self._approvers.is_approver(identity.subject):
+            return
+        raise ServiceError(ErrorCode.FORBIDDEN if registration.actor == identity.subject
+                           else ErrorCode.NOT_FOUND)
+
+    def _require_owner_or_approver(self, identity: Identity, mission_id: str) -> None:
+        """Read the mission itself (never its audit or result): the owner, or an approver who must see
+        what they are asked to approve."""
+        registration = mission_registration(self._store, mission_id)
+        if registration is None:
+            raise ServiceError(ErrorCode.NOT_FOUND)
+        if registration.actor != identity.subject and not self._approvers.is_approver(identity.subject):
+            raise ServiceError(ErrorCode.NOT_FOUND)
+
     def _view(self, mission_id: str) -> MissionView:
         contract = load_mission_contract(self._store, mission_id)
         lifecycle = derive_mission_state(self._store, mission_id)
-        return mission_view_from_domain(
-            contract, lifecycle, approval_status=self._approval_status(contract))
+        status = self._approval_status(contract)
+        if lifecycle.state is MissionState.APPROVED and status is ApprovalStatus.REQUIRED:
+            # An approval event exists but no longer counts (e.g. its approver's duty was withdrawn):
+            # never present the mission as approved while the gate would refuse it.
+            lifecycle = dataclasses.replace(lifecycle, state=MissionState.PLANNED)
+        return mission_view_from_domain(contract, lifecycle, approval_status=status)
 
     def _approval_status(self, contract) -> ApprovalStatus:
         """``granted`` only if a signed approval passes the real gate with the configured

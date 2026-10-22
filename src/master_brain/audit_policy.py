@@ -49,6 +49,7 @@ PAYLOAD_KEY_ALLOWLIST: dict[str, frozenset[str]] = {
         "mission_id", "integration_id", "attempt_id", "dispatch_status", "reason",
         "external_effect_confirmed",
     }),
+    "audit.tail_recovered": frozenset({"discarded_bytes", "complete_events", "fragment_sha256"}),
     "security.login_succeeded": frozenset({"address"}),
     "security.login_failed": frozenset({"address", "reason"}),
     "security.login_throttled": frozenset({"address", "scope"}),

@@ -35,6 +35,9 @@ from master_brain.api_contracts import (
 from master_brain.identity import Authenticator
 from master_brain.mission_service import MISSION_ID_PATTERN, MissionService, ServiceError
 from master_brain.rate_limit import RateGate, retry_after_header
+from master_brain.security_log import (
+    LOGIN_FAILED, LOGIN_SUCCEEDED, LOGIN_THROTTLED, LOGOUT, SecurityLogError, attempted_subject_ref, clean_address,
+)
 
 MAX_BODY_BYTES = 64 * 1024
 SOCKET_TIMEOUT_SECONDS = 10.0
@@ -259,20 +262,33 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
             address = self.client_address[0]
             blocked = gate.address_blocked_for(address)
             if blocked > 0:
+                accounts.security_log.best_effort(LOGIN_THROTTLED, actor="anonymous", subject_ref="account:unknown",
+                                                  payload={"address": clean_address(address), "scope": "address"})
                 return self._error(ErrorCode.RATE_LIMITED, correlation_id, close=True, retry_after=blocked)
             if self.headers.get("Origin") is not None and not self._same_origin():  # login CSRF
                 return self._error(ErrorCode.FORBIDDEN, correlation_id, close=True)
             request = self._json_request(LoginRequest, correlation_id)
             if request is None:
                 return
+            seclog = accounts.security_log
+            who = attempted_subject_ref(request.subject)
+            where = clean_address(address)
             locked = gate.account_blocked_for(request.subject)
             if locked > 0:
+                seclog.best_effort(LOGIN_THROTTLED, actor="anonymous", subject_ref=who,
+                                   payload={"address": where, "scope": "account"})
                 return self._error(ErrorCode.RATE_LIMITED, correlation_id, close=False, retry_after=locked)
             identity = accounts.verify_password(request.subject, request.password)
             if identity is None:
                 gate.record_auth_failure(address)
                 gate.record_account_failure(request.subject)
+                seclog.best_effort(LOGIN_FAILED, actor="anonymous", subject_ref=who,
+                                   payload={"address": where, "reason": "bad_credentials"})
                 return self._error(ErrorCode.UNAUTHENTICATED, correlation_id)
+            try:  # no session without a record of it: the event is written BEFORE the session exists
+                seclog.critical(LOGIN_SUCCEEDED, actor=identity.subject, subject_ref=who, payload={"address": where})
+            except SecurityLogError:
+                return self._error(ErrorCode.UNAVAILABLE, correlation_id)
             token, expires = accounts.create_session(identity)
             max_age = int(ABSOLUTE_LIFETIME.total_seconds())
             view = SessionView(identity.subject, tuple(identity.roles), expires.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
@@ -288,7 +304,10 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
             self._send(200, view.to_dict(), correlation_id)
 
         def _logout(self, identity, _match, correlation_id: str) -> None:
-            accounts.revoke_session(self._credential_value)
+            accounts.revoke_session(self._credential_value)  # the user's intent to sign out never waits on the log
+            accounts.security_log.best_effort(LOGOUT, actor=identity.subject,
+                                              subject_ref=attempted_subject_ref(identity.subject),
+                                              payload={"address": clean_address(self.client_address[0])})
             self._send(200, {"api_version": API_VERSION, "signed_out": True}, correlation_id,
                        {"Set-Cookie": self._cookie("", 0)})
 

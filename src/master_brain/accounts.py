@@ -20,6 +20,7 @@ import argparse
 import getpass
 import hashlib
 import hmac
+import re
 import secrets
 import sqlite3
 import sys
@@ -29,6 +30,9 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from master_brain.identity import KNOWN_ROLES, Identity
+from master_brain.security_log import (
+    ACCOUNT_CHANGED, SecurityLog, SecurityLogError, attempted_subject_ref,
+)
 
 SCRYPT_N, SCRYPT_R, SCRYPT_P, SCRYPT_DKLEN, SALT_BYTES = 2 ** 14, 8, 1, 32, 16
 _SCRYPT_MAXMEM = 64 * 1024 * 1024
@@ -41,6 +45,15 @@ _TOUCH_INTERVAL = timedelta(seconds=30)  # do not write on every request
 
 class AccountError(ValueError):
     """Operator-facing problem (bad password policy, duplicate or unknown subject)."""
+
+
+def operator_actor() -> str:
+    """``operator:<os user>`` — the CLI has no login of its own; the OS user is the best available identity."""
+    try:
+        name = re.sub(r"[^A-Za-z0-9._-]", "_", getpass.getuser())[:100] or "unknown"
+    except Exception:
+        name = "unknown"
+    return "operator:" + name
 
 
 def _utc_now() -> datetime:
@@ -91,9 +104,13 @@ def check_password_policy(subject: str, password: str) -> None:
 
 
 class AccountStore:
-    def __init__(self, path: str | Path, *, clock: Callable[[], datetime] | None = None) -> None:
+    def __init__(self, path: str | Path, *, clock: Callable[[], datetime] | None = None,
+                 security_log: SecurityLog | None = None) -> None:
         self.path = Path(path)
         self._clock = clock or _utc_now
+        # Always present (fail closed): by convention beside the database as ``<name>.security.jsonl``.
+        self.security_log = security_log or SecurityLog(self.path.with_name(self.path.stem + ".security.jsonl"),
+                                                        clock=self._clock)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as db, db:
             db.executescript(
@@ -113,10 +130,29 @@ class AccountStore:
         return self._clock()
 
     # ------------------------------------------------------------------ operator actions
-    def create_account(self, subject: str, password: str, roles: Iterable[str] = ()) -> None:
+    def _exists(self, subject: str) -> bool:
+        with closing(self._connect()) as db:
+            return db.execute("SELECT 1 FROM accounts WHERE subject=?", (subject,)).fetchone() is not None
+
+    def _record_change(self, subject: str, change: str, roles: Iterable[str] | None, actor: str | None) -> None:
+        """Written BEFORE the change: if the log is unavailable the change is refused."""
+        payload: dict = {"change": change}
+        if roles is not None:
+            payload["roles"] = sorted(roles)
+        try:
+            self.security_log.critical(ACCOUNT_CHANGED, actor=actor or operator_actor(),
+                                       subject_ref=attempted_subject_ref(subject), payload=payload)
+        except SecurityLogError as exc:
+            raise AccountError("security log unavailable; change refused") from exc
+
+    def create_account(self, subject: str, password: str, roles: Iterable[str] = (), *,
+                       actor: str | None = None) -> None:
         identity = Identity(subject, frozenset(roles))  # validates subject and roles
         check_password_policy(subject, password)
         record = _encode_record(password)
+        if self._exists(identity.subject):
+            raise AccountError("subject already exists")
+        self._record_change(identity.subject, "created", identity.roles, actor)
         try:
             with closing(self._connect()) as db:
                 db.execute("INSERT INTO accounts(subject,password_record,roles,disabled,created_at) VALUES(?,?,?,0,?)",
@@ -124,8 +160,11 @@ class AccountStore:
         except sqlite3.IntegrityError as exc:
             raise AccountError("subject already exists") from exc
 
-    def set_password(self, subject: str, password: str) -> None:
+    def set_password(self, subject: str, password: str, *, actor: str | None = None) -> None:
         check_password_policy(subject, password)
+        if not self._exists(subject):
+            raise AccountError("unknown subject")
+        self._record_change(subject, "password_changed", None, actor)
         with closing(self._connect()) as db:
             changed = db.execute("UPDATE accounts SET password_record=? WHERE subject=?",
                                  (_encode_record(password), subject)).rowcount
@@ -133,17 +172,23 @@ class AccountStore:
                 raise AccountError("unknown subject")
             db.execute("DELETE FROM sessions WHERE subject=?", (subject,))  # old password => old sessions die
 
-    def set_disabled(self, subject: str, disabled: bool) -> None:
+    def set_disabled(self, subject: str, disabled: bool, *, actor: str | None = None) -> None:
+        if not self._exists(subject):
+            raise AccountError("unknown subject")
+        self._record_change(subject, "disabled" if disabled else "enabled", None, actor)
         with closing(self._connect()) as db:
             if not db.execute("UPDATE accounts SET disabled=? WHERE subject=?", (1 if disabled else 0, subject)).rowcount:
                 raise AccountError("unknown subject")
             if disabled:
                 db.execute("DELETE FROM sessions WHERE subject=?", (subject,))
 
-    def set_roles(self, subject: str, roles: Iterable[str]) -> None:
+    def set_roles(self, subject: str, roles: Iterable[str], *, actor: str | None = None) -> None:
         roles = frozenset(roles)
         if not roles <= KNOWN_ROLES:
             raise AccountError("unknown role")
+        if not self._exists(subject):
+            raise AccountError("unknown subject")
+        self._record_change(subject, "roles_set", roles, actor)
         with closing(self._connect()) as db:
             if not db.execute("UPDATE accounts SET roles=? WHERE subject=?", (",".join(sorted(roles)), subject)).rowcount:
                 raise AccountError("unknown subject")

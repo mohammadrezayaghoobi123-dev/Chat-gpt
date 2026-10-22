@@ -49,6 +49,12 @@ PAYLOAD_KEY_ALLOWLIST: dict[str, frozenset[str]] = {
         "mission_id", "integration_id", "attempt_id", "dispatch_status", "reason",
         "external_effect_confirmed",
     }),
+    "security.login_succeeded": frozenset({"address"}),
+    "security.login_failed": frozenset({"address", "reason"}),
+    "security.login_throttled": frozenset({"address", "scope"}),
+    "security.logout": frozenset({"address"}),
+    "security.account_changed": frozenset({"change", "roles"}),
+    "security.events_suppressed": frozenset({"count", "window_seconds"}),
     "falsification.reviewed": frozenset({
         "schema_version", "outcome_mapping_version", "claim_id", "mission_context", "status",
         "previous_decision", "decision_changed", "decision_change_reason", "truth_established",

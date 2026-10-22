@@ -92,6 +92,12 @@ class AuditPayloadPolicyTests(unittest.TestCase):
 
 
 EXPECTED_ALLOW_LIST = {
+    "security.login_succeeded": {"address"},
+    "security.login_failed": {"address", "reason"},
+    "security.login_throttled": {"address", "scope"},
+    "security.logout": {"address"},
+    "security.account_changed": {"change", "roles"},
+    "security.events_suppressed": {"count", "window_seconds"},
     "mission.approval_granted": {
         "approval_schema_version", "decision", "mission_id", "contract_schema_version",
         "contract_digest", "approver_subject", "authentication_method", "scope",

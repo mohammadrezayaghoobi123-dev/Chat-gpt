@@ -3,7 +3,8 @@
  * Rules this file keeps (each is checked by tests/test_web_client.py or the browser run):
  *  - the server is the only source of mission truth: nothing is stored or invented here;
  *  - every value from the server is written with textContent (never as markup);
- *  - the access token lives only in a JS variable (never storage, never URL);
+ *  - the session lives only in an HttpOnly cookie the script cannot read; the script never sees, stores
+ *    or sends a credential except the one-time login form, which is cleared as soon as it is submitted;
  *  - unknown enum values are shown as "unknown value (raw)", never mapped to a friendly guess;
  *  - a failed/dropped mutating request keeps its idempotency key, so a retry cannot duplicate it;
  *  - nothing here claims a result is verified: that label comes from the server's field.
@@ -17,7 +18,7 @@
   var RISKS = ["low", "medium", "high", "critical"];
   var RESOLUTIONS = ["effect_occurred", "effect_did_not_occur"];
 
-  var S = { token: null, lang: "fa", strings: null, mission: null, result: null, audit: null,
+  var S = { signedIn: false, who: null, lang: "fa", strings: null, mission: null, result: null, audit: null,
             tasks: [], challenge: null, pending: {} };
 
   function $(id) { return document.getElementById(id); }
@@ -73,6 +74,7 @@
     c.setAttribute("data-conn", kind);
   }
   function showFailure(res) {
+    if (res.expired) return;  // expireSession() already told the user; do not overwrite it with a generic error
     if (res.network) { setConn("bad"); return notice("warn", t("err_network")); }
     if (res.error) {
       var e = res.error;
@@ -87,13 +89,14 @@
 
   // ---------------------------------------------------------------------- api
   function api(method, path, body) {
-    var headers = { "Authorization": "Bearer " + S.token };
-    var init = { method: method, headers: headers, cache: "no-store", credentials: "omit" };
+    var headers = {};
+    var init = { method: method, headers: headers, cache: "no-store", credentials: "same-origin" };
     if (body !== undefined) { headers["Content-Type"] = "application/json"; init.body = JSON.stringify(body); }
     return fetch(API + path, init).then(function (r) {
       return r.text().then(function (txt) {
         var data = null;
         try { data = txt ? JSON.parse(txt) : null; } catch (_e) { data = null; }
+        if (r.status === 401 && S.signedIn) { expireSession(); return { ok: false, expired: true }; }
         if (r.ok && data && typeof data === "object") return { ok: true, status: r.status, data: data };
         if (data && data.error && typeof data.error === "object" && typeof data.error.code === "string")
           return { ok: false, status: r.status, error: data.error };
@@ -219,12 +222,12 @@
     $("lang").textContent = t("lang_toggle");
     var keepRisk = $("risk").value, keepRes = $("r-res").value;
     fillSelects(); $("risk").value = keepRisk || "medium"; if (keepRes) $("r-res").value = keepRes;
-    setConn($("conn").getAttribute("data-conn") || (S.token ? "ok" : "out"));
+    setConn($("conn").getAttribute("data-conn") || (S.signedIn ? "ok" : "out"));
     renderRecent(); renderTasks(); renderMission();
   }
 
   // ------------------------------------------------------------------ actions
-  function needToken() { if (S.token) return false; notice("warn", t("err_need_token")); return true; }
+  function needSignedIn() { if (S.signedIn) return false; notice("warn", t("err_need_token")); return true; }
   function needMission() { if (S.mission) return false; notice("warn", t("err_need_mission")); return true; }
   function mid() { return encodeURIComponent(S.mission.mission_id); }
 
@@ -246,7 +249,7 @@
     });
   }
   function openMission(id) {
-    if (needToken()) return;
+    if (needSignedIn()) return;
     id = String(id || "").trim();
     if (!ID_RE.test(id)) return notice("warn", t("err_bad_id"));
     $("mid").value = id;
@@ -259,33 +262,53 @@
   }
   function lines(id) { return $(id).value.split("\n").map(function (s) { return s.trim(); }).filter(Boolean); }
 
+  function showSignedIn(view) {
+    S.signedIn = true; S.who = view;
+    $("signin-form").hidden = true; $("whoami").hidden = false; $("workspace").hidden = false;
+    $("who").textContent = t("who_prefix") + ": " + view.subject + ((view.roles || []).indexOf("operator") >= 0 ? " (" + t("operator_badge") + ")" : "");
+    setConn("ok");
+  }
+  function showSignedOut() {
+    S.signedIn = false; S.who = null; S.mission = null; S.result = null; S.audit = null; S.tasks = []; S.pending = {}; S.challenge = null;
+    $("workspace").hidden = true; $("mission").hidden = true; $("whoami").hidden = true; $("signin-form").hidden = false;
+    $("password").value = ""; setConn("out");
+  }
+  function expireSession() { showSignedOut(); notice("warn", t("err_session_expired")); }
+  function enterWorkspace(view) {
+    // tasks first, then reveal: the workspace never shows a half-loaded task list
+    return api("GET", "/tasks").then(function (res) {
+      if (!res.ok && res.status === 401) return;  // no valid session after all: stay signed out silently
+      S.tasks = res.ok && Array.isArray(res.data.tasks) ? res.data.tasks : [];
+      showSignedIn(view);
+      renderTasks();
+      var m = /^#m=(.+)$/.exec(window.location.hash || "");
+      if (m) { try { return openMission(decodeURIComponent(m[1])); } catch (_e) { /* bad hash */ } }
+    });
+  }
   function onSignin(ev) {
     ev.preventDefault();
-    var tok = $("token").value.trim();
-    if (!tok) return;
-    S.token = tok;
-    api("GET", "/tasks").then(function (res) {
-      if (!res.ok) { S.token = null; setConn(res.network ? "bad" : "out"); return showFailure(res); }
-      S.tasks = Array.isArray(res.data.tasks) ? res.data.tasks : [];
-      $("token").value = "";
-      $("signin-form").querySelector("button[type=submit]").hidden = true;
-      $("token").hidden = true; document.querySelector("label[for=token]").hidden = true;
-      $("signout").hidden = false; $("workspace").hidden = false;
-      setConn("ok"); renderTasks(); notice("ok", t("status_signed_in"));
-      var m = /^#m=(.+)$/.exec(window.location.hash || "");
-      if (m) { try { openMission(decodeURIComponent(m[1])); } catch (_e) { /* bad hash */ } }
+    var body = { subject: $("subject").value.trim(), password: $("password").value };
+    $("password").value = "";  // never keep the password in the page longer than the request
+    if (!body.subject || !body.password) return;
+    $("signin-btn").disabled = true;
+    api("POST", "/session", body).then(function (res) {
+      $("signin-btn").disabled = false;
+      body = null;
+      if (!res.ok) { setConn(res.network ? "bad" : "out"); return showFailure(res); }
+      notice("ok", t("status_signed_in"));
+      return enterWorkspace(res.data);
     });
   }
   function onSignout() {
-    S.token = null; S.mission = null; S.result = null; S.audit = null; S.tasks = []; S.pending = {}; S.challenge = null;
-    $("workspace").hidden = true; $("mission").hidden = true; $("signout").hidden = true;
-    $("signin-form").querySelector("button[type=submit]").hidden = false;
-    $("token").hidden = false; document.querySelector("label[for=token]").hidden = false;
-    $("notice").hidden = true; setConn("out");
+    api("DELETE", "/session").then(function (res) {
+      if (!res.ok && !res.network) { /* the server cleared nothing; the cookie may still be valid */ return showFailure(res); }
+      if (res.network) return showFailure(res);
+      showSignedOut(); $("notice").hidden = true;
+    });
   }
   function onCreate(ev) {
     ev.preventDefault();
-    if (needToken()) return;
+    if (needSignedIn()) return;
     var body = { objective: $("objective").value.trim(), constraints: lines("constraints"), success_criteria: lines("criteria"),
                  risk_tier: $("risk").value, requires_approval: $("req-approval").checked };
     body.idempotency_key = keyFor("create", JSON.stringify(body));
@@ -298,7 +321,7 @@
   }
   function onChallenge(ev) {
     ev.preventDefault();
-    if (needToken() || needMission()) return;
+    if (needSignedIn() || needMission()) return;
     var m = S.mission;
     if (!m.contract_digest) return notice("warn", t("err_bad_response"));
     var body = { contract_digest: m.contract_digest, signing_key_id: $("key-id").value.trim(), signature_alg: $("alg").value.trim() };
@@ -313,7 +336,7 @@
   }
   function onApprove(ev) {
     ev.preventDefault();
-    if (needToken() || needMission()) return;
+    if (needSignedIn() || needMission()) return;
     if (!S.challenge) return;
     var body = { approval_event_id: S.challenge.event, signing_key_id: S.challenge.key, signature_alg: S.challenge.alg,
                  signature_hex: $("sig").value.trim().toLowerCase() };
@@ -325,7 +348,7 @@
   }
   function onExecute(ev) {
     ev.preventDefault();
-    if (needToken() || needMission()) return;
+    if (needSignedIn() || needMission()) return;
     var task = $("task").value;
     if (!task) return;
     var body = { task_id: task };
@@ -339,7 +362,7 @@
   }
   function onReconcile(ev) {
     ev.preventDefault();
-    if (needToken() || needMission()) return;
+    if (needSignedIn() || needMission()) return;
     var body = { attempt_id: $("r-attempt").value, resolution: $("r-res").value, evidence_ref: $("r-ev").value.trim() };
     if (!body.attempt_id) return;
     body.idempotency_key = keyFor("recon:" + mid(), JSON.stringify(body));
@@ -361,18 +384,22 @@
     });
     $("signin-form").addEventListener("submit", onSignin);
     $("signout").addEventListener("click", onSignout);
+    api("GET", "/session").then(function (res) {  // restore a live session after reload (401 = not signed in, silently)
+      if (res.ok) return enterWorkspace(res.data);
+      if (res.network) setConn("bad");
+    });
     $("create-form").addEventListener("submit", onCreate);
     $("open-form").addEventListener("submit", function (ev) { ev.preventDefault(); openMission($("mid").value); });
-    $("refresh").addEventListener("click", function () { if (S.mission && !needToken()) loadMission(S.mission.mission_id, false); });
+    $("refresh").addEventListener("click", function () { if (S.mission && !needSignedIn()) loadMission(S.mission.mission_id, false); });
     $("challenge-form").addEventListener("submit", onChallenge);
     $("approve-form").addEventListener("submit", onApprove);
     $("exec-form").addEventListener("submit", onExecute);
     $("recon-form").addEventListener("submit", onReconcile);
     $("task").addEventListener("change", showTaskInfo);
-    window.addEventListener("online", function () { if (S.token) { setConn("ok"); if (S.mission) loadMission(S.mission.mission_id, true); } });
+    window.addEventListener("online", function () { if (S.signedIn) { setConn("ok"); if (S.mission) loadMission(S.mission.mission_id, true); } });
     window.addEventListener("offline", function () { setConn("bad"); notice("warn", t("err_network")); });
     document.addEventListener("visibilitychange", function () {
-      if (!document.hidden && S.token && S.mission) loadMission(S.mission.mission_id, true);
+      if (!document.hidden && S.signedIn && S.mission) loadMission(S.mission.mission_id, true);
     });
   }
   fetch("/app/strings.json", { cache: "no-store" }).then(function (r) { return r.json(); }).then(boot).catch(function () {

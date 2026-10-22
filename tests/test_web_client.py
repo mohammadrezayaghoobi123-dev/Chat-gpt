@@ -114,24 +114,34 @@ class SecurityProperties(unittest.TestCase):
                        "new Function", "setTimeout(\"", "javascript:"):
             self.assertNotIn(banned, js, banned)
 
-    def test_token_is_never_stored_or_put_in_a_url(self):
+    def test_the_script_never_handles_a_credential_beyond_the_one_time_login_form(self):
         js = read("app.js")
-        for line in js.splitlines():
-            code = line.split("//")[0]
-            if "S.token" in code or "tok" in code.split():
-                self.assertNotIn("localStorage", code)
-                self.assertNotIn("sessionStorage", code)
-                self.assertNotIn("history.", code)
-                self.assertNotIn("location", code)
+        self.assertNotIn("Authorization", js)  # no bearer token is ever built by the page
+        self.assertNotIn("S.password", js)
+        self.assertNotIn("document.cookie", js)  # the session cookie is HttpOnly; the script must not even try
+        self.assertNotIn("sessionStorage", js)
         stores = re.findall(r"localStorage\.(?:get|set)Item\(([^,)]+)", js)
         self.assertTrue(stores)
         for key in stores:
             self.assertIn(key.strip(), {"RECENT_KEY", "LANG_KEY"})
-        self.assertNotIn("sessionStorage", js)
-        self.assertNotIn("document.cookie", js)
+        # the password field is cleared before the request is even sent
+        submit = js[js.index("function onSignin"):js.index("function onSignout")]
+        self.assertLess(submit.index('$("password").value = ""'), submit.index('api("POST", "/session"'))
+        for line in js.splitlines():
+            code = line.split("//")[0]
+            if "password" in code.lower() and ("history." in code or "location" in code or "localStorage" in code):
+                self.fail(f"password near a persistence sink: {line.strip()}")
+
+    def test_login_inputs_use_the_right_autocomplete_and_password_type(self):
+        fields = {a["id"]: a for t, a in parsed() if t == "input" and "id" in a}
+        self.assertEqual(fields["password"]["type"], "password")
+        self.assertEqual(fields["password"]["autocomplete"], "current-password")
+        self.assertEqual(fields["subject"]["autocomplete"], "username")
+        self.assertEqual(fields["password"]["maxlength"], "256")
 
     def test_requests_carry_no_ambient_credentials(self):
-        self.assertIn('credentials: "omit"', read("app.js"))
+        self.assertIn('credentials: "same-origin"', read("app.js"))
+        self.assertNotIn('credentials: "include"', read("app.js"))
         self.assertIn('cache: "no-store"', read("app.js"))
 
 

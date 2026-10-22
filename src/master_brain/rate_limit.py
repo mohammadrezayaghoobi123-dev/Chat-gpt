@@ -110,6 +110,8 @@ class RateLimits:
     per_identity_burst: int = 120
     auth_failure_limit: int = 20         # failed authentications per client address ...
     auth_failure_window: float = 60.0    # ... per window (seconds)
+    account_failure_limit: int = 20      # failed logins against ONE account (from any address) ...
+    account_failure_window: float = 600.0  # ... per window; trades a temporary lock-out risk for no distributed guessing
     max_keys: int = 10_000
 
 
@@ -122,6 +124,14 @@ class RateGate:
                                             clock=clock, max_keys=limits.max_keys)
         self._failures = FailureThrottle(limits.auth_failure_limit, limits.auth_failure_window,
                                          clock=clock, max_keys=limits.max_keys)
+        self._accounts = FailureThrottle(limits.account_failure_limit, limits.account_failure_window,
+                                         clock=clock, max_keys=limits.max_keys)
+
+    def account_blocked_for(self, subject: str) -> float:
+        return self._accounts.blocked_for(subject)
+
+    def record_account_failure(self, subject: str) -> None:
+        self._accounts.record_failure(subject)
 
     def address_blocked_for(self, address: str) -> float:
         return self._failures.blocked_for(address)

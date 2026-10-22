@@ -27,14 +27,19 @@
   <section id="signin" aria-labelledby="signin-h">
     <h2 id="signin-h" data-i18n="signin_title"></h2>
     <p class="help" data-i18n="signin_help"></p>
-    <form id="signin-form" autocomplete="off">
-      <label for="token" data-i18n="token_label"></label>
-      <input id="token" name="token" type="password" dir="ltr" autocomplete="off" spellcheck="false" required>
+    <form id="signin-form" autocomplete="on">
+      <label for="subject" data-i18n="subject_label"></label>
+      <input id="subject" name="username" dir="ltr" autocomplete="username" spellcheck="false" autocapitalize="off" required>
+      <label for="password" data-i18n="password_label"></label>
+      <input id="password" name="password" type="password" dir="ltr" autocomplete="current-password" maxlength="256" required>
       <div class="row">
-        <button type="submit" data-i18n="signin_button"></button>
-        <button type="button" id="signout" class="ghost" data-i18n="signout_button" hidden></button>
+        <button type="submit" id="signin-btn" data-i18n="signin_button"></button>
       </div>
     </form>
+    <div id="whoami" class="row" hidden>
+      <span id="who" class="pill"></span>
+      <button type="button" id="signout" class="ghost" data-i18n="signout_button"></button>
+    </div>
   </section>
 
   <div id="workspace" hidden>

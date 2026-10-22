@@ -8,8 +8,7 @@
     "status_signed_in": "متصل",
     "status_offline": "ارتباط با سرور برقرار نیست",
     "signin_title": "ورود",
-    "signin_help": "نشانه (توکن) فقط در حافظهٔ همین تب نگه داشته می‌شود و هرگز ذخیره نمی‌شود.",
-    "token_label": "نشانهٔ دسترسی",
+    "signin_help": "ورود با نام کاربری و گذرواژهٔ حساب. نشست در کوکی امن (غیرقابل‌خواندن برای اسکریپت) نگه داشته می‌شود و گذرواژه هرگز ذخیره نمی‌شود.",
     "signin_button": "اتصال",
     "signout_button": "خروج",
     "create_title": "ساخت ماموریت",
@@ -130,7 +129,12 @@
     "risk.critical": "بحرانی",
     "verification.not_independently_verified": "به‌طور مستقل راستی‌آزمایی نشده",
     "unknown_value": "مقدار ناشناخته",
-    "error.rate_limited": "تعداد درخواست‌ها زیاد است؛ چیزی اجرا نشد. کمی صبر کنید و دوباره تلاش کنید."
+    "error.rate_limited": "تعداد درخواست‌ها زیاد است؛ چیزی اجرا نشد. کمی صبر کنید و دوباره تلاش کنید.",
+    "subject_label": "نام کاربری",
+    "password_label": "گذرواژه",
+    "err_session_expired": "نشست شما پایان یافته است؛ دوباره وارد شوید.",
+    "who_prefix": "کاربر",
+    "operator_badge": "اپراتور"
   },
   "en": {
     "app_title": "Master Brain",
@@ -141,8 +145,7 @@
     "status_signed_in": "Connected",
     "status_offline": "Cannot reach the server",
     "signin_title": "Sign in",
-    "signin_help": "The token is kept only in this tab's memory and is never stored.",
-    "token_label": "Access token",
+    "signin_help": "Sign in with your account's username and password. The session lives in a secure cookie that scripts cannot read; the password is never stored.",
     "signin_button": "Connect",
     "signout_button": "Sign out",
     "create_title": "Create mission",
@@ -263,6 +266,11 @@
     "risk.critical": "Critical",
     "verification.not_independently_verified": "Not independently verified",
     "unknown_value": "Unknown value",
-    "error.rate_limited": "Too many requests; nothing was executed. Wait a moment and try again."
+    "error.rate_limited": "Too many requests; nothing was executed. Wait a moment and try again.",
+    "subject_label": "Username",
+    "password_label": "Password",
+    "err_session_expired": "Your session has ended; sign in again.",
+    "who_prefix": "User",
+    "operator_badge": "operator"
   }
 }

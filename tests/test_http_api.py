@@ -9,7 +9,8 @@ from pathlib import Path
 from master_brain.api_contracts import ERROR_TABLE, ErrorCode
 from master_brain.audit_store import AuditStore
 from master_brain.http_api import MAX_BODY_BYTES, make_server, serve_in_thread
-from master_brain.identity import Identity, StaticTokenAuthenticator
+from master_brain.accounts import SessionAuthenticator
+from master_brain.identity import ChainAuthenticator, Identity, StaticTokenAuthenticator
 from master_brain.mission_service import MissionService, mission_id_for
 
 ALICE = "alice-token-" + "a" * 32
@@ -19,11 +20,13 @@ KEY = "key-0001-abcdef"
 
 
 class Running:
-    def __init__(self, path, verifier=None, clock=None, execution=None, rate_gate=None):
+    def __init__(self, path, verifier=None, clock=None, execution=None, rate_gate=None, accounts=None,
+                 secure_cookies=False):
         self.store = AuditStore(path, clock=clock)
-        self.server = make_server(MissionService(self.store, verifier, execution),
-                                  StaticTokenAuthenticator({ALICE: "user:alice", BOB: "user:bob", OPS: ("user:ops", ("operator",))}),
-                                  rate_gate=rate_gate)
+        static = StaticTokenAuthenticator({ALICE: "user:alice", BOB: "user:bob", OPS: ("user:ops", ("operator",))})
+        authenticator = static if accounts is None else ChainAuthenticator(static, SessionAuthenticator(accounts))
+        self.server = make_server(MissionService(self.store, verifier, execution), authenticator,
+                                  rate_gate=rate_gate, accounts=accounts, secure_cookies=secure_cookies)
         self.thread = serve_in_thread(self.server)
         self.port = self.server.server_address[1]
 
@@ -341,7 +344,7 @@ class RawProtocol(HttpBase):
             return b"".join(chunks)
 
     def post_head(self, length: str) -> bytes:
-        return (f"POST /v1/missions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {ALICE}\r\n"
+        return (f"POST /v1/missions HTTP/1.1\r\nHost: 127.0.0.1:{self.app.port}\r\nAuthorization: Bearer {ALICE}\r\n"
                 f"Content-Type: application/json\r\nContent-Length: {length}\r\n\r\n").encode()
 
     def test_content_length_must_be_plain_ascii_digits_of_at_most_nine(self):
@@ -356,7 +359,7 @@ class RawProtocol(HttpBase):
     def test_connection_is_really_closed_after_an_unread_body_error(self):
         import socket
         with socket.create_connection(("127.0.0.1", self.app.port), timeout=10) as sock:
-            sock.sendall(b"POST /v1/missions HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\n\r\n{}")
+            sock.sendall(f"POST /v1/missions HTTP/1.1\r\nHost: 127.0.0.1:{self.app.port}\r\nContent-Length: 2\r\n\r\n{{}}".encode())
             first = b""
             while b"\r\n\r\n" not in first:
                 first += sock.recv(4096)
@@ -434,7 +437,9 @@ class ServerConstruction(unittest.TestCase):
         for host in ("127.0.0.1", "localhost"):
             with self.subTest(host=host):
                 make_server(service, auth, host).server_close()
-        server = make_server(service, auth, "0.0.0.0", allow_non_loopback=True)
+        with self.assertRaises(ValueError):  # a wildcard bind without an explicit Host allow-list is refused too
+            make_server(service, auth, "0.0.0.0", allow_non_loopback=True)
+        server = make_server(service, auth, "0.0.0.0", allow_non_loopback=True, allowed_hosts=["mb.example.test:8443"])
         server.server_close()
 
 

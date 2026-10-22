@@ -23,12 +23,14 @@ import sys
 import threading
 import uuid
 from importlib import resources
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, Iterable
 
+from master_brain.accounts import ABSOLUTE_LIFETIME, IDLE_TIMEOUT, AccountStore
 from master_brain.api_contracts import (
     API_VERSION, ApprovalChallengeRequest, CreateMissionRequest, ContractError, ErrorCode,
-    ExecuteMissionRequest, ReconcileRequest, SubmitApprovalRequest, error_response,
+    ExecuteMissionRequest, LoginRequest, ReconcileRequest, SessionView, SubmitApprovalRequest, error_response,
 )
 from master_brain.identity import Authenticator
 from master_brain.mission_service import MISSION_ID_PATTERN, MissionService, ServiceError
@@ -45,6 +47,9 @@ _EXECUTIONS = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/executions")
 _RECONCILIATIONS = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/reconciliations")
 _RESULT = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/result")
 _TASKS = re.compile(r"/v1/tasks")
+_SESSION = re.compile(r"/v1/session")
+COOKIE_NAME = "mb_session"
+_MAX_COOKIE_HEADER = 4096
 _LOOPBACK = {"127.0.0.1", "localhost"}  # IPv4 only: the server socket is AF_INET
 
 # Web client (Gate 3): static, public, no mission data; only GET. The page can only talk to this origin.
@@ -90,12 +95,23 @@ def parse_json_body(raw: bytes) -> Any:
 
 def make_server(service: MissionService, authenticator: Authenticator, host: str = "127.0.0.1",
                 port: int = 0, *, allow_non_loopback: bool = False,
-                rate_gate: RateGate | None = None) -> ThreadingHTTPServer:
-    """``rate_gate`` defaults to ``RateGate()`` (limits ON); pass your own to tune or to inject a clock."""
+                rate_gate: RateGate | None = None, accounts: AccountStore | None = None,
+                allowed_hosts: Iterable[str] | None = None, secure_cookies: bool = False) -> ThreadingHTTPServer:
+    """``rate_gate`` defaults to ``RateGate()`` (limits ON); pass your own to tune or to inject a clock.
+
+    ``accounts`` enables ``/v1/session`` (login/whoami/logout with an HttpOnly SameSite=Strict cookie); the
+    ``authenticator`` must then also accept sessions (see ``SessionAuthenticator``/``ChainAuthenticator``).
+    Every request's ``Host`` must be in ``allowed_hosts`` (default: ``127.0.0.1:<port>`` and
+    ``localhost:<port>``) - this defeats DNS rebinding; binding a non-loopback address REQUIRES an explicit
+    list. Set ``secure_cookies=True`` only behind TLS (adds ``Secure`` and expects ``https`` origins)."""
     gate = rate_gate if rate_gate is not None else RateGate()
     if host not in _LOOPBACK and not allow_non_loopback:
         raise ValueError("refusing to bind a non-loopback address without allow_non_loopback=True "
                          "(no TLS/rate-limit in this transport)")
+    if host not in _LOOPBACK and allowed_hosts is None:
+        raise ValueError("a non-loopback bind requires an explicit allowed_hosts list (DNS-rebinding defence)")
+    host_allow: set[str] = {h.lower() for h in (allowed_hosts or ())}
+    scheme = "https" if secure_cookies else "http"
 
     static = _load_static()  # fail fast at start-up if the client files are missing
 
@@ -148,11 +164,29 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
             self.end_headers()
             self.wfile.write(data)
 
-        def _identity(self):
+        def _credential(self) -> tuple[str | None, str | None]:
+            """(credential, source). An Authorization header, even a malformed one, wins over any cookie."""
             header = self.headers.get("Authorization")
-            if not header or not header.startswith("Bearer "):
-                return None
-            return authenticator.authenticate(header[len("Bearer "):])
+            if header is not None:
+                return (header[len("Bearer "):], "bearer") if header.startswith("Bearer ") and header[7:] else (None, None)
+            raw = self.headers.get("Cookie")
+            if raw and len(raw) <= _MAX_COOKIE_HEADER:
+                try:
+                    jar: SimpleCookie = SimpleCookie()
+                    jar.load(raw)
+                    morsel = jar.get(COOKIE_NAME)
+                except CookieError:
+                    morsel = None
+                if morsel is not None and morsel.value:
+                    return morsel.value, "cookie"
+            return None, None
+
+        def _same_origin(self) -> bool:
+            return (self.headers.get("Origin") or "").lower() == f"{scheme}://{(self.headers.get('Host') or '').lower()}"
+
+        def _cookie(self, value: str, max_age: int) -> str:
+            return (f"{COOKIE_NAME}={value}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict"
+                    + ("; Secure" if secure_cookies else ""))
 
         def _read_body(self) -> bytes | None:
             """None => request rejected as invalid (caller responds and closes)."""
@@ -174,17 +208,22 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
                 path = self.path
                 if "?" in path:  # no query parameters in API v1
                     return self._error(ErrorCode.INVALID_REQUEST, correlation_id, close=True)
+                if (self.headers.get("Host") or "").lower() not in host_allow:  # DNS rebinding defence
+                    return self._error(ErrorCode.INVALID_REQUEST, correlation_id, close=True)
                 if path in static:
                     if method != "GET":
                         return self._error(ErrorCode.INVALID_REQUEST, correlation_id, close=True)
                     return self._send_static(path, correlation_id)
+                if accounts is not None and path == "/v1/session" and method == "POST":
+                    return self._login(correlation_id)
                 routes = (
                     ("POST", _MISSIONS, self._create), ("GET", _MISSION, self._get),
                     ("GET", _AUDIT, self._audit),
                     ("POST", _CHALLENGES, self._challenge), ("POST", _APPROVALS, self._approve),
                     ("POST", _RECONCILIATIONS, self._reconcile), ("POST", _EXECUTIONS, self._execute), ("GET", _RESULT, self._result),
                     ("GET", _TASKS, self._tasks),
-                )
+                ) + ((("GET", _SESSION, self._session_info), ("DELETE", _SESSION, self._logout))
+                     if accounts is not None else ())
                 matched = [(m, rx.fullmatch(path), fn) for m, rx, fn in routes if rx.fullmatch(path)]
                 if not matched:
                     return self._error(ErrorCode.NOT_FOUND, correlation_id, close=True)
@@ -195,10 +234,15 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
                 blocked = gate.address_blocked_for(address)  # before authenticating: no oracle while blocked
                 if blocked > 0:
                     return self._error(ErrorCode.RATE_LIMITED, correlation_id, close=True, retry_after=blocked)
-                identity = self._identity()
+                credential, source = self._credential()
+                identity = authenticator.authenticate(credential) if credential else None
                 if identity is None:
                     gate.record_auth_failure(address)
                     return self._error(ErrorCode.UNAUTHENTICATED, correlation_id, close=True)
+                self._credential_value = credential
+                if source == "cookie" and method != "GET" and not self._same_origin():
+                    # ambient (cookie) credentials need a same-origin proof on every state change (CSRF)
+                    return self._error(ErrorCode.FORBIDDEN, correlation_id, close=True)
                 wait = gate.identity_wait(identity.subject)
                 if wait > 0:
                     return self._error(ErrorCode.RATE_LIMITED, correlation_id, close=True, retry_after=wait)
@@ -210,6 +254,43 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
                 self._error(ErrorCode.UNAVAILABLE, correlation_id, close=True)
 
         # ---------------------------------------------------------------- routes
+        def _login(self, correlation_id: str) -> None:
+            address = self.client_address[0]
+            blocked = gate.address_blocked_for(address)
+            if blocked > 0:
+                return self._error(ErrorCode.RATE_LIMITED, correlation_id, close=True, retry_after=blocked)
+            if self.headers.get("Origin") is not None and not self._same_origin():  # login CSRF
+                return self._error(ErrorCode.FORBIDDEN, correlation_id, close=True)
+            request = self._json_request(LoginRequest, correlation_id)
+            if request is None:
+                return
+            locked = gate.account_blocked_for(request.subject)
+            if locked > 0:
+                return self._error(ErrorCode.RATE_LIMITED, correlation_id, close=False, retry_after=locked)
+            identity = accounts.verify_password(request.subject, request.password)
+            if identity is None:
+                gate.record_auth_failure(address)
+                gate.record_account_failure(request.subject)
+                return self._error(ErrorCode.UNAUTHENTICATED, correlation_id)
+            token, expires = accounts.create_session(identity)
+            max_age = int(ABSOLUTE_LIFETIME.total_seconds())
+            view = SessionView(identity.subject, tuple(identity.roles), expires.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                               int(IDLE_TIMEOUT.total_seconds()))
+            self._send(201, view.to_dict(), correlation_id, {"Set-Cookie": self._cookie(token, max_age)})
+
+        def _session_info(self, identity, _match, correlation_id: str) -> None:
+            expires = accounts.session_expiry(self._credential_value)
+            if expires is None:  # authenticated by a static token: there is no session to describe
+                raise ServiceError(ErrorCode.NOT_FOUND)
+            view = SessionView(identity.subject, tuple(identity.roles), expires.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                               int(IDLE_TIMEOUT.total_seconds()))
+            self._send(200, view.to_dict(), correlation_id)
+
+        def _logout(self, identity, _match, correlation_id: str) -> None:
+            accounts.revoke_session(self._credential_value)
+            self._send(200, {"api_version": API_VERSION, "signed_out": True}, correlation_id,
+                       {"Set-Cookie": self._cookie("", 0)})
+
         def _create(self, identity, _match, correlation_id: str) -> None:
             request = self._json_request(CreateMissionRequest, correlation_id)
             if request is not None:
@@ -294,7 +375,11 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
                 return
             sys.stderr.write(f"unexpected server error: {type(exc).__name__}\n")
 
-    return Server((host, port), Handler)
+    server = Server((host, port), Handler)
+    if allowed_hosts is None:  # loopback bind: the port is only known now
+        bound = server.server_address[1]
+        host_allow.update({f"127.0.0.1:{bound}", f"localhost:{bound}"})
+    return server
 
 
 def serve_in_thread(server: ThreadingHTTPServer) -> threading.Thread:
@@ -303,4 +388,4 @@ def serve_in_thread(server: ThreadingHTTPServer) -> threading.Thread:
     return thread
 
 
-__all__ = ["MAX_BODY_BYTES", "WEB_CSP", "make_server", "parse_json_body", "serve_in_thread"]
+__all__ = ["COOKIE_NAME", "MAX_BODY_BYTES", "WEB_CSP", "make_server", "parse_json_body", "serve_in_thread"]

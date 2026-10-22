@@ -1,0 +1,9 @@
+{
+  "api_version": "1",
+  "expires_at": "2026-10-22T20:00:00.000000Z",
+  "idle_timeout_seconds": 1800,
+  "roles": [
+    "operator"
+  ],
+  "subject": "user:ops"
+}

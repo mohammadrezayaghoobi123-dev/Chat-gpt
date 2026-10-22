@@ -196,6 +196,30 @@ class SubmitApprovalRequest:
 
 
 _TASK_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_SUBJECT = re.compile(r"^[A-Za-z0-9._:@-]{1,128}$")
+MAX_PASSWORD_CHARS = 256
+
+
+@dataclass(frozen=True)
+class LoginRequest:
+    """Credentials for ``POST /v1/session``. The password is NOT trimmed or normalised; its policy is
+    enforced when an account is created, so login only bounds its size."""
+
+    subject: str
+    password: str
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "LoginRequest":
+        d = _object(data, "request", {"subject", "password"}, set())
+        password = d["password"]
+        if not isinstance(password, str) or not 1 <= len(password) <= MAX_PASSWORD_CHARS or "\x00" in password:
+            raise ContractError("request.password", f"must be 1-{MAX_PASSWORD_CHARS} characters without NUL")
+        return cls(subject=_pattern(d["subject"], "request.subject", _SUBJECT, "1-128 characters of [A-Za-z0-9._:@-]"),
+                   password=password)
+
+    def __repr__(self) -> str:  # never let a password reach a log line or traceback
+        return f"LoginRequest(subject={self.subject!r}, password=<redacted>)"
+
 
 
 @dataclass(frozen=True)
@@ -399,6 +423,21 @@ class ApprovalChallenge:
         }
 
 
+@dataclass(frozen=True)
+class SessionView:
+    """Who the server believes the caller is. The session token itself is never in a body: it lives only
+    in the HttpOnly cookie."""
+
+    subject: str
+    roles: tuple[str, ...]
+    expires_at: str
+    idle_timeout_seconds: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"api_version": API_VERSION, "subject": self.subject, "roles": sorted(self.roles),
+                "expires_at": self.expires_at, "idle_timeout_seconds": self.idle_timeout_seconds}
+
+
 # AuditEventView deliberately has NO payload: audit detail is role-gated later, and the
 # default view must not expose more than is needed.
 @dataclass(frozen=True)
@@ -543,6 +582,7 @@ def error_from_execution_result(result: Any, correlation_id: str) -> ErrorRespon
 __all__ = [
     "API_VERSION", "ApprovalChallenge", "ApprovalChallengeRequest", "ApprovalStatus",
     "AttemptView", "AuditEventView", "ContractError", "CreateMissionRequest", "ExecuteMissionRequest",
+    "LoginRequest", "MAX_PASSWORD_CHARS", "SessionView",
     "MAX_EVIDENCE_REF_CHARS", "RECONCILIATION_RESOLUTIONS", "ReconcileRequest",
     "RESULT_NOTES", "ResultView", "TaskView", "ERROR_TABLE", "EXECUTION_STATUSES",
     "ErrorCode", "ErrorResponse", "ExecutionPhase", "MissionView", "RESULT_NOT_VERIFIED",

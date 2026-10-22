@@ -162,7 +162,8 @@ class HelperTests(unittest.TestCase):
     def test_defaults_are_generous_for_a_person_and_bounded(self):
         d = RateLimits()
         self.assertEqual((d.per_identity_rate, d.per_identity_burst, d.auth_failure_limit,
-                          d.auth_failure_window, d.max_keys), (20.0, 120, 20, 60.0, 10_000))
+                          d.auth_failure_window, d.account_failure_limit, d.account_failure_window, d.max_keys),
+                         (20.0, 120, 20, 60.0, 20, 600.0, 10_000))
         with self.assertRaises(Exception):
             d.max_keys = 1  # immutable policy object
         RateGate(d, clock=Clock())  # constructs

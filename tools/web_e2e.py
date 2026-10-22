@@ -12,13 +12,16 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+from master_brain.accounts import AccountStore, SessionAuthenticator
 from master_brain.audit_store import AuditStore
 from master_brain.execution_registry import SQLiteExecutionRegistry
 from master_brain.http_api import make_server, serve_in_thread
-from master_brain.identity import StaticTokenAuthenticator
+from master_brain.identity import ChainAuthenticator, StaticTokenAuthenticator
 from master_brain.mission_service import ExecutionConfig, MissionService
 from master_brain.task_catalog import TaskCatalog
 from tests.test_http_api import ALICE, BOB, OPS
+
+PW = "correct horse battery"
 from tests.test_task_catalog import make
 
 CHROMIUM = "/opt/pw-browsers/chromium"
@@ -42,8 +45,11 @@ def main():
     store = AuditStore(base / "audit.jsonl")
     cfg = ExecutionConfig(TaskCatalog([make("echo", adapter=Echo())]),
                           SQLiteExecutionRegistry(str(base / "reg.sqlite")), dispatch_timeout_seconds=5)
+    accounts = AccountStore(base / "id.sqlite")
+    accounts.create_account("user:carol", PW)
     server = make_server(MissionService(store, None, cfg),
-                         StaticTokenAuthenticator({ALICE: "user:alice", BOB: "user:bob", OPS: ("user:ops", ("operator",))}))
+                         ChainAuthenticator(StaticTokenAuthenticator({ALICE: "user:alice", BOB: "user:bob", OPS: ("user:ops", ("operator",))}),
+                                            SessionAuthenticator(accounts)), accounts=accounts)
     serve_in_thread(server)
     url = f"http://127.0.0.1:{server.server_address[1]}/app/"
 
@@ -66,21 +72,31 @@ def main():
         page.keyboard.press("Tab")
         check("first Tab stop is the skip link", page.evaluate("document.activeElement.className") == "skip")
 
-        # bad token -> honest error, still signed out
-        page.fill("#token", "wrong-token-value-0000000000000000")
+        # wrong password -> honest error, still signed out, password field emptied
+        page.fill("#subject", "user:carol")
+        page.fill("#password", "wrong password!!")
         page.click("#signin-form button[type=submit]")
         page.wait_for_selector("#notice:not([hidden])")
-        check("bad token shows an error notice", "notice err" in page.get_attribute("#notice", "class"), page.inner_text("#notice"))
-        check("bad token keeps workspace hidden", page.is_hidden("#workspace"))
-        check("token field is cleared of nothing secret in DOM URL", "wrong-token" not in page.url)
+        check("wrong password shows an error notice", "notice err" in page.get_attribute("#notice", "class"), page.inner_text("#notice"))
+        check("wrong password keeps workspace hidden", page.is_hidden("#workspace"))
+        check("password field is emptied after submit", page.input_value("#password") == "")
+        check("password never reaches the URL", "wrong" not in page.url)
 
-        # good token
-        page.fill("#token", ALICE)
+        # good login
+        page.fill("#subject", "user:carol")
+        page.fill("#password", PW)
         page.click("#signin-form button[type=submit]")
         page.wait_for_selector("#workspace:not([hidden])")
         check("signed-in status shown", page.get_attribute("#conn", "data-conn") == "ok")
-        check("token not left in the input", page.input_value("#token") == "")
+        check("password not left in the page", page.input_value("#password") == "" and PW not in page.content())
+        check("who-am-i shows the account", "user:carol" in page.inner_text("#who"))
         check("task list from server", "echo" in page.inner_text("#task"))
+        cookies = {c["name"]: c for c in ctx.cookies()}
+        sess = cookies.get("mb_session")
+        check("session cookie is HttpOnly + SameSite=Strict", bool(sess) and sess["httpOnly"] and sess["sameSite"] == "Strict", sess)
+        check("script cannot read the session cookie", "mb_session" not in page.evaluate("document.cookie"))
+        check("no credential in web storage", page.evaluate("JSON.stringify([localStorage, sessionStorage])").count("mb_session") == 0
+              and PW not in page.evaluate("JSON.stringify([localStorage, sessionStorage])"))
 
         # create mission, including a hostile objective that must render as text
         hostile = '<img src=x onerror="window.__pwned=1"> هدف آزمایشی'
@@ -98,7 +114,7 @@ def main():
         check("verification badge says not independently verified", "راستی‌آزمایی نشده" in state, state)
         mission_hash = page.evaluate("location.hash")
         check("URL hash holds only the mission id", re.fullmatch(r"#m=[A-Za-z0-9._:%-]+", mission_hash) is not None, mission_hash)
-        check("hash does not contain the token", ALICE not in page.url)
+        check("hash does not contain the session", sess["value"] not in page.url)
 
         # execute with a dropped connection first: same key must be reused on retry
         bodies = []
@@ -144,14 +160,11 @@ def main():
             page.wait_for_selector("#notice.err")
             check("non-operator reconcile shows an error", True)
 
-        # refresh/reload recovery: hash survives, sign in again, mission returns without re-creating
+        # refresh/reload recovery: the cookie keeps the session; the mission returns from the server
         page.reload()
-        page.wait_for_selector("#signin-form")
-        check("reload drops the token (signed out)", page.is_hidden("#workspace"))
-        page.fill("#token", ALICE)
-        page.click("#signin-form button[type=submit]")
         page.wait_for_selector("#mission:not([hidden])")
         page.wait_for_selector("#m-fields dd")
+        check("reload keeps the session (no new login needed)", page.is_visible("#whoami") and page.is_hidden("#signin-form"))
         check("after reload the same mission is recovered from the server", page.inner_text("#m-objective") == hostile)
 
         # language toggle
@@ -180,9 +193,29 @@ def main():
         check("dark scheme changes the background", bg != "rgb(246, 247, 249)", bg)
         page.emulate_media(color_scheme="light")
 
-        # sign-out wipes the workspace
+        # sign-out wipes the workspace and the server-side session
         page.click("#signout")
+        page.wait_for_selector("#signin-form:not([hidden])")
         check("sign-out hides workspace", page.is_hidden("#workspace") and page.is_hidden("#mission"))
+        check("sign-out clears the cookie", "mb_session" not in {c["name"] for c in ctx.cookies()})
+        replay = ctx.request.get(url.replace("/app/", "/v1/tasks"), headers={"Cookie": "mb_session=" + sess["value"]})
+        check("the old session value no longer works on the server", replay.status == 401, replay.status)
+        page.reload()
+        page.wait_for_selector("#signin-form")
+        check("after sign-out a reload stays signed out", page.is_hidden("#workspace"))
+
+        # server-side revocation mid-session: the next call shows "session ended" and signs the UI out
+        page.fill("#subject", "user:carol")
+        page.fill("#password", PW)
+        page.click("#signin-form button[type=submit]")
+        page.wait_for_selector("#mission:not([hidden])")
+        page.wait_for_selector("#m-fields dd")
+        accounts.set_disabled("user:carol", True)
+        page.click("#refresh")
+        page.wait_for_selector("#signin-form:not([hidden])")
+        check("a 401 mid-session signs the UI out with a clear message",
+              "notice warn" in page.get_attribute("#notice", "class") and "نشست" in page.inner_text("#notice"), page.inner_text("#notice"))
+        check("expired session hides the workspace", page.is_hidden("#workspace") and page.is_hidden("#mission"))
 
         bad = [c for c in console if c[0] in ("error", "pageerror") and "ERR_CONNECTION_RESET" not in c[1]
                and "Failed to load resource" not in c[1]]

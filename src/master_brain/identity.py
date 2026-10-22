@@ -83,6 +83,22 @@ class StaticTokenAuthenticator:
         return found
 
 
+class ChainAuthenticator:
+    """Try several authenticators in order (e.g. static service tokens, then server-side sessions)."""
+
+    def __init__(self, *authenticators: Authenticator) -> None:
+        if not authenticators:
+            raise ValueError("at least one authenticator is required")
+        self._chain = authenticators
+
+    def authenticate(self, credential: str | None) -> Identity | None:
+        for authenticator in self._chain:
+            identity = authenticator.authenticate(credential)
+            if identity is not None:
+                return identity
+        return None
+
+
 def _encodable(text: str) -> bool:
     try:
         text.encode("utf-8")
@@ -91,5 +107,5 @@ def _encodable(text: str) -> bool:
     return True
 
 
-__all__ = ["Authenticator", "Identity", "KNOWN_ROLES", "MIN_TOKEN_CHARS", "ROLE_OPERATOR",
+__all__ = ["Authenticator", "ChainAuthenticator", "Identity", "KNOWN_ROLES", "MIN_TOKEN_CHARS", "ROLE_OPERATOR",
            "StaticTokenAuthenticator"]

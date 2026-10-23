@@ -29,12 +29,29 @@ main{width:min(900px,100%);margin:auto;padding:28px 18px 56px}.brand{display:fle
 <script>
 const statusText=document.querySelector("#status"),dot=document.querySelector("#dot");
 const ids={status:"statusOut",architecture:"archOut",audit:"auditOut"};
-let rpcId=0;
+let rpcId=0,sessionId=null;
+async function postMcp(payload){
+ const headers={"Content-Type":"application/json","Accept":"application/json, text/event-stream"};
+ if(sessionId)headers["mcp-session-id"]=sessionId;
+ const r=await fetch("/mcp",{method:"POST",headers,body:JSON.stringify(payload)});
+ const text=await r.text();let data=null;
+ if(text){try{data=JSON.parse(text)}catch{throw new Error("MCP response was not JSON: "+text.slice(0,300))}}
+ if(!r.ok||data?.error)throw new Error(data?.error?.message||("HTTP "+r.status));
+ return {response:r,data};
+}
+async function ensureSession(){
+ if(sessionId)return;
+ const {response,data}=await postMcp({jsonrpc:"2.0",id:++rpcId,method:"initialize",params:{
+  protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"master-brain-evidence-lab",version:"0.1.0"}
+ }});
+ sessionId=response.headers.get("mcp-session-id");
+ if(!sessionId)throw new Error("Server did not return an MCP session ID.");
+ await postMcp({jsonrpc:"2.0",method:"notifications/initialized"});
+}
 async function callMcp(name,args={}){
- const r=await fetch("/mcp",{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:++rpcId,method:"tools/call",params:{name,arguments:args}})});
- const text=await r.text();let data;try{data=JSON.parse(text)}catch{throw new Error("MCP response was not JSON: "+text.slice(0,300))}
- if(!r.ok||data.error)throw new Error(data.error?.message||("HTTP "+r.status));
- return (data.result?.content||[]).map(x=>x.text||"").join("\n")||JSON.stringify(data.result||data,null,2);
+ await ensureSession();
+ const {data}=await postMcp({jsonrpc:"2.0",id:++rpcId,method:"tools/call",params:{name,arguments:args}});
+ return (data?.result?.content||[]).map(x=>x.text||"").join("\n")||JSON.stringify(data?.result||data,null,2);
 }
 async function refresh(){
  try{const r=await fetch("/healthz");if(!r.ok)throw new Error("HTTP "+r.status);const d=await r.json();dot.classList.add("ok");statusText.textContent="Cloud service online · "+d.mode;}

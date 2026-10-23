@@ -6,6 +6,7 @@ asserts what the user would see. Exits non-zero on the first failed expectation.
 unittest suite (needs a browser); tests/test_web_client.py guards the static properties in CI."""
 import json
 import re
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -26,7 +27,7 @@ from tests.test_http_api import ALICE, BOB, OPS
 PW = "correct horse battery"
 from tests.test_task_catalog import make
 
-CHROMIUM = "/opt/pw-browsers/chromium"
+CHROMIUM = os.environ.get("MB_CHROMIUM") or "/opt/pw-browsers/chromium"
 failures = []
 
 

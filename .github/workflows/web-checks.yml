@@ -1,0 +1,43 @@
+name: Web client checks (real browser)
+
+# Real Chromium end-to-end flow + automated accessibility audit (with its own self-test that proves
+# the audit can fail). Runs only when the web client, the HTTP layer or these tools change.
+on:
+  push:
+    branches:
+      - master-brain/integrated
+    paths:
+      - "src/master_brain/web/**"
+      - "src/master_brain/http_api.py"
+      - "tools/web_e2e.py"
+      - "tools/a11y_check.py"
+      - ".github/workflows/web-checks.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MB_REQUIRE_SIGNING_TESTS: "1"
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package and Playwright
+        run: |
+          python -m pip install -e ".[signing]" playwright
+          python -m playwright install --with-deps chromium
+      - name: Locate Chromium
+        run: echo "MB_CHROMIUM=$(python -c 'from playwright.sync_api import sync_playwright as s; p=s().start(); print(p.chromium.executable_path); p.stop()')" >> "$GITHUB_ENV"
+      - name: End-to-end flow
+        run: PYTHONPATH=src:. python tools/web_e2e.py
+      - name: Accessibility audit
+        run: PYTHONPATH=src:. python tools/a11y_check.py
+      - name: Accessibility audit self-test (each deliberate defect must be caught)
+        run: PYTHONPATH=src:. python tools/a11y_check.py --selftest

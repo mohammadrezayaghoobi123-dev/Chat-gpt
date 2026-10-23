@@ -275,6 +275,40 @@ class Build(Dirs):
         self.assertEqual([t.task_id for t in tasks], ["echo"])
         self.assertEqual(tasks[0].integration.limitations, ("offline only",))
 
+    def test_pubmed_specs_register_read_only_free_tasks_and_are_announced(self):
+        calls = []
+        built = build(self.config(port=0, pubmed_searches=("pm-a=metformin AND trial", "pm-b=aspirin")),
+                      pubmed_fetcher=lambda url: calls.append(url) or b"{}")
+        self.addCleanup(built.close)
+        tasks = built.service._execution.catalog.list()
+        self.assertEqual([t.task_id for t in tasks], ["pm-a", "pm-b"])
+        self.assertEqual(tasks[0].payload(), {"query": "metformin AND trial", "max_results": 10})
+        self.assertEqual((tasks[0].integration.risk_level, tasks[0].integration.estimated_cost_per_call), (0, 0.0))
+        self.assertTrue(any("eutils.ncbi.nlm.nih.gov" in w for w in built.warnings))
+        self.assertEqual(calls, [])  # registering never touches the network
+
+    def test_pubmed_specs_coexist_with_the_demo_task(self):
+        built = build(self.config(port=0, demo_echo_task=True, pubmed_searches=("pm=x",)))
+        self.addCleanup(built.close)
+        self.assertEqual([t.task_id for t in built.service._execution.catalog.list()], ["echo", "pm"])
+
+    def test_malformed_or_duplicate_pubmed_specs_refuse_to_start(self):
+        for specs, demo in ((("no-equals",), False), (("=q",), False), (("Bad ID=q",), False), (("ok=",), False),
+                            (("ok=" + "x" * 501,), False), (("a=q", "a=r"), False), (("echo=q",), True)):
+            with self.assertRaises(StartupRefused, msg=specs):
+                build(self.config(port=0, demo_echo_task=demo, pubmed_searches=specs))
+
+    def test_a_spec_without_equals_says_how_to_write_it(self):
+        with self.assertRaises(StartupRefused) as ctx:
+            build(self.config(port=0, pubmed_searches=("no-equals",)))
+        self.assertIn("TASK_ID=QUERY", str(ctx.exception))
+
+    def test_the_command_line_flag_is_repeatable(self):
+        from master_brain.serve import _parse
+        cfg = _parse(["--data-dir", "d", "--pubmed-search", "a=x", "--pubmed-search", "b=y"])
+        self.assertEqual(cfg.pubmed_searches, ("a=x", "b=y"))
+        self.assertEqual(_parse(["--data-dir", "d"]).pubmed_searches, ())
+
 
 class RealProcess(Dirs):
     """The scientific check: a REAL process, killed with SIGKILL, restarted on the same files."""

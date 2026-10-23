@@ -41,6 +41,7 @@ from master_brain.integrations import (
     IntegrationDescriptor, IntegrationHealth, IntegrationKind, IntegrationMaturity, IntegrationRequirement,
 )
 from master_brain.mission_service import ExecutionConfig, MissionService
+from master_brain.pubmed import PubMedError, pubmed_search_task
 from master_brain.task_catalog import TaskCatalog, TaskDefinition
 
 MAX_TRUSTED_KEYS = 100
@@ -63,6 +64,7 @@ class ServeConfig:
     secure_cookies: bool = False
     approval_keys: Path | None = None
     demo_echo_task: bool = False
+    pubmed_searches: tuple[str, ...] = ()
 
 
 @dataclass
@@ -182,7 +184,21 @@ def _demo_task() -> TaskDefinition:
 
 
 # ----------------------------------------------------------------------------- assembly
-def build(config: ServeConfig) -> Built:
+PUBMED_DEFAULT_MAX = 10
+
+
+def parse_pubmed_spec(spec: str, fetcher: Any = None) -> TaskDefinition:
+    """``TASK_ID=QUERY`` -> an operator-defined, approval-gated PubMed search task."""
+    task_id, sep, query = spec.partition("=")
+    if not sep:
+        raise StartupRefused("--pubmed-search must look like TASK_ID=QUERY")
+    try:
+        return pubmed_search_task(task_id.strip(), query.strip(), PUBMED_DEFAULT_MAX, fetcher=fetcher)
+    except (PubMedError, ValueError) as exc:
+        raise StartupRefused(f"--pubmed-search {task_id.strip()!r}: {exc}") from exc
+
+
+def build(config: ServeConfig, *, pubmed_fetcher: Any = None) -> Built:
     warnings = preflight(config.data_dir)
     data = Path(config.data_dir)
     verifier = None
@@ -192,10 +208,20 @@ def build(config: ServeConfig) -> Built:
         warnings.append("no --approval-keys: no approval can be recorded")
     accounts = AccountStore(data / "accounts.sqlite")
     execution = None
+    tasks: list[TaskDefinition] = []
     if config.demo_echo_task:
-        execution = ExecutionConfig(TaskCatalog([_demo_task()]), SQLiteExecutionRegistry(str(data / "registry.sqlite")),
-                                    dispatch_timeout_seconds=30.0)
+        tasks.append(_demo_task())
         warnings.append("--demo-echo-task is on: one offline task can run (not a real integration)")
+    tasks.extend(parse_pubmed_spec(spec, pubmed_fetcher) for spec in config.pubmed_searches)
+    if config.pubmed_searches:
+        warnings.append("--pubmed-search: approved tasks will contact eutils.ncbi.nlm.nih.gov (read-only, free)")
+    if tasks:
+        try:
+            catalog = TaskCatalog(tasks)
+        except ValueError as exc:
+            raise StartupRefused(str(exc)) from exc
+        execution = ExecutionConfig(catalog, SQLiteExecutionRegistry(str(data / "registry.sqlite")),
+                                    dispatch_timeout_seconds=30.0)
     service = MissionService(AuditStore(data / "audit.jsonl"), verifier, execution, AccountApprovers(accounts))
     try:
         server = make_server(service, SessionAuthenticator(accounts), config.host, config.port,
@@ -219,11 +245,14 @@ def _parse(argv: list[str] | None) -> ServeConfig:
     parser.add_argument("--secure-cookies", action="store_true", help="only behind TLS")
     parser.add_argument("--approval-keys", type=Path, help="JSON file of PUBLIC approval keys")
     parser.add_argument("--demo-echo-task", action="store_true", help="register one offline demo task")
+    parser.add_argument("--pubmed-search", action="append", default=[], metavar="TASK_ID=QUERY",
+                        help="repeatable; register a read-only PubMed search task")
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("--port must be 0-65535")
     return ServeConfig(args.data_dir, args.host, args.port, args.allow_non_loopback, tuple(args.allowed_host),
-                       args.secure_cookies, args.approval_keys, args.demo_echo_task)
+                       args.secure_cookies, args.approval_keys, args.demo_echo_task,
+                       tuple(args.pubmed_search))
 
 
 def _main(argv: list[str] | None = None) -> int:

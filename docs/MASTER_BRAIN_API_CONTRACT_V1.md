@@ -167,3 +167,8 @@ python -m master_brain.serve --data-dir DIR [--port 8765] [--approval-keys KEYS.
 - **کلیدهای تأیید:** `{"keys":[{"key_id","subject","public_key_hex"}]}` فقط کلید **عمومی** Ed25519 (۶۴ نویسهٔ hex)، حداکثر ۱۰۰، فقط همین سه فیلد، هر کلید به یک موضوع گره خورده؛ فقط هنگام شروع بارگیری می‌شود (تغییر = restart). بدون این فایل هیچ تأییدی ثبت نمی‌شود (هشدار چاپ می‌شود). کلید خصوصی هرگز اینجا نمی‌آید.
 - **اجرا:** بدون `--demo-echo-task` هیچ کاری اجرا نمی‌شود؛ با آن، یک کار آفلاین (`echo`، محدودیت «offline only») ثبت می‌شود. تلفیق واقعی گام جدا و بازبینی‌شده است.
 - **شبکه:** پیش‌فرض loopback. غیرحلقه‌ای نیازمند `--allow-non-loopback` و `--allowed-host` (ضد DNS-rebinding) است؛ TLS اینجا پایان نمی‌یابد (پراکسی جلوی آن + `--secure-cookies`). `SIGTERM/SIGINT` ⇒ توقف تمیز.
+
+## Gate 3a — PubMed (`pubmed.py`, `serve --pubmed-search`)
+- `python -m master_brain.serve … --pubmed-search TASK_ID=QUERY` (repeatable) registers a catalogue task `TASK_ID` (integration `pubmed-esearch`, kind `data_source`, `risk_level` 0, cost 0.0, payload `{"query": QUERY, "max_results": 10}`). It runs only through the normal approval/execution gates; `GET /v1/tasks` shows its `action_digest`.
+- Result of a successful run: `{"source":"pubmed","query":…,"total_count":int,"pmids":[str,…]}` (≤ 20 PMIDs). Any upstream anomaly ⇒ fixed-message `PubMedError` ⇒ dispatch failure; no URL or upstream text is leaked.
+- Start-up refuses a malformed spec (no `=`, bad task id, empty/over-500-char query) or a duplicate id (also vs. `echo`).

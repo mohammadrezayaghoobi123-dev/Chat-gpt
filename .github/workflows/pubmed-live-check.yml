@@ -1,0 +1,29 @@
+name: PubMed live check
+
+# Read-only, free, unauthenticated NCBI request. No secrets, no inputs.
+# Runs once when THIS file changes on the integrated branch, and on demand (workflow_dispatch works
+# from the default branch only; for the integrated branch push a change to this file to re-run).
+on:
+  push:
+    branches:
+      - master-brain/integrated
+    paths:
+      - .github/workflows/pubmed-live-check.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Real PubMed search through the production adapter
+        run: PYTHONPATH=src python -m master_brain.pubmed "metformin[Title] AND randomized controlled trial[Publication Type]" --max 3

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Master Brain · Evidence Lab</title>
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#e9edf5;background:#10141c;font-synthesis:none}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top,#202c3e 0,#10141c 55%);min-height:100vh}
+main{width:min(900px,100%);margin:auto;padding:28px 18px 56px}.brand{display:flex;align-items:center;gap:12px;margin-bottom:28px}.mark{width:46px;height:46px;border-radius:14px;background:#b6e3cc;color:#14251e;display:grid;place-items:center;font-size:24px;font-weight:800}.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#9fbaaE}.brand h1{font-size:25px;margin:2px 0}.sub{color:#b7c2d3;font-size:14px;line-height:1.6}.pill{border:1px solid #344356;color:#b7c2d3;border-radius:999px;padding:5px 9px;font-size:12px;display:inline-block}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.panel{border:1px solid #303c4d;background:#171e29;border-radius:16px;padding:18px;min-width:0}.panel h2{font-size:17px;margin:0 0 10px}.panel p{font-size:13px;line-height:1.6;color:#b7c2d3}.wide{grid-column:1/-1}label{display:block;font-size:13px;color:#c6d0df;margin:12px 0 6px}input,textarea{font:inherit;width:100%;padding:11px 12px;border-radius:10px;border:1px solid #405066;background:#0e131b;color:#eef2f8;outline:none}textarea{resize:vertical;min-height:90px}button{font:inherit;font-weight:650;border:0;border-radius:10px;background:#b6e3cc;color:#14251e;padding:10px 14px;cursor:pointer;margin-top:12px}button.secondary{background:#273447;color:#edf3fc;border:1px solid #405066}button:disabled{opacity:.5;cursor:wait}.actions{display:flex;gap:8px;flex-wrap:wrap}.result{margin-top:12px;border-radius:10px;border:1px solid #344356;background:#0d1219;padding:12px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.6;max-height:360px;overflow:auto;color:#dbe5f3}.status{display:flex;align-items:center;gap:8px;font-size:13px;color:#b7c2d3;margin:12px 0}.dot{width:8px;height:8px;border-radius:50%;background:#e5b567}.dot.ok{background:#75d6a6}.foot{font-size:12px;color:#8492a6;line-height:1.7;margin-top:20px}a{color:#b6e3cc}@media(max-width:650px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}main{padding:22px 13px 40px}.brand h1{font-size:22px}}
+</style>
+</head>
+<body><main>
+<header class="brand"><div class="mark">M</div><div><div class="eyebrow">From contradiction to proof</div><h1>Master Brain · Evidence Lab</h1><div class="sub">Cloud starter · read-only · no laptop connection</div></div></header>
+<div class="status"><span id="dot" class="dot"></span><span id="status">Checking service…</span></div>
+<div class="grid">
+<section class="panel"><h2>Project status</h2><p>Check whether this cloud service is responding and review its safety boundaries.</p><button id="statusBtn">Check status</button><pre class="result" id="statusOut" hidden></pre></section>
+<section class="panel"><h2>Architecture</h2><p>View the current blueprint. This is a starter design, not a claim that the full platform exists.</p><button id="archBtn">View blueprint</button><pre class="result" id="archOut" hidden></pre></section>
+<section class="panel wide"><h2>Proof audit</h2><p>Structure a claim and any evidence you already have. This tool does not independently verify sources or search the web.</p>
+<label for="claim">Claim to review</label><textarea id="claim" maxlength="2000" placeholder="Write one precise claim…"></textarea>
+<label for="context">Context (optional)</label><input id="context" maxlength="2000" placeholder="What decision depends on this claim?">
+<label for="sources">Evidence sources (optional, one per line)</label><textarea id="sources" placeholder="Title | https://example.com | excerpt (optional)"></textarea>
+<button id="auditBtn">Prepare audit</button><pre class="result" id="auditOut" hidden></pre></section>
+</div>
+<p class="foot">Privacy and limits: this starter has no persistent storage, no account access, no laptop/OpenClaw/Ollama access, and no write-capable tools. Inputs are processed to generate the response and are not saved by this app. Do not enter passwords, API keys, or sensitive personal information.</p>
+</main>
+<script>
+const statusText=document.querySelector("#status"),dot=document.querySelector("#dot");
+const ids={status:"statusOut",architecture:"archOut",audit:"auditOut"};
+let rpcId=0;
+async function callMcp(name,args={}){
+ const r=await fetch("/mcp",{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:++rpcId,method:"tools/call",params:{name,arguments:args}})});
+ const text=await r.text();let data;try{data=JSON.parse(text)}catch{throw new Error("MCP response was not JSON: "+text.slice(0,300))}
+ if(!r.ok||data.error)throw new Error(data.error?.message||("HTTP "+r.status));
+ return (data.result?.content||[]).map(x=>x.text||"").join("\n")||JSON.stringify(data.result||data,null,2);
+}
+async function refresh(){
+ try{const r=await fetch("/healthz");if(!r.ok)throw new Error("HTTP "+r.status);const d=await r.json();dot.classList.add("ok");statusText.textContent="Cloud service online · "+d.mode;}
+ catch(e){dot.classList.remove("ok");statusText.textContent="Service check failed: "+e.message;}
+}
+function show(id,text){const el=document.getElementById(id);el.hidden=false;el.textContent=text}
+async function run(button,output,tool,args={}){
+ const b=document.getElementById(button);b.disabled=true;b.textContent="Working…";
+ try{show(output,await callMcp(tool,args))}
+ catch(e){show(output,"Error: "+e.message)}
+ finally{b.disabled=false;b.textContent=button==="auditBtn"?"Prepare audit":button==="archBtn"?"View blueprint":"Check status"}
+}
+document.querySelector("#statusBtn").onclick=()=>run("statusBtn","statusOut","master_brain_status");
+document.querySelector("#archBtn").onclick=()=>run("archBtn","archOut","master_brain_architecture");
+document.querySelector("#auditBtn").onclick=()=>{
+ const claim=document.querySelector("#claim").value.trim();
+ if(!claim){show("auditOut","Please enter a claim first.");return}
+ const context=document.querySelector("#context").value.trim();
+ const sources=document.querySelector("#sources").value.split("\n").map(x=>x.trim()).filter(Boolean).map(line=>{
+  const [title,url,...rest]=line.split("|").map(x=>x.trim());
+  const s={title:title||"User-supplied source"};
+  if(url&&/^https?:\/\//i.test(url))s.url=url;
+  if(rest.length)s.excerpt=rest.join(" | ");
+  return s;
+ });
+ run("auditBtn","auditOut","proof_audit_template",{claim,context:context||undefined,sources});
+};
+refresh();
+</script></body></html>

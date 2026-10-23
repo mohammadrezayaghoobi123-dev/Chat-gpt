@@ -406,3 +406,78 @@ class RealProcess(Dirs):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PubMedThroughTheGates(RealProcess):
+    """Gate 3a: the PubMed task travels the whole approved path over real HTTP (fake network only)."""
+
+    GOOD = json.dumps({"esearchresult": {"count": "2144", "idlist": ["42870643", "42655937"]}}).encode()
+
+    def serve(self, fetcher):
+        from master_brain.approval_signing_ed25519 import Ed25519Signer
+        self.signer = Ed25519Signer.generate("k-boss")
+        self.data.mkdir(mode=0o700)
+        os.chmod(self.data, 0o700)
+        accounts = AccountStore(self.data / "accounts.sqlite")
+        accounts.create_account("user:boss", PW, roles=("approver",), actor="operator:test")
+        accounts.create_account("user:dave", PW, actor="operator:test")
+        keys = keyfile(Path(self.tmp.name) / "keys.json",
+                       [good_key("k-boss", "user:boss", self.signer.public_key_bytes().hex())])
+        built = build(ServeConfig(self.data, port=0, approval_keys=keys, pubmed_searches=("pm=metformin trial",)),
+                      pubmed_fetcher=fetcher)
+        self.addCleanup(built.close)
+        threading.Thread(target=built.run, daemon=True).start()
+        port = built.server.server_address[1]
+        self.dave, self.boss = self.login(port, "user:dave"), self.login(port, "user:boss")
+        return port
+
+    def approved_mission(self, port, tag):
+        status, mission, _ = self.call(port, "POST", "/v1/missions", {
+            "idempotency_key": f"key-{tag}-000001", "objective": "Literature scan", "success_criteria": ["ids"],
+            "risk_tier": "high"}, cookie=self.dave)
+        self.assertEqual(status, 201, mission)
+        mid = mission["mission_id"]
+        digest = self.call(port, "GET", "/v1/tasks", cookie=self.dave)[1]["tasks"][0]["action_digest"]
+        challenge = self.call(port, "POST", f"/v1/missions/{mid}/approval-challenges", {
+            "contract_digest": mission["contract_digest"], "signing_key_id": "k-boss",
+            "signature_alg": "ed25519", "action_digest": digest}, cookie=self.boss)[1]
+        signature = self.signer.sign(bytes.fromhex(challenge["signing_message_hex"])).hex()
+        status, approved, _ = self.call(port, "POST", f"/v1/missions/{mid}/approvals", {
+            "idempotency_key": f"appr-{tag}-0000001", "approval_event_id": challenge["approval_event_id"],
+            "signing_key_id": "k-boss", "signature_alg": "ed25519", "signature_hex": signature}, cookie=self.boss)
+        self.assertEqual((status, approved["approval_status"]), (201, "granted"), approved)
+        return mid
+
+    def test_an_approved_search_returns_pmids_and_touches_the_network_exactly_once_with_the_approved_query(self):
+        urls = []
+        port = self.serve(lambda url: urls.append(url) or self.GOOD)
+        self.assertEqual(urls, [])  # nothing before approval and execution
+        mid = self.approved_mission(port, "ok")
+        status, result, _ = self.call(port, "POST", f"/v1/missions/{mid}/executions", {
+            "idempotency_key": "exec-ok-000001", "task_id": "pm"}, cookie=self.dave)
+        self.assertEqual((status, result["state"]), (201, "response_received"), result)
+        self.assertEqual(len(urls), 1)
+        self.assertIn("term=metformin+trial", urls[0])
+        self.assertIn("retmax=10", urls[0])
+        self.assertIn("42870643", json.dumps(result))
+
+    def test_a_hostile_upstream_answer_fails_cleanly_and_leaks_nothing(self):
+        port = self.serve(lambda url: b'{"esearchresult": {"ERROR": "SECRET-UPSTREAM-TEXT"}}')
+        mid = self.approved_mission(port, "bad")
+        status, result, _ = self.call(port, "POST", f"/v1/missions/{mid}/executions", {
+            "idempotency_key": "exec-bad-00001", "task_id": "pm"}, cookie=self.dave)
+        self.assertNotIn("SECRET-UPSTREAM-TEXT", json.dumps(result))
+        self.assertEqual((status, result["error"]["code"]), (500, "outcome_unknown"), result)
+        audit = (self.data / "audit.jsonl").read_text()
+        self.assertNotIn("SECRET-UPSTREAM-TEXT", audit)
+
+    def test_without_approval_the_network_is_never_touched(self):
+        urls = []
+        port = self.serve(lambda url: urls.append(url) or self.GOOD)
+        status, mission, _ = self.call(port, "POST", "/v1/missions", {
+            "idempotency_key": "key-na-0000001", "objective": "Literature scan", "success_criteria": ["ids"],
+            "risk_tier": "high"}, cookie=self.dave)
+        status, result, _ = self.call(port, "POST", f"/v1/missions/{mission['mission_id']}/executions", {
+            "idempotency_key": "exec-na-000001", "task_id": "pm"}, cookie=self.dave)
+        self.assertEqual((status, result["error"]["code"]), (403, "approval_required"), result)
+        self.assertEqual(urls, [])

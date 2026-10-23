@@ -4,8 +4,14 @@
   "private": true,
   "description": "Read-only cloud MCP starter for the Master Brain project",
   "type": "module",
-  "engines": {"node": ">=20"},
-  "scripts": {"start": "node server.js", "check": "node --check server.js"},
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js",
+    "test": "node test-smoke.mjs"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "express": "^4.21.2",

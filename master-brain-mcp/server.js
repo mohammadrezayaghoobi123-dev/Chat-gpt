@@ -1,4 +1,6 @@
 import express from "express";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
@@ -10,6 +12,7 @@ app.use(express.json({ limit: "64kb" }));
 const PORT = Number(process.env.PORT || 3000);
 const SERVICE_NAME = "master-brain-mcp";
 const SERVICE_VERSION = "0.1.0";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const architecture = {
   name: "Master Brain",
@@ -104,12 +107,11 @@ app.get("/healthz", (_req, res) => res.status(200).json({
   status: "ok", service: SERVICE_NAME, version: SERVICE_VERSION, mode: "read_only"
 }));
 
-app.get("/", (_req, res) => res.status(200).json({
-  service: SERVICE_NAME,
-  message: "Master Brain read-only MCP endpoint",
-  mcp_endpoint: "/mcp",
-  health_endpoint: "/healthz"
-}));
+app.get("/", (_req, res) => res.redirect(302, "/app"));
+
+app.get("/app", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
 
 app.post("/mcp", async (req, res) => {
   const transport = new StreamableHTTPServerTransport({

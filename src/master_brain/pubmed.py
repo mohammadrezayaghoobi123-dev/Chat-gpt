@@ -270,10 +270,12 @@ def main(argv: list[str] | None = None, *, fetcher: Fetcher | None = None, out: 
     parser = argparse.ArgumentParser(prog="python -m master_brain.pubmed", description=main.__doc__.split("\n\n")[0])
     parser.add_argument("query")
     parser.add_argument("--max", type=int, default=3, dest="max_results")
+    parser.add_argument("--abstracts", action="store_true", help="also fetch titles/abstracts (efetch)")
     args = parser.parse_args(argv)
     out = out or sys.stdout
     try:
-        result = PubMedSearch(fetcher).invoke({"query": args.query, "max_results": args.max_results})
+        adapter = PubMedAbstracts(fetcher) if args.abstracts else PubMedSearch(fetcher)
+        result = adapter.invoke({"query": args.query, "max_results": args.max_results})
     except PubMedError as exc:
         print(f"pubmed check failed: {exc}", file=sys.stderr)
         return 2

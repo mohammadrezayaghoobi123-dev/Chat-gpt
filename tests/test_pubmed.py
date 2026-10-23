@@ -173,6 +173,26 @@ class CliTests(unittest.TestCase):
             self.run_main(["--help"], Fetch())
         self.assertIn("Operator check", buf.getvalue())
 
+    def test_abstracts_flag_uses_the_two_step_adapter(self):
+        esearch = json.dumps({"esearchresult": {"count": "1", "idlist": ["7"]}}).encode()
+        efetch = (b"<PubmedArticleSet><PubmedArticle><MedlineCitation><PMID>7</PMID><Article>"
+                  b"<ArticleTitle>T</ArticleTitle><Abstract><AbstractText>A</AbstractText></Abstract>"
+                  b"</Article></MedlineCitation></PubmedArticle></PubmedArticleSet>")
+        bodies = [esearch, efetch]
+        urls = []
+
+        def fetcher(url):
+            urls.append(url)
+            return bodies.pop(0)
+        code, text = self.run_main(["x", "--abstracts"], fetcher)
+        self.assertEqual(code, 0)
+        out = json.loads(text)
+        self.assertEqual(out["articles"][0]["abstract"], "A")
+        self.assertEqual(len(urls), 2)
+        urls2 = []
+        self.run_main(["x"], lambda u: urls2.append(u) or esearch)
+        self.assertEqual(len(urls2), 1)  # without the flag: search only
+
     def test_default_max_is_three(self):
         f = Fetch()
         self.run_main(["x"], f)

@@ -27,3 +27,16 @@ jobs:
           python-version: "3.11"
       - name: Real PubMed search through the production adapter
         run: PYTHONPATH=src python -m master_brain.pubmed "metformin[Title] AND randomized controlled trial[Publication Type]" --max 3
+      - name: Real PubMed search with abstracts (efetch) and structural assertions
+        run: |
+          PYTHONPATH=src python -m master_brain.pubmed "metformin[Title] AND randomized controlled trial[Publication Type]" --max 3 --abstracts > abstracts.json
+          python - <<'PY'
+          import json
+          d = json.load(open("abstracts.json"))
+          arts = d["articles"]
+          assert d["source"] == "pubmed" and d["total_count"] > 0, d["total_count"]
+          assert 1 <= len(arts) <= 3, len(arts)
+          assert all(a["pmid"].isdigit() and a["title"] for a in arts), "missing pmid/title"
+          assert any(a["abstract"] for a in arts), "no abstract in any article"
+          print("OK articles=%d with_abstract=%d total_count=%d" % (len(arts), sum(1 for a in arts if a["abstract"]), d["total_count"]))
+          PY

@@ -74,13 +74,21 @@ class Built:
     service: MissionService
     warnings: list[str] = field(default_factory=list)
     _started: bool = False
+    _stopping: bool = False
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def run(self) -> None:
-        self._started = True
+        with self._lock:
+            if self._stopping:  # a stop that arrived before the loop began is honoured, not lost
+                return
+            self._started = True
         self.server.serve_forever()
 
     def stop(self) -> None:
-        if self._started:
+        with self._lock:
+            self._stopping = True
+            started = self._started
+        if started:
             self.server.shutdown()
 
     def close(self) -> None:

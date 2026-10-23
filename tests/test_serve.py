@@ -335,8 +335,58 @@ class Build(Dirs):
         self.assertEqual(_parse(["--data-dir", "d"]).pubmed_abstracts, ())
 
 
-class RealProcess(Dirs):
-    """The scientific check: a REAL process, killed with SIGKILL, restarted on the same files."""
+class StopRace(unittest.TestCase):
+    """A shutdown request that arrives before the serve loop has started must not be lost."""
+
+    class FakeServer:
+        def __init__(self):
+            self.calls = []
+
+        def serve_forever(self):
+            self.calls.append("serve_forever")
+
+        def shutdown(self):
+            self.calls.append("shutdown")
+
+    def built(self):
+        from master_brain.serve import Built
+        server = self.FakeServer()
+        return Built(server, None, []), server
+
+    def test_stop_before_run_makes_run_return_without_serving(self):
+        b, server = self.built()
+        b.stop()
+        b.run()
+        self.assertEqual(server.calls, [])
+
+    def test_stop_after_run_started_shuts_the_loop_down(self):
+        b, server = self.built()
+        b.run()
+        b.stop()
+        self.assertEqual(server.calls, ["serve_forever", "shutdown"])
+
+    def test_stop_is_idempotent_and_run_after_stop_stays_a_no_op(self):
+        b, server = self.built()
+        b.stop()
+        b.stop()
+        b.run()
+        b.run()
+        self.assertEqual(server.calls, [])
+
+    def test_stop_while_the_loop_runs_in_another_thread(self):
+        import http.server
+        built = build(ServeConfig(Path(tempfile.mkdtemp()) / "d", port=0))
+        self.addCleanup(built.server.server_close)
+        t = threading.Thread(target=built.run, daemon=True)
+        t.start()
+        time.sleep(0.2)
+        built.stop()
+        t.join(10)
+        self.assertFalse(t.is_alive())
+
+
+class ProcessHelpers:
+    """Helpers shared by the real-process and through-the-gates suites (no tests of their own)."""
 
     def start(self, *extra):
         proc = subprocess.Popen([sys.executable, "-m", "master_brain.serve", "--data-dir", str(self.data),
@@ -365,6 +415,9 @@ class RealProcess(Dirs):
         status, _body, cookie = self.call(port, "POST", "/v1/session", {"subject": subject, "password": PW})
         self.assertEqual(status, 201)
         return cookie.split(";")[0]
+
+class RealProcess(ProcessHelpers, Dirs):
+    """The scientific check: a REAL process, killed with SIGKILL, restarted on the same files."""
 
     def test_approval_survives_kill_9_and_a_restart(self):
         from master_brain.approval_signing_ed25519 import Ed25519Signer
@@ -433,7 +486,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class PubMedThroughTheGates(RealProcess):
+class PubMedThroughTheGates(ProcessHelpers, Dirs):
     """Gate 3a: the PubMed task travels the whole approved path over real HTTP (fake network only)."""
 
     GOOD = json.dumps({"esearchresult": {"count": "2144", "idlist": ["42870643", "42655937"]}}).encode()

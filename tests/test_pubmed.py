@@ -111,6 +111,74 @@ class AdapterTests(unittest.TestCase):
                 PubMedSearch(lambda u, bad=bad: bad).invoke({"query": "x", "max_results": 1})
 
 
+class SpacerTests(unittest.TestCase):
+    def test_requests_are_spaced_and_never_sleep_when_idle(self):
+        from master_brain.pubmed import _Spacer
+        t = [100.0]
+        slept = []
+
+        def sleep(d):
+            slept.append(round(d, 3))
+            t[0] += d
+        sp = _Spacer(0.5, clock=lambda: t[0], sleep=sleep)
+        sp.wait()                      # first call: no wait
+        t[0] += 0.2
+        sp.wait()                      # 0.3 s early -> sleeps 0.3
+        sp.wait()                      # immediately again -> sleeps the full 0.5
+        t[0] += 5
+        sp.wait()                      # long idle -> no sleep
+        self.assertEqual(slept, [0.3, 0.5])
+
+    def test_the_default_fetcher_spaces_its_calls(self):
+        from master_brain.pubmed import _Spacer
+        n = []
+        sp = _Spacer(0.5, clock=lambda: 0.0, sleep=lambda d: n.append(d))
+        f = make_fetcher(FakeOpener(), spacer=sp)
+        f(build_url("x", 1))
+        f(build_url("x", 1))
+        self.assertEqual(n, [0.5])
+
+
+class CliTests(unittest.TestCase):
+    def run_main(self, argv, fetcher):
+        import io
+        from master_brain.pubmed import main
+        out = io.StringIO()
+        return main(argv, fetcher=fetcher, out=out), out.getvalue()
+
+    def test_success_prints_the_parsed_result(self):
+        code, text = self.run_main(["metformin", "--max", "2"], Fetch())
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(text)["pmids"], ["42870643", "42655937"])
+
+    def test_failure_is_exit_2_with_a_fixed_message(self):
+        import contextlib, io
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code, text = self.run_main(["x", "--max", "99"], Fetch())
+        self.assertEqual((code, text), (2, ""))
+        self.assertIn("max_results", err.getvalue())
+
+    def test_output_is_sorted_and_keeps_non_ascii_readable(self):
+        code, text = self.run_main(["نمونه"], Fetch())
+        self.assertIn("نمونه", text)
+        keys = list(json.loads(text))
+        self.assertEqual(keys, sorted(keys))
+        self.assertEqual(text.index('"pmids"') < text.index('"query"') < text.index('"source"'), True)
+
+    def test_help_describes_the_operator_check(self):
+        import contextlib, io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), self.assertRaises(SystemExit):
+            self.run_main(["--help"], Fetch())
+        self.assertIn("Operator check", buf.getvalue())
+
+    def test_default_max_is_three(self):
+        f = Fetch()
+        self.run_main(["x"], f)
+        self.assertIn("retmax=3", f.urls[0])
+
+
 class TaskTests(unittest.TestCase):
     def test_task_shape(self):
         t = pubmed_search_task("pm-metformin", "metformin", 5, fetcher=Fetch())
@@ -120,6 +188,12 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(t.payload(), {"query": "metformin", "max_results": 5})
         self.assertTrue(any("PubMed" in x or "NCBI" in x for x in d.limitations))
         self.assertTrue(t.requirement.capabilities)
+
+    def test_the_description_is_capped_at_500_characters_exactly(self):
+        t = pubmed_search_task("t", "q" * MAX_QUERY_CHARS, 1, fetcher=Fetch())
+        self.assertEqual(len(t.description), 500)
+        self.assertTrue(t.description.startswith("PubMed search: qqq"))
+        self.assertEqual(pubmed_search_task("t", "abc", 1, fetcher=Fetch()).description, "PubMed search: abc")
 
     def test_digest_depends_on_query(self):
         a = pubmed_search_task("a", "metformin", 5, fetcher=Fetch()).action_digest

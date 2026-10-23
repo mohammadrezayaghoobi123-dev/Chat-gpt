@@ -7,8 +7,12 @@ testable offline. No API key, no cost, no credentials.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import re
+import sys
+import threading
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Mapping
@@ -75,19 +79,43 @@ def parse_esearch(body: Any) -> dict[str, Any]:
     return {"total_count": int(count), "pmids": list(ids)}
 
 
+MIN_INTERVAL_SECONDS = 0.34  # NCBI allows 3 requests/second without an API key
+
+
+class _Spacer:
+    """Thread-safe minimum spacing between requests (clock and sleep are injectable for tests)."""
+
+    def __init__(self, interval: float = MIN_INTERVAL_SECONDS, clock: Callable[[], float] = time.monotonic,
+                 sleep: Callable[[float], None] = time.sleep) -> None:
+        self._interval, self._clock, self._sleep = interval, clock, sleep
+        self._next = None
+        self._lock = threading.Lock()
+
+    def wait(self) -> None:
+        with self._lock:
+            now = self._clock()
+            if self._next is not None and now < self._next:
+                self._sleep(self._next - now)
+                now = self._next
+            self._next = now + self._interval
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args: Any, **kwargs: Any) -> None:
         return None
 
 
-def make_fetcher(opener: Any = None, timeout: float = TIMEOUT_SECONDS, max_bytes: int = MAX_BODY_BYTES) -> Fetcher:
+def make_fetcher(opener: Any = None, timeout: float = TIMEOUT_SECONDS, max_bytes: int = MAX_BODY_BYTES,
+                 spacer: "_Spacer | None" = None) -> Fetcher:
     """Default network fetcher: fixed host, https only, no redirects, bounded read."""
     opener = opener or urllib.request.build_opener(_NoRedirect)
+    spacer = spacer or _Spacer()
 
     def fetch(url: str) -> bytes:
         parsed = urlparse(url)
         if parsed.scheme != "https" or parsed.hostname != HOST or parsed.path != PATH:
             raise PubMedError("refused: URL is outside the allowed endpoint")
+        spacer.wait()
         request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "master-brain/1"})
         with opener.open(request, timeout=timeout) as response:
             data = response.read(max_bytes + 1)
@@ -133,6 +161,29 @@ def pubmed_search_task(task_id: str, query: str, max_results: int, *, fetcher: F
         task_id=task_id, description=f"PubMed search: {query}"[:500], integration=descriptor,
         requirement=IntegrationRequirement(("literature_search",), required_kind=IntegrationKind.DATA_SOURCE),
         adapter=PubMedSearch(fetcher), payload={"query": query, "max_results": max_results})
+
+
+def main(argv: list[str] | None = None, *, fetcher: Fetcher | None = None, out: Any = None) -> int:
+    """Operator check, run on YOUR machine: ``python -m master_brain.pubmed "metformin" --max 3``.
+
+    Performs one real, unapproved, read-only request and prints the parsed result; it touches no data dir.
+    """
+    parser = argparse.ArgumentParser(prog="python -m master_brain.pubmed", description=main.__doc__.split("\n\n")[0])
+    parser.add_argument("query")
+    parser.add_argument("--max", type=int, default=3, dest="max_results")
+    args = parser.parse_args(argv)
+    out = out or sys.stdout
+    try:
+        result = PubMedSearch(fetcher).invoke({"query": args.query, "max_results": args.max_results})
+    except PubMedError as exc:
+        print(f"pubmed check failed: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True), file=out)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 
 
 __all__ = ["MAX_RESULTS_CAP", "MAX_QUERY_CHARS", "PubMedError", "PubMedSearch", "build_url", "make_fetcher",

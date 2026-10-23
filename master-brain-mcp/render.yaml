@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: master-brain-mcp
+    runtime: docker
+    dockerfilePath: ./master-brain-mcp/Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production

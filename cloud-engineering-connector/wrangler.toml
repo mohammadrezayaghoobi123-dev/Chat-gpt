@@ -1,0 +1,7 @@
+name = "cloud-engineering-connector"
+main = "worker.js"
+compatibility_date = "2026-10-23"
+workers_dev = true
+
+[vars]
+SERVICE_MODE = "cloud"

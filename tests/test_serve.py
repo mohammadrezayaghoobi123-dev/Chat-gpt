@@ -136,16 +136,21 @@ class TrustStoreEdges(Dirs):
 
 
 class Preflight(Dirs):
-    def test_nested_data_directories_are_created_and_forced_private_whatever_the_umask(self):
+    def test_missing_parent_directories_are_created(self):
         nested = self.data / "a" / "b"
+        preflight(nested)
+        self.assertTrue(nested.is_dir())
+
+    @unittest.skipIf(os.name == "nt", "POSIX permissions")
+    def test_the_directory_is_forced_private_whatever_the_umask(self):
+        self.data.mkdir()  # the parent exists: a hostile umask would otherwise also strip the owner's own write bit
+        target = self.data / "private"
         old = os.umask(0o277)
         try:
-            preflight(nested)
+            preflight(target)
         finally:
             os.umask(old)
-        self.assertTrue(nested.is_dir())
-        if os.name != "nt":
-            self.assertEqual(stat.S_IMODE(nested.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o700)
 
     @unittest.skipIf(os.name == "nt", "POSIX permissions")
     def test_the_directory_is_private_from_the_instant_it_exists_not_only_after_the_chmod(self):

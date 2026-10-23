@@ -193,6 +193,12 @@ class AccountStore:
             if not db.execute("UPDATE accounts SET roles=? WHERE subject=?", (",".join(sorted(roles)), subject)).rowcount:
                 raise AccountError("unknown subject")
 
+    def counts(self) -> dict[str, int]:
+        """``{"accounts": n, "approvers": m}`` over ENABLED accounts (start-up diagnostics only)."""
+        with closing(self._connect()) as db:
+            rows = db.execute("SELECT roles FROM accounts WHERE disabled=0").fetchall()
+        return {"accounts": len(rows), "approvers": sum("approver" in row[0].split(",") for row in rows)}
+
     def active_roles(self, subject: object) -> frozenset[str]:
         """Roles of an existing, ENABLED account; empty for unknown/disabled/malformed subjects."""
         if not isinstance(subject, str) or len(subject) > 128:

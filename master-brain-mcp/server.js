@@ -2,8 +2,6 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
@@ -17,7 +15,6 @@ const SERVICE_NAME = "master-brain-mcp";
 const SERVICE_VERSION = "0.1.0";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const transports = new Map();
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const architecture = {
   name: "Master Brain",

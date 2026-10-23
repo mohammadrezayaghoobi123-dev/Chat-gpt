@@ -29,7 +29,7 @@ jobs:
         run: PYTHONPATH=src python -m master_brain.pubmed "metformin[Title] AND randomized controlled trial[Publication Type]" --max 3
       - name: Real PubMed search with abstracts (efetch) and structural assertions
         run: |
-          PYTHONPATH=src python -m master_brain.pubmed "metformin[Title] AND randomized controlled trial[Publication Type]" --max 3 --abstracts > abstracts.json
+          PYTHONPATH=src python -m master_brain.pubmed "metformin[Title] AND randomized controlled trial[Publication Type]" --max 3 --abstracts > abstracts.json 2> err.txt || { echo "::error::$(cat err.txt)"; exit 2; }
           python - <<'PY'
           import json
           d = json.load(open("abstracts.json"))

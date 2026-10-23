@@ -57,6 +57,10 @@ def build_url(query: Any, max_results: Any) -> str:
     return f"https://{HOST}{PATH}?{urlencode(params)}"
 
 
+_NLM_DOCTYPE = re.compile(
+    rb'<!DOCTYPE PubmedArticleSet PUBLIC "[-A-Za-z0-9/ ,.]{1,120}" "https://dtd\.nlm\.nih\.gov/[A-Za-z0-9/_.-]{1,120}">\s*')
+
+
 def build_efetch_url(pmids: Any) -> str:
     if not isinstance(pmids, (list, tuple)) or not 1 <= len(pmids) <= MAX_RESULTS_CAP:
         raise PubMedError(f"pmids must be a list of 1-{MAX_RESULTS_CAP} ids")
@@ -102,7 +106,7 @@ def parse_efetch(body: Any) -> list[dict[str, Any]]:
     """Strict parse of an efetch XML document. DTDs/entities are refused outright (no expansion attacks)."""
     if not isinstance(body, (bytes, bytearray)) or len(body) > MAX_BODY_BYTES:
         raise PubMedError("unusable response")
-    raw = bytes(body)
+    raw = _NLM_DOCTYPE.sub(b"", bytes(body), count=1)  # the one declaration real NCBI responses carry
     lowered = raw.lower()
     if b"<!doctype" in lowered or b"<!entity" in lowered:
         raise PubMedError("response contains a DTD or entity declaration")

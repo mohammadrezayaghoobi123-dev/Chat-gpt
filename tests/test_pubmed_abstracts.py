@@ -62,6 +62,33 @@ class ParseTests(unittest.TestCase):
         with self.assertRaises(PubMedError):
             parse_efetch("<PubmedArticleSet/>")  # str, not bytes
 
+    NLM = ('<!DOCTYPE PubmedArticleSet PUBLIC "-//NLM//DTD PubMedArticle, 1st January 2025//EN" '
+           '"https://dtd.nlm.nih.gov/ncbi/pubmed/out/pubmed_250101.dtd">')
+
+    def test_the_standard_nlm_doctype_that_real_efetch_responses_carry_is_accepted(self):
+        # Found by the live run: real NCBI XML starts with this declaration; refusing every DOCTYPE broke efetch.
+        for doc in ('<?xml version="1.0" ?>\n' + self.NLM + "\n" + xml(article()).decode().split("?>", 1)[1],
+                    self.NLM + xml(article()).decode().split("?>", 1)[1]):
+            out = parse_efetch(doc.encode())
+            self.assertEqual(out[0]["pmid"], "42870643")
+
+    def test_any_other_doctype_is_still_refused(self):
+        body = xml(article()).decode().split("?>", 1)[1]
+        bads = [
+            '<!DOCTYPE PubmedArticleSet PUBLIC "-//NLM//DTD X//EN" "https://evil.example/x.dtd">',
+            '<!DOCTYPE PubmedArticleSet PUBLIC "-//NLM//DTD X//EN" "http://dtd.nlm.nih.gov/x.dtd">',
+            '<!DOCTYPE PubmedArticleSet SYSTEM "https://dtd.nlm.nih.gov/x.dtd">',
+            '<!DOCTYPE PubmedArticleSet PUBLIC "-//NLM//DTD X//EN" "https://dtd.nlm.nih.gov/x.dtd" [<!ENTITY a "b">]>',
+            '<!DOCTYPE Other PUBLIC "-//NLM//DTD X//EN" "https://dtd.nlm.nih.gov/x.dtd">',
+            '<!DOCTYPE PubmedArticleSet PUBLIC "-//NLM//DTD X//EN" "https://dtd.nlm.nih.gov.evil.example/x.dtd">',
+            self.NLM + self.NLM,
+        ]
+        for d in bads:
+            with self.assertRaises(PubMedError, msg=d):
+                parse_efetch((d + body).encode())
+        with self.assertRaises(PubMedError):  # an entity declared elsewhere, even next to the allowed DOCTYPE
+            parse_efetch((self.NLM + body.replace("<PubmedArticleSet>", '<PubmedArticleSet><!ENTITY a "b">')).encode())
+
     def test_an_empty_set_is_valid(self):
         self.assertEqual(parse_efetch(b"<PubmedArticleSet></PubmedArticleSet>"), [])
 

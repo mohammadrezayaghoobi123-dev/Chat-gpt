@@ -15,3 +15,35 @@ test("change PR rejects protected workflow paths before API calls",async()=>{con
 test("unknown RPC methods return method-not-found",async()=>{const r=await worker.fetch(rpc("invalid/method"),env);const b=await r.json();assert.equal(b.error.code,-32601)});
 
 test("engineering standards require evidence and prohibit false verification claims",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"engineering_standards",arguments:{}}),env);const b=await r.json();const result=JSON.parse(b.result.content[0].text);assert.ok(result.mandatory_behavior.some(x=>x.includes("Never claim tests")));assert.ok(result.required_report.includes("Unverified items"));assert.match(result.quality_gate,/not proof of correctness/)});
+
+const call=(args,e={...env,GITHUB_TOKEN:"unused"})=>worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:args}),e).then(r=>r.json());
+test("reading secrets and key files is refused before any GitHub request",async()=>{
+  const real=globalThis.fetch;let calls=0;globalThis.fetch=()=>{calls++;throw new Error("network must not be reached")};
+  try{
+    for(const path of [".env",".env.production","app/.env","secrets/a.txt","config/credentials/x","Credentials/x","server.pem","a/b.KEY","cert.p12","cert.pfx","id_rsa","home/id_ed25519","a//b","a/./b","a/../b","/abs","a\\b",""," ".repeat(0)+"x".repeat(241)]){
+      const b=await call({owner:"octo",repo:"demo",path});
+      assert.equal(b.result.isError,true,path);
+      assert.match(b.result.content[0].text,/Rejected unsafe or protected file path|Invalid file path/,path);
+    }
+  }finally{globalThis.fetch=real}
+  assert.equal(calls,0);
+});
+test("ordinary files and workflow files remain readable",async()=>{
+  const real=globalThis.fetch;const seen=[];
+  globalThis.fetch=async(url)=>{seen.push(String(url));return new Response(JSON.stringify({type:"file",path:"README.md",size:2,content:btoa("hi")}),{status:200})};
+  try{
+    const b=await call({owner:"octo",repo:"demo",path:"README.md"});
+    assert.equal(b.result.isError,undefined);
+    assert.equal(JSON.parse(b.result.content[0].text).content,"hi");
+    await call({owner:"octo",repo:"demo",path:".github/workflows/ci.yml"});
+    assert.equal(seen.length,2);
+    assert.ok(seen[0].endsWith("/contents/README.md"));
+  }finally{globalThis.fetch=real}
+});
+test("bearer token comparison accepts only the exact token",async()=>{
+  const mk=(auth)=>worker.fetch(req("/mcp",{method:"POST",headers:{authorization:auth,"content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})}),env);
+  assert.equal((await mk("Bearer test-secret")).status,200);
+  for(const bad of ["Bearer test-secre","Bearer test-secrets","bearer test-secret","Bearer ","Bearer","test-secret","Bearer TEST-SECRET",""])assert.equal((await mk(bad)).status,401,JSON.stringify(bad));
+  const none=await worker.fetch(req("/mcp",{method:"POST",headers:{"content-type":"application/json"},body:"{}"}),env);
+  assert.equal(none.status,401);
+});

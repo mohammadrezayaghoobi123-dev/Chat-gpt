@@ -128,6 +128,14 @@ class SecurityLog:
     def read_all(self):
         return self.store.read_all()
 
+    def recent(self, limit: int) -> tuple[list[dict[str, Any]], bool]:
+        """Newest-first view for operators: ``(events, truncated)``. Reads the whole log (verifying chain and
+        anchor) and raises if anything is inconsistent, so a tampered log is never displayed."""
+        events = self.store.read_all()
+        shown = [{"event_type": e.event_type, "recorded_at": e.recorded_at, "actor": e.actor,
+                  "subject_ref": e.subject_ref, "payload": dict(e.payload)} for e in reversed(events[-limit:])]
+        return shown, len(events) > limit
+
 
 def _positive(text: str) -> int:
     value = int(text)

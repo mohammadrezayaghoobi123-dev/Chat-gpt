@@ -27,7 +27,7 @@ from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Iterable
 
-from master_brain.accounts import ABSOLUTE_LIFETIME, IDLE_TIMEOUT, AccountStore
+from master_brain.accounts import ABSOLUTE_LIFETIME, IDLE_TIMEOUT, MAX_ADMIN_ACCOUNTS, MAX_ADMIN_EVENTS, AccountStore
 from master_brain.api_contracts import (
     API_VERSION, ApprovalChallengeRequest, CreateMissionRequest, ContractError, ErrorCode,
     ExecuteMissionRequest, LoginRequest, ReconcileRequest, SessionView, SubmitApprovalRequest, error_response,
@@ -52,6 +52,8 @@ _RESULT = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/result")
 _TASKS = re.compile(r"/v1/tasks")
 _PENDING = re.compile(r"/v1/approvals")
 _SESSION = re.compile(r"/v1/session")
+_ADMIN_ACCOUNTS = re.compile(r"/v1/admin/accounts")
+_ADMIN_EVENTS = re.compile(r"/v1/admin/security-events")
 COOKIE_NAME = "mb_session"
 _MAX_COOKIE_HEADER = 4096
 _LOOPBACK = {"127.0.0.1", "localhost"}  # IPv4 only: the server socket is AF_INET
@@ -226,7 +228,8 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
                     ("POST", _CHALLENGES, self._challenge), ("POST", _APPROVALS, self._approve),
                     ("POST", _RECONCILIATIONS, self._reconcile), ("POST", _EXECUTIONS, self._execute), ("GET", _RESULT, self._result),
                     ("GET", _TASKS, self._tasks), ("GET", _PENDING, self._pending),
-                ) + ((("GET", _SESSION, self._session_info), ("DELETE", _SESSION, self._logout))
+                ) + ((("GET", _SESSION, self._session_info), ("DELETE", _SESSION, self._logout),
+                      ("GET", _ADMIN_ACCOUNTS, self._admin_accounts), ("GET", _ADMIN_EVENTS, self._admin_events))
                      if accounts is not None else ())
                 matched = [(m, rx.fullmatch(path), fn) for m, rx, fn in routes if rx.fullmatch(path)]
                 if not matched:
@@ -302,6 +305,18 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
             view = SessionView(identity.subject, tuple(identity.roles), expires.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                                int(IDLE_TIMEOUT.total_seconds()))
             self._send(200, view.to_dict(), correlation_id)
+
+        def _admin_accounts(self, identity, _match, correlation_id: str) -> None:
+            if not identity.is_operator:
+                raise ServiceError(ErrorCode.FORBIDDEN)
+            rows, truncated = accounts.list_accounts(MAX_ADMIN_ACCOUNTS)
+            self._send(200, {"api_version": API_VERSION, "accounts": rows, "truncated": truncated}, correlation_id)
+
+        def _admin_events(self, identity, _match, correlation_id: str) -> None:
+            if not identity.is_operator:
+                raise ServiceError(ErrorCode.FORBIDDEN)
+            events, truncated = accounts.security_log.recent(MAX_ADMIN_EVENTS)
+            self._send(200, {"api_version": API_VERSION, "events": events, "truncated": truncated}, correlation_id)
 
         def _logout(self, identity, _match, correlation_id: str) -> None:
             accounts.revoke_session(self._credential_value)  # the user's intent to sign out never waits on the log

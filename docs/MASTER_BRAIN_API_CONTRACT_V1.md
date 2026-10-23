@@ -172,3 +172,9 @@ python -m master_brain.serve --data-dir DIR [--port 8765] [--approval-keys KEYS.
 - `python -m master_brain.serve … --pubmed-search TASK_ID=QUERY` (repeatable) registers a catalogue task `TASK_ID` (integration `pubmed-esearch`, kind `data_source`, `risk_level` 0, cost 0.0, payload `{"query": QUERY, "max_results": 10}`). It runs only through the normal approval/execution gates; `GET /v1/tasks` shows its `action_digest`.
 - Result of a successful run: `{"source":"pubmed","query":…,"total_count":int,"pmids":[str,…]}` (≤ 20 PMIDs). Any upstream anomaly ⇒ fixed-message `PubMedError` ⇒ dispatch failure; no URL or upstream text is leaked.
 - Start-up refuses a malformed spec (no `=`, bad task id, empty/over-500-char query) or a duplicate id (also vs. `echo`).
+
+## Gate 3d — read-only operator view (`GET /v1/admin/accounts`, `GET /v1/admin/security-events`)
+- Only with session authentication enabled (`accounts` configured). Operator role required (session or static-token operator); any other authenticated identity ⇒ 403 `forbidden`; unauthenticated ⇒ 401. **GET only**: no write method exists on these paths.
+- `accounts` ⇒ `{"accounts":[{"subject","roles":[…],"disabled":bool,"created_at"}], "truncated":bool}` sorted by subject, cap 500. Never any password material or session data.
+- `security-events` ⇒ `{"events":[{"event_type","recorded_at","actor","subject_ref","payload"}], "truncated":bool}` newest first, cap 100, from the verified security log (chain + anchor checked on every read). A log that fails verification ⇒ 503 `unavailable` and nothing is shown.
+- Role changes remain command-line only (`python -m master_brain.accounts roles …`).

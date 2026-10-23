@@ -68,6 +68,21 @@
       <ul id="queue-list" class="plain"></ul>
     </section>
 
+    <section id="admin" aria-labelledby="admin-h" hidden>
+      <div class="head">
+        <h2 id="admin-h" data-i18n="admin_title"></h2>
+        <button type="button" id="admin-refresh" class="ghost" data-i18n="refresh_button"></button>
+      </div>
+      <p class="help" data-i18n="admin_help"></p>
+      <p id="admin-msg" class="help" hidden></p>
+      <div class="tablewrap">
+        <table id="admin-accounts"></table>
+      </div>
+      <div class="tablewrap">
+        <table id="admin-events"></table>
+      </div>
+    </section>
+
     <section aria-labelledby="open-h">
       <h2 id="open-h" data-i18n="open_title"></h2>
       <form id="open-form" class="inline">

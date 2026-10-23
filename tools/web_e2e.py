@@ -52,6 +52,8 @@ def main():
     accounts.create_account("user:carol", PW)
     accounts.create_account("user:dave", PW)
     accounts.create_account("user:boss", PW, roles=("approver",))
+    accounts.create_account("user:opsweb", PW, roles=("operator",))
+    accounts.create_account("user:plain", PW)
     verifier = HmacSeamVerifier()
     verifier.add("k-boss", b"boss-secret", "user:boss")
     server = make_server(MissionService(store, verifier, cfg, AccountApprovers(accounts)),
@@ -279,6 +281,44 @@ def main():
         check("the approver sees the mission as approved", "تأییدشده" in boss.inner_text("#m-fields"),
               boss.inner_text("#m-fields"))
         boss_ctx.close()
+
+        # ---- read-only admin view: operators only, and nothing in it can change anything
+        ops_ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+        ops = ops_ctx.new_page()
+        ops.goto(url)
+        ops.wait_for_selector("#signin-form")
+        check("the admin section is hidden before sign-in", ops.is_hidden("#admin"))
+        ops.fill("#subject", "user:opsweb")
+        ops.fill("#password", PW)
+        ops.click("#signin-form button[type=submit]")
+        ops.wait_for_selector("#admin:not([hidden])")
+        ops.wait_for_selector("#admin-accounts tbody tr")
+        ops.wait_for_selector("#admin-events tbody tr")
+        accounts_text = ops.inner_text("#admin-accounts")
+        check("the operator sees every account and its roles", all(x in accounts_text for x in ("user:boss", "user:carol", "user:opsweb")), accounts_text)
+        check("roles are shown by name", "تأییدکننده" in accounts_text and "اپراتور" in accounts_text, accounts_text)
+        events_text = ops.inner_text("#admin-events")
+        check("the operator sees security events (a login)", "security.login_succeeded" in events_text, events_text)
+        check("no password material anywhere in the admin view", "scrypt" not in ops.inner_text("#admin") and PW not in ops.inner_text("#admin"))
+        check("the admin section offers no way to change anything",
+              ops.evaluate("() => Array.from(document.querySelectorAll('#admin input, #admin select, #admin textarea, #admin form, #admin a')).length") == 0
+              and ops.evaluate("() => Array.from(document.querySelectorAll('#admin button')).map(b => b.id)") == ["admin-refresh"])
+        ops.click("#lang")
+        check("the admin view follows the language switch", "Administration" in ops.inner_text("#admin-h"), ops.inner_text("#admin-h"))
+        ops.click("#signout")
+        ops.wait_for_selector("#signin-form:not([hidden])")
+        check("the admin section disappears on sign-out", ops.is_hidden("#admin"))
+        ops_ctx.close()
+        plain_ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+        plain = plain_ctx.new_page()
+        plain.goto(url)
+        plain.wait_for_selector("#signin-form")
+        plain.fill("#subject", "user:plain")
+        plain.fill("#password", PW)
+        plain.click("#signin-form button[type=submit]")
+        plain.wait_for_selector("#workspace:not([hidden])")
+        check("a non-operator never sees the admin section", plain.is_hidden("#admin"))
+        plain_ctx.close()
 
         bad = [c for c in console if c[0] in ("error", "pageerror") and "ERR_CONNECTION_RESET" not in c[1]
                and "Failed to load resource" not in c[1]]

@@ -19,7 +19,7 @@
   var RESOLUTIONS = ["effect_occurred", "effect_did_not_occur"];
 
   var S = { signedIn: false, who: null, lang: "fa", strings: null, mission: null, result: null, audit: null,
-            tasks: [], challenge: null, pending: {}, queue: null };
+            tasks: [], challenge: null, pending: {}, queue: null, admin: null };
 
   function $(id) { return document.getElementById(id); }
   function t(key) {
@@ -155,6 +155,47 @@
     });
   }
 
+  // ------------------------------------------------------------ admin (read-only, operators)
+  function isOperator() { return !!(S.who && (S.who.roles || []).indexOf("operator") >= 0); }
+  function adminTable(id, captionKey, heads, rows) {
+    var table = $(id); clear(table);
+    table.appendChild(el("caption", { text: t(captionKey) }));
+    var tr = el("tr");
+    heads.forEach(function (h) { tr.appendChild(el("th", { scope: "col", text: t(h) })); });
+    table.appendChild(el("thead", {}, [tr]));
+    var body = el("tbody");
+    rows.forEach(function (cells) {
+      var row = el("tr");
+      cells.forEach(function (c) { row.appendChild(el("td", { text: String(c) })); });
+      body.appendChild(row);
+    });
+    if (!rows.length) body.appendChild(el("tr", {}, [el("td", { colspan: String(heads.length), text: t("admin_empty") })]));
+    table.appendChild(body);
+  }
+  function renderAdmin() {
+    var show = S.signedIn && isOperator();
+    $("admin").hidden = !show;
+    if (!show) return;
+    var msg = $("admin-msg"); msg.hidden = true; msg.textContent = "";
+    var a = S.admin && S.admin.accounts, e = S.admin && S.admin.events;
+    if (!a || !e) { msg.hidden = false; msg.textContent = t("admin_failed"); }
+    adminTable("admin-accounts", "admin_accounts_caption", ["col_subject", "col_roles", "col_state", "col_created"],
+      (a ? a.accounts : []).map(function (r) {
+        var roles = (r.roles || []).map(function (x) { return x === "operator" ? t("operator_badge") : x === "approver" ? t("approver_badge") : String(x); });
+        return [r.subject, roles.length ? roles.join(", ") : t("roles_none"), r.disabled ? t("state_disabled") : t("state_active"), r.created_at];
+      }));
+    adminTable("admin-events", "admin_events_caption", ["col_time", "col_event", "col_actor", "col_details"],
+      (e ? e.events : []).map(function (x) { return [x.recorded_at, x.event_type, x.actor, JSON.stringify(x.payload)]; }));
+    if ((a && a.truncated) || (e && e.truncated)) { msg.hidden = false; msg.textContent = t("admin_truncated"); }
+  }
+  function loadAdmin() {
+    if (!isOperator()) { S.admin = null; renderAdmin(); return Promise.resolve(); }
+    return Promise.all([api("GET", "/admin/accounts"), api("GET", "/admin/security-events")]).then(function (rs) {
+      S.admin = { accounts: rs[0].ok ? rs[0].data : null, events: rs[1].ok ? rs[1].data : null };
+      renderAdmin();
+    });
+  }
+
   // ---------------------------------------------------------------- rendering
   function field(dl, name, valueNode) {
     dl.appendChild(el("dt", { text: name }));
@@ -252,7 +293,7 @@
     var keepRisk = $("risk").value, keepRes = $("r-res").value;
     fillSelects(); $("risk").value = keepRisk || "medium"; if (keepRes) $("r-res").value = keepRes;
     setConn($("conn").getAttribute("data-conn") || (S.signedIn ? "ok" : "out"));
-    renderRecent(); renderTasks(); renderQueue(); renderMission();
+    renderRecent(); renderTasks(); renderQueue(); renderAdmin(); renderMission();
   }
 
   // ------------------------------------------------------------------ actions
@@ -300,8 +341,8 @@
     setConn("ok");
   }
   function showSignedOut() {
-    S.signedIn = false; S.who = null; S.mission = null; S.result = null; S.audit = null; S.tasks = []; S.pending = {}; S.challenge = null; S.queue = null;
-    $("workspace").hidden = true; $("mission").hidden = true; $("whoami").hidden = true; $("signin-form").hidden = false;
+    S.signedIn = false; S.who = null; S.mission = null; S.result = null; S.audit = null; S.tasks = []; S.pending = {}; S.challenge = null; S.queue = null; S.admin = null;
+    $("admin").hidden = true; $("workspace").hidden = true; $("mission").hidden = true; $("whoami").hidden = true; $("signin-form").hidden = false;
     $("password").value = ""; setConn("out");
   }
   function expireSession() { showSignedOut(); notice("warn", t("err_session_expired")); }
@@ -317,6 +358,7 @@
     showSignedIn(view);
     renderTasks();
     renderQueue();  // after sign-in is marked: the "not an approver" hint depends on it
+    loadAdmin();
     var m = /^#m=(.+)$/.exec(window.location.hash || "");
     if (m) { try { return openMission(decodeURIComponent(m[1])); } catch (_e) { /* bad hash */ } }
   }
@@ -430,6 +472,7 @@
     $("create-form").addEventListener("submit", onCreate);
     $("open-form").addEventListener("submit", function (ev) { ev.preventDefault(); openMission($("mid").value); });
     $("queue-refresh").addEventListener("click", function () { if (!needSignedIn()) loadQueue(); });
+    $("admin-refresh").addEventListener("click", function () { if (!needSignedIn()) loadAdmin(); });
     $("refresh").addEventListener("click", function () { if (S.mission && !needSignedIn()) loadMission(S.mission.mission_id, false); });
     $("challenge-form").addEventListener("submit", onChallenge);
     $("approve-form").addEventListener("submit", onApprove);

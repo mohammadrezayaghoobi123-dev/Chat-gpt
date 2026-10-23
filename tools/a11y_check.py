@@ -135,6 +135,7 @@ def main(mutations=None):
                           SQLiteExecutionRegistry(str(base / "reg.sqlite")), dispatch_timeout_seconds=5)
     accounts = AccountStore(base / "id.sqlite")
     accounts.create_account("user:boss", PW, roles=("approver",))
+    accounts.create_account("user:opsa11y", PW, roles=("operator",))
     verifier = HmacSeamVerifier()
     verifier.add("k-boss", b"boss-secret", "user:boss")
     server = make_server(MissionService(AuditStore(base / "audit.jsonl"), verifier, cfg, AccountApprovers(accounts)),
@@ -180,6 +181,21 @@ def main(mutations=None):
                     page.click("#lang")
                 note(f"{scheme}/{lang} signed-in rules", page.evaluate(RULES_JS))
                 keyboard_pass(page, f"{scheme}/{lang} signed-in")
+            # the operator's read-only admin view (tables, captions, scoped headers) gets the same rules
+            page.click("#signout")
+            page.wait_for_selector("#signin-form:not([hidden])")
+            page.fill("#subject", "user:opsa11y")
+            page.fill("#password", PW)
+            page.click("#signin-form button[type=submit]")
+            page.wait_for_selector("#admin:not([hidden]) #admin-accounts tbody tr")
+            for lang in ("fa", "en"):
+                if page.get_attribute("html", "lang") != lang:
+                    page.click("#lang")
+                note(f"{scheme}/{lang} admin rules", page.evaluate(RULES_JS))
+                note(f"{scheme}/{lang} admin tables", page.evaluate(
+                    "() => Array.from(document.querySelectorAll('#admin table')).flatMap(t => [t.querySelector('caption') ? null : 'no caption on ' + t.id,"
+                    " t.querySelectorAll('th[scope=col]').length === 0 ? 'no scoped column headers in ' + t.id : null]).filter(Boolean)"))
+                keyboard_pass(page, f"{scheme}/{lang} admin")
             # error notice must be announced
             page.fill("#mid", "does-not-exist")
             page.click("#open-form button[type=submit]")

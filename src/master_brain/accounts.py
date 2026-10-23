@@ -43,6 +43,10 @@ MAX_SESSIONS_PER_SUBJECT = 10
 _TOUCH_INTERVAL = timedelta(seconds=30)  # do not write on every request
 
 
+MAX_ADMIN_ACCOUNTS = 500
+MAX_ADMIN_EVENTS = 100
+
+
 class AccountError(ValueError):
     """Operator-facing problem (bad password policy, duplicate or unknown subject)."""
 
@@ -198,6 +202,15 @@ class AccountStore:
         with closing(self._connect()) as db:
             rows = db.execute("SELECT roles FROM accounts WHERE disabled=0").fetchall()
         return {"accounts": len(rows), "approvers": sum("approver" in row[0].split(",") for row in rows)}
+
+    def list_accounts(self, limit: int = MAX_ADMIN_ACCOUNTS) -> tuple[list[dict[str, object]], bool]:
+        """Read-only operator view: ``(rows sorted by subject, truncated)``. Never includes password material."""
+        with closing(self._connect()) as db:
+            rows = db.execute("SELECT subject, roles, disabled, created_at FROM accounts ORDER BY subject LIMIT ?",
+                              (limit + 1,)).fetchall()
+        view = [{"subject": r[0], "roles": sorted(filter(None, r[1].split(","))), "disabled": bool(r[2]),
+                 "created_at": r[3]} for r in rows[:limit]]
+        return view, len(rows) > limit
 
     def active_roles(self, subject: object) -> frozenset[str]:
         """Roles of an existing, ENABLED account; empty for unknown/disabled/malformed subjects."""

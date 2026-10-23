@@ -1,6 +1,9 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
@@ -12,6 +15,8 @@ app.use(express.json({ limit: "64kb" }));
 const PORT = Number(process.env.PORT || 3000);
 const SERVICE_NAME = "master-brain-mcp";
 const SERVICE_VERSION = "0.1.0";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const transports = new Map();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const architecture = {
@@ -114,14 +119,50 @@ app.get("/app", (_req, res) => {
 });
 
 app.post("/mcp", async (req, res) => {
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true
-  });
-  res.on("close", () => { transport.close().catch(() => {}); });
+  const requestedSessionId = req.headers["mcp-session-id"];
+  let transport = requestedSessionId ? transports.get(requestedSessionId) : undefined;
+
+  if (requestedSessionId && !transport) {
+    return res.status(404).json({
+      jsonrpc: "2.0",
+      error: { code: -32001, message: "Unknown or expired MCP session. Reconnect and initialize again." },
+      id: req.body?.id ?? null
+    });
+  }
+
+  if (!transport) {
+    if (req.body?.method !== "initialize") {
+      return res.status(400).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Initialize an MCP session first." },
+        id: req.body?.id ?? null
+      });
+    }
+
+    let newTransport;
+    newTransport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      enableJsonResponse: true,
+      onsessioninitialized: (sessionId) => transports.set(sessionId, newTransport)
+    });
+    newTransport.onclose = () => {
+      if (newTransport.sessionId) transports.delete(newTransport.sessionId);
+    };
+    transport = newTransport;
+
+    try {
+      await createMcpServer().connect(transport);
+    } catch (error) {
+      console.error("MCP session setup failed:", error instanceof Error ? error.message : "unknown error");
+      return res.status(500).json({
+        jsonrpc: "2.0",
+        error: { code: -32603, message: "Could not initialize MCP session" },
+        id: req.body?.id ?? null
+      });
+    }
+  }
+
   try {
-    const server = createMcpServer();
-    await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   } catch (error) {
     if (!res.headersSent) res.status(500).json({
@@ -133,9 +174,18 @@ app.post("/mcp", async (req, res) => {
   }
 });
 
+app.delete("/mcp", async (req, res) => {
+  const sessionId = req.headers["mcp-session-id"];
+  const transport = sessionId ? transports.get(sessionId) : undefined;
+  if (!transport) return res.status(404).json({ error: "Unknown or expired MCP session." });
+  await transport.close();
+  transports.delete(sessionId);
+  return res.status(200).end();
+});
+
 app.all("/mcp", (_req, res) => {
-  res.set("Allow", "POST");
-  res.status(405).json({ error: "This stateless starter accepts MCP POST requests only." });
+  res.set("Allow", "POST, DELETE");
+  res.status(405).json({ error: "Use POST for MCP requests or DELETE to close a session." });
 });
 
 app.listen(PORT, "0.0.0.0", () => console.log(SERVICE_NAME + " listening on port " + PORT));

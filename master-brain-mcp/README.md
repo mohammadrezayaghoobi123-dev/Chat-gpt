@@ -5,6 +5,7 @@ A stateless, read-only MCP service designed to run separately from the Windows/O
 ## Included tools
 
 - `master_brain_status` — service health and safety boundaries.
+- Web interface at `/app` (also the `/` landing page) for status, architecture, and proof-audit template.
 - `master_brain_architecture` — the current Master Brain starter blueprint.
 - `proof_audit_template` — structures supplied claims and evidence for review. It does **not** independently verify claims or fetch sources.
 
@@ -27,7 +28,7 @@ npm run check
 npm start
 ```
 
-The service listens on `PORT` (default `3000`). Health check: `GET /healthz`. MCP endpoint: `POST /mcp`.
+The service listens on `PORT` (default `3000`). Web interface: `GET /app` (or `/`). Health check: `GET /healthz`. MCP endpoint: `POST /mcp`.
 
 ## Cloud deployment
 
@@ -43,6 +44,15 @@ docker run --rm -p 3000:3000 -e PORT=3000 master-brain-mcp
 ### Render
 
 The included `render.yaml` is a starting point for a Docker web service. Connect the repository in Render and deploy the Blueprint. Review current plan limits and billing first. Free web services may sleep or have usage limits; this does not guarantee always-on hosting.
+
+## Deploy with Render Dashboard
+
+1. Open Render and create a **New Web Service**.
+2. Connect this repository and select branch `feature/master-brain-cloud-mcp` (do not merge to `main`).
+3. Choose Docker as the runtime. Set the Dockerfile path to `master-brain-mcp/Dockerfile`; leave the Docker build context at the repository root.
+4. Choose the Free instance if available, then deploy. Wait for the first build to finish.
+5. Open the generated HTTPS URL. The web app should appear at `/app`, and `/healthz` should return JSON with `status: ok`.
+6. Free services may sleep after 15 minutes of inactivity and take about a minute to wake. They are not guaranteed always-on.
 
 ## Connect to ChatGPT
 

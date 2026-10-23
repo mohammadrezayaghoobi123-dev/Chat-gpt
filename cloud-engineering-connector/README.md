@@ -17,6 +17,7 @@ A general-purpose, cloud-hosted MCP connector for demanding software engineering
 - `project_inspect`: repository metadata, latest branch commit, and a capped file listing.
 - `read_project_file`: read a text file at a ref.
 - `architecture_review`: review rubric for requirements, architecture, correctness, security, operations, testing, and evidence.
+- `engineering_standards`: mandatory operating rules and a quality gate for evidence, testing, safety, and reporting.
 - `create_change_pr`: create a new `assistant/*` branch and draft PR; never merge.
 
 The model using this connector must perform substantive reasoning, inspect relevant files, consult primary sources where necessary, and run/inspect CI. Tool output alone is not proof that code is correct.
@@ -31,6 +32,8 @@ npm run check
 ```
 
 ## Cloud deployment (Cloudflare Workers)
+
+This branch includes the Worker source and Wrangler configuration, but no live Worker is deployed by GitHub commits. To deploy without merging into `main`, connect the repository in the Cloudflare dashboard and select branch `feature/cloud-engineering-connector` with project root `cloud-engineering-connector`. Set `MCP_AUTH_TOKEN` and `GITHUB_TOKEN` as Worker secrets before exposing the endpoint.
 
 1. Sign in to Cloudflare and connect this GitHub repository.
 2. Create a Worker using `cloud-engineering-connector/worker.js` as the entry point and `wrangler.toml` as its configuration.

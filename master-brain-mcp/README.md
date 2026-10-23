@@ -1,6 +1,6 @@
 # Master Brain Cloud MCP (starter)
 
-A stateless, read-only MCP service designed to run separately from the Windows/OpenClaw machine.
+A read-only MCP service with in-memory protocol sessions, designed to run separately from the Windows/OpenClaw machine. It does not persist user evidence or application data.
 
 ## Included tools
 

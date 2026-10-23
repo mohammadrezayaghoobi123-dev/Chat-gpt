@@ -1,0 +1,11 @@
+{
+  "nodeModulesDir": "auto",
+  "deploy": {
+    "install": "npm install",
+    "runtime": {
+      "type": "dynamic",
+      "entrypoint": "./server.js",
+      "cwd": "."
+    }
+  }
+}

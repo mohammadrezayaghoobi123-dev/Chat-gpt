@@ -303,11 +303,36 @@ class Build(Dirs):
             build(self.config(port=0, pubmed_searches=("no-equals",)))
         self.assertIn("TASK_ID=QUERY", str(ctx.exception))
 
+    def test_abstract_tasks_register_with_their_own_integration_and_share_the_id_space(self):
+        built = build(self.config(port=0, pubmed_searches=("pm=a",), pubmed_abstracts=("pa=b",)),
+                      pubmed_fetcher=lambda url: b"{}")
+        self.addCleanup(built.close)
+        tasks = {t.task_id: t for t in built.service._execution.catalog.list()}
+        self.assertEqual({k: v.integration.integration_id for k, v in tasks.items()},
+                         {"pm": "pubmed-esearch", "pa": "pubmed-abstracts"})
+        self.assertEqual(tasks["pa"].payload(), {"query": "b", "max_results": 10})
+        self.assertTrue(any("eutils.ncbi.nlm.nih.gov" in w for w in built.warnings))
+        for bad in (("pm=x",), ("no-equals",), ("=q",)):
+            with self.assertRaises(StartupRefused, msg=bad):
+                build(self.config(port=0, pubmed_searches=("pm=a",), pubmed_abstracts=bad))
+        with self.assertRaises(StartupRefused) as ctx:
+            build(self.config(port=0, pubmed_abstracts=("no-equals",)))
+        self.assertIn("--pubmed-abstracts", str(ctx.exception))
+        self.assertIn("TASK_ID=QUERY", str(ctx.exception))
+
+    def test_abstracts_alone_announce_network_use(self):
+        built = build(self.config(port=0, pubmed_abstracts=("pa=b",)))
+        self.addCleanup(built.close)
+        self.assertTrue(any("eutils.ncbi.nlm.nih.gov" in w for w in built.warnings))
+
     def test_the_command_line_flag_is_repeatable(self):
         from master_brain.serve import _parse
         cfg = _parse(["--data-dir", "d", "--pubmed-search", "a=x", "--pubmed-search", "b=y"])
         self.assertEqual(cfg.pubmed_searches, ("a=x", "b=y"))
         self.assertEqual(_parse(["--data-dir", "d"]).pubmed_searches, ())
+        both = _parse(["--data-dir", "d", "--pubmed-abstracts", "c=z", "--pubmed-abstracts", "e=y"])
+        self.assertEqual((both.pubmed_abstracts, both.pubmed_searches), (("c=z", "e=y"), ()))
+        self.assertEqual(_parse(["--data-dir", "d"]).pubmed_abstracts, ())
 
 
 class RealProcess(Dirs):
@@ -413,7 +438,7 @@ class PubMedThroughTheGates(RealProcess):
 
     GOOD = json.dumps({"esearchresult": {"count": "2144", "idlist": ["42870643", "42655937"]}}).encode()
 
-    def serve(self, fetcher):
+    def serve(self, fetcher, **specs):
         from master_brain.approval_signing_ed25519 import Ed25519Signer
         self.signer = Ed25519Signer.generate("k-boss")
         self.data.mkdir(mode=0o700)
@@ -423,8 +448,8 @@ class PubMedThroughTheGates(RealProcess):
         accounts.create_account("user:dave", PW, actor="operator:test")
         keys = keyfile(Path(self.tmp.name) / "keys.json",
                        [good_key("k-boss", "user:boss", self.signer.public_key_bytes().hex())])
-        built = build(ServeConfig(self.data, port=0, approval_keys=keys, pubmed_searches=("pm=metformin trial",)),
-                      pubmed_fetcher=fetcher)
+        specs = specs or {"pubmed_searches": ("pm=metformin trial",)}
+        built = build(ServeConfig(self.data, port=0, approval_keys=keys, **specs), pubmed_fetcher=fetcher)
         self.addCleanup(built.close)
         threading.Thread(target=built.run, daemon=True).start()
         port = built.server.server_address[1]
@@ -460,6 +485,25 @@ class PubMedThroughTheGates(RealProcess):
         self.assertIn("term=metformin+trial", urls[0])
         self.assertIn("retmax=10", urls[0])
         self.assertIn("42870643", json.dumps(result))
+
+    def test_an_approved_abstract_task_makes_exactly_two_requests_and_returns_abstracts(self):
+        urls = []
+        xml = (b"<PubmedArticleSet><PubmedArticle><MedlineCitation><PMID>42870643</PMID><Article>"
+               b"<Journal><JournalIssue><PubDate><Year>2026</Year></PubDate></JournalIssue><Title>J</Title></Journal>"
+               b"<ArticleTitle>T</ArticleTitle><Abstract><AbstractText>ABSTRACT-OK</AbstractText></Abstract>"
+               b"</Article></MedlineCitation></PubmedArticle></PubmedArticleSet>")
+
+        def fetch(url):
+            urls.append(url)
+            return self.GOOD.replace(b'"42655937"', b'"42870643"').replace(b'["42870643", "42870643"]', b'["42870643"]') \
+                if "esearch" in url else xml
+        port = self.serve(fetch, pubmed_abstracts=("pa=metformin trial",))
+        mid = self.approved_mission(port, "abs")
+        status, result, _ = self.call(port, "POST", f"/v1/missions/{mid}/executions", {
+            "idempotency_key": "exec-abs-00001", "task_id": "pa"}, cookie=self.dave)
+        self.assertEqual((status, result["state"]), (201, "response_received"), result)
+        self.assertEqual([("esearch" in u, "efetch" in u) for u in urls], [(True, False), (False, True)])
+        self.assertIn("ABSTRACT-OK", json.dumps(result))
 
     def test_a_hostile_upstream_answer_fails_cleanly_and_leaks_nothing(self):
         port = self.serve(lambda url: b'{"esearchresult": {"ERROR": "SECRET-UPSTREAM-TEXT"}}')

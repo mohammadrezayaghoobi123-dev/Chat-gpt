@@ -41,7 +41,7 @@ from master_brain.integrations import (
     IntegrationDescriptor, IntegrationHealth, IntegrationKind, IntegrationMaturity, IntegrationRequirement,
 )
 from master_brain.mission_service import ExecutionConfig, MissionService
-from master_brain.pubmed import PubMedError, pubmed_search_task
+from master_brain.pubmed import PubMedError, pubmed_abstracts_task, pubmed_search_task
 from master_brain.task_catalog import TaskCatalog, TaskDefinition
 
 MAX_TRUSTED_KEYS = 100
@@ -65,6 +65,7 @@ class ServeConfig:
     approval_keys: Path | None = None
     demo_echo_task: bool = False
     pubmed_searches: tuple[str, ...] = ()
+    pubmed_abstracts: tuple[str, ...] = ()
 
 
 @dataclass
@@ -187,15 +188,17 @@ def _demo_task() -> TaskDefinition:
 PUBMED_DEFAULT_MAX = 10
 
 
-def parse_pubmed_spec(spec: str, fetcher: Any = None) -> TaskDefinition:
-    """``TASK_ID=QUERY`` -> an operator-defined, approval-gated PubMed search task."""
+def parse_pubmed_spec(spec: str, fetcher: Any = None, *, abstracts: bool = False) -> TaskDefinition:
+    """``TASK_ID=QUERY`` -> an operator-defined, approval-gated PubMed task (search, or search + abstracts)."""
+    flag = "--pubmed-abstracts" if abstracts else "--pubmed-search"
     task_id, sep, query = spec.partition("=")
     if not sep:
-        raise StartupRefused("--pubmed-search must look like TASK_ID=QUERY")
+        raise StartupRefused(f"{flag} must look like TASK_ID=QUERY")
+    make = pubmed_abstracts_task if abstracts else pubmed_search_task
     try:
-        return pubmed_search_task(task_id.strip(), query.strip(), PUBMED_DEFAULT_MAX, fetcher=fetcher)
+        return make(task_id.strip(), query.strip(), PUBMED_DEFAULT_MAX, fetcher=fetcher)
     except (PubMedError, ValueError) as exc:
-        raise StartupRefused(f"--pubmed-search {task_id.strip()!r}: {exc}") from exc
+        raise StartupRefused(f"{flag} {task_id.strip()!r}: {exc}") from exc
 
 
 def build(config: ServeConfig, *, pubmed_fetcher: Any = None) -> Built:
@@ -213,7 +216,8 @@ def build(config: ServeConfig, *, pubmed_fetcher: Any = None) -> Built:
         tasks.append(_demo_task())
         warnings.append("--demo-echo-task is on: one offline task can run (not a real integration)")
     tasks.extend(parse_pubmed_spec(spec, pubmed_fetcher) for spec in config.pubmed_searches)
-    if config.pubmed_searches:
+    tasks.extend(parse_pubmed_spec(spec, pubmed_fetcher, abstracts=True) for spec in config.pubmed_abstracts)
+    if config.pubmed_searches or config.pubmed_abstracts:
         warnings.append("--pubmed-search: approved tasks will contact eutils.ncbi.nlm.nih.gov (read-only, free)")
     if tasks:
         try:
@@ -247,12 +251,14 @@ def _parse(argv: list[str] | None) -> ServeConfig:
     parser.add_argument("--demo-echo-task", action="store_true", help="register one offline demo task")
     parser.add_argument("--pubmed-search", action="append", default=[], metavar="TASK_ID=QUERY",
                         help="repeatable; register a read-only PubMed search task")
+    parser.add_argument("--pubmed-abstracts", action="append", default=[], metavar="TASK_ID=QUERY",
+                        help="repeatable; like --pubmed-search but also returns abstracts")
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("--port must be 0-65535")
     return ServeConfig(args.data_dir, args.host, args.port, args.allow_non_loopback, tuple(args.allowed_host),
                        args.secure_cookies, args.approval_keys, args.demo_echo_task,
-                       tuple(args.pubmed_search))
+                       tuple(args.pubmed_search), tuple(args.pubmed_abstracts))
 
 
 def _main(argv: list[str] | None = None) -> int:

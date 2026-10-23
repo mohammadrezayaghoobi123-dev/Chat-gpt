@@ -13,6 +13,7 @@ import re
 import sys
 import threading
 import time
+import xml.etree.ElementTree as ET
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Mapping
@@ -24,6 +25,9 @@ from master_brain.task_catalog import TaskDefinition
 
 HOST = "eutils.ncbi.nlm.nih.gov"
 PATH = "/entrez/eutils/esearch.fcgi"
+EFETCH_PATH = "/entrez/eutils/efetch.fcgi"
+MAX_ABSTRACT_CHARS = 4000
+MAX_TEXT_CHARS = 1000
 MAX_RESULTS_CAP = 20
 MAX_QUERY_CHARS = 500
 MAX_BODY_BYTES = 1024 * 1024
@@ -51,6 +55,66 @@ def _check_max(n: Any) -> int:
 def build_url(query: Any, max_results: Any) -> str:
     params = {"db": "pubmed", "retmode": "json", "retmax": str(_check_max(max_results)), "term": _check_query(query)}
     return f"https://{HOST}{PATH}?{urlencode(params)}"
+
+
+def build_efetch_url(pmids: Any) -> str:
+    if not isinstance(pmids, (list, tuple)) or not 1 <= len(pmids) <= MAX_RESULTS_CAP:
+        raise PubMedError(f"pmids must be a list of 1-{MAX_RESULTS_CAP} ids")
+    if any(not isinstance(i, str) or not _PMID.fullmatch(i) for i in pmids):
+        raise PubMedError("pmids must be numeric strings")
+    return f"https://{HOST}{EFETCH_PATH}?" + urlencode({"db": "pubmed", "retmode": "xml", "id": ",".join(pmids)})
+
+
+def _text(node: Any) -> "str | None":
+    if node is None:
+        return None
+    value = " ".join("".join(node.itertext()).split())
+    return value[:MAX_TEXT_CHARS] if value else None
+
+
+def _parse_article(node: Any) -> dict[str, Any]:
+    pmid = (node.findtext("MedlineCitation/PMID") or "").strip()
+    if not _PMID.fullmatch(pmid):
+        raise PubMedError("unexpected response shape")
+    year = (node.findtext("MedlineCitation/Article/Journal/JournalIssue/PubDate/Year") or "").strip()
+    if not year:
+        match = re.match(r"^[0-9]{4}", (node.findtext("MedlineCitation/Article/Journal/JournalIssue/PubDate/MedlineDate")
+                                         or "").strip())
+        year = match.group(0) if match else ""
+    doi = None
+    for loc in node.findall("MedlineCitation/Article/ELocationID"):
+        if loc.get("EIdType") == "doi" and (loc.text or "").strip():
+            doi = loc.text.strip()[:MAX_TEXT_CHARS]
+            break
+    parts = []
+    for part in node.findall("MedlineCitation/Article/Abstract/AbstractText"):
+        body = " ".join("".join(part.itertext()).split())
+        if body:
+            label = (part.get("Label") or "").strip()
+            parts.append(f"{label}: {body}" if label else body)
+    abstract = "\n".join(parts)[:MAX_ABSTRACT_CHARS] or None
+    return {"pmid": pmid, "doi": doi, "title": _text(node.find("MedlineCitation/Article/ArticleTitle")),
+            "journal": _text(node.find("MedlineCitation/Article/Journal/Title")), "year": year or None,
+            "abstract": abstract}
+
+
+def parse_efetch(body: Any) -> list[dict[str, Any]]:
+    """Strict parse of an efetch XML document. DTDs/entities are refused outright (no expansion attacks)."""
+    if not isinstance(body, (bytes, bytearray)) or len(body) > MAX_BODY_BYTES:
+        raise PubMedError("unusable response")
+    raw = bytes(body)
+    lowered = raw.lower()
+    if b"<!doctype" in lowered or b"<!entity" in lowered:
+        raise PubMedError("response contains a DTD or entity declaration")
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        raise PubMedError("response is not valid XML") from None
+    if root.tag != "PubmedArticleSet" or len(root) > MAX_RESULTS_CAP:
+        raise PubMedError("unexpected response shape")
+    if any(child.tag != "PubmedArticle" for child in root):
+        raise PubMedError("unexpected response shape")
+    return [_parse_article(child) for child in root]
 
 
 def _no_constant(name: str) -> Any:
@@ -113,7 +177,7 @@ def make_fetcher(opener: Any = None, timeout: float = TIMEOUT_SECONDS, max_bytes
 
     def fetch(url: str) -> bytes:
         parsed = urlparse(url)
-        if parsed.scheme != "https" or parsed.hostname != HOST or parsed.path != PATH:
+        if parsed.scheme != "https" or parsed.hostname != HOST or parsed.path not in (PATH, EFETCH_PATH):
             raise PubMedError("refused: URL is outside the allowed endpoint")
         spacer.wait()
         request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "master-brain/1"})
@@ -130,21 +194,56 @@ class PubMedSearch:
     def __init__(self, fetcher: Fetcher | None = None) -> None:
         self._fetch = fetcher or make_fetcher()
 
-    def invoke(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        if not isinstance(payload, Mapping) or set(payload) != {"query", "max_results"}:
-            raise PubMedError("payload must be exactly {query, max_results}")
-        query, wanted = payload["query"], payload["max_results"]
-        url = build_url(query, wanted)
+    def _get(self, url: str) -> Any:
         try:
-            body = self._fetch(url)
+            return self._fetch(url)
         except PubMedError:
             raise
         except Exception:  # network/HTTP details are deliberately not propagated
             raise PubMedError("PubMed request failed") from None
-        parsed = parse_esearch(body)
+
+    def invoke(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        if not isinstance(payload, Mapping) or set(payload) != {"query", "max_results"}:
+            raise PubMedError("payload must be exactly {query, max_results}")
+        query, wanted = payload["query"], payload["max_results"]
+        parsed = parse_esearch(self._get(build_url(query, wanted)))
         if len(parsed["pmids"]) > wanted:
             raise PubMedError("response returned more results than requested")
         return {"source": "pubmed", "query": query, **parsed}
+
+
+class PubMedAbstracts(PubMedSearch):
+    """esearch, then efetch for exactly the PMIDs that search returned (two requests, both fixed-endpoint)."""
+
+    def invoke(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        found = super().invoke(payload)
+        pmids = found["pmids"]
+        articles: list[dict[str, Any]] = []
+        if pmids:
+            by_id: dict[str, dict[str, Any]] = {}
+            for article in parse_efetch(self._get(build_efetch_url(pmids))):
+                if article["pmid"] not in pmids or article["pmid"] in by_id:
+                    raise PubMedError("response contained an unexpected or duplicate article")
+                by_id[article["pmid"]] = article
+            articles = [by_id[i] for i in pmids if i in by_id]
+        return {"source": "pubmed", "query": found["query"], "total_count": found["total_count"],
+                "articles": articles}
+
+
+def pubmed_abstracts_task(task_id: str, query: str, max_results: int, *, fetcher: Fetcher | None = None) -> TaskDefinition:
+    _check_query(query)
+    _check_max(max_results)
+    descriptor = IntegrationDescriptor(
+        integration_id="pubmed-abstracts", version="1", kind=IntegrationKind.DATA_SOURCE,
+        capabilities=("literature_search", "abstract_retrieval"), maturity=IntegrationMaturity.ENABLED,
+        health=IntegrationHealth.AVAILABLE, risk_level=0, estimated_cost_per_call=0.0, data_regions=("us",),
+        limitations=("NCBI PubMed only (biomedical literature)", "abstracts truncated to 4000 characters",
+                     "two requests per call; unauthenticated NCBI rate limits apply",
+                     "cite PubMed and the article DOI when using results"))
+    return TaskDefinition.create(
+        task_id=task_id, description=f"PubMed search with abstracts: {query}"[:500], integration=descriptor,
+        requirement=IntegrationRequirement(("literature_search",), required_kind=IntegrationKind.DATA_SOURCE),
+        adapter=PubMedAbstracts(fetcher), payload={"query": query, "max_results": max_results})
 
 
 def pubmed_search_task(task_id: str, query: str, max_results: int, *, fetcher: Fetcher | None = None) -> TaskDefinition:
@@ -186,5 +285,6 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["MAX_RESULTS_CAP", "MAX_QUERY_CHARS", "PubMedError", "PubMedSearch", "build_url", "make_fetcher",
+__all__ = ["MAX_ABSTRACT_CHARS", "PubMedAbstracts", "build_efetch_url", "parse_efetch", "pubmed_abstracts_task",
+           "MAX_RESULTS_CAP", "MAX_QUERY_CHARS", "PubMedError", "PubMedSearch", "build_url", "make_fetcher",
            "parse_esearch", "pubmed_search_task"]

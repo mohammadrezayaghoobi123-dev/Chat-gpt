@@ -205,6 +205,12 @@ class AccountStore:
             rows = db.execute("SELECT roles FROM accounts WHERE disabled=0").fetchall()
         return {"accounts": len(rows), "approvers": sum("approver" in row[0].split(",") for row in rows)}
 
+    def approver_subjects(self) -> tuple[str, ...]:
+        """Subjects of ENABLED accounts holding the approver role, sorted (start-up diagnostics only)."""
+        with closing(self._connect()) as db:
+            rows = db.execute("SELECT subject, roles FROM accounts WHERE disabled=0 ORDER BY subject").fetchall()
+        return tuple(r[0] for r in rows if "approver" in r[1].split(","))
+
     def list_accounts(self, limit: int = MAX_ADMIN_ACCOUNTS) -> tuple[list[dict[str, object]], bool]:
         """Read-only operator view: ``(rows sorted by subject, truncated)``. Never includes password material."""
         with closing(self._connect()) as db:

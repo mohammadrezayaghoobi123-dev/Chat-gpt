@@ -180,6 +180,31 @@ def preflight(data_dir: str | os.PathLike[str]) -> list[str]:
     return warnings
 
 
+def approver_readiness_warnings(accounts: AccountStore, verifier: Any) -> list[str]:
+    """Who can ACTUALLY approve = an enabled approver account that also holds a trusted signing key.
+
+    Pure diagnostics: nothing about who may approve changes. Subjects are not secrets; key material is never named.
+    """
+    if verifier is None or not hasattr(verifier, "active_subjects"):
+        return []
+    approvers = accounts.approver_subjects()
+    if not approvers:
+        return []  # already reported by preflight
+    keyed = verifier.active_subjects()
+    ready = [s for s in approvers if s in keyed]
+    unready = [s for s in approvers if s not in keyed]
+    out: list[str] = []
+    if not ready:
+        out.append("no approver has a signing key in --approval-keys: nobody can approve a consequential mission")
+    elif len(ready) == 1:
+        out.append("only one approver can approve (single point of failure): add a second approver account "
+                   "and signing key, and keep the recovery steps from docs/APPROVER_RECOVERY_RUNBOOK.md at hand")
+    if unready:
+        shown = ", ".join(unready[:5]) + (f" and {len(unready) - 5} more" if len(unready) > 5 else "")
+        out.append(f"approver accounts without a signing key in --approval-keys: {shown}")
+    return out
+
+
 # ----------------------------------------------------------------------------- demo task (offline)
 class OfflineEcho:
     def invoke(self, payload):
@@ -223,6 +248,7 @@ def build(config: ServeConfig, *, pubmed_fetcher: Any = None) -> Built:
     else:
         warnings.append("no --approval-keys: no approval can be recorded")
     accounts = AccountStore(data / "accounts.sqlite", full_verify_interval_seconds=FULL_VERIFY_SECONDS)
+    warnings.extend(approver_readiness_warnings(accounts, verifier))
     execution = None
     tasks: list[TaskDefinition] = []
     if config.demo_echo_task:

@@ -61,6 +61,10 @@ class Ed25519TrustStore:
             raise ValueError("an Ed25519 public key is exactly 32 bytes")
         self._keys[key_id] = (Ed25519PublicKey.from_public_bytes(bytes(public_key_bytes)), subject)
 
+    def active_subjects(self) -> frozenset[str]:
+        """Subjects that hold at least one non-revoked trusted key (start-up diagnostics)."""
+        return frozenset(subject for key_id, (_, subject) in self._keys.items() if key_id not in self._revoked)
+
     def revoke(self, key_id: str) -> None:
         if key_id not in self._keys:
             raise KeyError(key_id)

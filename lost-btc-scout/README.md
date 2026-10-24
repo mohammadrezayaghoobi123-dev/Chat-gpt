@@ -1,25 +1,22 @@
-# Lost BTC Scout
+# Crypto Scout (formerly Lost BTC Scout)
 
-A tiny, standalone, mobile-friendly, read-only Bitcoin public-address explorer. It is separate from Master Brain and requires no wallet, private key, seed phrase, or transaction signing.
+A standalone, mobile-friendly, read-only public-address explorer, independent from Master Brain. No wallet, private key, seed phrase, signing, or initial capital is required.
 
-## What it does
-- Queries public address data from the mempool.space API.
-- Shows reported balance, transaction count, latest available confirmed transaction time, and unspent outputs (UTXOs).
-- Provides links to independently inspect an address and its recent transactions.
-- Works as a static web page on mobile browsers.
+## Multi-chain support in `multichain.html`
+- Bitcoin (BTC): balance and transaction count from the public mempool.space API.
+- EVM native assets: Ethereum (ETH), BNB Smart Chain (BNB), Polygon (POL), Arbitrum One (ETH), Optimism (ETH), Base (ETH), and Avalanche C-Chain (AVAX). Reads native balance, transaction nonce, and latest block from public JSON-RPC endpoints.
+- Offers links to independent block explorers.
 
-## Important limitations
-- Address inactivity, age, or balance does **not** prove that an address is abandoned, ownerless, or available to claim.
-- This initial version checks one address at a time. It does not crawl the entire Bitcoin blockchain or identify private keys.
-- It cannot guarantee profit or recover funds from an address without the legitimate signing key.
-- Public APIs can rate-limit requests, be unavailable, or return incomplete data.
-- Do not enter private keys or seed phrases. The app does not need them.
-
-## Run locally
-Open `index.html` in a modern browser. Some browsers restrict cross-origin requests when opened as a local file; if so, use a simple local static server or host the page.
+## Limitations
+- It does **not** prove that any address is abandoned, ownerless, or available to claim. Age, low activity, and high balance are not proof of abandonment or permission to access funds.
+- It does not scan the entire blockchain or search every wallet automatically. It checks one address at a time.
+- The current multi-chain page does not index ERC-20/BEP-20 tokens or NFTs. A zero native balance does not imply no token assets.
+- Public APIs/RPC endpoints may be rate-limited, unavailable, or block browser requests. Results should be verified in an independent explorer.
+- Never enter seed phrases or private keys. The app cannot recover funds without the legitimate signing key and does not guarantee income.
 
 ## Free static hosting
-The repository can host this as a static page with GitHub Pages if Pages is enabled in repository settings and configured to deploy from the branch/folder containing this file. For example, deploying the repository root makes the page available at `/lost-btc-scout/`. Hosting and API availability are subject to provider terms and limits.
+GitHub Pages may host this as a static site if Pages is enabled and configured from the branch containing these files. The multi-chain page is `lost-btc-scout/multichain.html`. Deployment is not considered live until the published URL is tested.
 
-## Data source
-- mempool.space public API: https://mempool.space/docs/api
+## Data sources
+- Bitcoin: https://mempool.space/docs/api
+- EVM: public JSON-RPC endpoints configured in `multichain.html`

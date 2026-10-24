@@ -2,6 +2,7 @@
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -301,6 +302,172 @@ class Edges(CacheCase):
             f.write(b"\xff\xfe\n")
         with self.assertRaisesRegex(AuditStoreError, "UTF-8"):
             s.read_all()
+
+
+class TornRead(CacheCase):
+    """A reader must never observe an append that is still being written (regression found by CI)."""
+
+    def torn_append(self, store, release):
+        """Hold the append lock the way a writer does, and leave half a record on disk until released."""
+        from master_brain.audit_ledger import create_event
+        from dataclasses import asdict
+        last = store.read_all()[-1]
+        ev = create_event(event_id="late", event_type="x", recorded_at="2026-10-12T00:00:01Z", actor="a",
+                          subject_ref="s", payload={}, previous_hash=last.event_hash)
+        row = json.dumps(asdict(ev), sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        started = threading.Event()
+
+        def writer():
+            with store._exclusive_lock():
+                with self.path.open("ab") as handle:
+                    handle.write(row[: len(row) // 2])
+                    handle.flush()
+                    started.set()
+                    release.wait(5)
+                    handle.write(row[len(row) // 2:])
+                    handle.flush()
+                store._write_anchor(4, ev.event_hash)
+        thread = threading.Thread(target=writer)
+        thread.start()
+        self.assertTrue(started.wait(5))
+        return thread
+
+    def check(self, interval):
+        s = self.store(interval)
+        self.add(s, 3)
+        s.read_all()
+        release = threading.Event()
+        writer = self.torn_append(s, release)
+        out = {}
+
+        def reader():
+            try:
+                out["events"] = [e.event_id for e in s.read_all()]
+            except Exception as exc:  # noqa: BLE001
+                out["error"] = exc
+        t = threading.Thread(target=reader)
+        t.start()
+        t.join(0.4)
+        self.assertTrue(t.is_alive(), f"the reader did not wait for the writer: {out}")
+        release.set()
+        writer.join(5)
+        t.join(5)
+        self.assertEqual(out.get("error"), None)
+        self.assertEqual(out["events"], ["e0", "e1", "e2", "late"])
+
+    def test_a_cached_reader_waits_for_an_append_in_progress(self):
+        self.check(300.0)
+
+    def test_an_uncached_reader_waits_for_an_append_in_progress(self):
+        self.check(None)
+
+
+class Locking(CacheCase):
+    def run_with_deadline(self, fn, seconds=5):
+        out = {}
+
+        def target():
+            try:
+                out["value"] = fn()
+            except Exception as exc:  # noqa: BLE001
+                out["error"] = exc
+        t = threading.Thread(target=target, daemon=True)
+        t.start()
+        t.join(seconds)
+        self.assertFalse(t.is_alive(), "deadlock")
+        if "error" in out:
+            raise out["error"]
+        return out.get("value")
+
+    def test_reading_while_holding_the_exclusive_lock_does_not_deadlock(self):
+        for interval in (None, 300.0):
+            with self.subTest(interval=interval):
+                s = self.store(interval)
+                self.add(s, 2, start=0 if interval is None else 10)
+
+                def inside():
+                    with s._exclusive_lock():
+                        return len(s.read_all())
+                self.assertGreaterEqual(self.run_with_deadline(inside), 2)
+
+    def test_the_exclusive_lock_is_reentrant_in_one_thread_and_released_after(self):
+        s, other = self.store(), self.store()
+        self.add(s, 1)
+
+        def depth():
+            return list(audit_store_module._HELD.paths.values())[0]
+
+        def nested():
+            with s._exclusive_lock():
+                self.assertEqual(depth(), 1)
+                with s._exclusive_lock():
+                    self.assertEqual(depth(), 2)
+                    with other._exclusive_lock():  # another instance on the same file, same thread
+                        self.assertEqual(depth(), 3)
+                    self.assertEqual(depth(), 2)
+                self.assertEqual(depth(), 1)
+                self.assertGreaterEqual(len(s.read_all()), 1)  # still ours after an inner exit: no self-deadlock
+                # still held here: a second thread must not get in
+                got = []
+                t = threading.Thread(target=lambda: (other._exclusive_lock().__enter__(), got.append(1)))
+                t.daemon = True
+                t.start()
+                t.join(0.3)
+                assert not got, "the lock was released too early"
+        self.run_with_deadline(nested)
+        self.assertEqual(depth(), 0)
+        self.run_with_deadline(lambda: other._exclusive_lock().__enter__().__class__)  # free again
+
+    def test_a_writer_waits_for_readers_and_readers_do_not_block_each_other(self):
+        s = self.store(None)
+        self.add(s, 1)
+        gate = threading.Event()
+        inside = []
+
+        def slow_reader():
+            with s._shared_lock():
+                inside.append(1)
+                gate.wait(5)
+        r1 = threading.Thread(target=slow_reader, daemon=True)
+        r1.start()
+        while not inside:
+            pass
+        self.assertEqual(len(self.run_with_deadline(s.read_all)), 1)  # a second reader is not blocked
+        done = threading.Event()
+        w = threading.Thread(target=lambda: (self.add(s, 1, start=1), done.set()), daemon=True)
+        w.start()
+        self.assertFalse(done.wait(0.3), "the writer must wait while a reader holds the shared lock")
+        gate.set()
+        self.assertTrue(done.wait(5))
+
+    def test_a_lock_file_that_cannot_be_opened_falls_back_to_an_unlocked_read(self):
+        from unittest import mock
+        s = self.store(None)
+        self.add(s, 2)
+        real_open = Path.open
+
+        def failing(self_, mode="r", *a, **k):
+            if self_.name.endswith(".lock"):
+                raise PermissionError("read-only directory")
+            return real_open(self_, mode, *a, **k)
+        with mock.patch.object(Path, "open", failing):
+            self.assertEqual(len(s.read_all()), 2)
+            with self.assertRaisesRegex(AuditStoreError, "lock"):
+                self.add(s, 1, start=2)  # a WRITER still fails closed
+
+    def test_a_failed_lock_acquisition_is_refused_not_ignored(self):
+        from unittest import mock
+        import fcntl
+        s = self.store(None)
+        self.add(s, 1)
+        with mock.patch.object(fcntl, "flock", side_effect=OSError("no locks")):
+            with self.assertRaisesRegex(AuditStoreError, "acquire"):
+                s.read_all()
+
+    def test_a_missing_directory_reads_as_empty_without_creating_anything(self):
+        ghost = AuditStore(Path(self.tmp.name) / "nodir" / "a.jsonl", strict_event_types=False)
+        self.assertEqual(ghost.read_all(), ())
+        self.assertFalse((Path(self.tmp.name) / "nodir").exists())
 
 
 class Threads(CacheCase):

@@ -39,6 +39,9 @@ from master_brain.audit_ledger import GENESIS_HASH, AuditEvent, create_event, ve
 from master_brain.audit_policy import AuditPayloadRejected, enforce_payload_policy
 
 
+_HELD = threading.local()  # lock-file paths this thread currently holds exclusively (re-entrancy)
+
+
 class AuditStoreError(RuntimeError):
     """Raised when the audit store cannot safely be read or extended."""
 
@@ -126,6 +129,11 @@ class AuditStore:
             raise AuditStoreError(f"invalid audit record at line {number}") from exc
 
     def read_all(self) -> tuple[AuditEvent, ...]:
+        """Verified history. Takes a SHARED lock so a record being appended is never seen half-written."""
+        with self._shared_lock():
+            return self._read_all_unlocked()
+
+    def _read_all_unlocked(self) -> tuple[AuditEvent, ...]:
         if not self.path.exists():
             self._cache = None
             return ()
@@ -261,29 +269,81 @@ class AuditStore:
         except OSError as exc:
             raise AuditStoreError("failed to write audit head anchor") from exc
 
+    @property
+    def _lock_path(self) -> Path:
+        return self.path.with_name(self.path.name + ".lock")
+
     @contextmanager
-    def _exclusive_lock(self):
-        """Hold an exclusive cross-process lock for one read-modify-append cycle."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        lock_path = self.path.with_name(self.path.name + ".lock")
-        try:
-            handle = lock_path.open("a+b")
-        except OSError as exc:
-            raise AuditStoreError("failed to open audit store lock") from exc
+    def _flock(self, *, shared: bool):
+        handle = self._lock_path.open("a+b")
         try:
             try:
                 if os.name == "nt":
                     import msvcrt
                     handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)  # no shared mode: exclusive
                 else:
                     import fcntl
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
             except OSError as exc:
                 raise AuditStoreError("failed to acquire audit store lock") from exc
             yield
         finally:
             handle.close()  # closing releases the lock
+
+    @contextmanager
+    def _exclusive_lock(self):
+        """Hold an exclusive cross-process lock for one read-modify-append cycle."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        key = str(self._lock_path.resolve())
+        held = getattr(_HELD, "paths", None)
+        if held is None:
+            held = _HELD.paths = {}
+        if held.get(key):  # already exclusive in this thread: re-entering must not deadlock on ourselves
+            held[key] += 1
+            try:
+                yield
+            finally:
+                held[key] -= 1
+            return
+        try:
+            cm = self._flock(shared=False)
+            cm.__enter__()
+        except OSError as exc:
+            raise AuditStoreError("failed to open audit store lock") from exc
+        held[key] = 1
+        try:
+            yield
+        finally:
+            held[key] = 0
+            cm.__exit__(None, None, None)
+
+    @contextmanager
+    def _shared_lock(self):
+        """Readers wait for an in-progress append. A thread that already holds the exclusive lock reads freely.
+
+        If the lock file cannot be opened (e.g. a read-only data directory with no writer) the read proceeds
+        unlocked, exactly as before this lock existed."""
+        held = getattr(_HELD, "paths", None) or {}
+        try:
+            skip = bool(held.get(str(self._lock_path.resolve()))) or not self.path.parent.is_dir()
+        except OSError:
+            skip = True  # the real read below reports an unreadable store with its own error
+        if skip:
+            yield
+            return
+        try:
+            cm = self._flock(shared=True)
+            cm.__enter__()
+        except AuditStoreError:
+            raise
+        except OSError:
+            yield
+            return
+        try:
+            yield
+        finally:
+            cm.__exit__(None, None, None)
 
     def append(
         self, *, event_id: str, event_type: str, recorded_at: "str | _NowType", actor: str,
@@ -327,7 +387,7 @@ class AuditStore:
         subject_ref: str, payload: dict[str, Any],
         precondition: Callable[[tuple[AuditEvent, ...]], str | None] | None = None,
     ) -> AuditEvent:
-        history = self.read_all()
+        history = self._read_all_unlocked()
         if recorded_at is NOW:
             recorded_at = self.now().isoformat().replace("+00:00", "Z")
         if precondition is not None:

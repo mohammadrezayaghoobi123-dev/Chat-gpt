@@ -19,6 +19,7 @@ import urllib.request
 from typing import Any, Callable, Mapping
 from urllib.parse import urlencode, urlparse
 
+from master_brain.dispatch import FailedBeforeEffect
 from master_brain.integrations import (IntegrationDescriptor, IntegrationHealth, IntegrationKind,
                                        IntegrationMaturity, IntegrationRequirement)
 from master_brain.task_catalog import TaskDefinition
@@ -36,8 +37,9 @@ _PMID = re.compile(r"^[0-9]{1,12}$")
 Fetcher = Callable[[str], bytes]
 
 
-class PubMedError(Exception):
-    """Fixed, non-leaking messages only (no URLs, no upstream text)."""
+class PubMedError(FailedBeforeEffect):
+    """Fixed, non-leaking messages only (no URLs, no upstream text). Every PubMed failure is a read that did not
+    change anything, so it is a definite failure (see dispatch.FailedBeforeEffect)."""
 
 
 def _check_query(query: Any) -> str:

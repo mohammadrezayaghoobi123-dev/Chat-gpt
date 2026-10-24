@@ -44,7 +44,7 @@ _DISPATCH_FINISHED = "mission.dispatch_finished"
 RECONCILED_EVENT_TYPE = "mission.dispatch_reconciled"
 RECONCILIATION_RESOLUTIONS = frozenset({"effect_occurred", "effect_did_not_occur"})
 # Statuses where the adapter was never invoked, so no external effect can have happened.
-_NO_EFFECT_STATUSES = frozenset({"rejected", "adapter_missing"})
+_NO_EFFECT_STATUSES = frozenset({"rejected", "adapter_missing", "failed_before_effect"})
 _SUCCESS_STATUS = "succeeded"
 
 _TUPLE_FIELDS = (

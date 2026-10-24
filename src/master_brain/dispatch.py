@@ -15,9 +15,20 @@ from typing import Any, Mapping, Protocol
 
 from master_brain.integrations import (
     IntegrationDescriptor,
+    IntegrationKind,
     IntegrationRequirement,
     assess_integration,
 )
+
+
+class FailedBeforeEffect(Exception):
+    """An adapter's explicit claim: "I failed before causing ANY external effect".
+
+    Honoured only for read-only integrations (risk level 0 and kind data_source/retrieval_tool); for anything else
+    the claim is ignored and the failure stays "outcome unknown". Never put request data in the message."""
+
+
+_READ_ONLY_KINDS = frozenset({IntegrationKind.DATA_SOURCE, IntegrationKind.RETRIEVAL_TOOL})
 
 
 class DispatchStatus(str, Enum):
@@ -25,6 +36,7 @@ class DispatchStatus(str, Enum):
     REJECTED = "rejected"
     ADAPTER_MISSING = "adapter_missing"
     ADAPTER_ERROR = "adapter_error"
+    FAILED_BEFORE_EFFECT = "failed_before_effect"
     INVALID_OUTPUT = "invalid_output"
     TIMEOUT = "timeout"
 
@@ -163,6 +175,12 @@ def dispatch_once(
             reason="adapter_timeout_outcome_unknown",
         )
     except Exception as exc:
+        if (isinstance(exc, FailedBeforeEffect) and integration.risk_level == 0
+                and integration.kind in _READ_ONLY_KINDS):
+            return DispatchResult(
+                DispatchStatus.FAILED_BEFORE_EFFECT, integration.integration_id,
+                reason="adapter_failed_before_effect",
+            )
         return DispatchResult(
             DispatchStatus.ADAPTER_ERROR,
             integration.integration_id,

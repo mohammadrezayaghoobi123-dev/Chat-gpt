@@ -514,17 +514,19 @@ class PubMedThroughTheGates(ProcessHelpers, Dirs):
             "idempotency_key": f"key-{tag}-000001", "objective": "Literature scan", "success_criteria": ["ids"],
             "risk_tier": "high"}, cookie=self.dave)
         self.assertEqual(status, 201, mission)
-        mid = mission["mission_id"]
+        self.approve_mission(port, mission["mission_id"], mission["contract_digest"], tag)
+        return mission["mission_id"]
+
+    def approve_mission(self, port, mid, contract_digest, tag):
         digest = self.call(port, "GET", "/v1/tasks", cookie=self.dave)[1]["tasks"][0]["action_digest"]
         challenge = self.call(port, "POST", f"/v1/missions/{mid}/approval-challenges", {
-            "contract_digest": mission["contract_digest"], "signing_key_id": "k-boss",
+            "contract_digest": contract_digest, "signing_key_id": "k-boss",
             "signature_alg": "ed25519", "action_digest": digest}, cookie=self.boss)[1]
         signature = self.signer.sign(bytes.fromhex(challenge["signing_message_hex"])).hex()
         status, approved, _ = self.call(port, "POST", f"/v1/missions/{mid}/approvals", {
             "idempotency_key": f"appr-{tag}-0000001", "approval_event_id": challenge["approval_event_id"],
             "signing_key_id": "k-boss", "signature_alg": "ed25519", "signature_hex": signature}, cookie=self.boss)
         self.assertEqual((status, approved["approval_status"]), (201, "granted"), approved)
-        return mid
 
     def test_an_approved_search_returns_pmids_and_touches_the_network_exactly_once_with_the_approved_query(self):
         urls = []
@@ -564,9 +566,33 @@ class PubMedThroughTheGates(ProcessHelpers, Dirs):
         status, result, _ = self.call(port, "POST", f"/v1/missions/{mid}/executions", {
             "idempotency_key": "exec-bad-00001", "task_id": "pm"}, cookie=self.dave)
         self.assertNotIn("SECRET-UPSTREAM-TEXT", json.dumps(result))
-        self.assertEqual((status, result["error"]["code"]), (500, "outcome_unknown"), result)
+        self.assertEqual((status, result["error"]["code"]), (502, "dispatch_failed"), result)
         audit = (self.data / "audit.jsonl").read_text()
         self.assertNotIn("SECRET-UPSTREAM-TEXT", audit)
+
+    def test_a_transient_upstream_failure_is_definite_and_a_retry_with_a_new_key_succeeds(self):
+        state = {"up": False}
+
+        def fetch(url):
+            if not state["up"]:
+                raise OSError("network down")
+            return self.GOOD
+        port = self.serve(fetch)
+        mid = self.approved_mission(port, "retry")
+        status, result, _ = self.call(port, "POST", f"/v1/missions/{mid}/executions", {
+            "idempotency_key": "exec-rt-000001", "task_id": "pm"}, cookie=self.dave)
+        self.assertEqual((status, result["error"]["code"]), (502, "dispatch_failed"), result)
+        mission = self.call(port, "GET", f"/v1/missions/{mid}", cookie=self.dave)[1]
+        self.assertEqual(mission["state"], "dispatch_failed_no_effect", mission)  # no reconciliation needed
+        state["up"] = True
+        # approvals stay single-use: the failed attempt consumed this one, so a retry needs a fresh approval
+        status, result, _ = self.call(port, "POST", f"/v1/missions/{mid}/executions", {
+            "idempotency_key": "exec-rt-000002", "task_id": "pm"}, cookie=self.dave)
+        self.assertEqual((status, result["error"]["code"]), (403, "approval_required"), result)
+        self.approve_mission(port, mid, mission["contract_digest"], "retry2")
+        status, result, _ = self.call(port, "POST", f"/v1/missions/{mid}/executions", {
+            "idempotency_key": "exec-rt-000003", "task_id": "pm"}, cookie=self.dave)
+        self.assertEqual((status, result["state"]), (201, "response_received"), result)
 
     def test_without_approval_the_network_is_never_touched(self):
         urls = []

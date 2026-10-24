@@ -19,6 +19,20 @@ class Fetch:
         return self.body
 
 
+class ClaimTests(unittest.TestCase):
+    def test_every_pubmed_failure_is_a_definite_failure_claim(self):
+        from master_brain.dispatch import FailedBeforeEffect
+        self.assertTrue(issubclass(PubMedError, FailedBeforeEffect))
+
+    def test_a_network_error_surfaces_as_that_claim(self):
+        from master_brain.dispatch import FailedBeforeEffect
+
+        def boom(url):
+            raise OSError("down")
+        with self.assertRaises(FailedBeforeEffect):
+            PubMedSearch(boom).invoke({"query": "x", "max_results": 1})
+
+
 class UrlTests(unittest.TestCase):
     def test_fixed_host_https_and_encoded_query(self):
         u = urlparse(build_url("a&b=c #x", 5))

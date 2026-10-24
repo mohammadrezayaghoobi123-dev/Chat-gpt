@@ -466,11 +466,23 @@ def execute_mission_idempotently(
     # record in OUTCOME_UNKNOWN until a dedicated evidence-aware terminal
     # transition exists; never bypass the registry's fail-closed state guard.
     target = State.OUTCOME_UNKNOWN
+    definite = (
+        result.status == "dispatch_failed" and result.dispatch_result is not None
+        and result.dispatch_result.status is DispatchStatus.FAILED_BEFORE_EFFECT
+    )
     try:
-        registry.transition(
-            key=idempotency_key, expected_version=running.version, target=target,
-            recorded_at=_rt(),
-        )
+        if definite:
+            # A read-only adapter's explicit pre-effect failure: nothing to reconcile,
+            # and the same intent may be retried (with a fresh approval).
+            target = State.FAILED
+            registry.fail_with_no_effect_claim(
+                key=idempotency_key, expected_version=running.version, recorded_at=_rt(),
+            )
+        else:
+            registry.transition(
+                key=idempotency_key, expected_version=running.version, target=target,
+                recorded_at=_rt(),
+            )
     except RegistryError:
         return MissionExecutionResult(
             contract.mission_id, "execution_registry_incomplete",

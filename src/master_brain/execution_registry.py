@@ -932,6 +932,23 @@ class SQLiteExecutionRegistry:
         a possible external side effect makes failure a claim that needs trusted
         evidence; this generic transition API does not accept such evidence.
         """
+        return self._transition(key=key, expected_version=expected_version, target=target,
+                                recorded_at=recorded_at, definite_no_effect=False)
+
+    def fail_with_no_effect_claim(self, *, key: str, expected_version: int,
+                                  recorded_at: str) -> Record:
+        """RUNNING -> FAILED, only for a definite failure of a risk-0 read-only adapter.
+
+        The caller (mission_execution) invokes this solely when dispatch reported
+        FAILED_BEFORE_EFFECT, which dispatch_once grants only to an explicit adapter
+        claim on a risk-0 DATA_SOURCE/RETRIEVAL_TOOL. The generic transition()
+        still refuses RUNNING -> FAILED.
+        """
+        return self._transition(key=key, expected_version=expected_version, target=State.FAILED,
+                                recorded_at=recorded_at, definite_no_effect=True)
+
+    def _transition(self, *, key: str, expected_version: int, target: State,
+                    recorded_at: str, definite_no_effect: bool) -> Record:
         self._required(key=key, recorded_at=recorded_at)
         if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 0:
             raise ValueError("expected_version must be a non-negative integer")
@@ -980,7 +997,10 @@ class SQLiteExecutionRegistry:
                 # Fail closed rather than let callers assert success by changing state.
                 if target is State.SUCCEEDED:
                     raise InvalidTransition("SUCCEEDED requires verified completion evidence; use complete_with_verified_evidence")
-                if target not in _ALLOWED[current.state]:
+                if definite_no_effect and current.state is not State.RUNNING:
+                    raise InvalidTransition("a no-effect claim applies only to a RUNNING execution")
+                if not (definite_no_effect and current.state is State.RUNNING
+                        and target is State.FAILED) and target not in _ALLOWED[current.state]:
                     raise InvalidTransition(f"disallowed transition {current.state.value}->{target.value}")
                 if target is State.RUNNING:
                     # Same intent (mission, contract, payload) under a DIFFERENT key must

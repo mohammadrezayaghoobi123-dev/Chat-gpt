@@ -178,3 +178,8 @@ python -m master_brain.serve --data-dir DIR [--port 8765] [--approval-keys KEYS.
 - `accounts` ⇒ `{"accounts":[{"subject","roles":[…],"disabled":bool,"created_at"}], "truncated":bool}` sorted by subject, cap 500. Never any password material or session data.
 - `security-events` ⇒ `{"events":[{"event_type","recorded_at","actor","subject_ref","payload"}], "truncated":bool}` newest first, cap 100, from the verified security log (chain + anchor checked on every read). A log that fails verification ⇒ 503 `unavailable` and nothing is shown.
 - Role changes remain command-line only (`python -m master_brain.accounts roles …`).
+
+## Gate 3e — definite failure for read-only integrations
+- A failed execution of a **risk-0 `DATA_SOURCE`/`RETRIEVAL_TOOL`** adapter that explicitly raises `FailedBeforeEffect` returns **502 `dispatch_failed`** (mission state `dispatch_failed_no_effect`); nothing needs reconciliation. All other adapter failures remain `outcome_unknown` (500) and block the mission (`dispatch_unresolved`).
+- Approvals stay single-use: a retry after `dispatch_failed` needs a **new approval** (otherwise 403 `approval_required`) and a new idempotency key; the registry no longer answers 409 `duplicate_request` for that intent.
+- `PubMedError` is a `FailedBeforeEffect`. UI string `dispatch.failed_before_effect` was added (fa/en).

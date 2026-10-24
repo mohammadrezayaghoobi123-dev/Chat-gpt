@@ -30,6 +30,8 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -75,7 +77,24 @@ class AuditStore:
     def __init__(
         self, path: str | os.PathLike[str], *, strict_event_types: bool = True,
         clock: Callable[[], datetime] | None = None, max_future_skew_seconds: float = 300.0,
+        full_verify_interval_seconds: float | None = None,
+        monotonic: Callable[[], float] | None = None,
     ) -> None:
+        # ``full_verify_interval_seconds=None`` (default): every read re-verifies the whole
+        # file. A number enables the verified-prefix cache: the first read and then one read
+        # per interval verify everything; reads in between verify only bytes appended since
+        # the last verification (chain link, hashes, ids, anchor). Tampering with an OLD
+        # byte is then detected at the next full verification, at most one interval later.
+        if full_verify_interval_seconds is not None and (
+            isinstance(full_verify_interval_seconds, bool)
+            or not isinstance(full_verify_interval_seconds, (int, float))
+            or not 0 < full_verify_interval_seconds < float("inf")
+        ):
+            raise ValueError("full_verify_interval_seconds must be None or a finite number > 0")
+        self._full_interval = full_verify_interval_seconds
+        self._monotonic = monotonic or time.monotonic
+        self._cache: dict[str, Any] | None = None
+        self._cache_lock = threading.Lock()  # servers read from many threads
         if isinstance(max_future_skew_seconds, bool) or not isinstance(
             max_future_skew_seconds, (int, float)
         ) or not 0 <= max_future_skew_seconds < float("inf"):
@@ -108,7 +127,14 @@ class AuditStore:
 
     def read_all(self) -> tuple[AuditEvent, ...]:
         if not self.path.exists():
+            self._cache = None
             return ()
+        if self._full_interval is None:
+            return self._read_all_uncached()
+        with self._cache_lock:
+            return self._read_all_cached()
+
+    def _read_all_uncached(self) -> tuple[AuditEvent, ...]:
         events: list[AuditEvent] = []
         try:
             with self.path.open("r", encoding="utf-8") as handle:
@@ -126,6 +152,77 @@ class AuditStore:
                 f"audit chain verification failed at {check.failing_event_id}: {check.reason}"
             )
         self._verify_anchor(events)
+        return tuple(events)
+
+    def _parse_chunk(self, data: bytes, first_line: int, previous: str, ids: set[str]):
+        """Decode and chain-verify complete lines of ``data``; returns (events, new ids).
+
+        Nothing is committed to the cache here: the caller does that only on success."""
+        if not data:
+            return [], set()
+        if not data.endswith(b"\n"):
+            raise AuditStoreError(f"unterminated audit record at line {first_line + data.count(chr(10).encode())}")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise AuditStoreError("audit store is not valid UTF-8") from exc
+        events: list[AuditEvent] = []
+        new_ids: set[str] = set()
+        for offset, line in enumerate(text.split("\n")[:-1]):
+            number = first_line + offset
+            if not line.strip():
+                raise AuditStoreError(f"blank audit record at line {number}")
+            events.append(self._decode(line + "\n", number))
+        check = verify_chain(events, genesis_hash=previous)
+        if not check.valid:
+            raise AuditStoreError(
+                f"audit chain verification failed at {check.failing_event_id}: {check.reason}"
+            )
+        for event in events:
+            if event.event_id in ids or event.event_id in new_ids:
+                raise AuditStoreError(
+                    f"audit chain verification failed at {event.event_id}: duplicate_event_id"
+                )
+            new_ids.add(event.event_id)
+        return events, new_ids
+
+    def _read_all_cached(self) -> tuple[AuditEvent, ...]:
+        try:
+            st = os.stat(self.path)
+        except OSError as exc:
+            raise AuditStoreError("audit store is unreadable") from exc
+        now = self._monotonic()
+        c = self._cache
+        if (c is not None and c["dev"] == st.st_dev and c["ino"] == st.st_ino
+                and st.st_size >= c["size"] and 0 <= now - c["verified_at"] < self._full_interval):
+            try:
+                with self.path.open("rb") as handle:
+                    handle.seek(c["size"])
+                    tail = handle.read()
+            except OSError as exc:
+                raise AuditStoreError("audit store is unreadable") from exc
+            events, new_ids = self._parse_chunk(
+                tail, len(c["events"]) + 1,
+                c["events"][-1].event_hash if c["events"] else GENESIS_HASH, c["ids"])
+            merged = c["events"] + events if events else c["events"]
+            self._verify_anchor(merged)
+            if events:  # commit only after the tail AND the anchor agree
+                c["events"] = merged
+                c["ids"] |= new_ids
+                c["size"] += len(tail)
+            return tuple(c["events"])
+        # first read, interval elapsed, file replaced or shrunk: verify everything
+        self._cache = None
+        try:
+            with self.path.open("rb") as handle:
+                fst = os.fstat(handle.fileno())
+                data = handle.read()
+        except OSError as exc:
+            raise AuditStoreError("audit store is unreadable") from exc
+        events, ids = self._parse_chunk(data, 1, GENESIS_HASH, set())
+        self._verify_anchor(events)
+        self._cache = {"dev": fst.st_dev, "ino": fst.st_ino, "size": len(data), "events": events,
+                       "ids": ids, "verified_at": now}
         return tuple(events)
 
     @property

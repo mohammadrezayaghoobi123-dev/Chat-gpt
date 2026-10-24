@@ -78,10 +78,11 @@ def _validate(event_type: str, payload: dict[str, Any]) -> None:
 class SecurityLog:
     def __init__(self, path: str | Path, *, clock: Callable[[], datetime] | None = None,
                  monotonic: Callable[[], float] = time.monotonic, window_seconds: float = 60.0,
-                 max_best_effort_per_window: int = 60) -> None:
+                 max_best_effort_per_window: int = 60,
+                 full_verify_interval_seconds: float | None = None) -> None:
         if not (window_seconds > 0 and max_best_effort_per_window >= 1):
             raise ValueError("window_seconds must be > 0 and max_best_effort_per_window >= 1")
-        self.store = AuditStore(path, clock=clock)
+        self.store = AuditStore(path, clock=clock, full_verify_interval_seconds=full_verify_interval_seconds)
         self.path = self.store.path
         self._monotonic = monotonic
         self._window = float(window_seconds)

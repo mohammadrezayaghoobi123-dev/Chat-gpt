@@ -12,6 +12,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from master_brain.accounts import AccountStore
 from master_brain.serve import (
@@ -234,6 +235,17 @@ class Build(Dirs):
                           config.approval_keys, config.allowed_hosts), ("127.0.0.1", False, False, False, None, ()))
         parsed = _parse(["--data-dir", str(self.data)])
         self.assertEqual(parsed, ServeConfig(data_dir=self.data))
+
+    def test_the_server_uses_the_verified_prefix_cache_for_both_logs(self):
+        import master_brain.serve as serve_module
+        self.assertEqual(serve_module.FULL_VERIFY_SECONDS, 300.0)
+        with mock.patch.object(serve_module, "AuditStore", wraps=serve_module.AuditStore) as audit, \
+                mock.patch.object(serve_module, "AccountStore", wraps=serve_module.AccountStore) as accounts:
+            built = build(self.config(port=0))
+            self.addCleanup(built.close)
+        self.assertEqual(audit.call_args_list[-1].kwargs["full_verify_interval_seconds"], 300.0)
+        self.assertEqual(accounts.call_args_list[-1].kwargs["full_verify_interval_seconds"], 300.0)
+        self.assertEqual(built.service._store._full_interval, 300.0)
 
     def test_a_non_loopback_bind_warns_about_tls_and_a_loopback_bind_does_not(self):
         wide = build(self.config(host="0.0.0.0", port=0, allow_non_loopback=True, allowed_hosts=("brain.example.org",)))

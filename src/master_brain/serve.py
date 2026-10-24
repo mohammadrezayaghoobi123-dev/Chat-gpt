@@ -54,6 +54,11 @@ class StartupRefused(RuntimeError):
     """The server must not start; the message says why (never contains a secret)."""
 
 
+# The server verifies the whole audit/security log at its first read and then every 5 minutes;
+# reads in between verify only the bytes appended since (see AuditStore).
+FULL_VERIFY_SECONDS = 300.0
+
+
 @dataclass(frozen=True)
 class ServeConfig:
     data_dir: Path
@@ -163,7 +168,7 @@ def preflight(data_dir: str | os.PathLike[str]) -> list[str]:
     if os.name != "nt" and data.stat().st_mode & 0o077:
         raise StartupRefused("the data directory has permissions that let other users in; run: chmod 700 " + str(data))
     _verify_log(data / "audit.jsonl", "mission audit log")
-    accounts = AccountStore(data / "accounts.sqlite")
+    accounts = AccountStore(data / "accounts.sqlite", full_verify_interval_seconds=FULL_VERIFY_SECONDS)
     _verify_log(accounts.security_log.path, "security log")
     totals = accounts.counts()
     warnings: list[str] = []
@@ -217,7 +222,7 @@ def build(config: ServeConfig, *, pubmed_fetcher: Any = None) -> Built:
         verifier = load_trust_store(config.approval_keys)
     else:
         warnings.append("no --approval-keys: no approval can be recorded")
-    accounts = AccountStore(data / "accounts.sqlite")
+    accounts = AccountStore(data / "accounts.sqlite", full_verify_interval_seconds=FULL_VERIFY_SECONDS)
     execution = None
     tasks: list[TaskDefinition] = []
     if config.demo_echo_task:
@@ -234,7 +239,7 @@ def build(config: ServeConfig, *, pubmed_fetcher: Any = None) -> Built:
             raise StartupRefused(str(exc)) from exc
         execution = ExecutionConfig(catalog, SQLiteExecutionRegistry(str(data / "registry.sqlite")),
                                     dispatch_timeout_seconds=30.0)
-    service = MissionService(AuditStore(data / "audit.jsonl"), verifier, execution, AccountApprovers(accounts))
+    service = MissionService(AuditStore(data / "audit.jsonl", full_verify_interval_seconds=FULL_VERIFY_SECONDS), verifier, execution, AccountApprovers(accounts))
     try:
         server = make_server(service, SessionAuthenticator(accounts), config.host, config.port,
                              allow_non_loopback=config.allow_non_loopback,

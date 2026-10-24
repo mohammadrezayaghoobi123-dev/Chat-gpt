@@ -183,3 +183,6 @@ python -m master_brain.serve --data-dir DIR [--port 8765] [--approval-keys KEYS.
 - A failed execution of a **risk-0 `DATA_SOURCE`/`RETRIEVAL_TOOL`** adapter that explicitly raises `FailedBeforeEffect` returns **502 `dispatch_failed`** (mission state `dispatch_failed_no_effect`); nothing needs reconciliation. All other adapter failures remain `outcome_unknown` (500) and block the mission (`dispatch_unresolved`).
 - Approvals stay single-use: a retry after `dispatch_failed` needs a **new approval** (otherwise 403 `approval_required`) and a new idempotency key; the registry no longer answers 409 `duplicate_request` for that intent.
 - `PubMedError` is a `FailedBeforeEffect`. UI string `dispatch.failed_before_effect` was added (fa/en).
+
+## Gate 3f — log verification schedule (operational note, no API change)
+The server verifies the audit and security logs fully at start and then every 5 minutes; in between each read/append verifies only the newly appended bytes and the head anchor. Tampering with an old byte is therefore detected within 5 minutes (a restart detects it immediately).

@@ -109,12 +109,14 @@ def check_password_policy(subject: str, password: str) -> None:
 
 class AccountStore:
     def __init__(self, path: str | Path, *, clock: Callable[[], datetime] | None = None,
-                 security_log: SecurityLog | None = None) -> None:
+                 security_log: SecurityLog | None = None,
+                 full_verify_interval_seconds: float | None = None) -> None:
         self.path = Path(path)
         self._clock = clock or _utc_now
         # Always present (fail closed): by convention beside the database as ``<name>.security.jsonl``.
         self.security_log = security_log or SecurityLog(self.path.with_name(self.path.stem + ".security.jsonl"),
-                                                        clock=self._clock)
+                                                        clock=self._clock,
+                                                        full_verify_interval_seconds=full_verify_interval_seconds)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as db, db:
             db.executescript(

@@ -16,20 +16,11 @@ python -m master_brain.accounts --db DATA/accounts.sqlite passwd --subject user:
 
 ## ۳) کلید امضا گم یا لو رفت
 ۱. حساب را فوراً غیرفعال کنید تا چیزی تأیید نشود: `… accounts --db DATA/accounts.sqlite disable --subject user:boss`
-۲. کلید جدید روی یک رایانهٔ امن بسازید (کلید خصوصی هرگز از آن رایانه خارج نمی‌شود؛ فقط ورودی عمومی JSON را ببرید):
+۲. کلید جدید روی یک رایانهٔ امن بسازید (کلید خصوصی رمزدار می‌ماند و هرگز چاپ نمی‌شود؛ فقط ورودی عمومی JSON را ببرید):
 ```
-python3 - <<'PY'
-import os, json
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives import serialization as s
-k = Ed25519PrivateKey.generate()
-raw = k.private_bytes(s.Encoding.Raw, s.PrivateFormat.Raw, s.NoEncryption())
-fd = os.open("approver.key", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)   # از بازنویسی کلید قبلی خودداری می‌کند
-os.write(fd, raw.hex().encode()); os.close(fd)
-pub = k.public_key().public_bytes(s.Encoding.Raw, s.PublicFormat.Raw).hex()
-print(json.dumps({"key_id": "k-NEW", "subject": "user:boss", "public_key_hex": pub}))
-PY
+python -m master_brain.approval_keys keygen --key-id k-NEW --subject user:boss --out boss.key
 ```
+گذرواژهٔ کلید (حداقل ۱۲ نویسه) دو بار پرسیده می‌شود. فایل `boss.key` با مجوز 600 ساخته می‌شود و هرگز بازنویسی نمی‌شود. اگر فقط ورودی عمومی را دوباره لازم دارید: `python -m master_brain.approval_keys public --key boss.key`.
 ۳. در فایل `--approval-keys` **ورودی کلید قدیمی را حذف** و ورودی جدید را اضافه کنید؛ مجوز فایل باید `chmod 600` باشد.
 ۴. سرور را **ری‌استارت** کنید (کلیدها فقط هنگام شروع بار می‌شوند؛ لغو کلید هم همین‌طور).
 ۵. حساب را دوباره فعال کنید: `… enable --subject user:boss`.
@@ -43,6 +34,7 @@ python -m master_brain.accounts --db DATA/accounts.sqlite add --subject user:dep
 توجه: وجود دو تأییدکننده **قاعدهٔ دو‌نفره** نیست؛ هر کدام به‌تنهایی می‌تواند تأیید کند. این فقط ظرفیت بازیابی می‌دهد.
 
 ## ۵) محدودیت‌های صادقانه
-- ابزاری برای ساخت کلید یا امضای چالش در مخزن نیست (بند ۳ قطعه‌کد دستی است)؛ امضا هم باید با ابزار بیرون از مرورگر انجام شود.
+- امضای هر تأیید: `python -m master_brain.approval_keys sign --key boss.key --message-hex <signing_message_hex>`؛ ابزار فقط پیام تأیید Master Brain را امضا می‌کند، محتوا را نشان می‌دهد، برای کلید/تأییدکنندهٔ دیگر یا چالش منقضی امتناع می‌کند و روی ترمینال «yes» می‌خواهد. این ابزار روی آیفون اجرا نمی‌شود؛ به یک رایانه (یا محیط Python) نیاز دارد.
+- گذرواژهٔ کلید را فراموش کنید، کلید قابل بازیابی نیست؛ بند ۳ را دوباره اجرا کنید.
 - لغو کلید بدون ری‌استارت ممکن نیست.
 - اگر لاگ خراب یا ناقص باشد، سرور راه نمی‌افتد؛ آن مورد با `docs/EXECUTION_RECOVERY_RUNBOOK_V0.md` و ابزار بازیابی دم لاگ بررسی می‌شود، نه با این راهنما.

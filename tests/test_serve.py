@@ -503,9 +503,9 @@ class PubMedThroughTheGates(ProcessHelpers, Dirs):
 
     GOOD = json.dumps({"esearchresult": {"count": "2144", "idlist": ["42870643", "42655937"]}}).encode()
 
-    def serve(self, fetcher, **specs):
+    def serve(self, fetcher, signer=None, **specs):
         from master_brain.approval_signing_ed25519 import Ed25519Signer
-        self.signer = Ed25519Signer.generate("k-boss")
+        self.signer = signer or Ed25519Signer.generate("k-boss")
         self.data.mkdir(mode=0o700)
         os.chmod(self.data, 0o700)
         accounts = AccountStore(self.data / "accounts.sqlite")
@@ -539,6 +539,28 @@ class PubMedThroughTheGates(ProcessHelpers, Dirs):
             "idempotency_key": f"appr-{tag}-0000001", "approval_event_id": challenge["approval_event_id"],
             "signing_key_id": "k-boss", "signature_alg": "ed25519", "signature_hex": signature}, cookie=self.boss)
         self.assertEqual((status, approved["approval_status"]), (201, "granted"), approved)
+
+    def test_approval_signed_by_the_key_tool_is_accepted_end_to_end(self):
+        from master_brain import approval_keys
+
+        class ToolSigner:  # signs only through the real tool, with the real refusals
+            def __init__(self, path, passphrase, public):
+                self.path, self.passphrase, self.public = path, passphrase, public
+
+            def public_key_bytes(self):
+                return bytes.fromhex(self.public)
+
+            def sign(self, message):
+                return bytes.fromhex(approval_keys.sign(self.path, message.hex(), self.passphrase,
+                                                        confirm=lambda: True))
+        key_path = Path(self.tmp.name) / "boss.key"
+        entry = approval_keys.keygen("k-boss", "user:boss", key_path, "a long passphrase 42")
+        port = self.serve(lambda url: self.GOOD, signer=ToolSigner(key_path, "a long passphrase 42",
+                                                                  entry["public_key_hex"]))
+        mid = self.approved_mission(port, "tool")
+        status, result, _ = self.call(port, "POST", f"/v1/missions/{mid}/executions", {
+            "idempotency_key": "exec-tool-00001", "task_id": "pm"}, cookie=self.dave)
+        self.assertEqual((status, result["state"]), (201, "response_received"), result)
 
     def test_an_approved_search_returns_pmids_and_touches_the_network_exactly_once_with_the_approved_query(self):
         urls = []

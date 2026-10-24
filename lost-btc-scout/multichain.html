@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101827"><meta name="description" content="بررسی فقط‌خواندنی داده‌های عمومی دارایی‌های رمزارزی در چند شبکه">
+<title>Crypto Scout — کاوشگر چندشبکه‌ای</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1220;--panel:#121d2e;--line:#29384d;--text:#eef4fc;--muted:#a9b8cb;--accent:#7dd3fc;--green:#55d6a1;--red:#ff8b8b}*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top,#182943 0,#0b1220 60%);color:var(--text);font-family:system-ui,sans-serif;line-height:1.65}main{max-width:850px;margin:auto;padding:24px 16px 48px}.brand{display:flex;gap:12px;align-items:center}.logo{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;background:#26364c;color:var(--accent);font-size:25px}.eyebrow{font-size:12px;color:var(--accent)}h1{font-size:26px;margin:0}.sub,.muted{color:var(--muted)}.card{background:rgba(18,29,46,.94);border:1px solid var(--line);border-radius:18px;padding:18px;margin:14px 0}.card h2{font-size:17px;margin:0 0 12px}.formrow{display:flex;gap:9px}input,select,button{font:inherit;border-radius:12px;padding:12px;border:1px solid var(--line)}input,select{background:#0b1422;color:var(--text);width:100%;min-width:0}button{background:var(--accent);color:#101827;border:0;font-weight:750;cursor:pointer}button:disabled{opacity:.55}.notice{border-right:3px solid var(--accent);padding:10px 12px;background:#142333;border-radius:8px;font-size:13px}.status{margin-top:12px;font-size:14px;overflow-wrap:anywhere;color:var(--muted)}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.metric{background:#0b1422;border:1px solid var(--line);border-radius:12px;padding:12px;min-width:0}.label{color:var(--muted);font-size:12px}.value{font-size:18px;font-weight:750;overflow-wrap:anywhere}.hidden{display:none}.error{color:var(--red)}a{color:#8fc8ff}.muted{font-size:13px}.quick{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.quick button{background:#26364c;color:var(--text);font-size:13px}.foot{font-size:12px;color:var(--muted);margin-top:24px}@media(max-width:480px){.formrow{flex-direction:column}.card{padding:14px}}
+</style></head>
+<body><main>
+<header><div class="brand"><div class="logo">◎</div><div><div class="eyebrow">FREE • MULTI-CHAIN • READ ONLY</div><h1>Crypto Scout</h1></div></div><p class="sub">کاوشگر عمومی چندشبکه‌ای برای بررسی موجودی و فعالیت آدرس‌ها؛ بدون کیف‌پول، کلید خصوصی یا سرمایهٔ اولیه.</p></header>
+<div class="notice">مهم: آدرس قدیمی، موجودی بالا یا تراکنش کم، مالکیت یا رهاشدگی را ثابت نمی‌کند. این ابزار فقط داده‌های عمومی را می‌خواند و دارایی قابل‌برداشت را تضمین نمی‌کند.</div>
+<section class="card"><h2>بررسی آدرس عمومی</h2><label class="muted" for="network">شبکه / دارایی بومی</label><select id="network" style="margin:6px 0 12px"><option value="btc">Bitcoin (BTC)</option><option value="eth">Ethereum (ETH)</option><option value="bnb">BNB Smart Chain (BNB)</option><option value="polygon">Polygon (POL)</option><option value="arb">Arbitrum One (ETH)</option><option value="op">Optimism (ETH)</option><option value="base">Base (ETH)</option><option value="avax">Avalanche C-Chain (AVAX)</option></select>
+<label class="muted" for="address">آدرس عمومی همان شبکه</label><div class="formrow" style="margin-top:7px"><input id="address" placeholder="آدرس عمومی را وارد کنید" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="scan">بررسی آدرس</button></div><div class="quick"><button id="demo">نمونهٔ آدرس</button><button id="clear">پاک کردن</button></div><div id="status" class="status" role="status" aria-live="polite">شبکه را انتخاب و آدرس عمومی را وارد کنید.</div></section>
+<section id="results" class="card hidden"><h2>نتیجهٔ بررسی</h2><div id="metrics" class="grid"></div><p id="assessment" class="muted"></p><p id="explorer"></p></section>
+<section class="card"><h2>پوشش نسخهٔ فعلی</h2><p class="muted">این نسخه بررسی موجودی دارایی بومی و شمارندهٔ تراکنش را برای چند شبکهٔ EVM و موجودی/تراکنش‌های بیت‌کوین ارائه می‌کند. هنوز همهٔ توکن‌های ERC-20/BEP-20، NFTها و کل بلاک‌چین را به‌صورت سراسری اسکن نمی‌کند. برای یافتن دارایی‌های توکنی، به ایندکس‌گذاری اختصاصی یا APIهای جداگانه نیاز است.</p></section>
+<section class="card"><h2>ایمنی و محدودیت‌ها</h2><p class="muted">هرگز عبارت بازیابی یا کلید خصوصی را وارد نکن. موجودی بالا یا بی‌فعالیتی، نشانهٔ اثبات‌شدهٔ کیف‌پول بی‌صاحب نیست. از هیچ‌کدام از داده‌های این صفحه نمی‌توان مجوز برداشت دارایی دیگران را نتیجه گرفت. سرویس‌های عمومی ممکن است محدودیت درخواست یا قطعی داشته باشند.</p></section>
+<footer class="foot">Crypto Scout · نسخهٔ آزمایشی · داده‌های عمومی فقط‌خواندنی · مستقل از Master Brain</footer>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const networks={
+ btc:{name:'Bitcoin',symbol:'BTC',explorer:'https://mempool.space/address/',kind:'btc'},
+ eth:{name:'Ethereum',symbol:'ETH',rpc:'https://ethereum-rpc.publicnode.com',explorer:'https://etherscan.io/address/',kind:'evm'},
+ bnb:{name:'BNB Smart Chain',symbol:'BNB',rpc:'https://bsc-rpc.publicnode.com',explorer:'https://bscscan.com/address/',kind:'evm'},
+ polygon:{name:'Polygon',symbol:'POL',rpc:'https://polygon-bor-rpc.publicnode.com',explorer:'https://polygonscan.com/address/',kind:'evm'},
+ arb:{name:'Arbitrum One',symbol:'ETH',rpc:'https://arbitrum-one-rpc.publicnode.com',explorer:'https://arbiscan.io/address/',kind:'evm'},
+ op:{name:'Optimism',symbol:'ETH',rpc:'https://optimism-rpc.publicnode.com',explorer:'https://optimistic.etherscan.io/address/',kind:'evm'},
+ base:{name:'Base',symbol:'ETH',rpc:'https://base-rpc.publicnode.com',explorer:'https://basescan.org/address/',kind:'evm'},
+ avax:{name:'Avalanche C-Chain',symbol:'AVAX',rpc:'https://avalanche-c-chain-rpc.publicnode.com',explorer:'https://snowtrace.io/address/',kind:'evm'}
+};
+const fmt=n=>new Intl.NumberFormat('fa-IR',{maximumFractionDigits:8}).format(n);
+function metric(label,value){return '<div class="metric"><div class="label">'+label+'</div><div class="value">'+value+'</div></div>'}
+function rpc(url,method,params){return fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})}).then(async r=>{if(!r.ok)throw Error('RPC HTTP '+r.status);const j=await r.json();if(j.error)throw Error(j.error.message||'RPC error');return j.result})}
+async function scan(){
+ const key=$('network').value,n=networks[key],a=$('address').value.trim();
+ if(n.kind==='evm'&&!/^0x[a-fA-F0-9]{40}$/.test(a)){$('status').innerHTML='<span class="error">آدرس EVM باید با 0x شروع شود و ۴۰ رقم هگزادسیمال داشته باشد.</span>';return}
+ if(n.kind==='btc'&&!/^(bc1[ac-hj-np-z02-9]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/.test(a)){$('status').innerHTML='<span class="error">قالب آدرس بیت‌کوین معتبر نیست.</span>';return}
+ $('scan').disabled=true;$('results').classList.add('hidden');$('status').textContent='در حال دریافت اطلاعات عمومی از شبکه…';
+ try{
+  if(n.kind==='btc'){
+   const base='https://mempool.space/api/address/'+encodeURIComponent(a),r=await fetch(base);if(!r.ok)throw Error('API بیت‌کوین پاسخ نداد: HTTP '+r.status);
+   const d=await r.json(),c=d.chain_stats||{},m=d.mempool_stats||{},balance=((c.funded_txo_sum||0)+(m.funded_txo_sum||0)-(c.spent_txo_sum||0)-(m.spent_txo_sum||0))/1e8,tx=(c.tx_count||0)+(m.tx_count||0);
+   $('metrics').innerHTML=metric('موجودی فعلی',fmt(balance)+' BTC')+metric('تعداد تراکنش',fmt(tx))+metric('شبکه',n.name)+metric('نوع داده','موجودی + شمارنده');
+   $('assessment').textContent='این API تاریخچهٔ کامل را در این مرحله بررسی نمی‌کند؛ تعداد تراکنش و موجودی به‌تنهایی وضعیت مالکیت را مشخص نمی‌کنند.';
+  }else{
+   const [bal,nonce,block]=await Promise.all([rpc(n.rpc,'eth_getBalance',[a,'latest']),rpc(n.rpc,'eth_getTransactionCount',[a,'latest']),rpc(n.rpc,'eth_blockNumber',[])]);
+   const value=Number(BigInt(bal))/1e18;
+   $('metrics').innerHTML=metric('موجودی بومی',fmt(value)+' '+n.symbol)+metric('تراکنش‌های ارسال‌شده (nonce)',fmt(parseInt(nonce,16)))+metric('آخرین شمارهٔ بلاک',fmt(parseInt(block,16)))+metric('شبکه',n.name);
+   $('assessment').textContent='Nonce تعداد تراکنش‌های ارسال‌شده از آدرس را نشان می‌دهد، نه تمام فعالیت‌ها یا توکن‌ها. موجودی بومی صفر به معنی نبود توکن یا NFT نیست.';
+  }
+  $('explorer').innerHTML='بررسی مستقل در کاوشگر شبکه: <a target="_blank" rel="noopener noreferrer" href="'+n.explorer+encodeURIComponent(a)+'">باز کردن آدرس در '+n.name+'</a>';
+  $('results').classList.remove('hidden');$('status').textContent='داده دریافت شد. برای نتیجهٔ قطعی، کاوشگر مستقل را نیز بررسی کن.';
+ }catch(e){$('status').innerHTML='<span class="error">'+String(e.message||'خطای نامشخص').replace(/[<>]/g,'')+'</span><br>ممکن است RPC عمومی محدود یا در دسترس نباشد؛ کمی بعد دوباره تلاش کن.'}
+ finally{$('scan').disabled=false}
+}
+$('scan').addEventListener('click',scan);$('address').addEventListener('keydown',e=>{if(e.key==='Enter')scan()});$('network').addEventListener('change',()=>{$('address').value='';$('results').classList.add('hidden');$('status').textContent='آدرس متناسب با شبکهٔ انتخاب‌شده را وارد کنید.'});$('clear').addEventListener('click',()=>{$('address').value='';$('results').classList.add('hidden');$('status').textContent='آمادهٔ بررسی.'});$('demo').addEventListener('click',()=>{$('address').value=$('network').value==='btc'?'1BoatSLRHtKNngkdXEeobR76b53LETtpyT':'0x0000000000000000000000000000000000000000';$('status').textContent='نمونه پر شد؛ برای بررسی روی دکمه بزن.'});
+</script></body></html>

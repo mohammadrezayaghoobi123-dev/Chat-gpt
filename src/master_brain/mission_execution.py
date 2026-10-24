@@ -129,6 +129,20 @@ def _unresolved_error(contract: MissionContract, store: AuditStore) -> str | Non
     return None
 
 
+def effective_dispatch_timeout(server_timeout: Any, mission_deadline_seconds: int) -> Any:
+    """How long the external call may run: the smaller of the server's cap and the mission's own deadline.
+
+    ``deadline_seconds`` of the contract is the time the mission allows an attempt to take. A server value that is
+    not a valid positive number is returned unchanged so ``dispatch_once`` keeps rejecting it explicitly."""
+    deadline = float(mission_deadline_seconds)
+    if server_timeout is None:
+        return deadline
+    if (isinstance(server_timeout, bool) or not isinstance(server_timeout, (int, float))
+            or not 0 < server_timeout < float("inf")):
+        return server_timeout
+    return float(min(float(server_timeout), deadline))
+
+
 def execute_mission_once(
     contract: MissionContract,
     store: AuditStore,
@@ -236,7 +250,7 @@ def execute_mission_once(
 
     result = dispatch_once(
         integration, requirement, adapter, payload,
-        timeout_seconds=dispatch_timeout_seconds,
+        timeout_seconds=effective_dispatch_timeout(dispatch_timeout_seconds, contract.deadline_seconds),
     )
     try:
         store.append(

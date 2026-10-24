@@ -124,9 +124,6 @@ class Pipeline(PipelineFixture):
         self.assertIs(view.state, MissionState.DISPATCH_UNRESOLVED)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class RegistryEdge(unittest.TestCase):
     """RUNNING -> FAILED exists only through the dedicated no-effect-claim method."""
@@ -186,3 +183,7 @@ class RegistryEdge(unittest.TestCase):
         with self.assertRaises(InvalidTransition):
             self.reg.fail_with_no_effect_claim(key=run.key, expected_version=run.version - 1,
                                                recorded_at="2026-10-12T00:00:02Z")
+
+
+if __name__ == "__main__":
+    unittest.main()

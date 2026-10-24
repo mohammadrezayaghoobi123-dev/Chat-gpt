@@ -29,10 +29,35 @@ class MetaIntelligenceTests(unittest.TestCase):
         self.assertEqual(plan.review_level, ReviewLevel.HUMAN_GATED)
         self.assertTrue(any("approval" in step.lower() for step in plan.verification_steps))
 
+    def test_keyword_matching_does_not_match_inside_unrelated_words(self):
+        plan = plan_coordination(Mission("I need a comfortable chair for my office"))
+        self.assertNotIn("software_ai", {selection.island_id for selection in plan.selections})
+
     def test_empty_objective_requests_clarification(self):
         plan = plan_coordination(Mission(""))
         self.assertTrue(plan.clarification_questions)
         self.assertTrue(plan.unknowns)
+
+    def test_duplicate_profile_ids_do_not_duplicate_dispatch_selections(self):
+        profiles = (
+            IslandProfile("industrial", ("factory",)),
+            IslandProfile("industrial", ("production",)),
+            IslandProfile("general", ("plan",)),
+        )
+        plan = plan_coordination(Mission("factory production planning"), profiles=profiles)
+        selected_ids = [selection.island_id for selection in plan.selections]
+        self.assertEqual(selected_ids.count("industrial"), 1)
+        self.assertTrue(any("duplicate island profile id" in item.lower()
+                            for item in plan.unknowns))
+
+    def test_malformed_profile_keywords_are_reported_and_skipped(self):
+        profiles = (
+            IslandProfile("broken", (None, "factory")),
+            IslandProfile("industrial", ("factory",)),
+        )
+        plan = plan_coordination(Mission("factory production planning"), profiles=profiles)
+        self.assertIn("industrial", {item.island_id for item in plan.selections})
+        self.assertTrue(any("invalid island profile" in item.lower() for item in plan.unknowns))
 
     def test_disabled_island_is_not_selected(self):
         plan = plan_coordination(Mission("factory production machine planning"), profiles=(
@@ -51,6 +76,16 @@ class MetaIntelligenceTests(unittest.TestCase):
         objective = "  Analyze market demand  "
         plan = plan_coordination(Mission(objective))
         self.assertEqual(plan.original_objective, objective)
+
+    def test_invalid_objective_type_requests_clarification_instead_of_crashing(self):
+        plan = plan_coordination(Mission(None))
+        self.assertEqual(plan.original_objective, "")
+        self.assertTrue(plan.clarification_questions)
+        self.assertTrue(any("objective" in item.lower() for item in plan.unknowns))
+
+    def test_invalid_risk_tier_type_is_flagged_instead_of_crashing(self):
+        plan = plan_coordination(Mission("Plan a market analysis project", risk_tier=None))
+        self.assertTrue(any("risk tier" in item.lower() for item in plan.unknowns))
 
     def test_unrecognized_risk_tier_is_flagged(self):
         plan = plan_coordination(Mission("Plan a market analysis project", risk_tier="unknown"))

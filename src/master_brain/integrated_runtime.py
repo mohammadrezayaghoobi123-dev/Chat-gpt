@@ -32,6 +32,10 @@ class IslandResult:
 IslandExecutor = Callable[[Mission], IslandResult]
 
 
+class _InvalidIslandResult(ValueError):
+    """Safe validation failure for malformed specialist output."""
+
+
 @dataclass(frozen=True)
 class MissionRun:
     plan: CoordinationPlan
@@ -59,20 +63,53 @@ def _build_audit_records(mission: Mission, run: MissionRun) -> tuple[AuditRecord
     # Preserve the proof plane's exact first-seen claim ordering, even when an
     # upstream executor supplies a malformed/blank ID. References are filtered
     # separately so a bad identifier cannot shift another claim's review status.
-    claims_by_id: dict[object, Claim] = {}
-    evidence_by_claim: dict[object, list[Evidence]] = {}
+    claims_by_id: dict[str, Claim] = {}
+    ambiguous_claim_ids: set[str] = set()
+    evidence_by_claim: dict[str, list[Evidence]] = {}
 
-    for result in run.results:
-        for claim in result.claims:
-            claims_by_id.setdefault(claim.claim_id, claim)
-        for evidence in result.evidence:
-            evidence_by_claim.setdefault(evidence.claim_id, []).append(evidence)
+    all_claims = tuple(claim for result in run.results for claim in result.claims)
+    for claim in all_claims:
+        if not isinstance(claim, Claim):
+            continue
+        claim_id = claim.claim_id
+        if not isinstance(claim_id, str) or not claim_id.strip():
+            continue
+        previous = claims_by_id.get(claim_id)
+        if previous is None and claim_id not in ambiguous_claim_ids:
+            claims_by_id[claim_id] = claim
+        elif previous != claim:
+            ambiguous_claim_ids.add(claim_id)
+    # Keep audit ordering aligned with proof review, which excludes conflicting IDs.
+    for claim_id in ambiguous_claim_ids:
+        claims_by_id.pop(claim_id, None)
 
     all_evidence = tuple(item for result in run.results for item in result.evidence)
-    all_claim_ids = tuple(claim.claim_id for claim in claims_by_id.values())
+    evidence_id_counts: dict[str, int] = {}
+    for item in all_evidence:
+        evidence_id = getattr(item, "evidence_id", None)
+        if isinstance(evidence_id, str) and evidence_id.strip():
+            evidence_id_counts[evidence_id] = evidence_id_counts.get(evidence_id, 0) + 1
+    duplicate_evidence_ids = {
+        evidence_id for evidence_id, count in evidence_id_counts.items() if count > 1
+    }
+    for item in all_evidence:
+        evidence_id = getattr(item, "evidence_id", None)
+        claim_id = getattr(item, "claim_id", None)
+        if (
+            isinstance(item, Evidence)
+            and isinstance(item.source, str) and item.source.strip()
+            and isinstance(item.supports, bool)
+            and isinstance(evidence_id, str) and evidence_id.strip()
+            and evidence_id not in duplicate_evidence_ids
+            and isinstance(claim_id, str) and claim_id.strip()
+            and claim_id in claims_by_id
+        ):
+            evidence_by_claim.setdefault(claim_id, []).append(item)
+
+    all_claim_ids = tuple(claims_by_id.keys())
     executed_islands = tuple(result.island_id for result in run.results)
     allowed_risk_tiers = {"low", "medium", "high", "critical"}
-    risk_tier = mission.risk_tier.casefold()
+    risk_tier = mission.risk_tier.casefold() if isinstance(mission.risk_tier, str) else "unrecognized"
     if risk_tier not in allowed_risk_tiers:
         risk_tier = "unrecognized"
 
@@ -162,13 +199,14 @@ def _execute_mission_untraced(
     digest-bound approval service. An approval must not be simulated by a bool.
     """
     plan = plan_coordination(mission)
-    if mission.risk_tier.casefold() not in {"low", "medium", "high", "critical"}:
+    risk_tier = mission.risk_tier.casefold() if isinstance(mission.risk_tier, str) else "unrecognized"
+    if risk_tier not in {"low", "medium", "high", "critical"}:
         return MissionRun(
             plan=plan,
             status="needs_clarification",
             unresolved_issues=("Mission not dispatched because its risk tier is unrecognized.",),
         )
-    if mission.risk_tier.casefold() in {"high", "critical"} or mission.irreversible_action or plan.review_level is ReviewLevel.HUMAN_GATED:
+    if risk_tier in {"high", "critical"} or mission.irreversible_action or plan.review_level is ReviewLevel.HUMAN_GATED:
         return MissionRun(
             plan=plan,
             status="approval_required",
@@ -195,19 +233,42 @@ def _execute_mission_untraced(
                 metadata={"component": "specialist-island"},
             ) as island_trace:
                 result = executor(mission)
-                if island_trace is not None and isinstance(result, IslandResult):
-                    island_trace.update(output={
-                        "status": "completed",
-                        "claim_count": len(result.claims),
-                        "evidence_count": len(result.evidence),
-                        "provenance_count": len(result.provenance),
-                        "limitation_count": len(result.limitations),
-                    })
             if not isinstance(result, IslandResult):
-                raise TypeError("executor must return IslandResult")
+                raise _InvalidIslandResult("executor must return IslandResult")
             if result.island_id != island_id:
-                raise ValueError("result island_id does not match dispatched island")
+                raise _InvalidIslandResult("result island_id does not match dispatched island")
+            invalid_fields = []
+            if not isinstance(result.summary, str) or not result.summary.strip():
+                invalid_fields.append("summary must be a non-empty string")
+            if not isinstance(result.claims, (tuple, list)) or isinstance(result.claims, str) or any(
+                not isinstance(item, Claim) for item in result.claims
+            ):
+                invalid_fields.append("claims must be a sequence of Claim records")
+            if not isinstance(result.evidence, (tuple, list)) or isinstance(result.evidence, str) or any(
+                not isinstance(item, Evidence) for item in result.evidence
+            ):
+                invalid_fields.append("evidence must be a sequence of Evidence records")
+            if not isinstance(result.provenance, (tuple, list)) or isinstance(result.provenance, str) or any(
+                not isinstance(item, str) or not item.strip() for item in result.provenance
+            ):
+                invalid_fields.append("provenance must be a sequence of non-empty strings")
+            if not isinstance(result.limitations, (tuple, list)) or isinstance(result.limitations, str) or any(
+                not isinstance(item, str) or not item.strip() for item in result.limitations
+            ):
+                invalid_fields.append("limitations must be a sequence of non-empty strings")
+            if invalid_fields:
+                raise _InvalidIslandResult("invalid IslandResult: " + "; ".join(invalid_fields))
+            if island_trace is not None:
+                island_trace.update(output={
+                    "status": "completed",
+                    "claim_count": len(result.claims),
+                    "evidence_count": len(result.evidence),
+                    "provenance_count": len(result.provenance),
+                    "limitation_count": len(result.limitations),
+                })
             results.append(result)
+        except _InvalidIslandResult as exc:
+            errors.append(f"{island_id}: {exc}")
         except Exception as exc:
             errors.append(f"{island_id}: execution failed ({type(exc).__name__})")
 
@@ -219,7 +280,12 @@ def _execute_mission_untraced(
     provenance = tuple(dict.fromkeys(
         item for result in results for item in result.provenance
     ))
+    # Planning uncertainty and capability gaps are part of the execution result;
+    # do not report completion when the planner itself says coverage is missing.
     unresolved: list[str] = list(proof_report.unresolved_issues)
+    unresolved.extend(plan.unknowns)
+    unresolved.extend(plan.capability_gaps)
+    unresolved.extend(plan.clarification_questions)
     if missing:
         unresolved.append("One or more selected islands were not executed because no executor was configured.")
     if errors:
@@ -242,7 +308,7 @@ def _execute_mission_untraced(
         contradictions=contradictions,
         claim_reviews=reviews,
         provenance=provenance,
-        unresolved_issues=tuple(unresolved),
+        unresolved_issues=tuple(dict.fromkeys(unresolved)),
         ctp_cases=proof_report.ctp_cases,
     )
 

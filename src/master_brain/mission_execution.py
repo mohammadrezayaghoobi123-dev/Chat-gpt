@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import hashlib
 import json
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping
 
 from master_brain.audit_store import NOW, AuditPreconditionError, AuditStore, AuditStoreError
@@ -129,6 +130,37 @@ def _unresolved_error(contract: MissionContract, store: AuditStore) -> str | Non
     return None
 
 
+def _attempt_cost(integration: Any) -> tuple["Decimal | None", str | None]:
+    """The exact charge for one attempt, or a refusal reason. An unknown or malformed cost is refused (owner decision)."""
+    raw = getattr(integration, "estimated_cost_per_call", None)
+    if raw is None:
+        return None, "cost_unknown_budget_enforced"
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not 0 <= raw < float("inf"):
+        return None, "cost_invalid"
+    return Decimal(str(raw)), None
+
+
+def _budget_reason(history, mission_id: str, budget_units: int, cost: "Decimal") -> str | None:
+    """Refuse when this mission's recorded charges plus this attempt exceed ``budget_units`` (exact decimal sums).
+
+    Charges live in the mission.dispatch_started events (written atomically with the admission check). Attempts
+    recorded before charges existed carry no cost and count as 0; an unreadable charge stops execution."""
+    spent = Decimal(0)
+    for event in history:
+        if event.event_type == "mission.dispatch_started" and event.payload.get("mission_id") == mission_id:
+            charge = event.payload.get("estimated_cost")
+            if charge is None:
+                continue
+            try:
+                value = Decimal(charge)
+            except (InvalidOperation, TypeError, ValueError):
+                return "budget_ledger_unreadable"
+            if not value.is_finite() or value < 0:
+                return "budget_ledger_unreadable"
+            spent += value
+    return "budget_exceeded" if spent + cost > Decimal(budget_units) else None
+
+
 def effective_dispatch_timeout(server_timeout: Any, mission_deadline_seconds: int) -> Any:
     """How long the external call may run: the smaller of the server's cap and the mission's own deadline.
 
@@ -204,6 +236,10 @@ def execute_mission_once(
     )
     approval_event_id = receipt.event_id if consumes_approval else None
 
+    cost, cost_reason = _attempt_cost(integration)
+    if cost_reason:
+        return MissionExecutionResult(contract.mission_id, "rejected", reason=cost_reason)
+
     def _dispatch_admissible(history):
         if consumes_approval:
             for event in history:
@@ -214,7 +250,7 @@ def execute_mission_once(
                     return "approval_already_consumed"
         if unresolved_attempt_ids(history, contract.mission_id):
             return UNRESOLVED_REASON
-        return None
+        return _budget_reason(history, contract.mission_id, contract.budget_units, cost)
 
     try:
         store.append(
@@ -229,6 +265,7 @@ def execute_mission_once(
                 "contract_digest": mission_contract_digest(contract),
                 "integration_id": getattr(integration, "integration_id", "unknown"),
                 "attempt_id": attempt_id,
+                "estimated_cost": str(cost),
                 **({"approval_event_id": approval_event_id} if consumes_approval else {}),
             },
         )

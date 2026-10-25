@@ -114,7 +114,8 @@ EXPECTED_ALLOW_LIST = {
     "mission.dispatch_reconciled": {
         "mission_id", "attempt_id", "resolution", "evidence_ref"},
     "mission.dispatch_started": {
-        "mission_id", "contract_digest", "integration_id", "attempt_id", "approval_event_id"},
+        "mission_id", "contract_digest", "integration_id", "attempt_id", "approval_event_id",
+        "estimated_cost"},  # reviewed 2026-10-24: the exact per-attempt charge the budget gate sums
     "mission.dispatch_finished": {
         "mission_id", "integration_id", "attempt_id", "dispatch_status", "reason",
         "external_effect_confirmed"},

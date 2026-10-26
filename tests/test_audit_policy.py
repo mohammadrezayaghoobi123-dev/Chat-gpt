@@ -125,6 +125,17 @@ EXPECTED_ALLOW_LIST = {
         "exit_code", "term_signal", "outcome", "provisional_status", "stdout_sha256",
         "stderr_sha256", "stdout_bytes", "stderr_bytes", "environment", "criterion",
         "verification", "limitations"},
+    "ctp.run_requested": {
+        "schema_version", "request_id", "test_id", "spec_digest", "requester", "registry_digest"},
+    "ctp.run_challenge_issued": {
+        "request_id", "approval_event_id", "approver", "signing_key_id", "signature_alg",
+        "expires_at", "spec_digest"},
+    "ctp.run_approved": {
+        "approval_schema_version", "purpose", "decision", "request_id", "test_id", "spec_digest",
+        "requester", "approver_subject", "authentication_method", "scope", "expires_at",
+        "identity_verified_by_this_module", "signature", "signing_key_id", "signature_alg"},
+    "ctp.run_claimed": {"request_id", "test_id", "approval_event_id", "spec_digest", "executor"},
+    "ctp.run_aborted": {"request_id", "reason"},
     "ctp.test_verified": {
         "original_execution_id", "rerun_execution_id", "verdict", "verifier_id",
         "signing_key_id", "signature_alg", "signature_hex", "basis", "independence",

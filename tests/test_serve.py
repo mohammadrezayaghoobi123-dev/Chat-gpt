@@ -236,6 +236,27 @@ class Build(Dirs):
         parsed = _parse(["--data-dir", str(self.data)])
         self.assertEqual(parsed, ServeConfig(data_dir=self.data))
 
+    def test_ctp_runs_are_off_by_default_and_refuse_to_start_without_their_prerequisites(self):
+        built = build(self.config(port=0))
+        self.addCleanup(built.close)
+        import http.client
+        from master_brain.http_api import serve_in_thread
+        self.addCleanup(built.server.shutdown)
+        serve_in_thread(built.server)
+        conn = http.client.HTTPConnection("127.0.0.1", built.server.server_address[1], timeout=5)
+        conn.request("GET", "/v1/ctp/tests", headers={"Host": f"127.0.0.1:{built.server.server_address[1]}"})
+        self.assertEqual(conn.getresponse().status, 404)
+        with self.assertRaises(StartupRefused) as ctx:               # needs approval keys
+            build(self.config(port=0, ctp_builtin_tests=True))
+        self.assertIn("approval-keys", str(ctx.exception))
+        keys = keyfile(self.data.parent / "k.json", [])
+        down = {"available": False, "properties": {}, "reason": "simulated"}
+        import master_brain.ctp_runner as runner
+        with mock.patch.object(runner, "sandbox_status", return_value=down), \
+                self.assertRaises(StartupRefused) as ctx:            # no sandbox => no start, no fallback
+            build(self.config(port=0, ctp_builtin_tests=True, approval_keys=keys))
+        self.assertIn("sandbox", str(ctx.exception))
+
     def test_the_server_uses_the_verified_prefix_cache_for_both_logs(self):
         import master_brain.serve as serve_module
         self.assertEqual(serve_module.FULL_VERIFY_SECONDS, 300.0)

@@ -71,6 +71,7 @@ class ServeConfig:
     demo_echo_task: bool = False
     pubmed_searches: tuple[str, ...] = ()
     pubmed_abstracts: tuple[str, ...] = ()
+    ctp_builtin_tests: bool = False
 
 
 @dataclass
@@ -265,12 +266,29 @@ def build(config: ServeConfig, *, pubmed_fetcher: Any = None) -> Built:
             raise StartupRefused(str(exc)) from exc
         execution = ExecutionConfig(catalog, SQLiteExecutionRegistry(str(data / "registry.sqlite")),
                                     dispatch_timeout_seconds=30.0)
-    service = MissionService(AuditStore(data / "audit.jsonl", full_verify_interval_seconds=FULL_VERIFY_SECONDS), verifier, execution, AccountApprovers(accounts))
+    ctp = None
+    audit_store = AuditStore(data / "audit.jsonl", full_verify_interval_seconds=FULL_VERIFY_SECONDS)
+    if config.ctp_builtin_tests:
+        from master_brain.ctp_operations import CtpOperations
+        from master_brain.ctp_registry import builtin_registry
+        from master_brain.ctp_runner import sandbox_status
+        status = sandbox_status()
+        if not status["available"]:  # fail closed at start-up: no unsandboxed fallback exists
+            raise StartupRefused("--ctp-builtin-tests needs a working sandbox: " + status["reason"])
+        if verifier is None:
+            raise StartupRefused("--ctp-builtin-tests needs --approval-keys (a run cannot be approved otherwise)")
+        evidence = data / "ctp-evidence"
+        evidence.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(evidence, 0o700)
+        ctp = CtpOperations(audit_store, builtin_registry(), AccountApprovers(accounts), verifier, evidence)
+        warnings.append("CTP runs enabled: approved REGISTERED tests execute in the sandbox on this host; "
+                        "independent verification needs the separate `python -m master_brain.ctp_verify` process")
+    service = MissionService(audit_store, verifier, execution, AccountApprovers(accounts))
     try:
         server = make_server(service, SessionAuthenticator(accounts), config.host, config.port,
                              allow_non_loopback=config.allow_non_loopback,
                              allowed_hosts=config.allowed_hosts or None, secure_cookies=config.secure_cookies,
-                             accounts=accounts)
+                             accounts=accounts, ctp=ctp)
     except ValueError as exc:
         raise StartupRefused(str(exc)) from exc
     if config.host not in _LOOPBACK:
@@ -287,6 +305,8 @@ def _parse(argv: list[str] | None) -> ServeConfig:
     parser.add_argument("--allowed-host", action="append", default=[], help="repeatable; e.g. brain.example.org")
     parser.add_argument("--secure-cookies", action="store_true", help="only behind TLS")
     parser.add_argument("--approval-keys", type=Path, help="JSON file of PUBLIC approval keys")
+    parser.add_argument("--ctp-builtin-tests", action="store_true",
+                        help="enable operator-approved runs of the reviewed built-in CTP tests (needs sandbox + --approval-keys)")
     parser.add_argument("--demo-echo-task", action="store_true", help="register one offline demo task")
     parser.add_argument("--pubmed-search", action="append", default=[], metavar="TASK_ID=QUERY",
                         help="repeatable; register a read-only PubMed search task")
@@ -297,7 +317,7 @@ def _parse(argv: list[str] | None) -> ServeConfig:
         parser.error("--port must be 0-65535")
     return ServeConfig(args.data_dir, args.host, args.port, args.allow_non_loopback, tuple(args.allowed_host),
                        args.secure_cookies, args.approval_keys, args.demo_echo_task,
-                       tuple(args.pubmed_search), tuple(args.pubmed_abstracts))
+                       tuple(args.pubmed_search), tuple(args.pubmed_abstracts), args.ctp_builtin_tests)
 
 
 def _main(argv: list[str] | None = None) -> int:

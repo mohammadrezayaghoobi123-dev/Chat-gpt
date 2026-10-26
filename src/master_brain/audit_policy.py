@@ -50,6 +50,22 @@ PAYLOAD_KEY_ALLOWLIST: dict[str, frozenset[str]] = {
         "mission_id", "integration_id", "attempt_id", "dispatch_status", "reason",
         "external_effect_confirmed",
     }),
+    "ctp.run_requested": frozenset({
+        "schema_version", "request_id", "test_id", "spec_digest", "requester", "registry_digest",
+    }),
+    "ctp.run_challenge_issued": frozenset({
+        "request_id", "approval_event_id", "approver", "signing_key_id", "signature_alg",
+        "expires_at", "spec_digest",
+    }),
+    "ctp.run_approved": frozenset({
+        "approval_schema_version", "purpose", "decision", "request_id", "test_id", "spec_digest",
+        "requester", "approver_subject", "authentication_method", "scope", "expires_at",
+        "identity_verified_by_this_module", "signature", "signing_key_id", "signature_alg",
+    }),
+    "ctp.run_claimed": frozenset({
+        "request_id", "test_id", "approval_event_id", "spec_digest", "executor",
+    }),
+    "ctp.run_aborted": frozenset({"request_id", "reason"}),
     "ctp.test_executed": frozenset({
         "execution_id", "case_id", "test_id", "runner_id", "spec_digest", "argv_digest",
         "executable_sha256", "code_digests", "input_digest", "started_at", "duration_ms",

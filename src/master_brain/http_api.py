@@ -33,6 +33,9 @@ from master_brain.api_contracts import (
     ExecuteMissionRequest, LoginRequest, ReconcileRequest, SessionView, SubmitApprovalRequest, error_response,
 )
 from master_brain.identity import Authenticator
+from master_brain.ctp_operations import (
+    CtpOperations, RunApprovalRequest, RunChallengeRequest, RunExecuteRequest, RunRequest,
+)
 from master_brain.mission_service import MISSION_ID_PATTERN, MissionService, ServiceError
 from master_brain.rate_limit import RateGate, retry_after_header
 from master_brain.security_log import (
@@ -52,6 +55,13 @@ _RESULT = re.compile(rf"/v1/missions/({MISSION_ID_PATTERN})/result")
 _TASKS = re.compile(r"/v1/tasks")
 _PENDING = re.compile(r"/v1/approvals")
 _SESSION = re.compile(r"/v1/session")
+_CTP_ID = r"(ctpreq-[0-9a-f]{32})"
+_CTP_TESTS = re.compile(r"/v1/ctp/tests")
+_CTP_RUNS = re.compile(r"/v1/ctp/runs")
+_CTP_RUN = re.compile(rf"/v1/ctp/runs/{_CTP_ID}")
+_CTP_CHALLENGES = re.compile(rf"/v1/ctp/runs/{_CTP_ID}/approval-challenges")
+_CTP_APPROVALS = re.compile(rf"/v1/ctp/runs/{_CTP_ID}/approvals")
+_CTP_EXECUTIONS = re.compile(rf"/v1/ctp/runs/{_CTP_ID}/executions")
 _ADMIN_ACCOUNTS = re.compile(r"/v1/admin/accounts")
 _ADMIN_EVENTS = re.compile(r"/v1/admin/security-events")
 COOKIE_NAME = "mb_session"
@@ -102,7 +112,8 @@ def parse_json_body(raw: bytes) -> Any:
 def make_server(service: MissionService, authenticator: Authenticator, host: str = "127.0.0.1",
                 port: int = 0, *, allow_non_loopback: bool = False,
                 rate_gate: RateGate | None = None, accounts: AccountStore | None = None,
-                allowed_hosts: Iterable[str] | None = None, secure_cookies: bool = False) -> ThreadingHTTPServer:
+                allowed_hosts: Iterable[str] | None = None, secure_cookies: bool = False,
+                ctp: CtpOperations | None = None) -> ThreadingHTTPServer:
     """``rate_gate`` defaults to ``RateGate()`` (limits ON); pass your own to tune or to inject a clock.
 
     ``accounts`` enables ``/v1/session`` (login/whoami/logout with an HttpOnly SameSite=Strict cookie); the
@@ -228,7 +239,10 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
                     ("POST", _CHALLENGES, self._challenge), ("POST", _APPROVALS, self._approve),
                     ("POST", _RECONCILIATIONS, self._reconcile), ("POST", _EXECUTIONS, self._execute), ("GET", _RESULT, self._result),
                     ("GET", _TASKS, self._tasks), ("GET", _PENDING, self._pending),
-                ) + ((("GET", _SESSION, self._session_info), ("DELETE", _SESSION, self._logout),
+                ) + ((("GET", _CTP_TESTS, self._ctp_tests), ("POST", _CTP_RUNS, self._ctp_request),
+                      ("GET", _CTP_RUN, self._ctp_get), ("POST", _CTP_CHALLENGES, self._ctp_challenge),
+                      ("POST", _CTP_APPROVALS, self._ctp_approve), ("POST", _CTP_EXECUTIONS, self._ctp_execute))
+                     if ctp is not None else ()) + ((("GET", _SESSION, self._session_info), ("DELETE", _SESSION, self._logout),
                       ("GET", _ADMIN_ACCOUNTS, self._admin_accounts), ("GET", _ADMIN_EVENTS, self._admin_events))
                      if accounts is not None else ())
                 matched = [(m, rx.fullmatch(path), fn) for m, rx, fn in routes if rx.fullmatch(path)]
@@ -379,6 +393,33 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
             self._send(200, {"api_version": API_VERSION,
                              "missions": [m.to_dict() for m in service.list_pending_approvals(identity)]},
                        correlation_id)
+
+        def _ctp_tests(self, identity, _match, correlation_id: str) -> None:
+            self._send(200, {"api_version": API_VERSION, "tests": ctp.list_tests(identity)}, correlation_id)
+
+        def _ctp_request(self, identity, _match, correlation_id: str) -> None:
+            request = self._json_request(RunRequest, correlation_id)
+            if request is not None:
+                self._send(201, ctp.request_run(identity, request), correlation_id)
+
+        def _ctp_get(self, identity, match, correlation_id: str) -> None:
+            self._send(200, ctp.get_run(identity, match.group(1)), correlation_id)
+
+        def _ctp_challenge(self, identity, match, correlation_id: str) -> None:
+            request = self._json_request(RunChallengeRequest, correlation_id)
+            if request is not None:
+                self._send(201, ctp.request_approval_challenge(identity, match.group(1), request), correlation_id)
+
+        def _ctp_approve(self, identity, match, correlation_id: str) -> None:
+            request = self._json_request(RunApprovalRequest, correlation_id)
+            if request is not None:
+                view, created = ctp.submit_approval(identity, match.group(1), request)
+                self._send(201 if created else 200, view, correlation_id)
+
+        def _ctp_execute(self, identity, match, correlation_id: str) -> None:
+            request = self._json_request(RunExecuteRequest, correlation_id)
+            if request is not None:
+                self._send(201, ctp.execute(identity, match.group(1), request), correlation_id)
 
         def _get(self, identity, match, correlation_id: str) -> None:
             self._send(200, service.get_mission(identity, match.group(1)).to_dict(), correlation_id)

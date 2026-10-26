@@ -138,12 +138,21 @@ def describe_message(message: bytes, *, key_id: str, now: datetime | None = None
     try:
         body = json.loads(message[len(SIGNATURE_DOMAIN):].decode("utf-8"))
         payload = body["payload"]
-        shown = {
-            "approval_event_id": body["event_id"], "mission_id": payload["mission_id"],
-            "contract_digest": payload["contract_digest"], "approver": payload["approver_subject"],
-            "action_digest": payload.get("action_digest", "(none)"),
-            "expires_at": payload["expires_at"], "signing_key_id": payload["signing_key_id"],
-        }
+        if payload.get("purpose") == "ctp_run_approval":
+            shown = {
+                "approval_event_id": body["event_id"], "kind": "RUN A REGISTERED CTP TEST (sandboxed, single use)",
+                "request_id": payload["request_id"], "test_id": payload["test_id"],
+                "spec_digest": payload["spec_digest"], "requester": payload["requester"],
+                "approver": payload["approver_subject"], "expires_at": payload["expires_at"],
+                "signing_key_id": payload["signing_key_id"],
+            }
+        else:
+            shown = {
+                "approval_event_id": body["event_id"], "mission_id": payload["mission_id"],
+                "contract_digest": payload["contract_digest"], "approver": payload["approver_subject"],
+                "action_digest": payload.get("action_digest", "(none)"),
+                "expires_at": payload["expires_at"], "signing_key_id": payload["signing_key_id"],
+            }
         if not all(isinstance(v, str) and v for v in shown.values()):
             raise ValueError
     except (ValueError, KeyError, TypeError, UnicodeDecodeError):
@@ -181,6 +190,29 @@ def sign(path: Path, message_hex: str, passphrase: str, *, confirm, now: datetim
     except (ValueError, TypeError):
         raise KeyToolError("wrong passphrase or damaged key file") from None
     return key.sign(message).hex()
+
+
+def load_signer(path: Path, passphrase: str):
+    """Signer for a SEPARATE verifier process (``ctp_verify``). Returns an object with key_id, subject,
+    algorithm and ``sign``. Not used by the approval ``sign`` command, which refuses non-approval bytes."""
+    data = _load(path)
+    serialization, _ = _crypto()
+    try:
+        key = serialization.load_pem_private_key(data["private_key_pem"].encode("ascii"),
+                                                 password=passphrase.encode("utf-8"))
+    except (ValueError, TypeError):
+        raise KeyToolError("wrong passphrase or damaged key file") from None
+
+    class _Signer:
+        key_id = data["key_id"]
+        subject = data["subject"]
+        algorithm = "ed25519"
+
+        @staticmethod
+        def sign(message: bytes) -> bytes:
+            return key.sign(message)
+
+    return _Signer()
 
 
 def _tty_confirm() -> bool:

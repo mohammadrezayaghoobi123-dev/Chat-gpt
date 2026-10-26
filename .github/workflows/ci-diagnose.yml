@@ -21,6 +21,10 @@ env:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,7 +41,7 @@ jobs:
           python -c "import sys,cryptography;print('::notice::python',sys.version.split()[0],'cryptography',cryptography.__version__)"
       - name: Run suite and surface failures
         run: |
-          python -m unittest discover -s tests 2>&1 | tee out.txt || true
+          python -m unittest discover -s tests -v 2>&1 | tee out.txt || true
           python - <<'PY'
           import re
           text = open("out.txt", encoding="utf-8", errors="replace").read()

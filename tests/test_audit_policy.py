@@ -119,6 +119,16 @@ EXPECTED_ALLOW_LIST = {
     "mission.dispatch_finished": {
         "mission_id", "integration_id", "attempt_id", "dispatch_status", "reason",
         "external_effect_confirmed"},
+    "ctp.test_executed": {
+        "execution_id", "case_id", "test_id", "runner_id", "spec_digest", "argv_digest",
+        "executable_sha256", "code_digests", "input_digest", "started_at", "duration_ms",
+        "exit_code", "term_signal", "outcome", "provisional_status", "stdout_sha256",
+        "stderr_sha256", "stdout_bytes", "stderr_bytes", "environment", "criterion",
+        "verification", "limitations"},
+    "ctp.test_verified": {
+        "original_execution_id", "rerun_execution_id", "verdict", "verifier_id",
+        "signing_key_id", "signature_alg", "signature_hex", "basis", "independence",
+        "limitations"},
     "falsification.reviewed": {
         "schema_version", "outcome_mapping_version", "claim_id", "mission_context", "status",
         "previous_decision", "decision_changed", "decision_change_reason", "truth_established",

@@ -50,6 +50,18 @@ PAYLOAD_KEY_ALLOWLIST: dict[str, frozenset[str]] = {
         "mission_id", "integration_id", "attempt_id", "dispatch_status", "reason",
         "external_effect_confirmed",
     }),
+    "ctp.test_executed": frozenset({
+        "execution_id", "case_id", "test_id", "runner_id", "spec_digest", "argv_digest",
+        "executable_sha256", "code_digests", "input_digest", "started_at", "duration_ms",
+        "exit_code", "term_signal", "outcome", "provisional_status", "stdout_sha256",
+        "stderr_sha256", "stdout_bytes", "stderr_bytes", "environment", "criterion",
+        "verification", "limitations",
+    }),
+    "ctp.test_verified": frozenset({
+        "original_execution_id", "rerun_execution_id", "verdict", "verifier_id",
+        "signing_key_id", "signature_alg", "signature_hex", "basis", "independence",
+        "limitations",
+    }),
     "audit.tail_recovered": frozenset({"discarded_bytes", "complete_events", "fragment_sha256"}),
     "security.login_succeeded": frozenset({"address"}),
     "security.login_failed": frozenset({"address", "reason"}),

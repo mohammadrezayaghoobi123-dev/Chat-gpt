@@ -15,6 +15,7 @@ permissions:
 
 env:
   MB_REQUIRE_SIGNING_TESTS: "1"
+  MB_REQUIRE_SANDBOX_TESTS: "1"
 
 jobs:
   test:
@@ -28,6 +29,11 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+      - name: Allow unprivileged user namespaces (needed by the CTP runner sandbox)
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          unshare --user --map-root-user --net --pid --fork --mount-proc true && echo "::notice::user namespaces usable"
       - name: Install package and test runner
         run: |
           python -m pip install --upgrade pip

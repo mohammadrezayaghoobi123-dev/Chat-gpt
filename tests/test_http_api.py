@@ -137,6 +137,36 @@ class MissionLifecycleOverHttp(HttpBase):
                              for e in AuditStore(self.path).read_all()), 1)
 
 
+class ListenBacklog(unittest.TestCase):
+    """A burst of simultaneous connections must queue, not be reset.
+
+    ``socketserver`` defaults to a listen backlog of 5; under load a burst of ~24 clients was
+    reset (``ConnectionResetError``) while the accept loop was busy. The accept loop is NOT
+    started here, so only the kernel's backlog decides how many connections are accepted.
+    """
+
+    def test_a_burst_of_connections_is_queued_by_the_kernel(self):
+        import socket
+        with tempfile.TemporaryDirectory() as d:
+            store = AuditStore(Path(d) / "a.jsonl")
+            server = make_server(MissionService(store, None, None, StaticApprovers(set())),
+                                 StaticTokenAuthenticator({ALICE: "user:alice"}))
+            socks = []
+            try:
+                port = server.server_address[1]
+                for _ in range(60):
+                    c = socket.socket()
+                    c.settimeout(1.0)
+                    socks.append(c)
+                    c.connect(("127.0.0.1", port))      # completes in the kernel; no accept() needed
+            finally:
+                for c in socks:
+                    c.close()
+                server.server_close()
+            self.assertEqual(len(socks), 60)
+            self.assertGreaterEqual(server.request_queue_size, 64)
+
+
 class ConcurrentWriters(HttpBase):
     def test_many_different_missions_created_at_once_all_succeed(self):
         """Regression: timestamps taken outside the lock made valid concurrent writes fail (503)."""

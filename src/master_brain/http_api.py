@@ -406,6 +406,9 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
     class Server(ThreadingHTTPServer):
         daemon_threads = True
         allow_reuse_address = True
+        # socketserver's default listen backlog is 5: a burst of clients was reset while the accept
+        # loop was busy. The kernel clamps this to net.core.somaxconn, so it can only help.
+        request_queue_size = 128
 
         def handle_error(self, request, client_address) -> None:
             """A client that vanishes mid-request is not a server fault (no traceback noise);

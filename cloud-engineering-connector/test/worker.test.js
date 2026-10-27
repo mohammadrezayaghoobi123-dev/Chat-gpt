@@ -86,3 +86,28 @@ test("create_change_pr rejects every protected path before any GitHub request",a
  const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called for protected paths")};
  try{for(const path of [".env",".envrc/secret.txt","nested/.envrc/config",".env/secrets.txt","nested/.env/config",".env.production","nested/.envrc.local/config",".github","docs/.github/workflows/ci.yml","secrets/token.txt","config/credentials/prod.json","keys/private.pem","id_ed25519"]){const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path,content:"proposal"}]};const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true,path);assert.match(b.result.content[0].text,/Rejected unsafe or protected file path/,path)}assert.equal(calls,0)}finally{globalThis.fetch=originalFetch}
 });
+
+test("create_change_pr deletes its new branch if draft PR creation fails",async()=>{
+ const originalFetch=globalThis.fetch;const calls=[];let createdRef=null;
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input);const method=init.method||"GET";calls.push({url,method});
+  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"base-sha"}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/base-sha"))return new Response(JSON.stringify({tree:{sha:"base-tree"}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:"new-tree"}),{status:201});
+  if(method==="POST"&&url.endsWith("/git/commits"))return new Response(JSON.stringify({sha:"new-commit"}),{status:201});
+  if(method==="POST"&&url.endsWith("/git/refs")){createdRef=JSON.parse(init.body).ref;return new Response(JSON.stringify({ref:createdRef}),{status:201})}
+  if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({message:"simulated PR validation failure"}),{status:422});
+  if(method==="DELETE"&&createdRef&&url.endsWith("/git/refs/"+createdRef.replace(/^refs\//,"")))return new Response(null,{status:204});
+  throw new Error("Unexpected mocked GitHub request: "+method+" "+url)
+ };
+ try{
+  const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example proposal",summary:"Test rollback",files:[{path:"docs/proposal.txt",content:"proposal"}]};
+  const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"test-token"});
+  const body=await r.json();
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/GitHub API 422: simulated PR validation failure/);
+  assert.ok(createdRef?.startsWith("refs/heads/assistant/"));
+  assert.ok(calls.some(c=>c.method==="DELETE"&&c.url.endsWith("/git/refs/"+createdRef.replace(/^refs\//,""))),"new branch should be deleted after PR creation failure");
+ }finally{globalThis.fetch=originalFetch}
+});

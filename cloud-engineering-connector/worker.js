@@ -1,7 +1,7 @@
 const VERSION = "0.1.0";
 const MAX_FILES = 12;
 const MAX_FILE_BYTES = 100_000;
-const BLOCKED_PATHS = [/^\.github\//i, /(^|\/)\.env(?:\.|$)/i, /(^|\/)(?:secrets?|credentials?)(?:\/|$)/i, /\.(?:pem|key|p12|pfx)$/i, /(^|\/)id_(?:rsa|ed25519)$/i];
+const BLOCKED_PATHS = [/(^|\/)\.github\//i, /(^|\/)\.env(?:\.|$|rc$)/i, /(^|\/)(?:secrets?|credentials?)(?:\/|$)/i, /\.(?:pem|key|p12|pfx)$/i, /(^|\/)id_(?:rsa|ed25519)$/i];
 const PUBLIC_READ_ONLY_TOOLS=new Set(["project_inspect","read_project_file","engineering_standards","architecture_review"]);
 const TOOLS = [
 {name:"project_inspect",description:"Inspect repository metadata, default branch, latest commit, and file tree. Read-only.",inputSchema:{type:"object",properties:{owner:{type:"string"},repo:{type:"string"},branch:{type:"string"}},required:["owner","repo"],additionalProperties:false}},

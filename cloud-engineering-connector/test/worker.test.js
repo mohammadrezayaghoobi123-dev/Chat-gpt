@@ -19,3 +19,24 @@ test("change PR rejects protected workflow paths before API calls",async()=>{con
 test("unknown RPC methods return method-not-found",async()=>{const r=await worker.fetch(rpc("invalid/method"),env);const b=await r.json();assert.equal(b.error.code,-32601)});
 
 test("engineering standards require evidence and prohibit false verification claims",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"engineering_standards",arguments:{}}),env);const b=await r.json();const result=JSON.parse(b.result.content[0].text);assert.ok(result.mandatory_behavior.some(x=>x.includes("Never claim tests")));assert.ok(result.required_report.includes("Unverified items"));assert.match(result.quality_gate,/not proof of correctness/)});
+
+test("unauthenticated public read-only calls never forward GitHub credentials",async()=>{
+ const originalFetch=globalThis.fetch;
+ const authorizationHeaders=[];
+ globalThis.fetch=async(input,init={})=>{
+  authorizationHeaders.push(new Headers(init.headers).get("authorization"));
+  const url=String(input);
+  if(url.endsWith("/repos/octo/demo"))return new Response(JSON.stringify({full_name:"octo/demo",private:false,default_branch:"main"}),{status:200,headers:{"content-type":"application/json"}});
+  if(url.endsWith("/repos/octo/demo/commits/main"))return new Response(JSON.stringify({sha:"abc123",commit:{tree:{sha:"tree123"},message:"test",committer:{date:"2026-01-01T00:00:00Z"}}}),{status:200,headers:{"content-type":"application/json"}});
+  if(url.includes("/repos/octo/demo/git/trees/tree123?recursive=1"))return new Response(JSON.stringify({tree:[],truncated:false}),{status:200,headers:{"content-type":"application/json"}});
+  throw new Error("Unexpected mocked GitHub URL: "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"octo",repo:"demo"}},1,null),{PUBLIC_READ_ONLY:"true",GITHUB_TOKEN:"must-not-leak"});
+  assert.equal(response.status,200);
+  const body=await response.json();
+  assert.equal(body.result.content[0].type,"text");
+  assert.equal(authorizationHeaders.length,3);
+  assert.deepEqual(authorizationHeaders,[null,null,null]);
+ }finally{globalThis.fetch=originalFetch}
+});

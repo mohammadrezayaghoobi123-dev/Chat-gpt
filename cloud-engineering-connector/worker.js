@@ -19,7 +19,7 @@ function validBranchName(value){return typeof value==="string"&&value.length<=20
 function validatePath(path){if(typeof path!=="string"||!path||path.length>240||path.startsWith("/")||path.includes("\\")||path.split("/").some(p=>!p||p==="."||p==="..")||BLOCKED_PATHS.some(re=>re.test(path)))throw new Error("Rejected unsafe or protected file path: "+String(path))}
 async function readJsonLimited(request,maxBytes=MAX_REQUEST_BYTES){
  const declared=request.headers.get("content-length");
- if(declared!==null&&(/^\\d+$/.test(declared)===false||Number(declared)>maxBytes))throw Object.assign(new Error("Request body too large."),{status:413});
+ if(declared!==null&&(/^\d+$/.test(declared)===false||Number(declared)>maxBytes))throw Object.assign(new Error("Request body too large."),{status:413});
  if(!request.body)return {};
  const reader=request.body.getReader();const chunks=[];let total=0;
  try{while(true){const {done,value}=await reader.read();if(done)break;total+=value.byteLength;if(total>maxBytes){await reader.cancel();throw Object.assign(new Error("Request body too large."),{status:413});}chunks.push(value)}}finally{reader.releaseLock()}

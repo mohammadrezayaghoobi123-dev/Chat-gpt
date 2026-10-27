@@ -22,7 +22,7 @@ async function readJsonLimited(request,maxBytes=MAX_REQUEST_BYTES){
  if(declared!==null&&(/^\d+$/.test(declared)===false||Number(declared)>maxBytes))throw Object.assign(new Error("Request body too large."),{status:413});
  if(!request.body)return {};
  const reader=request.body.getReader();const chunks=[];let total=0;
- try{while(true){const {done,value}=await reader.read();if(done)break;total+=value.byteLength;if(total>maxBytes){await reader.cancel();throw Object.assign(new Error("Request body too large."),{status:413});}chunks.push(value)}}finally{reader.releaseLock()}
+ try{while(true){const {done,value}=await reader.read();if(done)break;total+=value.byteLength;if(total>maxBytes){try{await reader.cancel()}catch{}throw Object.assign(new Error("Request body too large."),{status:413});}chunks.push(value)}}finally{reader.releaseLock()}
  const bytes=new Uint8Array(total);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength}
  return JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(bytes));
 }

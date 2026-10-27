@@ -10,6 +10,7 @@ on:
     branches:
       - main
       - master-brain/integrated-mvp
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -36,6 +37,24 @@ jobs:
       - name: Install package
         run: python -m pip install -e ".[signing]"
       - name: Run unit tests
-        run: python -m unittest discover -s tests -v
+        shell: bash   # pipefail: the job still fails exactly when the tests fail
+        run: python -m unittest discover -s tests -v 2>&1 | tee unittest-out.txt
+      - name: Surface failing tests as annotations (diagnostic only; does not change the result)
+        if: failure()
+        run: |
+          python - <<'PY'
+          import re
+          text = open("unittest-out.txt", encoding="utf-8", errors="replace").read()
+          blocks = re.split(r"\n={70}\n", text)
+          bad = [b for b in blocks if b.startswith(("FAIL:", "ERROR:"))]
+          tail = text.strip().splitlines()[-3:]
+          print("::notice::summary " + " | ".join(tail))
+          for b in bad[:12]:
+              lines = b.strip().splitlines()
+              body = "\n".join([lines[0][:200]] + lines[-8:])[:900]
+              print("::error::" + body.replace("%", "%25").replace("\r", "").replace("\n", "%0A"))
+          if not bad:
+              print("::notice::no FAIL/ERROR blocks found; last lines: " + " | ".join(text.strip().splitlines()[-6:])[:600])
+          PY
       - name: Run offline demo
         run: python -m master_brain.demo

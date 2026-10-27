@@ -46,16 +46,34 @@ test("MCP_AUTH_TOKEN invalid or missing bearer: 401, no GitHub call, secret not 
   });
 });
 
-test("GITHUB_TOKEN absent: explicit configuration error naming GITHUB_TOKEN, not a GitHub 404, no GitHub call", async () => {
-  await withFetch(() => ghError(404, "Not Found"), async (calls) => {
-    for (const tool of ["project_inspect", "read_project_file"]) {
-      const r = await worker.fetch(call(tool, { owner: "octo", repo: "demo", path: "README.md" }), { MCP_AUTH_TOKEN: SECRET });
-      const b = await r.json();
-      assert.equal(b.result.isError, true);
-      assert.match(b.result.content[0].text, /GITHUB_TOKEN/);
-      assert.doesNotMatch(b.result.content[0].text, /404|Not Found/);
-    }
-    assert.equal(calls.length, 0);
+// Contract note (recorded reason for changing this assertion): PR #15 (merged by the owner) deliberately allows
+// unauthenticated GitHub GET requests for public read-only use, so "no GitHub call" no longer holds for reads.
+// What must still hold: the request carries NO authorization header, and a refusal from GitHub (401/403/404) is
+// reported as an explicit configuration hint naming GITHUB_TOKEN instead of a bare, misleading "404 Not Found".
+test("GITHUB_TOKEN absent: read is sent unauthenticated and a GitHub 404 is explained with a GITHUB_TOKEN hint", async () => {
+  for (const status of [401, 403, 404]) {
+    await withFetch(() => ghError(status, "Not Found"), async (calls) => {
+      for (const tool of ["project_inspect", "read_project_file"]) {
+        const r = await worker.fetch(call(tool, { owner: "octo", repo: "demo", path: "README.md" }), { MCP_AUTH_TOKEN: SECRET });
+        const b = await r.json();
+        assert.equal(b.result.isError, true);
+        const text = b.result.content[0].text;
+        assert.match(text, /GITHUB_TOKEN/);
+        assert.match(text, new RegExp("GitHub API " + status));
+        assert.doesNotMatch(text, new RegExp(SECRET));
+      }
+      assert.ok(calls.length >= 1);
+      for (const c of calls) assert.equal(c[1].headers.authorization, undefined);
+    });
+  }
+});
+
+test("GITHUB_TOKEN absent: non-auth GitHub errors (e.g. 500) are not mislabelled as a token problem", async () => {
+  await withFetch(() => ghError(500, "boom"), async () => {
+    const r = await worker.fetch(call("project_inspect", { owner: "octo", repo: "demo" }), { MCP_AUTH_TOKEN: SECRET });
+    const text = (await r.json()).result.content[0].text;
+    assert.match(text, /GitHub API 500/);
+    assert.doesNotMatch(text, /GITHUB_TOKEN/);
   });
 });
 

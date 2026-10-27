@@ -156,3 +156,20 @@ test("create_change_pr retains branch when pull request creation outcome is unce
   assert.equal(body.result.isError,true);assert.equal(deleteAttempted,false);assert.match(msg,/outcome is uncertain/);assert.match(msg,/branch assistant\//);assert.match(msg,/simulated network timeout/);
  }finally{globalThis.fetch=originalFetch}
 });
+
+test("GitHub API calls receive a bounded 10-second abort signal",async()=>{
+ const originalFetch=globalThis.fetch,originalTimeout=AbortSignal.timeout;const timeoutValues=[],controller=new AbortController();let calls=0;
+ AbortSignal.timeout=(milliseconds)=>{timeoutValues.push(milliseconds);return controller.signal};
+ globalThis.fetch=async(input,init={})=>{
+  calls++;assert.equal(init.signal,controller.signal,"GitHub request must receive the bounded signal");
+  const url=String(input);
+  if(url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt",default_branch:"main"}),{status:200});
+  if(url.endsWith("/commits/main"))return new Response(JSON.stringify({sha:"abc123",commit:{tree:{sha:"tree123"},message:"test",committer:{date:"2026-01-01T00:00:00Z"}}}),{status:200});
+  if(url.includes("/git/trees/tree123?recursive=1"))return new Response(JSON.stringify({tree:[],truncated:false}),{status:200});
+  throw new Error("Unexpected mocked GitHub URL: "+url);
+ };
+ try{
+  const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"} }),{...env,GITHUB_TOKEN:"test-token"});
+  assert.equal(r.status,200);assert.equal(calls,3);assert.deepEqual(timeoutValues,[10_000,10_000,10_000]);
+ }finally{globalThis.fetch=originalFetch;AbortSignal.timeout=originalTimeout}
+});

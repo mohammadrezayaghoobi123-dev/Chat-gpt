@@ -53,3 +53,15 @@ test("create_change_pr rejects missing, main, and alternate base branches before
 test("MCP rejects oversized request bodies before JSON parsing",async()=>{const body=JSON.stringify({jsonrpc:"2.0",id:1,method:"ping",padding:"x".repeat(1_000_001)});const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json"},body}),env);assert.equal(r.status,413);assert.deepEqual(await r.json(),{error:"payload_too_large"})});
 
 test("MCP rejects invalid bearer tokens",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer wrong-token","content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})}),env);assert.equal(r.status,401)});
+
+test("MCP rejects oversized streamed request bodies without Content-Length",async()=>{
+ const payload=JSON.stringify({jsonrpc:"2.0",id:1,method:"ping",padding:"x".repeat(1_000_001)});
+ const bytes=new TextEncoder().encode(payload);
+ let offset=0;
+ const stream=new ReadableStream({pull(controller){if(offset>=bytes.length){controller.close();return}const end=Math.min(offset+64_000,bytes.length);controller.enqueue(bytes.slice(offset,end));offset=end}});
+ const request=new Request("https://example.test/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json"},body:stream,duplex:"half"});
+ assert.equal(request.headers.has("content-length"),false);
+ const r=await worker.fetch(request,env);
+ assert.equal(r.status,413);
+ assert.deepEqual(await r.json(),{error:"payload_too_large"});
+});

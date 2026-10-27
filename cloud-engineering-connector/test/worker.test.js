@@ -65,3 +65,17 @@ test("MCP rejects oversized streamed request bodies without Content-Length",asyn
  assert.equal(r.status,413);
  assert.deepEqual(await r.json(),{error:"payload_too_large"});
 });
+
+test("MCP returns 413 even if cancelling an oversized request stream rejects",async()=>{
+ const payload=JSON.stringify({jsonrpc:"2.0",id:1,method:"ping",padding:"x".repeat(1_000_001)});
+ const bytes=new TextEncoder().encode(payload);
+ let offset=0;
+ const stream=new ReadableStream({
+  pull(controller){if(offset>=bytes.length){controller.close();return}const end=Math.min(offset+64_000,bytes.length);controller.enqueue(bytes.slice(offset,end));offset=end},
+  cancel(){return Promise.reject(new Error("simulated stream cancellation failure"))}
+ });
+ const request=new Request("https://example.test/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json"},body:stream,duplex:"half"});
+ const r=await worker.fetch(request,env);
+ assert.equal(r.status,413);
+ assert.deepEqual(await r.json(),{error:"payload_too_large"});
+});

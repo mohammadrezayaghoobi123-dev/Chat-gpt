@@ -3,11 +3,17 @@ name: CI fetch failed-job logs (diagnostic, read-only)
 # Reads the logs of given job ids from inside GitHub (the workspace cannot reach the log storage host)
 # and re-emits the failing unittest blocks as annotations. Read-only; changes nothing.
 on:
+  push:
+    branches:
+      - ci/flake-stress-2026-10-28
+    paths:
+      - .github/workflows/ci-fetch-logs.yml
   workflow_dispatch:
     inputs:
       job_ids:
         description: "space separated job ids"
-        required: true
+        required: false
+        default: "121860531215 120849868742"
 
 permissions:
   actions: read
@@ -20,7 +26,7 @@ jobs:
       - name: Fetch and surface
         env:
           GH_TOKEN: ${{ github.token }}
-          JOB_IDS: ${{ inputs.job_ids }}
+          JOB_IDS: ${{ inputs.job_ids || '121860531215 120849868742' }}
           REPO: ${{ github.repository }}
         run: |
           mkdir -p logs

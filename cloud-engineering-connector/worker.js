@@ -4,7 +4,7 @@ const MAX_FILE_BYTES = 100_000;
 const MAX_READ_FILE_BYTES = 100_000;
 const MAX_REQUEST_BYTES = 1_000_000;
 const ALLOWED_BASE_BRANCH = "feature/cloud-engineering-connector";
-const BLOCKED_PATHS = [/(^|\/)(?:\.git|\.github|\.ssh|\.aws|\.azure|\.kube|\.docker)(?:\/|$)/i, /(^|\/)\.config\/gcloud(?:\/|$)/i, /(^|\/)\.env(?:\.[^/]*|rc(?:\.[^/]*)?)?(?:\/|$)/i, /(^|\/)(?:secrets?|credentials?)(?:\/|$)/i, /(^|\/)(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|known_hosts|authorized_keys)$/i, /(^|\/)(?:\.npmrc|\.pypirc|\.netrc|\.git-credentials)$/i, /(?:^|\/)terraform\.tfstate(?:\.backup)?$/i, /\.(?:pem|key|p12|pfx|tfvars|tfstate)$/i];
+const BLOCKED_PATHS = [/(^|\/)(?:\.git|\.github|\.ssh|\.aws|\.azure|\.kube|\.docker)(?:\/|$)/i, /(^|\/)\.config\/(?:gcloud|gh|containers|rclone)(?:\/|$)/i, /(^|\/)\.env(?:\.[^/]*|rc(?:\.[^/]*)?)?(?:\/|$)/i, /(^|\/)(?:secrets?|credentials?)(?:[._-][^/]*)?(?:\/|$)/i, /(^|\/)(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|known_hosts|authorized_keys)$/i, /(^|\/)(?:\.npmrc|\.pypirc|\.netrc|\.gitconfig|\.git-credentials)$/i, /(?:^|\/)terraform\.tfstate(?:\.backup)?$/i, /\.(?:pem|key|p12|pfx|tfvars|tfstate)$/i];
 const PUBLIC_READ_ONLY_TOOLS=new Set(["project_inspect","read_project_file","engineering_standards","architecture_review"]);
 const TOOLS = [
 {name:"project_inspect",description:"Inspect repository metadata, default branch, latest commit, and file tree. Read-only.",inputSchema:{type:"object",properties:{owner:{type:"string"},repo:{type:"string"},branch:{type:"string"}},required:["owner","repo"],additionalProperties:false}},

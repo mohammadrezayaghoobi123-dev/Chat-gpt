@@ -5,10 +5,12 @@ references and summaries rather than raw user inputs or model outputs.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 import json
 import re
+import unicodedata
 from typing import Any, Mapping
 
 
@@ -30,22 +32,32 @@ _SENSITIVE_KEY_PARTS = (
 )
 
 
-def _check_sensitive_keys(value: Any, path: str = "metadata") -> None:
-    if isinstance(value, Mapping):
-        for key, child in value.items():
-            if not isinstance(key, str):
-                raise AuditValidationError(f"{path} keys must be strings")
-            normalized = re.sub(r"[^a-z0-9]", "", key.lower())
-            sensitive_parts = (re.sub(r"[^a-z0-9]", "", part) for part in _SENSITIVE_KEY_PARTS)
-            if any(part in normalized for part in sensitive_parts):
-                raise AuditValidationError(
-                    f"sensitive field name is not allowed in audit metadata: {path}.{key}"
-                )
-            _check_sensitive_keys(child, f"{path}.{key}")
-    elif isinstance(value, (list, tuple)):
-        for index, child in enumerate(value):
-            _check_sensitive_keys(child, f"{path}[{index}]")
-
+def _check_sensitive_keys(value: Any, path: str = "metadata", _active: set[int] | None = None) -> None:
+    if _active is None:
+        _active = set()
+    if not isinstance(value, (Mapping, list, tuple)):
+        return
+    identity = id(value)
+    if identity in _active:
+        raise AuditValidationError(f"cyclic metadata is not allowed: {path}")
+    _active.add(identity)
+    try:
+        if isinstance(value, Mapping):
+            for key, child in value.items():
+                if not isinstance(key, str):
+                    raise AuditValidationError(f"{path} keys must be strings")
+                normalized = re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKC", key).casefold())
+                sensitive_parts = (re.sub(r"[^a-z0-9]", "", part) for part in _SENSITIVE_KEY_PARTS)
+                if any(part in normalized for part in sensitive_parts):
+                    raise AuditValidationError(
+                        f"sensitive field name is not allowed in audit metadata: {path}.{key}"
+                    )
+                _check_sensitive_keys(child, f"{path}.{key}", _active)
+        else:
+            for index, child in enumerate(value):
+                _check_sensitive_keys(child, f"{path}[{index}]", _active)
+    finally:
+        _active.remove(identity)
 
 def _require_text(name: str, value: str) -> None:
     if not isinstance(value, str) or not value.strip():
@@ -67,7 +79,8 @@ class AuditRecord:
     schema_version: int = 1
 
     def __post_init__(self) -> None:
-        """Reject invalid records at construction, not only at serialization."""
+        """Defensively copy nested metadata and validate at construction."""
+        object.__setattr__(self, "metadata", deepcopy(self.metadata))
         self.validate()
 
     def validate(self) -> None:
@@ -110,7 +123,7 @@ class AuditRecord:
         result = asdict(self)
         result["input_refs"] = list(self.input_refs)
         result["output_refs"] = list(self.output_refs)
-        result["metadata"] = dict(self.metadata)
+        result["metadata"] = deepcopy(dict(self.metadata))
         return result
 
     def to_stable_json(self) -> str:

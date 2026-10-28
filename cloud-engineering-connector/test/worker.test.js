@@ -241,3 +241,22 @@ test("read_project_file streams and rejects oversized GitHub API responses befor
   const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/response exceeds the configured byte limit/i);assert.equal(cancelled,true);
  }finally{globalThis.fetch=originalFetch}
 });
+
+
+test("all well-formed MCP notifications return 202 with an empty body",async()=>{
+ for(const method of ["notifications/initialized","notifications/cancelled","notifications/progress","notifications/custom-event"]){
+  const request=req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",method,params:{}})});
+  const response=await worker.fetch(request,env);
+  assert.equal(response.status,202,method);
+  assert.equal(await response.text(),"",method);
+ }
+});
+
+test("notification-named methods with an id are requests and receive a JSON-RPC response",async()=>{
+ const request=req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:9,method:"notifications/initialized"})});
+ const response=await worker.fetch(request,env);
+ assert.equal(response.status,200);
+ const body=await response.json();
+ assert.equal(body.id,9);
+ assert.equal(body.error.code,-32601);
+});

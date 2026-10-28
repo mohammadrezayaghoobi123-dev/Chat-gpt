@@ -1,0 +1,27 @@
+name: CI env probe (diagnostic, read-only)
+
+# Prints the starting state of a fresh ubuntu-latest runner: /tmp contents, limits, kernel, CPUs, memory.
+# No project code runs. Used to test claims such as "/tmp/x may already exist on the host".
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        n: [1, 2, 3, 4, 5, 6]
+    steps:
+      - name: Probe
+        run: |
+          echo "::notice::runner image=$ImageVersion os=$(. /etc/os-release; echo $PRETTY_NAME) kernel=$(uname -r) cpus=$(nproc) mem_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)"
+          echo "::notice::/tmp entries=$(ls -A /tmp | wc -l) names=$(ls -A /tmp | head -20 | tr '\n' ' ')"
+          for p in /tmp/x /x /tmp/ctp-leak-probe; do
+            if [ -e "$p" ] || [ -L "$p" ]; then echo "::error::EXISTS $p"; else echo "::notice::absent $p"; fi
+          done
+          echo "::notice::userns=$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || echo na) apparmor_restrict=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo na) max_userns=$(sysctl -n user.max_user_namespaces)"
+          echo "::notice::ulimit nproc=$(ulimit -u) nofile=$(ulimit -n) uptime=$(cut -d' ' -f1 /proc/uptime)s"

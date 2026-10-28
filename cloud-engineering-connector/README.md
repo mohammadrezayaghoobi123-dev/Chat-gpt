@@ -55,6 +55,11 @@ The repository source and a live Worker deployment are separate states. A GitHub
 
 Cloudflare Workers has a free tier subject to current quotas and account eligibility. Free does not mean unlimited execution or guaranteed unlimited availability.
 
+## Response limits
+
+- GitHub API responses are bounded to 2,000,000 bytes by default. The limit is enforced from `Content-Length` when valid and while streaming, including responses without a trustworthy length header.
+- `read_project_file` uses a stricter 150,000-byte API response limit and a 100,000-byte decoded-file limit.
+
 ## Security boundaries and limitations
 
 - No shell or arbitrary command execution is exposed.

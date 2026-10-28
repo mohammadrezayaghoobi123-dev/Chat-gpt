@@ -44,13 +44,14 @@ The repository source and a live Worker deployment are separate states. A GitHub
 
 ### Last inspected Cloudflare state
 
-This snapshot is an operational observation, not a release certification:
+This snapshot is an operational observation, not a release certification. Last refreshed 2026-10-29:
 
-- Production Worker: `chat-gpt111`; version `23` (`e489b0b6-ef42-4923-b89f-fc5433809404`); deployment `370d2b97-995e-4765-bc96-fd7069fd114d`; 100% traffic at the time inspected.
-- Production version 23 and version 21 reported the same Worker script ETag (`ce4430b8421b79790fcf2fe9d82279f9805c96d0b6ca77fcaa6ac67d8b9b7760`), indicating the secret-only rollout did not change the script content. This ETag has not yet been mapped to a verified Git commit.
-- Production has `MCP_ALLOWED_ORIGINS` and `PUBLIC_READ_ONLY` bindings, but the inspected secret-name list did not include `MCP_AUTH_TOKEN` or `GITHUB_TOKEN`. Thus production is currently configured for unauthenticated public read-only access, assuming the deployed code matches the inspected script. Only the explicit read-only allowlist should be exposed in that mode. This carries residual abuse and anonymous GitHub rate-limit risk; prefer bearer authentication before enabling broader use.
-- Staging Worker: `chat-gpt111-staging`; version 4 was observed with `MCP_AUTH_TOKEN` and `MCP_ALLOWED_ORIGINS`, but no `GITHUB_TOKEN`. The configured origin values have not yet been validated against real ChatGPT/Claude browser requests. Staging write operations should fail closed until a repository-scoped token is deliberately configured.
-- GitHub CI for commit `6ff19b3834f695729cd93bdb545f863033b48b0f` reported two successful workflow runs. These results do not prove that this exact commit is deployed or that real clients interoperate.
+- Production Worker: `chat-gpt111`; version `24` (`9341f83f-b89e-4167-bd13-b33e2fb71f85`); deployment `7dc263e3-a05a-487f-938d-b0a842d492eb`; 100% traffic at the time inspected.
+- The version-24 bundle source map contains the `worker.js` source. Its embedded source content matched the `worker.js` file on `feature/cloud-engineering-connector` byte-for-byte: 36,282 characters, SHA-256 `f11be0df667b91b2d981253ced6fbfd58e37af1c57e0081f96d8dcdd5ffab78c`. This confirms source-file identity against that branch file, but does not independently establish the full build recipe or the exact commit used by Cloudflare.
+- The inspected production secret-name list contained `MCP_ALLOWED_ORIGINS` and `PUBLIC_READ_ONLY`, but not `MCP_AUTH_TOKEN` or `GITHUB_TOKEN`. With `PUBLIC_READ_ONLY=true`, the inspected code exposes only the four server-side allowlisted read-only tools. This is unauthenticated public access, not authenticated access; it carries abuse and anonymous GitHub rate-limit risk. CORS is not authentication.
+- Staging Worker: `chat-gpt111-staging`; version 4 was previously observed with `MCP_AUTH_TOKEN` and `MCP_ALLOWED_ORIGINS`, but no `GITHUB_TOKEN`. Staging write operations should fail closed until a repository-scoped token is deliberately configured. Real-client origin compatibility remains unverified.
+- Commit `d6044120835bddebadc4eb4c16e630f374b05bf0` added a regression test for anonymous public read-only repository inspection. Both its PR CI and post-merge CI completed successfully. CI does not prove live Worker/ChatGPT/Claude interoperability.
+- Direct outbound probes from the current tool environment to the production `workers.dev` hostname were blocked by that environment; this is not evidence that the Worker itself is down. Live endpoint and real-client tests remain release blockers.
 
 ### Release procedure
 

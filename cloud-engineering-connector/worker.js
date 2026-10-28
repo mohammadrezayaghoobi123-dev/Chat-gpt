@@ -22,7 +22,8 @@ function subscriptionsListenResponse(request,rpc){
  for(const key of Object.keys(filter))if(!allowed.has(key))return invalid("unsupported notification filter "+key+".");
  for(const key of ["toolsListChanged","promptsListChanged","resourcesListChanged"])if(filter[key]!==undefined&&typeof filter[key]!=="boolean")return invalid(key+" must be a boolean.");
  if(filter.resourceSubscriptions!==undefined){
-  if(!Array.isArray(filter.resourceSubscriptions)||filter.resourceSubscriptions.some(uri=>typeof uri!=="string"))return invalid("resourceSubscriptions must be an array of strings.");
+  if(!Array.isArray(filter.resourceSubscriptions)||filter.resourceSubscriptions.some(uri=>typeof uri!=="string"))return invalid("resourceSubscriptions must be an array of URI strings.");
+  for(const uri of filter.resourceSubscriptions){if(!uri||uri!==uri.trim()||/[\u0000-\u0020\u007f]/.test(uri))return invalid("resourceSubscriptions entries must be absolute URIs without raw whitespace or control characters.");try{new URL(uri)}catch{return invalid("resourceSubscriptions entries must be absolute URIs.")}}
   const unique=[...new Set(filter.resourceSubscriptions)];
   if(unique.length>1024||unique.reduce((total,uri)=>total+new TextEncoder().encode(uri).byteLength,0)>65536)return invalid("resourceSubscriptions exceeds protocol limits.");
  }

@@ -5,6 +5,7 @@ on:
     paths:
       - "cloud-engineering-connector/**"
       - ".github/workflows/connector-ci.yml"
+      - ".github/workflows/cloud-engineering-connector.yml"
   push:
     branches:
       - "feature/cloud-engineering-connector"
@@ -12,6 +13,7 @@ on:
     paths:
       - "cloud-engineering-connector/**"
       - ".github/workflows/connector-ci.yml"
+      - ".github/workflows/cloud-engineering-connector.yml"
 
 permissions:
   contents: read

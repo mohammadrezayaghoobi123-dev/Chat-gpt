@@ -1,0 +1,80 @@
+name: CI flake stress (diagnostic, read-only)
+
+# Diagnostic only. Runs the unit-test suite exactly like master-brain-tests.yml, many times under
+# CPU contention, to catch the intermittent unit-tests failure. Never changes code or results elsewhere.
+# Every failing pass is surfaced as ::error:: annotations and as an artifact.
+on:
+  push:
+    branches:
+      - ci/flake-stress-2026-10-28
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MB_REQUIRE_SIGNING_TESTS: "1"
+  MB_REQUIRE_SANDBOX_TESTS: "1"
+
+jobs:
+  stress:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Allow unprivileged user namespaces (needed by the CTP runner sandbox)
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          unshare --user --map-root-user --net --pid --fork --mount-proc true && echo "::notice::user namespaces usable"
+      - run: python -m pip install -e ".[signing]"
+      - name: Environment
+        run: |
+          python -c "import sys,cryptography,platform;print('::notice::python',sys.version.split()[0],'cryptography',cryptography.__version__,platform.platform(),'cpus',__import__('os').cpu_count())"
+      - name: Run the suite 3x in each of 2 concurrent loops (6 passes per job)
+        run: |
+          mkdir -p out
+          loop() {
+            for i in 1 2 3; do
+              start=$(date +%s)
+              python -m unittest discover -s tests -v > out/pass-$1-$i.txt 2>&1
+              echo "$? $(( $(date +%s)-start ))" > out/pass-$1-$i.rc
+            done
+          }
+          loop A & loop B & wait
+          ls out/*.rc | sort | while read f; do echo "$f: $(cat $f)"; done
+      - name: Surface failures
+        if: always()
+        run: |
+          python - <<'PY'
+          import glob, re
+          bad_passes = 0
+          for rc in sorted(glob.glob("out/*.rc")):
+              code, secs = open(rc).read().split()
+              txt = open(rc.replace(".rc", ".txt"), encoding="utf-8", errors="replace").read()
+              tail = " | ".join(txt.strip().splitlines()[-3:])
+              print(f"::notice::{rc} exit={code} secs={secs} {tail}")
+              if code != "0":
+                  bad_passes += 1
+                  blocks = re.split(r"\n={70}\n", txt)
+                  bad = [b for b in blocks if b.startswith(("FAIL:", "ERROR:"))]
+                  for b in bad[:12]:
+                      lines = b.strip().splitlines()
+                      body = "\n".join([lines[0][:200]] + lines[-10:])[:1200]
+                      print("::error::" + body.replace("%", "%25").replace("\r", "").replace("\n", "%0A"))
+                  if not bad:
+                      print("::error::failing pass without FAIL/ERROR block; last lines: " + " | ".join(txt.strip().splitlines()[-8:])[:700])
+          print(f"::notice::stress summary: failing passes = {bad_passes}")
+          PY
+      - name: Keep outputs of failing passes
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-failures-${{ matrix.job }}
+          path: out/

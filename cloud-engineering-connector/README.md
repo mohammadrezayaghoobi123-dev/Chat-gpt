@@ -25,9 +25,9 @@ The model using this connector must perform substantive reasoning, inspect relev
 ## Protocol compatibility status
 
 - The legacy path implements the **2025-11-25 and 2025-03-26 handshake-era protocols** with version negotiation, `initialize`, `tools/list`, `tools/call`, `ping`, and legacy notification handling. It does not claim support for every optional legacy capability. The modern `server/discover` response advertises all three protocol revisions this endpoint serves, so clients can select a mutually supported version.
-- Draft PR #28 adds an initial dual-era path for the **2026-07-28 modern protocol**: per-request `_meta`, `server/discover`, required version/method/name header checks, machine-readable unsupported-version and header-mismatch errors, and response metadata. Modern successful results include `resultType`, `ttlMs`, `cacheScope`, and server identity in `_meta`; discovery and `tools/list` use a bounded 60-second private cache hint, while tool-call results default to `ttlMs: 0` to avoid caching potentially consequential execution results. This is not full specification conformance or deployed.
+- The current review branch extends the dual-era implementation introduced in PR #28 through the protocol fixes in PRs #44–#53: required modern metadata and routing headers, correct header/metadata error classification, safe `Mcp-Name` sentinel handling, supported-version discovery, HTTP 405 for unsupported endpoint methods, strict `Accept` quality parsing, legacy notification compatibility, and correct HTTP status handling for JSON-RPC errors. Modern successful results include `resultType`, `ttlMs`, `cacheScope`, and server identity in `_meta`; discovery and `tools/list` use a bounded 60-second private cache hint, while tool-call results default to `ttlMs: 0`. This is still a review branch, not a deployed release or a claim of full MCP conformance.
 - The modern path deliberately advertises only tools. `subscriptions/listen` is implemented as a long-lived SSE stream, acknowledges an empty accepted filter because no `listChanged` or resource-subscription capabilities are advertised, and includes both the subscription ID and server identity in the acknowledgment metadata. The server validates `resourceSubscriptions` entries as absolute URIs, and validates standard `Mcp-Name` routing headers for the Task extension's `tasks/get`, `tasks/update`, and `tasks/cancel` methods, but does not implement or advertise the Tasks extension. No current tool needs client input mid-call, so the connector does not emit MRTR `input_required` results; add MRTR only alongside a concrete operation that requires it. Resources/prompts and custom `Mcp-Param-*` validation are not implemented because no corresponding capability or schema annotation is exposed; full JSON Schema 2020-12 validation is not claimed. Live ChatGPT/Claude interoperability remains unverified. Do not merge or deploy based on CI alone.
-- Origin validation is proposed in draft PR #25. If that change is adopted, browser clients that send an `Origin` header require an exact, verified `MCP_ALLOWED_ORIGINS` allowlist. Requests with no `Origin` are intended for non-browser clients. Do not deploy the origin guard before trusted client origins and client compatibility are verified.
+- This branch includes the Origin guard introduced in PR #25: if an `Origin` header is present, it must match an exact canonical entry in `MCP_ALLOWED_ORIGINS`; requests without `Origin` remain supported for non-browser clients. The production allowlist and browser-client interoperability have not been verified, so deployment remains blocked until the intended origins are confirmed.
 - MCP handshake success, `tools/list`, authenticated tool calls, and real ChatGPT/Claude connection tests must be verified separately. A successful CI run or `/healthz` response does not prove these integration paths.
 
 ## Local verification
@@ -55,11 +55,11 @@ The repository source and a live Worker deployment are separate states. A GitHub
 
 Cloudflare Workers has a free tier subject to current quotas and account eligibility. Free does not mean unlimited execution or guaranteed unlimited availability.
 
-## Security
+## Security boundaries and limitations
 
 - Inbound MCP request bodies are capped at 1,000,000 bytes.
 - GitHub API responses are capped at 2,000,000 bytes by default; `read_project_file` uses a stricter 150,000-byte cap.
-- Missing-token diagnostics are actionable; write operations remain denied without required credentials. boundaries and limitations
+- Missing-token diagnostics are actionable; write operations remain denied without required credentials.
 
 - No shell or arbitrary command execution is exposed.
 - GitHub writes are restricted to the configured base branch and create a new branch plus draft PR; no auto-merge.

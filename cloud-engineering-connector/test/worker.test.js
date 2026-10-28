@@ -427,6 +427,9 @@ test("id-less non-notification MCP messages are rejected before tool execution",
  try{
   for(const message of [
    {jsonrpc:"2.0",method:"tools/list",params:{}},
+   {jsonrpc:"2.0",method:"initialize",params:{protocolVersion:"2025-11-25"}},
+   {jsonrpc:"2.0",method:"ping",params:{}},
+   {jsonrpc:"2.0",method:"unknown/method",params:{}},
    {jsonrpc:"2.0",method:"tools/call",params:{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Must not execute",summary:"id-less request",files:[{path:"README.md",content:"proposal"}]}}}
   ]){
    const response=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify(message)}),{...env,GITHUB_TOKEN:"test-token"});

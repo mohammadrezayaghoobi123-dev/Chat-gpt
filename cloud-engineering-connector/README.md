@@ -10,6 +10,7 @@ A general-purpose, cloud-hosted MCP connector for demanding software engineering
 - **Safe autonomy:** code changes go to a new `assistant/*` branch and a **draft pull request**. The connector never writes to the base branch or merges.
 - **Least privilege:** credentials are cloud secrets, never source files. Use a fine-grained token limited to selected repositories.
 - **Bounded changes:** maximum 12 files and 500 KB per proposal; workflow files, environment files, credential directories, and private keys are blocked.
+- **Bounded upstream responses:** GitHub API response bodies are capped at 2,000,000 bytes by default; `read_project_file` uses a stricter 150,000-byte cap. Oversized or inconsistent file responses are rejected.
 - **Fail closed:** MCP bearer authentication is mandatory.
 
 ## MCP tools

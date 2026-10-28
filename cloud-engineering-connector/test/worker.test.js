@@ -394,3 +394,28 @@ test("create_change_pr schema advertises and enforces string length constraints 
   const longResult=await tooLong.json();assert.equal(longResult.result.isError,true);assert.match(longResult.result.content[0].text,/summary must contain at most 8000 characters/);assert.equal(calls,0);
  }finally{globalThis.fetch=originalFetch}
 });
+
+
+test("public read-only repository inspection succeeds without a GitHub token",async()=>{
+ const originalFetch=globalThis.fetch;
+ const requests=[];
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input);
+  requests.push({url,authorization:new Headers(init.headers).get("authorization")});
+  if(url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt",private:false,default_branch:"main"}),{status:200,headers:{"content-type":"application/json"}});
+  if(url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt/commits/main"))return new Response(JSON.stringify({sha:"abc123",commit:{tree:{sha:"tree123"},message:"test",committer:{date:"2026-01-01T00:00:00Z"}}}),{status:200,headers:{"content-type":"application/json"}});
+  if(url.includes("/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/trees/tree123?recursive=1"))return new Response(JSON.stringify({tree:[{type:"blob",path:"README.md",size:42}],truncated:false}),{status:200,headers:{"content-type":"application/json"}});
+  throw new Error("Unexpected mocked GitHub URL: "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true"});
+  assert.equal(response.status,200);
+  const body=await response.json();
+  assert.equal(body.result.isError,undefined);
+  const result=JSON.parse(body.result.content[0].text);
+  assert.equal(result.repository,"mohammadrezayaghoobi123-dev/Chat-gpt");
+  assert.equal(result.file_count_returned,1);
+  assert.equal(requests.length,3);
+  assert.deepEqual(requests.map(request=>request.authorization),[null,null,null]);
+ }finally{globalThis.fetch=originalFetch}
+});

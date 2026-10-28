@@ -251,6 +251,10 @@ test("read_project_file streams and rejects oversized GitHub API responses befor
 });
 
 
+test("notifications reject unsupported protocol-version headers instead of acknowledging them",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":"2024-11-05"},body:JSON.stringify({jsonrpc:"2.0",method:"notifications/initialized"})}),env);assert.equal(r.status,400);const body=await r.json();assert.equal(body.error.code,-32022);assert.equal(body.error.data.requested,"2024-11-05");assert.equal(Object.prototype.hasOwnProperty.call(body,"id"),false)});
+
+test("malformed modern version claims on notifications never receive legacy 202 acknowledgement",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",method:"notifications/initialized",params:{_meta:{"io.modelcontextprotocol/protocolVersion":null}}})}),env);assert.equal(r.status,400);const body=await r.json();assert.equal(body.error.code,-32600);assert.equal(Object.prototype.hasOwnProperty.call(body,"id"),false)});
+
 test("all well-formed MCP notifications return 202 with an empty body",async()=>{
  for(const method of ["notifications/initialized","notifications/cancelled","notifications/progress","notifications/custom-event"]){
   const request=req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",method,params:{}})});

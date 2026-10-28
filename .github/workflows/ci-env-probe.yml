@@ -3,6 +3,11 @@ name: CI env probe (diagnostic, read-only)
 # Prints the starting state of a fresh ubuntu-latest runner: /tmp contents, limits, kernel, CPUs, memory.
 # No project code runs. Used to test claims such as "/tmp/x may already exist on the host".
 on:
+  push:
+    branches:
+      - ci/flake-stress-2026-10-28
+    paths:
+      - .github/workflows/ci-env-probe.yml
   workflow_dispatch:
 
 permissions:

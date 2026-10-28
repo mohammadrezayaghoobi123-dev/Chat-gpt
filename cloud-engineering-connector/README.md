@@ -20,7 +20,7 @@ A cloud-hosted MCP connector for rigorous software engineering: repository inspe
 - `engineering_standards`: mandatory operating rules and a quality gate for evidence, testing, safety, and reporting.
 - `create_change_pr`: create a new `assistant/*` branch and draft PR; never merge.
 
-The model using this connector must perform substantive reasoning, inspect relevant files, consult primary sources where necessary, and run/inspect CI. Tool output alone is not proof that code is correct.
+The model using this connector must perform substantive reasoning, inspect relevant files, consult primary sources where necessary, and run/inspect CI. Tool output alone is not proof that code is correct. The connector also validates tool-call arguments against the schema subset currently used by its tool definitions (object/array/string/numeric/boolean/null types, required fields, nested properties, additional-properties rejection, and array item bounds). This is not a full JSON Schema 2020-12 validator; do not add unsupported schema keywords without extending the validator and its negative tests.
 
 ## Protocol compatibility status
 

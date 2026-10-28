@@ -16,7 +16,7 @@ const TOOLS = [
 function json(data,status=200,headers={}){return new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store",...headers}})}
 function subscriptionsListenResponse(request,rpc){
  const invalid=(message)=>json({jsonrpc:"2.0",id:rpc.id,error:{code:-32602,message:"Invalid params: "+message}},400);
- const filter=rpc.params?.notifications===undefined?{}:rpc.params.notifications;
+ const filter=rpc.params?.notifications;
  if(!filter||typeof filter!=="object"||Array.isArray(filter))return invalid("notifications must be an object.");
  const allowed=new Set(["toolsListChanged","promptsListChanged","resourcesListChanged","resourceSubscriptions"]);
  for(const key of Object.keys(filter))if(!allowed.has(key))return invalid("unsupported notification filter "+key+".");

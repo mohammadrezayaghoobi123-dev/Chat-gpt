@@ -279,6 +279,8 @@ test("MCP accepts requests without Origin for non-browser clients",async()=>{
  assert.equal(r.status,200);
 });
 
+test("Origin validation takes precedence over unsupported methods on the MCP endpoint",async()=>{const allowedEnv={...env,MCP_ALLOWED_ORIGINS:"https://client.example"};for(const method of ["GET","DELETE","PUT"]){const blocked=await worker.fetch(req("/mcp",{method,headers:{origin:"https://evil.example"}}),allowedEnv);assert.equal(blocked.status,403,method+" invalid Origin must be rejected first");const allowed=await worker.fetch(req("/mcp",{method,headers:{origin:"https://client.example"}}),allowedEnv);assert.equal(allowed.status,405,method+" trusted Origin may receive method-not-allowed");assert.equal(allowed.headers.get("allow"),"POST")}});
+
 test("MCP rejects Origin requests when no explicit origin allowlist is configured",async()=>{
  const request=req("/mcp",{method:"POST",headers:{origin:"https://client.example",authorization:"Bearer test-secret","content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})});
  const r=await worker.fetch(request,env);

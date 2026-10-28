@@ -26,7 +26,7 @@ function subscriptionsListenResponse(request,rpc){
   const unique=[...new Set(filter.resourceSubscriptions)];
   if(unique.length>1024||unique.reduce((total,uri)=>total+new TextEncoder().encode(uri).byteLength,0)>65536)return invalid("resourceSubscriptions exceeds protocol limits.");
  }
- const ack={jsonrpc:"2.0",method:"notifications/subscriptions/acknowledged",params:{notifications:{},_meta:{"io.modelcontextprotocol/subscriptionId":rpc.id}}};
+ const ack={jsonrpc:"2.0",method:"notifications/subscriptions/acknowledged",params:{notifications:{},_meta:{"io.modelcontextprotocol/subscriptionId":rpc.id,"io.modelcontextprotocol/serverInfo":{name:"cloud-engineering-connector",version:VERSION}}}};
  const encoder=new TextEncoder();let keepalive;let abortHandler;
  const stream=new ReadableStream({
   start(controller){

@@ -24,8 +24,9 @@ The model using this connector must perform substantive reasoning, inspect relev
 
 ## Protocol compatibility status
 
-- The current Worker advertises the **2025-03-26 handshake-era protocol** and implements `initialize`, `tools/list`, `tools/call`, `ping`, and notification handling.
-- This is **not yet demonstrated to support the 2026-07-28 modern protocol era**. That revision uses `server/discover`, a per-request `_meta` envelope, and required standard HTTP headers. Do not change the advertised version string without implementing and testing the corresponding wire behavior.
+- The legacy path implements the **2025-03-26 handshake-era protocol** with `initialize`, `tools/list`, `tools/call`, `ping`, and legacy notification handling.
+- Draft PR #28 adds an initial dual-era path for the **2026-07-28 modern protocol**: per-request `_meta`, `server/discover`, required version/method/name header checks, machine-readable unsupported-version and header-mismatch errors, and `tools/list` cache metadata. It is not yet full specification conformance or deployed.
+- The modern path deliberately advertises only tools. Streaming responses, `subscriptions/listen`, MRTR/input-required flows, resources/prompts, custom `Mcp-Param-*` validation, and live client interoperability remain unimplemented or unverified. Do not merge or deploy based on CI alone.
 - Origin validation is proposed in draft PR #25. If that change is adopted, browser clients that send an `Origin` header require an exact, verified `MCP_ALLOWED_ORIGINS` allowlist. Requests with no `Origin` are intended for non-browser clients. Do not deploy the origin guard before trusted client origins and client compatibility are verified.
 - MCP handshake success, `tools/list`, authenticated tool calls, and real ChatGPT/Claude connection tests must be verified separately. A successful CI run or `/healthz` response does not prove these integration paths.
 

@@ -55,7 +55,11 @@ The repository source and a live Worker deployment are separate states. A GitHub
 
 Cloudflare Workers has a free tier subject to current quotas and account eligibility. Free does not mean unlimited execution or guaranteed unlimited availability.
 
-## Security boundaries and limitations
+## Security
+
+- Inbound MCP request bodies are capped at 1,000,000 bytes.
+- GitHub API responses are capped at 2,000,000 bytes by default; `read_project_file` uses a stricter 150,000-byte cap.
+- Missing-token diagnostics are actionable; write operations remain denied without required credentials. boundaries and limitations
 
 - No shell or arbitrary command execution is exposed.
 - GitHub writes are restricted to the configured base branch and create a new branch plus draft PR; no auto-merge.

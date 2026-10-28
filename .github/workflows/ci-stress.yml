@@ -10,6 +10,10 @@ on:
         description: "commit/branch of the code under test (default: this branch)"
         required: false
         default: ""
+      pin_one_cpu:
+        description: "pin every pass to one CPU and run 3 concurrent loops (strong contention)"
+        required: false
+        default: "false"
 
 permissions:
   contents: read
@@ -41,17 +45,22 @@ jobs:
       - name: Environment
         run: |
           git log -1 --format="::notice::code under test %H %s" ; python -c "import sys,cryptography,platform;print('::notice::python',sys.version.split()[0],'cryptography',cryptography.__version__,platform.platform(),'cpus',__import__('os').cpu_count())"
-      - name: Run the suite 3x in each of 2 concurrent loops (6 passes per job)
+      - name: Run the suite under contention
+        env:
+          PIN_ONE_CPU: ${{ inputs.pin_one_cpu }}
         run: |
           mkdir -p out
+          PIN=""; LOOPS="A B"; PASSES="1 2 3"
+          if [ "$PIN_ONE_CPU" = "true" ]; then PIN="taskset -c 0"; LOOPS="A B C"; PASSES="1 2"; fi
+          echo "::notice::pin='$PIN' loops='$LOOPS' passes='$PASSES'"
           loop() {
-            for i in 1 2 3; do
+            for i in $PASSES; do
               start=$(date +%s)
-              python -m unittest discover -s tests -v > out/pass-$1-$i.txt 2>&1
+              $PIN python -m unittest discover -s tests -v > out/pass-$1-$i.txt 2>&1
               echo "$? $(( $(date +%s)-start ))" > out/pass-$1-$i.rc
             done
           }
-          loop A & loop B & wait
+          for l in $LOOPS; do loop $l & done; wait
           ls out/*.rc | sort | while read f; do echo "$f: $(cat $f)"; done
       - name: Surface failures
         if: always()

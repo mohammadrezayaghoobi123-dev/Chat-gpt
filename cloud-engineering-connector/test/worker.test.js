@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import worker from "../worker.js";
 const env={MCP_AUTH_TOKEN:"test-secret"};
 const req=(path,options={})=>new Request("https://example.test"+path,options);
-const rpc=(method,params={},id=1)=>req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})});
+const rpc=(method,params={},id=1)=>req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})});
 test("health reports cloud execution without laptop dependency",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers")});
 test("MCP fails closed by default when authentication is not configured",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",body:"{}"}),{});assert.equal(r.status,503)});
 test("public read-only mode must be explicitly enabled",async()=>{const r=await worker.fetch(rpc("initialize",{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"test",version:"1"}},1,null),{PUBLIC_READ_ONLY:"true"});assert.equal(r.status,200);const b=await r.json();assert.equal(b.result.serverInfo.name,"cloud-engineering-connector")});
@@ -52,16 +52,16 @@ test("create_change_pr rejects missing, main, and alternate base branches before
  try{for(const base_branch of [undefined,"main","valid-but-not-allowed"]){const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]};if(base_branch!==undefined)args.base_branch=base_branch;const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/Base branch is not allowed/)}assert.equal(calls,0)}finally{globalThis.fetch=originalFetch}
 });
 
-test("MCP rejects oversized request bodies before JSON parsing",async()=>{const body=JSON.stringify({jsonrpc:"2.0",id:1,method:"ping",padding:"x".repeat(1_000_001)});const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json"},body}),env);assert.equal(r.status,413);assert.deepEqual(await r.json(),{error:"payload_too_large"})});
+test("MCP rejects oversized request bodies before JSON parsing",async()=>{const body=JSON.stringify({jsonrpc:"2.0",id:1,method:"ping",padding:"x".repeat(1_000_001)});const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body}),env);assert.equal(r.status,413);assert.deepEqual(await r.json(),{error:"payload_too_large"})});
 
-test("MCP rejects invalid bearer tokens",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer wrong-token","content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})}),env);assert.equal(r.status,401)});
+test("MCP rejects invalid bearer tokens",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer wrong-token","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})}),env);assert.equal(r.status,401)});
 
 test("MCP rejects oversized streamed request bodies without Content-Length",async()=>{
  const payload=JSON.stringify({jsonrpc:"2.0",id:1,method:"ping",padding:"x".repeat(1_000_001)});
  const bytes=new TextEncoder().encode(payload);
  let offset=0;
  const stream=new ReadableStream({pull(controller){if(offset>=bytes.length){controller.close();return}const end=Math.min(offset+64_000,bytes.length);controller.enqueue(bytes.slice(offset,end));offset=end}});
- const request=new Request("https://example.test/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json"},body:stream,duplex:"half"});
+ const request=new Request("https://example.test/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body:stream,duplex:"half"});
  assert.equal(request.headers.has("content-length"),false);
  const r=await worker.fetch(request,env);
  assert.equal(r.status,413);
@@ -76,7 +76,7 @@ test("MCP returns 413 even if cancelling an oversized request stream rejects",as
   pull(controller){if(offset>=bytes.length){controller.close();return}const end=Math.min(offset+64_000,bytes.length);controller.enqueue(bytes.slice(offset,end));offset=end},
   cancel(){return Promise.reject(new Error("simulated stream cancellation failure"))}
  });
- const request=new Request("https://example.test/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json"},body:stream,duplex:"half"});
+ const request=new Request("https://example.test/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body:stream,duplex:"half"});
  const r=await worker.fetch(request,env);
  assert.equal(r.status,413);
  assert.deepEqual(await r.json(),{error:"payload_too_large"});
@@ -245,7 +245,7 @@ test("read_project_file streams and rejects oversized GitHub API responses befor
 
 test("all well-formed MCP notifications return 202 with an empty body",async()=>{
  for(const method of ["notifications/initialized","notifications/cancelled","notifications/progress","notifications/custom-event"]){
-  const request=req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",method,params:{}})});
+  const request=req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",method,params:{}})});
   const response=await worker.fetch(request,env);
   assert.equal(response.status,202,method);
   assert.equal(await response.text(),"",method);
@@ -253,7 +253,7 @@ test("all well-formed MCP notifications return 202 with an empty body",async()=>
 });
 
 test("notification-named methods with an id are requests and receive a JSON-RPC response",async()=>{
- const request=req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:9,method:"notifications/initialized"})});
+ const request=req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:9,method:"notifications/initialized"})});
  const response=await worker.fetch(request,env);
  assert.equal(response.status,200);
  const body=await response.json();
@@ -277,11 +277,32 @@ test("MCP rejects Origin requests when no explicit origin allowlist is configure
 test("MCP accepts only exact configured origins",async()=>{
  const allowed={...env,MCP_ALLOWED_ORIGINS:"https://client.example, https://console.example"};
  for(const origin of ["https://client.example","https://console.example"]){
-  const request=req("/mcp",{method:"POST",headers:{origin,authorization:"Bearer test-secret","content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})});
+  const request=req("/mcp",{method:"POST",headers:{origin,authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})});
   const r=await worker.fetch(request,allowed);assert.equal(r.status,200,origin);
  }
  for(const origin of ["https://evil.example","https://client.example.evil.example","null","https://client.example/","not-an-origin"]){
-  const request=req("/mcp",{method:"POST",headers:{origin,authorization:"Bearer test-secret","content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})});
+  const request=req("/mcp",{method:"POST",headers:{origin,authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})});
   const r=await worker.fetch(request,allowed);assert.equal(r.status,403,origin);
  }
+});
+
+test("Streamable HTTP rejects missing or non-JSON Content-Type",async()=>{
+ for(const headers of [{authorization:"Bearer test-secret",accept:"application/json, text/event-stream"},{authorization:"Bearer test-secret","content-type":"text/plain",accept:"application/json, text/event-stream"}]){
+  const r=await worker.fetch(req("/mcp",{method:"POST",headers,body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})}),env);
+  assert.equal(r.status,415);
+  assert.deepEqual(await r.json(),{error:"unsupported_media_type"});
+ }
+});
+test("Streamable HTTP requires both JSON and event-stream in Accept",async()=>{
+ for(const accept of [undefined,"application/json","text/event-stream","application/json, text/event-stream;q=0"]){
+  const headers={"content-type":"application/json",authorization:"Bearer test-secret"};
+  if(accept!==undefined)headers.accept=accept;
+  const r=await worker.fetch(req("/mcp",{method:"POST",headers,body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})}),env);
+  assert.equal(r.status,400,String(accept));
+  assert.deepEqual(await r.json(),{error:"invalid_accept_header",required:["application/json","text/event-stream"]});
+ }
+});
+test("Streamable HTTP accepts required media types with parameters and case-insensitive names",async()=>{
+ const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"Application/JSON; charset=utf-8",accept:"application/json; q=1, TEXT/EVENT-STREAM; q=0.8"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})}),env);
+ assert.equal(r.status,200);
 });

@@ -260,3 +260,28 @@ test("notification-named methods with an id are requests and receive a JSON-RPC 
  assert.equal(body.id,9);
  assert.equal(body.error.code,-32601);
 });
+
+
+test("MCP accepts requests without Origin for non-browser clients",async()=>{
+ const r=await worker.fetch(rpc("ping"),env);
+ assert.equal(r.status,200);
+});
+
+test("MCP rejects Origin requests when no explicit origin allowlist is configured",async()=>{
+ const request=req("/mcp",{method:"POST",headers:{origin:"https://client.example",authorization:"Bearer test-secret","content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})});
+ const r=await worker.fetch(request,env);
+ assert.equal(r.status,403);
+ assert.deepEqual(await r.json(),{error:"forbidden_origin"});
+});
+
+test("MCP accepts only exact configured origins",async()=>{
+ const allowed={...env,MCP_ALLOWED_ORIGINS:"https://client.example, https://console.example"};
+ for(const origin of ["https://client.example","https://console.example"]){
+  const request=req("/mcp",{method:"POST",headers:{origin,authorization:"Bearer test-secret","content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})});
+  const r=await worker.fetch(request,allowed);assert.equal(r.status,200,origin);
+ }
+ for(const origin of ["https://evil.example","https://client.example.evil.example","null","https://client.example/","not-an-origin"]){
+  const request=req("/mcp",{method:"POST",headers:{origin,authorization:"Bearer test-secret","content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})});
+  const r=await worker.fetch(request,allowed);assert.equal(r.status,403,origin);
+ }
+});

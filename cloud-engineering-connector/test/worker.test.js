@@ -377,3 +377,20 @@ test("legacy tool input schema errors are returned as tool execution results",as
 test("modern MCP returns invalid-params for an unknown tool instead of a tool execution error",async()=>{const r=await worker.fetch(modernRequest("tools/call",{name:"not_a_real_tool",arguments:{}},18),env);assert.equal(r.status,200);const body=await r.json();assert.equal(body.error.code,-32602);assert.match(body.error.message,/Unknown tool/)});
 
 test("modern subscriptions/listen tolerates unknown extension filters but acknowledges only supported filters",async()=>{const r=await worker.fetch(modernRequest("subscriptions/listen",{notifications:{unknownFilter:{future:true},taskIds:["task-1"],toolsListChanged:true}},"listen-extension-1"),env);assert.equal(r.status,200);const reader=r.body.getReader();try{const first=await reader.read();const frame=new TextDecoder().decode(first.value);const ack=JSON.parse(frame.slice(6).trim());assert.deepEqual(ack.params.notifications,{});assert.equal(ack.params._meta["io.modelcontextprotocol/subscriptionId"],"listen-extension-1")}finally{await reader.cancel()}});
+
+
+test("create_change_pr schema advertises and enforces string length constraints before any GitHub request",async()=>{
+ const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called for schema-invalid input")};
+ try{
+  const listed=await worker.fetch(rpc("tools/list"),env);const body=await listed.json();
+  const schema=body.result.tools.find(t=>t.name==="create_change_pr").inputSchema;
+  assert.equal(schema.properties.title.minLength,1);assert.equal(schema.properties.title.maxLength,200);
+  assert.equal(schema.properties.summary.maxLength,8000);assert.equal(schema.properties.files.items.properties.path.maxLength,240);
+  const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"",summary:"Test",files:[{path:"README.md",content:"proposal"}]};
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"unused"});
+  const result=await response.json();assert.equal(result.result.isError,true);assert.match(result.result.content[0].text,/title must contain at least 1 characters/);assert.equal(calls,0);
+  args.title="Valid title";args.summary="x".repeat(8001);
+  const tooLong=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"unused"});
+  const longResult=await tooLong.json();assert.equal(longResult.result.isError,true);assert.match(longResult.result.content[0].text,/summary must contain at most 8000 characters/);assert.equal(calls,0);
+ }finally{globalThis.fetch=originalFetch}
+});

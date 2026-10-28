@@ -52,6 +52,9 @@ This snapshot is an operational observation, not a release certification. Last r
 - Staging Worker: `chat-gpt111-staging`; version 4 was previously observed with `MCP_AUTH_TOKEN` and `MCP_ALLOWED_ORIGINS`, but no `GITHUB_TOKEN`. Staging write operations should fail closed until a repository-scoped token is deliberately configured. Real-client origin compatibility remains unverified.
 - Commit `d6044120835bddebadc4eb4c16e630f374b05bf0` added a regression test for anonymous public read-only repository inspection. Both its PR CI and post-merge CI completed successfully. CI does not prove live Worker/ChatGPT/Claude interoperability.
 - Direct outbound probes from the current tool environment to the production `workers.dev` hostname were blocked by that environment; this is not evidence that the Worker itself is down. Live endpoint and real-client tests remain release blockers.
+- A later read-only account inspection confirmed the production Worker has its `workers.dev` subdomain enabled, with preview URLs also enabled; no custom Worker domains were returned by the account-level domains endpoint. The account-level rulesets list returned a managed firewall ruleset, but a lookup for an account-level `http_ratelimit` entrypoint returned 404. This does not establish that all Cloudflare edge controls are absent: zone-level and other applicable controls have not been exhaustively audited, and the service is exposed on `workers.dev`.
+- The staging Worker has its `workers.dev` subdomain enabled and preview URLs disabled. Its observed settings enable persisted invocation logs and set `redact_query_string=false`. No evidence here shows secrets are passed in query strings, but the setting should be reviewed for data minimization before production-like staging use.
+
 
 ### Release procedure
 

@@ -54,7 +54,8 @@ test("GITHUB_TOKEN absent: read is sent unauthenticated and a GitHub 404 is expl
   for (const status of [401, 403, 404]) {
     await withFetch(() => ghError(status, "Not Found"), async (calls) => {
       for (const tool of ["project_inspect", "read_project_file"]) {
-        const r = await worker.fetch(call(tool, { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt", path: "README.md" }), { MCP_AUTH_TOKEN: SECRET });
+        const args = tool === "read_project_file" ? { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt", path: "README.md" } : { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt" };
+        const r = await worker.fetch(call(tool, args), { MCP_AUTH_TOKEN: SECRET });
         const b = await r.json();
         assert.equal(b.result.isError, true);
         const text = b.result.content[0].text;

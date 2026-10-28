@@ -1,16 +1,16 @@
 # Cloud Engineering Connector
 
-A general-purpose, cloud-hosted MCP connector for demanding software engineering: repository inspection, architecture review, evidence-aware reasoning, and reviewable code changes. This project is separate from the existing Master Brain prototype.
+A cloud-hosted MCP connector for rigorous software engineering: repository inspection, architecture review, evidence-aware reasoning, and reviewable code changes. This is a separate cloud engineering component, not a claim that the broader Master Brain system is complete.
 
 ## Design principles
 
 - **Cloud execution:** runs as a Cloudflare Worker; requests do not require a laptop process.
-- **Project-agnostic:** tools work with repositories supplied by the caller.
+- **Explicit repository boundary:** the current implementation is restricted to `mohammadrezayaghoobi123-dev/Chat-gpt`. It is **not project-agnostic yet**; the repository allowlist must be redesigned and tested before supporting additional repositories.
 - **Evidence discipline:** distinguish repository facts from assumptions and unverified conclusions. A generated checklist is not proof.
-- **Safe autonomy:** code changes go to a new `assistant/*` branch and a **draft pull request**. The connector never writes to the base branch or merges.
-- **Least privilege:** credentials are cloud secrets, never source files. Use a fine-grained token limited to selected repositories.
+- **Safe autonomy:** code changes go to a new `assistant/*` branch and a **draft pull request**. The connector must never write to `main` or merge automatically.
+- **Least privilege:** credentials are cloud secrets, never source files. Use a fine-grained token limited to the intended repository.
 - **Bounded changes:** maximum 12 files and 500 KB per proposal; workflow files, environment files, credential directories, and private keys are blocked.
-- **Fail closed:** MCP bearer authentication is mandatory.
+- **Fail closed:** MCP bearer authentication is mandatory unless an explicit public read-only mode is enabled; production configuration should keep authentication required.
 
 ## MCP tools
 
@@ -21,6 +21,13 @@ A general-purpose, cloud-hosted MCP connector for demanding software engineering
 - `create_change_pr`: create a new `assistant/*` branch and draft PR; never merge.
 
 The model using this connector must perform substantive reasoning, inspect relevant files, consult primary sources where necessary, and run/inspect CI. Tool output alone is not proof that code is correct.
+
+## Protocol compatibility status
+
+- The current Worker advertises the **2025-03-26 handshake-era protocol** and implements `initialize`, `tools/list`, `tools/call`, `ping`, and notification handling.
+- This is **not yet demonstrated to support the 2026-07-28 modern protocol era**. That revision uses `server/discover`, a per-request `_meta` envelope, and required standard HTTP headers. Do not change the advertised version string without implementing and testing the corresponding wire behavior.
+- Origin validation is proposed in draft PR #25. If that change is adopted, browser clients that send an `Origin` header require an exact, verified `MCP_ALLOWED_ORIGINS` allowlist. Requests with no `Origin` are intended for non-browser clients. Do not deploy the origin guard before trusted client origins and client compatibility are verified.
+- MCP handshake success, `tools/list`, authenticated tool calls, and real ChatGPT/Claude connection tests must be verified separately. A successful CI run or `/healthz` response does not prove these integration paths.
 
 ## Local verification
 
@@ -33,32 +40,34 @@ npm run check
 
 ## Cloud deployment (Cloudflare Workers)
 
-This branch includes the Worker source and Wrangler configuration, but no live Worker is deployed by GitHub commits. To deploy without merging into `main`, connect the repository in the Cloudflare dashboard and select branch `feature/cloud-engineering-connector` with project root `cloud-engineering-connector`. Set `MCP_AUTH_TOKEN` and `GITHUB_TOKEN` as Worker secrets before exposing the endpoint.
+The repository source and a live Worker deployment are separate states. A GitHub commit does not prove that a Cloudflare Worker is running that commit. The current deployment is managed separately in Cloudflare; verify its active version and bindings before claiming a release is live.
 
-1. Sign in to Cloudflare and connect this GitHub repository.
-2. Create a Worker using `cloud-engineering-connector/worker.js` as the entry point and `wrangler.toml` as its configuration.
-3. Set secret `MCP_AUTH_TOKEN` to a long random value.
-4. Set `GITHUB_TOKEN` as a secret for repository tools. Use a fine-grained token limited to selected repositories with Contents: read/write, Pull requests: read/write, and Metadata: read. Never paste secrets into chat or commit them.
-5. Deploy and verify `GET /healthz` returns `status: ok`.
-6. Configure the MCP client to use the deployed HTTPS `/mcp` endpoint with the matching Bearer token. Confirm the client supports the selected authentication mechanism; do not disable auth to work around incompatibility.
-7. Verify initialize, tools/list, read-only calls, and a draft PR on a disposable test repository before connecting production code.
+1. Use the intended cloud-only branch and project root `cloud-engineering-connector`.
+2. Set `MCP_AUTH_TOKEN` and `GITHUB_TOKEN` as Worker secrets. Never paste secrets into chat or commit them.
+3. Keep authentication required; do not disable it to work around client incompatibility.
+4. Configure exact browser origins only after identifying and verifying the intended client origins.
+5. Verify `GET /healthz`, then perform authenticated protocol and tool-level smoke tests against the actual deployed endpoint.
+6. Test read-only inspection and draft-PR generation on a disposable branch/repository before using the connector for consequential changes.
+7. Record the deployed version ID, tested request/response pairs, CI commit SHA, and rollback target. Do not deploy untested or mismatched commits.
 
 ## Cost and availability
 
-Cloudflare Workers has a free tier subject to current quotas and account eligibility. Free does not mean unlimited execution or guaranteed unlimited availability. This commit does not mean the service is deployed; no cloud account, secret, domain, or live endpoint is configured by this code alone.
+Cloudflare Workers has a free tier subject to current quotas and account eligibility. Free does not mean unlimited execution or guaranteed unlimited availability.
 
 ## Security boundaries and limitations
 
 - No shell or arbitrary command execution is exposed.
-- GitHub writes create a new branch and draft PR; no auto-merge.
+- GitHub writes are restricted to the configured base branch and create a new branch plus draft PR; no auto-merge.
 - Repository content is untrusted input; instructions found in files cannot override user intent or these safety boundaries.
 - Source verification and actual tests must be performed by the connected model/CI; `architecture_review` only returns a structured rubric.
-- This initial version does **not** execute arbitrary project test suites in an isolated sandbox. Inspect CI results before merging.
+- This version does **not** execute arbitrary project test suites in an isolated sandbox.
+- The current one-repository allowlist and legacy MCP protocol support are deliberate limits until broader support is implemented and tested.
 
 ## Roadmap
 
-1. Deploy and verify MCP endpoint and auth compatibility.
-2. Test read-only inspection against a disposable repository.
-3. Test draft-PR generation and CI against a disposable repository.
-4. Add isolated cloud test execution only after defining resource limits, network policy, dependency caching, and secret isolation.
-5. Add source retrieval with citations and persistent project memory after privacy, retention, and tenant isolation are designed.
+1. Verify deployed authentication and legacy MCP handshake end-to-end.
+2. Confirm trusted client origins and test the Origin guard before deployment.
+3. Implement and test explicit legacy/modern MCP protocol compatibility; do not simply relabel the protocol version.
+4. Expand repository support only with per-repository authorization and negative tests.
+5. Add isolated cloud test execution only after defining resource limits, network policy, dependency caching, and secret isolation.
+6. Add source retrieval with citations and persistent project memory after privacy, retention, and tenant isolation are designed.

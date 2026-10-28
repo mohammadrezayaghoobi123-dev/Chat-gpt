@@ -223,3 +223,21 @@ test("read_project_file rejects invalid UTF-8 content",async()=>{
   const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/encoded data|UTF-8|encoded/i);
  }finally{globalThis.fetch=originalFetch}
 });
+
+
+test("read_project_file streams and rejects oversized GitHub API responses before JSON parsing",async()=>{
+ const originalFetch=globalThis.fetch;let cancelled=false;
+ globalThis.fetch=async()=>{
+  const payload=JSON.stringify({type:"file",path:"docs/oversized.txt",size:10,content:"A".repeat(160_000),encoding:"base64"});
+  const encoded=new TextEncoder().encode(payload);
+  const stream=new ReadableStream({
+   start(controller){controller.enqueue(encoded);},
+   cancel(){cancelled=true;}
+  });
+  return new Response(stream,{status:200,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/oversized.txt"}}),{...env,GITHUB_TOKEN:"test-token"});
+  const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/response exceeds the configured byte limit/i);assert.equal(cancelled,true);
+ }finally{globalThis.fetch=originalFetch}
+});

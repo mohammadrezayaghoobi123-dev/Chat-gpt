@@ -1,0 +1,50 @@
+name: CI fetch failed-job logs (diagnostic, read-only)
+
+# Reads the logs of given job ids from inside GitHub (the workspace cannot reach the log storage host)
+# and re-emits the failing unittest blocks as annotations. Read-only; changes nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      job_ids:
+        description: "space separated job ids"
+        required: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch and surface
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_IDS: ${{ inputs.job_ids }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p logs
+          for id in $JOB_IDS; do
+            gh api "repos/$REPO/actions/jobs/$id/logs" > "logs/$id.txt" 2> "logs/$id.err" || echo "::warning::job $id: fetch failed: $(head -c 200 logs/$id.err)"
+            echo "::notice::job $id log bytes: $(wc -c < logs/$id.txt)"
+          done
+          python3 - <<'PY'
+          import glob, re, os
+          def esc(s): return s.replace("%","%25").replace("\r","").replace("\n","%0A")
+          for path in sorted(glob.glob("logs/*.txt")):
+              jid = os.path.basename(path)[:-4]
+              text = open(path, encoding="utf-8", errors="replace").read()
+              # strip the leading timestamp of every runner log line
+              lines = [re.sub(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ", "", l) for l in text.splitlines()]
+              body = "\n".join(lines)
+              blocks = re.split(r"\n={70}\n", body)
+              bad = [b for b in blocks if b.startswith(("FAIL:", "ERROR:"))]
+              ran = [l for l in lines if l.startswith(("Ran ", "FAILED", "OK"))]
+              print("::notice::job %s: %d lines, %d FAIL/ERROR blocks, summary: %s" % (jid, len(lines), len(bad), " | ".join(ran)[:300]))
+              for b in bad[:8]:
+                  print("::error::job %s: %s" % (jid, esc(b.strip()[:1800])))
+              if not bad:
+                  hits = [l for l in lines if re.search(r"Traceback|Error|error:|Timeout|timed out|Killed|Segmentation|exit code", l)]
+                  print("::notice::job %s: no FAIL/ERROR block; suspicious lines: %s" % (jid, esc(" || ".join(hits[:25])[:1800])))
+                  print("::notice::job %s: last 25 lines: %s" % (jid, esc(" || ".join(lines[-25:])[:1800])))
+          PY

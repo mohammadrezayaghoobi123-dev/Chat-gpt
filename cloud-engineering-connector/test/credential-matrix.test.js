@@ -57,7 +57,7 @@ test("GITHUB_TOKEN absent: read is sent unauthenticated and a GitHub 404 is expl
         const args = tool === "read_project_file" ? { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt", path: "README.md" } : { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt" };
         const r = await worker.fetch(call(tool, args), { MCP_AUTH_TOKEN: SECRET });
         const b = await r.json();
-        assert.equal(b.result.isError, true);
+        assert.ok(b.result?.isError, JSON.stringify({status:r.status,body:b,tool,statusCode:status}));
         const text = b.result.content[0].text;
         assert.match(text, /GITHUB_TOKEN/);
         assert.match(text, new RegExp("GitHub API " + status));

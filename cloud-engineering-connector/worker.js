@@ -18,7 +18,6 @@ function subscriptionsListenResponse(request,rpc){
  const invalid=(message)=>json({jsonrpc:"2.0",id:rpc.id,error:{code:-32602,message:"Invalid params: "+message}},400);
  const filter=rpc.params?.notifications;
  if(!filter||typeof filter!=="object"||Array.isArray(filter))return invalid("notifications must be an object.");
- const allowed=new Set(["toolsListChanged","promptsListChanged","resourcesListChanged","resourceSubscriptions"]);
  // Unknown filter keys may belong to extensions. Ignore unsupported keys and acknowledge only the subset this server actually honors.
  for(const key of ["toolsListChanged","promptsListChanged","resourcesListChanged"])if(filter[key]!==undefined&&typeof filter[key]!=="boolean")return invalid(key+" must be a boolean.");
  if(filter.resourceSubscriptions!==undefined){

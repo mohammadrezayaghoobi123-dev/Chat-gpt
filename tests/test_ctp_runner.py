@@ -7,6 +7,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+import uuid
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -197,14 +198,18 @@ class Sandbox(unittest.TestCase):
             """)
 
     def test_system_dirs_are_read_only_and_writes_do_not_leak(self):
-        self.assert_passes("""
+        # A per-run unique marker: a fixed host path such as /tmp/x makes this test fail on any host (or any
+        # concurrent process) that happens to own that path, which says nothing about sandbox isolation.
+        marker = f"/tmp/ctp-leak-probe-{uuid.uuid4().hex}"
+        self.assertFalse(os.path.lexists(marker))
+        self.assert_passes(f"""
             import os, sys
             for p in ('/usr/x', '/bin/x', '/etc/x', '/x', '/lib/x'):
                 try: open(p, 'w'); sys.exit(1)
                 except OSError: pass
-            open('/tmp/x', 'w').write('1')  # private tmpfs is fine
+            open({marker!r}, 'w').write('1')  # private tmpfs is fine
         """)
-        self.assertFalse(os.path.exists("/tmp/x"))
+        self.assertFalse(os.path.lexists(marker))
 
     def test_private_pid_space_cannot_signal_host(self):
         self.assert_passes(f"""

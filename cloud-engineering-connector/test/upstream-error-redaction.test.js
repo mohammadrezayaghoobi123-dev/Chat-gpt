@@ -56,3 +56,19 @@ test("ordinary short messages are unchanged", async () => {
   const missing = await callWith({ MCP_AUTH_TOKEN: MCP }, 404, JSON.stringify({ message: "Not Found" }));
   assert.match(missing.error, /^GitHub API 404: Not Found\. GITHUB_TOKEN is not configured/);
 });
+
+test("a thrown fetch error is redacted and a null JSON body does not leak internals (D3)", async () => {
+  const original = globalThis.fetch;
+  const run = async (impl) => { globalThis.fetch = impl; try {
+    const r = await worker.fetch(new Request("https://example.test/mcp", { method: "POST", headers,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "project_inspect", arguments: { owner: OWNER, repo: REPO } } }) }),
+      { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH });
+    return await r.text(); } finally { globalThis.fetch = original; } };
+  const thrown = await run(async () => { throw new TypeError("fetch failed token=" + GH + " " + MCP); });
+  assert.ok(!thrown.includes(GH) && !thrown.includes(MCP), "secret in thrown error");
+  assert.match(thrown, /GitHub API request failed/);
+  for (const status of [200, 500]) {
+    const out = await run(async () => new Response("null", { status }));
+    assert.ok(!/Cannot read properties/.test(out), "internal TypeError leaked for " + status);
+  }
+});

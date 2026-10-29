@@ -24,7 +24,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           mkdir -p logs
-          for id in 120849868742 121860531215; do
+          for id in 123419420982; do
             curl -sSL --fail -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/actions/jobs/$id/logs" -o "logs/$id.txt" 2> "logs/$id.err" || echo "::warning::fetch failed for $id: $(head -c 300 logs/$id.err)"
             echo "::notice::job $id log bytes: $(wc -c < logs/$id.txt)"
           done
@@ -49,6 +49,8 @@ jobs:
                   print('::error::window768-800: ' + esc(' ¦ '.join(w)[:1900]))
                   errs = [l.strip() for l in lines if re.search(r'^\w*(Error|Exception)\b|^(http|socket|urllib|ConnectionR|Remote|Broken|OSError|TimeoutError)', l.strip())]
                   print('::error::error-lines: ' + esc(' ¦ '.join(errs[:20])[:1900]))
+              sk=[l for l in lines if re.search(r'skipped|SKIP|Skipped|sandbox|MB_REQUIRE', l)]
+              print('::notice::skip-related lines (%d): %s' % (len(sk), esc(' ¦ '.join(x.strip() for x in sk[:25])[:1800])))
               # also: slowest tests / timing lines
               t = [l for l in lines if re.match(r"^(Ran |FAILED|OK)", l)]
               print("::notice::job %s: summary %s" % (jid, " | ".join(t)))

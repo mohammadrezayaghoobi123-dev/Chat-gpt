@@ -44,6 +44,11 @@ jobs:
                   chunk = lines[max(0, i-2):i+14]
                   seen.update(range(i, i+14))
                   print("::error::job %s @%d: %s" % (jid, i, esc("\n".join(chunk)[:1900])))
+              if jid == '120849868742':
+                  w = [l.strip() for l in lines[768:800] if l.strip()]
+                  print('::error::window768-800: ' + esc(' ¦ '.join(w)[:1900]))
+                  errs = [l.strip() for l in lines if re.search(r'^\w*(Error|Exception)\b|^(http|socket|urllib|ConnectionR|Remote|Broken|OSError|TimeoutError)', l.strip())]
+                  print('::error::error-lines: ' + esc(' ¦ '.join(errs[:20])[:1900]))
               # also: slowest tests / timing lines
               t = [l for l in lines if re.match(r"^(Ran |FAILED|OK)", l)]
               print("::notice::job %s: summary %s" % (jid, " | ".join(t)))

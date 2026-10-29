@@ -467,3 +467,43 @@ test("id-less non-notification MCP messages are rejected before tool execution",
   assert.equal(calls,0,"id-less messages must never reach tools or GitHub side effects");
  }finally{globalThis.fetch=originalFetch}
 });
+
+
+function publicReadOnlyRequestWithIp(ip){
+ const request=rpc("tools/list",{},1);
+ const headers=new Headers(request.headers);
+ headers.delete("authorization");
+ headers.set("cf-connecting-ip",ip);
+ return new Request(request,{headers});
+}
+
+test("IPv6 clients in the same /64 share a normalized public rate-limit key",async()=>{
+ const keys=[];
+ const limiter={limit:async({key})=>{keys.push(key);return{success:true}}};
+ for(const ip of ["2001:0db8:abcd:0012:0000:0000:0000:0001","2001:db8:abcd:12::ffff"]){
+  const response=await worker.fetch(publicReadOnlyRequestWithIp(ip),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:limiter});
+  assert.equal(response.status,200);
+ }
+ assert.deepEqual(keys,["public-mcp:v6/64:2001:db8:abcd:12","public-mcp:v6/64:2001:db8:abcd:12"]);
+});
+
+test("IPv4-mapped IPv6 client addresses normalize to the IPv4 rate-limit key",async()=>{
+ let key;
+ const response=await worker.fetch(publicReadOnlyRequestWithIp("::ffff:192.0.2.128"),{
+  PUBLIC_READ_ONLY:"true",
+  MCP_RATE_LIMITER:{limit:async(input)=>{key=input.key;return{success:true}}}
+ });
+ assert.equal(response.status,200);
+ assert.equal(key,"public-mcp:192.0.2.128");
+});
+
+test("malformed IPv4 and IPv6 client addresses fail closed before consuming a rate-limit bucket",async()=>{
+ let calls=0;
+ const limiter={limit:async()=>{calls++;return{success:true}}};
+ for(const ip of ["999.0.0.1","2001:::1"]){
+  const response=await worker.fetch(publicReadOnlyRequestWithIp(ip),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:limiter});
+  assert.equal(response.status,503);
+  assert.deepEqual(await response.json(),{error:"client_identity_unavailable"});
+ }
+ assert.equal(calls,0);
+});

@@ -934,22 +934,32 @@ class RecoveryCandidateTests(unittest.TestCase):
              "2026-10-12T00:00:00Z", "2026-10-12T00:00:00Z"),
         )
 
-        def release_lock():
-            time.sleep(0.06)
-            blocker.commit()
+        # Deterministic: the lock is released exactly when the registry first backs off (its first
+        # retry sleep), not after a wall-clock delay. A fixed delay had only ~175 ms of margin inside
+        # the ~235 ms retry window and failed once on a stalled shared CI runner.
+        import master_brain.execution_registry as registry_module
 
-        releaser = threading.Thread(target=release_lock)
-        releaser.start()
-        try:
+        real_time = registry_module.time
+        backoffs = []
+
+        class ReleasingClock:
+            def sleep(self, seconds):
+                backoffs.append(seconds)
+                if len(backoffs) == 1:
+                    blocker.commit()
+                real_time.sleep(seconds)
+
+            def __getattr__(self, name):
+                return getattr(real_time, name)
+
+        with patch.object(registry_module, "time", ReleasingClock()):
             record, created = registry.reserve(
                 key="after-lock", mission_id="mission-after-lock",
                 contract_digest="contract", payload_digest="payload",
                 recorded_at="2026-10-12T00:00:01Z",
             )
-        finally:
-            releaser.join(timeout=2)
 
-        self.assertFalse(releaser.is_alive(), "lock-release thread did not finish")
+        self.assertEqual(len(backoffs), 1, "exactly one retry back-off is expected")
         self.assertTrue(created)
         self.assertEqual(record.key, "after-lock")
         self.assertEqual(registry.get("after-lock"), record)

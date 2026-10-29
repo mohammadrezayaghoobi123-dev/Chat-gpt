@@ -419,3 +419,23 @@ test("public read-only repository inspection succeeds without a GitHub token",as
   assert.deepEqual(requests.map(request=>request.authorization),[null,null,null]);
  }finally{globalThis.fetch=originalFetch}
 });
+
+
+test("id-less non-notification MCP messages are rejected before tool execution",async()=>{
+ const originalFetch=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called for an id-less tool call")};
+ try{
+  for(const message of [
+   {jsonrpc:"2.0",method:"tools/list",params:{}},
+   {jsonrpc:"2.0",method:"initialize",params:{protocolVersion:"2025-11-25"}},
+   {jsonrpc:"2.0",method:"ping",params:{}},
+   {jsonrpc:"2.0",method:"unknown/method",params:{}},
+   {jsonrpc:"2.0",method:"tools/call",params:{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Must not execute",summary:"id-less request",files:[{path:"README.md",content:"proposal"}]}}}
+  ]){
+   const response=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify(message)}),{...env,GITHUB_TOKEN:"test-token"});
+   assert.equal(response.status,400);
+   assert.deepEqual(await response.json(),{error:"invalid_notification",message:"Only protocol notification methods may omit the JSON-RPC id."});
+  }
+  assert.equal(calls,0,"id-less messages must never reach tools or GitHub side effects");
+ }finally{globalThis.fetch=originalFetch}
+});

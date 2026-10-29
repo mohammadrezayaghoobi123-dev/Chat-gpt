@@ -378,6 +378,28 @@ test("modern MCP returns invalid-params for an unknown tool instead of a tool ex
 
 test("modern subscriptions/listen tolerates unknown extension filters but acknowledges only supported filters",async()=>{const r=await worker.fetch(modernRequest("subscriptions/listen",{notifications:{unknownFilter:{future:true},taskIds:["task-1"],toolsListChanged:true}},"listen-extension-1"),env);assert.equal(r.status,200);const reader=r.body.getReader();try{const first=await reader.read();const frame=new TextDecoder().decode(first.value);const ack=JSON.parse(frame.slice(6).trim());assert.deepEqual(ack.params.notifications,{});assert.equal(ack.params._meta["io.modelcontextprotocol/subscriptionId"],"listen-extension-1")}finally{await reader.cancel()}});
 
+test("modern subscriptions/listen with no honored filters closes gracefully after acknowledgement",async()=>{
+ const r=await worker.fetch(modernRequest("subscriptions/listen",{notifications:{toolsListChanged:true,resourceSubscriptions:["file:///tmp/unserved-resource"]}},"listen-empty-2"),env);
+ assert.equal(r.status,200);
+ const reader=r.body.getReader();
+ try{
+  const first=await reader.read();
+  assert.equal(first.done,false);
+  const ack=JSON.parse(new TextDecoder().decode(first.value).slice(6).trim());
+  assert.equal(ack.method,"notifications/subscriptions/acknowledged");
+  assert.deepEqual(ack.params.notifications,{});
+  const second=await Promise.race([reader.read(),new Promise(resolve=>setTimeout(()=>resolve({timedOut:true}),100))]);
+  assert.notEqual(second.timedOut,true,"empty subscriptions must not hold an SSE stream open indefinitely");
+  assert.equal(second.done,false);
+  const final=JSON.parse(new TextDecoder().decode(second.value).slice(6).trim());
+  assert.equal(final.jsonrpc,"2.0");
+  assert.equal(final.id,"listen-empty-2");
+  assert.equal(final.result.resultType,"complete");
+  assert.equal(final.result._meta["io.modelcontextprotocol/subscriptionId"],"listen-empty-2");
+  assert.equal((await reader.read()).done,true);
+ }finally{await reader.cancel()}
+});
+
 
 test("create_change_pr schema advertises and enforces string length constraints before any GitHub request",async()=>{
  const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called for schema-invalid input")};

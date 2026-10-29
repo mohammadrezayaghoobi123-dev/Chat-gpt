@@ -1,1 +1,14 @@
-{"name":"cloud-engineering-connector","version":"0.1.0","private":true,"type":"module","description":"Cloud-hosted MCP connector for rigorous software engineering, architecture, code review, and evidence-aware workflows.","scripts":{"test":"node --test","check":"node --check worker.js && node --check test/worker.test.js"},"engines":{"node":">=22"}}
+{
+  "name": "cloud-engineering-connector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloud-hosted MCP connector for rigorous software engineering, architecture, code review, and evidence-aware workflows.",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check worker.js && node --check test/worker.test.js && npx --yes wrangler@4.155.0 deploy --dry-run"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -72,3 +72,14 @@ test("a thrown fetch error is redacted and a null JSON body does not leak intern
     assert.ok(!/Cannot read properties/.test(out), "internal TypeError leaked for " + status);
   }
 });
+
+test("a response stream read failure is replaced with a safe generic error", async () => {
+  const out = await callWith(
+    { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH },
+    500,
+    new ReadableStream({ start(controller) { controller.error(new Error("stream failed " + GH + " " + MCP)); } })
+  );
+  assert.ok(!out.text.includes(GH) && !out.text.includes(MCP), "secret in stream-read failure");
+  assert.match(out.text, /GitHub API response could not be read safely/);
+  assert.ok(!out.text.includes("stream failed"), "raw stream error escaped");
+});

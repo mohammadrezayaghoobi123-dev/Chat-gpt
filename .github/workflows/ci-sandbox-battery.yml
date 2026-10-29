@@ -1,0 +1,50 @@
+name: CI sandbox battery (diagnostic, read-only)
+
+# Runs the pre-registered Stage 3 real-sandbox battery against ctp_runner of a given ref on a GitHub runner
+# and surfaces the output as annotations. Read-only: nothing is written to the subject repository.
+on:
+  push:
+    branches:
+      - ci/flake-stress-2026-10-28
+    paths:
+      - .github/workflows/ci-sandbox-battery.yml
+      - .github/diag/s3_battery.py
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "subject ref"
+        required: false
+        default: "master-brain/integrated"
+
+permissions:
+  contents: read
+
+jobs:
+  battery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'master-brain/integrated' }}
+          path: subject
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run battery
+        env:
+          MB_SRC: subject/src
+        run: |
+          set +e
+          python .github/diag/s3_battery.py > battery.out 2>&1
+          echo "exit=$?" >> battery.out
+          python - <<'PY'
+          def esc(s): return s.replace("%","%25").replace("\r","").replace("\n","%0A")
+          t = open("battery.out", errors="replace").read()
+          import re
+          parts = re.split(r"(?m)^(?==== |--- |sandbox_status|host listener)", t)
+          for i in range(0, len(parts), 3):
+              print("::notice::" + esc("".join(parts[i:i+3])[:1800]))
+          PY
+          echo "subject: $(git -C subject rev-parse --short HEAD); kernel: $(uname -r)" 
+          uname -a; nproc; free -m | head -2

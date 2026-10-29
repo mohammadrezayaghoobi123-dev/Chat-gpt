@@ -32,6 +32,11 @@ function subscriptionsListenResponse(request,rpc){
  const stream=new ReadableStream({
   start(controller){
    controller.enqueue(encoder.encode("data: "+JSON.stringify(ack)+"\n\n"));
+   if(Object.keys(ack.params.notifications).length===0){
+    controller.enqueue(encoder.encode("data: "+JSON.stringify({jsonrpc:"2.0",id:rpc.id,result:{resultType:"complete",_meta:{"io.modelcontextprotocol/subscriptionId":rpc.id,"io.modelcontextprotocol/serverInfo":{name:"cloud-engineering-connector",version:VERSION}}}})+"\n\n"));
+    controller.close();
+    return;
+   }
    keepalive=setInterval(()=>{try{controller.enqueue(encoder.encode(": keepalive\n\n"))}catch{clearInterval(keepalive)}},15000);
    abortHandler=()=>{clearInterval(keepalive);try{controller.close()}catch{}};
    if(request.signal.aborted)abortHandler();else request.signal.addEventListener("abort",abortHandler,{once:true});

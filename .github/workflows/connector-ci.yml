@@ -9,6 +9,7 @@ on:
   push:
     branches:
       - "feature/cloud-engineering-connector"
+      - "release/production"
       - "assistant/**"
     paths:
       - "cloud-engineering-connector/**"

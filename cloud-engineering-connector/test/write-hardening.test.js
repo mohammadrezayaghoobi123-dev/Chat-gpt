@@ -21,7 +21,7 @@ async function withFetch(handler, fn) {
 const text = async (r) => JSON.parse((await r.json()).result.content[0].text);
 
 test("write path denylist covers env variants, key material, tfstate dirs and review-control files", async () => {
-  const bad = [".env-prod", ".env_local", "a/.env.production", "prod.auto.tfvars.json", "terraform.tfstate.d/x", "x/.terraform/y",
+  const bad = [".env-prod", ".env_local", "a/.env.production", ".dev.vars", ".dev.vars.production", "config/.dev.vars.local", "prod.auto.tfvars.json", "terraform.tfstate.d/x", "x/.terraform/y",
     ".gitmodules", ".gitattributes", "CODEOWNERS", "docs/codeowners", ".dockerconfigjson", ".htpasswd", "x.p8", "service-account.json"];
   for (const path of bad) {
     await withFetch(async () => { throw new Error("must not reach GitHub"); }, async (calls) => {

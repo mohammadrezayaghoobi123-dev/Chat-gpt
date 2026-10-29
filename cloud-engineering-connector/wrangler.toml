@@ -1,4 +1,4 @@
-name = "cloud-engineering-connector"
+name = "chat-gpt111"
 main = "worker.js"
 compatibility_date = "2026-10-23"
 workers_dev = true

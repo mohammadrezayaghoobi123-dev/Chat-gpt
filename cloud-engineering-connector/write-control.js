@@ -4,6 +4,7 @@ const PHASES = [
   "RESERVED",
   "TREE_DISPATCHED",
   "TREE_WRITTEN",
+  "COMMIT_DISPATCHED",
   "COMMIT_WRITTEN",
   "BRANCH_WRITTEN",
   "PR_DISPATCHED",
@@ -16,6 +17,11 @@ const METADATA_FIELDS = new Set([
   "prNumber",
   "prUrl",
   "errorCode",
+  "baseTreeSha",
+  "parentSha",
+  "treeSha",
+  "commitDate",
+  "commitMessage",
 ]);
 
 function assertHash(value, field) {
@@ -38,6 +44,7 @@ function operationFromRow(row) {
     prNumber: row.pr_number,
     prUrl: row.pr_url,
     errorCode: row.error_code,
+    gitMetadata: row.git_metadata ? JSON.parse(row.git_metadata) : {},
   };
 }
 
@@ -61,14 +68,15 @@ export class WriteControl extends DurableObject {
           key_hash TEXT PRIMARY KEY,
           request_hash TEXT NOT NULL,
           status TEXT NOT NULL CHECK (status IN ('IN_PROGRESS','SUCCEEDED','FAILED','UNKNOWN')),
-          phase TEXT NOT NULL CHECK (phase IN ('RESERVED','TREE_DISPATCHED','TREE_WRITTEN','COMMIT_WRITTEN','BRANCH_WRITTEN','PR_DISPATCHED','PR_CREATED')),
+          phase TEXT NOT NULL CHECK (phase IN ('RESERVED','TREE_DISPATCHED','TREE_WRITTEN','COMMIT_DISPATCHED','COMMIT_WRITTEN','BRANCH_WRITTEN','PR_DISPATCHED','PR_CREATED')),
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL,
           branch_name TEXT,
           commit_sha TEXT,
           pr_number INTEGER,
           pr_url TEXT,
-          error_code TEXT
+          error_code TEXT,
+          git_metadata TEXT
         )
       `);
       sql.exec(`
@@ -188,6 +196,21 @@ export class WriteControl extends DurableObject {
     const prNumber = metadata.prNumber ?? null;
     const prUrl = metadata.prUrl ?? null;
     const errorCode = metadata.errorCode ?? null;
+    const gitMetadata = {};
+    for (const key of ["baseTreeSha", "parentSha", "treeSha", "commitDate", "commitMessage"]) {
+      if (metadata[key] !== undefined) gitMetadata[key] = metadata[key];
+    }
+    for (const key of ["baseTreeSha", "parentSha", "treeSha"]) {
+      if (gitMetadata[key] !== undefined && (typeof gitMetadata[key] !== "string" || !/^[a-f0-9]{40}$/.test(gitMetadata[key]))) {
+        throw new TypeError(key + " must be a Git SHA.");
+      }
+    }
+    if (gitMetadata.commitDate !== undefined && (typeof gitMetadata.commitDate !== "string" || !/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/.test(gitMetadata.commitDate) || new Date(gitMetadata.commitDate).toISOString() !== gitMetadata.commitDate)) {
+      throw new TypeError("commitDate must be a canonical UTC ISO timestamp.");
+    }
+    if (gitMetadata.commitMessage !== undefined && (typeof gitMetadata.commitMessage !== "string" || gitMetadata.commitMessage.length < 1 || gitMetadata.commitMessage.length > 500)) {
+      throw new TypeError("commitMessage must contain 1-500 characters.");
+    }
     if (branchName !== null && (typeof branchName !== "string" || branchName.length > 255)) {
       throw new TypeError("branchName is invalid.");
     }
@@ -207,6 +230,7 @@ export class WriteControl extends DurableObject {
     return this.ctx.storage.transactionSync(() => {
       const current = this.readOperation(keyHash);
       if (!current) return { updated: false, reason: "NOT_FOUND" };
+      const mergedGitMetadata = { ...(current.gitMetadata ?? {}), ...gitMetadata };
       if (current.phase !== expectedPhase) {
         return { updated: false, reason: "PHASE_CONFLICT", operation: current };
       }
@@ -220,7 +244,8 @@ export class WriteControl extends DurableObject {
              commit_sha = COALESCE(?, commit_sha),
              pr_number = COALESCE(?, pr_number),
              pr_url = COALESCE(?, pr_url),
-             error_code = COALESCE(?, error_code)
+             error_code = COALESCE(?, error_code),
+             git_metadata = ?
          WHERE key_hash = ? AND phase = ? AND status = 'IN_PROGRESS'`,
         nextPhase,
         status,
@@ -230,8 +255,70 @@ export class WriteControl extends DurableObject {
         prNumber,
         prUrl,
         errorCode,
+        JSON.stringify(mergedGitMetadata),
         keyHash,
         expectedPhase,
+      );
+      return { updated: true, operation: this.readOperation(keyHash) };
+    });
+  }
+
+
+  reconcileTreeWritten(input) {
+    if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
+    const { keyHash, baseTreeSha, parentSha, treeSha } = input;
+    const now = Date.now();
+    assertHash(keyHash, "keyHash");
+    for (const [field, value] of Object.entries({ baseTreeSha, parentSha, treeSha })) {
+      if (typeof value !== "string" || !/^[a-f0-9]{40}$/.test(value)) throw new TypeError(field + " must be a Git SHA.");
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.readOperation(keyHash);
+      if (!current) return { updated: false, reason: "NOT_FOUND" };
+      if (current.status !== "UNKNOWN" || current.phase !== "TREE_DISPATCHED") {
+        return { updated: false, reason: "RECONCILIATION_NOT_ALLOWED", operation: current };
+      }
+      if (current.gitMetadata?.baseTreeSha !== baseTreeSha || current.gitMetadata?.parentSha !== parentSha) {
+        return { updated: false, reason: "OPERATION_IDENTITY_MISMATCH", operation: current };
+      }
+      const merged = { ...current.gitMetadata, treeSha };
+      this.ctx.storage.sql.exec(
+        `UPDATE write_operations
+         SET phase = 'TREE_WRITTEN', status = 'IN_PROGRESS', updated_at = ?, git_metadata = ?, error_code = NULL
+         WHERE key_hash = ? AND status = 'UNKNOWN' AND phase = 'TREE_DISPATCHED'`,
+        now,
+        JSON.stringify(merged),
+        keyHash,
+      );
+      return { updated: true, operation: this.readOperation(keyHash) };
+    });
+  }
+
+  reconcileCommitWritten(input) {
+    if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
+    const { keyHash, treeSha, parentSha, commitSha } = input;
+    const now = Date.now();
+    assertHash(keyHash, "keyHash");
+    for (const [field, value] of Object.entries({ treeSha, parentSha, commitSha })) {
+      if (typeof value !== "string" || !/^[a-f0-9]{40}$/.test(value)) throw new TypeError(field + " must be a Git SHA.");
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.readOperation(keyHash);
+      if (!current) return { updated: false, reason: "NOT_FOUND" };
+      if (current.status !== "UNKNOWN" || current.phase !== "COMMIT_DISPATCHED") {
+        return { updated: false, reason: "RECONCILIATION_NOT_ALLOWED", operation: current };
+      }
+      if (current.gitMetadata?.treeSha !== treeSha || current.gitMetadata?.parentSha !== parentSha ||
+          typeof current.gitMetadata?.commitDate !== "string" || typeof current.gitMetadata?.commitMessage !== "string") {
+        return { updated: false, reason: "OPERATION_IDENTITY_MISMATCH", operation: current };
+      }
+      this.ctx.storage.sql.exec(
+        `UPDATE write_operations
+         SET phase = 'COMMIT_WRITTEN', status = 'IN_PROGRESS', updated_at = ?, commit_sha = ?, error_code = NULL
+         WHERE key_hash = ? AND status = 'UNKNOWN' AND phase = 'COMMIT_DISPATCHED'`,
+        now,
+        commitSha,
+        keyHash,
       );
       return { updated: true, operation: this.readOperation(keyHash) };
     });

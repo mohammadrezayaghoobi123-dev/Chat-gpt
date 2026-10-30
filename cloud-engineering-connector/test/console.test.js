@@ -38,6 +38,9 @@ test("GET / serves a secure Master Brain MCP console without requiring an MCP to
   assert.match(html, /read_project_file/);
   assert.match(html, /engineering_standards/);
   assert.match(html, /architecture_review/);
+  assert.match(html, /architecture_analyze/);
+  assert.match(html, /id=\\?"analysisPaths\\?"/);
+  assert.match(html, /id=\\?"analyze\\?"/);
   assert.doesNotMatch(html, /localStorage|sessionStorage/);
 });
 

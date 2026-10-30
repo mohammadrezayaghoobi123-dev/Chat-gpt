@@ -350,6 +350,18 @@ describe("Durable state transition metadata invariants",()=>{
       keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",
       metadata:{branchName,commitSha,prNumber:42,prUrl:"https://github.com/acme/project/pull/43"},
     }))).rejects.toThrow(/pull URL must match the PR number/);
+    for(const prUrl of [
+      "https://github.com/acme?redirect=/project/pull/42",
+      "https://user@github.com/acme/project/pull/42",
+      "https://github.com/acme/project/pull/42?redirect=elsewhere",
+      "https://github.com/acme%2fother/project/pull/42",
+      "https://github.com.evil.example/acme/project/pull/42",
+    ]){
+      await expect(Promise.resolve().then(()=>stub.transitionOperation({
+        keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",
+        metadata:{branchName,commitSha,prNumber:42,prUrl},
+      }))).rejects.toThrow(/PR_CREATED requires deterministic branch, commit, PR number and URL|pull URL must match the PR number/);
+    }
   });
 
   it("rejects mutation of an already persisted commit identity",async()=>{

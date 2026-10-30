@@ -225,8 +225,14 @@ async function createChangePr(args,env) {
    const match=/^GitHub API ([0-9]{3}):/.exec(message);
    const status=match?Number(match[1]):null;
    const ambiguous=error instanceof ToolError||status===null||status===408||status===409||status>=500;
-   try{await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?"UPSTREAM_OUTCOME_UNCERTAIN":"UPSTREAM_REJECTED"});}
+   let marked;
+   try{marked=await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?"UPSTREAM_OUTCOME_UNCERTAIN":"UPSTREAM_REJECTED"});}
    catch{throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
+   if(!marked?.updated) {
+    let existing;
+    try{existing=await stub.getOperation(keyHash);}catch{throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
+    if(existing?.status!==(ambiguous?"UNKNOWN":"FAILED"))throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+   }
    if(ambiguous)throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:"UNKNOWN",phase});
    throw error;
   };
@@ -355,8 +361,14 @@ async function createChangePr(args,env) {
     const match=/^GitHub API (\d{3}):/.exec(message);
     const status=match?Number(match[1]):null;
     const ambiguous=status===null||status===408||status===409||status>=500;
-    try { await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?"UPSTREAM_OUTCOME_UNCERTAIN":"UPSTREAM_REJECTED"}); }
+    let marked;
+    try { marked=await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?"UPSTREAM_OUTCOME_UNCERTAIN":"UPSTREAM_REJECTED"}); }
     catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
+    if(!marked?.updated) {
+     let existing;
+     try { existing=await stub.getOperation(keyHash); } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
+     if(existing?.status!==(ambiguous?"UNKNOWN":"FAILED")) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+    }
     if(ambiguous) throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:"UNKNOWN",phase:"PR_DISPATCHED"});
     throw error;
    }
@@ -460,9 +472,15 @@ async function createChangePr(args,env) {
   const match=/^GitHub API (\d{3}):/.exec(message);
   const httpStatus=match?Number(match[1]):null;
   const ambiguous=sideEffectStarted&&(error instanceof ToolError||httpStatus===null||httpStatus===408||httpStatus===409||httpStatus>=500);
+  let marked;
   try {
-   await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?(error instanceof ToolError?"GIT_IDENTITY_UNVERIFIED":"UPSTREAM_OUTCOME_UNCERTAIN"):"UPSTREAM_REJECTED"});
+   marked=await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?(error instanceof ToolError?"GIT_IDENTITY_UNVERIFIED":"UPSTREAM_OUTCOME_UNCERTAIN"):"UPSTREAM_REJECTED"});
   } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
+  if(!marked?.updated) {
+   let existing;
+   try { existing=await stub.getOperation(keyHash); } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
+   if(existing?.status!==(ambiguous?"UNKNOWN":"FAILED")) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+  }
   if(ambiguous) throw new ToolError("WRITE_OUTCOME_UNKNOWN",{phase:currentPhase,message:"A GitHub write may have succeeded or its returned identity could not be proven. The operation was quarantined and will not be retried automatically."});
   throw error;
  }

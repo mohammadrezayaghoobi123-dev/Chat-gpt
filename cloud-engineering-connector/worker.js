@@ -374,13 +374,18 @@ async function createChangePr(args,env) {
    const matches=candidates.filter(pr=>pr&&pr.head?.ref===operation.branchName&&pr.head?.sha===operation.commitSha&&pr.base?.ref===args.base_branch&&typeof pr.body==="string"&&pr.body.includes(marker));
    if(matches.length>1) throw new ToolError("WRITE_RECONCILIATION_CONFLICT",{matching_prs:matches.length});
    if(matches.length===1) {
-    const match=matches[0];
+    let match;
+    try {
+     match=await verifyCreatedPullRequest(env,base,args.owner,args.repo,matches[0],operation.branchName,args.base_branch,operation.commitSha,marker);
+    } catch {
+     throw new ToolError("WRITE_RECONCILIATION_UNAVAILABLE",{operation_status:"UNKNOWN",phase:operation.phase,message:"A unique PR candidate was found but its live identity could not be independently verified."});
+    }
     let reconciled;
     try {
      reconciled=await stub.reconcilePrCreated({keyHash,now:Date.now(),branchName:operation.branchName,commitSha:operation.commitSha,prNumber:match.number,prUrl:match.html_url});
     } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
     if(!reconciled?.updated) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
-    return {status:"draft_pull_request_created",repository:args.owner+"/"+args.repo,branch:operation.branchName,base_branch:args.base_branch,commit:operation.commitSha,pull_request:{number:match.number,url:match.html_url,draft:match.draft,state:match.state},head_sha:match.head?.sha??null,head_changed_since_creation:false,changed_paths:args.files.map(file=>file.path),replayed:true,reconciled:true,safety:"The previously ambiguous PR creation was verified by read-only GitHub evidence and reconciled in the durable operation ledger; no new PR was created."};
+    return {status:"draft_pull_request_created",repository:args.owner+"/"+args.repo,branch:operation.branchName,base_branch:args.base_branch,commit:operation.commitSha,pull_request:{number:match.number,url:match.html_url,draft:match.draft,state:match.state},head_sha:match.head?.sha??null,head_changed_since_creation:false,changed_paths:args.files.map(file=>file.path),replayed:true,reconciled:true,safety:"The previously ambiguous PR creation was verified by read-only lookup and a second GET against the exact operation marker, branch, base, commit, and draft identity; no new PR was created."};
    }
    throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:"UNKNOWN",phase:operation.phase,message:"No matching PR was found. The operation remains quarantined and will not be retried automatically."});
   }

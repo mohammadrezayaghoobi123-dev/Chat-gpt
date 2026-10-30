@@ -306,7 +306,7 @@ test("create_change_pr retains deterministic branch after a definite PR rejectio
   if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
   if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
   if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1")){
-   const bytes=new TextEncoder().encode("proposal"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
+   const bytes=new TextEncoder().encode("proposal"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
    const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
    return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
   }
@@ -334,7 +334,7 @@ test("create_change_pr retains branch when pull request creation outcome is unce
   if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
   if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
   if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1")){
-   const bytes=new TextEncoder().encode("proposal"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
+   const bytes=new TextEncoder().encode("proposal"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
    const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
    return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
   }

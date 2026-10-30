@@ -242,6 +242,34 @@ export class WriteControl extends DurableObject {
     });
   }
 
+  markOperationStatus(input) {
+    if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
+    const { keyHash, status, now, errorCode } = input;
+    assertHash(keyHash, "keyHash");
+    assertTimestamp(now, "now");
+    if (status !== "FAILED" && status !== "UNKNOWN") {
+      throw new TypeError("Only FAILED or UNKNOWN may be assigned outside a phase transition.");
+    }
+    if (errorCode !== undefined && (typeof errorCode !== "string" || !/^[A-Z0-9_]{1,64}$/.test(errorCode))) {
+      throw new TypeError("errorCode is invalid.");
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.readOperation(keyHash);
+      if (!current) return { updated: false, reason: "NOT_FOUND" };
+      if (current.status !== "IN_PROGRESS") {
+        return { updated: false, reason: "STATUS_CONFLICT", operation: current };
+      }
+      this.ctx.storage.sql.exec(
+        "UPDATE write_operations SET status = ?, updated_at = ?, error_code = ? WHERE key_hash = ? AND status = 'IN_PROGRESS'",
+        status,
+        now,
+        errorCode ?? null,
+        keyHash,
+      );
+      return { updated: true, operation: this.readOperation(keyHash) };
+    });
+  }
+
   markStaleOperationsUnknown(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
     const { now, leaseMs } = input;

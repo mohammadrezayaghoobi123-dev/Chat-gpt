@@ -1,9 +1,36 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker.js";
-const env={MCP_AUTH_TOKEN:"test-secret"};
+let workerTestKey = 0;
+function createWriteControlMock() {
+ const operations = new Map();
+ const stub = {
+  async admitWrite(input) {
+   const old = operations.get(input.keyHash);
+   if (old) return old.requestHash === input.requestHash ? { admitted:true,replay:true,operation:old } : { admitted:false,reason:"IDEMPOTENCY_CONFLICT" };
+   const operation={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};
+   operations.set(input.keyHash,operation);
+   return {admitted:true,replay:false,operation};
+  },
+  async transitionOperation(input) {
+   const op=operations.get(input.keyHash);
+   if(!op||op.phase!==input.expectedPhase||op.status!=="IN_PROGRESS")return{updated:false,reason:"PHASE_CONFLICT"};
+   Object.assign(op,{phase:input.nextPhase,status:input.status??"IN_PROGRESS",updatedAt:input.now});
+   if(input.metadata)Object.assign(op,{branchName:input.metadata.branchName??op.branchName,commitSha:input.metadata.commitSha??op.commitSha,prNumber:input.metadata.prNumber??op.prNumber,prUrl:input.metadata.prUrl??op.prUrl});
+   return{updated:true,operation:op};
+  },
+  async markOperationStatus(input){const op=operations.get(input.keyHash);if(!op||op.status!=="IN_PROGRESS")return{updated:false,reason:"STATUS_CONFLICT"};Object.assign(op,{status:input.status,updatedAt:input.now});return{updated:true,operation:op};},
+  async markStaleOperationsUnknown(){return 0;},
+  async getOperation(keyHash){return operations.get(keyHash)??null;}
+ };
+ return {idFromName:name=>name,get:()=>stub};
+}
+\nconst env={MCP_AUTH_TOKEN:"test-secret",WRITE_CONTROL:createWriteControlMock()};
 const req=(path,options={})=>new Request("https://example.test"+path,options);
-const rpc=(method,params={},id=1)=>req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})});
+const rpc=(method,params={},id=1)=>{
+ if(method==="tools/call"&&params.name==="create_change_pr"&&params.arguments&&!Object.hasOwn(params.arguments,"idempotency_key"))params={...params,arguments:{...params.arguments,idempotency_key:"worker-test-key-"+String(++workerTestKey).padStart(8,"0")}};
+ return req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})});
+};
 test("health reports cloud execution without laptop dependency",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers")});
 test("MCP fails closed by default when authentication is not configured",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",body:"{}"}),{});assert.equal(r.status,503)});
 test("public read-only mode fails closed when rate limiter binding is absent",async()=>{const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true"});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"rate_limiter_unavailable"})});
@@ -19,10 +46,18 @@ test("public mode never permits write tools without MCP_AUTH_TOKEN",async()=>{co
 test("MCP rejects missing bearer token",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{"content-type":"application/json","cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize"})}),{...env,MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,401)});
 test("initialize advertises connector identity and tools capability",async()=>{const r=await worker.fetch(rpc("initialize",{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"test",version:"1"}}),env);const b=await r.json();assert.equal(b.result.serverInfo.name,"cloud-engineering-connector");assert.ok(b.result.capabilities.tools)});
 test("tools/list exposes all five declared tools",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();assert.deepEqual(b.result.tools.map(t=>t.name),["project_inspect","read_project_file","engineering_standards","architecture_review","create_change_pr"])});
-test("tools/list schema requires base_branch for create_change_pr",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();const tool=b.result.tools.find(t=>t.name==="create_change_pr");assert.ok(tool,"create_change_pr must be listed");assert.ok(Array.isArray(tool.inputSchema.required));assert.ok(tool.inputSchema.required.includes("base_branch"));assert.ok(Object.hasOwn(tool.inputSchema.properties,"base_branch"));assert.equal(tool.inputSchema.additionalProperties,false)});
+test("tools/list schema requires base_branch for create_change_pr",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();const tool=b.result.tools.find(t=>t.name==="create_change_pr");assert.ok(tool,"create_change_pr must be listed");assert.ok(Array.isArray(tool.inputSchema.required));assert.ok(tool.inputSchema.required.includes("base_branch"));assert.ok(tool.inputSchema.required.includes("idempotency_key"));assert.ok(Object.hasOwn(tool.inputSchema.properties,"base_branch"));assert.equal(tool.inputSchema.additionalProperties,false)});
 test("architecture review labels its output unverified",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"architecture_review",arguments:{project_goal:"Example",proposed_change:"Add cache"}}),env);const b=await r.json();const result=JSON.parse(b.result.content[0].text);assert.equal(result.status,"review_framework_generated_not_independently_verified");assert.ok(result.mandatory_output_sections.includes("Verification status"))});
 test("write tool fails closed without GitHub token",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]}}),env);const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/GITHUB_TOKEN/)});
-test("change PR rejects credential filenames before API calls",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"credentials.json",content:"token=should-not-pass"}]}}),{...env,GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/Rejected unsafe or protected file path/)});
+
+test("write operations fail closed when the Durable Object binding is unavailable",async()=>{
+ const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called")};
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Valid",summary:"Valid",files:[{path:"README.md",content:"x"}]}}),{...env,GITHUB_TOKEN:"unused",WRITE_CONTROL:undefined});
+  const body=await response.json();assert.equal(response.status,200);assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/WRITE_CONTROL_UNAVAILABLE/);assert.equal(calls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
+\ntest("change PR rejects credential filenames before API calls",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"credentials.json",content:"token=should-not-pass"}]}}),{...env,GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/Rejected unsafe or protected file path/)});
 test("missing GITHUB_TOKEN gives an actionable hint when a GitHub read is refused",async()=>{const originalFetch=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({message:"Not Found"}),{status:404,headers:{"content-type":"application/json"}});try{const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}}),env);const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/GITHUB_TOKEN is not configured/);assert.match(b.result.content[0].text,/intended repository/)}finally{globalThis.fetch=originalFetch}});
 test("all GitHub API responses are byte-bounded, including repository metadata",async()=>{const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;const bytes=new TextEncoder().encode(JSON.stringify({message:"x".repeat(2_000_100)}));return new Response(new ReadableStream({start(controller){controller.enqueue(bytes);controller.close()}}),{status:200,headers:{"content-type":"application/json","content-length":String(bytes.byteLength)}})};try{const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}}),{...env,GITHUB_TOKEN:"test-token"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/response exceeds the configured byte limit/);assert.equal(calls,1)}finally{globalThis.fetch=originalFetch}});
 test("read_project_file accepts valid empty text files",async()=>{const originalFetch=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({type:"file",path:"docs/empty.txt",size:0,content:"",encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}});try{const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/empty.txt"}}),{...env,GITHUB_TOKEN:"test-token"});const b=await r.json();assert.equal(b.result.isError,undefined);const value=JSON.parse(b.result.content[0].text);assert.equal(value.content,"");assert.equal(value.size,0)}finally{globalThis.fetch=originalFetch}});
@@ -101,51 +136,24 @@ test("create_change_pr rejects every protected path before any GitHub request",a
  try{for(const path of [".env",".envrc/secret.txt","nested/.envrc/config",".env/secrets.txt","nested/.env/config",".env.production","nested/.envrc.local/config",".github","docs/.github/workflows/ci.yml","secrets/token.txt","config/credentials/prod.json","keys/private.pem","id_ed25519","id_rsa","id_dsa","id_ecdsa","id_ed25519_sk","id_ecdsa_sk",".ssh/id_rsa",".aws/credentials",".azure/accessTokens.json",".config/gcloud/application_default_credentials.json",".kube/config",".docker/config.json",".npmrc",".netrc",".git-credentials","terraform.tfstate","infra/prod.tfvars","keys/known_hosts","keys/authorized_keys"]){const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path,content:"proposal"}]};const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true,path);assert.match(b.result.content[0].text,/Rejected unsafe or protected file path/,path)}assert.equal(calls,0)}finally{globalThis.fetch=originalFetch}
 });
 
-test("create_change_pr deletes its new branch if draft PR creation fails",async()=>{
- const originalFetch=globalThis.fetch;const calls=[];let createdRef=null;
+test("create_change_pr retains deterministic branch after a definite PR rejection",async()=>{
+ const originalFetch=globalThis.fetch;const calls=[];let branchRef=null;
  globalThis.fetch=async(input,init={})=>{
-  const url=String(input);const method=init.method||"GET";calls.push({url,method});
+  const url=String(input),method=init.method||"GET";calls.push({url,method});
   if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
-  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"base-sha"}}),{status:200});
-  if(method==="GET"&&url.endsWith("/git/commits/base-sha"))return new Response(JSON.stringify({tree:{sha:"base-tree"}}),{status:200});
-  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:"new-tree"}),{status:201});
-  if(method==="POST"&&url.endsWith("/git/commits"))return new Response(JSON.stringify({sha:"new-commit"}),{status:201});
-  if(method==="POST"&&url.endsWith("/git/refs")){createdRef=JSON.parse(init.body).ref;return new Response(JSON.stringify({ref:createdRef}),{status:201})}
+  if(method==="GET"&&url.includes("/git/ref/heads/feature%2Fcloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"parent"}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/parent"))return new Response(JSON.stringify({tree:{sha:"base-tree"}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:"tree"}),{status:201});
+  if(method==="POST"&&url.endsWith("/git/commits"))return new Response(JSON.stringify({sha:"commit"}),{status:201});
+  if(method==="POST"&&url.endsWith("/git/refs")){branchRef=JSON.parse(init.body).ref;return new Response(JSON.stringify({ref:branchRef}),{status:201});}
   if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({message:"simulated PR validation failure"}),{status:422});
-  if(method==="DELETE"&&createdRef&&url.endsWith("/git/refs/"+createdRef.replace(/^refs\//,"")))return new Response(null,{status:204});
-  throw new Error("Unexpected mocked GitHub request: "+method+" "+url)
+  throw new Error("Unexpected request "+method+" "+url);
  };
  try{
-  const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example proposal",summary:"Test rollback",files:[{path:"docs/proposal.txt",content:"proposal"}]};
+  const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Test",summary:"Test",files:[{path:"docs/proposal.txt",content:"proposal"}]};
   const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"test-token"});
-  const body=await r.json();
-  assert.equal(body.result.isError,true);
-  assert.match(body.result.content[0].text,/GitHub API 422: simulated PR validation failure/);
-  assert.ok(createdRef?.startsWith("refs/heads/assistant/"));
-  assert.ok(calls.some(c=>c.method==="DELETE"&&c.url.endsWith("/git/refs/"+createdRef.replace(/^refs\//,""))),"new branch should be deleted after PR creation failure");
- }finally{globalThis.fetch=originalFetch}
-});
-
-
-test("create_change_pr reports cleanup failure with the orphan branch name",async()=>{
- const originalFetch=globalThis.fetch;let createdBranch=null;let deleteAttempted=false;
- globalThis.fetch=async(input,init={})=>{
-  const url=String(input),method=init.method||"GET";
-  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
-  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"base-sha"}}),{status:200});
-  if(method==="GET"&&url.endsWith("/git/commits/base-sha"))return new Response(JSON.stringify({tree:{sha:"base-tree"}}),{status:200});
-  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:"new-tree"}),{status:201});
-  if(method==="POST"&&url.endsWith("/git/commits"))return new Response(JSON.stringify({sha:"new-commit"}),{status:201});
-  if(method==="POST"&&url.endsWith("/git/refs")){createdBranch=JSON.parse(init.body).ref.split("/").slice(2).join("/");return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch}),{status:201})}
-  if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({message:"simulated validation failure"}),{status:422});
-  if(method==="DELETE"&&createdBranch&&url.endsWith("/git/refs/heads/"+createdBranch)){deleteAttempted=true;return new Response(JSON.stringify({message:"simulated delete failure"}),{status:403})}
-  throw new Error("Unexpected mocked GitHub request: "+method+" "+url)
- };
- try{
-  const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example proposal",summary:"Test cleanup failure",files:[{path:"docs/proposal.txt",content:"proposal"}]};
-  const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"test-token"});
-  const body=await r.json();const msg=body.result.content[0].text;
-  assert.equal(body.result.isError,true);assert.ok(deleteAttempted);assert.match(msg,/cleanup of branch assistant\//);assert.match(msg,/GitHub API 403/);
+  const body=await r.json();assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/GitHub API 422: simulated PR validation failure/);
+  assert.ok(branchRef?.startsWith("refs/heads/assistant/mcp-"));assert.equal(calls.some(c=>c.method==="DELETE"),false);
  }finally{globalThis.fetch=originalFetch}
 });
 

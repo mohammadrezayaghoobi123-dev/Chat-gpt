@@ -4,13 +4,49 @@ import assert from "node:assert/strict";
 import worker from "../worker.js";
 
 const MCP = "mcp-secret-value", GH = "ghp_FAKE_TOKEN_FOR_TEST_0123456789";
-const env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH };
+let mockKeyCounter = 0;
+function createWriteControlMock() {
+  const operations = new Map();
+  const stub = {
+    async admitWrite(input) {
+      const current = operations.get(input.keyHash);
+      if (current) return current.requestHash === input.requestHash
+        ? { admitted: true, replay: true, operation: current }
+        : { admitted: false, reason: "IDEMPOTENCY_CONFLICT" };
+      const operation = { keyHash: input.keyHash, requestHash: input.requestHash, status: "IN_PROGRESS", phase: "RESERVED", createdAt: input.now, updatedAt: input.now };
+      operations.set(input.keyHash, operation);
+      return { admitted: true, replay: false, operation };
+    },
+    async transitionOperation(input) {
+      const operation = operations.get(input.keyHash);
+      if (!operation || operation.phase !== input.expectedPhase || operation.status !== "IN_PROGRESS") return { updated: false, reason: "PHASE_CONFLICT" };
+      Object.assign(operation, { phase: input.nextPhase, status: input.status ?? "IN_PROGRESS", updatedAt: input.now });
+      if (input.metadata) Object.assign(operation, {
+        branchName: input.metadata.branchName ?? operation.branchName,
+        commitSha: input.metadata.commitSha ?? operation.commitSha,
+        prNumber: input.metadata.prNumber ?? operation.prNumber,
+        prUrl: input.metadata.prUrl ?? operation.prUrl,
+      });
+      return { updated: true, operation };
+    },
+    async markOperationStatus(input) {
+      const operation = operations.get(input.keyHash);
+      if (!operation || operation.status !== "IN_PROGRESS") return { updated: false, reason: "STATUS_CONFLICT" };
+      Object.assign(operation, { status: input.status, updatedAt: input.now });
+      return { updated: true, operation };
+    },
+    async markStaleOperationsUnknown() { return 0; },
+    async getOperation(keyHash) { return operations.get(keyHash) ?? null; },
+  };
+  return { idFromName: (name) => name, get: () => stub };
+}
+\nconst env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH, WRITE_CONTROL: createWriteControlMock() };
 const OWNER = "mohammadrezayaghoobi123-dev", REPO = "Chat-gpt";
 const headers = { "content-type": "application/json", accept: "application/json, text/event-stream",
   authorization: "Bearer " + MCP, "mcp-protocol-version": "2025-03-26" };
 const call = (name, args) => worker.fetch(new Request("https://example.test/mcp", { method: "POST", headers,
   body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) }), env);
-const pr = (files, extra = {}) => ({ owner: OWNER, repo: REPO, base_branch: "feature/cloud-engineering-connector",
+const pr = (files, extra = {}) => ({ owner: OWNER, repo: REPO, idempotency_key: "hardening-test-key-" + String(++mockKeyCounter).padStart(8,"0"), base_branch: "feature/cloud-engineering-connector",
   title: "Example", summary: "Test", files, ...extra });
 
 async function withFetch(handler, fn) {

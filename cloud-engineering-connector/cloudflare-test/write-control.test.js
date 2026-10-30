@@ -441,3 +441,40 @@ describe("safe recovery before the first external side effect",()=>{
     });
   });
 });
+
+
+describe("Durable lease fencing",()=>{
+  it("rejects a stale worker transition after an expired operation is reconciled by a new owner",async()=>{
+    vi.useFakeTimers({toFake:["Date"]});
+    try{
+      const start=1_800_000_000_000;
+      vi.setSystemTime(start);
+      const stub=stubFor("lease-fence-stale-owner");
+      const keyHash="e".repeat(64);
+      const requestHash="f".repeat(64);
+      const admitted=await stub.admitWrite(request(keyHash,requestHash));
+      expect(admitted.operation.leaseGeneration).toBe(1);
+      const baseTreeSha="1".repeat(40),parentSha="2".repeat(40),treeSha="3".repeat(40);
+      await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha,parentSha}});
+      await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"TREE_DISPATCHED",nextPhase:"TREE_WRITTEN",metadata:{treeSha}});
+      vi.setSystemTime(start+120_001);
+      await stub.markStaleOperationsUnknown({leaseMs:120_000});
+      const stale=await stub.getOperation(keyHash);
+      expect(stale).toMatchObject({status:"UNKNOWN",phase:"TREE_WRITTEN",leaseGeneration:2});
+      const recovered=await stub.reconcileTreeWritten({keyHash,leaseGeneration:2,baseTreeSha,parentSha,treeSha});
+      expect(recovered).toMatchObject({updated:true,operation:{status:"IN_PROGRESS",phase:"TREE_WRITTEN",leaseGeneration:3}});
+      const oldOwner=await stub.transitionOperation({
+        keyHash,leaseGeneration:1,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",
+        metadata:{
+          commitDate:"2026-10-30T12:00:00.000Z",commitMessage:"assistant: stale lease fence",
+          authorName:"Cloud Engineering Connector",authorEmail:"mcp-connector@users.noreply.github.com",
+          committerName:"Cloud Engineering Connector",committerEmail:"mcp-connector@users.noreply.github.com",
+        },
+      });
+      expect(oldOwner).toMatchObject({updated:false,reason:"LEASE_FENCE_MISMATCH"});
+      await expect(stub.getOperation(keyHash)).resolves.toMatchObject({
+        status:"IN_PROGRESS",phase:"TREE_WRITTEN",leaseGeneration:3,
+      });
+    }finally{vi.useRealTimers();}
+  });
+});

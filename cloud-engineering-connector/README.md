@@ -9,7 +9,7 @@ A cloud-hosted MCP connector for rigorous software engineering: repository inspe
 - **Evidence discipline:** distinguish repository facts from assumptions and unverified conclusions. A generated checklist is not proof.
 - **Safe autonomy:** code changes go to a new `assistant/*` branch and a **draft pull request**. The connector must never write to `main` or merge automatically.
 - **Least privilege:** credentials are cloud secrets, never source files. Use a fine-grained token limited to the intended repository.
-- **Bounded changes:** maximum 12 files and 500 KB per proposal; workflow files, environment files, credential directories, and private keys are blocked.
+- **Bounded changes:** maximum 12 files and 500 KB per proposal; workflow files, environment files, credential directories, and private keys are blocked. Paths must already be Unicode NFC and must not contain bidirectional formatting controls; this avoids visually ambiguous names in code review and cross-platform checkouts.
 - **Fail closed:** MCP bearer authentication is mandatory unless an explicit public read-only mode is enabled; production configuration should keep authentication required.
 
 ## MCP tools

@@ -156,7 +156,7 @@ test("UNKNOWN COMMIT_WRITTEN replay verifies deterministic branch then creates o
   async markOperationStatus(){return{updated:true}}
  };
  globalThis.fetch=async(input,init={})=>{
-  const method=init.method||"GET";calls.push({method,url:String(input)});
+  const method=init.method||"GET",url=String(input);calls.push({method,url});
   if(method==="GET"&&url.endsWith("/pulls/81"))return new Response(JSON.stringify(createdPr),{status:200,headers:{"content-type":"application/json"}});
   if(method==="GET")return new Response(JSON.stringify({ref:"refs/heads/"+branchFor(keyHash),object:{sha:commitSha}}),{status:200,headers:{"content-type":"application/json"}});
   const sent=JSON.parse(init.body);assert.equal(sent.head,branchFor(keyHash));assert.equal(sent.draft,true);assert.ok(sent.body.includes("<!-- mcp-operation:"+keyHash+" -->"));
@@ -1029,7 +1029,7 @@ test("a successful PR POST with a mismatched head identity is quarantined before
  const originalFetch=globalThis.fetch;
  const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
  const key="pull-request-identity-mismatch-0001";
- const operations=new Map();let prPosts=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null;
+ const operations=new Map();let prPosts=0,prReads=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null,createdBranch=null;
  const stub={
   async admitWrite(input){const operation={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
   async transitionOperation(input){const operation=operations.get(input.keyHash);if(!operation||operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false};operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";operation.updatedAt=input.now;if(input.metadata)Object.assign(operation,input.metadata);ledgerPhase=operation.phase;ledgerStatus=operation.status;return{updated:true,operation};},

@@ -40,6 +40,13 @@ jobs:
         run: npm install --global npm@11.21.1
       - name: Install dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Export resolved package lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: connector-package-lock-${{ github.sha }}
+          path: cloud-engineering-connector/package-lock.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Run tests
         run: npm test
       - name: Check JavaScript syntax

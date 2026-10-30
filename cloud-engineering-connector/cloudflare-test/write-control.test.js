@@ -534,3 +534,27 @@ describe("concurrent recovery ownership",()=>{
     });
   });
 });
+
+
+describe("mandatory lease generation on mutation RPCs",()=>{
+  it("rejects phase transitions that omit the fencing generation",async()=>{
+    const stub=stubFor("transition-requires-generation");
+    const keyHash="a".repeat(64);
+    await stub.admitWrite(request(keyHash,"b".repeat(64)));
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({
+      keyHash,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",
+      metadata:{baseTreeSha:"1".repeat(40),parentSha:"2".repeat(40)},
+    }))).rejects.toThrow(/leaseGeneration is required/);
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({phase:"RESERVED",leaseGeneration:1});
+  });
+
+  it("rejects status writes that omit the fencing generation",async()=>{
+    const stub=stubFor("status-requires-generation");
+    const keyHash="c".repeat(64);
+    await stub.admitWrite(request(keyHash,"d".repeat(64)));
+    await expect(Promise.resolve().then(()=>stub.markOperationStatus({
+      keyHash,status:"UNKNOWN",errorCode:"MISSING_FENCE",
+    }))).rejects.toThrow(/leaseGeneration is required/);
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({status:"IN_PROGRESS",leaseGeneration:1});
+  });
+});

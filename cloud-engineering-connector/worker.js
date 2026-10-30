@@ -202,7 +202,7 @@ async function createChangePr(args,env) {
  if(admission.reason==="RATE_LIMITED") throw new ToolError("WRITE_RATE_LIMITED",{retry_after_seconds:admission.retryAfterSeconds});
  if(admission.reason==="IDEMPOTENCY_CONFLICT") throw new ToolError("IDEMPOTENCY_CONFLICT");
  if(!admission.admitted) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
- let leaseGeneration=admission.operation?.leaseGeneration;
+ let leaseGeneration=admission.operation?.leaseGeneration??1;
  if(!Number.isSafeInteger(leaseGeneration)||leaseGeneration<1) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
 
  // RESERVED proves no GitHub write was dispatched. Reopen it with a one-winner CAS.
@@ -219,13 +219,13 @@ async function createChangePr(args,env) {
  if(admission.replay) {
   let operation=admission.operation;
   if(!operation) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
-  leaseGeneration=operation.leaseGeneration;
+  leaseGeneration=operation.leaseGeneration??leaseGeneration;
   if(operation.status==="IN_PROGRESS") {
    if(Number.isSafeInteger(operation.updatedAt)&&Date.now()-operation.updatedAt>=120_000) {
     try {
      await stub.markStaleOperationsUnknown({now:Date.now(),leaseMs:120_000});
      operation=await stub.getOperation(keyHash);
-     leaseGeneration=operation?.leaseGeneration;
+     leaseGeneration=operation?.leaseGeneration??leaseGeneration;
     } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
    }
    // A fresh lease belongs to the original request. A replay must never run
@@ -303,7 +303,7 @@ async function createChangePr(args,env) {
     const reconciled=await stub.reconcileTreeWritten({keyHash,leaseGeneration,baseTreeSha:git.baseTreeSha,parentSha:git.parentSha,treeSha});
     if(!reconciled?.updated)throw new ToolError("WRITE_RECONCILIATION_CONFLICT",{phase:operation.phase});
     operation=reconciled.operation;
-    leaseGeneration=operation.leaseGeneration;
+    leaseGeneration=operation.leaseGeneration??leaseGeneration;
    }catch(error){if(error instanceof ToolError)throw error;throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:"UNKNOWN",phase:operation.phase,message:"Tree recovery could not prove the exact immutable Git tree. No branch or PR write was attempted."});}
   }
   if(operation?.status==="IN_PROGRESS"&&operation.phase==="TREE_WRITTEN"){
@@ -340,7 +340,7 @@ async function createChangePr(args,env) {
     const reconciled=await stub.reconcileCommitWritten({keyHash,leaseGeneration,treeSha:git.treeSha,parentSha:git.parentSha,commitSha:commit.sha});
     if(!reconciled?.updated)throw new ToolError("WRITE_RECONCILIATION_CONFLICT",{phase:operation.phase});
     operation=reconciled.operation;
-    leaseGeneration=operation.leaseGeneration;
+    leaseGeneration=operation.leaseGeneration??leaseGeneration;
    }catch(error){if(error instanceof ToolError)throw error;throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:"UNKNOWN",phase:operation.phase,message:"Commit recovery could not prove the exact immutable Git commit. No branch or PR write was attempted."});}
   }
   if(operation?.status==="IN_PROGRESS"&&operation.phase==="COMMIT_WRITTEN")return await finishRecoveredCommit(false);
@@ -445,7 +445,7 @@ async function createChangePr(args,env) {
    const result=await stub.transitionOperation({keyHash,leaseGeneration,expectedPhase,nextPhase,status,metadata,now:Date.now()});
    if(!result?.updated) throw new Error("operation phase transition rejected");
    currentPhase=nextPhase;
-   leaseGeneration=result.operation.leaseGeneration;
+   leaseGeneration=result.operation.leaseGeneration??leaseGeneration;
    return result.operation;
   } catch {
    try { await stub.markOperationStatus({keyHash,leaseGeneration,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"}); } catch {}

@@ -1158,3 +1158,50 @@ test("a successful PR POST with unavailable readback is quarantined as UNKNOWN",
   assert.equal(ledgerPhase,"PR_DISPATCHED");
  }finally{globalThis.fetch=originalFetch}
 });
+
+
+test("a failed durable status write never falsely claims UNKNOWN quarantine",async()=>{
+ const originalFetch=globalThis.fetch;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
+ const key="pull-request-ledger-status-failure-0001";
+ const operations=new Map();let prPosts=0,prReads=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null,createdBranch=null;
+ const stub={
+  async admitWrite(input){const operation={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
+  async transitionOperation(input){const operation=operations.get(input.keyHash);if(!operation||operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false};operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";operation.updatedAt=input.now;if(input.metadata)Object.assign(operation,input.metadata);ledgerPhase=operation.phase;ledgerStatus=operation.status;return{updated:true,operation};},
+  async markOperationStatus(){return{updated:false};},
+  async markStaleOperationsUnknown(){return 0;},
+  async getOperation(keyHash){return operations.get(keyHash)??null;},
+  async reconcilePrCreated(){return{updated:false};}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";
+  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:parentSha}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1")){
+   const bytes=new TextEncoder().encode("proposal"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
+   const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+   return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
+  }
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/refs")){const payload=JSON.parse(init.body);createdBranch=payload.ref.slice("refs/heads/".length);return new Response(JSON.stringify({ref:payload.ref,object:{sha:commitSha}}),{status:201});}
+  if(method==="GET"&&createdBranch&&url.endsWith("/git/ref/heads/"+createdBranch))return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch,object:{sha:commitSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/pulls")){prPosts++;const requestBody=JSON.parse(init.body);return new Response(JSON.stringify({number:101,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/101",draft:true,state:"open",head:{ref:createdBranch,sha:commitSha},base:{ref:"feature/cloud-engineering-connector"},body:requestBody.body}),{status:201});}
+  if(method==="GET"&&url.endsWith("/pulls/101")){prReads++;return new Response(JSON.stringify({message:"Not Found"}),{status:404});}
+  throw new Error("Unexpected request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:key,owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Verify branch identity",summary:"Do not accept a mismatched Git ref",files:[{path:"docs/proposal.txt",content:"proposal"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/WRITE_CONTROL_UNAVAILABLE/);
+  assert.doesNotMatch(body.result.content[0].text,/WRITE_OUTCOME_UNKNOWN/);
+  assert.equal(prPosts,1);
+  assert.equal(prReads,0);
+  assert.equal(ledgerStatus,null);
+  assert.equal(ledgerPhase,"PR_DISPATCHED");
+ }finally{globalThis.fetch=originalFetch}
+});

@@ -751,3 +751,45 @@ test("public and authentication-failure requests use independent key spaces",asy
  assert.equal(publicResponse.status,200);
  assert.deepEqual(keys,["auth-failure:203.0.113.10","public-mcp:203.0.113.10"]);
 });
+
+
+test("create_change_pr persists deterministic Git commit identity before dispatching the commit",async()=>{
+ const originalFetch=globalThis.fetch;
+ const createdAt=Date.parse("2026-10-30T12:00:00.000Z");
+ const events=[],metadata=[];
+ let keyHash=null;
+ const stub={
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:false,operation:{keyHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt,updatedAt:createdAt}};},
+  async transitionOperation(input){events.push(input.nextPhase);metadata.push(input.metadata??{});return{updated:true,operation:{status:"IN_PROGRESS",phase:input.nextPhase}};},
+  async markOperationStatus(){return{updated:true};},
+  async markStaleOperationsUnknown(){return 0;},
+  async getOperation(){return null;},
+ };
+ const commitSha="4".repeat(40),treeSha="3".repeat(40),parentSha="2".repeat(40),baseTreeSha="1".repeat(40);
+ let commitPayload=null;
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";
+  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:parentSha}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+keyHash,object:{sha:commitSha}}),{status:201});
+  if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:91,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/91",draft:true,state:"open"}),{status:201});
+  throw new Error("Unexpected GitHub request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"fixed-commit-date-test-0001",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Deterministic commit",summary:"Persist exact identity",files:[{path:"docs/recovery.txt",content:"stable"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.result.isError,undefined);
+  assert.deepEqual(events,["TREE_DISPATCHED","TREE_WRITTEN","COMMIT_DISPATCHED","COMMIT_WRITTEN","BRANCH_WRITTEN","PR_DISPATCHED","PR_CREATED"]);
+  assert.deepEqual(metadata[0],{baseTreeSha,parentSha});
+  assert.deepEqual(metadata[1],{treeSha});
+  assert.deepEqual(metadata[2],{commitDate:"2026-10-30T12:00:00.000Z",commitMessage:"assistant: Deterministic commit"});
+  assert.equal(commitPayload.tree,treeSha);
+  assert.deepEqual(commitPayload.parents,[parentSha]);
+  assert.deepEqual(commitPayload.author,{name:"Cloud Engineering Connector",email:"mcp-connector@users.noreply.github.com",date:"2026-10-30T12:00:00.000Z"});
+  assert.deepEqual(commitPayload.committer,commitPayload.author);
+ }finally{globalThis.fetch=originalFetch}
+});

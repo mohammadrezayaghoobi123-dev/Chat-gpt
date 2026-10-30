@@ -82,7 +82,7 @@ async function architectureAnalyze(args,env){
   evidence.push({path:file.path,ref:file.ref,size_bytes:file.size,line_count:lines.length});
   for(let index=0;index<lines.length;index++){
    const line=lines[index];
-   if(/\bfetch\s*\(/.test(line)&&!/\bsignal\s*:/.test(line)&&!/AbortSignal\./.test(line)){
+   if(/\bfetch\s*\(/.test(line)&&!/\bfunction\s+fetch\s*\(/.test(line)&&!/\bsignal\s*:/.test(line)&&!/AbortSignal\./.test(line)){
     findings.push({id:"ARCH-"+String(findings.length+1).padStart(3,"0"),rule_id:"UNBOUNDED_FETCH",title:"Fetch call has no visible timeout or abort signal",severity:"medium",status:"observed",confidence:"heuristic",evidence:[{path:file.path,line_start:index+1,line_end:index+1,snippet:line.trim().slice(0,240)}],reasoning:"The inspected line contains a fetch invocation but no timeout or AbortSignal in that invocation. This bounded line-level check cannot determine whether cancellation is applied by a wrapper or surrounding control flow.",impact:"A stalled upstream request may consume execution time or delay failure handling.",verification:{method:"Trace the call path and run a controlled upstream-timeout test.",result:"not_run"},recommendation:"Apply an explicit bounded timeout or propagate an AbortSignal, then add a regression test."});
    }
    if(/\beval\s*\(|new\s+Function\s*\(/.test(line)){

@@ -84,7 +84,7 @@ test("idempotency fingerprint conflict is a structured MCP tool error",async()=>
 
 test("idempotency scope and request fingerprint canonicalize GitHub owner and repository casing",async()=>{
  const originalFetch=globalThis.fetch,admissions=[];
- const stub={async markStaleOperationsUnknown(){return 0},async admitWrite(input){admissions.push(input);return{admitted:false,reason:"RATE_LIMITED",retryAfterSeconds:1}}};
+ const stub={async markStaleOperationsUnknown(){return 0},async admitWrite(input){admissions.push(input);return{admitted:false,reason:"RATE_LIMITED",retryAfterSeconds:1}},async transitionOperation(){throw new Error("not expected")},async markOperationStatus(){throw new Error("not expected")},async reconcilePrCreated(){throw new Error("not expected")},async getOperation(){return null}};
  globalThis.fetch=async()=>{throw new Error("GitHub must not be called while admission is denied")};
  try{
   const common={idempotency_key:"case-normalization-key-0001",base_branch:"feature/cloud-engineering-connector",title:"Case normalization",summary:"Same GitHub resource",files:[{path:"docs/proposal.txt",content:"x"}]};

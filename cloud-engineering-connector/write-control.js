@@ -216,19 +216,18 @@ export class WriteControl extends DurableObject {
       throw new TypeError("commitMessage must contain 1-500 characters.");
     }
     for (const key of ["authorName", "committerName"]) {
-      if (gitMetadata[key] !== undefined && (typeof gitMetadata[key] !== "string" || gitMetadata[key].length < 1 || gitMetadata[key].length > 100 || /[\\r\\n\\u0000]/.test(gitMetadata[key]))) {
+      if (gitMetadata[key] !== undefined && (typeof gitMetadata[key] !== "string" || gitMetadata[key].length < 1 || gitMetadata[key].length > 100 || gitMetadata[key].includes("\r") || gitMetadata[key].includes("\n") || gitMetadata[key].includes("\0"))) {
         throw new TypeError(key + " is invalid.");
       }
     }
     for (const key of ["authorEmail", "committerEmail"]) {
-      if (gitMetadata[key] !== undefined && (typeof gitMetadata[key] !== "string" || gitMetadata[key].length > 254 || !/^[^\\s@]+@[^\\s@]+$/.test(gitMetadata[key]))) {
+      if (gitMetadata[key] !== undefined && (typeof gitMetadata[key] !== "string" || gitMetadata[key].length > 254 || !/^[^\s@]+@[^\s@]+$/.test(gitMetadata[key]))) {
         throw new TypeError(key + " is invalid.");
       }
     }
     if (nextPhase === "COMMIT_DISPATCHED") {
-      const persisted = { ...(this.readOperation(keyHash)?.gitMetadata ?? {}), ...gitMetadata };
       for (const key of ["commitDate", "commitMessage", "authorName", "authorEmail", "committerName", "committerEmail"]) {
-        if (typeof persisted[key] !== "string" || !persisted[key]) throw new TypeError("COMMIT_DISPATCHED requires persisted " + key + ".");
+        if (typeof gitMetadata[key] !== "string" || !gitMetadata[key]) throw new TypeError("COMMIT_DISPATCHED requires persisted " + key + ".");
       }
     }
     if (branchName !== null && (typeof branchName !== "string" || branchName.length > 255)) {

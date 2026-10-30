@@ -367,7 +367,7 @@ export class WriteControl extends DurableObject {
 
   reconcileTreeWritten(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { keyHash, baseTreeSha, parentSha, treeSha } = input;
+    const { keyHash, baseTreeSha, parentSha, treeSha , leaseGeneration } = input;
     const now = Date.now();
     assertHash(keyHash, "keyHash");
     for (const [field, value] of Object.entries({ baseTreeSha, parentSha, treeSha })) {
@@ -376,6 +376,7 @@ export class WriteControl extends DurableObject {
     return this.ctx.storage.transactionSync(() => {
       const current = this.readOperation(keyHash);
       if (!current) return { updated: false, reason: "NOT_FOUND" };
+      if (leaseGeneration !== undefined && current.leaseGeneration !== leaseGeneration) return { updated: false, reason: "LEASE_FENCE_MISMATCH", operation: current };
       if (current.status !== "UNKNOWN" || !["TREE_DISPATCHED", "TREE_WRITTEN"].includes(current.phase)) {
         return { updated: false, reason: "RECONCILIATION_NOT_ALLOWED", operation: current };
       }
@@ -402,7 +403,7 @@ export class WriteControl extends DurableObject {
 
   reconcileCommitWritten(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { keyHash, treeSha, parentSha, commitSha } = input;
+    const { keyHash, treeSha, parentSha, commitSha , leaseGeneration } = input;
     const now = Date.now();
     assertHash(keyHash, "keyHash");
     for (const [field, value] of Object.entries({ treeSha, parentSha, commitSha })) {
@@ -411,6 +412,7 @@ export class WriteControl extends DurableObject {
     return this.ctx.storage.transactionSync(() => {
       const current = this.readOperation(keyHash);
       if (!current) return { updated: false, reason: "NOT_FOUND" };
+      if (leaseGeneration !== undefined && current.leaseGeneration !== leaseGeneration) return { updated: false, reason: "LEASE_FENCE_MISMATCH", operation: current };
       if (current.status !== "UNKNOWN" || current.phase !== "COMMIT_DISPATCHED") {
         return { updated: false, reason: "RECONCILIATION_NOT_ALLOWED", operation: current };
       }
@@ -438,7 +440,7 @@ export class WriteControl extends DurableObject {
 
   reconcileBranchWritten(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { keyHash, branchName, commitSha } = input;
+    const { keyHash, branchName, commitSha , leaseGeneration } = input;
     const now = Date.now();
     assertHash(keyHash, "keyHash");
     if (branchName !== "assistant/mcp-" + keyHash) throw new TypeError("branchName does not match the deterministic operation identity.");
@@ -446,6 +448,7 @@ export class WriteControl extends DurableObject {
     return this.ctx.storage.transactionSync(() => {
       const current = this.readOperation(keyHash);
       if (!current) return { updated: false, reason: "NOT_FOUND" };
+      if (leaseGeneration !== undefined && current.leaseGeneration !== leaseGeneration) return { updated: false, reason: "LEASE_FENCE_MISMATCH", operation: current };
       if (current.status !== "UNKNOWN" || !["COMMIT_WRITTEN", "BRANCH_WRITTEN"].includes(current.phase)) {
         return { updated: false, reason: "RECONCILIATION_NOT_ALLOWED", operation: current };
       }
@@ -472,7 +475,7 @@ export class WriteControl extends DurableObject {
 
   reconcilePrCreated(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { keyHash, branchName, commitSha, prNumber, prUrl } = input;
+    const { keyHash, branchName, commitSha, prNumber, prUrl , leaseGeneration } = input;
     const now = Date.now();
     assertHash(keyHash, "keyHash");
     if (branchName !== "assistant/mcp-" + keyHash) throw new TypeError("branchName does not match the deterministic operation identity.");
@@ -484,6 +487,7 @@ export class WriteControl extends DurableObject {
     return this.ctx.storage.transactionSync(() => {
       const current = this.readOperation(keyHash);
       if (!current) return { updated: false, reason: "NOT_FOUND" };
+      if (leaseGeneration !== undefined && current.leaseGeneration !== leaseGeneration) return { updated: false, reason: "LEASE_FENCE_MISMATCH", operation: current };
       if (current.status !== "UNKNOWN" || current.phase !== "PR_DISPATCHED") {
         return { updated: false, reason: "RECONCILIATION_NOT_ALLOWED", operation: current };
       }
@@ -545,12 +549,14 @@ export class WriteControl extends DurableObject {
 
   reopenReserved(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { keyHash } = input;
+    const { keyHash, leaseGeneration } = input;
     const now = Date.now();
     assertHash(keyHash, "keyHash");
+    if (leaseGeneration !== undefined && (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1)) throw new TypeError("leaseGeneration must be a positive safe integer.");
     return this.ctx.storage.transactionSync(() => {
       const current = this.readOperation(keyHash);
       if (!current) return { updated: false, reason: "NOT_FOUND" };
+      if (leaseGeneration !== undefined && current.leaseGeneration !== leaseGeneration) return { updated: false, reason: "LEASE_FENCE_MISMATCH", operation: current };
       if (current.status !== "UNKNOWN" || current.phase !== "RESERVED") {
         return { updated: false, reason: "RECONCILIATION_NOT_ALLOWED", operation: current };
       }

@@ -118,11 +118,12 @@ export class WriteControl extends DurableObject {
     const now = Date.now();
     assertHash(keyHash, "keyHash");
     assertHash(requestHash, "requestHash");
-    if (!Number.isSafeInteger(windowMs) || windowMs < 1 || windowMs > 3_600_000) {
-      throw new TypeError("windowMs must be an integer between 1 and 3600000.");
+    // Enforce the security policy at the Durable Object boundary; callers cannot widen it.
+    if (windowMs !== 60_000) {
+      throw new TypeError("windowMs must equal the fixed policy value 60000.");
     }
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) {
-      throw new TypeError("limit must be an integer between 1 and 10000.");
+    if (limit !== 5) {
+      throw new TypeError("limit must equal the fixed policy value 5.");
     }
 
     return this.ctx.storage.transactionSync(() => {

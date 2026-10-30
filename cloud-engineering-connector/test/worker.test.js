@@ -311,7 +311,7 @@ test("create_change_pr retains deterministic branch after a definite PR rejectio
    return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
   }
   if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
-  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha)){const secondPrecision=value=>({...value,date:new Date(Math.floor(Date.parse(value.date)/1000)*1000).toISOString()});return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:secondPrecision(commitPayload.author),committer:secondPrecision(commitPayload.committer)}),{status:200});}
   if(method==="POST"&&url.endsWith("/git/refs")){branchRef=JSON.parse(init.body).ref;return new Response(JSON.stringify({ref:branchRef}),{status:201});}
   if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({message:"simulated PR validation failure"}),{status:422});
   throw new Error("Unexpected request "+method+" "+url);
@@ -809,10 +809,10 @@ test("create_change_pr persists deterministic Git commit identity before dispatc
   assert.deepEqual(events,["TREE_DISPATCHED","TREE_WRITTEN","COMMIT_DISPATCHED","COMMIT_WRITTEN","BRANCH_WRITTEN","PR_DISPATCHED","PR_CREATED"]);
   assert.deepEqual(metadata[0],{baseTreeSha,parentSha});
   assert.deepEqual(metadata[1],{treeSha});
-  assert.deepEqual(metadata[2],{commitDate:"2026-10-30T12:00:00.000Z",commitMessage:"assistant: Deterministic commit",authorName:"Cloud Engineering Connector",authorEmail:"mcp-connector@users.noreply.github.com",committerName:"Cloud Engineering Connector",committerEmail:"mcp-connector@users.noreply.github.com"});
+  assert.deepEqual(metadata[2],{commitDate:expectedGitDate,commitMessage:"assistant: Deterministic commit",authorName:"Cloud Engineering Connector",authorEmail:"mcp-connector@users.noreply.github.com",committerName:"Cloud Engineering Connector",committerEmail:"mcp-connector@users.noreply.github.com"});
   assert.equal(commitPayload.tree,treeSha);
   assert.deepEqual(commitPayload.parents,[parentSha]);
-  assert.deepEqual(commitPayload.author,{name:"Cloud Engineering Connector",email:"mcp-connector@users.noreply.github.com",date:"2026-10-30T12:00:00.000Z"});
+  assert.deepEqual(commitPayload.author,{name:"Cloud Engineering Connector",email:"mcp-connector@users.noreply.github.com",date:expectedGitDate});
   assert.deepEqual(commitPayload.committer,commitPayload.author);
  }finally{globalThis.fetch=originalFetch}
 });

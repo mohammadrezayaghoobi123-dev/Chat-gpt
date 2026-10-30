@@ -696,6 +696,84 @@ class Plumbing(unittest.TestCase):
 
 
 @needs_sandbox
+class AggregateResourceLimits(unittest.TestCase):
+    """Per-process rlimits do not bound a *set* of processes. The runner also watches the whole sandbox.
+
+    Stage 3 measured (pre-registered, two environments): 4 x 400 MB against a 512 MB budget, 1500 child
+    processes and 100 MB of files were all accepted. The watchdog stops these floods; sampling is
+    best-effort (about 50 ms), so the caps are bounds on abuse, not hard kernel guarantees.
+    """
+
+    def run_raw(self, script, **kw):
+        return R._run_raw(spec(script, timeout_s=kw.pop("timeout_s", 20), **kw))
+
+    def test_process_flood_is_stopped(self):
+        started = time.monotonic()
+        raw = self.run_raw("""
+            import os, time
+            kids = []
+            for i in range(1500):
+                pid = os.fork()
+                if pid == 0:
+                    time.sleep(30); os._exit(0)
+                kids.append(pid)
+            time.sleep(30)
+        """)
+        self.assertEqual(raw["outcome"], "inconclusive")
+        self.assertEqual(raw["reason"], "resource limit exceeded: processes")
+        self.assertLess(time.monotonic() - started, 10)
+
+    def test_aggregate_memory_flood_is_stopped(self):
+        raw = self.run_raw("""
+            import os, time
+            for i in range(4):
+                if os.fork() == 0:
+                    b = bytearray(80 * 1024 * 1024)
+                    for j in range(0, len(b), 4096): b[j] = 1
+                    time.sleep(20); os._exit(0)
+            time.sleep(20)
+        """, memory_bytes=256 << 20)   # each child fits its own RLIMIT_AS; 4 x 80 MB exceeds the group budget
+        self.assertEqual(raw["outcome"], "inconclusive")
+        self.assertEqual(raw["reason"], "resource limit exceeded: memory")
+
+    def test_disk_flood_in_work_is_stopped(self):
+        with mock.patch.object(R, "MAX_WORK_BYTES", 4 << 20):
+            raw = self.run_raw("""
+                import time
+                chunk = b'x' * 65536
+                for i in range(2000):
+                    open(f'/work/f{i}', 'wb').write(chunk)
+                time.sleep(20)
+            """)
+        self.assertEqual(raw["outcome"], "inconclusive")
+        self.assertEqual(raw["reason"], "resource limit exceeded: disk")
+
+    def test_forked_workers_sharing_pages_are_not_counted_as_a_memory_flood(self):
+        raw = self.run_raw("""
+            import os, time
+            big = bytearray(60 * 1024 * 1024)
+            for j in range(0, len(big), 4096): big[j] = 1
+            kids = []
+            for i in range(20):
+                pid = os.fork()
+                if pid == 0:
+                    time.sleep(1.0); os._exit(0)      # read-only sharers: no private copy of `big`
+                kids.append(pid)
+            for pid in kids: os.waitpid(pid, 0)
+        """, memory_bytes=256 << 20)
+        self.assertEqual((raw["outcome"], raw["reason"]), ("pass", "criterion met (exit 0)"))
+
+    def test_ordinary_multi_process_work_is_not_affected(self):
+        raw = self.run_raw("""
+            import os, subprocess, sys
+            outs = [subprocess.run([sys.executable, '-I', '-c', 'print(1)'], capture_output=True).stdout for _ in range(5)]
+            open('out/result.txt', 'wb').write(b'y' * (1 << 20))
+            assert len(outs) == 5
+        """)
+        self.assertEqual((raw["outcome"], raw["reason"]), ("pass", "criterion met (exit 0)"))
+
+
+@needs_sandbox
 class Limits(unittest.TestCase):
     """The limits the runner claims to apply are really in force inside the test process."""
 

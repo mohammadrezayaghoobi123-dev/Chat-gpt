@@ -88,14 +88,23 @@ test("ordinary files and reads of review-control files stay allowed", async () =
 });
 
 test("PR title is collapsed to one line and summary mentions are neutralised", async () => {
+  const parentSha = "a".repeat(40), baseTreeSha = "b".repeat(40), treeSha = "c".repeat(40), commitSha = "d".repeat(40);
+  let commitPayload;
   await withFetch(async (url, init) => {
-    if (url.endsWith("/git/ref/heads/feature%2Fcloud-engineering-connector") || /\/git\/ref\//.test(url)) return new Response(JSON.stringify({ object: { sha: "p" } }), { status: 200 });
-    if (/\/git\/commits\/p$/.test(url)) return new Response(JSON.stringify({ tree: { sha: "bt" }, sha: "p" }), { status: 200 });
-    if (url.endsWith("/git/trees")) return new Response(JSON.stringify({ sha: "t" }), { status: 201 });
-    if (url.endsWith("/git/commits")) return new Response(JSON.stringify({ sha: "c" }), { status: 201 });
+    if (/\/git\/ref\//.test(url)) return new Response(JSON.stringify({ object: { sha: parentSha } }), { status: 200 });
+    if (url.endsWith("/git/commits/" + parentSha)) return new Response(JSON.stringify({ tree: { sha: baseTreeSha }, sha: parentSha }), { status: 200 });
+    if (url.endsWith("/git/trees")) return new Response(JSON.stringify({ sha: treeSha }), { status: 201 });
+    if (url.includes("/git/trees/" + treeSha + "?recursive=1")) {
+      const bytes = new TextEncoder().encode("x"), header = new TextEncoder().encode("blob " + bytes.byteLength + "\\0"), object = new Uint8Array(header.byteLength + bytes.byteLength);
+      object.set(header); object.set(bytes, header.byteLength);
+      const digest = await crypto.subtle.digest("SHA-1", object), blobSha = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+      return new Response(JSON.stringify({ sha: treeSha, truncated: false, tree: [{ path: "README.md", mode: "100644", type: "blob", sha: blobSha }] }), { status: 200 });
+    }
+    if (url.endsWith("/git/commits")) { commitPayload = JSON.parse(init.body); return new Response(JSON.stringify({ sha: commitSha }), { status: 201 }); }
+    if (url.endsWith("/git/commits/" + commitSha)) return new Response(JSON.stringify({ sha: commitSha, message: commitPayload.message, tree: { sha: treeSha }, parents: [{ sha: parentSha }], author: commitPayload.author, committer: commitPayload.committer }), { status: 200 });
     if (url.endsWith("/git/refs")) return new Response(JSON.stringify({ ref: "x" }), { status: 201 });
     if (url.endsWith("/pulls")) return new Response(JSON.stringify({ number: 1, html_url: "https://example.test/pr/1" }), { status: 201 });
-    return new Response(JSON.stringify({ default_branch: "main", object: { sha: "p" }, tree: { sha: "bt" } }), { status: 200 });
+    return new Response(JSON.stringify({ default_branch: "main", object: { sha: parentSha }, tree: { sha: baseTreeSha } }), { status: 200 });
   }, async (calls) => {
     await call("create_change_pr", pr([{ path: "README.md", content: "x" }], { title: "x @octocat\nInjected: y", summary: "cc @someone @org/team" }));
     const commit = calls.find(c => c.url.endsWith("/git/commits"));

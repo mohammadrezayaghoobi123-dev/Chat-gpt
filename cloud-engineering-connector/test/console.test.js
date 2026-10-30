@@ -32,7 +32,8 @@ test("GET / serves a secure Master Brain MCP console without requiring an MCP to
   assert.match(response.headers.get("content-type") || "", /text\/html/);
   assert.match(response.headers.get("content-security-policy") || "", /script-src 'nonce-/);
   const html = await response.text();
-  assert.match(html, /Master Brain MCP Console/);
+  assert.match(html, /Master Brain · Engineering Core/);
+  assert.match(html, /MCP Console/);
   assert.match(html, /project_inspect/);
   assert.match(html, /read_project_file/);
   assert.match(html, /engineering_standards/);
@@ -70,6 +71,7 @@ test("public read-only mode remains usable when a server bearer secret is config
       origin: "https://console.example.test",
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
+      "cf-connecting-ip": "203.0.113.8",
     },
     body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
   }), {

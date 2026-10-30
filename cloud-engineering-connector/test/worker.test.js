@@ -797,7 +797,7 @@ test("create_change_pr persists deterministic Git commit identity before dispatc
    return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/recovery.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
   }
   if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
-  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha)){const secondPrecision=value=>({...value,date:new Date(Math.floor(Date.parse(value.date)/1000)*1000).toISOString()});return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:secondPrecision(commitPayload.author),committer:secondPrecision(commitPayload.committer)}),{status:200});}
   if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+keyHash,object:{sha:commitSha}}),{status:201});
   if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:91,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/91",draft:true,state:"open"}),{status:201});
   throw new Error("Unexpected GitHub request "+method+" "+url);
@@ -887,7 +887,7 @@ test("UNKNOWN COMMIT_DISPATCHED replay recreates and verifies the exact persiste
 test("UNKNOWN TREE_DISPATCHED replay repeats only the same immutable tree payload before continuing",async()=>{
  const originalFetch=globalThis.fetch;
  const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
- const createdAt=Date.parse("2026-10-30T12:00:00.000Z");
+ const createdAt=Date.parse("2026-10-30T12:00:00.123Z");
  const operation={status:"UNKNOWN",phase:"TREE_DISPATCHED",createdAt,updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha}};
  const ledger=recoveryLedger(operation),calls=[];let treePayload=null,commitPayload=null;
  globalThis.fetch=async(input,init={})=>{
@@ -906,6 +906,7 @@ test("UNKNOWN TREE_DISPATCHED replay repeats only the same immutable tree payloa
   const body=await response.json(),result=JSON.parse(body.result.content[0].text);
   assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,93);
   assert.deepEqual(treePayload,{base_tree:baseTreeSha,tree:[{path:"docs/replay.txt",mode:"100644",type:"blob",content:"x"}]});
+   assert.equal(commitPayload.author.date,"2026-10-30T12:00:00.000Z");
   assert.deepEqual(calls.map(call=>call.method),["GET","POST","GET","POST","GET","POST","POST"]);
   assert.equal(operation.phase,"PR_CREATED");assert.equal(operation.status,"SUCCEEDED");
  }finally{globalThis.fetch=originalFetch}

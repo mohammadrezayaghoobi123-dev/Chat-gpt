@@ -111,3 +111,30 @@ test("architecture_analyze enforces the eight-file limit before repository reads
     globalThis.fetch = originalFetch;
   }
 });
+
+
+test("architecture_analyze bounds finding volume and reports truncation", async () => {
+  const originalFetch = globalThis.fetch;
+  const source = Array.from({ length: 125 }, (_, index) => "fetch('/resource/" + index + "');").join("\\n");
+  globalThis.fetch = async (url) => {
+    const path = decodeURIComponent(new URL(url).pathname.split("/contents/")[1] || "");
+    const content = path === "src/noisy.js" ? source : null;
+    return content === null
+      ? new Response(JSON.stringify({ message: "Not Found" }), { status: 404 })
+      : new Response(githubFile(path, content), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const response = await worker.fetch(request("architecture_analyze", {
+      owner: "mohammadrezayaghoobi123-dev",
+      repo: "Chat-gpt",
+      paths: ["src/noisy.js"],
+    }), { MCP_AUTH_TOKEN: "test-secret" });
+    const body = await response.json();
+    const analysis = JSON.parse(body.result.content[0].text);
+    assert.equal(analysis.findings.length, 100);
+    assert.equal(analysis.summary.findings_total, 100);
+    assert.equal(analysis.findings_truncated, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

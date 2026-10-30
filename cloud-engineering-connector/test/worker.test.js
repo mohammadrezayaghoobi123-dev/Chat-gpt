@@ -1212,7 +1212,7 @@ test("a fresh IN_PROGRESS replay never dispatches a concurrent branch write",asy
  const key="fresh-commit-written-replay-0001";
  const keyHash="a".repeat(64);
  const operation={
-  keyHash,requestHash:"b".repeat(64),status:"IN_PROGRESS",phase:"COMMIT_WRITTEN",
+  keyHash,requestHash:"b".repeat(64),leaseGeneration:1,status:"IN_PROGRESS",phase:"COMMIT_WRITTEN",
   createdAt:Date.now(),updatedAt:Date.now(),commitSha:"c".repeat(40),
   branchName:"assistant/mcp-"+keyHash,
  };

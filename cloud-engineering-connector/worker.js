@@ -203,6 +203,16 @@ async function createChangePr(args,env) {
  if(admission.reason==="IDEMPOTENCY_CONFLICT") throw new ToolError("IDEMPOTENCY_CONFLICT");
  if(!admission.admitted) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
 
+ // RESERVED proves no GitHub write was dispatched. Reopen it with a one-winner CAS.
+ // A concurrent replay that loses this CAS must not enter the write path.
+ if(admission.replay&&admission.operation?.status==="UNKNOWN"&&admission.operation.phase==="RESERVED") {
+  let reopened;
+  try { reopened=await stub.reopenReserved({keyHash}); }
+  catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
+  if(!reopened?.updated) throw new ToolError("WRITE_ALREADY_IN_PROGRESS",{operation_status:reopened?.operation?.status??"UNKNOWN",phase:reopened?.operation?.phase??"RESERVED"});
+  admission={...admission,replay:false,operation:reopened.operation};
+ }
+
  if(admission.replay) {
   let operation=admission.operation;
   if(!operation) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");

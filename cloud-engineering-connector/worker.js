@@ -202,7 +202,8 @@ async function createChangePr(args,env) {
  if(admission.reason==="RATE_LIMITED") throw new ToolError("WRITE_RATE_LIMITED",{retry_after_seconds:admission.retryAfterSeconds});
  if(admission.reason==="IDEMPOTENCY_CONFLICT") throw new ToolError("IDEMPOTENCY_CONFLICT");
  if(!admission.admitted) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
- let leaseGeneration=admission.operation?.leaseGeneration??1;
+ const leaseGeneration=admission.operation?.leaseGeneration;
+ if(!Number.isSafeInteger(leaseGeneration)||leaseGeneration<1) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
  if(!Number.isSafeInteger(leaseGeneration)||leaseGeneration<1) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
 
  // RESERVED proves no GitHub write was dispatched. Reopen it with a one-winner CAS.

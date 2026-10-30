@@ -96,7 +96,7 @@ function gitCommitPayload(treeSha,parentSha,commitDate,commitMessage) {
 }
 async function gitBlobSha(content) {
  const bytes=new TextEncoder().encode(content);
- const header=new TextEncoder().encode("blob "+bytes.byteLength+"\\0");
+ const header=new TextEncoder().encode("blob "+bytes.byteLength+"\0");
  const object=new Uint8Array(header.byteLength+bytes.byteLength);
  object.set(header);object.set(bytes,header.byteLength);
  const digest=await crypto.subtle.digest("SHA-1",object);

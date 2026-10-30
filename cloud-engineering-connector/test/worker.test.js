@@ -1205,3 +1205,39 @@ test("a failed durable status write never falsely claims UNKNOWN quarantine",asy
   assert.equal(ledgerPhase,"PR_DISPATCHED");
  }finally{globalThis.fetch=originalFetch}
 });
+
+
+test("a fresh IN_PROGRESS replay never dispatches a concurrent branch write",async()=>{
+ const originalFetch=globalThis.fetch;
+ const key="fresh-commit-written-replay-0001";
+ const keyHash="a".repeat(64);
+ const operation={
+  keyHash,requestHash:"b".repeat(64),status:"IN_PROGRESS",phase:"COMMIT_WRITTEN",
+  createdAt:Date.now(),updatedAt:Date.now(),commitSha:"c".repeat(40),
+  branchName:"assistant/mcp-"+keyHash,
+ };
+ let githubCalls=0,status=operation.status;
+ const stub={
+  async markStaleOperationsUnknown(){return 0;},
+  async admitWrite(){return{admitted:true,replay:true,operation};},
+  async getOperation(){return operation;},
+  async markOperationStatus(input){status=input.status;operation.status=input.status;return{updated:true,operation};},
+  async transitionOperation(){throw new Error("a fresh replay must not advance the operation");},
+  async reconcilePrCreated(){throw new Error("a fresh replay must not reconcile");},
+ };
+ globalThis.fetch=async()=>{githubCalls++;throw new Error("GitHub must not be called for a fresh in-progress replay");};
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{
+   idempotency_key:key,owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",
+   base_branch:"feature/cloud-engineering-connector",title:"Concurrent replay",
+   summary:"Must not dispatch a second branch write",files:[{path:"docs/proposal.txt",content:"proposal"}],
+  }}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/WRITE_ALREADY_IN_PROGRESS/);
+  assert.equal(githubCalls,0);
+  assert.equal(status,"IN_PROGRESS");
+  assert.equal(operation.phase,"COMMIT_WRITTEN");
+ }finally{globalThis.fetch=originalFetch}
+});

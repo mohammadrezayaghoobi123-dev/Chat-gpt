@@ -527,6 +527,30 @@ export class WriteControl extends DurableObject {
     });
   }
 
+  reopenReserved(input) {
+    if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
+    const { keyHash } = input;
+    const now = Date.now();
+    assertHash(keyHash, "keyHash");
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.readOperation(keyHash);
+      if (!current) return { updated: false, reason: "NOT_FOUND" };
+      if (current.status !== "UNKNOWN" || current.phase !== "RESERVED") {
+        return { updated: false, reason: "RECONCILIATION_NOT_ALLOWED", operation: current };
+      }
+      this.ctx.storage.sql.exec(
+        "UPDATE write_operations SET status = 'IN_PROGRESS', updated_at = ?, error_code = NULL WHERE key_hash = ? AND status = 'UNKNOWN' AND phase = 'RESERVED'",
+        now,
+        keyHash,
+      );
+      const updatedOperation = this.readOperation(keyHash);
+      if (!updatedOperation || updatedOperation.status !== "IN_PROGRESS" || updatedOperation.phase !== "RESERVED") {
+        return { updated: false, reason: "PERSISTENCE_VERIFICATION_FAILED", operation: updatedOperation };
+      }
+      return { updated: true, operation: updatedOperation };
+    });
+  }
+
   markStaleOperationsUnknown(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
     const { leaseMs } = input;

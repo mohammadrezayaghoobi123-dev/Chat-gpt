@@ -869,7 +869,7 @@ test("UNKNOWN COMMIT_DISPATCHED replay recreates and verifies the exact persiste
  const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
  const commitDate="2026-10-30T12:00:00.000Z",commitMessage="assistant: Persisted identity";
  const persistedIdentity={authorName:"Persisted Engineering Agent",authorEmail:"persisted-agent@example.test",committerName:"Persisted Engineering Agent",committerEmail:"persisted-agent@example.test"};
- const operation={status:"UNKNOWN",phase:"COMMIT_DISPATCHED",createdAt:Date.parse(commitDate),updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha,treeSha,commitDate,commitMessage,...persistedIdentity}};
+ const operation={leaseGeneration:1,status:"UNKNOWN",phase:"COMMIT_DISPATCHED",createdAt:Date.parse(commitDate),updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha,treeSha,commitDate,commitMessage,...persistedIdentity}};
  const ledger=recoveryLedger(operation),calls=[];let commitPayload=null,createdPr=null,createdRef=null;
  globalThis.fetch=async(input,init={})=>{
   const url=String(input),method=init.method||"GET";calls.push({method,url});
@@ -897,7 +897,7 @@ test("UNKNOWN TREE_DISPATCHED replay repeats only the same immutable tree payloa
  const originalFetch=globalThis.fetch;
  const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
  const createdAt=Date.parse("2026-10-30T12:00:00.123Z");
- const operation={status:"UNKNOWN",phase:"TREE_DISPATCHED",createdAt,updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha}};
+ const operation={leaseGeneration:1,status:"UNKNOWN",phase:"TREE_DISPATCHED",createdAt,updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha}};
  const ledger=recoveryLedger(operation),calls=[];let treePayload=null,commitPayload=null,createdPr=null,createdRef=null;
  globalThis.fetch=async(input,init={})=>{
   const url=String(input),method=init.method||"GET";calls.push({method,url});
@@ -928,7 +928,7 @@ test("UNKNOWN TREE_WRITTEN replay verifies the recorded tree without posting it 
  const originalFetch=globalThis.fetch;
  const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
  const createdAt=Date.parse("2026-10-30T12:00:00.000Z");
- const operation={status:"UNKNOWN",phase:"TREE_WRITTEN",createdAt,updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha,treeSha}};
+ const operation={leaseGeneration:1,status:"UNKNOWN",phase:"TREE_WRITTEN",createdAt,updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha,treeSha}};
  const ledger=recoveryLedger(operation),calls=[];let commitPayload=null,treePosts=0,createdPr=null,createdRef=null;
  globalThis.fetch=async(input,init={})=>{
   const url=String(input),method=init.method||"GET";calls.push({method,url});

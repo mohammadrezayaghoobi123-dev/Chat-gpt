@@ -166,7 +166,7 @@ test("UNKNOWN COMMIT_WRITTEN replay verifies deterministic branch then creates o
  try{
   const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"worker-recovery-0001",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Recover branch",summary:"Recover safely",files:[{path:"README.md",content:"x"}]}}),{...env,WRITE_CONTROL:{idFromName:name=>name,get:()=>stub},GITHUB_TOKEN:"test-token"});
   const body=await response.json(),result=JSON.parse(body.result.content[0].text);
-  assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,81);
+  assert.equal(response.status,200);assert.equal(result.reconciled,true,body.result.content[0].text);assert.equal(result.pull_request.number,81);
   assert.deepEqual(calls.filter(x=>x.method==="GET"||x.method==="POST").map(x=>x.method),["GET","POST","GET"]);
   assert.deepEqual(calls.filter(x=>x.method==="LEDGER").map(x=>x.phase),["PR_DISPATCHED","PR_CREATED"]);
  }finally{globalThis.fetch=originalFetch}

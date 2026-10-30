@@ -1,4 +1,6 @@
 import { env } from "cloudflare:workers";
+
+import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
 function stubFor(name = "write-control-contract") {
@@ -14,6 +16,53 @@ const request = (keyHash, requestHash) => ({
 });
 
 describe("WriteControl atomic admission and idempotency contract", () => {
+  it("migrates a legacy SQLite operations table in place and preserves existing records", async () => {
+    const stub = stubFor("legacy-schema-migration");
+    const keyHash = "a".repeat(64);
+    const requestHash = "b".repeat(64);
+    await runInDurableObject(stub, async (instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec("DROP TABLE IF EXISTS write_operations");
+      sql.exec(`
+        CREATE TABLE write_operations (
+          key_hash TEXT PRIMARY KEY,
+          request_hash TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('IN_PROGRESS','SUCCEEDED','FAILED','UNKNOWN')),
+          phase TEXT NOT NULL CHECK (phase IN ('RESERVED','TREE_DISPATCHED','TREE_WRITTEN','COMMIT_DISPATCHED','COMMIT_WRITTEN','BRANCH_WRITTEN','PR_DISPATCHED','PR_CREATED')),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          branch_name TEXT,
+          commit_sha TEXT,
+          pr_number INTEGER,
+          pr_url TEXT,
+          error_code TEXT,
+          git_metadata TEXT
+        )
+      `);
+      sql.exec(
+        "INSERT INTO write_operations (key_hash, request_hash, status, phase, created_at, updated_at, branch_name) VALUES (?, ?, 'UNKNOWN', 'BRANCH_WRITTEN', 100, 200, ?)",
+        keyHash, requestHash, "assistant/mcp-" + keyHash,
+      );
+
+      instance.ensureSchema();
+
+      const columns = sql.exec("PRAGMA table_info(write_operations)").toArray();
+      expect(columns.some((column) => column.name === "lease_generation")).toBe(true);
+      const row = sql.exec("SELECT * FROM write_operations WHERE key_hash = ?", keyHash).one();
+      expect(row).toMatchObject({
+        key_hash: keyHash,
+        request_hash: requestHash,
+        status: "UNKNOWN",
+        phase: "BRANCH_WRITTEN",
+        created_at: 100,
+        updated_at: 200,
+        branch_name: "assistant/mcp-" + keyHash,
+        lease_generation: 1,
+      });
+      expect(sql.exec("SELECT COUNT(*) AS count FROM write_operations").one().count).toBe(1);
+    });
+  });
+
   it("refuses caller attempts to weaken the fixed global quota policy",async()=>{
     const stub=stubFor("fixed-quota-policy");
     const keyHash="d".repeat(64);

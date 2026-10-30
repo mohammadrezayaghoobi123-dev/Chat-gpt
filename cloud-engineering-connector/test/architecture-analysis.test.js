@@ -132,7 +132,8 @@ test("architecture_analyze bounds finding volume and reports truncation", async 
     const body = await response.json();
     const analysis = JSON.parse(body.result.content[0].text);
     assert.equal(analysis.findings.length, 100);
-    assert.equal(analysis.summary.findings_total, 100);
+    assert.equal(analysis.summary.findings_returned, 100);
+    assert.equal(analysis.summary.findings_total, null);
     assert.equal(analysis.findings_truncated, true);
   } finally {
     globalThis.fetch = originalFetch;

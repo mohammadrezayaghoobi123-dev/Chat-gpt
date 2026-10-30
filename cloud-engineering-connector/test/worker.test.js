@@ -778,6 +778,9 @@ test("create_change_pr persists deterministic Git commit identity before dispatc
   async markOperationStatus(){return{updated:true};},
   async markStaleOperationsUnknown(){return 0;},
   async getOperation(){return null;},
+  async reconcilePrCreated(){return{updated:false};},
+  async reconcileTreeWritten(){return{updated:false};},
+  async reconcileCommitWritten(){return{updated:false};},
  };
  const commitSha="4".repeat(40),treeSha="3".repeat(40),parentSha="2".repeat(40),baseTreeSha="1".repeat(40);
  let commitPayload=null;

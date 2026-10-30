@@ -360,7 +360,7 @@ describe("Durable state transition metadata invariants",()=>{
       await expect(Promise.resolve().then(()=>stub.transitionOperation({
         keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",
         metadata:{branchName,commitSha,prNumber:42,prUrl},
-      }))).rejects.toThrow(/PR_CREATED requires deterministic branch, commit, PR number and URL|pull URL must match the PR number/);
+      }))).rejects.toThrow(/PR_CREATED requires deterministic branch, commit, PR number and URL|pull URL must match the PR number|prUrl must be a GitHub HTTPS URL/);
     }
   });
 

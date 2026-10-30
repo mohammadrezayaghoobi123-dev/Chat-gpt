@@ -22,6 +22,10 @@ const METADATA_FIELDS = new Set([
   "treeSha",
   "commitDate",
   "commitMessage",
+  "authorName",
+  "authorEmail",
+  "committerName",
+  "committerEmail",
 ]);
 
 function assertHash(value, field) {
@@ -197,7 +201,7 @@ export class WriteControl extends DurableObject {
     const prUrl = metadata.prUrl ?? null;
     const errorCode = metadata.errorCode ?? null;
     const gitMetadata = {};
-    for (const key of ["baseTreeSha", "parentSha", "treeSha", "commitDate", "commitMessage"]) {
+    for (const key of ["baseTreeSha", "parentSha", "treeSha", "commitDate", "commitMessage", "authorName", "authorEmail", "committerName", "committerEmail"]) {
       if (metadata[key] !== undefined) gitMetadata[key] = metadata[key];
     }
     for (const key of ["baseTreeSha", "parentSha", "treeSha"]) {
@@ -210,6 +214,22 @@ export class WriteControl extends DurableObject {
     }
     if (gitMetadata.commitMessage !== undefined && (typeof gitMetadata.commitMessage !== "string" || gitMetadata.commitMessage.length < 1 || gitMetadata.commitMessage.length > 500)) {
       throw new TypeError("commitMessage must contain 1-500 characters.");
+    }
+    for (const key of ["authorName", "committerName"]) {
+      if (gitMetadata[key] !== undefined && (typeof gitMetadata[key] !== "string" || gitMetadata[key].length < 1 || gitMetadata[key].length > 100 || /[\\r\\n\\u0000]/.test(gitMetadata[key]))) {
+        throw new TypeError(key + " is invalid.");
+      }
+    }
+    for (const key of ["authorEmail", "committerEmail"]) {
+      if (gitMetadata[key] !== undefined && (typeof gitMetadata[key] !== "string" || gitMetadata[key].length > 254 || !/^[^\\s@]+@[^\\s@]+$/.test(gitMetadata[key]))) {
+        throw new TypeError(key + " is invalid.");
+      }
+    }
+    if (nextPhase === "COMMIT_DISPATCHED") {
+      const persisted = { ...(this.readOperation(keyHash)?.gitMetadata ?? {}), ...gitMetadata };
+      for (const key of ["commitDate", "commitMessage", "authorName", "authorEmail", "committerName", "committerEmail"]) {
+        if (typeof persisted[key] !== "string" || !persisted[key]) throw new TypeError("COMMIT_DISPATCHED requires persisted " + key + ".");
+      }
     }
     if (branchName !== null && (typeof branchName !== "string" || branchName.length > 255)) {
       throw new TypeError("branchName is invalid.");
@@ -310,7 +330,9 @@ export class WriteControl extends DurableObject {
         return { updated: false, reason: "RECONCILIATION_NOT_ALLOWED", operation: current };
       }
       if (current.gitMetadata?.treeSha !== treeSha || current.gitMetadata?.parentSha !== parentSha ||
-          typeof current.gitMetadata?.commitDate !== "string" || typeof current.gitMetadata?.commitMessage !== "string") {
+          typeof current.gitMetadata?.commitDate !== "string" || typeof current.gitMetadata?.commitMessage !== "string" ||
+          typeof current.gitMetadata?.authorName !== "string" || typeof current.gitMetadata?.authorEmail !== "string" ||
+          typeof current.gitMetadata?.committerName !== "string" || typeof current.gitMetadata?.committerEmail !== "string") {
         return { updated: false, reason: "OPERATION_IDENTITY_MISMATCH", operation: current };
       }
       this.ctx.storage.sql.exec(

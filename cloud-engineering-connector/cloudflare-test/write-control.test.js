@@ -492,6 +492,13 @@ describe("mandatory lease generation at every recovery boundary",()=>{
     await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
     await expect(Promise.resolve().then(()=>stub.reconcileTreeWritten({keyHash,baseTreeSha,parentSha,treeSha})))
       .rejects.toThrow(/leaseGeneration is required/);
+    await expect(Promise.resolve().then(()=>stub.reconcileCommitWritten({keyHash,treeSha,parentSha,commitSha:"4".repeat(40)})))
+      .rejects.toThrow(/leaseGeneration is required/);
+    await expect(Promise.resolve().then(()=>stub.reconcileBranchWritten({keyHash,branchName:"assistant/mcp-"+keyHash,commitSha:"4".repeat(40)})))
+      .rejects.toThrow(/leaseGeneration is required/);
+    await expect(Promise.resolve().then(()=>stub.reconcilePrCreated({
+      keyHash,branchName:"assistant/mcp-"+keyHash,commitSha:"4".repeat(40),prNumber:42,prUrl:"https://github.com/acme/project/pull/42",
+    }))).rejects.toThrow(/leaseGeneration is required/);
     await expect(stub.getOperation(keyHash)).resolves.toMatchObject({status:"UNKNOWN",phase:"TREE_DISPATCHED",leaseGeneration:2});
   });
 

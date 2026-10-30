@@ -1201,7 +1201,7 @@ test("a failed durable status write never falsely claims UNKNOWN quarantine",asy
   assert.doesNotMatch(body.result.content[0].text,/WRITE_OUTCOME_UNKNOWN/);
   assert.equal(prPosts,1);
   assert.equal(prReads,0);
-  assert.equal(ledgerStatus,null);
+  assert.equal(ledgerStatus,"IN_PROGRESS");
   assert.equal(ledgerPhase,"PR_DISPATCHED");
  }finally{globalThis.fetch=originalFetch}
 });

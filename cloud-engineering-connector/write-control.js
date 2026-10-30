@@ -275,10 +275,11 @@ export class WriteControl extends DurableObject {
     return this.ctx.storage.transactionSync(() => {
       const current = this.readOperation(keyHash);
       if (!current) return { updated: false, reason: "NOT_FOUND" };
-      if (current.status !== "UNKNOWN" || current.phase !== "TREE_DISPATCHED") {
+      if (current.status !== "UNKNOWN" || !["TREE_DISPATCHED", "TREE_WRITTEN"].includes(current.phase)) {
         return { updated: false, reason: "RECONCILIATION_NOT_ALLOWED", operation: current };
       }
-      if (current.gitMetadata?.baseTreeSha !== baseTreeSha || current.gitMetadata?.parentSha !== parentSha) {
+      if (current.gitMetadata?.baseTreeSha !== baseTreeSha || current.gitMetadata?.parentSha !== parentSha ||
+          (current.phase === "TREE_WRITTEN" && current.gitMetadata?.treeSha !== treeSha)) {
         return { updated: false, reason: "OPERATION_IDENTITY_MISMATCH", operation: current };
       }
       const merged = { ...current.gitMetadata, treeSha };

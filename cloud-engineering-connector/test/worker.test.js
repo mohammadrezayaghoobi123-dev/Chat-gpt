@@ -106,6 +106,7 @@ test("UNKNOWN COMMIT_WRITTEN replay verifies deterministic branch then creates o
   async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{keyHash,status:"UNKNOWN",phase:"COMMIT_WRITTEN",commitSha,updatedAt:Date.now()}}},
   async markStaleOperationsUnknown(){return 0},
   async getOperation(){return null},
+  async reconcilePrCreated(){return{updated:false}},
   async reconcileBranchWritten(input){assert.equal(input.keyHash,keyHash);assert.equal(input.branchName,branchFor(keyHash));assert.equal(input.commitSha,commitSha);return{updated:true,operation:{status:"IN_PROGRESS",phase:"BRANCH_WRITTEN",branchName:input.branchName,commitSha}}},
   async transitionOperation(input){calls.push({phase:input.nextPhase,method:"LEDGER"});return{updated:true,operation:{phase:input.nextPhase,status:input.status??"IN_PROGRESS"}}},
   async markOperationStatus(){return{updated:true}}

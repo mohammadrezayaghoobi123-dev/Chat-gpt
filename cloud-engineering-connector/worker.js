@@ -112,12 +112,15 @@ async function verifyGitTree(env,base,treeSha,files) {
  }
  return tree;
 }
+function sameGitDate(actual,expected) {
+ return typeof actual==="string"&&Number.isFinite(Date.parse(actual))&&typeof expected==="string"&&Number.isFinite(Date.parse(expected))&&Date.parse(actual)===Date.parse(expected);
+}
 function verifyGitCommit(commit,sha,payload) {
  const author=payload.author,committer=payload.committer;
  if(commit?.sha!==sha||commit?.message!==payload.message||commit?.tree?.sha!==payload.tree||
     !Array.isArray(commit.parents)||commit.parents.length!==1||commit.parents[0]?.sha!==payload.parents[0]||
-    commit.author?.name!==author.name||commit.author?.email!==author.email||commit.author?.date!==author.date||
-    commit.committer?.name!==committer.name||commit.committer?.email!==committer.email||commit.committer?.date!==committer.date) {
+    commit.author?.name!==author.name||commit.author?.email!==author.email||!sameGitDate(commit.author?.date,author.date)||
+    commit.committer?.name!==committer.name||commit.committer?.email!==committer.email||!sameGitDate(commit.committer?.date,committer.date)) {
   throw new ToolError("GIT_COMMIT_VERIFICATION_FAILED");
  }
  return commit;

@@ -7,13 +7,13 @@ const stagingStart = config.search(/^\\[env\\.staging(?:\\.|\\])/m);
 const staging = stagingStart >= 0 ? config.slice(stagingStart) : "";
 
 function namespaceId(section) {
-  const match = section.match(/namespace_id\s*=\s*"([0-9]+)"/);
+  const match = section.match(/namespace_id\\s*=\\s*"([0-9]+)"/);
   return match?.[1] ?? null;
 }
 
 test("Staging declares its own Rate Limiting namespace", () => {
   assert.ok(staging, "missing Staging environment configuration");
-  assert.match(staging, /\[\[env\.staging\.ratelimits\]\]/);
+  assert.match(staging, /\\[\\[env\\.staging\\.ratelimits\\]\\]/);
   assert.equal(namespaceId(staging), "78294164");
 });
 
@@ -26,7 +26,6 @@ test("Staging and Production Rate Limiting namespaces are distinct positive inte
 });
 
 test("Staging explicitly declares non-inherited runtime variables", () => {
-  const staging = config.split("[env.staging]")[1] ?? "";
-  assert.match(staging, /\[env\.staging\.vars\]/);
-  assert.match(staging, /SERVICE_MODE\s*=\s*"cloud"/);
+  assert.match(staging, /\\[env\\.staging\\.vars\\]/);
+  assert.match(staging, /SERVICE_MODE\\s*=\\s*"cloud"/);
 });

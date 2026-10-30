@@ -202,25 +202,30 @@ async function createChangePr(args,env) {
  if(admission.reason==="RATE_LIMITED") throw new ToolError("WRITE_RATE_LIMITED",{retry_after_seconds:admission.retryAfterSeconds});
  if(admission.reason==="IDEMPOTENCY_CONFLICT") throw new ToolError("IDEMPOTENCY_CONFLICT");
  if(!admission.admitted) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+ let leaseGeneration=admission.operation?.leaseGeneration;
+ if(!Number.isSafeInteger(leaseGeneration)||leaseGeneration<1) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
 
  // RESERVED proves no GitHub write was dispatched. Reopen it with a one-winner CAS.
  // A concurrent replay that loses this CAS must not enter the write path.
  if(admission.replay&&admission.operation?.status==="UNKNOWN"&&admission.operation.phase==="RESERVED") {
   let reopened;
-  try { reopened=await stub.reopenReserved({keyHash}); }
+  try { reopened=await stub.reopenReserved({keyHash,leaseGeneration}); }
   catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
   if(!reopened?.updated) throw new ToolError("WRITE_ALREADY_IN_PROGRESS",{operation_status:reopened?.operation?.status??"UNKNOWN",phase:reopened?.operation?.phase??"RESERVED"});
   admission={...admission,replay:false,operation:reopened.operation};
+  leaseGeneration=reopened.operation.leaseGeneration;
  }
 
  if(admission.replay) {
   let operation=admission.operation;
   if(!operation) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+  leaseGeneration=operation.leaseGeneration;
   if(operation.status==="IN_PROGRESS") {
    if(Number.isSafeInteger(operation.updatedAt)&&Date.now()-operation.updatedAt>=120_000) {
     try {
      await stub.markStaleOperationsUnknown({now:Date.now(),leaseMs:120_000});
      operation=await stub.getOperation(keyHash);
+     leaseGeneration=operation?.leaseGeneration;
     } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
    }
    // A fresh lease belongs to the original request. A replay must never run
@@ -243,7 +248,7 @@ async function createChangePr(args,env) {
    const status=match?Number(match[1]):null;
    const ambiguous=error instanceof ToolError||status===null||status===408||status===409||status>=500;
    let marked;
-   try{marked=await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?"UPSTREAM_OUTCOME_UNCERTAIN":"UPSTREAM_REJECTED"});}
+   try{marked=await stub.markOperationStatus({keyHash,leaseGeneration,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?"UPSTREAM_OUTCOME_UNCERTAIN":"UPSTREAM_REJECTED"});}
    catch{throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
    if(!marked?.updated) {
     let existing;
@@ -262,14 +267,14 @@ async function createChangePr(args,env) {
      await verifyBranchAfterWrite(env,base,branchName,operation.commitSha);
     }catch(error){return await markReplayFailure(error,"COMMIT_WRITTEN");}
     let branchTransition;
-    try{branchTransition=await stub.transitionOperation({keyHash,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",now:Date.now(),metadata:{branchName}});}
-    catch{try{await stub.markOperationStatus({keyHash,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"});}catch{}throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
+    try{branchTransition=await stub.transitionOperation({keyHash,leaseGeneration,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",now:Date.now(),metadata:{branchName}});}
+    catch{try{await stub.markOperationStatus({keyHash,leaseGeneration,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"});}catch{}throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
     if(!branchTransition?.updated)throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
     operation=branchTransition.operation;
    }
    let prDispatch;
-   try{prDispatch=await stub.transitionOperation({keyHash,expectedPhase:"BRANCH_WRITTEN",nextPhase:"PR_DISPATCHED",now:Date.now()});}
-   catch{try{await stub.markOperationStatus({keyHash,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"});}catch{}throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
+   try{prDispatch=await stub.transitionOperation({keyHash,leaseGeneration,expectedPhase:"BRANCH_WRITTEN",nextPhase:"PR_DISPATCHED",now:Date.now()});}
+   catch{try{await stub.markOperationStatus({keyHash,leaseGeneration,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"});}catch{}throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
    if(!prDispatch?.updated)throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
    operation=prDispatch.operation;
    const body=args.summary.trim().replace(/@/g,"@\u200b")+"\n\n"+marker+"\n\n---\nGenerated as a reviewable proposal. No branch was merged automatically. Run and inspect CI before merging.";
@@ -279,9 +284,9 @@ async function createChangePr(args,env) {
     pr=await verifyCreatedPullRequest(env,base,args.owner,args.repo,created,branchName,args.base_branch,operation.commitSha,marker);
    }catch(error){return await markReplayFailure(error,"PR_DISPATCHED");}
    let completed;
-   try{completed=await stub.transitionOperation({keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",now:Date.now(),metadata:{branchName,commitSha:operation.commitSha,prNumber:pr.number,prUrl:pr.html_url}});}
-   catch{try{await stub.markOperationStatus({keyHash,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"});}catch{}throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
-   if(!completed?.updated){try{await stub.markOperationStatus({keyHash,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"});}catch{}throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
+   try{completed=await stub.transitionOperation({keyHash,leaseGeneration,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",now:Date.now(),metadata:{branchName,commitSha:operation.commitSha,prNumber:pr.number,prUrl:pr.html_url}});}
+   catch{try{await stub.markOperationStatus({keyHash,leaseGeneration,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"});}catch{}throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
+   if(!completed?.updated){try{await stub.markOperationStatus({keyHash,leaseGeneration,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"});}catch{}throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
    return {status:"draft_pull_request_created",repository:args.owner+"/"+args.repo,branch:branchName,base_branch:args.base_branch,commit:operation.commitSha,pull_request:{number:pr.number,url:pr.html_url,draft:pr.draft,state:pr.state},changed_paths:args.files.map(file=>file.path),replayed:true,reconciled:true,safety:"A previously ambiguous Git object was verified by immutable Git identity; one branch and one draft PR were then created. No existing GitHub write was blindly retried."};
   };
   if(operation?.status==="UNKNOWN"&&(operation.phase==="TREE_DISPATCHED"||operation.phase==="TREE_WRITTEN")){
@@ -295,9 +300,10 @@ async function createChangePr(args,env) {
      treeSha=tree.sha;
     }
     await verifyGitTree(env,base,treeSha,args.files);
-    const reconciled=await stub.reconcileTreeWritten({keyHash,baseTreeSha:git.baseTreeSha,parentSha:git.parentSha,treeSha});
+    const reconciled=await stub.reconcileTreeWritten({keyHash,leaseGeneration,baseTreeSha:git.baseTreeSha,parentSha:git.parentSha,treeSha});
     if(!reconciled?.updated)throw new ToolError("WRITE_RECONCILIATION_CONFLICT",{phase:operation.phase});
     operation=reconciled.operation;
+    leaseGeneration=operation.leaseGeneration;
    }catch(error){if(error instanceof ToolError)throw error;throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:"UNKNOWN",phase:operation.phase,message:"Tree recovery could not prove the exact immutable Git tree. No branch or PR write was attempted."});}
   }
   if(operation?.status==="IN_PROGRESS"&&operation.phase==="TREE_WRITTEN"){
@@ -306,8 +312,8 @@ async function createChangePr(args,env) {
    const commitMessage="assistant: "+safeTitle;
    const commitIdentity={authorName:GIT_COMMIT_AUTHOR.name,authorEmail:GIT_COMMIT_AUTHOR.email,committerName:GIT_COMMIT_AUTHOR.name,committerEmail:GIT_COMMIT_AUTHOR.email};
    let dispatched;
-   try{dispatched=await stub.transitionOperation({keyHash,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",now:Date.now(),metadata:{commitDate,commitMessage,...commitIdentity}});}
-   catch{try{await stub.markOperationStatus({keyHash,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"});}catch{}throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
+   try{dispatched=await stub.transitionOperation({keyHash,leaseGeneration,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",now:Date.now(),metadata:{commitDate,commitMessage,...commitIdentity}});}
+   catch{try{await stub.markOperationStatus({keyHash,leaseGeneration,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"});}catch{}throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
    if(!dispatched?.updated)throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
    operation=dispatched.operation;
    const git=operation.gitMetadata;
@@ -316,7 +322,7 @@ async function createChangePr(args,env) {
     const commit=await github(env,base+"/git/commits",{method:"POST",body:JSON.stringify(payload)});
     const verified=await github(env,base+"/git/commits/"+encodeURIComponent(commit.sha));
     verifyGitCommit(verified,commit.sha,payload);
-    const completed=await stub.transitionOperation({keyHash,expectedPhase:"COMMIT_DISPATCHED",nextPhase:"COMMIT_WRITTEN",now:Date.now(),metadata:{commitSha:commit.sha}});
+    const completed=await stub.transitionOperation({keyHash,leaseGeneration,expectedPhase:"COMMIT_DISPATCHED",nextPhase:"COMMIT_WRITTEN",now:Date.now(),metadata:{commitSha:commit.sha}});
     if(!completed?.updated)throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
     operation=completed.operation;
    }catch(error){return await markReplayFailure(error,"COMMIT_DISPATCHED");}
@@ -331,9 +337,10 @@ async function createChangePr(args,env) {
     const commit=await github(env,base+"/git/commits",{method:"POST",body:JSON.stringify(payload)});
     const verified=await github(env,base+"/git/commits/"+encodeURIComponent(commit.sha));
     verifyGitCommit(verified,commit.sha,payload);
-    const reconciled=await stub.reconcileCommitWritten({keyHash,treeSha:git.treeSha,parentSha:git.parentSha,commitSha:commit.sha});
+    const reconciled=await stub.reconcileCommitWritten({keyHash,leaseGeneration,treeSha:git.treeSha,parentSha:git.parentSha,commitSha:commit.sha});
     if(!reconciled?.updated)throw new ToolError("WRITE_RECONCILIATION_CONFLICT",{phase:operation.phase});
     operation=reconciled.operation;
+    leaseGeneration=operation.leaseGeneration;
    }catch(error){if(error instanceof ToolError)throw error;throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:"UNKNOWN",phase:operation.phase,message:"Commit recovery could not prove the exact immutable Git commit. No branch or PR write was attempted."});}
   }
   if(operation?.status==="IN_PROGRESS"&&operation.phase==="COMMIT_WRITTEN")return await finishRecoveredCommit(false);
@@ -360,12 +367,14 @@ async function createChangePr(args,env) {
    }
    let reconciled;
    try {
-    reconciled=await stub.reconcileBranchWritten({keyHash,now:Date.now(),branchName,commitSha:operation.commitSha});
+    reconciled=await stub.reconcileBranchWritten({keyHash,leaseGeneration,now:Date.now(),branchName,commitSha:operation.commitSha});
    } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
    if(!reconciled?.updated) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+   operation=reconciled.operation;
+   leaseGeneration=operation.leaseGeneration;
    let dispatched;
    try {
-    dispatched=await stub.transitionOperation({keyHash,expectedPhase:"BRANCH_WRITTEN",nextPhase:"PR_DISPATCHED",now:Date.now()});
+    dispatched=await stub.transitionOperation({keyHash,leaseGeneration,expectedPhase:"BRANCH_WRITTEN",nextPhase:"PR_DISPATCHED",now:Date.now()});
    } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
    if(!dispatched?.updated) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
    const body=args.summary.trim().replace(/@/g,"@\u200b")+"\n\n"+marker+"\n\n---\nGenerated as a reviewable proposal. No branch was merged automatically. Run and inspect CI before merging.";
@@ -379,7 +388,7 @@ async function createChangePr(args,env) {
     const status=match?Number(match[1]):null;
     const ambiguous=status===null||status===408||status===409||status>=500;
     let marked;
-    try { marked=await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?"UPSTREAM_OUTCOME_UNCERTAIN":"UPSTREAM_REJECTED"}); }
+    try { marked=await stub.markOperationStatus({keyHash,leaseGeneration,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?"UPSTREAM_OUTCOME_UNCERTAIN":"UPSTREAM_REJECTED"}); }
     catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
     if(!marked?.updated) {
      let existing;
@@ -391,13 +400,13 @@ async function createChangePr(args,env) {
    }
    let completed;
    try {
-    completed=await stub.transitionOperation({keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",now:Date.now(),metadata:{branchName,commitSha:operation.commitSha,prNumber:pr.number,prUrl:pr.html_url}});
+    completed=await stub.transitionOperation({keyHash,leaseGeneration,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",now:Date.now(),metadata:{branchName,commitSha:operation.commitSha,prNumber:pr.number,prUrl:pr.html_url}});
    } catch {
-    try { await stub.markOperationStatus({keyHash,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"}); } catch {}
+    try { await stub.markOperationStatus({keyHash,leaseGeneration,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"}); } catch {}
     throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
    }
    if(!completed?.updated) {
-    try { await stub.markOperationStatus({keyHash,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"}); } catch {}
+    try { await stub.markOperationStatus({keyHash,leaseGeneration,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"}); } catch {}
     throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
    }
    return {status:"draft_pull_request_created",repository:args.owner+"/"+args.repo,branch:branchName,base_branch:args.base_branch,commit:operation.commitSha,pull_request:{number:pr.number,url:pr.html_url,draft:pr.draft,state:pr.state},changed_paths:args.files.map(file=>file.path),replayed:true,reconciled:true,safety:"The previously ambiguous branch creation was verified against its exact commit, then one draft PR was created. No existing GitHub write was blindly retried."};
@@ -420,7 +429,7 @@ async function createChangePr(args,env) {
     }
     let reconciled;
     try {
-     reconciled=await stub.reconcilePrCreated({keyHash,now:Date.now(),branchName:operation.branchName,commitSha:operation.commitSha,prNumber:match.number,prUrl:match.html_url});
+     reconciled=await stub.reconcilePrCreated({keyHash,leaseGeneration,now:Date.now(),branchName:operation.branchName,commitSha:operation.commitSha,prNumber:match.number,prUrl:match.html_url});
     } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
     if(!reconciled?.updated) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
     return {status:"draft_pull_request_created",repository:args.owner+"/"+args.repo,branch:operation.branchName,base_branch:args.base_branch,commit:operation.commitSha,pull_request:{number:match.number,url:match.html_url,draft:match.draft,state:match.state},head_sha:match.head?.sha??null,head_changed_since_creation:false,changed_paths:args.files.map(file=>file.path),replayed:true,reconciled:true,safety:"The previously ambiguous PR creation was verified by read-only lookup and a second GET against the exact operation marker, branch, base, commit, and draft identity; no new PR was created."};
@@ -433,12 +442,13 @@ async function createChangePr(args,env) {
  let currentPhase="RESERVED";
  const transition=async(expectedPhase,nextPhase,metadata={},status="IN_PROGRESS")=>{
   try {
-   const result=await stub.transitionOperation({keyHash,expectedPhase,nextPhase,status,metadata,now:Date.now()});
+   const result=await stub.transitionOperation({keyHash,leaseGeneration,expectedPhase,nextPhase,status,metadata,now:Date.now()});
    if(!result?.updated) throw new Error("operation phase transition rejected");
    currentPhase=nextPhase;
+   leaseGeneration=result.operation.leaseGeneration;
    return result.operation;
   } catch {
-   try { await stub.markOperationStatus({keyHash,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"}); } catch {}
+   try { await stub.markOperationStatus({keyHash,leaseGeneration,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"}); } catch {}
    throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
   }
  };
@@ -491,7 +501,7 @@ async function createChangePr(args,env) {
   const ambiguous=sideEffectStarted&&(error instanceof ToolError||httpStatus===null||httpStatus===408||httpStatus===409||httpStatus>=500);
   let marked;
   try {
-   marked=await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?(error instanceof ToolError?"GIT_IDENTITY_UNVERIFIED":"UPSTREAM_OUTCOME_UNCERTAIN"):"UPSTREAM_REJECTED"});
+   marked=await stub.markOperationStatus({keyHash,leaseGeneration,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?(error instanceof ToolError?"GIT_IDENTITY_UNVERIFIED":"UPSTREAM_OUTCOME_UNCERTAIN"):"UPSTREAM_REJECTED"});
   } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
   if(!marked?.updated) {
    let existing;

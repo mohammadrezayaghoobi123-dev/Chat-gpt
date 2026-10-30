@@ -557,7 +557,7 @@ export class WriteControl extends DurableObject {
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw new TypeError("leaseGeneration is required and must be a positive safe integer.");
     const now = Date.now();
     assertHash(keyHash, "keyHash");
-    if (leaseGeneration !== undefined && (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1)) throw new TypeError("leaseGeneration must be a positive safe integer.");
+
     return this.ctx.storage.transactionSync(() => {
       const current = this.readOperation(keyHash);
       if (!current) return { updated: false, reason: "NOT_FOUND" };

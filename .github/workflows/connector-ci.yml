@@ -36,6 +36,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Pin npm CLI for deterministic dependency resolution
+        run: npm install --global npm@11.21.1
       - name: Install dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
       - name: Run tests

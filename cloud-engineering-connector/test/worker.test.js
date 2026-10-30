@@ -1241,3 +1241,19 @@ test("a fresh IN_PROGRESS replay never dispatches a concurrent branch write",asy
   assert.equal(operation.phase,"COMMIT_WRITTEN");
  }finally{globalThis.fetch=originalFetch}
 });
+
+
+test("create_change_pr rejects Unicode-normalization and bidirectional-control paths before GitHub calls",async()=>{
+ const originalFetch=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called for ambiguous paths")};
+ try{
+  for(const path of ["docs/cafe\\u0301.md","docs/report\\u202Egpj.exe","docs/\\u2066hidden\\u2069.txt"]){
+   const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Unicode path safety",summary:"Reject ambiguous path rendering",files:[{path,content:"proposal"}]};
+   const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"unused"});
+   const body=await response.json();
+   assert.equal(body.result.isError,true,path);
+   assert.match(body.result.content[0].text,/Unicode|bidirectional|ambiguous/i,path);
+  }
+  assert.equal(calls,0);
+ }finally{globalThis.fetch=originalFetch}
+});

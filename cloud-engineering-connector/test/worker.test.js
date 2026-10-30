@@ -1044,8 +1044,8 @@ test("a successful PR POST with a mismatched head identity is quarantined before
   }
   if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
   if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
-  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+(await sha256Hex(key)),object:{sha:commitSha}}),{status:201});
-  if(method==="GET"&&url.endsWith("/git/ref/heads/assistant/mcp-"+(await sha256Hex(key))))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+(await sha256Hex(key)),object:{sha:commitSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/refs")){const payload=JSON.parse(init.body);createdBranch=payload.ref.slice("refs/heads/".length);return new Response(JSON.stringify({ref:payload.ref,object:{sha:commitSha}}),{status:201});}
+  if(method==="GET"&&createdBranch&&url.endsWith("/git/ref/heads/"+createdBranch))return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch,object:{sha:commitSha}}),{status:200});
   if(method==="POST"&&url.endsWith("/pulls")){prPosts++;const requestBody=JSON.parse(init.body);return new Response(JSON.stringify({number:101,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/101",draft:true,state:"open",head:{ref:"assistant/mcp-wrong",sha:commitSha},base:{ref:"feature/cloud-engineering-connector"},body:requestBody.body}),{status:201});}
   if(method==="GET"&&url.endsWith("/pulls/101")){prReads++;return new Response(JSON.stringify({number:101,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/101",draft:true,state:"open",head:{ref:"assistant/mcp-wrong",sha:commitSha},base:{ref:"feature/cloud-engineering-connector"},body:""}),{status:200});}
   throw new Error("Unexpected request "+method+" "+url);

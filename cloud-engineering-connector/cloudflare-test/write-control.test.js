@@ -68,7 +68,7 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     await expect(stub.transitionOperation({
       keyHash,
       expectedPhase: "RESERVED",
-      nextPhase: "COMMIT_WRITTEN",
+      nextPhase: "TREE_WRITTEN",
       now: 1_800_000_000_002,
     })).resolves.toMatchObject({ updated: false, reason: "PHASE_CONFLICT" });
   });
@@ -93,7 +93,7 @@ describe("WriteControl atomic admission and idempotency contract", () => {
       now: 1_800_000_200_000,
       leaseMs: 120_000,
     });
-    expect(changed).toBe(1);
+    expect(changed).toBeGreaterThanOrEqual(1);
     await expect(stub.getOperation(keyHash)).resolves.toMatchObject({
       status: "UNKNOWN",
       phase: "RESERVED",

@@ -885,7 +885,7 @@ test("UNKNOWN COMMIT_DISPATCHED replay recreates and verifies the exact persiste
   const body=await response.json(),result=JSON.parse(body.result.content[0].text);
   assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,92);
   assert.deepEqual(commitPayload,{message:commitMessage,tree:treeSha,parents:[parentSha],author:{name:persistedIdentity.authorName,email:persistedIdentity.authorEmail,date:commitDate},committer:{name:persistedIdentity.committerName,email:persistedIdentity.committerEmail,date:commitDate}});
-  assert.deepEqual(calls.map(call=>call.method),["GET","GET","POST","GET","POST","POST"]);
+  assert.deepEqual(calls.map(call=>call.method),["GET","GET","POST","GET","POST","GET","POST","GET"]);
   assert.equal(operation.phase,"PR_CREATED");assert.equal(operation.status,"SUCCEEDED");
  }finally{globalThis.fetch=originalFetch}
 });
@@ -915,7 +915,7 @@ test("UNKNOWN TREE_DISPATCHED replay repeats only the same immutable tree payloa
   assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,93);
   assert.deepEqual(treePayload,{base_tree:baseTreeSha,tree:[{path:"docs/replay.txt",mode:"100644",type:"blob",content:"x"}]});
    assert.equal(commitPayload.author.date,"2026-10-30T12:00:00.000Z");
-  assert.deepEqual(calls.map(call=>call.method),["GET","POST","GET","POST","GET","POST","POST"]);
+  assert.deepEqual(calls.map(call=>call.method),["GET","POST","GET","POST","GET","POST","GET","POST","GET"]);
   assert.equal(operation.phase,"PR_CREATED");assert.equal(operation.status,"SUCCEEDED");
  }finally{globalThis.fetch=originalFetch}
 });
@@ -945,7 +945,7 @@ test("UNKNOWN TREE_WRITTEN replay verifies the recorded tree without posting it 
   const body=await response.json(),result=JSON.parse(body.result.content[0].text);
   assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,94);
   assert.equal(treePosts,0);
-  assert.deepEqual(calls.map(call=>call.method),["GET","GET","POST","GET","POST","POST"]);
+  assert.deepEqual(calls.map(call=>call.method),["GET","GET","POST","GET","POST","GET","POST","GET"]);
   assert.equal(operation.phase,"PR_CREATED");assert.equal(operation.status,"SUCCEEDED");
  }finally{globalThis.fetch=originalFetch}
 });

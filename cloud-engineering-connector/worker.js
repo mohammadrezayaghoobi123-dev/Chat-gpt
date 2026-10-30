@@ -311,7 +311,9 @@ async function createChangePr(args,env) {
    let livePr;
    try { livePr=await github(env,base+"/pulls/"+operation.prNumber); }
    catch { throw new ToolError("WRITE_REPLAY_VERIFICATION_UNAVAILABLE"); }
-   if(!livePr||livePr.number!==operation.prNumber||livePr.html_url!==operation.prUrl||livePr.head?.ref!==operation.branchName||livePr.base?.ref!==args.base_branch||typeof livePr.body!=="string"||!livePr.body.includes(marker)) {
+   if(!livePr||livePr.number!==operation.prNumber||livePr.html_url!==operation.prUrl||livePr.head?.ref!==operation.branchName||
+      typeof livePr.head?.sha!=="string"||!/^[a-f0-9]{40}$/.test(livePr.head.sha)||livePr.base?.ref!==args.base_branch||
+      typeof livePr.body!=="string"||!livePr.body.includes(marker)) {
     throw new ToolError("WRITE_REPLAY_VERIFICATION_FAILED",{operation_status:operation.status,phase:operation.phase});
    }
    return {status:"draft_pull_request_created",repository:args.owner+"/"+args.repo,branch:operation.branchName,base_branch:args.base_branch,commit:operation.commitSha,pull_request:{number:livePr.number,url:livePr.html_url,draft:livePr.draft,state:livePr.state},head_sha:livePr.head?.sha??null,head_changed_since_creation:typeof livePr.head?.sha==="string"&&livePr.head.sha!==operation.commitSha,changed_paths:args.files.map(file=>file.path),replayed:true,safety:"Idempotent replay verified against the existing GitHub PR; no GitHub write was performed."};

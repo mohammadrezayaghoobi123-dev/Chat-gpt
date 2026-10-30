@@ -250,7 +250,7 @@ describe("Git object recovery identity contract", () => {
       keyHash, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED",
       metadata: { commitDate, commitMessage, authorName, authorEmail, committerName, committerEmail },
     });
-    await stub.markOperationStatus({ keyHash, status: "UNKNOWN", errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
+    await stub.markOperationStatus({ keyHash, leaseGeneration:1, status: "UNKNOWN", errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
     await expect(stub.reconcileCommitWritten({ keyHash, leaseGeneration:2, treeSha, parentSha, commitSha }))
       .resolves.toMatchObject({
         updated: true,
@@ -299,7 +299,7 @@ describe("Idempotency tombstone retention",()=>{
       const requestHash="8".repeat(64);
       const first=await stub.admitWrite(request(keyHash,requestHash));
       expect(first).toMatchObject({admitted:true,replay:false});
-      await stub.markOperationStatus({keyHash,status:"UNKNOWN",errorCode:"UPSTREAM_OUTCOME_UNCERTAIN"});
+      await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"UPSTREAM_OUTCOME_UNCERTAIN"});
       vi.setSystemTime(start+3_600_001);
       const replay=await stub.admitWrite(request(keyHash,requestHash));
       expect(replay).toMatchObject({
@@ -417,8 +417,8 @@ describe("safe recovery before the first external side effect",()=>{
     await stub.admitWrite(request(keyHash,"c".repeat(64)));
     await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
     const results=await Promise.all([
-      stub.reopenReserved({keyHash}),
-      stub.reopenReserved({keyHash}),
+      stub.reopenReserved({keyHash,leaseGeneration:2}),
+      stub.reopenReserved({keyHash,leaseGeneration:2}),
     ]);
     expect(results.filter(result=>result.updated)).toHaveLength(1);
     expect(results.filter(result=>!result.updated)).toHaveLength(1);
@@ -435,7 +435,7 @@ describe("safe recovery before the first external side effect",()=>{
       metadata:{baseTreeSha:"1".repeat(40),parentSha:"2".repeat(40)},
     });
     await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
-    await expect(stub.reopenReserved({keyHash})).resolves.toMatchObject({
+    await expect(stub.reopenReserved({keyHash,leaseGeneration:2})).resolves.toMatchObject({
       updated:false,reason:"RECONCILIATION_NOT_ALLOWED",
       operation:{status:"UNKNOWN",phase:"TREE_DISPATCHED"},
     });

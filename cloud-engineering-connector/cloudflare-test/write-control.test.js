@@ -399,6 +399,22 @@ describe("safe recovery before the first external side effect",()=>{
     });
   });
 
+
+  it("allows exactly one concurrent retry to reopen an UNKNOWN RESERVED operation",async()=>{
+    const stub=stubFor("unknown-reserved-concurrent-reopen");
+    const keyHash="b".repeat(64);
+    await stub.admitWrite(request(keyHash,"c".repeat(64)));
+    await stub.markOperationStatus({keyHash,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    const results=await Promise.all([
+      stub.reopenReserved({keyHash}),
+      stub.reopenReserved({keyHash}),
+    ]);
+    expect(results.filter(result=>result.updated)).toHaveLength(1);
+    expect(results.filter(result=>!result.updated)).toHaveLength(1);
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({
+      status:"IN_PROGRESS",phase:"RESERVED",
+    });
+  });
   it("does not reopen an UNKNOWN operation after a GitHub side effect may have started",async()=>{
     const stub=stubFor("unknown-tree-not-reopenable");
     const keyHash="9".repeat(64);

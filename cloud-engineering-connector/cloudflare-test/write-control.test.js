@@ -76,12 +76,14 @@ describe("WriteControl atomic admission and idempotency contract", () => {
       expectedPhase: "RESERVED",
       nextPhase: "TREE_DISPATCHED",
       now: 1_800_000_000_001,
+      metadata: { baseTreeSha: "a".repeat(40), parentSha: "b".repeat(40) },
     })).resolves.toMatchObject({ updated: true, operation: { phase: "TREE_DISPATCHED" } });
     await expect(stub.transitionOperation({
       keyHash,
       expectedPhase: "TREE_DISPATCHED",
       nextPhase: "TREE_WRITTEN",
       now: 1_800_000_000_002,
+      metadata: { treeSha: "c".repeat(40) },
     })).resolves.toMatchObject({ updated: true, operation: { phase: "TREE_WRITTEN" } });
     await expect(stub.transitionOperation({
       keyHash,

@@ -382,3 +382,35 @@ describe("Durable state transition metadata invariants",()=>{
     await expect(stub.getOperation(keyHash)).resolves.toMatchObject({gitMetadata:{treeSha:"3".repeat(40)}});
   });
 });
+
+
+describe("safe recovery before the first external side effect",()=>{
+  it("reopens a stale UNKNOWN RESERVED operation without changing its idempotency identity",async()=>{
+    const stub=stubFor("unknown-reserved-reopen");
+    const keyHash="7".repeat(64),requestHash="8".repeat(64);
+    await stub.admitWrite(request(keyHash,requestHash));
+    await stub.markOperationStatus({keyHash,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    await expect(stub.reopenReserved({keyHash})).resolves.toMatchObject({
+      updated:true,
+      operation:{keyHash,requestHash,status:"IN_PROGRESS",phase:"RESERVED"},
+    });
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({
+      keyHash,requestHash,status:"IN_PROGRESS",phase:"RESERVED",
+    });
+  });
+
+  it("does not reopen an UNKNOWN operation after a GitHub side effect may have started",async()=>{
+    const stub=stubFor("unknown-tree-not-reopenable");
+    const keyHash="9".repeat(64);
+    await stub.admitWrite(request(keyHash,"a".repeat(64)));
+    await stub.transitionOperation({
+      keyHash,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",
+      metadata:{baseTreeSha:"1".repeat(40),parentSha:"2".repeat(40)},
+    });
+    await stub.markOperationStatus({keyHash,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    await expect(stub.reopenReserved({keyHash})).resolves.toMatchObject({
+      updated:false,reason:"RECONCILIATION_NOT_ALLOWED",
+      operation:{status:"UNKNOWN",phase:"TREE_DISPATCHED"},
+    });
+  });
+});

@@ -244,3 +244,86 @@ describe("Git object recovery identity contract", () => {
       .resolves.toMatchObject({ updated: false, reason: "RECONCILIATION_NOT_ALLOWED" });
   });
 });
+
+
+
+async function seedCommitReady(stub,keyHash) {
+  const baseTreeSha="1".repeat(40),parentSha="2".repeat(40),treeSha="3".repeat(40),commitSha="4".repeat(40);
+  await stub.admitWrite(request(keyHash,"b".repeat(64)));
+  await stub.transitionOperation({keyHash,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha,parentSha}});
+  await stub.transitionOperation({keyHash,expectedPhase:"TREE_DISPATCHED",nextPhase:"TREE_WRITTEN",metadata:{treeSha}});
+  await stub.transitionOperation({
+    keyHash,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",
+    metadata:{
+      commitDate:"2026-10-30T12:00:00.000Z",
+      commitMessage:"assistant: state machine invariant",
+      authorName:"Cloud Engineering Connector",
+      authorEmail:"mcp-connector@users.noreply.github.com",
+      committerName:"Cloud Engineering Connector",
+      committerEmail:"mcp-connector@users.noreply.github.com",
+    },
+  });
+  await stub.transitionOperation({keyHash,expectedPhase:"COMMIT_DISPATCHED",nextPhase:"COMMIT_WRITTEN",metadata:{commitSha}});
+  return {baseTreeSha,parentSha,treeSha,commitSha,branchName:"assistant/mcp-"+keyHash};
+}
+
+describe("Durable state transition metadata invariants",()=>{
+  it("rejects TREE_DISPATCHED without a persisted base tree and parent identity",async()=>{
+    const stub=stubFor("invariant-tree-dispatched");
+    const keyHash="1".repeat(64);
+    await stub.admitWrite(request(keyHash,"2".repeat(64)));
+    await expect(stub.transitionOperation({keyHash,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED"}))
+      .rejects.toThrow(/TREE_DISPATCHED requires baseTreeSha and parentSha/);
+  });
+
+  it("rejects a branch transition whose name is not derived from the operation key",async()=>{
+    const stub=stubFor("invariant-branch-name");
+    const keyHash="3".repeat(64);
+    const {commitSha}=await seedCommitReady(stub,keyHash);
+    await expect(stub.transitionOperation({
+      keyHash,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",
+      metadata:{branchName:"assistant/mcp-unrelated",commitSha},
+    })).rejects.toThrow(/deterministic operation identity/);
+  });
+
+  it("rejects PR_DISPATCHED unless deterministic branch and commit identity are persisted",async()=>{
+    const stub=stubFor("invariant-pr-dispatched");
+    const keyHash="4".repeat(64);
+    await stub.admitWrite(request(keyHash,"5".repeat(64)));
+    await stub.transitionOperation({keyHash,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha:"1".repeat(40),parentSha:"2".repeat(40)}});
+    await stub.transitionOperation({keyHash,expectedPhase:"TREE_DISPATCHED",nextPhase:"TREE_WRITTEN",metadata:{treeSha:"3".repeat(40)}});
+    await stub.transitionOperation({keyHash,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",metadata:{
+      commitDate:"2026-10-30T12:00:00.000Z",commitMessage:"assistant: missing commit",
+      authorName:"Cloud Engineering Connector",authorEmail:"mcp-connector@users.noreply.github.com",
+      committerName:"Cloud Engineering Connector",committerEmail:"mcp-connector@users.noreply.github.com",
+    }});
+    await expect(stub.transitionOperation({keyHash,expectedPhase:"COMMIT_DISPATCHED",nextPhase:"COMMIT_WRITTEN"}))
+      .rejects.toThrow(/COMMIT_WRITTEN requires commitSha/);
+  });
+
+  it("rejects PR_CREATED without complete PR identity and a URL matching its number",async()=>{
+    const stub=stubFor("invariant-pr-created");
+    const keyHash="5".repeat(64);
+    const {commitSha,branchName}=await seedCommitReady(stub,keyHash);
+    await stub.transitionOperation({keyHash,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",metadata:{branchName}});
+    await stub.transitionOperation({keyHash,expectedPhase:"BRANCH_WRITTEN",nextPhase:"PR_DISPATCHED"});
+    await expect(stub.transitionOperation({keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED"}))
+      .rejects.toThrow(/PR_CREATED requires PR number and URL/);
+    await expect(stub.transitionOperation({
+      keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",
+      metadata:{branchName,commitSha,prNumber:42,prUrl:"https://github.com/acme/project/pull/43"},
+    })).rejects.toThrow(/pull URL must match the PR number/);
+  });
+
+  it("rejects mutation of an already persisted commit identity",async()=>{
+    const stub=stubFor("invariant-commit-immutable");
+    const keyHash="6".repeat(64);
+    const {commitSha}=await seedCommitReady(stub,keyHash);
+    const result=await stub.transitionOperation({
+      keyHash,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",
+      metadata:{branchName:"assistant/mcp-"+keyHash,commitSha:"f".repeat(40)},
+    });
+    expect(result).toMatchObject({updated:false,reason:"OPERATION_IDENTITY_MISMATCH"});
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({commitSha});
+  });
+});

@@ -90,9 +90,10 @@ const GIT_COMMIT_AUTHOR = Object.freeze({
  name: "Cloud Engineering Connector",
  email: "mcp-connector@users.noreply.github.com",
 });
-function gitCommitPayload(treeSha,parentSha,commitDate,commitMessage) {
- const identity={...GIT_COMMIT_AUTHOR,date:commitDate};
- return {message:commitMessage,tree:treeSha,parents:[parentSha],author:identity,committer:{...identity}};
+function gitCommitPayload(treeSha,parentSha,commitDate,commitMessage,authorName,authorEmail,committerName,committerEmail) {
+ const author={name:authorName,email:authorEmail,date:commitDate};
+ const committer={name:committerName,email:committerEmail,date:commitDate};
+ return {message:commitMessage,tree:treeSha,parents:[parentSha],author,committer};
 }
 async function gitBlobSha(content) {
  const bytes=new TextEncoder().encode(content);
@@ -245,13 +246,14 @@ async function createChangePr(args,env) {
    if(!Number.isSafeInteger(operation.createdAt))throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
    const commitDate=new Date(operation.createdAt).toISOString();
    const commitMessage="assistant: "+safeTitle;
+   const commitIdentity={authorName:GIT_COMMIT_AUTHOR.name,authorEmail:GIT_COMMIT_AUTHOR.email,committerName:GIT_COMMIT_AUTHOR.name,committerEmail:GIT_COMMIT_AUTHOR.email};
    let dispatched;
-   try{dispatched=await stub.transitionOperation({keyHash,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",now:Date.now(),metadata:{commitDate,commitMessage}});}
+   try{dispatched=await stub.transitionOperation({keyHash,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",now:Date.now(),metadata:{commitDate,commitMessage,...commitIdentity}});}
    catch{try{await stub.markOperationStatus({keyHash,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"});}catch{}throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
    if(!dispatched?.updated)throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
    operation=dispatched.operation;
    const git=operation.gitMetadata;
-   const payload=gitCommitPayload(git.treeSha,git.parentSha,git.commitDate,git.commitMessage);
+   const payload=gitCommitPayload(git.treeSha,git.parentSha,git.commitDate,git.commitMessage,git.authorName,git.authorEmail,git.committerName,git.committerEmail);
    try{
     const commit=await github(env,base+"/git/commits",{method:"POST",body:JSON.stringify(payload)});
     const verified=await github(env,base+"/git/commits/"+encodeURIComponent(commit.sha));
@@ -264,10 +266,10 @@ async function createChangePr(args,env) {
   if(operation?.status==="UNKNOWN"&&operation.phase==="COMMIT_DISPATCHED"){
    try{
     const git=operation.gitMetadata;
-    if(typeof git?.treeSha!=="string"||!/^[a-f0-9]{40}$/.test(git.treeSha)||typeof git?.commitDate!=="string"||typeof git?.commitMessage!=="string")throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:"UNKNOWN",phase:operation.phase});
+    if(typeof git?.treeSha!=="string"||!/^[a-f0-9]{40}$/.test(git.treeSha)||typeof git?.commitDate!=="string"||typeof git?.commitMessage!=="string"||typeof git?.authorName!=="string"||typeof git?.authorEmail!=="string"||typeof git?.committerName!=="string"||typeof git?.committerEmail!=="string")throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:"UNKNOWN",phase:operation.phase});
     await verifyParent(git);
     await verifyGitTree(env,base,git.treeSha,args.files);
-    const payload=gitCommitPayload(git.treeSha,git.parentSha,git.commitDate,git.commitMessage);
+    const payload=gitCommitPayload(git.treeSha,git.parentSha,git.commitDate,git.commitMessage,git.authorName,git.authorEmail,git.committerName,git.committerEmail);
     const commit=await github(env,base+"/git/commits",{method:"POST",body:JSON.stringify(payload)});
     const verified=await github(env,base+"/git/commits/"+encodeURIComponent(commit.sha));
     verifyGitCommit(verified,commit.sha,payload);
@@ -388,8 +390,9 @@ async function createChangePr(args,env) {
   await transition("TREE_DISPATCHED","TREE_WRITTEN",{treeSha:tree.sha});
   const commitDate=new Date(admission.operation.createdAt).toISOString();
   const commitMessage="assistant: "+safeTitle;
-  await transition("TREE_WRITTEN","COMMIT_DISPATCHED",{commitDate,commitMessage});
-  const commitPayload=gitCommitPayload(tree.sha,parentSha,commitDate,commitMessage);
+  const commitIdentity={authorName:GIT_COMMIT_AUTHOR.name,authorEmail:GIT_COMMIT_AUTHOR.email,committerName:GIT_COMMIT_AUTHOR.name,committerEmail:GIT_COMMIT_AUTHOR.email};
+  await transition("TREE_WRITTEN","COMMIT_DISPATCHED",{commitDate,commitMessage,...commitIdentity});
+  const commitPayload=gitCommitPayload(tree.sha,parentSha,commitDate,commitMessage,commitIdentity.authorName,commitIdentity.authorEmail,commitIdentity.committerName,commitIdentity.committerEmail);
   const commit=await github(env,base+"/git/commits",{method:"POST",body:JSON.stringify(commitPayload)});
   const verifiedCommit=await github(env,base+"/git/commits/"+encodeURIComponent(commit.sha));
   verifyGitCommit(verifiedCommit,commit.sha,commitPayload);

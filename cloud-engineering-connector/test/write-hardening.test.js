@@ -40,7 +40,8 @@ function createWriteControlMock() {
   };
   return { idFromName: (name) => name, get: () => stub };
 }
-\nconst env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH, WRITE_CONTROL: createWriteControlMock() };
+
+const env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH, WRITE_CONTROL: createWriteControlMock() };
 const OWNER = "mohammadrezayaghoobi123-dev", REPO = "Chat-gpt";
 const headers = { "content-type": "application/json", accept: "application/json, text/event-stream",
   authorization: "Bearer " + MCP, "mcp-protocol-version": "2025-03-26" };

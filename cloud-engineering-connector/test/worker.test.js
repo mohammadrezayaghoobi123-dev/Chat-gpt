@@ -25,7 +25,8 @@ function createWriteControlMock() {
  };
  return {idFromName:name=>name,get:()=>stub};
 }
-\nconst env={MCP_AUTH_TOKEN:"test-secret",WRITE_CONTROL:createWriteControlMock()};
+
+const env={MCP_AUTH_TOKEN:"test-secret",WRITE_CONTROL:createWriteControlMock()};
 const req=(path,options={})=>new Request("https://example.test"+path,options);
 const rpc=(method,params={},id=1)=>{
  if(method==="tools/call"&&params.name==="create_change_pr"&&params.arguments&&!Object.hasOwn(params.arguments,"idempotency_key"))params={...params,arguments:{...params.arguments,idempotency_key:"worker-test-key-"+String(++workerTestKey).padStart(8,"0")}};
@@ -175,7 +176,7 @@ test("create_change_pr retains branch when pull request creation outcome is unce
   const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example proposal",summary:"Test ambiguous outcome",files:[{path:"docs/proposal.txt",content:"proposal"}]};
   const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"test-token"});
   const body=await r.json();const msg=body.result.content[0].text;
-  assert.equal(body.result.isError,true);assert.equal(deleteAttempted,false);assert.match(msg,/outcome is uncertain/);assert.match(msg,/branch assistant\//);assert.match(msg,/simulated network timeout/);
+  assert.equal(body.result.isError,true);assert.equal(deleteAttempted,false);assert.match(msg,/WRITE_OUTCOME_UNKNOWN/);assert.match(msg,/will not be retried automatically/);assert.ok(createdBranch?.startsWith("assistant\/mcp-"));
  }finally{globalThis.fetch=originalFetch}
 });
 

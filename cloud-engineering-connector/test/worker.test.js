@@ -939,3 +939,33 @@ test("UNKNOWN TREE_WRITTEN replay verifies the recorded tree without posting it 
   assert.equal(operation.phase,"PR_CREATED");assert.equal(operation.status,"SUCCEEDED");
  }finally{globalThis.fetch=originalFetch}
 });
+
+
+test("a successful tree POST with failed identity verification is immediately quarantined as UNKNOWN",async()=>{
+ const originalFetch=globalThis.fetch;let status=null,phase=null,treeSha="c".repeat(40);
+ const key="tree-verification-mismatch-key-01";
+ const operations=new Map();
+ const stub={
+  async admitWrite(input){const op={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:Date.now(),updatedAt:Date.now()};operations.set(input.keyHash,op);return{admitted:true,replay:false,operation:op}},
+  async transitionOperation(input){phase=input.nextPhase;const op=operations.values().next().value;op.phase=input.nextPhase;return{updated:true,operation:op}},
+  async markOperationStatus(input){status=input.status;const op=operations.get(input.keyHash);op.status=input.status;op.errorCode=input.errorCode;return{updated:true,operation:op}},
+  async markStaleOperationsUnknown(){return 0},
+  async getOperation(keyHash){return operations.get(keyHash)??null},
+  async reconcilePrCreated(){return{updated:false}}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";
+  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"a".repeat(40)}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+"a".repeat(40)))return new Response(JSON.stringify({sha:"a".repeat(40),tree:{sha:"b".repeat(40)}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1"))return new Response(JSON.stringify({sha:"e".repeat(40),truncated:false,tree:[]}),{status:200});
+  throw new Error("Unexpected GitHub request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:key,owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Tree verification mismatch",summary:"Verify successful write with unverifiable identity",files:[{path:"docs/proposal.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();assert.equal(response.status,200);assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/WRITE_OUTCOME_UNKNOWN/);
+  assert.equal(status,"UNKNOWN");assert.equal(operations.values().next().value.phase,"TREE_DISPATCHED");
+ }finally{globalThis.fetch=originalFetch}
+});

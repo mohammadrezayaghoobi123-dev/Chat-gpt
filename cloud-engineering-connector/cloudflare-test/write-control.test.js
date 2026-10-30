@@ -310,7 +310,7 @@ describe("Durable state transition metadata invariants",()=>{
     await stub.transitionOperation({keyHash,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",metadata:{branchName}});
     await stub.transitionOperation({keyHash,expectedPhase:"BRANCH_WRITTEN",nextPhase:"PR_DISPATCHED"});
     await expect(Promise.resolve().then(()=>stub.transitionOperation({keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED"})))
-      .rejects.toThrow(/PR_CREATED requires PR number and URL/);
+      .rejects.toThrow(/PR_CREATED requires deterministic branch, commit, PR number and URL/);
     await expect(Promise.resolve().then(()=>stub.transitionOperation({
       keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",
       metadata:{branchName,commitSha,prNumber:42,prUrl:"https://github.com/acme/project/pull/43"},

@@ -34,7 +34,14 @@ function assertHash(value, field) {
   }
 }
 function isPullRequestUrl(url,number) {
-  return typeof url==="string" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(url) && url.endsWith("/pull/"+number);
+  if(typeof url!=="string"||url.length>2048)return false;
+  try{
+    const parsed=new URL(url);
+    if(parsed.protocol!=="https:"||parsed.hostname!=="github.com"||parsed.port!==""||
+       parsed.username!==""||parsed.password!==""||parsed.search!==""||parsed.hash!=="")return false;
+    const match=/^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)$/.exec(parsed.pathname);
+    return Boolean(match&&Number(match[3])===number&&String(number)===match[3]);
+  }catch{return false;}
 }
 
 function operationFromRow(row) {

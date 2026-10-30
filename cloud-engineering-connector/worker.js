@@ -85,6 +85,43 @@ async function sha256Hex(value) {
  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2,"0")).join("");
 }
+
+const GIT_COMMIT_AUTHOR = Object.freeze({
+ name: "Cloud Engineering Connector",
+ email: "mcp-connector@users.noreply.github.com",
+});
+function gitCommitPayload(treeSha,parentSha,commitDate,commitMessage) {
+ const identity={...GIT_COMMIT_AUTHOR,date:commitDate};
+ return {message:commitMessage,tree:treeSha,parents:[parentSha],author:identity,committer:{...identity}};
+}
+async function gitBlobSha(content) {
+ const bytes=new TextEncoder().encode(content);
+ const header=new TextEncoder().encode("blob "+bytes.byteLength+"\\0");
+ const object=new Uint8Array(header.byteLength+bytes.byteLength);
+ object.set(header);object.set(bytes,header.byteLength);
+ const digest=await crypto.subtle.digest("SHA-1",object);
+ return [...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+}
+async function verifyGitTree(env,base,treeSha,files) {
+ if(typeof treeSha!=="string"||!/^[a-f0-9]{40}$/.test(treeSha))throw new ToolError("GIT_TREE_IDENTITY_INVALID");
+ const tree=await github(env,base+"/git/trees/"+encodeURIComponent(treeSha)+"?recursive=1");
+ if(tree?.sha!==treeSha||tree.truncated===true||!Array.isArray(tree.tree))throw new ToolError("GIT_TREE_VERIFICATION_FAILED");
+ for(const file of files){
+  const matches=tree.tree.filter(entry=>entry?.path===file.path);
+  if(matches.length!==1||matches[0].type!=="blob"||matches[0].mode!=="100644"||matches[0].sha!==await gitBlobSha(file.content))throw new ToolError("GIT_TREE_VERIFICATION_FAILED",{path:file.path});
+ }
+ return tree;
+}
+function verifyGitCommit(commit,sha,payload) {
+ const author=payload.author,committer=payload.committer;
+ if(commit?.sha!==sha||commit?.message!==payload.message||commit?.tree?.sha!==payload.tree||
+    !Array.isArray(commit.parents)||commit.parents.length!==1||commit.parents[0]?.sha!==payload.parents[0]||
+    commit.author?.name!==author.name||commit.author?.email!==author.email||commit.author?.date!==author.date||
+    commit.committer?.name!==committer.name||commit.committer?.email!==committer.email||commit.committer?.date!==committer.date) {
+  throw new ToolError("GIT_COMMIT_VERIFICATION_FAILED");
+ }
+ return commit;
+}
 async function createChangePr(args,env) {
  if(args.base_branch!==ALLOWED_BASE_BRANCH) throw new Error("Base branch is not allowed.");
  const base=repoPath(args.owner,args.repo);
@@ -240,13 +277,24 @@ async function createChangePr(args,env) {
   const baseRef=await github(env,base+"/git/ref/heads/"+encodeURIComponent(baseBranch).replace(/%2F/g,"/"));
   const parentSha=baseRef.object.sha;
   const parentCommit=await github(env,base+"/git/commits/"+parentSha);
-  await transition("RESERVED","TREE_DISPATCHED");
-  // Set before dispatch: a transport failure can occur after GitHub accepted the write.
+  if(!Number.isSafeInteger(admission.operation?.createdAt))throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+  const baseTreeSha=parentCommit.tree?.sha;
+  if(typeof baseTreeSha!=="string"||!/^[a-f0-9]{40}$/.test(baseTreeSha)||typeof parentSha!=="string"||!/^[a-f0-9]{40}$/.test(parentSha))throw new ToolError("GIT_BASE_IDENTITY_INVALID");
+  await transition("RESERVED","TREE_DISPATCHED",{baseTreeSha,parentSha});
+  // Persist the exact immutable tree inputs before dispatch: an ambiguous response can then be replayed safely.
   sideEffectStarted=true;
-  const tree=await github(env,base+"/git/trees",{method:"POST",body:JSON.stringify({base_tree:parentCommit.tree.sha,tree:args.files.map(file=>({path:file.path,mode:"100644",type:"blob",content:file.content}))})});
-  await transition("TREE_DISPATCHED","TREE_WRITTEN");
-  const commit=await github(env,base+"/git/commits",{method:"POST",body:JSON.stringify({message:"assistant: "+safeTitle,tree:tree.sha,parents:[parentSha]})});
-  await transition("TREE_WRITTEN","COMMIT_WRITTEN",{commitSha:commit.sha});
+  const treePayload={base_tree:baseTreeSha,tree:args.files.map(file=>({path:file.path,mode:"100644",type:"blob",content:file.content}))};
+  const tree=await github(env,base+"/git/trees",{method:"POST",body:JSON.stringify(treePayload)});
+  await verifyGitTree(env,base,tree.sha,args.files);
+  await transition("TREE_DISPATCHED","TREE_WRITTEN",{treeSha:tree.sha});
+  const commitDate=new Date(admission.operation.createdAt).toISOString();
+  const commitMessage="assistant: "+safeTitle;
+  await transition("TREE_WRITTEN","COMMIT_DISPATCHED",{commitDate,commitMessage});
+  const commitPayload=gitCommitPayload(tree.sha,parentSha,commitDate,commitMessage);
+  const commit=await github(env,base+"/git/commits",{method:"POST",body:JSON.stringify(commitPayload)});
+  const verifiedCommit=await github(env,base+"/git/commits/"+encodeURIComponent(commit.sha));
+  verifyGitCommit(verifiedCommit,commit.sha,commitPayload);
+  await transition("COMMIT_DISPATCHED","COMMIT_WRITTEN",{commitSha:commit.sha});
   const branch="assistant/mcp-"+keyHash;
   await github(env,base+"/git/refs",{method:"POST",body:JSON.stringify({ref:"refs/heads/"+branch,sha:commit.sha})});
   await transition("COMMIT_WRITTEN","BRANCH_WRITTEN",{branchName:branch});

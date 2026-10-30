@@ -260,6 +260,11 @@ export class WriteControl extends DurableObject {
         return { updated: false, reason: "STATUS_CONFLICT", operation: current };
       }
 
+      for (const [field,value] of Object.entries(gitMetadata)) {
+        if (current.gitMetadata?.[field]!==undefined && current.gitMetadata[field]!==value) {
+          return {updated:false,reason:"OPERATION_IDENTITY_MISMATCH",operation:current};
+        }
+      }
       const effectiveBranchName=branchName??current.branchName;
       const effectiveCommitSha=commitSha??current.commitSha;
       const effectivePrNumber=prNumber??current.prNumber;

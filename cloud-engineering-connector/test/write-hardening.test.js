@@ -4,13 +4,51 @@ import assert from "node:assert/strict";
 import worker from "../worker.js";
 
 const MCP = "mcp-secret-value", GH = "ghp_FAKE_TOKEN_FOR_TEST_0123456789";
-const env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH };
+let mockKeyCounter = 0;
+function createWriteControlMock() {
+  const operations = new Map();
+  const stub = {
+    async admitWrite(input) {
+      const current = operations.get(input.keyHash);
+      if (current) return current.requestHash === input.requestHash
+        ? { admitted: true, replay: true, operation: current }
+        : { admitted: false, reason: "IDEMPOTENCY_CONFLICT" };
+      const operation = { leaseGeneration: 1, keyHash: input.keyHash, requestHash: input.requestHash, status: "IN_PROGRESS", phase: "RESERVED", createdAt: input.now, updatedAt: input.now };
+      operations.set(input.keyHash, operation);
+      return { admitted: true, replay: false, operation };
+    },
+    async transitionOperation(input) {
+      const operation = operations.get(input.keyHash);
+      if (!operation || operation.phase !== input.expectedPhase || operation.status !== "IN_PROGRESS") return { updated: false, reason: "PHASE_CONFLICT" };
+      Object.assign(operation, { phase: input.nextPhase, status: input.status ?? "IN_PROGRESS", updatedAt: input.now });
+      if (input.metadata) Object.assign(operation, {
+        branchName: input.metadata.branchName ?? operation.branchName,
+        commitSha: input.metadata.commitSha ?? operation.commitSha,
+        prNumber: input.metadata.prNumber ?? operation.prNumber,
+        prUrl: input.metadata.prUrl ?? operation.prUrl,
+      });
+      return { updated: true, operation };
+    },
+    async markOperationStatus(input) {
+      const operation = operations.get(input.keyHash);
+      if (!operation || operation.status !== "IN_PROGRESS") return { updated: false, reason: "STATUS_CONFLICT" };
+      Object.assign(operation, { status: input.status, updatedAt: input.now });
+      return { updated: true, operation };
+    },
+    async markStaleOperationsUnknown() { return 0; },
+    async getOperation(keyHash) { return operations.get(keyHash) ?? null; },
+    async reconcilePrCreated(input) { const operation=operations.get(input.keyHash); if(!operation||operation.status!=="UNKNOWN"||operation.phase!=="PR_DISPATCHED")return{updated:false}; Object.assign(operation,{status:"SUCCEEDED",phase:"PR_CREATED",prNumber:input.prNumber,prUrl:input.prUrl,updatedAt:input.now}); return{updated:true,operation}; },
+  };
+  return { idFromName: (name) => name, get: () => stub };
+}
+
+const env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH, WRITE_CONTROL: createWriteControlMock() };
 const OWNER = "mohammadrezayaghoobi123-dev", REPO = "Chat-gpt";
 const headers = { "content-type": "application/json", accept: "application/json, text/event-stream",
   authorization: "Bearer " + MCP, "mcp-protocol-version": "2025-03-26" };
 const call = (name, args) => worker.fetch(new Request("https://example.test/mcp", { method: "POST", headers,
   body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) }), env);
-const pr = (files, extra = {}) => ({ owner: OWNER, repo: REPO, base_branch: "feature/cloud-engineering-connector",
+const pr = (files, extra = {}) => ({ owner: OWNER, repo: REPO, idempotency_key: "hardening-test-key-" + String(++mockKeyCounter).padStart(8,"0"), base_branch: "feature/cloud-engineering-connector",
   title: "Example", summary: "Test", files, ...extra });
 
 async function withFetch(handler, fn) {
@@ -50,14 +88,25 @@ test("ordinary files and reads of review-control files stay allowed", async () =
 });
 
 test("PR title is collapsed to one line and summary mentions are neutralised", async () => {
+  const parentSha = "a".repeat(40), baseTreeSha = "b".repeat(40), treeSha = "c".repeat(40), commitSha = "d".repeat(40);
+  let commitPayload,createdRef=null,createdPr=null;
   await withFetch(async (url, init) => {
-    if (url.endsWith("/git/ref/heads/feature%2Fcloud-engineering-connector") || /\/git\/ref\//.test(url)) return new Response(JSON.stringify({ object: { sha: "p" } }), { status: 200 });
-    if (/\/git\/commits\/p$/.test(url)) return new Response(JSON.stringify({ tree: { sha: "bt" }, sha: "p" }), { status: 200 });
-    if (url.endsWith("/git/trees")) return new Response(JSON.stringify({ sha: "t" }), { status: 201 });
-    if (url.endsWith("/git/commits")) return new Response(JSON.stringify({ sha: "c" }), { status: 201 });
-    if (url.endsWith("/git/refs")) return new Response(JSON.stringify({ ref: "x" }), { status: 201 });
-    if (url.endsWith("/pulls")) return new Response(JSON.stringify({ number: 1, html_url: "https://example.test/pr/1" }), { status: 201 });
-    return new Response(JSON.stringify({ default_branch: "main", object: { sha: "p" }, tree: { sha: "bt" } }), { status: 200 });
+    if (url.includes("/git/ref/heads/assistant/mcp-")) return new Response(JSON.stringify({ref:createdRef,object:{sha:commitSha}}),{status:200});
+    if (/\/git\/ref\//.test(url)) return new Response(JSON.stringify({ object: { sha: parentSha } }), { status: 200 });
+    if (url.endsWith("/git/commits/" + parentSha)) return new Response(JSON.stringify({ tree: { sha: baseTreeSha }, sha: parentSha }), { status: 200 });
+    if (url.endsWith("/git/trees")) return new Response(JSON.stringify({ sha: treeSha }), { status: 201 });
+    if (url.includes("/git/trees/" + treeSha + "?recursive=1")) {
+      const bytes = new TextEncoder().encode("x"), header = new TextEncoder().encode("blob " + bytes.byteLength + "\0"), object = new Uint8Array(header.byteLength + bytes.byteLength);
+      object.set(header); object.set(bytes, header.byteLength);
+      const digest = await crypto.subtle.digest("SHA-1", object), blobSha = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+      return new Response(JSON.stringify({ sha: treeSha, truncated: false, tree: [{ path: "README.md", mode: "100644", type: "blob", sha: blobSha }] }), { status: 200 });
+    }
+    if (url.endsWith("/git/commits")) { commitPayload = JSON.parse(init.body); return new Response(JSON.stringify({ sha: commitSha }), { status: 201 }); }
+    if (url.endsWith("/git/commits/" + commitSha)) return new Response(JSON.stringify({ sha: commitSha, message: commitPayload.message, tree: { sha: treeSha }, parents: [{ sha: parentSha }], author: commitPayload.author, committer: commitPayload.committer }), { status: 200 });
+    if (url.endsWith("/git/refs")) { const payload=JSON.parse(init.body);createdRef=payload.ref;return new Response(JSON.stringify({ref:createdRef,object:{sha:commitSha}}),{status:201}); }
+    if (url.endsWith("/pulls/1")) return new Response(JSON.stringify(createdPr),{status:200});
+    if (url.endsWith("/pulls")) { const payload=JSON.parse(init.body);createdPr={number:1,html_url:"https://github.com/"+OWNER+"/"+REPO+"/pull/1",draft:true,state:"open",head:{ref:payload.head,sha:commitSha},base:{ref:payload.base},body:payload.body};return new Response(JSON.stringify(createdPr),{status:201}); }
+    return new Response(JSON.stringify({ default_branch: "main", object: { sha: parentSha }, tree: { sha: baseTreeSha } }), { status: 200 });
   }, async (calls) => {
     await call("create_change_pr", pr([{ path: "README.md", content: "x" }], { title: "x @octocat\nInjected: y", summary: "cc @someone @org/team" }));
     const commit = calls.find(c => c.url.endsWith("/git/commits"));

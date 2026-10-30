@@ -1,9 +1,38 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker.js";
-const env={MCP_AUTH_TOKEN:"test-secret"};
+let workerTestKey = 0;
+function createWriteControlMock() {
+ const operations = new Map();
+ const stub = {
+  async admitWrite(input) {
+   const old = operations.get(input.keyHash);
+   if (old) return old.requestHash === input.requestHash ? { admitted:true,replay:true,operation:old } : { admitted:false,reason:"IDEMPOTENCY_CONFLICT" };
+   const operation={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};
+   operations.set(input.keyHash,operation);
+   return {admitted:true,replay:false,operation};
+  },
+  async transitionOperation(input) {
+   const op=operations.get(input.keyHash);
+   if(!op||op.phase!==input.expectedPhase||op.status!=="IN_PROGRESS")return{updated:false,reason:"PHASE_CONFLICT"};
+   Object.assign(op,{phase:input.nextPhase,status:input.status??"IN_PROGRESS",updatedAt:input.now});
+   if(input.metadata)Object.assign(op,{branchName:input.metadata.branchName??op.branchName,commitSha:input.metadata.commitSha??op.commitSha,prNumber:input.metadata.prNumber??op.prNumber,prUrl:input.metadata.prUrl??op.prUrl});
+   return{updated:true,operation:op};
+  },
+  async markOperationStatus(input){const op=operations.get(input.keyHash);if(!op||op.status!=="IN_PROGRESS")return{updated:false,reason:"STATUS_CONFLICT"};Object.assign(op,{status:input.status,updatedAt:input.now});return{updated:true,operation:op};},
+  async markStaleOperationsUnknown(){return 0;},
+  async getOperation(keyHash){return operations.get(keyHash)??null;},
+  async reconcilePrCreated(input){const op=operations.get(input.keyHash);if(!op||op.status!=="UNKNOWN"||op.phase!=="PR_DISPATCHED")return{updated:false};Object.assign(op,{status:"SUCCEEDED",phase:"PR_CREATED",prNumber:input.prNumber,prUrl:input.prUrl,updatedAt:input.now});return{updated:true,operation:op};}
+ };
+ return {idFromName:name=>name,get:()=>stub};
+}
+
+const env={MCP_AUTH_TOKEN:"test-secret",WRITE_CONTROL:createWriteControlMock()};
 const req=(path,options={})=>new Request("https://example.test"+path,options);
-const rpc=(method,params={},id=1)=>req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})});
+const rpc=(method,params={},id=1)=>{
+ if(method==="tools/call"&&params.name==="create_change_pr"&&params.arguments&&!Object.hasOwn(params.arguments,"idempotency_key"))params={...params,arguments:{...params.arguments,idempotency_key:"worker-test-key-"+String(++workerTestKey).padStart(8,"0")}};
+ return req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})});
+};
 test("health reports cloud execution without laptop dependency",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers")});
 test("MCP fails closed by default when authentication is not configured",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",body:"{}"}),{});assert.equal(r.status,503)});
 test("public read-only mode fails closed when rate limiter binding is absent",async()=>{const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true"});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"rate_limiter_unavailable"})});
@@ -19,9 +48,178 @@ test("public mode never permits write tools without MCP_AUTH_TOKEN",async()=>{co
 test("MCP rejects missing bearer token",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{"content-type":"application/json","cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize"})}),{...env,MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,401)});
 test("initialize advertises connector identity and tools capability",async()=>{const r=await worker.fetch(rpc("initialize",{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"test",version:"1"}}),env);const b=await r.json();assert.equal(b.result.serverInfo.name,"cloud-engineering-connector");assert.ok(b.result.capabilities.tools)});
 test("tools/list exposes all five declared tools",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();assert.deepEqual(b.result.tools.map(t=>t.name),["project_inspect","read_project_file","engineering_standards","architecture_review","create_change_pr"])});
-test("tools/list schema requires base_branch for create_change_pr",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();const tool=b.result.tools.find(t=>t.name==="create_change_pr");assert.ok(tool,"create_change_pr must be listed");assert.ok(Array.isArray(tool.inputSchema.required));assert.ok(tool.inputSchema.required.includes("base_branch"));assert.ok(Object.hasOwn(tool.inputSchema.properties,"base_branch"));assert.equal(tool.inputSchema.additionalProperties,false)});
+test("tools/list schema requires base_branch for create_change_pr",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();const tool=b.result.tools.find(t=>t.name==="create_change_pr");assert.ok(tool,"create_change_pr must be listed");assert.ok(Array.isArray(tool.inputSchema.required));assert.ok(tool.inputSchema.required.includes("base_branch"));assert.ok(tool.inputSchema.required.includes("idempotency_key"));assert.ok(Object.hasOwn(tool.inputSchema.properties,"base_branch"));assert.equal(tool.inputSchema.additionalProperties,false)});
 test("architecture review labels its output unverified",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"architecture_review",arguments:{project_goal:"Example",proposed_change:"Add cache"}}),env);const b=await r.json();const result=JSON.parse(b.result.content[0].text);assert.equal(result.status,"review_framework_generated_not_independently_verified");assert.ok(result.mandatory_output_sections.includes("Verification status"))});
 test("write tool fails closed without GitHub token",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]}}),env);const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/GITHUB_TOKEN/)});
+
+test("write operations fail closed when the Durable Object binding is unavailable",async()=>{
+ const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called")};
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Valid",summary:"Valid",files:[{path:"README.md",content:"x"}]}}),{...env,GITHUB_TOKEN:"unused",WRITE_CONTROL:undefined});
+  const body=await response.json();assert.equal(response.status,200);assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/WRITE_CONTROL_UNAVAILABLE/);assert.equal(calls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+test("write quota denial is a structured MCP tool error with HTTP 200",async()=>{
+ const originalFetch=globalThis.fetch;let githubCalls=0;globalThis.fetch=async()=>{githubCalls++;throw new Error("GitHub must not be called")};
+ const limited={idFromName:name=>name,get:()=>({admitWrite:async()=>({admitted:false,reason:"RATE_LIMITED",retryAfterSeconds:37}),transitionOperation:async()=>({updated:false}),markOperationStatus:async()=>({updated:false}),markStaleOperationsUnknown:async()=>0,reconcilePrCreated:async()=>({updated:false}),getOperation:async()=>null})};
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Quota",summary:"Quota",files:[{path:"README.md",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:limited});
+  const body=await response.json();assert.equal(response.status,200);assert.equal(body.jsonrpc,"2.0");assert.equal(body.result.isError,true);
+  assert.deepEqual(JSON.parse(body.result.content[0].text),{error:"WRITE_RATE_LIMITED",retry_after_seconds:37});assert.equal(githubCalls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
+
+test("idempotency fingerprint conflict is a structured MCP tool error",async()=>{
+ const originalFetch=globalThis.fetch;let githubCalls=0;globalThis.fetch=async()=>{githubCalls++;throw new Error("GitHub must not be called")};
+ const conflict={idFromName:name=>name,get:()=>({admitWrite:async()=>({admitted:false,reason:"IDEMPOTENCY_CONFLICT"}),transitionOperation:async()=>({updated:false}),markOperationStatus:async()=>({updated:false}),markStaleOperationsUnknown:async()=>0,reconcilePrCreated:async()=>({updated:false}),getOperation:async()=>null})};
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Conflict",summary:"Conflict",files:[{path:"README.md",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:conflict});
+  const body=await response.json();assert.equal(response.status,200);assert.equal(body.result.isError,true);assert.deepEqual(JSON.parse(body.result.content[0].text),{error:"IDEMPOTENCY_CONFLICT"});assert.equal(githubCalls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+
+test("idempotency scope and request fingerprint canonicalize GitHub owner and repository casing",async()=>{
+ const originalFetch=globalThis.fetch,admissions=[];
+ const stub={async markStaleOperationsUnknown(){return 0},async admitWrite(input){admissions.push(input);return{admitted:false,reason:"RATE_LIMITED",retryAfterSeconds:1}},async transitionOperation(){throw new Error("not expected")},async markOperationStatus(){throw new Error("not expected")},async reconcilePrCreated(){throw new Error("not expected")},async getOperation(){return null}};
+ globalThis.fetch=async()=>{throw new Error("GitHub must not be called while admission is denied")};
+ try{
+  const common={idempotency_key:"case-normalization-key-0001",base_branch:"feature/cloud-engineering-connector",title:"Case normalization",summary:"Same GitHub resource",files:[{path:"docs/proposal.txt",content:"x"}]};
+  for(const [owner,repoName] of [["mohammadrezayaghoobi123-dev","Chat-gpt"],["MOHAMMADREZAYAGHOOBI123-DEV","CHAT-GPT"]]){
+   const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{...common,owner,repo:repoName}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+   const body=await response.json();assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/WRITE_RATE_LIMITED/);
+  }
+  assert.equal(admissions.length,2);assert.equal(admissions[0].keyHash,admissions[1].keyHash);assert.equal(admissions[0].requestHash,admissions[1].requestHash);
+ }finally{globalThis.fetch=originalFetch}
+});
+
+test("a transport timeout during the first GitHub tree write is quarantined as UNKNOWN",async()=>{
+ const originalFetch=globalThis.fetch;let status=null,phase=null,githubCalls=[];
+ const key="first-tree-timeout-key-0001";
+ const operations=new Map();
+ const stub={
+  async admitWrite(input){const op={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:Date.now(),updatedAt:Date.now()};operations.set(input.keyHash,op);return{admitted:true,replay:false,operation:op}},
+  async transitionOperation(input){phase=input.nextPhase;const op=operations.values().next().value;op.phase=input.nextPhase;return{updated:true,operation:op}},
+  async markOperationStatus(input){status=input.status;const op=operations.get(input.keyHash);op.status=input.status;op.errorCode=input.errorCode;return{updated:true,operation:op}},
+  async markStaleOperationsUnknown(){return 0},
+  async getOperation(keyHash){return operations.get(keyHash)??null},
+  async reconcilePrCreated(){return{updated:false}}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";githubCalls.push({url,method});
+  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"a".repeat(40)}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+"a".repeat(40)))return new Response(JSON.stringify({sha:"a".repeat(40),tree:{sha:"b".repeat(40)}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))throw new TypeError("simulated network timeout after GitHub accepted the tree request");
+  throw new Error("Unexpected GitHub request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:key,owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Timeout test",summary:"Verify first write ambiguity",files:[{path:"docs/proposal.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();assert.equal(response.status,200);assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/WRITE_OUTCOME_UNKNOWN/);
+  assert.equal(status,"UNKNOWN");assert.equal(operations.values().next().value.phase,"TREE_DISPATCHED");
+  assert.equal(githubCalls.filter(x=>x.method==="POST").length,1);
+ }finally{globalThis.fetch=originalFetch}
+});
+
+test("successful idempotent replay verifies the existing PR marker before returning cached metadata",async()=>{
+ const originalFetch=globalThis.fetch;let keyHash=null;let calls=[];
+ const branchFor=key=>"assistant/mcp-"+key;
+ const replayStub={
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{leaseGeneration:1,keyHash,status:"SUCCEEDED",phase:"PR_CREATED",branchName:branchFor(input.keyHash),commitSha:"a".repeat(40),prNumber:42,prUrl:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/42"}}},
+  async transitionOperation(){throw new Error("no writes expected")},
+  async markOperationStatus(){throw new Error("no writes expected")},
+  async markStaleOperationsUnknown(){return 0},
+  async reconcilePrCreated(){throw new Error("no reconciliation expected")},
+  async getOperation(){return null}
+ };
+ globalThis.fetch=async(input,init={})=>{const method=init.method||"GET";calls.push({url:String(input),method});return new Response(JSON.stringify({number:42,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/42",draft:true,state:"open",head:{ref:branchFor(keyHash),sha:"b".repeat(40)},base:{ref:"feature/cloud-engineering-connector"},body:"proposal\\n<!-- mcp-operation:"+keyHash+" -->"}),{status:200,headers:{"content-type":"application/json"}})};
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Replay",summary:"Replay",files:[{path:"README.md",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>replayStub}});
+  const body=await response.json();const result=JSON.parse(body.result.content[0].text);assert.equal(response.status,200);assert.equal(result.replayed,true);assert.equal(result.head_changed_since_creation,true);assert.equal(result.pull_request.state,"open");assert.equal(calls.length,1);assert.equal(calls[0].method,"GET");
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+test("UNKNOWN COMMIT_WRITTEN replay verifies deterministic branch then creates one draft PR",async()=>{
+ const originalFetch=globalThis.fetch;let keyHash=null,createdPr=null;const calls=[];
+ const commitSha="d".repeat(40),branchFor=key=>"assistant/mcp-"+key;
+ const stub={
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{leaseGeneration:1,keyHash,status:"UNKNOWN",phase:"COMMIT_WRITTEN",commitSha,updatedAt:Date.now()}}},
+  async markStaleOperationsUnknown(){return 0},
+  async getOperation(){return null},
+  async reconcilePrCreated(){return{updated:false}},
+  async reconcileBranchWritten(input){assert.equal(input.keyHash,keyHash);assert.equal(input.branchName,branchFor(keyHash));assert.equal(input.commitSha,commitSha);return{updated:true,operation:{status:"IN_PROGRESS",phase:"BRANCH_WRITTEN",branchName:input.branchName,commitSha}}},
+  async transitionOperation(input){calls.push({phase:input.nextPhase,method:"LEDGER"});return{updated:true,operation:{phase:input.nextPhase,status:input.status??"IN_PROGRESS"}}},
+  async markOperationStatus(){return{updated:true}}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const method=init.method||"GET",url=String(input);calls.push({method,url});
+  if(method==="GET"&&url.endsWith("/pulls/81"))return new Response(JSON.stringify(createdPr),{status:200,headers:{"content-type":"application/json"}});
+  if(method==="GET")return new Response(JSON.stringify({ref:"refs/heads/"+branchFor(keyHash),object:{sha:commitSha}}),{status:200,headers:{"content-type":"application/json"}});
+  const sent=JSON.parse(init.body);assert.equal(sent.head,branchFor(keyHash));assert.equal(sent.draft,true);assert.ok(sent.body.includes("<!-- mcp-operation:"+keyHash+" -->"));
+  createdPr={number:81,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/81",draft:true,state:"open",head:{ref:sent.head,sha:commitSha},base:{ref:sent.base},body:sent.body};
+  return new Response(JSON.stringify(createdPr),{status:201,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"worker-recovery-0001",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Recover branch",summary:"Recover safely",files:[{path:"README.md",content:"x"}]}}),{...env,WRITE_CONTROL:{idFromName:name=>name,get:()=>stub},GITHUB_TOKEN:"test-token"});
+  const body=await response.json(),result=JSON.parse(body.result.content[0].text);
+  assert.equal(response.status,200);assert.equal(result.reconciled,true,body.result.content[0].text);assert.equal(result.pull_request.number,81);
+  assert.deepEqual(calls.filter(x=>x.method==="GET"||x.method==="POST").map(x=>x.method),["GET","POST","GET"]);
+  assert.deepEqual(calls.filter(x=>x.method==="LEDGER").map(x=>x.phase),["PR_DISPATCHED","PR_CREATED"]);
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+test("branch recovery records a definite GitHub 422 as FAILED rather than UNKNOWN",async()=>{
+ const originalFetch=globalThis.fetch;let keyHash=null,recordedStatus=null;const commitSha="e".repeat(40);
+ const stub={
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{leaseGeneration:1,keyHash,status:"UNKNOWN",phase:"COMMIT_WRITTEN",commitSha,updatedAt:Date.now()}}},
+  async markStaleOperationsUnknown(){return 0},
+  async getOperation(){return null},
+  async reconcileBranchWritten(input){assert.equal(input.keyHash,keyHash);return{updated:true,operation:{status:"IN_PROGRESS",phase:"BRANCH_WRITTEN",commitSha,branchName:input.branchName}}},
+  async transitionOperation(input){assert.equal(input.nextPhase,"PR_DISPATCHED");return{updated:true,operation:{status:"IN_PROGRESS",phase:"PR_DISPATCHED"}}},
+  async markOperationStatus(input){recordedStatus=input.status;return{updated:true}},
+  async reconcilePrCreated(){return{updated:false}}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";
+  if(method==="GET")return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+keyHash,object:{sha:commitSha}}),{status:200,headers:{"content-type":"application/json"}});
+  if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({message:"simulated validation rejection"}),{status:422,headers:{"content-type":"application/json"}});
+  throw new Error("Unexpected GitHub request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"branch-recovery-422-key-001",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Definite rejection",summary:"Test 422 classification",files:[{path:"docs/proposal.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();assert.equal(response.status,200);assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/GitHub API 422/);assert.equal(recordedStatus,"FAILED");
+ }finally{globalThis.fetch=originalFetch}
+});
+
+test("UNKNOWN PR_DISPATCHED replay reconciles exactly one marker-matched PR without creating another",async()=>{
+ const originalFetch=globalThis.fetch;let keyHash=null,reconcileCalls=0,githubMethods=[];
+ const branchFor=key=>"assistant/mcp-"+key;
+ const recoveryStub={
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{leaseGeneration:1,keyHash,status:"UNKNOWN",phase:"PR_DISPATCHED",branchName:branchFor(input.keyHash),commitSha:"c".repeat(40),updatedAt:Date.now()}}},
+  async transitionOperation(){throw new Error("no write phase transition expected")},
+  async markOperationStatus(){throw new Error("no status update expected")},
+  async markStaleOperationsUnknown(){return 0},
+  async getOperation(){return null},
+  async reconcilePrCreated(input){reconcileCalls++;assert.equal(input.keyHash,keyHash);return{updated:true,operation:{status:"SUCCEEDED",phase:"PR_CREATED"}}}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const method=init.method||"GET";githubMethods.push(method);
+  const pr={number:77,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/77",draft:true,state:"open",head:{ref:branchFor(keyHash),sha:"c".repeat(40)},base:{ref:"feature/cloud-engineering-connector"},body:"proposal\\n<!-- mcp-operation:"+keyHash+" -->"};
+  if(String(input).endsWith("/pulls/77"))return new Response(JSON.stringify(pr),{status:200,headers:{"content-type":"application/json"}});
+  return new Response(JSON.stringify([pr]),{status:200,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Recover",summary:"Recover",files:[{path:"README.md",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>recoveryStub}});
+  const body=await response.json(),result=JSON.parse(body.result.content[0].text);
+  assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,77);assert.equal(reconcileCalls,1);assert.deepEqual(githubMethods,["GET","GET"]);
+ }finally{globalThis.fetch=originalFetch}
+});
+
 test("change PR rejects credential filenames before API calls",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"credentials.json",content:"token=should-not-pass"}]}}),{...env,GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/Rejected unsafe or protected file path/)});
 test("missing GITHUB_TOKEN gives an actionable hint when a GitHub read is refused",async()=>{const originalFetch=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({message:"Not Found"}),{status:404,headers:{"content-type":"application/json"}});try{const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}}),env);const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/GITHUB_TOKEN is not configured/);assert.match(b.result.content[0].text,/intended repository/)}finally{globalThis.fetch=originalFetch}});
 test("all GitHub API responses are byte-bounded, including repository metadata",async()=>{const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;const bytes=new TextEncoder().encode(JSON.stringify({message:"x".repeat(2_000_100)}));return new Response(new ReadableStream({start(controller){controller.enqueue(bytes);controller.close()}}),{status:200,headers:{"content-type":"application/json","content-length":String(bytes.byteLength)}})};try{const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}}),{...env,GITHUB_TOKEN:"test-token"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/response exceeds the configured byte limit/);assert.equal(calls,1)}finally{globalThis.fetch=originalFetch}});
@@ -101,64 +299,53 @@ test("create_change_pr rejects every protected path before any GitHub request",a
  try{for(const path of [".env",".envrc/secret.txt","nested/.envrc/config",".env/secrets.txt","nested/.env/config",".env.production","nested/.envrc.local/config",".github","docs/.github/workflows/ci.yml","secrets/token.txt","config/credentials/prod.json","keys/private.pem","id_ed25519","id_rsa","id_dsa","id_ecdsa","id_ed25519_sk","id_ecdsa_sk",".ssh/id_rsa",".aws/credentials",".azure/accessTokens.json",".config/gcloud/application_default_credentials.json",".kube/config",".docker/config.json",".npmrc",".netrc",".git-credentials","terraform.tfstate","infra/prod.tfvars","keys/known_hosts","keys/authorized_keys"]){const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path,content:"proposal"}]};const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true,path);assert.match(b.result.content[0].text,/Rejected unsafe or protected file path/,path)}assert.equal(calls,0)}finally{globalThis.fetch=originalFetch}
 });
 
-test("create_change_pr deletes its new branch if draft PR creation fails",async()=>{
- const originalFetch=globalThis.fetch;const calls=[];let createdRef=null;
+test("create_change_pr retains deterministic branch after a definite PR rejection",async()=>{
+ const originalFetch=globalThis.fetch;const calls=[];let branchRef=null,commitPayload=null;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
  globalThis.fetch=async(input,init={})=>{
-  const url=String(input);const method=init.method||"GET";calls.push({url,method});
+  const url=String(input),method=init.method||"GET";calls.push({url,method});
   if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
-  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"base-sha"}}),{status:200});
-  if(method==="GET"&&url.endsWith("/git/commits/base-sha"))return new Response(JSON.stringify({tree:{sha:"base-tree"}}),{status:200});
-  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:"new-tree"}),{status:201});
-  if(method==="POST"&&url.endsWith("/git/commits"))return new Response(JSON.stringify({sha:"new-commit"}),{status:201});
-  if(method==="POST"&&url.endsWith("/git/refs")){createdRef=JSON.parse(init.body).ref;return new Response(JSON.stringify({ref:createdRef}),{status:201})}
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:parentSha}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1")){
+   const bytes=new TextEncoder().encode("proposal"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
+   const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+   return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
+  }
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha)){const secondPrecision=value=>({...value,date:new Date(Math.floor(Date.parse(value.date)/1000)*1000).toISOString()});return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:secondPrecision(commitPayload.author),committer:secondPrecision(commitPayload.committer)}),{status:200});}
+  if(method==="POST"&&url.endsWith("/git/refs")){branchRef=JSON.parse(init.body).ref;return new Response(JSON.stringify({ref:branchRef,object:{sha:commitSha}}),{status:201});}
+  if(method==="GET"&&branchRef&&url.endsWith("/git/ref/heads/"+branchRef.slice("refs/heads/".length)))return new Response(JSON.stringify({ref:branchRef,object:{sha:commitSha}}),{status:200});
   if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({message:"simulated PR validation failure"}),{status:422});
-  if(method==="DELETE"&&createdRef&&url.endsWith("/git/refs/"+createdRef.replace(/^refs\//,"")))return new Response(null,{status:204});
-  throw new Error("Unexpected mocked GitHub request: "+method+" "+url)
+  throw new Error("Unexpected request "+method+" "+url);
  };
  try{
-  const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example proposal",summary:"Test rollback",files:[{path:"docs/proposal.txt",content:"proposal"}]};
+  const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Test",summary:"Test",files:[{path:"docs/proposal.txt",content:"proposal"}]};
   const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"test-token"});
-  const body=await r.json();
-  assert.equal(body.result.isError,true);
-  assert.match(body.result.content[0].text,/GitHub API 422: simulated PR validation failure/);
-  assert.ok(createdRef?.startsWith("refs/heads/assistant/"));
-  assert.ok(calls.some(c=>c.method==="DELETE"&&c.url.endsWith("/git/refs/"+createdRef.replace(/^refs\//,""))),"new branch should be deleted after PR creation failure");
- }finally{globalThis.fetch=originalFetch}
-});
-
-
-test("create_change_pr reports cleanup failure with the orphan branch name",async()=>{
- const originalFetch=globalThis.fetch;let createdBranch=null;let deleteAttempted=false;
- globalThis.fetch=async(input,init={})=>{
-  const url=String(input),method=init.method||"GET";
-  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
-  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"base-sha"}}),{status:200});
-  if(method==="GET"&&url.endsWith("/git/commits/base-sha"))return new Response(JSON.stringify({tree:{sha:"base-tree"}}),{status:200});
-  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:"new-tree"}),{status:201});
-  if(method==="POST"&&url.endsWith("/git/commits"))return new Response(JSON.stringify({sha:"new-commit"}),{status:201});
-  if(method==="POST"&&url.endsWith("/git/refs")){createdBranch=JSON.parse(init.body).ref.split("/").slice(2).join("/");return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch}),{status:201})}
-  if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({message:"simulated validation failure"}),{status:422});
-  if(method==="DELETE"&&createdBranch&&url.endsWith("/git/refs/heads/"+createdBranch)){deleteAttempted=true;return new Response(JSON.stringify({message:"simulated delete failure"}),{status:403})}
-  throw new Error("Unexpected mocked GitHub request: "+method+" "+url)
- };
- try{
-  const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example proposal",summary:"Test cleanup failure",files:[{path:"docs/proposal.txt",content:"proposal"}]};
-  const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"test-token"});
-  const body=await r.json();const msg=body.result.content[0].text;
-  assert.equal(body.result.isError,true);assert.ok(deleteAttempted);assert.match(msg,/cleanup of branch assistant\//);assert.match(msg,/GitHub API 403/);
+  const body=await r.json();assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/GitHub API 422: simulated PR validation failure/);
+  assert.ok(branchRef?.startsWith("refs/heads/assistant/mcp-"));assert.equal(calls.some(c=>c.method==="DELETE"),false);
  }finally{globalThis.fetch=originalFetch}
 });
 
 test("create_change_pr retains branch when pull request creation outcome is uncertain",async()=>{
- const originalFetch=globalThis.fetch;let createdBranch=null;let deleteAttempted=false;
+ const originalFetch=globalThis.fetch;let createdBranch=null;let deleteAttempted=false,commitPayload=null;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
  globalThis.fetch=async(input,init={})=>{
   const url=String(input),method=init.method||"GET";
   if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
-  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"base-sha"}}),{status:200});
-  if(method==="GET"&&url.endsWith("/git/commits/base-sha"))return new Response(JSON.stringify({tree:{sha:"base-tree"}}),{status:200});
-  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:"new-tree"}),{status:201});
-  if(method==="POST"&&url.endsWith("/git/commits"))return new Response(JSON.stringify({sha:"new-commit"}),{status:201});
-  if(method==="POST"&&url.endsWith("/git/refs")){createdBranch=JSON.parse(init.body).ref.split("/").slice(2).join("/");return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch}),{status:201})}
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:parentSha}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1")){
+   const bytes=new TextEncoder().encode("proposal"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
+   const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+   return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
+  }
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha)){const secondPrecision=value=>({...value,date:new Date(Math.floor(Date.parse(value.date)/1000)*1000).toISOString()});return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:secondPrecision(commitPayload.author),committer:secondPrecision(commitPayload.committer)}),{status:200});}
+  if(method==="POST"&&url.endsWith("/git/refs")){createdBranch=JSON.parse(init.body).ref.split("/").slice(2).join("/");return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch,object:{sha:commitSha}}),{status:201})}
+  if(method==="GET"&&createdBranch&&url.endsWith("/git/ref/heads/"+createdBranch))return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch,object:{sha:commitSha}}),{status:200});
   if(method==="POST"&&url.endsWith("/pulls"))throw new TypeError("simulated network timeout after request dispatch");
   if(method==="DELETE"&&createdBranch&&url.endsWith("/git/refs/heads/"+createdBranch)){deleteAttempted=true;return new Response(null,{status:204})}
   throw new Error("Unexpected mocked GitHub request: "+method+" "+url)
@@ -167,7 +354,7 @@ test("create_change_pr retains branch when pull request creation outcome is unce
   const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example proposal",summary:"Test ambiguous outcome",files:[{path:"docs/proposal.txt",content:"proposal"}]};
   const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"test-token"});
   const body=await r.json();const msg=body.result.content[0].text;
-  assert.equal(body.result.isError,true);assert.equal(deleteAttempted,false);assert.match(msg,/outcome is uncertain/);assert.match(msg,/branch assistant\//);assert.match(msg,/simulated network timeout/);
+  assert.equal(body.result.isError,true);assert.equal(deleteAttempted,false);assert.match(msg,/WRITE_OUTCOME_UNKNOWN/);assert.match(msg,/will not be retried automatically/);assert.ok(createdBranch?.startsWith("assistant\/mcp-"));
  }finally{globalThis.fetch=originalFetch}
 });
 
@@ -582,4 +769,519 @@ test("public and authentication-failure requests use independent key spaces",asy
  assert.equal(protectedResponse.status,401);
  assert.equal(publicResponse.status,200);
  assert.deepEqual(keys,["auth-failure:203.0.113.10","public-mcp:203.0.113.10"]);
+});
+
+
+test("create_change_pr persists deterministic Git commit identity before dispatching the commit",async()=>{
+ const originalFetch=globalThis.fetch;
+ const createdAt=Date.parse("2026-10-30T12:00:00.123Z");
+ const expectedGitDate="2026-10-30T12:00:00.000Z";
+ const events=[],metadata=[];
+ let keyHash=null,createdPr=null;
+ const stub={
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:false,operation:{leaseGeneration:1,keyHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt,updatedAt:createdAt}};},
+  async transitionOperation(input){events.push(input.nextPhase);metadata.push(input.metadata??{});return{updated:true,operation:{status:"IN_PROGRESS",phase:input.nextPhase}};},
+  async markOperationStatus(){return{updated:true};},
+  async markStaleOperationsUnknown(){return 0;},
+  async getOperation(){return null;},
+  async reconcilePrCreated(){return{updated:false};},
+  async reconcileTreeWritten(){return{updated:false};},
+  async reconcileCommitWritten(){return{updated:false};},
+ };
+ const commitSha="4".repeat(40),treeSha="3".repeat(40),parentSha="2".repeat(40),baseTreeSha="1".repeat(40);
+ let commitPayload=null;
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";
+  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:parentSha}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1")){
+   const bytes=new TextEncoder().encode("stable"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
+   const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+   return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/recovery.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
+  }
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha)){const secondPrecision=value=>({...value,date:new Date(Math.floor(Date.parse(value.date)/1000)*1000).toISOString()});return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:secondPrecision(commitPayload.author),committer:secondPrecision(commitPayload.committer)}),{status:200});}
+  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+keyHash,object:{sha:commitSha}}),{status:201});
+  if(method==="GET"&&url.endsWith("/git/ref/heads/assistant/mcp-"+keyHash))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+keyHash,object:{sha:commitSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/pulls")){const payload=JSON.parse(init.body);createdPr={number:91,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/91",draft:true,state:"open",head:{ref:payload.head,sha:commitSha},base:{ref:payload.base},body:payload.body};return new Response(JSON.stringify(createdPr),{status:201});}
+  if(method==="GET"&&url.endsWith("/pulls/91"))return new Response(JSON.stringify(createdPr),{status:200});
+  throw new Error("Unexpected GitHub request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"fixed-commit-date-test-0001",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Deterministic commit",summary:"Persist exact identity",files:[{path:"docs/recovery.txt",content:"stable"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.result.isError,undefined,body.result.content?.[0]?.text);
+  assert.deepEqual(events,["TREE_DISPATCHED","TREE_WRITTEN","COMMIT_DISPATCHED","COMMIT_WRITTEN","BRANCH_WRITTEN","PR_DISPATCHED","PR_CREATED"]);
+  assert.deepEqual(metadata[0],{baseTreeSha,parentSha});
+  assert.deepEqual(metadata[1],{treeSha});
+  assert.deepEqual(metadata[2],{commitDate:expectedGitDate,commitMessage:"assistant: Deterministic commit",authorName:"Cloud Engineering Connector",authorEmail:"mcp-connector@users.noreply.github.com",committerName:"Cloud Engineering Connector",committerEmail:"mcp-connector@users.noreply.github.com"});
+  assert.equal(commitPayload.tree,treeSha);
+  assert.deepEqual(commitPayload.parents,[parentSha]);
+  assert.deepEqual(commitPayload.author,{name:"Cloud Engineering Connector",email:"mcp-connector@users.noreply.github.com",date:expectedGitDate});
+  assert.deepEqual(commitPayload.committer,commitPayload.author);
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+async function recoveryFixtureBlobSha(content){
+ const bytes=new TextEncoder().encode(content),header=new TextEncoder().encode("blob "+bytes.byteLength+"\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);
+ object.set(header);object.set(bytes,header.byteLength);
+ const digest=await crypto.subtle.digest("SHA-1",object);
+ return [...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+}
+function recoveryLedger(operation){
+ return {
+  async admitWrite(input){operation.keyHash=input.keyHash;return{admitted:true,replay:true,operation};},
+  async markStaleOperationsUnknown(){return 0;},
+  async getOperation(){return operation;},
+  async markOperationStatus(input){operation.status=input.status;operation.errorCode=input.errorCode;return{updated:true,operation};},
+  async transitionOperation(input){
+   if(operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false,reason:"PHASE_CONFLICT"};
+   operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";
+   if(input.metadata){
+    operation.gitMetadata={...(operation.gitMetadata??{})};
+    for(const [key,value] of Object.entries(input.metadata)){
+     if(["baseTreeSha","parentSha","treeSha","commitDate","commitMessage","authorName","authorEmail","committerName","committerEmail"].includes(key))operation.gitMetadata[key]=value;
+     else operation[key]=value;
+    }
+   }
+   return{updated:true,operation};
+  },
+  async reconcileTreeWritten(input){
+   if(operation.status!=="UNKNOWN"||!["TREE_DISPATCHED","TREE_WRITTEN"].includes(operation.phase)||operation.gitMetadata.baseTreeSha!==input.baseTreeSha||operation.gitMetadata.parentSha!==input.parentSha||(operation.phase==="TREE_WRITTEN"&&operation.gitMetadata.treeSha!==input.treeSha))return{updated:false};
+   operation.status="IN_PROGRESS";operation.phase="TREE_WRITTEN";operation.gitMetadata.treeSha=input.treeSha;
+   return{updated:true,operation};
+  },
+  async reconcileCommitWritten(input){
+   if(operation.status!=="UNKNOWN"||operation.phase!=="COMMIT_DISPATCHED"||operation.gitMetadata.treeSha!==input.treeSha||operation.gitMetadata.parentSha!==input.parentSha)return{updated:false};
+   operation.status="IN_PROGRESS";operation.phase="COMMIT_WRITTEN";operation.commitSha=input.commitSha;
+   return{updated:true,operation};
+  },
+  async reconcilePrCreated(){return{updated:false};}
+ };
+}
+
+test("UNKNOWN COMMIT_DISPATCHED replay recreates and verifies the exact persisted commit before one branch and PR",async()=>{
+ const originalFetch=globalThis.fetch;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
+ const commitDate="2026-10-30T12:00:00.000Z",commitMessage="assistant: Persisted identity";
+ const persistedIdentity={authorName:"Persisted Engineering Agent",authorEmail:"persisted-agent@example.test",committerName:"Persisted Engineering Agent",committerEmail:"persisted-agent@example.test"};
+ const operation={leaseGeneration:1,status:"UNKNOWN",phase:"COMMIT_DISPATCHED",createdAt:Date.parse(commitDate),updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha,treeSha,commitDate,commitMessage,...persistedIdentity}};
+ const ledger=recoveryLedger(operation),calls=[];let commitPayload=null,createdPr=null,createdRef=null;
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";calls.push({method,url});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1"))return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/replay.txt",mode:"100644",type:"blob",sha:await recoveryFixtureBlobSha("x")}]}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/refs")){const payload=JSON.parse(init.body);createdRef=payload.ref;return new Response(JSON.stringify({ref:createdRef,object:{sha:commitSha}}),{status:201});}
+  if(method==="GET"&&createdRef&&url.endsWith("/git/ref/heads/"+createdRef.slice("refs/heads/".length)))return new Response(JSON.stringify({ref:createdRef,object:{sha:commitSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/pulls")){const payload=JSON.parse(init.body);createdPr={number:92,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/92",draft:true,state:"open",head:{ref:payload.head,sha:commitSha},base:{ref:payload.base},body:payload.body};return new Response(JSON.stringify(createdPr),{status:201});}
+  if(method==="GET"&&url.endsWith("/pulls/92"))return new Response(JSON.stringify(createdPr),{status:200});
+  throw new Error("Unexpected GitHub request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"unknown-commit-replay-0001",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Persisted identity",summary:"Recover commit",files:[{path:"docs/replay.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>ledger}});
+  const body=await response.json(),result=JSON.parse(body.result.content[0].text);
+  assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,92);
+  assert.deepEqual(commitPayload,{message:commitMessage,tree:treeSha,parents:[parentSha],author:{name:persistedIdentity.authorName,email:persistedIdentity.authorEmail,date:commitDate},committer:{name:persistedIdentity.committerName,email:persistedIdentity.committerEmail,date:commitDate}});
+  assert.deepEqual(calls.map(call=>call.method),["GET","GET","POST","GET","POST","GET","POST","GET"]);
+  assert.equal(operation.phase,"PR_CREATED");assert.equal(operation.status,"SUCCEEDED");
+ }finally{globalThis.fetch=originalFetch}
+});
+
+test("UNKNOWN TREE_DISPATCHED replay repeats only the same immutable tree payload before continuing",async()=>{
+ const originalFetch=globalThis.fetch;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
+ const createdAt=Date.parse("2026-10-30T12:00:00.123Z");
+ const operation={leaseGeneration:1,status:"UNKNOWN",phase:"TREE_DISPATCHED",createdAt,updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha}};
+ const ledger=recoveryLedger(operation),calls=[];let treePayload=null,commitPayload=null,createdPr=null,createdRef=null;
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";calls.push({method,url});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees")){treePayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:treeSha}),{status:201});}
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1"))return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/replay.txt",mode:"100644",type:"blob",sha:await recoveryFixtureBlobSha("x")}]}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/refs")){const payload=JSON.parse(init.body);createdRef=payload.ref;return new Response(JSON.stringify({ref:createdRef,object:{sha:commitSha}}),{status:201});}
+  if(method==="GET"&&createdRef&&url.endsWith("/git/ref/heads/"+createdRef.slice("refs/heads/".length)))return new Response(JSON.stringify({ref:createdRef,object:{sha:commitSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/pulls")){const payload=JSON.parse(init.body);createdPr={number:93,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/93",draft:true,state:"open",head:{ref:payload.head,sha:commitSha},base:{ref:payload.base},body:payload.body};return new Response(JSON.stringify(createdPr),{status:201});}
+  if(method==="GET"&&url.endsWith("/pulls/93"))return new Response(JSON.stringify(createdPr),{status:200});
+  throw new Error("Unexpected GitHub request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"unknown-tree-replay-0001",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Tree recovery",summary:"Recover tree",files:[{path:"docs/replay.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>ledger}});
+  const body=await response.json(),result=JSON.parse(body.result.content[0].text);
+  assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,93);
+  assert.deepEqual(treePayload,{base_tree:baseTreeSha,tree:[{path:"docs/replay.txt",mode:"100644",type:"blob",content:"x"}]});
+   assert.equal(commitPayload.author.date,"2026-10-30T12:00:00.000Z");
+  assert.deepEqual(calls.map(call=>call.method),["GET","POST","GET","POST","GET","POST","GET","POST","GET"]);
+  assert.equal(operation.phase,"PR_CREATED");assert.equal(operation.status,"SUCCEEDED");
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+test("UNKNOWN TREE_WRITTEN replay verifies the recorded tree without posting it again",async()=>{
+ const originalFetch=globalThis.fetch;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
+ const createdAt=Date.parse("2026-10-30T12:00:00.000Z");
+ const operation={leaseGeneration:1,status:"UNKNOWN",phase:"TREE_WRITTEN",createdAt,updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha,treeSha}};
+ const ledger=recoveryLedger(operation),calls=[];let commitPayload=null,treePosts=0,createdPr=null,createdRef=null;
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";calls.push({method,url});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1"))return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/replay.txt",mode:"100644",type:"blob",sha:await recoveryFixtureBlobSha("x")}]}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees")){treePosts++;return new Response(JSON.stringify({sha:treeSha}),{status:201});}
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/refs")){const payload=JSON.parse(init.body);createdRef=payload.ref;return new Response(JSON.stringify({ref:createdRef,object:{sha:commitSha}}),{status:201});}
+  if(method==="GET"&&createdRef&&url.endsWith("/git/ref/heads/"+createdRef.slice("refs/heads/".length)))return new Response(JSON.stringify({ref:createdRef,object:{sha:commitSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/pulls")){const payload=JSON.parse(init.body);createdPr={number:94,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/94",draft:true,state:"open",head:{ref:payload.head,sha:commitSha},base:{ref:payload.base},body:payload.body};return new Response(JSON.stringify(createdPr),{status:201});}
+  if(method==="GET"&&url.endsWith("/pulls/94"))return new Response(JSON.stringify(createdPr),{status:200});
+  throw new Error("Unexpected GitHub request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"unknown-treewritten-replay-01",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Tree already written",summary:"Resume commit",files:[{path:"docs/replay.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>ledger}});
+  const body=await response.json(),result=JSON.parse(body.result.content[0].text);
+  assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,94);
+  assert.equal(treePosts,0);
+  assert.deepEqual(calls.map(call=>call.method),["GET","GET","POST","GET","POST","GET","POST","GET"]);
+  assert.equal(operation.phase,"PR_CREATED");assert.equal(operation.status,"SUCCEEDED");
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+test("a successful tree POST with failed identity verification is immediately quarantined as UNKNOWN",async()=>{
+ const originalFetch=globalThis.fetch;let status=null,phase=null,treeSha="c".repeat(40);
+ const key="tree-verification-mismatch-key-01";
+ const operations=new Map();
+ const stub={
+  async admitWrite(input){const op={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:Date.now(),updatedAt:Date.now()};operations.set(input.keyHash,op);return{admitted:true,replay:false,operation:op}},
+  async transitionOperation(input){phase=input.nextPhase;const op=operations.values().next().value;op.phase=input.nextPhase;return{updated:true,operation:op}},
+  async markOperationStatus(input){status=input.status;const op=operations.get(input.keyHash);op.status=input.status;op.errorCode=input.errorCode;return{updated:true,operation:op}},
+  async markStaleOperationsUnknown(){return 0},
+  async getOperation(keyHash){return operations.get(keyHash)??null},
+  async reconcilePrCreated(){return{updated:false}}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";
+  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"a".repeat(40)}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+"a".repeat(40)))return new Response(JSON.stringify({sha:"a".repeat(40),tree:{sha:"b".repeat(40)}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1"))return new Response(JSON.stringify({sha:"e".repeat(40),truncated:false,tree:[]}),{status:200});
+  throw new Error("Unexpected GitHub request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:key,owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Tree verification mismatch",summary:"Verify successful write with unverifiable identity",files:[{path:"docs/proposal.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();assert.equal(response.status,200);assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/WRITE_OUTCOME_UNKNOWN/);
+  assert.equal(status,"UNKNOWN");assert.equal(operations.values().next().value.phase,"TREE_DISPATCHED");
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+test("a successful branch POST with a mismatched ref identity is quarantined before PR dispatch",async()=>{
+ const originalFetch=globalThis.fetch;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
+ const key="branch-identity-mismatch-0001";
+ const operations=new Map();let prPosts=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null;
+ const stub={
+  async admitWrite(input){const operation={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
+  async transitionOperation(input){const operation=operations.get(input.keyHash);if(!operation||operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false};operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";operation.updatedAt=input.now;if(input.metadata)Object.assign(operation,input.metadata);ledgerPhase=operation.phase;ledgerStatus=operation.status;return{updated:true,operation};},
+  async markOperationStatus(input){const operation=operations.get(input.keyHash);if(!operation)return{updated:false};operation.status=input.status;operation.errorCode=input.errorCode;operation.updatedAt=input.now;ledgerStatus=operation.status;ledgerPhase=operation.phase;return{updated:true,operation};},
+  async markStaleOperationsUnknown(){return 0;},
+  async getOperation(keyHash){return operations.get(keyHash)??null;},
+  async reconcilePrCreated(){return{updated:false};}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";
+  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:parentSha}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1")){
+   const bytes=new TextEncoder().encode("proposal"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
+   const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+   return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
+  }
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-wrong",object:{sha:"e".repeat(40)}}),{status:201});
+  if(method==="POST"&&url.endsWith("/pulls")){prPosts++;return new Response(JSON.stringify({number:101,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/101",draft:true,state:"open"}),{status:201});}
+  throw new Error("Unexpected request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:key,owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Verify branch identity",summary:"Do not accept a mismatched Git ref",files:[{path:"docs/proposal.txt",content:"proposal"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/WRITE_OUTCOME_UNKNOWN/);
+  assert.equal(prPosts,0);
+  assert.equal(ledgerStatus,"UNKNOWN");
+  assert.equal(ledgerPhase,"COMMIT_WRITTEN");
+ }finally{globalThis.fetch=originalFetch}
+});
+test("a successful PR POST with a mismatched head identity is quarantined before SUCCEEDED",async()=>{
+ const originalFetch=globalThis.fetch;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
+ const key="pull-request-identity-mismatch-0001";
+ const operations=new Map();let prPosts=0,prReads=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null,createdBranch=null;
+ const stub={
+  async admitWrite(input){const operation={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
+  async transitionOperation(input){const operation=operations.get(input.keyHash);if(!operation||operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false};operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";operation.updatedAt=input.now;if(input.metadata)Object.assign(operation,input.metadata);ledgerPhase=operation.phase;ledgerStatus=operation.status;return{updated:true,operation};},
+  async markOperationStatus(input){const operation=operations.get(input.keyHash);if(!operation)return{updated:false};operation.status=input.status;operation.errorCode=input.errorCode;operation.updatedAt=input.now;ledgerStatus=operation.status;ledgerPhase=operation.phase;return{updated:true,operation};},
+  async markStaleOperationsUnknown(){return 0;},
+  async getOperation(keyHash){return operations.get(keyHash)??null;},
+  async reconcilePrCreated(){return{updated:false};}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";
+  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:parentSha}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1")){
+   const bytes=new TextEncoder().encode("proposal"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
+   const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+   return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
+  }
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/refs")){const payload=JSON.parse(init.body);createdBranch=payload.ref.slice("refs/heads/".length);return new Response(JSON.stringify({ref:payload.ref,object:{sha:commitSha}}),{status:201});}
+  if(method==="GET"&&createdBranch&&url.endsWith("/git/ref/heads/"+createdBranch))return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch,object:{sha:commitSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/pulls")){prPosts++;const requestBody=JSON.parse(init.body);return new Response(JSON.stringify({number:101,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/101",draft:true,state:"open",head:{ref:"assistant/mcp-wrong",sha:commitSha},base:{ref:"feature/cloud-engineering-connector"},body:requestBody.body}),{status:201});}
+  if(method==="GET"&&url.endsWith("/pulls/101")){prReads++;return new Response(JSON.stringify({number:101,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/101",draft:true,state:"open",head:{ref:"assistant/mcp-wrong",sha:commitSha},base:{ref:"feature/cloud-engineering-connector"},body:""}),{status:200});}
+  throw new Error("Unexpected request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:key,owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Verify branch identity",summary:"Do not accept a mismatched Git ref",files:[{path:"docs/proposal.txt",content:"proposal"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/WRITE_OUTCOME_UNKNOWN/);
+  assert.equal(prPosts,1);
+  assert.equal(prReads,0);
+  assert.equal(ledgerStatus,"UNKNOWN");
+  assert.equal(ledgerPhase,"PR_DISPATCHED");
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+test("a successful branch POST with unavailable readback is quarantined as UNKNOWN",async()=>{
+ const originalFetch=globalThis.fetch;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
+ const key="branch-readback-unavailable-0001";
+ const operations=new Map();let prPosts=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null,createdBranch=null;
+ const stub={
+  async admitWrite(input){const operation={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
+  async transitionOperation(input){const operation=operations.get(input.keyHash);if(!operation||operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false};operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";operation.updatedAt=input.now;if(input.metadata)Object.assign(operation,input.metadata);ledgerPhase=operation.phase;ledgerStatus=operation.status;return{updated:true,operation};},
+  async markOperationStatus(input){const operation=operations.get(input.keyHash);if(!operation)return{updated:false};operation.status=input.status;operation.errorCode=input.errorCode;operation.updatedAt=input.now;ledgerStatus=operation.status;ledgerPhase=operation.phase;return{updated:true,operation};},
+  async markStaleOperationsUnknown(){return 0;},
+  async getOperation(keyHash){return operations.get(keyHash)??null;},
+  async reconcilePrCreated(){return{updated:false};}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";
+  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:parentSha}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1")){
+   const bytes=new TextEncoder().encode("proposal"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
+   const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+   return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
+  }
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/refs")){const payload=JSON.parse(init.body);createdBranch=payload.ref.slice("refs/heads/".length);return new Response(JSON.stringify({ref:payload.ref,object:{sha:commitSha}}),{status:201});}
+  if(method==="GET"&&createdBranch&&url.endsWith("/git/ref/heads/"+createdBranch))return new Response(JSON.stringify({message:"Not Found"}),{status:404});
+  if(method==="POST"&&url.endsWith("/pulls")){prPosts++;return new Response(JSON.stringify({number:101,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/101",draft:true,state:"open"}),{status:201});}
+  throw new Error("Unexpected request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:key,owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Verify branch identity",summary:"Do not accept a mismatched Git ref",files:[{path:"docs/proposal.txt",content:"proposal"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/WRITE_OUTCOME_UNKNOWN/);
+  assert.equal(prPosts,0);
+  assert.equal(ledgerStatus,"UNKNOWN");
+  assert.equal(ledgerPhase,"COMMIT_WRITTEN");
+ }finally{globalThis.fetch=originalFetch}
+});
+
+test("a successful PR POST with unavailable readback is quarantined as UNKNOWN",async()=>{
+ const originalFetch=globalThis.fetch;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
+ const key="pull-request-readback-unavailable-0001";
+ const operations=new Map();let prPosts=0,prReads=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null,createdBranch=null;
+ const stub={
+  async admitWrite(input){const operation={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
+  async transitionOperation(input){const operation=operations.get(input.keyHash);if(!operation||operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false};operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";operation.updatedAt=input.now;if(input.metadata)Object.assign(operation,input.metadata);ledgerPhase=operation.phase;ledgerStatus=operation.status;return{updated:true,operation};},
+  async markOperationStatus(input){const operation=operations.get(input.keyHash);if(!operation)return{updated:false};operation.status=input.status;operation.errorCode=input.errorCode;operation.updatedAt=input.now;ledgerStatus=operation.status;ledgerPhase=operation.phase;return{updated:true,operation};},
+  async markStaleOperationsUnknown(){return 0;},
+  async getOperation(keyHash){return operations.get(keyHash)??null;},
+  async reconcilePrCreated(){return{updated:false};}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";
+  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:parentSha}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1")){
+   const bytes=new TextEncoder().encode("proposal"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
+   const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+   return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
+  }
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/refs")){const payload=JSON.parse(init.body);createdBranch=payload.ref.slice("refs/heads/".length);return new Response(JSON.stringify({ref:payload.ref,object:{sha:commitSha}}),{status:201});}
+  if(method==="GET"&&createdBranch&&url.endsWith("/git/ref/heads/"+createdBranch))return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch,object:{sha:commitSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/pulls")){prPosts++;const requestBody=JSON.parse(init.body);return new Response(JSON.stringify({number:101,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/101",draft:true,state:"open",head:{ref:createdBranch,sha:commitSha},base:{ref:"feature/cloud-engineering-connector"},body:requestBody.body}),{status:201});}
+  if(method==="GET"&&url.endsWith("/pulls/101")){prReads++;return new Response(JSON.stringify({message:"Not Found"}),{status:404});}
+  throw new Error("Unexpected request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:key,owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Verify branch identity",summary:"Do not accept a mismatched Git ref",files:[{path:"docs/proposal.txt",content:"proposal"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/WRITE_OUTCOME_UNKNOWN/);
+  assert.equal(prPosts,1);
+  assert.equal(prReads,1);
+  assert.equal(ledgerStatus,"UNKNOWN");
+  assert.equal(ledgerPhase,"PR_DISPATCHED");
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+test("a failed durable status write never falsely claims UNKNOWN quarantine",async()=>{
+ const originalFetch=globalThis.fetch;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
+ const key="pull-request-ledger-status-failure-0001";
+ const operations=new Map();let prPosts=0,prReads=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null,createdBranch=null;
+ const stub={
+  async admitWrite(input){const operation={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
+  async transitionOperation(input){const operation=operations.get(input.keyHash);if(!operation||operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false};operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";operation.updatedAt=input.now;if(input.metadata)Object.assign(operation,input.metadata);ledgerPhase=operation.phase;ledgerStatus=operation.status;return{updated:true,operation};},
+  async markOperationStatus(){return{updated:false};},
+  async markStaleOperationsUnknown(){return 0;},
+  async getOperation(keyHash){return operations.get(keyHash)??null;},
+  async reconcilePrCreated(){return{updated:false};}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";
+  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:parentSha}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1")){
+   const bytes=new TextEncoder().encode("proposal"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
+   const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+   return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
+  }
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/refs")){const payload=JSON.parse(init.body);createdBranch=payload.ref.slice("refs/heads/".length);return new Response(JSON.stringify({ref:payload.ref,object:{sha:commitSha}}),{status:201});}
+  if(method==="GET"&&createdBranch&&url.endsWith("/git/ref/heads/"+createdBranch))return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch,object:{sha:commitSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/pulls")){prPosts++;const requestBody=JSON.parse(init.body);return new Response(JSON.stringify({number:101,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/101",draft:true,state:"open",head:{ref:createdBranch,sha:commitSha},base:{ref:"feature/cloud-engineering-connector"},body:requestBody.body}),{status:201});}
+  if(method==="GET"&&url.endsWith("/pulls/101")){prReads++;return new Response(JSON.stringify({message:"Not Found"}),{status:404});}
+  throw new Error("Unexpected request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:key,owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Verify branch identity",summary:"Do not accept a mismatched Git ref",files:[{path:"docs/proposal.txt",content:"proposal"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/WRITE_CONTROL_UNAVAILABLE/);
+  assert.doesNotMatch(body.result.content[0].text,/WRITE_OUTCOME_UNKNOWN/);
+  assert.equal(prPosts,1);
+  assert.equal(prReads,1);
+  assert.equal(ledgerStatus,"IN_PROGRESS");
+  assert.equal(ledgerPhase,"PR_DISPATCHED");
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+test("a fresh IN_PROGRESS replay never dispatches a concurrent branch write",async()=>{
+ const originalFetch=globalThis.fetch;
+ const key="fresh-commit-written-replay-0001";
+ const keyHash="a".repeat(64);
+ const operation={
+  keyHash,requestHash:"b".repeat(64),leaseGeneration:1,status:"IN_PROGRESS",phase:"COMMIT_WRITTEN",
+  createdAt:Date.now(),updatedAt:Date.now(),commitSha:"c".repeat(40),
+  branchName:"assistant/mcp-"+keyHash,
+ };
+ let githubCalls=0,status=operation.status;
+ const stub={
+  async markStaleOperationsUnknown(){return 0;},
+  async admitWrite(){return{admitted:true,replay:true,operation};},
+  async getOperation(){return operation;},
+  async markOperationStatus(input){status=input.status;operation.status=input.status;return{updated:true,operation};},
+  async transitionOperation(){throw new Error("a fresh replay must not advance the operation");},
+  async reconcilePrCreated(){throw new Error("a fresh replay must not reconcile");},
+ };
+ globalThis.fetch=async()=>{githubCalls++;throw new Error("GitHub must not be called for a fresh in-progress replay");};
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{
+   idempotency_key:key,owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",
+   base_branch:"feature/cloud-engineering-connector",title:"Concurrent replay",
+   summary:"Must not dispatch a second branch write",files:[{path:"docs/proposal.txt",content:"proposal"}],
+  }}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/WRITE_ALREADY_IN_PROGRESS/);
+  assert.equal(githubCalls,0);
+  assert.equal(status,"IN_PROGRESS");
+  assert.equal(operation.phase,"COMMIT_WRITTEN");
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+test("create_change_pr rejects Unicode-normalization and bidirectional-control paths before GitHub calls",async()=>{
+ const originalFetch=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called for ambiguous paths")};
+ try{
+  for(const path of ["docs/cafe"+String.fromCodePoint(0x0301)+".md","docs/report"+String.fromCodePoint(0x202e)+"gpj.exe","docs/"+String.fromCodePoint(0x2066)+"hidden"+String.fromCodePoint(0x2069)+".txt"]){
+   const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Unicode path safety",summary:"Reject ambiguous path rendering",files:[{path,content:"proposal"}]};
+   const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"unused"});
+   const body=await response.json();
+   assert.equal(body.result.isError,true,path);
+   assert.match(body.result.content[0].text,/Unicode|bidirectional|ambiguous/i,path);
+  }
+  assert.equal(calls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+test("create_change_pr fails closed when Durable Object admission omits lease generation",async()=>{
+ const originalFetch=globalThis.fetch;let githubCalls=0;
+ const stub={
+  async markStaleOperationsUnknown(){return 0},
+  async admitWrite(){return{admitted:true,replay:false,operation:{status:"IN_PROGRESS",phase:"RESERVED"}}},
+  async transitionOperation(){throw new Error("must not mutate without an explicit lease")},
+  async markOperationStatus(){throw new Error("must not mutate without an explicit lease")},
+  async reconcilePrCreated(){throw new Error("must not reconcile without an explicit lease")},
+  async getOperation(){return{status:"IN_PROGRESS",phase:"RESERVED"}}
+ };
+ globalThis.fetch=async()=>{githubCalls++;throw new Error("GitHub must not be called without a lease generation")};
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{
+   idempotency_key:"missing-lease-generation-0001",
+   owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",
+   base_branch:"feature/cloud-engineering-connector",title:"Missing lease generation",
+   summary:"Admission response must contain an explicit fencing token",
+   files:[{path:"docs/proposal.txt",content:"proposal"}]
+  }}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.result.isError,true);
+  assert.deepEqual(JSON.parse(body.result.content[0].text),{error:"WRITE_CONTROL_UNAVAILABLE"});
+  assert.equal(githubCalls,0);
+ }finally{globalThis.fetch=originalFetch}
 });

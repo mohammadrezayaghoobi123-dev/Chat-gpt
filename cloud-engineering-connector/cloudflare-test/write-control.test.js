@@ -1,0 +1,609 @@
+import { env } from "cloudflare:workers";
+
+import { runInDurableObject } from "cloudflare:test";
+import { describe, expect, it, vi } from "vitest";
+
+function stubFor(name = "write-control-contract") {
+  return env.WRITE_CONTROL.get(env.WRITE_CONTROL.idFromName(name));
+}
+
+const request = (keyHash, requestHash) => ({
+  keyHash,
+  requestHash,
+  now: 1_800_000_000_000,
+  windowMs: 60_000,
+  limit: 5,
+});
+
+describe("WriteControl atomic admission and idempotency contract", () => {
+  it("migrates a legacy SQLite operations table in place and preserves existing records", async () => {
+    const stub = stubFor("legacy-schema-migration");
+    const keyHash = "a".repeat(64);
+    const requestHash = "b".repeat(64);
+    await runInDurableObject(stub, async (instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec("DROP TABLE IF EXISTS write_operations");
+      sql.exec(`
+        CREATE TABLE write_operations (
+          key_hash TEXT PRIMARY KEY,
+          request_hash TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('IN_PROGRESS','SUCCEEDED','FAILED','UNKNOWN')),
+          phase TEXT NOT NULL CHECK (phase IN ('RESERVED','TREE_DISPATCHED','TREE_WRITTEN','COMMIT_DISPATCHED','COMMIT_WRITTEN','BRANCH_WRITTEN','PR_DISPATCHED','PR_CREATED')),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          branch_name TEXT,
+          commit_sha TEXT,
+          pr_number INTEGER,
+          pr_url TEXT,
+          error_code TEXT,
+          git_metadata TEXT
+        )
+      `);
+      sql.exec(
+        "INSERT INTO write_operations (key_hash, request_hash, status, phase, created_at, updated_at, branch_name) VALUES (?, ?, 'UNKNOWN', 'BRANCH_WRITTEN', 100, 200, ?)",
+        keyHash, requestHash, "assistant/mcp-" + keyHash,
+      );
+
+      instance.ensureSchema();
+
+      const columns = sql.exec("PRAGMA table_info(write_operations)").toArray();
+      expect(columns.some((column) => column.name === "lease_generation")).toBe(true);
+      const row = sql.exec("SELECT * FROM write_operations WHERE key_hash = ?", keyHash).one();
+      expect(row).toMatchObject({
+        key_hash: keyHash,
+        request_hash: requestHash,
+        status: "UNKNOWN",
+        phase: "BRANCH_WRITTEN",
+        created_at: 100,
+        updated_at: 200,
+        branch_name: "assistant/mcp-" + keyHash,
+        lease_generation: 1,
+      });
+      expect(sql.exec("SELECT COUNT(*) AS count FROM write_operations").one().count).toBe(1);
+    });
+  });
+
+  it("refuses caller attempts to weaken the fixed global quota policy",async()=>{
+    const stub=stubFor("fixed-quota-policy");
+    const keyHash="d".repeat(64);
+    await expect(Promise.resolve().then(()=>stub.admitWrite({...request(keyHash,"e".repeat(64)),limit:6})))
+      .rejects.toThrow(/limit must equal the fixed policy value 5/);
+    await expect(Promise.resolve().then(()=>stub.admitWrite({...request(keyHash,"f".repeat(64)),windowMs:120_000})))
+      .rejects.toThrow(/windowMs must equal the fixed policy value 60000/);
+    await expect(stub.admitWrite(request(keyHash,"e".repeat(64))))
+      .resolves.toMatchObject({admitted:true,replay:false});
+  });
+
+  it("admits at most five distinct writes in a rolling 60-second window using the Durable Object clock", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = 1_800_000_000_000;
+      vi.setSystemTime(start);
+      const stub = stubFor("quota-five");
+      const results = [];
+      for (let i = 0; i < 5; i++) {
+        results.push(await stub.admitWrite(request(i.toString(16).padStart(64, "0"), (i + 100).toString(16).padStart(64, "0"))));
+      }
+      vi.setSystemTime(start + 59_999);
+      results.push(await stub.admitWrite({ ...request("5".repeat(64), "105".padStart(64, "0")), now: start + 86_400_000 }));
+      expect(results.filter((item) => item.admitted)).toHaveLength(5);
+      expect(results[5]).toMatchObject({ admitted: false, reason: "RATE_LIMITED" });
+      expect(results[5].retryAfterSeconds).toBeGreaterThan(0);
+      vi.setSystemTime(start + 60_001);
+      await expect(stub.admitWrite(request("6".repeat(64), "106".padStart(64, "0"))))
+        .resolves.toMatchObject({ admitted: true, replay: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("replays the same idempotency key without consuming a second admission", async () => {
+    const stub = stubFor("idempotency-replay");
+    const input = request("a".repeat(64), "b".repeat(64));
+    const first = await stub.admitWrite(input);
+    const replay = await stub.admitWrite({ ...input, now: input.now + 1 });
+    expect(first).toMatchObject({ admitted: true, replay: false });
+    expect(replay).toMatchObject({ admitted: true, replay: true, operation: { phase: "RESERVED", status: "IN_PROGRESS" } });
+  });
+
+  it("rejects reuse of an idempotency key for a different request fingerprint", async () => {
+    const stub = stubFor("idempotency-conflict");
+    const input = request("c".repeat(64), "d".repeat(64));
+    await stub.admitWrite(input);
+    await expect(stub.admitWrite({ ...input, requestHash: "e".repeat(64) })).resolves.toMatchObject({
+      admitted: false,
+      reason: "IDEMPOTENCY_CONFLICT",
+    });
+  });
+
+  it("serializes concurrent admissions so the global quota cannot be exceeded", async () => {
+    const stub = stubFor("concurrent-admissions");
+    const results = await Promise.all(
+      Array.from({ length: 24 }, (_, i) =>
+        stub.admitWrite(request((i + 1000).toString(16).padStart(64, "0"), (i + 2000).toString(16).padStart(64, "0"))),
+      ),
+    );
+    expect(results.filter((item) => item.admitted && !item.replay)).toHaveLength(5);
+    expect(results.filter((item) => item.reason === "RATE_LIMITED")).toHaveLength(19);
+  });
+
+  it("enforces compare-and-set phase transitions", async () => {
+    const stub = stubFor("phase-transition");
+    const keyHash = "f".repeat(64);
+    await stub.admitWrite(request(keyHash, "1".repeat(64)));
+    await expect(stub.transitionOperation({
+      keyHash,leaseGeneration:1,
+      expectedPhase: "RESERVED",
+      nextPhase: "TREE_DISPATCHED",
+      now: 1_800_000_000_001,
+      metadata: { baseTreeSha: "a".repeat(40), parentSha: "b".repeat(40) },
+    })).resolves.toMatchObject({ updated: true, operation: { phase: "TREE_DISPATCHED" } });
+    await expect(stub.transitionOperation({
+      keyHash,leaseGeneration:1,
+      expectedPhase: "TREE_DISPATCHED",
+      nextPhase: "TREE_WRITTEN",
+      now: 1_800_000_000_002,
+      metadata: { treeSha: "c".repeat(40) },
+    })).resolves.toMatchObject({ updated: true, operation: { phase: "TREE_WRITTEN" } });
+    await expect(stub.transitionOperation({
+      keyHash,leaseGeneration:1,
+      expectedPhase: "RESERVED",
+      nextPhase: "TREE_DISPATCHED",
+      now: 1_800_000_000_003,
+    })).resolves.toMatchObject({ updated: false, reason: "PHASE_CONFLICT" });
+  });
+
+  it("reconciles an ambiguous branch creation only when the exact deterministic branch and commit match", async () => {
+    const stub = stubFor("unknown-branch-reconcile");
+    const keyHash = "5".repeat(64);
+    const commitSha = "c".repeat(40);
+    const branchName = "assistant/mcp-" + keyHash;
+    await stub.admitWrite(request(keyHash, "d".repeat(64)));
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED", now: 1_800_000_000_001, metadata: { baseTreeSha: "1".repeat(40), parentSha: "2".repeat(40) } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "TREE_DISPATCHED", nextPhase: "TREE_WRITTEN", now: 1_800_000_000_001, metadata: { treeSha: "3".repeat(40) } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED", now: 1_800_000_000_002, metadata: { commitDate: "2026-10-30T12:00:00.000Z", commitMessage: "assistant: branch recovery", authorName: "Cloud Engineering Connector", authorEmail: "mcp-connector@users.noreply.github.com", committerName: "Cloud Engineering Connector", committerEmail: "mcp-connector@users.noreply.github.com" } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "COMMIT_DISPATCHED", nextPhase: "COMMIT_WRITTEN", now: 1_800_000_000_003, metadata: { commitSha } });
+    await stub.markOperationStatus({ keyHash, leaseGeneration:1, status: "UNKNOWN", now: 1_800_000_000_003, errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
+    await expect(Promise.resolve().then(()=>stub.reconcileBranchWritten({keyHash,leaseGeneration:2,branchName:"assistant/mcp-unrelated",commitSha})))
+      .rejects.toThrow(/deterministic operation identity/);
+    await expect(stub.reconcileBranchWritten({ keyHash, leaseGeneration:2, now: 1_800_000_000_004, branchName, commitSha }))
+      .resolves.toMatchObject({ updated: true, operation: { status: "IN_PROGRESS", phase: "BRANCH_WRITTEN", branchName, commitSha } });
+    await expect(stub.reconcileBranchWritten({ keyHash, leaseGeneration:3, now: 1_800_000_000_005, branchName, commitSha: "e".repeat(40) }))
+      .resolves.toMatchObject({ updated: false, reason: "RECONCILIATION_NOT_ALLOWED" });
+  });
+
+  it("reconciles an UNKNOWN PR_DISPATCHED operation only after verified PR evidence", async () => {
+    const stub = stubFor("unknown-pr-reconcile");
+    const keyHash = "6".repeat(64);
+    const commitSha = "a".repeat(40);
+    const branchName = "assistant/mcp-" + keyHash;
+    await stub.admitWrite(request(keyHash, "7".repeat(64)));
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED", now: 1_800_000_000_001, metadata: { baseTreeSha: "1".repeat(40), parentSha: "2".repeat(40) } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "TREE_DISPATCHED", nextPhase: "TREE_WRITTEN", now: 1_800_000_000_001, metadata: { treeSha: "3".repeat(40) } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED", now: 1_800_000_000_002, metadata: { commitDate: "2026-10-30T12:00:00.000Z", commitMessage: "assistant: branch recovery", authorName: "Cloud Engineering Connector", authorEmail: "mcp-connector@users.noreply.github.com", committerName: "Cloud Engineering Connector", committerEmail: "mcp-connector@users.noreply.github.com" } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "COMMIT_DISPATCHED", nextPhase: "COMMIT_WRITTEN", now: 1_800_000_000_003, metadata: { commitSha } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "COMMIT_WRITTEN", nextPhase: "BRANCH_WRITTEN", now: 1_800_000_000_003, metadata: { branchName } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "BRANCH_WRITTEN", nextPhase: "PR_DISPATCHED", now: 1_800_000_000_004 });
+    await stub.markOperationStatus({ keyHash, leaseGeneration:1, status: "UNKNOWN", now: 1_800_000_000_005, errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
+    await expect(Promise.resolve().then(()=>stub.reconcilePrCreated({
+      keyHash,leaseGeneration:2,branchName:"assistant/mcp-unrelated",commitSha,prNumber:42,prUrl:"https://github.com/acme/project/pull/42",
+    }))).rejects.toThrow(/deterministic operation identity/);
+    await expect(Promise.resolve().then(()=>stub.reconcilePrCreated({
+      keyHash,leaseGeneration:2,branchName,commitSha,prNumber:42,prUrl:"https://github.com/acme/project/pull/43",
+    }))).rejects.toThrow(/canonical GitHub URL/);
+    await expect(stub.reconcilePrCreated({
+      keyHash, leaseGeneration:2, now: 1_800_000_000_006, branchName, commitSha, prNumber: 42,
+      prUrl: "https://github.com/acme/project/pull/42",
+    })).resolves.toMatchObject({ updated: true, operation: { status: "SUCCEEDED", phase: "PR_CREATED", prNumber: 42, errorCode: null } });
+  });
+
+  it("refuses UNKNOWN reconciliation unless the operation is at PR_DISPATCHED", async () => {
+    const stub = stubFor("unknown-early-phase");
+    const keyHash = "8".repeat(64);
+    await stub.admitWrite(request(keyHash, "9".repeat(64)));
+    await stub.markOperationStatus({ keyHash, leaseGeneration:1, status: "UNKNOWN", now: 1_800_000_000_001 });
+    await expect(stub.reconcilePrCreated({
+      keyHash, leaseGeneration:2, now: 1_800_000_000_002, branchName: "assistant/mcp-" + keyHash,
+      commitSha: "b".repeat(40), prNumber: 43, prUrl: "https://github.com/acme/project/pull/43",
+    })).resolves.toMatchObject({ updated: false, reason: "RECONCILIATION_NOT_ALLOWED" });
+  });
+
+  it("records definite upstream rejection as terminal FAILED", async () => {
+    const stub = stubFor("terminal-failure");
+    const keyHash = "4".repeat(64);
+    await stub.admitWrite(request(keyHash, "5".repeat(64)));
+    await expect(stub.markOperationStatus({
+      keyHash,leaseGeneration:1,
+      status: "FAILED",
+      now: 1_800_000_000_001,
+      errorCode: "UPSTREAM_REJECTED",
+    })).resolves.toMatchObject({ updated: true, operation: { status: "FAILED", errorCode: "UPSTREAM_REJECTED" } });
+  });
+
+  it("moves expired in-progress operations to UNKNOWN using the Durable Object clock", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = 1_800_000_000_000;
+      vi.setSystemTime(start);
+      const stub = stubFor("stale-unknown");
+      const keyHash = "2".repeat(64);
+      await stub.admitWrite(request(keyHash, "3".repeat(64)));
+      vi.setSystemTime(start + 120_001);
+      const changed = await stub.markStaleOperationsUnknown({ leaseMs: 120_000 });
+      expect(changed).toBeGreaterThanOrEqual(1);
+      await expect(stub.getOperation(keyHash)).resolves.toMatchObject({
+        status: "UNKNOWN",
+        phase: "RESERVED",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+
+describe("Git object recovery identity contract", () => {
+  it("reconciles an ambiguous tree dispatch only for the persisted base tree and parent", async () => {
+    const stub = stubFor("unknown-tree-reconcile");
+    const keyHash = "a".repeat(64);
+    const baseTreeSha = "1".repeat(40);
+    const parentSha = "2".repeat(40);
+    const treeSha = "3".repeat(40);
+    await stub.admitWrite(request(keyHash, "b".repeat(64)));
+    await stub.transitionOperation({
+      keyHash,leaseGeneration:1, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED",
+      metadata: { baseTreeSha, parentSha },
+    });
+    await stub.markOperationStatus({ keyHash, leaseGeneration:1, status: "UNKNOWN", errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
+    await expect(stub.reconcileTreeWritten({ keyHash, leaseGeneration:2, baseTreeSha, parentSha, treeSha }))
+      .resolves.toMatchObject({
+        updated: true,
+        operation: {
+          status: "IN_PROGRESS",
+          phase: "TREE_WRITTEN",
+          gitMetadata: { baseTreeSha, parentSha, treeSha },
+        },
+      });
+    await stub.markOperationStatus({ keyHash, status: "UNKNOWN", leaseGeneration: 3, errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
+    await expect(stub.reconcileTreeWritten({ keyHash, leaseGeneration:4, baseTreeSha, parentSha: "4".repeat(40), treeSha }))
+      .resolves.toMatchObject({ updated: false, reason: "OPERATION_IDENTITY_MISMATCH" });
+    await expect(stub.reconcileTreeWritten({ keyHash, leaseGeneration:4, baseTreeSha, parentSha, treeSha }))
+      .resolves.toMatchObject({ updated: true, operation: { status: "IN_PROGRESS", phase: "TREE_WRITTEN" } });
+    await expect(stub.reconcileTreeWritten({ keyHash, leaseGeneration:5, baseTreeSha, parentSha, treeSha }))
+      .resolves.toMatchObject({ updated: false, reason: "RECONCILIATION_NOT_ALLOWED" });
+  });
+
+  it("reconciles an ambiguous commit dispatch only for its exact tree, parent, and persisted commit identity", async () => {
+    const stub = stubFor("unknown-commit-reconcile");
+    const keyHash = "c".repeat(64);
+    const baseTreeSha = "1".repeat(40);
+    const parentSha = "2".repeat(40);
+    const treeSha = "3".repeat(40);
+    const commitSha = "4".repeat(40);
+    const commitDate = "2026-10-30T12:00:00.000Z";
+    const commitMessage = "assistant: deterministic recovery";
+    const authorName = "Cloud Engineering Connector";
+    const authorEmail = "mcp-connector@users.noreply.github.com";
+    const committerName = "Cloud Engineering Connector";
+    const committerEmail = "mcp-connector@users.noreply.github.com";
+    await stub.admitWrite(request(keyHash, "d".repeat(64)));
+    await stub.transitionOperation({
+      keyHash,leaseGeneration:1, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED",
+      metadata: { baseTreeSha, parentSha },
+    });
+    await stub.transitionOperation({
+      keyHash,leaseGeneration:1, expectedPhase: "TREE_DISPATCHED", nextPhase: "TREE_WRITTEN",
+      metadata: { treeSha },
+    });
+    await stub.transitionOperation({
+      keyHash,leaseGeneration:1, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED",
+      metadata: { commitDate, commitMessage, authorName, authorEmail, committerName, committerEmail },
+    });
+    await stub.markOperationStatus({ keyHash, leaseGeneration:1, status: "UNKNOWN", errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
+    await expect(stub.reconcileCommitWritten({ keyHash, leaseGeneration:2, treeSha, parentSha, commitSha }))
+      .resolves.toMatchObject({
+        updated: true,
+        operation: {
+          status: "IN_PROGRESS",
+          phase: "COMMIT_WRITTEN",
+          commitSha,
+          gitMetadata: { baseTreeSha, parentSha, treeSha, commitDate, commitMessage, authorName, authorEmail, committerName, committerEmail },
+        },
+      });
+    await expect(stub.reconcileCommitWritten({ keyHash, leaseGeneration:3, treeSha: "5".repeat(40), parentSha, commitSha }))
+      .resolves.toMatchObject({ updated: false, reason: "RECONCILIATION_NOT_ALLOWED" });
+  });
+});
+
+
+
+async function seedCommitReady(stub,keyHash) {
+  const baseTreeSha="1".repeat(40),parentSha="2".repeat(40),treeSha="3".repeat(40),commitSha="4".repeat(40);
+  await stub.admitWrite(request(keyHash,"b".repeat(64)));
+  await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha,parentSha}});
+  await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"TREE_DISPATCHED",nextPhase:"TREE_WRITTEN",metadata:{treeSha}});
+  await stub.transitionOperation({
+    keyHash,leaseGeneration:1,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",
+    metadata:{
+      commitDate:"2026-10-30T12:00:00.000Z",
+      commitMessage:"assistant: state machine invariant",
+      authorName:"Cloud Engineering Connector",
+      authorEmail:"mcp-connector@users.noreply.github.com",
+      committerName:"Cloud Engineering Connector",
+      committerEmail:"mcp-connector@users.noreply.github.com",
+    },
+  });
+  await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"COMMIT_DISPATCHED",nextPhase:"COMMIT_WRITTEN",metadata:{commitSha}});
+  return {baseTreeSha,parentSha,treeSha,commitSha,branchName:"assistant/mcp-"+keyHash};
+}
+
+describe("Idempotency tombstone retention",()=>{
+  it("retains UNKNOWN as a non-retryable replay after the admission window expires",async()=>{
+    vi.useFakeTimers({toFake:["Date"]});
+    try{
+      const start=1_800_000_000_000;
+      vi.setSystemTime(start);
+      const stub=stubFor("unknown-tombstone-retention");
+      const keyHash="7".repeat(64);
+      const requestHash="8".repeat(64);
+      const first=await stub.admitWrite(request(keyHash,requestHash));
+      expect(first).toMatchObject({admitted:true,replay:false});
+      await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"UPSTREAM_OUTCOME_UNCERTAIN"});
+      vi.setSystemTime(start+3_600_001);
+      const replay=await stub.admitWrite(request(keyHash,requestHash));
+      expect(replay).toMatchObject({
+        admitted:true,replay:true,
+        operation:{keyHash,status:"UNKNOWN",phase:"RESERVED",requestHash},
+      });
+      const conflict=await stub.admitWrite(request(keyHash,"9".repeat(64)));
+      expect(conflict).toMatchObject({admitted:false,reason:"IDEMPOTENCY_CONFLICT"});
+      await expect(stub.getOperation(keyHash)).resolves.toMatchObject({status:"UNKNOWN",requestHash});
+    }finally{
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("Durable state transition metadata invariants",()=>{
+  it("rejects TREE_DISPATCHED without a persisted base tree and parent identity",async()=>{
+    const stub=stubFor("invariant-tree-dispatched");
+    const keyHash="1".repeat(64);
+    await stub.admitWrite(request(keyHash,"2".repeat(64)));
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED"})))
+      .rejects.toThrow(/TREE_DISPATCHED requires baseTreeSha and parentSha/);
+  });
+
+  it("rejects a branch transition whose name is not derived from the operation key",async()=>{
+    const stub=stubFor("invariant-branch-name");
+    const keyHash="3".repeat(64);
+    const {commitSha}=await seedCommitReady(stub,keyHash);
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({
+      keyHash,leaseGeneration:1,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",
+      metadata:{branchName:"assistant/mcp-unrelated",commitSha},
+    }))).rejects.toThrow(/deterministic operation identity/);
+  });
+
+  it("rejects COMMIT_WRITTEN without a persisted commit SHA",async()=>{
+    const stub=stubFor("invariant-pr-dispatched");
+    const keyHash="4".repeat(64);
+    await stub.admitWrite(request(keyHash,"5".repeat(64)));
+    await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha:"1".repeat(40),parentSha:"2".repeat(40)}});
+    await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"TREE_DISPATCHED",nextPhase:"TREE_WRITTEN",metadata:{treeSha:"3".repeat(40)}});
+    await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",metadata:{
+      commitDate:"2026-10-30T12:00:00.000Z",commitMessage:"assistant: missing commit",
+      authorName:"Cloud Engineering Connector",authorEmail:"mcp-connector@users.noreply.github.com",
+      committerName:"Cloud Engineering Connector",committerEmail:"mcp-connector@users.noreply.github.com",
+    }});
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"COMMIT_DISPATCHED",nextPhase:"COMMIT_WRITTEN"})))
+      .rejects.toThrow(/COMMIT_WRITTEN requires commitSha/);
+  });
+
+  it("rejects PR_CREATED without complete PR identity and a URL matching its number",async()=>{
+    const stub=stubFor("invariant-pr-created");
+    const keyHash="5".repeat(64);
+    const {commitSha,branchName}=await seedCommitReady(stub,keyHash);
+    await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",metadata:{branchName}});
+    await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"BRANCH_WRITTEN",nextPhase:"PR_DISPATCHED"});
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED"})))
+      .rejects.toThrow(/PR_CREATED requires deterministic branch, commit, PR number and URL/);
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({
+      keyHash,leaseGeneration:1,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",
+      metadata:{branchName,commitSha,prNumber:42,prUrl:"https://github.com/acme/project/pull/43"},
+    }))).rejects.toThrow(/pull URL must match the PR number/);
+    for(const prUrl of [
+      "https://github.com/acme?redirect=/project/pull/42",
+      "https://user@github.com/acme/project/pull/42",
+      "https://github.com/acme/project/pull/42?redirect=elsewhere",
+      "https://github.com/acme%2fother/project/pull/42",
+      "https://github.com.evil.example/acme/project/pull/42",
+    ]){
+      await expect(Promise.resolve().then(()=>stub.transitionOperation({
+        keyHash,leaseGeneration:1,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",
+        metadata:{branchName,commitSha,prNumber:42,prUrl},
+      }))).rejects.toThrow(/PR_CREATED requires deterministic branch, commit, PR number and URL|pull URL must match the PR number|prUrl must be a GitHub HTTPS URL/);
+    }
+  });
+
+  it("rejects mutation of an already persisted commit identity",async()=>{
+    const stub=stubFor("invariant-commit-immutable");
+    const keyHash="6".repeat(64);
+    const {commitSha}=await seedCommitReady(stub,keyHash);
+    const result=await stub.transitionOperation({
+      keyHash,leaseGeneration:1,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",
+      metadata:{branchName:"assistant/mcp-"+keyHash,commitSha:"f".repeat(40)},
+    });
+    expect(result).toMatchObject({updated:false,reason:"OPERATION_IDENTITY_MISMATCH"});
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({commitSha});
+    const treeMutation=await stub.transitionOperation({
+      keyHash,leaseGeneration:1,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",
+      metadata:{branchName:"assistant/mcp-"+keyHash,treeSha:"f".repeat(40)},
+    });
+    expect(treeMutation).toMatchObject({updated:false,reason:"OPERATION_IDENTITY_MISMATCH"});
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({gitMetadata:{treeSha:"3".repeat(40)}});
+  });
+});
+
+
+describe("safe recovery before the first external side effect",()=>{
+  it("reopens a stale UNKNOWN RESERVED operation without changing its idempotency identity",async()=>{
+    const stub=stubFor("unknown-reserved-reopen");
+    const keyHash="7".repeat(64),requestHash="8".repeat(64);
+    await stub.admitWrite(request(keyHash,requestHash));
+    await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    await expect(stub.reopenReserved({keyHash,leaseGeneration:2})).resolves.toMatchObject({
+      updated:true,
+      operation:{keyHash,requestHash,status:"IN_PROGRESS",phase:"RESERVED"},
+    });
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({
+      keyHash,requestHash,status:"IN_PROGRESS",phase:"RESERVED",
+    });
+  });
+
+
+  it("allows exactly one concurrent retry to reopen an UNKNOWN RESERVED operation",async()=>{
+    const stub=stubFor("unknown-reserved-concurrent-reopen");
+    const keyHash="b".repeat(64);
+    await stub.admitWrite(request(keyHash,"c".repeat(64)));
+    await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    const results=await Promise.all([
+      stub.reopenReserved({keyHash,leaseGeneration:2}),
+      stub.reopenReserved({keyHash,leaseGeneration:2}),
+    ]);
+    expect(results.filter(result=>result.updated)).toHaveLength(1);
+    expect(results.filter(result=>!result.updated)).toHaveLength(1);
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({
+      status:"IN_PROGRESS",phase:"RESERVED",
+    });
+  });
+  it("does not reopen an UNKNOWN operation after a GitHub side effect may have started",async()=>{
+    const stub=stubFor("unknown-tree-not-reopenable");
+    const keyHash="9".repeat(64);
+    await stub.admitWrite(request(keyHash,"a".repeat(64)));
+    await stub.transitionOperation({
+      keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",
+      metadata:{baseTreeSha:"1".repeat(40),parentSha:"2".repeat(40)},
+    });
+    await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    await expect(stub.reopenReserved({keyHash,leaseGeneration:2})).resolves.toMatchObject({
+      updated:false,reason:"RECONCILIATION_NOT_ALLOWED",
+      operation:{status:"UNKNOWN",phase:"TREE_DISPATCHED"},
+    });
+  });
+});
+
+
+describe("Durable lease fencing",()=>{
+  it("rejects a stale worker transition after an expired operation is reconciled by a new owner",async()=>{
+    vi.useFakeTimers({toFake:["Date"]});
+    try{
+      const start=1_800_000_000_000;
+      vi.setSystemTime(start);
+      const stub=stubFor("lease-fence-stale-owner");
+      const keyHash="e".repeat(64);
+      const requestHash="f".repeat(64);
+      const admitted=await stub.admitWrite(request(keyHash,requestHash));
+      expect(admitted.operation.leaseGeneration).toBe(1);
+      const baseTreeSha="1".repeat(40),parentSha="2".repeat(40),treeSha="3".repeat(40);
+      await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha,parentSha}});
+      await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"TREE_DISPATCHED",nextPhase:"TREE_WRITTEN",metadata:{treeSha}});
+      vi.setSystemTime(start+120_001);
+      await stub.markStaleOperationsUnknown({leaseMs:120_000});
+      const stale=await stub.getOperation(keyHash);
+      expect(stale).toMatchObject({status:"UNKNOWN",phase:"TREE_WRITTEN",leaseGeneration:2});
+      const recovered=await stub.reconcileTreeWritten({keyHash,leaseGeneration:2,baseTreeSha,parentSha,treeSha});
+      expect(recovered).toMatchObject({updated:true,operation:{status:"IN_PROGRESS",phase:"TREE_WRITTEN",leaseGeneration:3}});
+      const oldOwner=await stub.transitionOperation({
+        keyHash,leaseGeneration:1,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",
+        metadata:{
+          commitDate:"2026-10-30T12:00:00.000Z",commitMessage:"assistant: stale lease fence",
+          authorName:"Cloud Engineering Connector",authorEmail:"mcp-connector@users.noreply.github.com",
+          committerName:"Cloud Engineering Connector",committerEmail:"mcp-connector@users.noreply.github.com",
+        },
+      });
+      expect(oldOwner).toMatchObject({updated:false,reason:"LEASE_FENCE_MISMATCH"});
+      await expect(stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"STALE_OWNER"}))
+        .resolves.toMatchObject({updated:false,reason:"LEASE_FENCE_MISMATCH"});
+      await expect(stub.getOperation(keyHash)).resolves.toMatchObject({
+        status:"IN_PROGRESS",phase:"TREE_WRITTEN",leaseGeneration:3,
+      });
+    }finally{vi.useRealTimers();}
+  });
+});
+
+
+describe("mandatory lease generation at every recovery boundary",()=>{
+  it("rejects recovery calls that omit the lease generation",async()=>{
+    const stub=stubFor("recovery-requires-generation");
+    const keyHash="a".repeat(64);
+    const baseTreeSha="1".repeat(40),parentSha="2".repeat(40),treeSha="3".repeat(40);
+    await stub.admitWrite(request(keyHash,"b".repeat(64)));
+    await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha,parentSha}});
+    await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    await expect(Promise.resolve().then(()=>stub.reconcileTreeWritten({keyHash,baseTreeSha,parentSha,treeSha})))
+      .rejects.toThrow(/leaseGeneration is required/);
+    await expect(Promise.resolve().then(()=>stub.reconcileCommitWritten({keyHash,treeSha,parentSha,commitSha:"4".repeat(40)})))
+      .rejects.toThrow(/leaseGeneration is required/);
+    await expect(Promise.resolve().then(()=>stub.reconcileBranchWritten({keyHash,branchName:"assistant/mcp-"+keyHash,commitSha:"4".repeat(40)})))
+      .rejects.toThrow(/leaseGeneration is required/);
+    await expect(Promise.resolve().then(()=>stub.reconcilePrCreated({
+      keyHash,branchName:"assistant/mcp-"+keyHash,commitSha:"4".repeat(40),prNumber:42,prUrl:"https://github.com/acme/project/pull/42",
+    }))).rejects.toThrow(/leaseGeneration is required/);
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({status:"UNKNOWN",phase:"TREE_DISPATCHED",leaseGeneration:2});
+  });
+
+  it("rejects RESERVED reopen calls that omit the lease generation",async()=>{
+    const stub=stubFor("reopen-requires-generation");
+    const keyHash="c".repeat(64);
+    await stub.admitWrite(request(keyHash,"d".repeat(64)));
+    await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    await expect(Promise.resolve().then(()=>stub.reopenReserved({keyHash})))
+      .rejects.toThrow(/leaseGeneration is required/);
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({status:"UNKNOWN",phase:"RESERVED",leaseGeneration:2});
+  });
+});
+
+
+describe("concurrent recovery ownership",()=>{
+  it("allows only one recovery claimant to consume a lease generation",async()=>{
+    const stub=stubFor("concurrent-tree-recovery-claim");
+    const keyHash="e".repeat(64);
+    const baseTreeSha="1".repeat(40),parentSha="2".repeat(40),treeSha="3".repeat(40);
+    await stub.admitWrite(request(keyHash,"f".repeat(64)));
+    await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha,parentSha}});
+    await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    const results=await Promise.all([
+      stub.reconcileTreeWritten({keyHash,leaseGeneration:2,baseTreeSha,parentSha,treeSha}),
+      stub.reconcileTreeWritten({keyHash,leaseGeneration:2,baseTreeSha,parentSha,treeSha}),
+    ]);
+    expect(results.filter(result=>result.updated)).toHaveLength(1);
+    expect(results.filter(result=>!result.updated)).toHaveLength(1);
+    expect(results.find(result=>!result.updated)).toMatchObject({reason:"LEASE_FENCE_MISMATCH"});
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({
+      status:"IN_PROGRESS",phase:"TREE_WRITTEN",leaseGeneration:3,gitMetadata:{baseTreeSha,parentSha,treeSha},
+    });
+  });
+});
+
+
+describe("mandatory lease generation on mutation RPCs",()=>{
+  it("rejects phase transitions that omit the fencing generation",async()=>{
+    const stub=stubFor("transition-requires-generation");
+    const keyHash="a".repeat(64);
+    await stub.admitWrite(request(keyHash,"b".repeat(64)));
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({
+      keyHash,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",
+      metadata:{baseTreeSha:"1".repeat(40),parentSha:"2".repeat(40)},
+    }))).rejects.toThrow(/leaseGeneration is required/);
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({phase:"RESERVED",leaseGeneration:1});
+  });
+
+  it("rejects status writes that omit the fencing generation",async()=>{
+    const stub=stubFor("status-requires-generation");
+    const keyHash="c".repeat(64);
+    await stub.admitWrite(request(keyHash,"d".repeat(64)));
+    await expect(Promise.resolve().then(()=>stub.markOperationStatus({
+      keyHash,status:"UNKNOWN",errorCode:"MISSING_FENCE",
+    }))).rejects.toThrow(/leaseGeneration is required/);
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({status:"IN_PROGRESS",leaseGeneration:1});
+  });
+});

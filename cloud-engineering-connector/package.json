@@ -5,10 +5,17 @@
   "type": "module",
   "description": "Cloud-hosted MCP connector for rigorous software engineering, architecture, code review, and evidence-aware workflows.",
   "scripts": {
-    "test": "node --test",
-    "check": "node -e \"const fs=require('node:fs');const name=fs.readFileSync('wrangler.toml','utf8').split(/\\r?\\n/).find(line=>line.trim().startsWith('name ='));if(name?.trim()!=='name = \\\"chat-gpt111\\\"')throw new Error('wrangler.toml must target chat-gpt111');\" && node --check worker.js && node --check test/worker.test.js && node --check test/wrangler-env.test.js && npx --yes wrangler@4.155.0 deploy --env=\"\" --dry-run && npx --yes wrangler@4.155.0 deploy --env staging --dry-run"
+    "test:node": "node --test test/worker.test.js test/write-hardening.test.js test/wrangler-env.test.js",
+    "test:do": "vitest run --config vitest.config.js",
+    "test": "npm run test:node && npm run test:do",
+    "check": "node --check index.js && node --check worker.js && node --check write-control.js && node --check vitest.config.js && node --check test/worker.test.js && node --check test/write-hardening.test.js && node --check test/wrangler-env.test.js && node --check cloudflare-test/write-control.test.js && wrangler deploy --env=\"\" --dry-run && wrangler deploy --env staging --dry-run"
   },
   "engines": {
     "node": ">=22"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.4.11",
+    "vitest": "4.1.11",
+    "wrangler": "4.155.0"
   }
 }

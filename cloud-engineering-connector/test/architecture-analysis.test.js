@@ -115,7 +115,7 @@ test("architecture_analyze enforces the eight-file limit before repository reads
 
 test("architecture_analyze bounds finding volume and reports truncation", async () => {
   const originalFetch = globalThis.fetch;
-  const source = Array.from({ length: 125 }, (_, index) => "fetch('/resource/" + index + "');").join("\\n");
+  const source = Array.from({ length: 125 }, (_, index) => "fetch('/resource/" + index + "');").join("\n");
   globalThis.fetch = async (url) => {
     const path = decodeURIComponent(new URL(url).pathname.split("/contents/")[1] || "");
     const content = path === "src/noisy.js" ? source : null;

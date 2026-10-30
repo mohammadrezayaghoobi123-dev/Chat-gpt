@@ -14,6 +14,17 @@ const request = (keyHash, requestHash) => ({
 });
 
 describe("WriteControl atomic admission and idempotency contract", () => {
+  it("refuses caller attempts to weaken the fixed global quota policy",async()=>{
+    const stub=stubFor("fixed-quota-policy");
+    const keyHash="d".repeat(64);
+    await expect(stub.admitWrite({...request(keyHash,"e".repeat(64)),limit:6}))
+      .rejects.toThrow(/limit must equal the fixed policy value 5/);
+    await expect(stub.admitWrite({...request(keyHash,"f".repeat(64)),windowMs:120_000}))
+      .rejects.toThrow(/windowMs must equal the fixed policy value 60000/);
+    await expect(stub.admitWrite(request(keyHash,"e".repeat(64))))
+      .resolves.toMatchObject({admitted:true,replay:false});
+  });
+
   it("admits at most five distinct writes in a rolling 60-second window using the Durable Object clock", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {

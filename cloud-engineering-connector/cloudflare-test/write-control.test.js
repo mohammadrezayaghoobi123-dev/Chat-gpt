@@ -327,5 +327,11 @@ describe("Durable state transition metadata invariants",()=>{
     });
     expect(result).toMatchObject({updated:false,reason:"OPERATION_IDENTITY_MISMATCH"});
     await expect(stub.getOperation(keyHash)).resolves.toMatchObject({commitSha});
+    const treeMutation=await stub.transitionOperation({
+      keyHash,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",
+      metadata:{branchName:"assistant/mcp-"+keyHash,treeSha:"f".repeat(40)},
+    });
+    expect(treeMutation).toMatchObject({updated:false,reason:"OPERATION_IDENTITY_MISMATCH"});
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({gitMetadata:{treeSha:"3".repeat(40)}});
   });
 });

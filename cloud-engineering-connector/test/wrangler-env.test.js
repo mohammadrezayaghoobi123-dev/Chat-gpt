@@ -28,6 +28,7 @@ test("Staging and Production Rate Limiting namespaces are distinct positive inte
 test("Staging explicitly declares non-inherited runtime variables", () => {
   assert.match(staging, /\[env\.staging\.vars\]/);
   assert.match(staging, /SERVICE_MODE\s*=\s*"cloud"/);
+  assert.match(staging, /PUBLIC_READ_ONLY\s*=\s*"true"/);
 });
 
 test("Production and Staging both declare the SQLite WriteControl binding and migration", () => {

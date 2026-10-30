@@ -119,7 +119,7 @@ test("a transport timeout during the first GitHub tree write is quarantined as U
  try{
   const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:key,owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Timeout test",summary:"Verify first write ambiguity",files:[{path:"docs/proposal.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
   const body=await response.json();assert.equal(response.status,200);assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/WRITE_OUTCOME_UNKNOWN/);
-  assert.equal(status,"UNKNOWN");assert.equal(operations.values().next().value.phase,"RESERVED");
+  assert.equal(status,"UNKNOWN");assert.equal(operations.values().next().value.phase,"TREE_DISPATCHED");
   assert.equal(githubCalls.filter(x=>x.method==="POST").length,1);
  }finally{globalThis.fetch=originalFetch}
 });

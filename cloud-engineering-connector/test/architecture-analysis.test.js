@@ -23,7 +23,7 @@ test("architecture_analyze returns source-grounded findings with exact line evid
   const originalFetch = globalThis.fetch;
   const files = new Map([
     ["package.json", '{"scripts":{"test":"node --test"}}'],
-    ["src/worker.js", 'export async function fetch(request) {\n  return fetch(request.url);\n}\n'],
+    ["src/worker.js", 'export async function run(request) {\n  return fetch(request.url);\n}\n'],
   ]);
   globalThis.fetch = async (url) => {
     const path = decodeURIComponent(new URL(url).pathname.split("/contents/")[1] || "");

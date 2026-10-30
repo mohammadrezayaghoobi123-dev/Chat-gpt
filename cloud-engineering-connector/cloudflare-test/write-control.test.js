@@ -99,7 +99,8 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     await stub.admitWrite(request(keyHash, "d".repeat(64)));
     await stub.transitionOperation({ keyHash, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED", now: 1_800_000_000_001 });
     await stub.transitionOperation({ keyHash, expectedPhase: "TREE_DISPATCHED", nextPhase: "TREE_WRITTEN", now: 1_800_000_000_001 });
-    await stub.transitionOperation({ keyHash, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_WRITTEN", now: 1_800_000_000_002, metadata: { commitSha } });
+    await stub.transitionOperation({ keyHash, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED", now: 1_800_000_000_002, metadata: { commitDate: "2026-10-30T12:00:00.000Z", commitMessage: "assistant: branch recovery" } });
+    await stub.transitionOperation({ keyHash, expectedPhase: "COMMIT_DISPATCHED", nextPhase: "COMMIT_WRITTEN", now: 1_800_000_000_003, metadata: { commitSha } });
     await stub.markOperationStatus({ keyHash, status: "UNKNOWN", now: 1_800_000_000_003, errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
     await expect(stub.reconcileBranchWritten({ keyHash, now: 1_800_000_000_004, branchName, commitSha }))
       .resolves.toMatchObject({ updated: true, operation: { status: "IN_PROGRESS", phase: "BRANCH_WRITTEN", branchName, commitSha } });
@@ -115,7 +116,8 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     await stub.admitWrite(request(keyHash, "7".repeat(64)));
     await stub.transitionOperation({ keyHash, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED", now: 1_800_000_000_001 });
     await stub.transitionOperation({ keyHash, expectedPhase: "TREE_DISPATCHED", nextPhase: "TREE_WRITTEN", now: 1_800_000_000_001 });
-    await stub.transitionOperation({ keyHash, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_WRITTEN", now: 1_800_000_000_002, metadata: { commitSha } });
+    await stub.transitionOperation({ keyHash, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED", now: 1_800_000_000_002, metadata: { commitDate: "2026-10-30T12:00:00.000Z", commitMessage: "assistant: branch recovery" } });
+    await stub.transitionOperation({ keyHash, expectedPhase: "COMMIT_DISPATCHED", nextPhase: "COMMIT_WRITTEN", now: 1_800_000_000_003, metadata: { commitSha } });
     await stub.transitionOperation({ keyHash, expectedPhase: "COMMIT_WRITTEN", nextPhase: "BRANCH_WRITTEN", now: 1_800_000_000_003, metadata: { branchName } });
     await stub.transitionOperation({ keyHash, expectedPhase: "BRANCH_WRITTEN", nextPhase: "PR_DISPATCHED", now: 1_800_000_000_004 });
     await stub.markOperationStatus({ keyHash, status: "UNKNOWN", now: 1_800_000_000_005, errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });

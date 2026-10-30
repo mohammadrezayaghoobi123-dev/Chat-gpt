@@ -89,8 +89,9 @@ test("ordinary files and reads of review-control files stay allowed", async () =
 
 test("PR title is collapsed to one line and summary mentions are neutralised", async () => {
   const parentSha = "a".repeat(40), baseTreeSha = "b".repeat(40), treeSha = "c".repeat(40), commitSha = "d".repeat(40);
-  let commitPayload;
+  let commitPayload,createdRef=null,createdPr=null;
   await withFetch(async (url, init) => {
+    if (url.includes("/git/ref/heads/assistant/mcp-")) return new Response(JSON.stringify({ref:createdRef,object:{sha:commitSha}}),{status:200});
     if (/\/git\/ref\//.test(url)) return new Response(JSON.stringify({ object: { sha: parentSha } }), { status: 200 });
     if (url.endsWith("/git/commits/" + parentSha)) return new Response(JSON.stringify({ tree: { sha: baseTreeSha }, sha: parentSha }), { status: 200 });
     if (url.endsWith("/git/trees")) return new Response(JSON.stringify({ sha: treeSha }), { status: 201 });
@@ -102,8 +103,9 @@ test("PR title is collapsed to one line and summary mentions are neutralised", a
     }
     if (url.endsWith("/git/commits")) { commitPayload = JSON.parse(init.body); return new Response(JSON.stringify({ sha: commitSha }), { status: 201 }); }
     if (url.endsWith("/git/commits/" + commitSha)) return new Response(JSON.stringify({ sha: commitSha, message: commitPayload.message, tree: { sha: treeSha }, parents: [{ sha: parentSha }], author: commitPayload.author, committer: commitPayload.committer }), { status: 200 });
-    if (url.endsWith("/git/refs")) return new Response(JSON.stringify({ ref: "x" }), { status: 201 });
-    if (url.endsWith("/pulls")) return new Response(JSON.stringify({ number: 1, html_url: "https://example.test/pr/1" }), { status: 201 });
+    if (url.endsWith("/git/refs")) { const payload=JSON.parse(init.body);createdRef=payload.ref;return new Response(JSON.stringify({ref:createdRef,object:{sha:commitSha}}),{status:201}); }
+    if (url.endsWith("/pulls/1")) return new Response(JSON.stringify(createdPr),{status:200});
+    if (url.endsWith("/pulls")) { const payload=JSON.parse(init.body);createdPr={number:1,html_url:"https://github.com/"+OWNER+"/"+REPO+"/pull/1",draft:true,state:"open",head:{ref:payload.head,sha:commitSha},base:{ref:payload.base},body:payload.body};return new Response(JSON.stringify(createdPr),{status:201}); }
     return new Response(JSON.stringify({ default_branch: "main", object: { sha: parentSha }, tree: { sha: baseTreeSha } }), { status: 200 });
   }, async (calls) => {
     await call("create_change_pr", pr([{ path: "README.md", content: "x" }], { title: "x @octocat\nInjected: y", summary: "cc @someone @org/team" }));

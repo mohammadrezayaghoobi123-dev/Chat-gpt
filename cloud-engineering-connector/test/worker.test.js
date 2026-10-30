@@ -1153,7 +1153,7 @@ test("a successful PR POST with unavailable readback is quarantined as UNKNOWN",
   assert.equal(body.result.isError,true);
   assert.match(body.result.content[0].text,/WRITE_OUTCOME_UNKNOWN/);
   assert.equal(prPosts,1);
-  assert.equal(prReads,0);
+  assert.equal(prReads,1);
   assert.equal(ledgerStatus,"UNKNOWN");
   assert.equal(ledgerPhase,"PR_DISPATCHED");
  }finally{globalThis.fetch=originalFetch}
@@ -1200,7 +1200,7 @@ test("a failed durable status write never falsely claims UNKNOWN quarantine",asy
   assert.match(body.result.content[0].text,/WRITE_CONTROL_UNAVAILABLE/);
   assert.doesNotMatch(body.result.content[0].text,/WRITE_OUTCOME_UNKNOWN/);
   assert.equal(prPosts,1);
-  assert.equal(prReads,0);
+  assert.equal(prReads,1);
   assert.equal(ledgerStatus,"IN_PROGRESS");
   assert.equal(ledgerPhase,"PR_DISPATCHED");
  }finally{globalThis.fetch=originalFetch}

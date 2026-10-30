@@ -72,11 +72,14 @@ async function readProjectFile(args,env){const base=repoPath(args.owner,args.rep
 async function architectureAnalyze(args,env){
  const base={repository:args.owner+"/"+args.repo,ref:args.ref||"default branch"};
  if(!Array.isArray(args.paths)||args.paths.length<1||args.paths.length>8)throw new Error("Provide between 1 and 8 file paths.");
- const unique=new Set();const evidence=[];const findings=[];
+ const unique=new Set();
  for(const path of args.paths){
   validatePath(path);
   if(unique.has(path))throw new Error("Duplicate analysis path: "+path);
   unique.add(path);
+ }
+ const evidence=[];const findings=[];
+ for(const path of args.paths){
   const file=await readProjectFile({owner:args.owner,repo:args.repo,path,ref:args.ref},env);
   const lines=file.content.split(/\r?\n/);
   evidence.push({path:file.path,ref:file.ref,size_bytes:file.size,line_count:lines.length});

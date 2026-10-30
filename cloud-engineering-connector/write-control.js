@@ -33,6 +33,9 @@ function assertHash(value, field) {
     throw new TypeError(field + " must be a lowercase SHA-256 hex digest.");
   }
 }
+function isPullRequestUrl(url,number) {
+  return typeof url==="string" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(url) && url.endsWith("/pull/"+number);
+}
 
 function operationFromRow(row) {
   if (!row) return null;
@@ -256,6 +259,52 @@ export class WriteControl extends DurableObject {
       if (current.status !== "IN_PROGRESS") {
         return { updated: false, reason: "STATUS_CONFLICT", operation: current };
       }
+
+      const effectiveBranchName=branchName??current.branchName;
+      const effectiveCommitSha=commitSha??current.commitSha;
+      const effectivePrNumber=prNumber??current.prNumber;
+      const effectivePrUrl=prUrl??current.prUrl;
+      if (current.commitSha && commitSha && current.commitSha!==commitSha) {
+        return { updated:false,reason:"OPERATION_IDENTITY_MISMATCH",operation:current };
+      }
+      if (current.branchName && branchName && current.branchName!==branchName) {
+        return { updated:false,reason:"OPERATION_IDENTITY_MISMATCH",operation:current };
+      }
+      if (current.prNumber && prNumber && current.prNumber!==prNumber) {
+        return { updated:false,reason:"OPERATION_IDENTITY_MISMATCH",operation:current };
+      }
+      if (current.prUrl && prUrl && current.prUrl!==prUrl) {
+        return { updated:false,reason:"OPERATION_IDENTITY_MISMATCH",operation:current };
+      }
+      if (branchName!==null && branchName!=="assistant/mcp-"+keyHash) {
+        throw new TypeError("branchName must match the deterministic operation identity.");
+      }
+      if (nextPhase==="TREE_DISPATCHED" && (!gitMetadata.baseTreeSha || !gitMetadata.parentSha)) {
+        throw new TypeError("TREE_DISPATCHED requires baseTreeSha and parentSha.");
+      }
+      if (nextPhase==="TREE_WRITTEN" && (!gitMetadata.treeSha || !current.gitMetadata?.baseTreeSha || !current.gitMetadata?.parentSha)) {
+        throw new TypeError("TREE_WRITTEN requires treeSha and persisted baseTreeSha and parentSha.");
+      }
+      if (nextPhase==="COMMIT_DISPATCHED" && (!current.gitMetadata?.treeSha || !current.gitMetadata?.parentSha)) {
+        throw new TypeError("COMMIT_DISPATCHED requires persisted treeSha and parentSha.");
+      }
+      if (nextPhase==="COMMIT_WRITTEN" && (!commitSha || !current.gitMetadata?.treeSha || !current.gitMetadata?.parentSha)) {
+        throw new TypeError("COMMIT_WRITTEN requires commitSha and persisted Git tree identity.");
+      }
+      if (nextPhase==="BRANCH_WRITTEN" && (effectiveBranchName!=="assistant/mcp-"+keyHash || !effectiveCommitSha)) {
+        throw new TypeError("BRANCH_WRITTEN requires deterministic branchName and persisted commitSha.");
+      }
+      if (nextPhase==="PR_DISPATCHED" && (effectiveBranchName!=="assistant/mcp-"+keyHash || !effectiveCommitSha)) {
+        throw new TypeError("PR_DISPATCHED requires deterministic branchName and persisted commitSha.");
+      }
+      if (nextPhase==="PR_CREATED") {
+        if (effectiveBranchName!=="assistant/mcp-"+keyHash || !effectiveCommitSha || !effectivePrNumber || !effectivePrUrl) {
+          throw new TypeError("PR_CREATED requires deterministic branch, commit, PR number and URL.");
+        }
+        if (!isPullRequestUrl(effectivePrUrl,effectivePrNumber)) {
+          throw new TypeError("pull URL must match the PR number.");
+        }
+      }
       this.ctx.storage.sql.exec(
         `UPDATE write_operations
          SET phase = ?, status = ?, updated_at = ?,
@@ -278,7 +327,15 @@ export class WriteControl extends DurableObject {
         keyHash,
         expectedPhase,
       );
-      return { updated: true, operation: this.readOperation(keyHash) };
+      const updatedOperation=this.readOperation(keyHash);
+      if (!updatedOperation || updatedOperation.phase!==nextPhase || updatedOperation.status!==status ||
+          (commitSha && updatedOperation.commitSha!==commitSha) ||
+          (branchName && updatedOperation.branchName!==branchName) ||
+          (prNumber && updatedOperation.prNumber!==prNumber) ||
+          (prUrl && updatedOperation.prUrl!==prUrl)) {
+        return { updated:false,reason:"PERSISTENCE_VERIFICATION_FAILED",operation:updatedOperation };
+      }
+      return { updated: true, operation: updatedOperation };
     });
   }
 
@@ -346,7 +403,11 @@ export class WriteControl extends DurableObject {
         commitSha,
         keyHash,
       );
-      return { updated: true, operation: this.readOperation(keyHash) };
+      const updatedOperation=this.readOperation(keyHash);
+      if (!updatedOperation || updatedOperation.status!=="IN_PROGRESS" || updatedOperation.phase!=="COMMIT_WRITTEN" || updatedOperation.commitSha!==commitSha) {
+        return { updated:false,reason:"RECONCILIATION_CONFLICT",operation:updatedOperation };
+      }
+      return { updated: true, operation: updatedOperation };
     });
   }
 
@@ -363,7 +424,7 @@ export class WriteControl extends DurableObject {
       if (current.status !== "UNKNOWN" || !["COMMIT_WRITTEN", "BRANCH_WRITTEN"].includes(current.phase)) {
         return { updated: false, reason: "RECONCILIATION_NOT_ALLOWED", operation: current };
       }
-      if (current.commitSha !== commitSha) {
+      if (current.commitSha !== commitSha || (current.branchName && current.branchName!==branchName)) {
         return { updated: false, reason: "OPERATION_IDENTITY_MISMATCH", operation: current };
       }
       this.ctx.storage.sql.exec(
@@ -375,7 +436,12 @@ export class WriteControl extends DurableObject {
         branchName,
         keyHash,
       );
-      return { updated: true, operation: this.readOperation(keyHash) };
+      const updatedOperation=this.readOperation(keyHash);
+      if (!updatedOperation || updatedOperation.status!=="IN_PROGRESS" || updatedOperation.phase!=="BRANCH_WRITTEN" ||
+          updatedOperation.branchName!==branchName || updatedOperation.commitSha!==commitSha) {
+        return { updated:false,reason:"RECONCILIATION_CONFLICT",operation:updatedOperation };
+      }
+      return { updated: true, operation: updatedOperation };
     });
   }
 
@@ -384,11 +450,11 @@ export class WriteControl extends DurableObject {
     const { keyHash, branchName, commitSha, prNumber, prUrl } = input;
     const now = Date.now();
     assertHash(keyHash, "keyHash");
-    if (typeof branchName !== "string" || branchName.length > 255) throw new TypeError("branchName is invalid.");
+    if (branchName !== "assistant/mcp-" + keyHash) throw new TypeError("branchName does not match the deterministic operation identity.");
     if (typeof commitSha !== "string" || !/^[a-f0-9]{40}$/.test(commitSha)) throw new TypeError("commitSha must be a Git SHA.");
     if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new TypeError("prNumber must be a positive integer.");
-    if (typeof prUrl !== "string" || prUrl.length > 2048 || !/^https:\/\/github\.com\//.test(prUrl)) {
-      throw new TypeError("prUrl must be a GitHub HTTPS URL.");
+    if (typeof prUrl !== "string" || prUrl.length > 2048 || !isPullRequestUrl(prUrl,prNumber)) {
+      throw new TypeError("prUrl must be the canonical GitHub URL for prNumber.");
     }
     return this.ctx.storage.transactionSync(() => {
       const current = this.readOperation(keyHash);
@@ -408,7 +474,12 @@ export class WriteControl extends DurableObject {
         prUrl,
         keyHash,
       );
-      return { updated: true, operation: this.readOperation(keyHash) };
+      const updatedOperation=this.readOperation(keyHash);
+      if (!updatedOperation || updatedOperation.status!=="SUCCEEDED" || updatedOperation.phase!=="PR_CREATED" ||
+          updatedOperation.prNumber!==prNumber || updatedOperation.prUrl!==prUrl) {
+        return { updated:false,reason:"RECONCILIATION_CONFLICT",operation:updatedOperation };
+      }
+      return { updated: true, operation: updatedOperation };
     });
   }
 
@@ -436,7 +507,11 @@ export class WriteControl extends DurableObject {
         errorCode ?? null,
         keyHash,
       );
-      return { updated: true, operation: this.readOperation(keyHash) };
+      const updatedOperation=this.readOperation(keyHash);
+      if (!updatedOperation || updatedOperation.status!==status || updatedOperation.errorCode!==(errorCode??null)) {
+        return { updated:false,reason:"PERSISTENCE_VERIFICATION_FAILED",operation:updatedOperation };
+      }
+      return { updated: true, operation: updatedOperation };
     });
   }
 

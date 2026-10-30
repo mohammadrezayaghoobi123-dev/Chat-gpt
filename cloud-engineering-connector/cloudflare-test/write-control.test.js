@@ -114,12 +114,12 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     await stub.transitionOperation({ keyHash, expectedPhase: "TREE_DISPATCHED", nextPhase: "TREE_WRITTEN", now: 1_800_000_000_001, metadata: { treeSha: "3".repeat(40) } });
     await stub.transitionOperation({ keyHash, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED", now: 1_800_000_000_002, metadata: { commitDate: "2026-10-30T12:00:00.000Z", commitMessage: "assistant: branch recovery", authorName: "Cloud Engineering Connector", authorEmail: "mcp-connector@users.noreply.github.com", committerName: "Cloud Engineering Connector", committerEmail: "mcp-connector@users.noreply.github.com" } });
     await stub.transitionOperation({ keyHash, expectedPhase: "COMMIT_DISPATCHED", nextPhase: "COMMIT_WRITTEN", now: 1_800_000_000_003, metadata: { commitSha } });
-    await stub.markOperationStatus({ keyHash, status: "UNKNOWN", now: 1_800_000_000_003, errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
-    await expect(Promise.resolve().then(()=>stub.reconcileBranchWritten({keyHash,branchName:"assistant/mcp-unrelated",commitSha})))
+    await stub.markOperationStatus({ keyHash, leaseGeneration:1, status: "UNKNOWN", now: 1_800_000_000_003, errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
+    await expect(Promise.resolve().then(()=>stub.reconcileBranchWritten({keyHash,leaseGeneration:2,branchName:"assistant/mcp-unrelated",commitSha})))
       .rejects.toThrow(/deterministic operation identity/);
-    await expect(stub.reconcileBranchWritten({ keyHash, now: 1_800_000_000_004, branchName, commitSha }))
+    await expect(stub.reconcileBranchWritten({ keyHash, leaseGeneration:2, now: 1_800_000_000_004, branchName, commitSha }))
       .resolves.toMatchObject({ updated: true, operation: { status: "IN_PROGRESS", phase: "BRANCH_WRITTEN", branchName, commitSha } });
-    await expect(stub.reconcileBranchWritten({ keyHash, now: 1_800_000_000_005, branchName, commitSha: "e".repeat(40) }))
+    await expect(stub.reconcileBranchWritten({ keyHash, leaseGeneration:3, now: 1_800_000_000_005, branchName, commitSha: "e".repeat(40) }))
       .resolves.toMatchObject({ updated: false, reason: "RECONCILIATION_NOT_ALLOWED" });
   });
 
@@ -135,15 +135,15 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     await stub.transitionOperation({ keyHash, expectedPhase: "COMMIT_DISPATCHED", nextPhase: "COMMIT_WRITTEN", now: 1_800_000_000_003, metadata: { commitSha } });
     await stub.transitionOperation({ keyHash, expectedPhase: "COMMIT_WRITTEN", nextPhase: "BRANCH_WRITTEN", now: 1_800_000_000_003, metadata: { branchName } });
     await stub.transitionOperation({ keyHash, expectedPhase: "BRANCH_WRITTEN", nextPhase: "PR_DISPATCHED", now: 1_800_000_000_004 });
-    await stub.markOperationStatus({ keyHash, status: "UNKNOWN", now: 1_800_000_000_005, errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
+    await stub.markOperationStatus({ keyHash, leaseGeneration:1, status: "UNKNOWN", now: 1_800_000_000_005, errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
     await expect(Promise.resolve().then(()=>stub.reconcilePrCreated({
-      keyHash,branchName:"assistant/mcp-unrelated",commitSha,prNumber:42,prUrl:"https://github.com/acme/project/pull/42",
+      keyHash,leaseGeneration:2,branchName:"assistant/mcp-unrelated",commitSha,prNumber:42,prUrl:"https://github.com/acme/project/pull/42",
     }))).rejects.toThrow(/deterministic operation identity/);
     await expect(Promise.resolve().then(()=>stub.reconcilePrCreated({
-      keyHash,branchName,commitSha,prNumber:42,prUrl:"https://github.com/acme/project/pull/43",
+      keyHash,leaseGeneration:2,branchName,commitSha,prNumber:42,prUrl:"https://github.com/acme/project/pull/43",
     }))).rejects.toThrow(/canonical GitHub URL/);
     await expect(stub.reconcilePrCreated({
-      keyHash, now: 1_800_000_000_006, branchName, commitSha, prNumber: 42,
+      keyHash, leaseGeneration:2, now: 1_800_000_000_006, branchName, commitSha, prNumber: 42,
       prUrl: "https://github.com/acme/project/pull/42",
     })).resolves.toMatchObject({ updated: true, operation: { status: "SUCCEEDED", phase: "PR_CREATED", prNumber: 42, errorCode: null } });
   });
@@ -152,9 +152,9 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     const stub = stubFor("unknown-early-phase");
     const keyHash = "8".repeat(64);
     await stub.admitWrite(request(keyHash, "9".repeat(64)));
-    await stub.markOperationStatus({ keyHash, status: "UNKNOWN", now: 1_800_000_000_001 });
+    await stub.markOperationStatus({ keyHash, leaseGeneration:1, status: "UNKNOWN", now: 1_800_000_000_001 });
     await expect(stub.reconcilePrCreated({
-      keyHash, now: 1_800_000_000_002, branchName: "assistant/mcp-" + keyHash,
+      keyHash, leaseGeneration:2, now: 1_800_000_000_002, branchName: "assistant/mcp-" + keyHash,
       commitSha: "b".repeat(40), prNumber: 43, prUrl: "https://github.com/acme/project/pull/43",
     })).resolves.toMatchObject({ updated: false, reason: "RECONCILIATION_NOT_ALLOWED" });
   });
@@ -205,8 +205,8 @@ describe("Git object recovery identity contract", () => {
       keyHash, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED",
       metadata: { baseTreeSha, parentSha },
     });
-    await stub.markOperationStatus({ keyHash, status: "UNKNOWN", errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
-    await expect(stub.reconcileTreeWritten({ keyHash, baseTreeSha, parentSha, treeSha }))
+    await stub.markOperationStatus({ keyHash, leaseGeneration:1, status: "UNKNOWN", errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
+    await expect(stub.reconcileTreeWritten({ keyHash, leaseGeneration:2, baseTreeSha, parentSha, treeSha }))
       .resolves.toMatchObject({
         updated: true,
         operation: {
@@ -216,11 +216,11 @@ describe("Git object recovery identity contract", () => {
         },
       });
     await stub.markOperationStatus({ keyHash, status: "UNKNOWN", leaseGeneration: 3, errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
-    await expect(stub.reconcileTreeWritten({ keyHash, baseTreeSha, parentSha: "4".repeat(40), treeSha }))
+    await expect(stub.reconcileTreeWritten({ keyHash, leaseGeneration:4, baseTreeSha, parentSha: "4".repeat(40), treeSha }))
       .resolves.toMatchObject({ updated: false, reason: "OPERATION_IDENTITY_MISMATCH" });
-    await expect(stub.reconcileTreeWritten({ keyHash, baseTreeSha, parentSha, treeSha }))
+    await expect(stub.reconcileTreeWritten({ keyHash, leaseGeneration:4, baseTreeSha, parentSha, treeSha }))
       .resolves.toMatchObject({ updated: true, operation: { status: "IN_PROGRESS", phase: "TREE_WRITTEN" } });
-    await expect(stub.reconcileTreeWritten({ keyHash, baseTreeSha, parentSha, treeSha }))
+    await expect(stub.reconcileTreeWritten({ keyHash, leaseGeneration:5, baseTreeSha, parentSha, treeSha }))
       .resolves.toMatchObject({ updated: false, reason: "RECONCILIATION_NOT_ALLOWED" });
   });
 
@@ -251,7 +251,7 @@ describe("Git object recovery identity contract", () => {
       metadata: { commitDate, commitMessage, authorName, authorEmail, committerName, committerEmail },
     });
     await stub.markOperationStatus({ keyHash, status: "UNKNOWN", errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
-    await expect(stub.reconcileCommitWritten({ keyHash, treeSha, parentSha, commitSha }))
+    await expect(stub.reconcileCommitWritten({ keyHash, leaseGeneration:2, treeSha, parentSha, commitSha }))
       .resolves.toMatchObject({
         updated: true,
         operation: {
@@ -261,7 +261,7 @@ describe("Git object recovery identity contract", () => {
           gitMetadata: { baseTreeSha, parentSha, treeSha, commitDate, commitMessage, authorName, authorEmail, committerName, committerEmail },
         },
       });
-    await expect(stub.reconcileCommitWritten({ keyHash, treeSha: "5".repeat(40), parentSha, commitSha }))
+    await expect(stub.reconcileCommitWritten({ keyHash, leaseGeneration:3, treeSha: "5".repeat(40), parentSha, commitSha }))
       .resolves.toMatchObject({ updated: false, reason: "RECONCILIATION_NOT_ALLOWED" });
   });
 });
@@ -400,8 +400,8 @@ describe("safe recovery before the first external side effect",()=>{
     const stub=stubFor("unknown-reserved-reopen");
     const keyHash="7".repeat(64),requestHash="8".repeat(64);
     await stub.admitWrite(request(keyHash,requestHash));
-    await stub.markOperationStatus({keyHash,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
-    await expect(stub.reopenReserved({keyHash})).resolves.toMatchObject({
+    await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    await expect(stub.reopenReserved({keyHash,leaseGeneration:2})).resolves.toMatchObject({
       updated:true,
       operation:{keyHash,requestHash,status:"IN_PROGRESS",phase:"RESERVED"},
     });
@@ -415,7 +415,7 @@ describe("safe recovery before the first external side effect",()=>{
     const stub=stubFor("unknown-reserved-concurrent-reopen");
     const keyHash="b".repeat(64);
     await stub.admitWrite(request(keyHash,"c".repeat(64)));
-    await stub.markOperationStatus({keyHash,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
     const results=await Promise.all([
       stub.reopenReserved({keyHash}),
       stub.reopenReserved({keyHash}),
@@ -434,7 +434,7 @@ describe("safe recovery before the first external side effect",()=>{
       keyHash,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",
       metadata:{baseTreeSha:"1".repeat(40),parentSha:"2".repeat(40)},
     });
-    await stub.markOperationStatus({keyHash,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
     await expect(stub.reopenReserved({keyHash})).resolves.toMatchObject({
       updated:false,reason:"RECONCILIATION_NOT_ALLOWED",
       operation:{status:"UNKNOWN",phase:"TREE_DISPATCHED"},

@@ -407,16 +407,19 @@ async function createChangePr(args,env) {
   await transition("PR_DISPATCHED","PR_CREATED",{branchName:branch,commitSha:commit.sha,prNumber:pr.number,prUrl:pr.html_url},"SUCCEEDED");
   return {status:"draft_pull_request_created",repository:repo.full_name,branch,base_branch:baseBranch,commit:commit.sha,pull_request:{number:pr.number,url:pr.html_url,draft:pr.draft,state:pr.state},changed_paths:args.files.map(file=>file.path),safety:"Changes were committed only to a deterministic assistant/mcp-* branch. The base branch was not modified and no merge was performed."};
  } catch(error) {
-  if(error instanceof ToolError) throw error;
+  // A successful GitHub write followed by a failed identity check is still an ambiguous external outcome.
+  // ToolError must not bypass durable quarantine once any side effect has been dispatched.
+  if(error instanceof ToolError&&(!sideEffectStarted||error.code==="WRITE_CONTROL_UNAVAILABLE")) throw error;
   const message=error instanceof Error?error.message:"unknown error";
   const match=/^GitHub API (\d{3}):/.exec(message);
   const httpStatus=match?Number(match[1]):null;
-  const ambiguous=sideEffectStarted&&(httpStatus===null||httpStatus===408||httpStatus===409||httpStatus>=500);
+  const ambiguous=sideEffectStarted&&(error instanceof ToolError||httpStatus===null||httpStatus===408||httpStatus===409||httpStatus>=500);
   try {
-   await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?"UPSTREAM_OUTCOME_UNCERTAIN":"UPSTREAM_REJECTED"});
+   await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?(error instanceof ToolError?"GIT_IDENTITY_UNVERIFIED":"UPSTREAM_OUTCOME_UNCERTAIN"):"UPSTREAM_REJECTED"});
   } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
-  if(ambiguous) throw new ToolError("WRITE_OUTCOME_UNKNOWN",{phase:currentPhase,message:"A GitHub write may have succeeded. The operation was quarantined and will not be retried automatically."});
+  if(ambiguous) throw new ToolError("WRITE_OUTCOME_UNKNOWN",{phase:currentPhase,message:"A GitHub write may have succeeded or its returned identity could not be proven. The operation was quarantined and will not be retried automatically."});
   throw error;
+ }
  }
 }
 

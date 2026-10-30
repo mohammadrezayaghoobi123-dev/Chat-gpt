@@ -86,6 +86,7 @@ test("public read-only mode remains usable when a server bearer secret is config
     "read_project_file",
     "engineering_standards",
     "architecture_review",
+    "architecture_analyze",
   ]);
 });
 

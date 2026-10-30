@@ -819,7 +819,7 @@ test("create_change_pr persists deterministic Git commit identity before dispatc
 
 
 async function recoveryFixtureBlobSha(content){
- const bytes=new TextEncoder().encode(content),header=new TextEncoder().encode("blob "+bytes.byteLength+"\\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);
+ const bytes=new TextEncoder().encode(content),header=new TextEncoder().encode("blob "+bytes.byteLength+"\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);
  object.set(header);object.set(bytes,header.byteLength);
  const digest=await crypto.subtle.digest("SHA-1",object);
  return [...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
@@ -862,19 +862,19 @@ test("UNKNOWN COMMIT_DISPATCHED replay recreates and verifies the exact persiste
  const commitDate="2026-10-30T12:00:00.000Z",commitMessage="assistant: persisted identity";
  const persistedIdentity={authorName:"Persisted Engineering Agent",authorEmail:"persisted-agent@example.test",committerName:"Persisted Engineering Agent",committerEmail:"persisted-agent@example.test"};
  const operation={status:"UNKNOWN",phase:"COMMIT_DISPATCHED",createdAt:Date.parse(commitDate),updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha,treeSha,commitDate,commitMessage,...persistedIdentity}};
- const ledger=recoveryLedger(operation),calls=[];let commitPayload=null,keyHash=null;
+ const ledger=recoveryLedger(operation),calls=[];let commitPayload=null;
  globalThis.fetch=async(input,init={})=>{
   const url=String(input),method=init.method||"GET";calls.push({method,url});
   if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
   if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1"))return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/replay.txt",mode:"100644",type:"blob",sha:await recoveryFixtureBlobSha("x")}]}),{status:200});
   if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
   if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
-  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+keyHash}),{status:201});
+  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered"}),{status:201});
   if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:92,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/92",draft:true,state:"open"}),{status:201});
   throw new Error("Unexpected GitHub request "+method+" "+url);
  };
  try{
-  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"unknown-commit-replay-0001",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Different request title ignored",summary:"Recover commit",files:[{path:"docs/replay.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>ledger}});
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"unknown-commit-replay-0001",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Persisted identity",summary:"Recover commit",files:[{path:"docs/replay.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>ledger}});
   const body=await response.json(),result=JSON.parse(body.result.content[0].text);
   assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,92);
   assert.deepEqual(commitPayload,{message:commitMessage,tree:treeSha,parents:[parentSha],author:{name:persistedIdentity.authorName,email:persistedIdentity.authorEmail,date:commitDate},committer:{name:persistedIdentity.committerName,email:persistedIdentity.committerEmail,date:commitDate}});
@@ -888,7 +888,7 @@ test("UNKNOWN TREE_DISPATCHED replay repeats only the same immutable tree payloa
  const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
  const createdAt=Date.parse("2026-10-30T12:00:00.000Z");
  const operation={status:"UNKNOWN",phase:"TREE_DISPATCHED",createdAt,updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha}};
- const ledger=recoveryLedger(operation),calls=[];let keyHash=null,treePayload=null,commitPayload=null;
+ const ledger=recoveryLedger(operation),calls=[];let treePayload=null,commitPayload=null;
  globalThis.fetch=async(input,init={})=>{
   const url=String(input),method=init.method||"GET";calls.push({method,url});
   if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});

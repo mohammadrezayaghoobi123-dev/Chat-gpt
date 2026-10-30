@@ -1,5 +1,5 @@
 name = "chat-gpt111"
-main = "worker.js"
+main = "index.js"
 compatibility_date = "2026-10-23"
 workers_dev = true
 
@@ -14,6 +14,14 @@ namespace_id = "78294163"
 limit = 60
 period = 60
 
+[[durable_objects.bindings]]
+name = "WRITE_CONTROL"
+class_name = "WriteControl"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WriteControl"]
+
 [env.staging.vars]
 SERVICE_MODE = "cloud"
 
@@ -24,3 +32,11 @@ namespace_id = "78294164"
 [env.staging.ratelimits.simple]
 limit = 60
 period = 60
+
+[[env.staging.durable_objects.bindings]]
+name = "WRITE_CONTROL"
+class_name = "WriteControl"
+
+[[env.staging.migrations]]
+tag = "v1"
+new_sqlite_classes = ["WriteControl"]

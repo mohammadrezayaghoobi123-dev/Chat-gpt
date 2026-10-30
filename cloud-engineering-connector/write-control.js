@@ -205,7 +205,7 @@ export class WriteControl extends DurableObject {
         throw new TypeError(key + " must be a Git SHA.");
       }
     }
-    if (gitMetadata.commitDate !== undefined && (typeof gitMetadata.commitDate !== "string" || !/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$/.test(gitMetadata.commitDate) || new Date(gitMetadata.commitDate).toISOString() !== gitMetadata.commitDate)) {
+    if (gitMetadata.commitDate !== undefined && (typeof gitMetadata.commitDate !== "string" || !Number.isFinite(Date.parse(gitMetadata.commitDate)) || new Date(gitMetadata.commitDate).toISOString() !== gitMetadata.commitDate)) {
       throw new TypeError("commitDate must be a canonical UTC ISO timestamp.");
     }
     if (gitMetadata.commitMessage !== undefined && (typeof gitMetadata.commitMessage !== "string" || gitMetadata.commitMessage.length < 1 || gitMetadata.commitMessage.length > 500)) {

@@ -975,7 +975,7 @@ test("a successful branch POST with a mismatched ref identity is quarantined bef
  const originalFetch=globalThis.fetch;
  const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
  const key="branch-identity-mismatch-0001";
- const operations=new Map();let prPosts=0,ledgerStatus=null,ledgerPhase=null;
+ const operations=new Map();let prPosts=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null;
  const stub={
   async admitWrite(input){const operation={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
   async transitionOperation(input){const operation=operations.get(input.keyHash);if(!operation||operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false};operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";operation.updatedAt=input.now;if(input.metadata)Object.assign(operation,input.metadata);ledgerPhase=operation.phase;ledgerStatus=operation.status;return{updated:true,operation};},
@@ -995,11 +995,8 @@ test("a successful branch POST with a mismatched ref identity is quarantined bef
    const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
    return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
   }
-  if(method==="POST"&&url.endsWith("/git/commits"))return new Response(JSON.stringify({sha:commitSha}),{status:201});
-  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha)){
-   const body=JSON.parse((await (async()=>{return new Response("{}")})()).body??"{}");
-   return new Response(JSON.stringify({sha:commitSha,message:"assistant: Verify branch identity",tree:{sha:treeSha},parents:[{sha:parentSha}],author:{name:"Cloud Engineering Connector",email:"mcp-connector@users.noreply.github.com",date:new Date(Math.floor(Date.now()/1000)*1000).toISOString()},committer:{name:"Cloud Engineering Connector",email:"mcp-connector@users.noreply.github.com",date:new Date(Math.floor(Date.now()/1000)*1000).toISOString()}}),{status:200});
-  }
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
   if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-wrong",object:{sha:"e".repeat(40)}}),{status:201});
   if(method==="POST"&&url.endsWith("/pulls")){prPosts++;return new Response(JSON.stringify({number:101,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/101",draft:true,state:"open"}),{status:201});}
   throw new Error("Unexpected request "+method+" "+url);

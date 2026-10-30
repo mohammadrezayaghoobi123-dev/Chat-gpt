@@ -216,11 +216,18 @@ async function createChangePr(args,env) {
  if(admission.replay) {
   let operation=admission.operation;
   if(!operation) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
-  if(operation.status==="IN_PROGRESS"&&Date.now()-operation.updatedAt>=120_000) {
-   try {
-    await stub.markStaleOperationsUnknown({now:Date.now(),leaseMs:120_000});
-    operation=await stub.getOperation(keyHash);
-   } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
+  if(operation.status==="IN_PROGRESS") {
+   if(Number.isSafeInteger(operation.updatedAt)&&Date.now()-operation.updatedAt>=120_000) {
+    try {
+     await stub.markStaleOperationsUnknown({now:Date.now(),leaseMs:120_000});
+     operation=await stub.getOperation(keyHash);
+    } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
+   }
+   // A fresh lease belongs to the original request. A replay must never run
+   // another external write while that request may still be active.
+   if(operation?.status==="IN_PROGRESS") {
+    throw new ToolError("WRITE_ALREADY_IN_PROGRESS",{operation_status:"IN_PROGRESS",phase:operation.phase??null});
+   }
   }
 
   const marker="<!-- mcp-operation:"+keyHash+" -->";

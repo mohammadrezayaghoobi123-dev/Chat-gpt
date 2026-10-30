@@ -72,3 +72,42 @@ test("architecture_analyze rejects protected paths before reading repository con
     globalThis.fetch = originalFetch;
   }
 });
+
+
+test("architecture_analyze rejects duplicate paths before any repository reads", async () => {
+  let calls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { calls += 1; throw new Error("must not fetch"); };
+  try {
+    const response = await worker.fetch(request("architecture_analyze", {
+      owner: "mohammadrezayaghoobi123-dev",
+      repo: "Chat-gpt",
+      paths: ["src/worker.js", "src/worker.js"],
+    }), { MCP_AUTH_TOKEN: "test-secret" });
+    const body = await response.json();
+    assert.equal(body.result.isError, true);
+    assert.match(body.result.content[0].text, /Duplicate analysis path/);
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("architecture_analyze enforces the eight-file limit before repository reads", async () => {
+  let calls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { calls += 1; throw new Error("must not fetch"); };
+  try {
+    const response = await worker.fetch(request("architecture_analyze", {
+      owner: "mohammadrezayaghoobi123-dev",
+      repo: "Chat-gpt",
+      paths: Array.from({ length: 9 }, (_, index) => "src/file-" + index + ".js"),
+    }), { MCP_AUTH_TOKEN: "test-secret" });
+    const body = await response.json();
+    assert.equal(body.result.isError, true);
+    assert.match(body.result.content[0].text, /between 1 and 8/);
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

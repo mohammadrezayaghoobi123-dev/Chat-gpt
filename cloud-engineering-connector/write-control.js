@@ -302,17 +302,19 @@ export class WriteControl extends DurableObject {
         return { updated: false, reason: "OPERATION_IDENTITY_MISMATCH", operation: current };
       }
       const merged = { ...current.gitMetadata, treeSha };
-      const result = this.ctx.storage.sql.exec(
+      this.ctx.storage.sql.exec(
         `UPDATE write_operations
          SET phase = 'TREE_WRITTEN', status = 'IN_PROGRESS', updated_at = ?, git_metadata = ?, error_code = NULL
-         WHERE key_hash = ? AND status = 'UNKNOWN' AND phase = ?`,
+         WHERE key_hash = ? AND status = 'UNKNOWN'`,
         now,
         JSON.stringify(merged),
         keyHash,
-        current.phase,
       );
-      if (result.rowsWritten !== 1) return { updated: false, reason: "RECONCILIATION_CONFLICT", operation: this.readOperation(keyHash) };
-      return { updated: true, operation: this.readOperation(keyHash) };
+      const updatedOperation = this.readOperation(keyHash);
+      if (!updatedOperation || updatedOperation.status !== "IN_PROGRESS" || updatedOperation.phase !== "TREE_WRITTEN" || updatedOperation.gitMetadata?.treeSha !== treeSha) {
+        return { updated: false, reason: "RECONCILIATION_CONFLICT", operation: updatedOperation };
+      }
+      return { updated: true, operation: updatedOperation };
     });
   }
 

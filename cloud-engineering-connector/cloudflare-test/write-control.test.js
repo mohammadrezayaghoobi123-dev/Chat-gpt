@@ -274,18 +274,18 @@ describe("Durable state transition metadata invariants",()=>{
     const stub=stubFor("invariant-tree-dispatched");
     const keyHash="1".repeat(64);
     await stub.admitWrite(request(keyHash,"2".repeat(64)));
-    expect(()=>stub.transitionOperation({keyHash,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED"}))
-      .toThrow(/TREE_DISPATCHED requires baseTreeSha and parentSha/);
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({keyHash,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED"})))
+      .rejects.toThrow(/TREE_DISPATCHED requires baseTreeSha and parentSha/);
   });
 
   it("rejects a branch transition whose name is not derived from the operation key",async()=>{
     const stub=stubFor("invariant-branch-name");
     const keyHash="3".repeat(64);
     const {commitSha}=await seedCommitReady(stub,keyHash);
-    expect(()=>stub.transitionOperation({
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({
       keyHash,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",
       metadata:{branchName:"assistant/mcp-unrelated",commitSha},
-    })).toThrow(/deterministic operation identity/);
+    }))).rejects.toThrow(/deterministic operation identity/);
   });
 
   it("rejects COMMIT_WRITTEN without a persisted commit SHA",async()=>{
@@ -299,8 +299,8 @@ describe("Durable state transition metadata invariants",()=>{
       authorName:"Cloud Engineering Connector",authorEmail:"mcp-connector@users.noreply.github.com",
       committerName:"Cloud Engineering Connector",committerEmail:"mcp-connector@users.noreply.github.com",
     }});
-    expect(()=>stub.transitionOperation({keyHash,expectedPhase:"COMMIT_DISPATCHED",nextPhase:"COMMIT_WRITTEN"}))
-      .toThrow(/COMMIT_WRITTEN requires commitSha/);
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({keyHash,expectedPhase:"COMMIT_DISPATCHED",nextPhase:"COMMIT_WRITTEN"})))
+      .rejects.toThrow(/COMMIT_WRITTEN requires commitSha/);
   });
 
   it("rejects PR_CREATED without complete PR identity and a URL matching its number",async()=>{
@@ -309,12 +309,12 @@ describe("Durable state transition metadata invariants",()=>{
     const {commitSha,branchName}=await seedCommitReady(stub,keyHash);
     await stub.transitionOperation({keyHash,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",metadata:{branchName}});
     await stub.transitionOperation({keyHash,expectedPhase:"BRANCH_WRITTEN",nextPhase:"PR_DISPATCHED"});
-    expect(()=>stub.transitionOperation({keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED"}))
-      .toThrow(/PR_CREATED requires PR number and URL/);
-    expect(()=>stub.transitionOperation({
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED"})))
+      .rejects.toThrow(/PR_CREATED requires PR number and URL/);
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({
       keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",
       metadata:{branchName,commitSha,prNumber:42,prUrl:"https://github.com/acme/project/pull/43"},
-    })).toThrow(/pull URL must match the PR number/);
+    }))).rejects.toThrow(/pull URL must match the PR number/);
   });
 
   it("rejects mutation of an already persisted commit identity",async()=>{

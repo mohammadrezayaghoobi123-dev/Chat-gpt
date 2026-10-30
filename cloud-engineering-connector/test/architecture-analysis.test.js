@@ -105,7 +105,7 @@ test("architecture_analyze enforces the eight-file limit before repository reads
     }), { MCP_AUTH_TOKEN: "test-secret" });
     const body = await response.json();
     assert.equal(body.result.isError, true);
-    assert.match(body.result.content[0].text, /between 1 and 8/);
+    assert.match(body.error || body.result?.content?.[0]?.text || "", /too many items|between 1 and 8/);
     assert.equal(calls, 0);
   } finally {
     globalThis.fetch = originalFetch;

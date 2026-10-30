@@ -53,6 +53,7 @@ function operationFromRow(row) {
     phase: row.phase,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    leaseGeneration: row.lease_generation,
     branchName: row.branch_name,
     commitSha: row.commit_sha,
     prNumber: row.pr_number,
@@ -85,6 +86,7 @@ export class WriteControl extends DurableObject {
           phase TEXT NOT NULL CHECK (phase IN ('RESERVED','TREE_DISPATCHED','TREE_WRITTEN','COMMIT_DISPATCHED','COMMIT_WRITTEN','BRANCH_WRITTEN','PR_DISPATCHED','PR_CREATED')),
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL,
+          lease_generation INTEGER NOT NULL DEFAULT 1,
           branch_name TEXT,
           commit_sha TEXT,
           pr_number INTEGER,
@@ -93,6 +95,10 @@ export class WriteControl extends DurableObject {
           git_metadata TEXT
         )
       `);
+      const operationColumns = sql.exec("PRAGMA table_info(write_operations)").toArray();
+      if (!operationColumns.some((column) => column.name === "lease_generation")) {
+        sql.exec("ALTER TABLE write_operations ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 1");
+      }
       sql.exec(`
         CREATE INDEX IF NOT EXISTS write_operations_by_status_time
         ON write_operations(status, updated_at)
@@ -183,9 +189,10 @@ export class WriteControl extends DurableObject {
 
   transitionOperation(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { keyHash, expectedPhase, nextPhase } = input;
+    const { keyHash, expectedPhase, nextPhase, leaseGeneration = 1 } = input;
     const now = Date.now();
     assertHash(keyHash, "keyHash");
+    if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw new TypeError("leaseGeneration must be a positive safe integer.");
     const expectedIndex = PHASES.indexOf(expectedPhase);
     if (expectedIndex < 0 || PHASES[expectedIndex + 1] !== nextPhase) {
       throw new TypeError("nextPhase must be the immediate successor of expectedPhase.");
@@ -261,6 +268,7 @@ export class WriteControl extends DurableObject {
       const current = this.readOperation(keyHash);
       if (!current) return { updated: false, reason: "NOT_FOUND" };
       const mergedGitMetadata = { ...(current.gitMetadata ?? {}), ...gitMetadata };
+      if (current.leaseGeneration !== leaseGeneration) return { updated: false, reason: "LEASE_FENCE_MISMATCH", operation: current };
       if (current.phase !== expectedPhase) {
         return { updated: false, reason: "PHASE_CONFLICT", operation: current };
       }
@@ -378,7 +386,7 @@ export class WriteControl extends DurableObject {
       const merged = { ...current.gitMetadata, treeSha };
       this.ctx.storage.sql.exec(
         `UPDATE write_operations
-         SET phase = 'TREE_WRITTEN', status = 'IN_PROGRESS', updated_at = ?, git_metadata = ?, error_code = NULL
+         SET phase = 'TREE_WRITTEN', status = 'IN_PROGRESS', updated_at = ?, git_metadata = ?, error_code = NULL, lease_generation = lease_generation + 1
          WHERE key_hash = ? AND status = 'UNKNOWN'`,
         now,
         JSON.stringify(merged),
@@ -414,7 +422,7 @@ export class WriteControl extends DurableObject {
       }
       this.ctx.storage.sql.exec(
         `UPDATE write_operations
-         SET phase = 'COMMIT_WRITTEN', status = 'IN_PROGRESS', updated_at = ?, commit_sha = ?, error_code = NULL
+         SET phase = 'COMMIT_WRITTEN', status = 'IN_PROGRESS', updated_at = ?, commit_sha = ?, error_code = NULL, lease_generation = lease_generation + 1
          WHERE key_hash = ? AND status = 'UNKNOWN' AND phase = 'COMMIT_DISPATCHED'`,
         now,
         commitSha,
@@ -447,7 +455,7 @@ export class WriteControl extends DurableObject {
       this.ctx.storage.sql.exec(
         `UPDATE write_operations
          SET phase = 'BRANCH_WRITTEN', status = 'IN_PROGRESS', updated_at = ?,
-             branch_name = ?, error_code = NULL
+             branch_name = ?, error_code = NULL, lease_generation = lease_generation + 1
          WHERE key_hash = ? AND status = 'UNKNOWN' AND phase IN ('COMMIT_WRITTEN', 'BRANCH_WRITTEN')`,
         now,
         branchName,
@@ -484,7 +492,7 @@ export class WriteControl extends DurableObject {
       }
       this.ctx.storage.sql.exec(
         `UPDATE write_operations
-         SET phase = 'PR_CREATED', status = 'SUCCEEDED', updated_at = ?, pr_number = ?, pr_url = ?, error_code = NULL
+         SET phase = 'PR_CREATED', status = 'SUCCEEDED', updated_at = ?, pr_number = ?, pr_url = ?, error_code = NULL, lease_generation = lease_generation + 1
          WHERE key_hash = ? AND status = 'UNKNOWN' AND phase = 'PR_DISPATCHED'`,
         now,
         prNumber,
@@ -502,9 +510,10 @@ export class WriteControl extends DurableObject {
 
   markOperationStatus(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { keyHash, status, errorCode } = input;
+    const { keyHash, status, errorCode, leaseGeneration = 1 } = input;
     const now = Date.now();
     assertHash(keyHash, "keyHash");
+    if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw new TypeError("leaseGeneration must be a positive safe integer.");
     if (status !== "FAILED" && status !== "UNKNOWN") {
       throw new TypeError("Only FAILED or UNKNOWN may be assigned outside a phase transition.");
     }
@@ -514,18 +523,20 @@ export class WriteControl extends DurableObject {
     return this.ctx.storage.transactionSync(() => {
       const current = this.readOperation(keyHash);
       if (!current) return { updated: false, reason: "NOT_FOUND" };
+      if (current.leaseGeneration !== leaseGeneration) return { updated: false, reason: "LEASE_FENCE_MISMATCH", operation: current };
       if (current.status !== "IN_PROGRESS") {
         return { updated: false, reason: "STATUS_CONFLICT", operation: current };
       }
       this.ctx.storage.sql.exec(
-        "UPDATE write_operations SET status = ?, updated_at = ?, error_code = ? WHERE key_hash = ? AND status = 'IN_PROGRESS'",
+        "UPDATE write_operations SET status = ?, updated_at = ?, error_code = ?, lease_generation = lease_generation + 1 WHERE key_hash = ? AND status = 'IN_PROGRESS' AND lease_generation = ?",
         status,
         now,
         errorCode ?? null,
         keyHash,
+        leaseGeneration,
       );
       const updatedOperation=this.readOperation(keyHash);
-      if (!updatedOperation || updatedOperation.status!==status || updatedOperation.errorCode!==(errorCode??null)) {
+      if (!updatedOperation || updatedOperation.status!==status || updatedOperation.errorCode!==(errorCode??null) || updatedOperation.leaseGeneration!==leaseGeneration+1) {
         return { updated:false,reason:"PERSISTENCE_VERIFICATION_FAILED",operation:updatedOperation };
       }
       return { updated: true, operation: updatedOperation };
@@ -544,12 +555,12 @@ export class WriteControl extends DurableObject {
         return { updated: false, reason: "RECONCILIATION_NOT_ALLOWED", operation: current };
       }
       this.ctx.storage.sql.exec(
-        "UPDATE write_operations SET status = 'IN_PROGRESS', updated_at = ?, error_code = NULL WHERE key_hash = ? AND status = 'UNKNOWN' AND phase = 'RESERVED'",
+        "UPDATE write_operations SET status = 'IN_PROGRESS', updated_at = ?, error_code = NULL, lease_generation = lease_generation + 1 WHERE key_hash = ? AND status = 'UNKNOWN' AND phase = 'RESERVED'",
         now,
         keyHash,
       );
       const updatedOperation = this.readOperation(keyHash);
-      if (!updatedOperation || updatedOperation.status !== "IN_PROGRESS" || updatedOperation.phase !== "RESERVED") {
+      if (!updatedOperation || updatedOperation.status !== "IN_PROGRESS" || updatedOperation.phase !== "RESERVED" || updatedOperation.leaseGeneration !== current.leaseGeneration + 1) {
         return { updated: false, reason: "PERSISTENCE_VERIFICATION_FAILED", operation: updatedOperation };
       }
       return { updated: true, operation: updatedOperation };
@@ -566,7 +577,7 @@ export class WriteControl extends DurableObject {
     return this.ctx.storage.transactionSync(() => {
       const result = this.ctx.storage.sql.exec(
         `UPDATE write_operations
-         SET status = 'UNKNOWN', updated_at = ?
+         SET status = 'UNKNOWN', updated_at = ?, lease_generation = lease_generation + 1
          WHERE status = 'IN_PROGRESS' AND updated_at <= ?`,
         now,
         now - leaseMs,

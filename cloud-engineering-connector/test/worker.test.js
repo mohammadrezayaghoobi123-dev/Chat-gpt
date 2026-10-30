@@ -843,7 +843,7 @@ function recoveryLedger(operation){
    return{updated:true,operation};
   },
   async reconcileTreeWritten(input){
-   if(operation.status!=="UNKNOWN"||operation.phase!=="TREE_DISPATCHED"||operation.gitMetadata.baseTreeSha!==input.baseTreeSha||operation.gitMetadata.parentSha!==input.parentSha)return{updated:false};
+   if(operation.status!=="UNKNOWN"||!["TREE_DISPATCHED","TREE_WRITTEN"].includes(operation.phase)||operation.gitMetadata.baseTreeSha!==input.baseTreeSha||operation.gitMetadata.parentSha!==input.parentSha||(operation.phase==="TREE_WRITTEN"&&operation.gitMetadata.treeSha!==input.treeSha))return{updated:false};
    operation.status="IN_PROGRESS";operation.phase="TREE_WRITTEN";operation.gitMetadata.treeSha=input.treeSha;
    return{updated:true,operation};
   },
@@ -906,6 +906,34 @@ test("UNKNOWN TREE_DISPATCHED replay repeats only the same immutable tree payloa
   assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,93);
   assert.deepEqual(treePayload,{base_tree:baseTreeSha,tree:[{path:"docs/replay.txt",mode:"100644",type:"blob",content:"x"}]});
   assert.deepEqual(calls.map(call=>call.method),["GET","POST","GET","POST","GET","POST","POST"]);
+  assert.equal(operation.phase,"PR_CREATED");assert.equal(operation.status,"SUCCEEDED");
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+test("UNKNOWN TREE_WRITTEN replay verifies the recorded tree without posting it again",async()=>{
+ const originalFetch=globalThis.fetch;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
+ const createdAt=Date.parse("2026-10-30T12:00:00.000Z");
+ const operation={status:"UNKNOWN",phase:"TREE_WRITTEN",createdAt,updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha,treeSha}};
+ const ledger=recoveryLedger(operation),calls=[];let commitPayload=null,treePosts=0;
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";calls.push({method,url});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1"))return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/replay.txt",mode:"100644",type:"blob",sha:await recoveryFixtureBlobSha("x")}]}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees")){treePosts++;return new Response(JSON.stringify({sha:treeSha}),{status:201});}
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered"}),{status:201});
+  if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:94,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/94",draft:true,state:"open"}),{status:201});
+  throw new Error("Unexpected GitHub request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"unknown-treewritten-replay-01",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Tree already written",summary:"Resume commit",files:[{path:"docs/replay.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>ledger}});
+  const body=await response.json(),result=JSON.parse(body.result.content[0].text);
+  assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,94);
+  assert.equal(treePosts,0);
+  assert.deepEqual(calls.map(call=>call.method),["GET","GET","POST","GET","POST","POST"]);
   assert.equal(operation.phase,"PR_CREATED");assert.equal(operation.status,"SUCCEEDED");
  }finally{globalThis.fetch=originalFetch}
 });

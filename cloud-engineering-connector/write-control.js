@@ -189,10 +189,10 @@ export class WriteControl extends DurableObject {
 
   transitionOperation(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { keyHash, expectedPhase, nextPhase, leaseGeneration = 1 } = input;
+    const { keyHash, expectedPhase, nextPhase, leaseGeneration } = input;
     const now = Date.now();
     assertHash(keyHash, "keyHash");
-    if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw new TypeError("leaseGeneration must be a positive safe integer.");
+    if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw new TypeError("leaseGeneration is required and must be a positive safe integer.");
     const expectedIndex = PHASES.indexOf(expectedPhase);
     if (expectedIndex < 0 || PHASES[expectedIndex + 1] !== nextPhase) {
       throw new TypeError("nextPhase must be the immediate successor of expectedPhase.");
@@ -518,7 +518,7 @@ export class WriteControl extends DurableObject {
 
   markOperationStatus(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { keyHash, status, errorCode, leaseGeneration = 1 } = input;
+    const { keyHash, status, errorCode, leaseGeneration } = input;
     const now = Date.now();
     assertHash(keyHash, "keyHash");
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw new TypeError("leaseGeneration must be a positive safe integer.");

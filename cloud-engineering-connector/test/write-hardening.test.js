@@ -13,7 +13,7 @@ function createWriteControlMock() {
       if (current) return current.requestHash === input.requestHash
         ? { admitted: true, replay: true, operation: current }
         : { admitted: false, reason: "IDEMPOTENCY_CONFLICT" };
-      const operation = { keyHash: input.keyHash, requestHash: input.requestHash, status: "IN_PROGRESS", phase: "RESERVED", createdAt: input.now, updatedAt: input.now };
+      const operation = { leaseGeneration: 1, keyHash: input.keyHash, requestHash: input.requestHash, status: "IN_PROGRESS", phase: "RESERVED", createdAt: input.now, updatedAt: input.now };
       operations.set(input.keyHash, operation);
       return { admitted: true, replay: false, operation };
     },

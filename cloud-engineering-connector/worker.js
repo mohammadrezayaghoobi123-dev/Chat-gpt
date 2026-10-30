@@ -388,7 +388,7 @@ async function createChangePr(args,env) {
   const tree=await github(env,base+"/git/trees",{method:"POST",body:JSON.stringify(treePayload)});
   await verifyGitTree(env,base,tree.sha,args.files);
   await transition("TREE_DISPATCHED","TREE_WRITTEN",{treeSha:tree.sha});
-  const commitDate=new Date(Math.floor(admission.operation.createdAt/1000)*1000).toISOString();
+  const commitDate=new Date(admission.operation.createdAt).toISOString();
   const commitMessage="assistant: "+safeTitle;
   const commitIdentity={authorName:GIT_COMMIT_AUTHOR.name,authorEmail:GIT_COMMIT_AUTHOR.email,committerName:GIT_COMMIT_AUTHOR.name,committerEmail:GIT_COMMIT_AUTHOR.email};
   await transition("TREE_WRITTEN","COMMIT_DISPATCHED",{commitDate,commitMessage,...commitIdentity});

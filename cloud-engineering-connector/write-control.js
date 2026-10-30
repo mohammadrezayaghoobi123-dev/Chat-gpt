@@ -340,7 +340,11 @@ export class WriteControl extends DurableObject {
         expectedPhase,
       );
       const updatedOperation=this.readOperation(keyHash);
+      const gitMetadataPersisted=updatedOperation && Object.entries(mergedGitMetadata).every(
+        ([field,value])=>updatedOperation.gitMetadata?.[field]===value
+      );
       if (!updatedOperation || updatedOperation.phase!==nextPhase || updatedOperation.status!==status ||
+          !gitMetadataPersisted ||
           (commitSha && updatedOperation.commitSha!==commitSha) ||
           (branchName && updatedOperation.branchName!==branchName) ||
           (prNumber && updatedOperation.prNumber!==prNumber) ||

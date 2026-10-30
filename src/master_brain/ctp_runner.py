@@ -67,6 +67,8 @@ MAX_TIMEOUT_S = 300.0
 MAX_OUTPUT_BYTES = 1 << 20
 MIN_MEMORY, MAX_MEMORY = 64 << 20, 4 << 30
 MAX_INPUT_BYTES = 1 << 20
+MAX_SANDBOX_PROCESSES = 256     # watchdog cap on live processes of one run
+MAX_WORK_BYTES = 64 << 20       # watchdog cap on bytes under ./work (code, inputs, out, scratch)
 MAX_ARGV, MAX_ENV, MAX_RO, MAX_OUT_FILES = 64, 16, 8, 64
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
@@ -514,7 +516,10 @@ def _run_raw(spec: TestSpec, *, probe: bool = False) -> dict:
                 return _result(spec, started, 0, None, None, "inconclusive",
                                f"spawn failed: {exc.__class__.__name__}", b"", b"", "", True)
             timed_out = capped = False
+            violation = ""
             deadline = t0 + spec.timeout_s
+            tick = 0
+            over_memory = 0
             while proc.poll() is None:
                 if time.monotonic() >= deadline:
                     timed_out = True
@@ -522,8 +527,18 @@ def _run_raw(spec: TestSpec, *, probe: bool = False) -> dict:
                 if os.path.getsize(out_path) > spec.max_output_bytes or os.path.getsize(err_path) > spec.max_output_bytes:
                     capped = True
                     break
+                tick += 1
+                if tick % 5 == 0 and spec.isolation == "sandbox":   # about every 50 ms
+                    violation = _watchdog_violation(proc.pid, work, spec.memory_bytes, tick % 20 == 0)
+                    # Accounting of pages shared by freshly forked processes is transiently wrong
+                    # (measured: spikes to several times the real size); a real flood persists.
+                    over_memory = over_memory + 1 if violation == "memory?" else 0
+                    if violation == "memory?":
+                        violation = "memory" if over_memory >= 3 else ""
+                    if violation:
+                        break
                 time.sleep(0.01)
-            if timed_out or capped:
+            if timed_out or capped or violation:
                 _killpg(proc)
             proc.wait()
         # a grandchild may outlive the leader; always clean the group
@@ -536,7 +551,9 @@ def _run_raw(spec: TestSpec, *, probe: bool = False) -> dict:
         exit_code, sig = (None, -rc) if rc is not None and rc < 0 else (rc, None)
         manifest, problem = _outputs_manifest(os.path.join(work, "out"))
         intact = _tree_digest(work, ("code", "inputs")) == before_inputs
-        if timed_out:
+        if violation:
+            outcome, reason = "inconclusive", f"resource limit exceeded: {violation}"
+        elif timed_out:
             outcome, reason = "inconclusive", "timeout"
         elif capped:
             outcome, reason = "inconclusive", "output limit exceeded"
@@ -555,6 +572,65 @@ def _run_raw(spec: TestSpec, *, probe: bool = False) -> dict:
         return _result(spec, started, duration_ms, exit_code, sig, outcome, reason, stdout, stderr, manifest, intact)
     finally:
         shutil.rmtree(base, ignore_errors=True)
+
+
+def _pss_bytes(pid: str, page: int) -> int:
+    """Proportional set size: pages shared by forked children are counted once, not once per process."""
+    try:
+        with open(f"/proc/{pid}/smaps_rollup", "rb") as fh:
+            for line in fh:
+                if line.startswith(b"Pss:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    with open(f"/proc/{pid}/statm", "rb") as fh:     # fallback (over-counts shared pages: errs on the strict side)
+        return int(fh.read().split()[1]) * page
+
+
+def _group_usage(pgrp: int) -> tuple[int, int]:
+    """(live processes, resident bytes) of every process in the run's process group (best effort)."""
+    count = rss = 0
+    page = os.sysconf("SC_PAGE_SIZE")
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return 0, 0
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat", "rb") as fh:
+                fields = fh.read().rsplit(b")", 1)[1].split()
+            if int(fields[2]) != pgrp:      # fields[2] is pgrp (after state, ppid)
+                continue
+            count += 1
+            rss += _pss_bytes(name, page)
+        except (OSError, ValueError, IndexError):
+            continue
+    return count, rss
+
+
+def _dir_bytes(path: str) -> int:
+    total = 0
+    for root, _, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def _watchdog_violation(pgrp: int, work: str, memory_bytes: int, check_disk: bool) -> str:
+    """Name of the aggregate resource cap that is exceeded, or ''. Per-process rlimits do not bound a set of processes."""
+    count, rss = _group_usage(pgrp)
+    if count > MAX_SANDBOX_PROCESSES:
+        return "processes"
+    if rss > memory_bytes:
+        return "memory?"      # memory must stay over the budget for several samples (see _run_raw)
+    if check_disk and _dir_bytes(work) > MAX_WORK_BYTES:
+        return "disk"
+    return ""
 
 
 def _tree_digest(work: str, subdirs: tuple[str, ...]) -> str:

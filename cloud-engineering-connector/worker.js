@@ -147,6 +147,53 @@ async function createChangePr(args,env) {
    }
    return {status:"draft_pull_request_created",repository:args.owner+"/"+args.repo,branch:operation.branchName,base_branch:args.base_branch,commit:operation.commitSha,pull_request:{number:livePr.number,url:livePr.html_url,draft:livePr.draft,state:livePr.state},head_sha:livePr.head?.sha??null,head_changed_since_creation:typeof livePr.head?.sha==="string"&&livePr.head.sha!==operation.commitSha,changed_paths:args.files.map(file=>file.path),replayed:true,safety:"Idempotent replay verified against the existing GitHub PR; no GitHub write was performed."};
   }
+  if(operation?.status==="UNKNOWN"&&(operation.phase==="COMMIT_WRITTEN"||operation.phase==="BRANCH_WRITTEN")&&operation.commitSha) {
+   const branchName="assistant/mcp-"+keyHash;
+   let refResult;
+   try {
+    const refPath="/git/ref/heads/"+encodeURIComponent(branchName).replace(/%2F/g,"/");
+    refResult=await github(env,base+refPath);
+   } catch { throw new ToolError("WRITE_RECONCILIATION_UNAVAILABLE",{operation_status:"UNKNOWN",phase:operation.phase}); }
+   if(refResult?.object?.sha!==operation.commitSha) {
+    throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:"UNKNOWN",phase:operation.phase,message:"The deterministic branch is absent or does not point to the recorded commit. No write was retried."});
+   }
+   let reconciled;
+   try {
+    reconciled=await stub.reconcileBranchWritten({keyHash,now:Date.now(),branchName,commitSha:operation.commitSha});
+   } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
+   if(!reconciled?.updated) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+   let dispatched;
+   try {
+    dispatched=await stub.transitionOperation({keyHash,expectedPhase:"BRANCH_WRITTEN",nextPhase:"PR_DISPATCHED",now:Date.now()});
+   } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
+   if(!dispatched?.updated) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+   const body=args.summary.trim().replace(/@/g,"@\u200b")+"\n\n"+marker+"\n\n---\nGenerated as a reviewable proposal. No branch was merged automatically. Run and inspect CI before merging.";
+   let pr;
+   try {
+    pr=await github(env,base+"/pulls",{method:"POST",body:JSON.stringify({title:safeTitle,body,head:branchName,base:args.base_branch,draft:true})});
+   } catch(error) {
+    const message=error instanceof Error?error.message:"unknown error";
+    const match=/^GitHub API (\\d{3}):/.exec(message);
+    const status=match?Number(match[1]):null;
+    const ambiguous=status===null||status===408||status===409||status>=500;
+    try { await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?"UPSTREAM_OUTCOME_UNCERTAIN":"UPSTREAM_REJECTED"}); }
+    catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
+    if(ambiguous) throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:"UNKNOWN",phase:"PR_DISPATCHED"});
+    throw error;
+   }
+   let completed;
+   try {
+    completed=await stub.transitionOperation({keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",now:Date.now(),metadata:{branchName,commitSha:operation.commitSha,prNumber:pr.number,prUrl:pr.html_url}});
+   } catch {
+    try { await stub.markOperationStatus({keyHash,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"}); } catch {}
+    throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+   }
+   if(!completed?.updated) {
+    try { await stub.markOperationStatus({keyHash,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"}); } catch {}
+    throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+   }
+   return {status:"draft_pull_request_created",repository:args.owner+"/"+args.repo,branch:branchName,base_branch:args.base_branch,commit:operation.commitSha,pull_request:{number:pr.number,url:pr.html_url,draft:pr.draft,state:pr.state},changed_paths:args.files.map(file=>file.path),replayed:true,reconciled:true,safety:"The previously ambiguous branch creation was verified against its exact commit, then one draft PR was created. No existing GitHub write was blindly retried."};
+  }
   if(operation?.status==="UNKNOWN"&&operation.phase==="PR_DISPATCHED"&&operation.branchName&&operation.commitSha) {
    let candidates;
    try {

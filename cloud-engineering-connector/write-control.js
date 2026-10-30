@@ -242,6 +242,35 @@ export class WriteControl extends DurableObject {
     });
   }
 
+  reconcileBranchWritten(input) {
+    if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
+    const { keyHash, now, branchName, commitSha } = input;
+    assertHash(keyHash, "keyHash");
+    assertTimestamp(now, "now");
+    if (branchName !== "assistant/mcp-" + keyHash) throw new TypeError("branchName does not match the deterministic operation identity.");
+    if (typeof commitSha !== "string" || !/^[a-f0-9]{40}$/.test(commitSha)) throw new TypeError("commitSha must be a Git SHA.");
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.readOperation(keyHash);
+      if (!current) return { updated: false, reason: "NOT_FOUND" };
+      if (current.status !== "UNKNOWN" || !["COMMIT_WRITTEN", "BRANCH_WRITTEN"].includes(current.phase)) {
+        return { updated: false, reason: "RECONCILIATION_NOT_ALLOWED", operation: current };
+      }
+      if (current.commitSha !== commitSha) {
+        return { updated: false, reason: "OPERATION_IDENTITY_MISMATCH", operation: current };
+      }
+      this.ctx.storage.sql.exec(
+        `UPDATE write_operations
+         SET phase = 'BRANCH_WRITTEN', status = 'IN_PROGRESS', updated_at = ?,
+             branch_name = ?, error_code = NULL
+         WHERE key_hash = ? AND status = 'UNKNOWN' AND phase IN ('COMMIT_WRITTEN', 'BRANCH_WRITTEN')`,
+        now,
+        branchName,
+        keyHash,
+      );
+      return { updated: true, operation: this.readOperation(keyHash) };
+    });
+  }
+
   reconcilePrCreated(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
     const { keyHash, now, branchName, commitSha, prNumber, prUrl } = input;

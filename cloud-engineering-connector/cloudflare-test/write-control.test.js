@@ -73,6 +73,21 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     })).resolves.toMatchObject({ updated: false, reason: "PHASE_CONFLICT" });
   });
 
+  it("reconciles an ambiguous branch creation only when the exact deterministic branch and commit match", async () => {
+    const stub = stubFor("unknown-branch-reconcile");
+    const keyHash = "5".repeat(64);
+    const commitSha = "c".repeat(40);
+    const branchName = "assistant/mcp-" + keyHash;
+    await stub.admitWrite(request(keyHash, "d".repeat(64)));
+    await stub.transitionOperation({ keyHash, expectedPhase: "RESERVED", nextPhase: "TREE_WRITTEN", now: 1_800_000_000_001 });
+    await stub.transitionOperation({ keyHash, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_WRITTEN", now: 1_800_000_000_002, metadata: { commitSha } });
+    await stub.markOperationStatus({ keyHash, status: "UNKNOWN", now: 1_800_000_000_003, errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
+    await expect(stub.reconcileBranchWritten({ keyHash, now: 1_800_000_000_004, branchName, commitSha }))
+      .resolves.toMatchObject({ updated: true, operation: { status: "IN_PROGRESS", phase: "BRANCH_WRITTEN", branchName, commitSha } });
+    await expect(stub.reconcileBranchWritten({ keyHash, now: 1_800_000_000_005, branchName, commitSha: "e".repeat(40) }))
+      .resolves.toMatchObject({ updated: false, reason: "RECONCILIATION_NOT_ALLOWED" });
+  });
+
   it("reconciles an UNKNOWN PR_DISPATCHED operation only after verified PR evidence", async () => {
     const stub = stubFor("unknown-pr-reconcile");
     const keyHash = "6".repeat(64);

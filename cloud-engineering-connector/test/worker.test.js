@@ -98,6 +98,33 @@ test("successful idempotent replay verifies the existing PR marker before return
  }finally{globalThis.fetch=originalFetch}
 });
 
+
+test("UNKNOWN COMMIT_WRITTEN replay verifies deterministic branch then creates one draft PR",async()=>{
+ const originalFetch=globalThis.fetch;let keyHash=null;const calls=[];
+ const commitSha="d".repeat(40),branchFor=key=>"assistant/mcp-"+key;
+ const stub={
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{keyHash,status:"UNKNOWN",phase:"COMMIT_WRITTEN",commitSha,updatedAt:Date.now()}}},
+  async markStaleOperationsUnknown(){return 0},
+  async getOperation(){return null},
+  async reconcileBranchWritten(input){assert.equal(input.keyHash,keyHash);assert.equal(input.branchName,branchFor(keyHash));assert.equal(input.commitSha,commitSha);return{updated:true,operation:{status:"IN_PROGRESS",phase:"BRANCH_WRITTEN",branchName:input.branchName,commitSha}}},
+  async transitionOperation(input){calls.push({phase:input.nextPhase,method:"LEDGER"});return{updated:true,operation:{phase:input.nextPhase,status:input.status??"IN_PROGRESS"}}},
+  async markOperationStatus(){return{updated:true}}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const method=init.method||"GET";calls.push({method,url:String(input)});
+  if(method==="GET")return new Response(JSON.stringify({ref:"refs/heads/"+branchFor(keyHash),object:{sha:commitSha}}),{status:200,headers:{"content-type":"application/json"}});
+  const sent=JSON.parse(init.body);assert.equal(sent.head,branchFor(keyHash));assert.equal(sent.draft,true);assert.ok(sent.body.includes("<!-- mcp-operation:"+keyHash+" -->"));
+  return new Response(JSON.stringify({number:81,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/81",draft:true,state:"open"}),{status:201,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"worker-recovery-0001",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Recover branch",summary:"Recover safely",files:[{path:"README.md",content:"x"}]}}),{...env,WRITE_CONTROL:{idFromName:name=>name,get:()=>stub},GITHUB_TOKEN:"test-token"});
+  const body=await response.json(),result=JSON.parse(body.result.content[0].text);
+  assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,81);
+  assert.deepEqual(calls.filter(x=>x.method).map(x=>x.method),["GET","POST"]);
+  assert.deepEqual(calls.filter(x=>x.method==="LEDGER").map(x=>x.phase),["PR_DISPATCHED","PR_CREATED"]);
+ }finally{globalThis.fetch=originalFetch}
+});
+
 test("UNKNOWN PR_DISPATCHED replay reconciles exactly one marker-matched PR without creating another",async()=>{
  const originalFetch=globalThis.fetch;let keyHash=null,reconcileCalls=0,githubMethods=[];
  const branchFor=key=>"assistant/mcp-"+key;

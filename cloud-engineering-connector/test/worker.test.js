@@ -774,7 +774,7 @@ test("create_change_pr persists deterministic Git commit identity before dispatc
  const createdAt=Date.parse("2026-10-30T12:00:00.123Z");
  const expectedGitDate="2026-10-30T12:00:00.000Z";
  const events=[],metadata=[];
- let keyHash=null;
+ let keyHash=null,createdPr=null;
  const stub={
   async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:false,operation:{keyHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt,updatedAt:createdAt}};},
   async transitionOperation(input){events.push(input.nextPhase);metadata.push(input.metadata??{});return{updated:true,operation:{status:"IN_PROGRESS",phase:input.nextPhase}};},
@@ -802,7 +802,8 @@ test("create_change_pr persists deterministic Git commit identity before dispatc
   if(method==="GET"&&url.endsWith("/git/commits/"+commitSha)){const secondPrecision=value=>({...value,date:new Date(Math.floor(Date.parse(value.date)/1000)*1000).toISOString()});return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:secondPrecision(commitPayload.author),committer:secondPrecision(commitPayload.committer)}),{status:200});}
   if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+keyHash,object:{sha:commitSha}}),{status:201});
   if(method==="GET"&&url.endsWith("/git/ref/heads/assistant/mcp-"+keyHash))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+keyHash,object:{sha:commitSha}}),{status:200});
-  if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:91,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/91",draft:true,state:"open"}),{status:201});
+  if(method==="POST"&&url.endsWith("/pulls")){const payload=JSON.parse(init.body);createdPr={number:91,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/91",draft:true,state:"open",head:{ref:payload.head,sha:commitSha},base:{ref:payload.base},body:payload.body};return new Response(JSON.stringify(createdPr),{status:201});}
+  if(method==="GET"&&url.endsWith("/pulls/91"))return new Response(JSON.stringify(createdPr),{status:200});
   throw new Error("Unexpected GitHub request "+method+" "+url);
  };
  try{
@@ -866,7 +867,7 @@ test("UNKNOWN COMMIT_DISPATCHED replay recreates and verifies the exact persiste
  const commitDate="2026-10-30T12:00:00.000Z",commitMessage="assistant: Persisted identity";
  const persistedIdentity={authorName:"Persisted Engineering Agent",authorEmail:"persisted-agent@example.test",committerName:"Persisted Engineering Agent",committerEmail:"persisted-agent@example.test"};
  const operation={status:"UNKNOWN",phase:"COMMIT_DISPATCHED",createdAt:Date.parse(commitDate),updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha,treeSha,commitDate,commitMessage,...persistedIdentity}};
- const ledger=recoveryLedger(operation),calls=[];let commitPayload=null;
+ const ledger=recoveryLedger(operation),calls=[];let commitPayload=null,createdPr=null;
  globalThis.fetch=async(input,init={})=>{
   const url=String(input),method=init.method||"GET";calls.push({method,url});
   if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
@@ -875,7 +876,8 @@ test("UNKNOWN COMMIT_DISPATCHED replay recreates and verifies the exact persiste
   if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
   if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered",object:{sha:commitSha}}),{status:201});
   if(method==="GET"&&url.endsWith("/git/ref/heads/assistant/mcp-recovered"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered",object:{sha:commitSha}}),{status:200});
-  if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:92,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/92",draft:true,state:"open"}),{status:201});
+  if(method==="POST"&&url.endsWith("/pulls")){const payload=JSON.parse(init.body);createdPr={number:92,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/92",draft:true,state:"open",head:{ref:payload.head,sha:commitSha},base:{ref:payload.base},body:payload.body};return new Response(JSON.stringify(createdPr),{status:201});}
+  if(method==="GET"&&url.endsWith("/pulls/92"))return new Response(JSON.stringify(createdPr),{status:200});
   throw new Error("Unexpected GitHub request "+method+" "+url);
  };
  try{
@@ -893,7 +895,7 @@ test("UNKNOWN TREE_DISPATCHED replay repeats only the same immutable tree payloa
  const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
  const createdAt=Date.parse("2026-10-30T12:00:00.123Z");
  const operation={status:"UNKNOWN",phase:"TREE_DISPATCHED",createdAt,updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha}};
- const ledger=recoveryLedger(operation),calls=[];let treePayload=null,commitPayload=null;
+ const ledger=recoveryLedger(operation),calls=[];let treePayload=null,commitPayload=null,createdPr=null;
  globalThis.fetch=async(input,init={})=>{
   const url=String(input),method=init.method||"GET";calls.push({method,url});
   if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
@@ -903,7 +905,8 @@ test("UNKNOWN TREE_DISPATCHED replay repeats only the same immutable tree payloa
   if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
   if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered",object:{sha:commitSha}}),{status:201});
   if(method==="GET"&&url.endsWith("/git/ref/heads/assistant/mcp-recovered"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered",object:{sha:commitSha}}),{status:200});
-  if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:93,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/93",draft:true,state:"open"}),{status:201});
+  if(method==="POST"&&url.endsWith("/pulls")){const payload=JSON.parse(init.body);createdPr={number:93,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/93",draft:true,state:"open",head:{ref:payload.head,sha:commitSha},base:{ref:payload.base},body:payload.body};return new Response(JSON.stringify(createdPr),{status:201});}
+  if(method==="GET"&&url.endsWith("/pulls/93"))return new Response(JSON.stringify(createdPr),{status:200});
   throw new Error("Unexpected GitHub request "+method+" "+url);
  };
  try{
@@ -923,7 +926,7 @@ test("UNKNOWN TREE_WRITTEN replay verifies the recorded tree without posting it 
  const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
  const createdAt=Date.parse("2026-10-30T12:00:00.000Z");
  const operation={status:"UNKNOWN",phase:"TREE_WRITTEN",createdAt,updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha,treeSha}};
- const ledger=recoveryLedger(operation),calls=[];let commitPayload=null,treePosts=0;
+ const ledger=recoveryLedger(operation),calls=[];let commitPayload=null,treePosts=0,createdPr=null;
  globalThis.fetch=async(input,init={})=>{
   const url=String(input),method=init.method||"GET";calls.push({method,url});
   if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
@@ -933,7 +936,8 @@ test("UNKNOWN TREE_WRITTEN replay verifies the recorded tree without posting it 
   if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
   if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered",object:{sha:commitSha}}),{status:201});
   if(method==="GET"&&url.endsWith("/git/ref/heads/assistant/mcp-recovered"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered",object:{sha:commitSha}}),{status:200});
-  if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:94,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/94",draft:true,state:"open"}),{status:201});
+  if(method==="POST"&&url.endsWith("/pulls")){const payload=JSON.parse(init.body);createdPr={number:94,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/94",draft:true,state:"open",head:{ref:payload.head,sha:commitSha},base:{ref:payload.base},body:payload.body};return new Response(JSON.stringify(createdPr),{status:201});}
+  if(method==="GET"&&url.endsWith("/pulls/94"))return new Response(JSON.stringify(createdPr),{status:200});
   throw new Error("Unexpected GitHub request "+method+" "+url);
  };
  try{

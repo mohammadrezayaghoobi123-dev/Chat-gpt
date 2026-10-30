@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const config = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
+const stagingStart = config.search(/^\\[env\\.staging(?:\\.|\\])/m);
+const staging = stagingStart >= 0 ? config.slice(stagingStart) : "";
 
 function namespaceId(section) {
   const match = section.match(/namespace_id\s*=\s*"([0-9]+)"/);
@@ -10,15 +12,14 @@ function namespaceId(section) {
 }
 
 test("Staging declares its own Rate Limiting namespace", () => {
-  const staging = config.split("[env.staging]")[1];
-  assert.ok(staging, "missing [env.staging] configuration");
+  assert.ok(staging, "missing Staging environment configuration");
   assert.match(staging, /\[\[env\.staging\.ratelimits\]\]/);
   assert.equal(namespaceId(staging), "78294164");
 });
 
 test("Staging and Production Rate Limiting namespaces are distinct positive integers", () => {
-  const productionId = namespaceId(config.split("[env.staging]")[0]);
-  const stagingId = namespaceId(config.split("[env.staging]")[1] ?? "");
+  const productionId = namespaceId(stagingStart >= 0 ? config.slice(0, stagingStart) : config);
+  const stagingId = namespaceId(staging);
   assert.ok(productionId && /^[1-9][0-9]*$/.test(productionId));
   assert.ok(stagingId && /^[1-9][0-9]*$/.test(stagingId));
   assert.notEqual(stagingId, productionId);

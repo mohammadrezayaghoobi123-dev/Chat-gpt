@@ -859,7 +859,7 @@ function recoveryLedger(operation){
 test("UNKNOWN COMMIT_DISPATCHED replay recreates and verifies the exact persisted commit before one branch and PR",async()=>{
  const originalFetch=globalThis.fetch;
  const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
- const commitDate="2026-10-30T12:00:00.000Z",commitMessage="assistant: persisted identity";
+ const commitDate="2026-10-30T12:00:00.000Z",commitMessage="assistant: Persisted identity";
  const persistedIdentity={authorName:"Persisted Engineering Agent",authorEmail:"persisted-agent@example.test",committerName:"Persisted Engineering Agent",committerEmail:"persisted-agent@example.test"};
  const operation={status:"UNKNOWN",phase:"COMMIT_DISPATCHED",createdAt:Date.parse(commitDate),updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha,treeSha,commitDate,commitMessage,...persistedIdentity}};
  const ledger=recoveryLedger(operation),calls=[];let commitPayload=null;

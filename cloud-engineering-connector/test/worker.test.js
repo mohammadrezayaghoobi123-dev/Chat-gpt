@@ -1257,3 +1257,31 @@ test("create_change_pr rejects Unicode-normalization and bidirectional-control p
   assert.equal(calls,0);
  }finally{globalThis.fetch=originalFetch}
 });
+
+
+test("create_change_pr fails closed when Durable Object admission omits lease generation",async()=>{
+ const originalFetch=globalThis.fetch;let githubCalls=0;
+ const stub={
+  async markStaleOperationsUnknown(){return 0},
+  async admitWrite(){return{admitted:true,replay:false,operation:{status:"IN_PROGRESS",phase:"RESERVED"}}},
+  async transitionOperation(){throw new Error("must not mutate without an explicit lease")},
+  async markOperationStatus(){throw new Error("must not mutate without an explicit lease")},
+  async reconcilePrCreated(){throw new Error("must not reconcile without an explicit lease")},
+  async getOperation(){return{status:"IN_PROGRESS",phase:"RESERVED"}}
+ };
+ globalThis.fetch=async()=>{githubCalls++;throw new Error("GitHub must not be called without a lease generation")};
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{
+   idempotency_key:"missing-lease-generation-0001",
+   owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",
+   base_branch:"feature/cloud-engineering-connector",title:"Missing lease generation",
+   summary:"Admission response must contain an explicit fencing token",
+   files:[{path:"docs/proposal.txt",content:"proposal"}]
+  }}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.result.isError,true);
+  assert.deepEqual(JSON.parse(body.result.content[0].text),{error:"WRITE_CONTROL_UNAVAILABLE"});
+  assert.equal(githubCalls,0);
+ }finally{globalThis.fetch=originalFetch}
+});

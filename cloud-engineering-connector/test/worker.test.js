@@ -578,7 +578,7 @@ test("public and authentication-failure requests use independent key spaces",asy
  const limiter={limit:async({key})=>{keys.push(key);return{success:true}}};
  const protectedResponse=await worker.fetch(requestWithAuthorization("Bearer wrong-secret"),{...env,MCP_RATE_LIMITER:limiter});
  const publicRequest=requestWithAuthorization(undefined);
- const publicResponse=await worker.fetch(publicRequest,{...env,PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:limiter});
+ const publicResponse=await worker.fetch(publicRequest,{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:limiter});
  assert.equal(protectedResponse.status,401);
  assert.equal(publicResponse.status,200);
  assert.deepEqual(keys,["auth-failure:203.0.113.10","public-mcp:203.0.113.10"]);

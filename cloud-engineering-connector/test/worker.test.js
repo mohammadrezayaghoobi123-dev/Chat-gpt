@@ -802,7 +802,7 @@ test("create_change_pr persists deterministic Git commit identity before dispatc
   const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"fixed-commit-date-test-0001",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Deterministic commit",summary:"Persist exact identity",files:[{path:"docs/recovery.txt",content:"stable"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
   const body=await response.json();
   assert.equal(response.status,200);
-  assert.equal(body.result.isError,undefined);
+  assert.equal(body.result.isError,undefined,body.result.content?.[0]?.text);
   assert.deepEqual(events,["TREE_DISPATCHED","TREE_WRITTEN","COMMIT_DISPATCHED","COMMIT_WRITTEN","BRANCH_WRITTEN","PR_DISPATCHED","PR_CREATED"]);
   assert.deepEqual(metadata[0],{baseTreeSha,parentSha});
   assert.deepEqual(metadata[1],{treeSha});

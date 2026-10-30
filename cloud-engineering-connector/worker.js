@@ -132,6 +132,22 @@ function verifyGitRef(ref,branchName,commitSha) {
  }
  return ref;
 }
+function verifyPullRequestIdentity(pr,owner,repo,branchName,baseBranch,commitSha,marker) {
+ const expectedUrl=typeof pr?.number==="number"?"https://github.com/"+owner+"/"+repo+"/pull/"+pr.number:null;
+ if(!Number.isSafeInteger(pr?.number)||pr.html_url!==expectedUrl||pr.draft!==true||pr.state!=="open"||
+    pr.head?.ref!==branchName||pr.head?.sha!==commitSha||pr.base?.ref!==baseBranch||
+    typeof pr.body!=="string"||!pr.body.includes(marker)) {
+  throw new ToolError("GITHUB_PR_VERIFICATION_FAILED",{expected_branch:branchName,expected_base:baseBranch,expected_commit:commitSha});
+ }
+ return pr;
+}
+async function verifyCreatedPullRequest(env,base,owner,repo,created,branchName,baseBranch,commitSha,marker) {
+ verifyPullRequestIdentity(created,owner,repo,branchName,baseBranch,commitSha,marker);
+ const current=await github(env,base+"/pulls/"+created.number);
+ verifyPullRequestIdentity(current,owner,repo,branchName,baseBranch,commitSha,marker);
+ if(current.html_url!==created.html_url)throw new ToolError("GITHUB_PR_VERIFICATION_FAILED");
+ return current;
+}
 async function createChangePr(args,env) {
  if(args.base_branch!==ALLOWED_BASE_BRANCH) throw new Error("Base branch is not allowed.");
  const base=repoPath(args.owner,args.repo);
@@ -228,8 +244,10 @@ async function createChangePr(args,env) {
    operation=prDispatch.operation;
    const body=args.summary.trim().replace(/@/g,"@\u200b")+"\n\n"+marker+"\n\n---\nGenerated as a reviewable proposal. No branch was merged automatically. Run and inspect CI before merging.";
    let pr;
-   try{pr=await github(env,base+"/pulls",{method:"POST",body:JSON.stringify({title:safeTitle,body,head:branchName,base:args.base_branch,draft:true})});}
-   catch(error){return await markReplayFailure(error,"PR_DISPATCHED");}
+   try{
+    const created=await github(env,base+"/pulls",{method:"POST",body:JSON.stringify({title:safeTitle,body,head:branchName,base:args.base_branch,draft:true})});
+    pr=await verifyCreatedPullRequest(env,base,args.owner,args.repo,created,branchName,args.base_branch,operation.commitSha,marker);
+   }catch(error){return await markReplayFailure(error,"PR_DISPATCHED");}
    let completed;
    try{completed=await stub.transitionOperation({keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",now:Date.now(),metadata:{branchName,commitSha:operation.commitSha,prNumber:pr.number,prUrl:pr.html_url}});}
    catch{try{await stub.markOperationStatus({keyHash,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"});}catch{}throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
@@ -321,7 +339,8 @@ async function createChangePr(args,env) {
    const body=args.summary.trim().replace(/@/g,"@\u200b")+"\n\n"+marker+"\n\n---\nGenerated as a reviewable proposal. No branch was merged automatically. Run and inspect CI before merging.";
    let pr;
    try {
-    pr=await github(env,base+"/pulls",{method:"POST",body:JSON.stringify({title:safeTitle,body,head:branchName,base:args.base_branch,draft:true})});
+    const created=await github(env,base+"/pulls",{method:"POST",body:JSON.stringify({title:safeTitle,body,head:branchName,base:args.base_branch,draft:true})});
+    pr=await verifyCreatedPullRequest(env,base,args.owner,args.repo,created,branchName,args.base_branch,operation.commitSha,marker);
    } catch(error) {
     const message=error instanceof Error?error.message:"unknown error";
     const match=/^GitHub API (\d{3}):/.exec(message);
@@ -417,7 +436,8 @@ async function createChangePr(args,env) {
   const marker="<!-- mcp-operation:"+keyHash+" -->";
   await transition("BRANCH_WRITTEN","PR_DISPATCHED");
   const body=args.summary.trim().replace(/@/g,"@\u200b")+"\n\n"+marker+"\n\n---\nGenerated as a reviewable proposal. No branch was merged automatically. Run and inspect CI before merging.";
-  const pr=await github(env,base+"/pulls",{method:"POST",body:JSON.stringify({title:safeTitle,body,head:branch,base:baseBranch,draft:true})});
+  const createdPr=await github(env,base+"/pulls",{method:"POST",body:JSON.stringify({title:safeTitle,body,head:branch,base:baseBranch,draft:true})});
+  const pr=await verifyCreatedPullRequest(env,base,args.owner,args.repo,createdPr,branch,baseBranch,commit.sha,marker);
   await transition("PR_DISPATCHED","PR_CREATED",{branchName:branch,commitSha:commit.sha,prNumber:pr.number,prUrl:pr.html_url},"SUCCEEDED");
   return {status:"draft_pull_request_created",repository:repo.full_name,branch,base_branch:baseBranch,commit:commit.sha,pull_request:{number:pr.number,url:pr.html_url,draft:pr.draft,state:pr.state},changed_paths:args.files.map(file=>file.path),safety:"Changes were committed only to a deterministic assistant/mcp-* branch. The base branch was not modified and no merge was performed."};
  } catch(error) {

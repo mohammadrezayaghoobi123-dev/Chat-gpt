@@ -264,7 +264,7 @@ export class WriteControl extends DurableObject {
       }
       this.ctx.storage.sql.exec(
         `UPDATE write_operations
-         SET phase = 'PR_CREATED', status = 'SUCCEEDED', updated_at = ?, pr_number = ?, pr_url = ?
+         SET phase = 'PR_CREATED', status = 'SUCCEEDED', updated_at = ?, pr_number = ?, pr_url = ?, error_code = NULL
          WHERE key_hash = ? AND status = 'UNKNOWN' AND phase = 'PR_DISPATCHED'`,
         now,
         prNumber,

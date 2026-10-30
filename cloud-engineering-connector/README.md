@@ -22,6 +22,24 @@ A cloud-hosted MCP connector for rigorous software engineering: repository inspe
 
 The model using this connector must perform substantive reasoning, inspect relevant files, consult primary sources where necessary, and run/inspect CI. Tool output alone is not proof that code is correct. The connector also validates tool-call arguments against the schema subset currently used by its tool definitions (object/array/string/numeric/boolean/null types, required fields, nested properties, additional-properties rejection, and array item bounds). This is not a full JSON Schema 2020-12 validator; do not add unsupported schema keywords without extending the validator and its negative tests.
 
+## Durable write control
+
+`create_change_pr` is the only write-capable tool in this version. It requires a client-generated `idempotency_key` containing 16–128 Base64URL characters.
+
+- A single SQLite-backed Durable Object per environment serializes admission across the shared service credential.
+- Admission is limited to **five distinct write operations in any rolling 60-second window**. The quota is shared by all clients using that environment credential; it is not a per-user fairness limit.
+- Replaying the same key and same canonical request fingerprint returns the recorded operation without consuming a second admission. Reusing the key with different request content returns `IDEMPOTENCY_CONFLICT`.
+- Validation of the request and protected paths occurs before admission. Once admitted, an operation consumes quota even if GitHub later rejects it.
+- The operation ledger stores only hashes, phases, timestamps, safe branch/commit/PR metadata, and bounded error codes. It never stores the raw bearer token, raw idempotency key, or submitted file contents.
+- Operations progress through `RESERVED`, `TREE_WRITTEN`, `COMMIT_WRITTEN`, `BRANCH_WRITTEN`, `PR_DISPATCHED`, and `PR_CREATED`. A deterministic `assistant/mcp-<sha256>` branch and a machine-readable PR-body marker support reconciliation.
+- Stale `IN_PROGRESS` records are quarantined as `UNKNOWN` after 120 seconds. An ambiguous PR dispatch is reconciled by read-only GitHub lookup using the exact branch, base, commit SHA, and operation marker. Exactly one match may be recorded as success; zero or multiple matches remain quarantined.
+- A successful replay re-reads the PR and verifies its URL, base, branch, and operation marker. It reports the current PR state and whether its head SHA changed after creation.
+- Authenticated MCP write denials are returned as structured tool errors inside the JSON-RPC response (HTTP 200), including `retry_after_seconds` for quota denial. If the Durable Object binding or RPC is unavailable, the connector fails closed and does not call GitHub.
+
+There is deliberately **no exactly-once claim across SQLite and GitHub**. The connector never blindly retries an ambiguous external write. `UNKNOWN` records are not automatically deleted. A terminal-record retention period has not been approved or configured.
+
+Production and Staging each declare their own Durable Object binding and SQLite migration. Configuration dry-runs do not deploy either environment; deployment requires separate explicit authorization.
+
 ## Protocol compatibility status
 
 - The legacy path implements the **2025-11-25 and 2025-03-26 handshake-era protocols** with version negotiation, `initialize`, `tools/list`, `tools/call`, `ping`, and legacy notification handling. It does not claim support for every optional legacy capability. The modern `server/discover` response advertises all three protocol revisions this endpoint serves, so clients can select a mutually supported version.

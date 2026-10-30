@@ -120,6 +120,7 @@ async function createChangePr(args,env) {
  const now=Date.now();
  let admission;
  try {
+  await stub.markStaleOperationsUnknown({now,leaseMs:120_000});
   admission=await stub.admitWrite({keyHash,requestHash,now,windowMs:60_000,limit:5});
  } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
  if(!admission||typeof admission.admitted!=="boolean") throw new ToolError("WRITE_CONTROL_UNAVAILABLE");

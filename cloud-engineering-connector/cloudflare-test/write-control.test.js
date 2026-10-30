@@ -87,7 +87,7 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     await expect(stub.reconcilePrCreated({
       keyHash, now: 1_800_000_000_006, branchName, commitSha, prNumber: 42,
       prUrl: "https://github.com/acme/project/pull/42",
-    })).resolves.toMatchObject({ updated: true, operation: { status: "SUCCEEDED", phase: "PR_CREATED", prNumber: 42 } });
+    })).resolves.toMatchObject({ updated: true, operation: { status: "SUCCEEDED", phase: "PR_CREATED", prNumber: 42, errorCode: null } });
   });
 
   it("refuses UNKNOWN reconciliation unless the operation is at PR_DISPATCHED", async () => {

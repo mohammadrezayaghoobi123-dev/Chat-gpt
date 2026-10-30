@@ -29,3 +29,11 @@ test("Staging explicitly declares non-inherited runtime variables", () => {
   assert.match(staging, /\[env\.staging\.vars\]/);
   assert.match(staging, /SERVICE_MODE\s*=\s*"cloud"/);
 });
+
+test("Production and Staging both declare the SQLite WriteControl binding and migration", () => {
+  const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
+  assert.match(production, /\[\[durable_objects\.bindings\]\][\s\S]*?name\s*=\s*"WRITE_CONTROL"[\s\S]*?class_name\s*=\s*"WriteControl"/);
+  assert.match(production, /\[\[migrations\]\][\s\S]*?new_sqlite_classes\s*=\s*\["WriteControl"\]/);
+  assert.match(staging, /\[\[env\.staging\.durable_objects\.bindings\]\][\s\S]*?name\s*=\s*"WRITE_CONTROL"[\s\S]*?class_name\s*=\s*"WriteControl"/);
+  assert.match(staging, /\[\[env\.staging\.migrations\]\][\s\S]*?new_sqlite_classes\s*=\s*\["WriteControl"\]/);
+});

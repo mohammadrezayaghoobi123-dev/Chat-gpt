@@ -22,6 +22,12 @@ A cloud-hosted MCP connector for rigorous software engineering: repository inspe
 
 The model using this connector must perform substantive reasoning, inspect relevant files, consult primary sources where necessary, and run/inspect CI. Tool output alone is not proof that code is correct. The connector also validates tool-call arguments against the schema subset currently used by its tool definitions (object/array/string/numeric/boolean/null types, required fields, nested properties, additional-properties rejection, and array item bounds). This is not a full JSON Schema 2020-12 validator; do not add unsupported schema keywords without extending the validator and its negative tests.
 
+## Browser console (Staging)
+
+The Worker serves a same-origin browser console at `GET /`. It displays `/healthz`, negotiates the legacy MCP `initialize` handshake, discovers tools, and can call only the read-only `project_inspect`, `read_project_file`, `engineering_standards`, and `architecture_review` tools. Dynamic output is inserted as text, the page uses a per-response CSP nonce, and the bearer token is never persisted in browser storage. The token field is optional only when the Staging Worker has the explicit `PUBLIC_READ_ONLY=true` setting.
+
+Staging public read-only mode is rate-limited and the server enforces its tool allowlist; hiding write tools in the browser is not the security control. Same-origin console requests are accepted without widening the cross-origin allowlist. Cross-origin requests still require an exact `MCP_ALLOWED_ORIGINS` entry. Production remains authenticated and is not changed by this Staging setting.
+
 ## Durable write control
 
 `create_change_pr` is the only write-capable tool in this version. It requires a client-generated `idempotency_key` containing 16–128 Base64URL characters.
@@ -39,6 +45,8 @@ The model using this connector must perform substantive reasoning, inspect relev
 - Every operation has a monotonically increasing `lease_generation`. Expiry and successful recovery advance the generation. All phase transitions and status writes require the current generation; the four recovery RPCs and `reopenReserved` reject missing or invalid generations. Existing SQLite rows receive an additive `lease_generation INTEGER NOT NULL DEFAULT 1` migration without deleting operation or idempotency records.
 - A successful replay re-reads the PR and verifies its URL, base, branch, and operation marker. It reports the current PR state and whether its head SHA changed after creation.
 - Authenticated MCP write denials are returned as structured tool errors inside the JSON-RPC response (HTTP 200), including `retry_after_seconds` for quota denial. If the Durable Object binding or RPC is unavailable, the connector fails closed and does not call GitHub.
+
+`UNKNOWN` records are never automatically deleted. `SUCCEEDED` and `FAILED` operation rows are also retained indefinitely in the current release; no automatic terminal-record purge or compaction is implemented. This deliberately preserves idempotency and replay safety while the service is low-volume. Storage growth is a known operational cost; any future retention change must preserve a permanent idempotency tombstone and must be separately reviewed and tested before implementation.
 
 There is deliberately **no exactly-once claim across SQLite and GitHub**. Only immutable, content-addressed Git Tree/Commit objects may be re-posted, and only with the exact persisted payload followed by read-back verification. Mutable branch refs and PR creation are not blindly retried; they use read-only reconciliation. `UNKNOWN` records are not automatically deleted. A terminal-record retention period has not been approved or configured.
 

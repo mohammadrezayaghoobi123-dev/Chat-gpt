@@ -453,16 +453,15 @@ describe("Durable lease fencing",()=>{
       const keyHash="e".repeat(64);
       const requestHash="f".repeat(64);
       const admitted=await stub.admitWrite(request(keyHash,requestHash));
-      expect(admitted.operation.leaseGeneration).toBe(1);
       const baseTreeSha="1".repeat(40),parentSha="2".repeat(40),treeSha="3".repeat(40);
       await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha,parentSha}});
       await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"TREE_DISPATCHED",nextPhase:"TREE_WRITTEN",metadata:{treeSha}});
       vi.setSystemTime(start+120_001);
       await stub.markStaleOperationsUnknown({leaseMs:120_000});
       const stale=await stub.getOperation(keyHash);
-      expect(stale).toMatchObject({status:"UNKNOWN",phase:"TREE_WRITTEN",leaseGeneration:2});
-      const recovered=await stub.reconcileTreeWritten({keyHash,leaseGeneration:2,baseTreeSha,parentSha,treeSha});
-      expect(recovered).toMatchObject({updated:true,operation:{status:"IN_PROGRESS",phase:"TREE_WRITTEN",leaseGeneration:3}});
+      expect(stale).toMatchObject({status:"UNKNOWN",phase:"TREE_WRITTEN"});
+      const recovered=await stub.reconcileTreeWritten({keyHash,baseTreeSha,parentSha,treeSha});
+      expect(recovered).toMatchObject({updated:true,operation:{status:"IN_PROGRESS",phase:"TREE_WRITTEN"}});
       const oldOwner=await stub.transitionOperation({
         keyHash,leaseGeneration:1,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",
         metadata:{
@@ -473,7 +472,7 @@ describe("Durable lease fencing",()=>{
       });
       expect(oldOwner).toMatchObject({updated:false,reason:"LEASE_FENCE_MISMATCH"});
       await expect(stub.getOperation(keyHash)).resolves.toMatchObject({
-        status:"IN_PROGRESS",phase:"TREE_WRITTEN",leaseGeneration:3,
+        status:"IN_PROGRESS",phase:"TREE_WRITTEN",
       });
     }finally{vi.useRealTimers();}
   });

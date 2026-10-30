@@ -8,7 +8,7 @@ function createWriteControlMock() {
   async admitWrite(input) {
    const old = operations.get(input.keyHash);
    if (old) return old.requestHash === input.requestHash ? { admitted:true,replay:true,operation:old } : { admitted:false,reason:"IDEMPOTENCY_CONFLICT" };
-   const operation={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};
+   const operation={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};
    operations.set(input.keyHash,operation);
    return {admitted:true,replay:false,operation};
   },
@@ -101,7 +101,7 @@ test("a transport timeout during the first GitHub tree write is quarantined as U
  const key="first-tree-timeout-key-0001";
  const operations=new Map();
  const stub={
-  async admitWrite(input){const op={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:Date.now(),updatedAt:Date.now()};operations.set(input.keyHash,op);return{admitted:true,replay:false,operation:op}},
+  async admitWrite(input){const op={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:Date.now(),updatedAt:Date.now()};operations.set(input.keyHash,op);return{admitted:true,replay:false,operation:op}},
   async transitionOperation(input){phase=input.nextPhase;const op=operations.values().next().value;op.phase=input.nextPhase;return{updated:true,operation:op}},
   async markOperationStatus(input){status=input.status;const op=operations.get(input.keyHash);op.status=input.status;op.errorCode=input.errorCode;return{updated:true,operation:op}},
   async markStaleOperationsUnknown(){return 0},
@@ -128,7 +128,7 @@ test("successful idempotent replay verifies the existing PR marker before return
  const originalFetch=globalThis.fetch;let keyHash=null;let calls=[];
  const branchFor=key=>"assistant/mcp-"+key;
  const replayStub={
-  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{keyHash,status:"SUCCEEDED",phase:"PR_CREATED",branchName:branchFor(input.keyHash),commitSha:"a".repeat(40),prNumber:42,prUrl:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/42"}}},
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{leaseGeneration:1,keyHash,status:"SUCCEEDED",phase:"PR_CREATED",branchName:branchFor(input.keyHash),commitSha:"a".repeat(40),prNumber:42,prUrl:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/42"}}},
   async transitionOperation(){throw new Error("no writes expected")},
   async markOperationStatus(){throw new Error("no writes expected")},
   async markStaleOperationsUnknown(){return 0},
@@ -147,7 +147,7 @@ test("UNKNOWN COMMIT_WRITTEN replay verifies deterministic branch then creates o
  const originalFetch=globalThis.fetch;let keyHash=null,createdPr=null;const calls=[];
  const commitSha="d".repeat(40),branchFor=key=>"assistant/mcp-"+key;
  const stub={
-  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{keyHash,status:"UNKNOWN",phase:"COMMIT_WRITTEN",commitSha,updatedAt:Date.now()}}},
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{leaseGeneration:1,keyHash,status:"UNKNOWN",phase:"COMMIT_WRITTEN",commitSha,updatedAt:Date.now()}}},
   async markStaleOperationsUnknown(){return 0},
   async getOperation(){return null},
   async reconcilePrCreated(){return{updated:false}},
@@ -176,7 +176,7 @@ test("UNKNOWN COMMIT_WRITTEN replay verifies deterministic branch then creates o
 test("branch recovery records a definite GitHub 422 as FAILED rather than UNKNOWN",async()=>{
  const originalFetch=globalThis.fetch;let keyHash=null,recordedStatus=null;const commitSha="e".repeat(40);
  const stub={
-  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{keyHash,status:"UNKNOWN",phase:"COMMIT_WRITTEN",commitSha,updatedAt:Date.now()}}},
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{leaseGeneration:1,keyHash,status:"UNKNOWN",phase:"COMMIT_WRITTEN",commitSha,updatedAt:Date.now()}}},
   async markStaleOperationsUnknown(){return 0},
   async getOperation(){return null},
   async reconcileBranchWritten(input){assert.equal(input.keyHash,keyHash);return{updated:true,operation:{status:"IN_PROGRESS",phase:"BRANCH_WRITTEN",commitSha,branchName:input.branchName}}},
@@ -200,7 +200,7 @@ test("UNKNOWN PR_DISPATCHED replay reconciles exactly one marker-matched PR with
  const originalFetch=globalThis.fetch;let keyHash=null,reconcileCalls=0,githubMethods=[];
  const branchFor=key=>"assistant/mcp-"+key;
  const recoveryStub={
-  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{keyHash,status:"UNKNOWN",phase:"PR_DISPATCHED",branchName:branchFor(input.keyHash),commitSha:"c".repeat(40),updatedAt:Date.now()}}},
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{leaseGeneration:1,keyHash,status:"UNKNOWN",phase:"PR_DISPATCHED",branchName:branchFor(input.keyHash),commitSha:"c".repeat(40),updatedAt:Date.now()}}},
   async transitionOperation(){throw new Error("no write phase transition expected")},
   async markOperationStatus(){throw new Error("no status update expected")},
   async markStaleOperationsUnknown(){return 0},
@@ -779,7 +779,7 @@ test("create_change_pr persists deterministic Git commit identity before dispatc
  const events=[],metadata=[];
  let keyHash=null,createdPr=null;
  const stub={
-  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:false,operation:{keyHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt,updatedAt:createdAt}};},
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:false,operation:{leaseGeneration:1,keyHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt,updatedAt:createdAt}};},
   async transitionOperation(input){events.push(input.nextPhase);metadata.push(input.metadata??{});return{updated:true,operation:{status:"IN_PROGRESS",phase:input.nextPhase}};},
   async markOperationStatus(){return{updated:true};},
   async markStaleOperationsUnknown(){return 0;},
@@ -959,7 +959,7 @@ test("a successful tree POST with failed identity verification is immediately qu
  const key="tree-verification-mismatch-key-01";
  const operations=new Map();
  const stub={
-  async admitWrite(input){const op={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:Date.now(),updatedAt:Date.now()};operations.set(input.keyHash,op);return{admitted:true,replay:false,operation:op}},
+  async admitWrite(input){const op={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:Date.now(),updatedAt:Date.now()};operations.set(input.keyHash,op);return{admitted:true,replay:false,operation:op}},
   async transitionOperation(input){phase=input.nextPhase;const op=operations.values().next().value;op.phase=input.nextPhase;return{updated:true,operation:op}},
   async markOperationStatus(input){status=input.status;const op=operations.get(input.keyHash);op.status=input.status;op.errorCode=input.errorCode;return{updated:true,operation:op}},
   async markStaleOperationsUnknown(){return 0},
@@ -990,7 +990,7 @@ test("a successful branch POST with a mismatched ref identity is quarantined bef
  const key="branch-identity-mismatch-0001";
  const operations=new Map();let prPosts=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null;
  const stub={
-  async admitWrite(input){const operation={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
+  async admitWrite(input){const operation={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
   async transitionOperation(input){const operation=operations.get(input.keyHash);if(!operation||operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false};operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";operation.updatedAt=input.now;if(input.metadata)Object.assign(operation,input.metadata);ledgerPhase=operation.phase;ledgerStatus=operation.status;return{updated:true,operation};},
   async markOperationStatus(input){const operation=operations.get(input.keyHash);if(!operation)return{updated:false};operation.status=input.status;operation.errorCode=input.errorCode;operation.updatedAt=input.now;ledgerStatus=operation.status;ledgerPhase=operation.phase;return{updated:true,operation};},
   async markStaleOperationsUnknown(){return 0;},
@@ -1031,7 +1031,7 @@ test("a successful PR POST with a mismatched head identity is quarantined before
  const key="pull-request-identity-mismatch-0001";
  const operations=new Map();let prPosts=0,prReads=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null,createdBranch=null;
  const stub={
-  async admitWrite(input){const operation={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
+  async admitWrite(input){const operation={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
   async transitionOperation(input){const operation=operations.get(input.keyHash);if(!operation||operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false};operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";operation.updatedAt=input.now;if(input.metadata)Object.assign(operation,input.metadata);ledgerPhase=operation.phase;ledgerStatus=operation.status;return{updated:true,operation};},
   async markOperationStatus(input){const operation=operations.get(input.keyHash);if(!operation)return{updated:false};operation.status=input.status;operation.errorCode=input.errorCode;operation.updatedAt=input.now;ledgerStatus=operation.status;ledgerPhase=operation.phase;return{updated:true,operation};},
   async markStaleOperationsUnknown(){return 0;},
@@ -1077,7 +1077,7 @@ test("a successful branch POST with unavailable readback is quarantined as UNKNO
  const key="branch-readback-unavailable-0001";
  const operations=new Map();let prPosts=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null,createdBranch=null;
  const stub={
-  async admitWrite(input){const operation={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
+  async admitWrite(input){const operation={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
   async transitionOperation(input){const operation=operations.get(input.keyHash);if(!operation||operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false};operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";operation.updatedAt=input.now;if(input.metadata)Object.assign(operation,input.metadata);ledgerPhase=operation.phase;ledgerStatus=operation.status;return{updated:true,operation};},
   async markOperationStatus(input){const operation=operations.get(input.keyHash);if(!operation)return{updated:false};operation.status=input.status;operation.errorCode=input.errorCode;operation.updatedAt=input.now;ledgerStatus=operation.status;ledgerPhase=operation.phase;return{updated:true,operation};},
   async markStaleOperationsUnknown(){return 0;},
@@ -1120,7 +1120,7 @@ test("a successful PR POST with unavailable readback is quarantined as UNKNOWN",
  const key="pull-request-readback-unavailable-0001";
  const operations=new Map();let prPosts=0,prReads=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null,createdBranch=null;
  const stub={
-  async admitWrite(input){const operation={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
+  async admitWrite(input){const operation={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
   async transitionOperation(input){const operation=operations.get(input.keyHash);if(!operation||operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false};operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";operation.updatedAt=input.now;if(input.metadata)Object.assign(operation,input.metadata);ledgerPhase=operation.phase;ledgerStatus=operation.status;return{updated:true,operation};},
   async markOperationStatus(input){const operation=operations.get(input.keyHash);if(!operation)return{updated:false};operation.status=input.status;operation.errorCode=input.errorCode;operation.updatedAt=input.now;ledgerStatus=operation.status;ledgerPhase=operation.phase;return{updated:true,operation};},
   async markStaleOperationsUnknown(){return 0;},
@@ -1166,7 +1166,7 @@ test("a failed durable status write never falsely claims UNKNOWN quarantine",asy
  const key="pull-request-ledger-status-failure-0001";
  const operations=new Map();let prPosts=0,prReads=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null,createdBranch=null;
  const stub={
-  async admitWrite(input){const operation={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
+  async admitWrite(input){const operation={leaseGeneration:1,keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
   async transitionOperation(input){const operation=operations.get(input.keyHash);if(!operation||operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false};operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";operation.updatedAt=input.now;if(input.metadata)Object.assign(operation,input.metadata);ledgerPhase=operation.phase;ledgerStatus=operation.status;return{updated:true,operation};},
   async markOperationStatus(){return{updated:false};},
   async markStaleOperationsUnknown(){return 0;},

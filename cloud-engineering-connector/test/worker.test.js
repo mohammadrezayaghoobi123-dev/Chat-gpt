@@ -155,6 +155,30 @@ test("UNKNOWN COMMIT_WRITTEN replay verifies deterministic branch then creates o
  }finally{globalThis.fetch=originalFetch}
 });
 
+
+test("branch recovery records a definite GitHub 422 as FAILED rather than UNKNOWN",async()=>{
+ const originalFetch=globalThis.fetch;let keyHash=null,recordedStatus=null;const commitSha="e".repeat(40);
+ const stub={
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{keyHash,status:"UNKNOWN",phase:"COMMIT_WRITTEN",commitSha,updatedAt:Date.now()}}},
+  async markStaleOperationsUnknown(){return 0},
+  async getOperation(){return null},
+  async reconcileBranchWritten(input){assert.equal(input.keyHash,keyHash);return{updated:true,operation:{status:"IN_PROGRESS",phase:"BRANCH_WRITTEN",commitSha,branchName:input.branchName}}},
+  async transitionOperation(input){assert.equal(input.nextPhase,"PR_DISPATCHED");return{updated:true,operation:{status:"IN_PROGRESS",phase:"PR_DISPATCHED"}}},
+  async markOperationStatus(input){recordedStatus=input.status;return{updated:true}},
+  async reconcilePrCreated(){return{updated:false}}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";
+  if(method==="GET")return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+keyHash,object:{sha:commitSha}}),{status:200,headers:{"content-type":"application/json"}});
+  if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({message:"simulated validation rejection"}),{status:422,headers:{"content-type":"application/json"}});
+  throw new Error("Unexpected GitHub request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"branch-recovery-422-key-001",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Definite rejection",summary:"Test 422 classification",files:[{path:"docs/proposal.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();assert.equal(response.status,200);assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/GitHub API 422/);assert.equal(recordedStatus,"FAILED");
+ }finally{globalThis.fetch=originalFetch}
+});
+
 test("UNKNOWN PR_DISPATCHED replay reconciles exactly one marker-matched PR without creating another",async()=>{
  const originalFetch=globalThis.fetch;let keyHash=null,reconcileCalls=0,githubMethods=[];
  const branchFor=key=>"assistant/mcp-"+key;

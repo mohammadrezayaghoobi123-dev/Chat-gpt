@@ -67,43 +67,47 @@ export class WriteControl extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.ctx.blockConcurrencyWhile(async () => {
-      const sql = this.ctx.storage.sql;
-      sql.exec(`
-        CREATE TABLE IF NOT EXISTS write_admissions (
-          key_hash TEXT PRIMARY KEY,
-          admitted_at INTEGER NOT NULL
-        )
-      `);
-      sql.exec(`
-        CREATE INDEX IF NOT EXISTS write_admissions_by_time
-        ON write_admissions(admitted_at)
-      `);
-      sql.exec(`
-        CREATE TABLE IF NOT EXISTS write_operations (
-          key_hash TEXT PRIMARY KEY,
-          request_hash TEXT NOT NULL,
-          status TEXT NOT NULL CHECK (status IN ('IN_PROGRESS','SUCCEEDED','FAILED','UNKNOWN')),
-          phase TEXT NOT NULL CHECK (phase IN ('RESERVED','TREE_DISPATCHED','TREE_WRITTEN','COMMIT_DISPATCHED','COMMIT_WRITTEN','BRANCH_WRITTEN','PR_DISPATCHED','PR_CREATED')),
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL,
-          lease_generation INTEGER NOT NULL DEFAULT 1,
-          branch_name TEXT,
-          commit_sha TEXT,
-          pr_number INTEGER,
-          pr_url TEXT,
-          error_code TEXT,
-          git_metadata TEXT
-        )
-      `);
-      const operationColumns = sql.exec("PRAGMA table_info(write_operations)").toArray();
-      if (!operationColumns.some((column) => column.name === "lease_generation")) {
-        sql.exec("ALTER TABLE write_operations ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 1");
-      }
-      sql.exec(`
-        CREATE INDEX IF NOT EXISTS write_operations_by_status_time
-        ON write_operations(status, updated_at)
-      `);
+      this.ensureSchema();
     });
+  }
+
+  ensureSchema() {
+    const sql = this.ctx.storage.sql;
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS write_admissions (
+        key_hash TEXT PRIMARY KEY,
+        admitted_at INTEGER NOT NULL
+      )
+    `);
+    sql.exec(`
+      CREATE INDEX IF NOT EXISTS write_admissions_by_time
+      ON write_admissions(admitted_at)
+    `);
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS write_operations (
+        key_hash TEXT PRIMARY KEY,
+        request_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('IN_PROGRESS','SUCCEEDED','FAILED','UNKNOWN')),
+        phase TEXT NOT NULL CHECK (phase IN ('RESERVED','TREE_DISPATCHED','TREE_WRITTEN','COMMIT_DISPATCHED','COMMIT_WRITTEN','BRANCH_WRITTEN','PR_DISPATCHED','PR_CREATED')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        lease_generation INTEGER NOT NULL DEFAULT 1,
+        branch_name TEXT,
+        commit_sha TEXT,
+        pr_number INTEGER,
+        pr_url TEXT,
+        error_code TEXT,
+        git_metadata TEXT
+      )
+    `);
+    const operationColumns = sql.exec("PRAGMA table_info(write_operations)").toArray();
+    if (!operationColumns.some((column) => column.name === "lease_generation")) {
+      sql.exec("ALTER TABLE write_operations ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 1");
+    }
+    sql.exec(`
+      CREATE INDEX IF NOT EXISTS write_operations_by_status_time
+      ON write_operations(status, updated_at)
+    `);
   }
 
   readOperation(keyHash) {

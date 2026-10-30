@@ -126,6 +126,12 @@ function verifyGitCommit(commit,sha,payload) {
  }
  return commit;
 }
+function verifyGitRef(ref,branchName,commitSha) {
+ if(ref?.ref!=="refs/heads/"+branchName||ref?.object?.sha!==commitSha) {
+  throw new ToolError("GIT_REF_VERIFICATION_FAILED",{expected_ref:"refs/heads/"+branchName,expected_commit:commitSha});
+ }
+ return ref;
+}
 async function createChangePr(args,env) {
  if(args.base_branch!==ALLOWED_BASE_BRANCH) throw new Error("Base branch is not allowed.");
  const base=repoPath(args.owner,args.repo);
@@ -203,7 +209,11 @@ async function createChangePr(args,env) {
    if(!operation?.commitSha||typeof operation.commitSha!=="string")throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:operation?.status??"UNKNOWN",phase:operation?.phase??null});
    if(!branchAlreadyWritten){
     try{
-     await github(env,base+"/git/refs",{method:"POST",body:JSON.stringify({ref:"refs/heads/"+branchName,sha:operation.commitSha})});
+     const createdRef=await github(env,base+"/git/refs",{method:"POST",body:JSON.stringify({ref:"refs/heads/"+branchName,sha:operation.commitSha})});
+     verifyGitRef(createdRef,branchName,operation.commitSha);
+     const refPath="/git/ref/heads/"+encodeURIComponent(branchName).replace(/%2F/g,"/");
+     const verifiedRef=await github(env,base+refPath);
+     verifyGitRef(verifiedRef,branchName,operation.commitSha);
     }catch(error){return await markReplayFailure(error,"COMMIT_WRITTEN");}
     let branchTransition;
     try{branchTransition=await stub.transitionOperation({keyHash,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",now:Date.now(),metadata:{branchName}});}
@@ -295,8 +305,8 @@ async function createChangePr(args,env) {
     const refPath="/git/ref/heads/"+encodeURIComponent(branchName).replace(/%2F/g,"/");
     refResult=await github(env,base+refPath);
    } catch { throw new ToolError("WRITE_RECONCILIATION_UNAVAILABLE",{operation_status:"UNKNOWN",phase:operation.phase}); }
-   if(refResult?.object?.sha!==operation.commitSha) {
-    throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:"UNKNOWN",phase:operation.phase,message:"The deterministic branch is absent or does not point to the recorded commit. No write was retried."});
+   if(refResult?.ref!=="refs/heads/"+branchName||refResult?.object?.sha!==operation.commitSha) {
+    throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:"UNKNOWN",phase:operation.phase,message:"The deterministic branch ref name or target SHA does not match the recorded operation. No write was retried."});
    }
    let reconciled;
    try {
@@ -398,7 +408,11 @@ async function createChangePr(args,env) {
   verifyGitCommit(verifiedCommit,commit.sha,commitPayload);
   await transition("COMMIT_DISPATCHED","COMMIT_WRITTEN",{commitSha:commit.sha});
   const branch="assistant/mcp-"+keyHash;
-  await github(env,base+"/git/refs",{method:"POST",body:JSON.stringify({ref:"refs/heads/"+branch,sha:commit.sha})});
+  const createdRef=await github(env,base+"/git/refs",{method:"POST",body:JSON.stringify({ref:"refs/heads/"+branch,sha:commit.sha})});
+  verifyGitRef(createdRef,branch,commit.sha);
+  const refPath="/git/ref/heads/"+encodeURIComponent(branch).replace(/%2F/g,"/");
+  const verifiedRef=await github(env,base+refPath);
+  verifyGitRef(verifiedRef,branch,commit.sha);
   await transition("COMMIT_WRITTEN","BRANCH_WRITTEN",{branchName:branch});
   const marker="<!-- mcp-operation:"+keyHash+" -->";
   await transition("BRANCH_WRITTEN","PR_DISPATCHED");

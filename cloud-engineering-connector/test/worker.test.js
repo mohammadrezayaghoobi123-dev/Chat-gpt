@@ -312,7 +312,8 @@ test("create_change_pr retains deterministic branch after a definite PR rejectio
   }
   if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
   if(method==="GET"&&url.endsWith("/git/commits/"+commitSha)){const secondPrecision=value=>({...value,date:new Date(Math.floor(Date.parse(value.date)/1000)*1000).toISOString()});return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:secondPrecision(commitPayload.author),committer:secondPrecision(commitPayload.committer)}),{status:200});}
-  if(method==="POST"&&url.endsWith("/git/refs")){branchRef=JSON.parse(init.body).ref;return new Response(JSON.stringify({ref:branchRef}),{status:201});}
+  if(method==="POST"&&url.endsWith("/git/refs")){branchRef=JSON.parse(init.body).ref;return new Response(JSON.stringify({ref:branchRef,object:{sha:commitSha}}),{status:201});}
+  if(method==="GET"&&branchRef&&url.endsWith("/git/ref/heads/"+branchRef.slice("refs/heads/".length)))return new Response(JSON.stringify({ref:branchRef,object:{sha:commitSha}}),{status:200});
   if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({message:"simulated PR validation failure"}),{status:422});
   throw new Error("Unexpected request "+method+" "+url);
  };
@@ -340,7 +341,8 @@ test("create_change_pr retains branch when pull request creation outcome is unce
   }
   if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
   if(method==="GET"&&url.endsWith("/git/commits/"+commitSha)){const secondPrecision=value=>({...value,date:new Date(Math.floor(Date.parse(value.date)/1000)*1000).toISOString()});return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:secondPrecision(commitPayload.author),committer:secondPrecision(commitPayload.committer)}),{status:200});}
-  if(method==="POST"&&url.endsWith("/git/refs")){createdBranch=JSON.parse(init.body).ref.split("/").slice(2).join("/");return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch}),{status:201})}
+  if(method==="POST"&&url.endsWith("/git/refs")){createdBranch=JSON.parse(init.body).ref.split("/").slice(2).join("/");return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch,object:{sha:commitSha}}),{status:201})}
+  if(method==="GET"&&createdBranch&&url.endsWith("/git/ref/heads/"+createdBranch))return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch,object:{sha:commitSha}}),{status:200});
   if(method==="POST"&&url.endsWith("/pulls"))throw new TypeError("simulated network timeout after request dispatch");
   if(method==="DELETE"&&createdBranch&&url.endsWith("/git/refs/heads/"+createdBranch)){deleteAttempted=true;return new Response(null,{status:204})}
   throw new Error("Unexpected mocked GitHub request: "+method+" "+url)
@@ -799,6 +801,7 @@ test("create_change_pr persists deterministic Git commit identity before dispatc
   if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
   if(method==="GET"&&url.endsWith("/git/commits/"+commitSha)){const secondPrecision=value=>({...value,date:new Date(Math.floor(Date.parse(value.date)/1000)*1000).toISOString()});return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:secondPrecision(commitPayload.author),committer:secondPrecision(commitPayload.committer)}),{status:200});}
   if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+keyHash,object:{sha:commitSha}}),{status:201});
+  if(method==="GET"&&url.endsWith("/git/ref/heads/assistant/mcp-"+keyHash))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+keyHash,object:{sha:commitSha}}),{status:200});
   if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:91,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/91",draft:true,state:"open"}),{status:201});
   throw new Error("Unexpected GitHub request "+method+" "+url);
  };
@@ -870,7 +873,8 @@ test("UNKNOWN COMMIT_DISPATCHED replay recreates and verifies the exact persiste
   if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1"))return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/replay.txt",mode:"100644",type:"blob",sha:await recoveryFixtureBlobSha("x")}]}),{status:200});
   if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
   if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
-  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered"}),{status:201});
+  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered",object:{sha:commitSha}}),{status:201});
+  if(method==="GET"&&url.endsWith("/git/ref/heads/assistant/mcp-recovered"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered",object:{sha:commitSha}}),{status:200});
   if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:92,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/92",draft:true,state:"open"}),{status:201});
   throw new Error("Unexpected GitHub request "+method+" "+url);
  };
@@ -897,7 +901,8 @@ test("UNKNOWN TREE_DISPATCHED replay repeats only the same immutable tree payloa
   if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1"))return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/replay.txt",mode:"100644",type:"blob",sha:await recoveryFixtureBlobSha("x")}]}),{status:200});
   if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
   if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
-  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered"}),{status:201});
+  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered",object:{sha:commitSha}}),{status:201});
+  if(method==="GET"&&url.endsWith("/git/ref/heads/assistant/mcp-recovered"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered",object:{sha:commitSha}}),{status:200});
   if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:93,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/93",draft:true,state:"open"}),{status:201});
   throw new Error("Unexpected GitHub request "+method+" "+url);
  };
@@ -926,7 +931,8 @@ test("UNKNOWN TREE_WRITTEN replay verifies the recorded tree without posting it 
   if(method==="POST"&&url.endsWith("/git/trees")){treePosts++;return new Response(JSON.stringify({sha:treeSha}),{status:201});}
   if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
   if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
-  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered"}),{status:201});
+  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered",object:{sha:commitSha}}),{status:201});
+  if(method==="GET"&&url.endsWith("/git/ref/heads/assistant/mcp-recovered"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-recovered",object:{sha:commitSha}}),{status:200});
   if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:94,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/94",draft:true,state:"open"}),{status:201});
   throw new Error("Unexpected GitHub request "+method+" "+url);
  };

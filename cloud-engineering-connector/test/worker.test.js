@@ -773,7 +773,13 @@ test("create_change_pr persists deterministic Git commit identity before dispatc
   if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:parentSha}}),{status:200});
   if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
   if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1")){
+   const bytes=new TextEncoder().encode("stable"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
+   const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+   return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/recovery.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
+  }
   if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
   if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+keyHash,object:{sha:commitSha}}),{status:201});
   if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:91,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/91",draft:true,state:"open"}),{status:201});
   throw new Error("Unexpected GitHub request "+method+" "+url);

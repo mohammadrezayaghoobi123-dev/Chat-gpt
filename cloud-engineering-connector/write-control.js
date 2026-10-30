@@ -394,7 +394,7 @@ export class WriteControl extends DurableObject {
         keyHash,
       );
       const updatedOperation = this.readOperation(keyHash);
-      if (!updatedOperation || updatedOperation.status !== "IN_PROGRESS" || updatedOperation.phase !== "TREE_WRITTEN" || updatedOperation.gitMetadata?.treeSha !== treeSha) {
+      if (!updatedOperation || updatedOperation.status !== "IN_PROGRESS" || updatedOperation.phase !== "TREE_WRITTEN" || updatedOperation.gitMetadata?.treeSha !== treeSha || updatedOperation.leaseGeneration !== current.leaseGeneration + 1) {
         return { updated: false, reason: "RECONCILIATION_CONFLICT", operation: updatedOperation };
       }
       return { updated: true, operation: updatedOperation };
@@ -431,7 +431,7 @@ export class WriteControl extends DurableObject {
         keyHash,
       );
       const updatedOperation=this.readOperation(keyHash);
-      if (!updatedOperation || updatedOperation.status!=="IN_PROGRESS" || updatedOperation.phase!=="COMMIT_WRITTEN" || updatedOperation.commitSha!==commitSha) {
+      if (!updatedOperation || updatedOperation.status!=="IN_PROGRESS" || updatedOperation.phase!=="COMMIT_WRITTEN" || updatedOperation.commitSha!==commitSha || updatedOperation.leaseGeneration!==current.leaseGeneration+1) {
         return { updated:false,reason:"RECONCILIATION_CONFLICT",operation:updatedOperation };
       }
       return { updated: true, operation: updatedOperation };
@@ -466,7 +466,7 @@ export class WriteControl extends DurableObject {
       );
       const updatedOperation=this.readOperation(keyHash);
       if (!updatedOperation || updatedOperation.status!=="IN_PROGRESS" || updatedOperation.phase!=="BRANCH_WRITTEN" ||
-          updatedOperation.branchName!==branchName || updatedOperation.commitSha!==commitSha) {
+          updatedOperation.branchName!==branchName || updatedOperation.commitSha!==commitSha || updatedOperation.leaseGeneration!==current.leaseGeneration+1) {
         return { updated:false,reason:"RECONCILIATION_CONFLICT",operation:updatedOperation };
       }
       return { updated: true, operation: updatedOperation };
@@ -505,7 +505,7 @@ export class WriteControl extends DurableObject {
       );
       const updatedOperation=this.readOperation(keyHash);
       if (!updatedOperation || updatedOperation.status!=="SUCCEEDED" || updatedOperation.phase!=="PR_CREATED" ||
-          updatedOperation.prNumber!==prNumber || updatedOperation.prUrl!==prUrl) {
+          updatedOperation.prNumber!==prNumber || updatedOperation.prUrl!==prUrl || updatedOperation.leaseGeneration!==current.leaseGeneration+1) {
         return { updated:false,reason:"RECONCILIATION_CONFLICT",operation:updatedOperation };
       }
       return { updated: true, operation: updatedOperation };

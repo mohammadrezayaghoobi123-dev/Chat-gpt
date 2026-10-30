@@ -207,6 +207,10 @@ describe("Git object recovery identity contract", () => {
     const commitSha = "4".repeat(40);
     const commitDate = "2026-10-30T12:00:00.000Z";
     const commitMessage = "assistant: deterministic recovery";
+    const authorName = "Cloud Engineering Connector";
+    const authorEmail = "mcp-connector@users.noreply.github.com";
+    const committerName = "Cloud Engineering Connector";
+    const committerEmail = "mcp-connector@users.noreply.github.com";
     await stub.admitWrite(request(keyHash, "d".repeat(64)));
     await stub.transitionOperation({
       keyHash, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED",
@@ -218,7 +222,7 @@ describe("Git object recovery identity contract", () => {
     });
     await stub.transitionOperation({
       keyHash, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED",
-      metadata: { commitDate, commitMessage },
+      metadata: { commitDate, commitMessage, authorName, authorEmail, committerName, committerEmail },
     });
     await stub.markOperationStatus({ keyHash, status: "UNKNOWN", errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
     await expect(stub.reconcileCommitWritten({ keyHash, treeSha, parentSha, commitSha }))
@@ -228,7 +232,7 @@ describe("Git object recovery identity contract", () => {
           status: "IN_PROGRESS",
           phase: "COMMIT_WRITTEN",
           commitSha,
-          gitMetadata: { baseTreeSha, parentSha, treeSha, commitDate, commitMessage },
+          gitMetadata: { baseTreeSha, parentSha, treeSha, commitDate, commitMessage, authorName, authorEmail, committerName, committerEmail },
         },
       });
     await expect(stub.reconcileCommitWritten({ keyHash, treeSha: "5".repeat(40), parentSha, commitSha }))

@@ -115,8 +115,11 @@ async function createChangePr(args,env) {
  } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
 
  const {idempotency_key,...requestData}=args;
- const keyHash=await sha256Hex("create_change_pr\n"+args.owner+"/"+args.repo+"\n"+idempotency_key);
- const requestHash=await sha256Hex(stableStringify(requestData));
+ const canonicalOwner=args.owner.toLowerCase();
+ const canonicalRepo=args.repo.toLowerCase();
+ const canonicalRequestData={...requestData,owner:canonicalOwner,repo:canonicalRepo};
+ const keyHash=await sha256Hex("create_change_pr\n"+canonicalOwner+"/"+canonicalRepo+"\n"+idempotency_key);
+ const requestHash=await sha256Hex(stableStringify(canonicalRequestData));
  const now=Date.now();
  let admission;
  try {

@@ -81,6 +81,21 @@ test("idempotency fingerprint conflict is a structured MCP tool error",async()=>
 });
 
 
+
+test("idempotency scope and request fingerprint canonicalize GitHub owner and repository casing",async()=>{
+ const originalFetch=globalThis.fetch,admissions=[];
+ const stub={async markStaleOperationsUnknown(){return 0},async admitWrite(input){admissions.push(input);return{admitted:false,reason:"RATE_LIMITED",retryAfterSeconds:1}}};
+ globalThis.fetch=async()=>{throw new Error("GitHub must not be called while admission is denied")};
+ try{
+  const common={idempotency_key:"case-normalization-key-0001",base_branch:"feature/cloud-engineering-connector",title:"Case normalization",summary:"Same GitHub resource",files:[{path:"docs/proposal.txt",content:"x"}]};
+  for(const [owner,repoName] of [["mohammadrezayaghoobi123-dev","Chat-gpt"],["MOHAMMADREZAYAGHOOBI123-DEV","CHAT-GPT"]]){
+   const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{...common,owner,repo:repoName}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+   const body=await response.json();assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/WRITE_RATE_LIMITED/);
+  }
+  assert.equal(admissions.length,2);assert.equal(admissions[0].keyHash,admissions[1].keyHash);assert.equal(admissions[0].requestHash,admissions[1].requestHash);
+ }finally{globalThis.fetch=originalFetch}
+});
+
 test("a transport timeout during the first GitHub tree write is quarantined as UNKNOWN",async()=>{
  const originalFetch=globalThis.fetch;let status=null,phase=null,githubCalls=[];
  const key="first-tree-timeout-key-0001";

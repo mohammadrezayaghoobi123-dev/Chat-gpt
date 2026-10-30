@@ -1247,7 +1247,7 @@ test("create_change_pr rejects Unicode-normalization and bidirectional-control p
  const originalFetch=globalThis.fetch;let calls=0;
  globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called for ambiguous paths")};
  try{
-  for(const path of ["docs/cafe\\u0301.md","docs/report\\u202Egpj.exe","docs/\\u2066hidden\\u2069.txt"]){
+  for(const path of ["docs/cafe"+String.fromCodePoint(0x0301)+".md","docs/report"+String.fromCodePoint(0x202e)+"gpj.exe","docs/"+String.fromCodePoint(0x2066)+"hidden"+String.fromCodePoint(0x2069)+".txt"]){
    const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Unicode path safety",summary:"Reject ambiguous path rendering",files:[{path,content:"proposal"}]};
    const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,GITHUB_TOKEN:"unused"});
    const body=await response.json();

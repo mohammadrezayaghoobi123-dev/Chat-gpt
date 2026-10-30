@@ -512,3 +512,25 @@ describe("mandatory lease generation at every recovery boundary",()=>{
     await expect(stub.getOperation(keyHash)).resolves.toMatchObject({status:"UNKNOWN",phase:"RESERVED",leaseGeneration:2});
   });
 });
+
+
+describe("concurrent recovery ownership",()=>{
+  it("allows only one recovery claimant to consume a lease generation",async()=>{
+    const stub=stubFor("concurrent-tree-recovery-claim");
+    const keyHash="e".repeat(64);
+    const baseTreeSha="1".repeat(40),parentSha="2".repeat(40),treeSha="3".repeat(40);
+    await stub.admitWrite(request(keyHash,"f".repeat(64)));
+    await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha,parentSha}});
+    await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    const results=await Promise.all([
+      stub.reconcileTreeWritten({keyHash,leaseGeneration:2,baseTreeSha,parentSha,treeSha}),
+      stub.reconcileTreeWritten({keyHash,leaseGeneration:2,baseTreeSha,parentSha,treeSha}),
+    ]);
+    expect(results.filter(result=>result.updated)).toHaveLength(1);
+    expect(results.filter(result=>!result.updated)).toHaveLength(1);
+    expect(results.find(result=>!result.updated)).toMatchObject({reason:"LEASE_FENCE_MISMATCH"});
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({
+      status:"IN_PROGRESS",phase:"TREE_WRITTEN",leaseGeneration:3,gitMetadata:{baseTreeSha,parentSha,treeSha},
+    });
+  });
+});

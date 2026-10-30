@@ -139,3 +139,36 @@ test("architecture_analyze bounds finding volume and reports truncation", async 
     globalThis.fetch = originalFetch;
   }
 });
+
+
+test("architecture_analyze scopes AbortSignal evidence to each fetch invocation", async () => {
+  const originalFetch = globalThis.fetch;
+  const source = [
+    "const unrelated = { signal: controller.signal }; fetch(url);",
+    "fetch(url, { signal: controller.signal });",
+    "eval(userInput);",
+  ].join("\n");
+  globalThis.fetch = async (url) => {
+    const path = decodeURIComponent(new URL(url).pathname.split("/contents/")[1] || "");
+    return path === "src/calls.js"
+      ? new Response(githubFile(path, source), { status: 200, headers: { "content-type": "application/json" } })
+      : new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+  };
+  try {
+    const response = await worker.fetch(request("architecture_analyze", {
+      owner: "mohammadrezayaghoobi123-dev",
+      repo: "Chat-gpt",
+      paths: ["src/calls.js"],
+    }), { MCP_AUTH_TOKEN: "test-secret" });
+    const body = await response.json();
+    const analysis = JSON.parse(body.result.content[0].text);
+    assert.deepEqual(
+      analysis.findings.map((finding) => [finding.rule_id, finding.evidence[0].line_start]),
+      [["UNBOUNDED_FETCH", 1], ["DYNAMIC_CODE_EXECUTION", 3]],
+    );
+    assert.equal(analysis.findings[1].severity, "high");
+    assert.equal(analysis.findings[1].verification.result, "not_run");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -187,7 +187,7 @@ async function createChangePr(args,env) {
   };
   const markReplayFailure=async(error,phase)=>{
    const message=error instanceof Error?error.message:"unknown error";
-   const match=/^GitHub API (\\d{3}):/.exec(message);
+   const match=/^GitHub API ([0-9]{3}):/.exec(message);
    const status=match?Number(match[1]):null;
    const ambiguous=error instanceof ToolError||status===null||status===408||status===409||status>=500;
    try{await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?"UPSTREAM_OUTCOME_UNCERTAIN":"UPSTREAM_REJECTED"});}
@@ -212,7 +212,7 @@ async function createChangePr(args,env) {
    catch{try{await stub.markOperationStatus({keyHash,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"});}catch{}throw new ToolError("WRITE_CONTROL_UNAVAILABLE");}
    if(!prDispatch?.updated)throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
    operation=prDispatch.operation;
-   const body=args.summary.trim().replace(/@/g,"@\\u200b")+"\\n\\n"+marker+"\\n\\n---\\nGenerated as a reviewable proposal. No branch was merged automatically. Run and inspect CI before merging.";
+   const body=args.summary.trim().replace(/@/g,"@\u200b")+"\n\n"+marker+"\n\n---\nGenerated as a reviewable proposal. No branch was merged automatically. Run and inspect CI before merging.";
    let pr;
    try{pr=await github(env,base+"/pulls",{method:"POST",body:JSON.stringify({title:safeTitle,body,head:branchName,base:args.base_branch,draft:true})});}
    catch(error){return await markReplayFailure(error,"PR_DISPATCHED");}

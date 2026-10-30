@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 
 const PHASES = [
   "RESERVED",
+  "TREE_DISPATCHED",
   "TREE_WRITTEN",
   "COMMIT_WRITTEN",
   "BRANCH_WRITTEN",
@@ -60,7 +61,7 @@ export class WriteControl extends DurableObject {
           key_hash TEXT PRIMARY KEY,
           request_hash TEXT NOT NULL,
           status TEXT NOT NULL CHECK (status IN ('IN_PROGRESS','SUCCEEDED','FAILED','UNKNOWN')),
-          phase TEXT NOT NULL CHECK (phase IN ('RESERVED','TREE_WRITTEN','COMMIT_WRITTEN','BRANCH_WRITTEN','PR_DISPATCHED','PR_CREATED')),
+          phase TEXT NOT NULL CHECK (phase IN ('RESERVED','TREE_DISPATCHED','TREE_WRITTEN','COMMIT_WRITTEN','BRANCH_WRITTEN','PR_DISPATCHED','PR_CREATED')),
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL,
           branch_name TEXT,

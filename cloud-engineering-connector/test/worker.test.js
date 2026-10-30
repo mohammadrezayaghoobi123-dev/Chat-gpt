@@ -87,7 +87,7 @@ test("a transport timeout during the first GitHub tree write is quarantined as U
  const operations=new Map();
  const stub={
   async admitWrite(input){const op={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",updatedAt:Date.now()};operations.set(input.keyHash,op);return{admitted:true,replay:false,operation:op}},
-  async transitionOperation(){throw new Error("no transition expected after a failed tree request")},
+  async transitionOperation(input){phase=input.nextPhase;const op=operations.values().next().value;op.phase=input.nextPhase;return{updated:true,operation:op}},
   async markOperationStatus(input){status=input.status;const op=operations.get(input.keyHash);op.status=input.status;op.errorCode=input.errorCode;return{updated:true,operation:op}},
   async markStaleOperationsUnknown(){return 0},
   async getOperation(keyHash){return operations.get(keyHash)??null},

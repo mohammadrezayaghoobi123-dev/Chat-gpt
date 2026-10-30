@@ -217,10 +217,12 @@ async function createChangePr(args,env) {
   throw new ToolError(operation?.status==="UNKNOWN"?"WRITE_OUTCOME_UNKNOWN":operation?.status==="FAILED"?"WRITE_OPERATION_FAILED":"WRITE_ALREADY_IN_PROGRESS",{operation_status:operation?.status??"UNKNOWN",phase:operation?.phase??null});
  }
  let sideEffectStarted=false;
+ let currentPhase="RESERVED";
  const transition=async(expectedPhase,nextPhase,metadata={},status="IN_PROGRESS")=>{
   try {
    const result=await stub.transitionOperation({keyHash,expectedPhase,nextPhase,status,metadata,now:Date.now()});
    if(!result?.updated) throw new Error("operation phase transition rejected");
+   currentPhase=nextPhase;
    return result.operation;
   } catch {
    try { await stub.markOperationStatus({keyHash,status:"UNKNOWN",now:Date.now(),errorCode:"LEDGER_TRANSITION_FAILED"}); } catch {}
@@ -235,10 +237,11 @@ async function createChangePr(args,env) {
   const baseRef=await github(env,base+"/git/ref/heads/"+encodeURIComponent(baseBranch).replace(/%2F/g,"/"));
   const parentSha=baseRef.object.sha;
   const parentCommit=await github(env,base+"/git/commits/"+parentSha);
+  await transition("RESERVED","TREE_DISPATCHED");
   // Set before dispatch: a transport failure can occur after GitHub accepted the write.
   sideEffectStarted=true;
   const tree=await github(env,base+"/git/trees",{method:"POST",body:JSON.stringify({base_tree:parentCommit.tree.sha,tree:args.files.map(file=>({path:file.path,mode:"100644",type:"blob",content:file.content}))})});
-  await transition("RESERVED","TREE_WRITTEN");
+  await transition("TREE_DISPATCHED","TREE_WRITTEN");
   const commit=await github(env,base+"/git/commits",{method:"POST",body:JSON.stringify({message:"assistant: "+safeTitle,tree:tree.sha,parents:[parentSha]})});
   await transition("TREE_WRITTEN","COMMIT_WRITTEN",{commitSha:commit.sha});
   const branch="assistant/mcp-"+keyHash;
@@ -259,7 +262,7 @@ async function createChangePr(args,env) {
   try {
    await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?"UPSTREAM_OUTCOME_UNCERTAIN":"UPSTREAM_REJECTED"});
   } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
-  if(ambiguous) throw new ToolError("WRITE_OUTCOME_UNKNOWN",{phase:"UNKNOWN",message:"A GitHub write may have succeeded. The operation was quarantined and will not be retried automatically."});
+  if(ambiguous) throw new ToolError("WRITE_OUTCOME_UNKNOWN",{phase:currentPhase,message:"A GitHub write may have succeeded. The operation was quarantined and will not be retried automatically."});
   throw error;
  }
 }

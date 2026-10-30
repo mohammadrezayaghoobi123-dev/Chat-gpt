@@ -809,7 +809,7 @@ test("create_change_pr persists deterministic Git commit identity before dispatc
   assert.deepEqual(events,["TREE_DISPATCHED","TREE_WRITTEN","COMMIT_DISPATCHED","COMMIT_WRITTEN","BRANCH_WRITTEN","PR_DISPATCHED","PR_CREATED"]);
   assert.deepEqual(metadata[0],{baseTreeSha,parentSha});
   assert.deepEqual(metadata[1],{treeSha});
-  assert.deepEqual(metadata[2],{commitDate:"2026-10-30T12:00:00.000Z",commitMessage:"assistant: Deterministic commit"});
+  assert.deepEqual(metadata[2],{commitDate:"2026-10-30T12:00:00.000Z",commitMessage:"assistant: Deterministic commit",authorName:"Cloud Engineering Connector",authorEmail:"mcp-connector@users.noreply.github.com",committerName:"Cloud Engineering Connector",committerEmail:"mcp-connector@users.noreply.github.com"});
   assert.equal(commitPayload.tree,treeSha);
   assert.deepEqual(commitPayload.parents,[parentSha]);
   assert.deepEqual(commitPayload.author,{name:"Cloud Engineering Connector",email:"mcp-connector@users.noreply.github.com",date:"2026-10-30T12:00:00.000Z"});

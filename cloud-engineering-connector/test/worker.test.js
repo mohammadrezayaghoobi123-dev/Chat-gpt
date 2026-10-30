@@ -143,7 +143,7 @@ test("create_change_pr retains deterministic branch after a definite PR rejectio
  globalThis.fetch=async(input,init={})=>{
   const url=String(input),method=init.method||"GET";calls.push({url,method});
   if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
-  if(method==="GET"&&url.includes("/git/ref/heads/feature%2Fcloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"parent"}}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"parent"}}),{status:200});
   if(method==="GET"&&url.endsWith("/git/commits/parent"))return new Response(JSON.stringify({tree:{sha:"base-tree"}}),{status:200});
   if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:"tree"}),{status:201});
   if(method==="POST"&&url.endsWith("/git/commits"))return new Response(JSON.stringify({sha:"commit"}),{status:201});

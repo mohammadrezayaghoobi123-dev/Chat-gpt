@@ -101,7 +101,7 @@ test("a transport timeout during the first GitHub tree write is quarantined as U
  const key="first-tree-timeout-key-0001";
  const operations=new Map();
  const stub={
-  async admitWrite(input){const op={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",updatedAt:Date.now()};operations.set(input.keyHash,op);return{admitted:true,replay:false,operation:op}},
+  async admitWrite(input){const op={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:Date.now(),updatedAt:Date.now()};operations.set(input.keyHash,op);return{admitted:true,replay:false,operation:op}},
   async transitionOperation(input){phase=input.nextPhase;const op=operations.values().next().value;op.phase=input.nextPhase;return{updated:true,operation:op}},
   async markOperationStatus(input){status=input.status;const op=operations.get(input.keyHash);op.status=input.status;op.errorCode=input.errorCode;return{updated:true,operation:op}},
   async markStaleOperationsUnknown(){return 0},
@@ -111,8 +111,8 @@ test("a transport timeout during the first GitHub tree write is quarantined as U
  globalThis.fetch=async(input,init={})=>{
   const url=String(input),method=init.method||"GET";githubCalls.push({url,method});
   if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
-  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"base-sha"}}),{status:200});
-  if(method==="GET"&&url.endsWith("/git/commits/base-sha"))return new Response(JSON.stringify({tree:{sha:"base-tree"}}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"a".repeat(40)}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+"a".repeat(40)))return new Response(JSON.stringify({sha:"a".repeat(40),tree:{sha:"b".repeat(40)}}),{status:200});
   if(method==="POST"&&url.endsWith("/git/trees"))throw new TypeError("simulated network timeout after GitHub accepted the tree request");
   throw new Error("Unexpected GitHub request "+method+" "+url);
  };
@@ -297,14 +297,21 @@ test("create_change_pr rejects every protected path before any GitHub request",a
 });
 
 test("create_change_pr retains deterministic branch after a definite PR rejection",async()=>{
- const originalFetch=globalThis.fetch;const calls=[];let branchRef=null;
+ const originalFetch=globalThis.fetch;const calls=[];let branchRef=null,commitPayload=null;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
  globalThis.fetch=async(input,init={})=>{
   const url=String(input),method=init.method||"GET";calls.push({url,method});
   if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
-  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"parent"}}),{status:200});
-  if(method==="GET"&&url.endsWith("/git/commits/parent"))return new Response(JSON.stringify({tree:{sha:"base-tree"}}),{status:200});
-  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:"tree"}),{status:201});
-  if(method==="POST"&&url.endsWith("/git/commits"))return new Response(JSON.stringify({sha:"commit"}),{status:201});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:parentSha}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1")){
+   const bytes=new TextEncoder().encode("proposal"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
+   const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+   return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
+  }
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
   if(method==="POST"&&url.endsWith("/git/refs")){branchRef=JSON.parse(init.body).ref;return new Response(JSON.stringify({ref:branchRef}),{status:201});}
   if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({message:"simulated PR validation failure"}),{status:422});
   throw new Error("Unexpected request "+method+" "+url);
@@ -318,14 +325,21 @@ test("create_change_pr retains deterministic branch after a definite PR rejectio
 });
 
 test("create_change_pr retains branch when pull request creation outcome is uncertain",async()=>{
- const originalFetch=globalThis.fetch;let createdBranch=null;let deleteAttempted=false;
+ const originalFetch=globalThis.fetch;let createdBranch=null;let deleteAttempted=false,commitPayload=null;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
  globalThis.fetch=async(input,init={})=>{
   const url=String(input),method=init.method||"GET";
   if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
-  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"base-sha"}}),{status:200});
-  if(method==="GET"&&url.endsWith("/git/commits/base-sha"))return new Response(JSON.stringify({tree:{sha:"base-tree"}}),{status:200});
-  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:"new-tree"}),{status:201});
-  if(method==="POST"&&url.endsWith("/git/commits"))return new Response(JSON.stringify({sha:"new-commit"}),{status:201});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:parentSha}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))return new Response(JSON.stringify({sha:treeSha}),{status:201});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1")){
+   const bytes=new TextEncoder().encode("proposal"),header=new TextEncoder().encode("blob "+bytes.byteLength+"\\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);object.set(header);object.set(bytes,header.byteLength);
+   const digest=await crypto.subtle.digest("SHA-1",object),blobSha=[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+   return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
+  }
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
   if(method==="POST"&&url.endsWith("/git/refs")){createdBranch=JSON.parse(init.body).ref.split("/").slice(2).join("/");return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch}),{status:201})}
   if(method==="POST"&&url.endsWith("/pulls"))throw new TypeError("simulated network timeout after request dispatch");
   if(method==="DELETE"&&createdBranch&&url.endsWith("/git/refs/heads/"+createdBranch)){deleteAttempted=true;return new Response(null,{status:204})}

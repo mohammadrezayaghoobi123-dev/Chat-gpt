@@ -249,8 +249,8 @@ export class WriteControl extends DurableObject {
     if (prNumber !== null && (!Number.isSafeInteger(prNumber) || prNumber < 1)) {
       throw new TypeError("prNumber must be a positive integer.");
     }
-    if (prUrl !== null && (typeof prUrl !== "string" || prUrl.length > 2048 || !/^https:\/\/github\.com\//.test(prUrl))) {
-      throw new TypeError("prUrl must be a GitHub HTTPS URL.");
+    if (prUrl !== null && (typeof prUrl !== "string" || prUrl.length > 2048 || !isPullRequestUrl(prUrl,prNumber))) {
+      throw new TypeError("pull URL must match the PR number.");
     }
     if (errorCode !== null && (typeof errorCode !== "string" || !/^[A-Z0-9_]{1,64}$/.test(errorCode))) {
       throw new TypeError("errorCode is invalid.");

@@ -132,6 +132,13 @@ function verifyGitRef(ref,branchName,commitSha) {
  }
  return ref;
 }
+async function verifyBranchAfterWrite(env,base,branchName,commitSha) {
+ const refPath="/git/ref/heads/"+encodeURIComponent(branchName).replace(/%2F/g,"/");
+ let ref;
+ try { ref=await github(env,base+refPath); }
+ catch { throw new ToolError("GIT_REF_VERIFICATION_UNAVAILABLE",{expected_ref:"refs/heads/"+branchName,expected_commit:commitSha}); }
+ return verifyGitRef(ref,branchName,commitSha);
+}
 function verifyPullRequestIdentity(pr,owner,repo,branchName,baseBranch,commitSha,marker) {
  const expectedUrl=typeof pr?.number==="number"?"https://github.com/"+owner+"/"+repo+"/pull/"+pr.number:null;
  if(!Number.isSafeInteger(pr?.number)||pr.html_url!==expectedUrl||pr.draft!==true||pr.state!=="open"||
@@ -143,7 +150,9 @@ function verifyPullRequestIdentity(pr,owner,repo,branchName,baseBranch,commitSha
 }
 async function verifyCreatedPullRequest(env,base,owner,repo,created,branchName,baseBranch,commitSha,marker) {
  verifyPullRequestIdentity(created,owner,repo,branchName,baseBranch,commitSha,marker);
- const current=await github(env,base+"/pulls/"+created.number);
+ let current;
+ try { current=await github(env,base+"/pulls/"+created.number); }
+ catch { throw new ToolError("GITHUB_PR_VERIFICATION_UNAVAILABLE",{pull_request_number:created.number}); }
  verifyPullRequestIdentity(current,owner,repo,branchName,baseBranch,commitSha,marker);
  if(current.html_url!==created.html_url)throw new ToolError("GITHUB_PR_VERIFICATION_FAILED");
  return current;
@@ -227,9 +236,7 @@ async function createChangePr(args,env) {
     try{
      const createdRef=await github(env,base+"/git/refs",{method:"POST",body:JSON.stringify({ref:"refs/heads/"+branchName,sha:operation.commitSha})});
      verifyGitRef(createdRef,branchName,operation.commitSha);
-     const refPath="/git/ref/heads/"+encodeURIComponent(branchName).replace(/%2F/g,"/");
-     const verifiedRef=await github(env,base+refPath);
-     verifyGitRef(verifiedRef,branchName,operation.commitSha);
+     await verifyBranchAfterWrite(env,base,branchName,operation.commitSha);
     }catch(error){return await markReplayFailure(error,"COMMIT_WRITTEN");}
     let branchTransition;
     try{branchTransition=await stub.transitionOperation({keyHash,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",now:Date.now(),metadata:{branchName}});}
@@ -436,9 +443,7 @@ async function createChangePr(args,env) {
   const branch="assistant/mcp-"+keyHash;
   const createdRef=await github(env,base+"/git/refs",{method:"POST",body:JSON.stringify({ref:"refs/heads/"+branch,sha:commit.sha})});
   verifyGitRef(createdRef,branch,commit.sha);
-  const refPath="/git/ref/heads/"+encodeURIComponent(branch).replace(/%2F/g,"/");
-  const verifiedRef=await github(env,base+refPath);
-  verifyGitRef(verifiedRef,branch,commit.sha);
+  await verifyBranchAfterWrite(env,base,branch,commit.sha);
   await transition("COMMIT_WRITTEN","BRANCH_WRITTEN",{branchName:branch});
   const marker="<!-- mcp-operation:"+keyHash+" -->";
   await transition("BRANCH_WRITTEN","PR_DISPATCHED");

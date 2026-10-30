@@ -583,3 +583,4 @@ test("public and authentication-failure requests use independent key spaces",asy
  assert.equal(publicResponse.status,200);
  assert.deepEqual(keys,["auth-failure:203.0.113.10","public-mcp:203.0.113.10"]);
 });
+test("GitHub API requests include the required User-Agent header",async()=>{const originalFetch=globalThis.fetch;let captured;globalThis.fetch=async(_url,options)=>{captured=new Headers(options.headers);return new Response(JSON.stringify({message:"Not Found"}),{status:404,headers:{"content-type":"application/json"}})};try{await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}}),env);assert.ok(captured?.get("user-agent"),"GitHub REST requests must identify the connector with a User-Agent header")}finally{globalThis.fetch=originalFetch}});

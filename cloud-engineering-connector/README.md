@@ -12,6 +12,12 @@ A cloud-hosted MCP connector for rigorous software engineering: repository inspe
 - **Bounded changes:** maximum 12 files and 500 KB per proposal; workflow files, environment files, credential directories, and private keys are blocked.
 - **Fail closed:** MCP bearer authentication is mandatory unless an explicit public read-only mode is enabled; production configuration should keep authentication required.
 
+## Browser console (Staging)
+
+The Worker serves a same-origin browser console at `GET /`. It displays `/healthz`, negotiates the legacy MCP `initialize` handshake, discovers tools, and can call only the read-only `project_inspect`, `read_project_file`, `engineering_standards`, and `architecture_review` tools. Dynamic output is inserted as text, the page uses a per-response CSP nonce, and the bearer token is never persisted in browser storage. The token field is optional only when the Staging Worker has the explicit `PUBLIC_READ_ONLY=true` setting.
+
+Staging public read-only mode is rate-limited and the server enforces its tool allowlist; hiding write tools in the browser is not the security control. Same-origin console requests are accepted without widening the cross-origin allowlist. Cross-origin requests still require an exact `MCP_ALLOWED_ORIGINS` entry. Production remains authenticated and is not changed by this Staging setting.
+
 ## MCP tools
 
 - `project_inspect`: repository metadata, latest branch commit, and a capped file listing.

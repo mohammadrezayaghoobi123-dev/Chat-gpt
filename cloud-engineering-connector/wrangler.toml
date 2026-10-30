@@ -16,6 +16,7 @@ period = 60
 
 [env.staging.vars]
 SERVICE_MODE = "cloud"
+PUBLIC_READ_ONLY = "true"
 
 [[env.staging.ratelimits]]
 name = "MCP_RATE_LIMITER"

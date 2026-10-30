@@ -95,7 +95,7 @@ test("PR title is collapsed to one line and summary mentions are neutralised", a
     if (url.endsWith("/git/commits/" + parentSha)) return new Response(JSON.stringify({ tree: { sha: baseTreeSha }, sha: parentSha }), { status: 200 });
     if (url.endsWith("/git/trees")) return new Response(JSON.stringify({ sha: treeSha }), { status: 201 });
     if (url.includes("/git/trees/" + treeSha + "?recursive=1")) {
-      const bytes = new TextEncoder().encode("x"), header = new TextEncoder().encode("blob " + bytes.byteLength + "\\0"), object = new Uint8Array(header.byteLength + bytes.byteLength);
+      const bytes = new TextEncoder().encode("x"), header = new TextEncoder().encode("blob " + bytes.byteLength + "\0"), object = new Uint8Array(header.byteLength + bytes.byteLength);
       object.set(header); object.set(bytes, header.byteLength);
       const digest = await crypto.subtle.digest("SHA-1", object), blobSha = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
       return new Response(JSON.stringify({ sha: treeSha, truncated: false, tree: [{ path: "README.md", mode: "100644", type: "blob", sha: blobSha }] }), { status: 200 });

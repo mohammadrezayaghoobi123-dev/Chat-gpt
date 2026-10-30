@@ -1,5 +1,3 @@
-const READ_ONLY_TOOLS = new Set(["project_inspect","read_project_file","engineering_standards","architecture_review"]);
-
 export function consoleResponse() {
   const bytes = new Uint8Array(18);
   crypto.getRandomValues(bytes);

@@ -111,7 +111,7 @@ async function createChangePr(args,env) {
  let stub;
  try {
   stub=binding.get(binding.idFromName("create-change-pr-global"));
-  if(!stub||typeof stub.admitWrite!=="function"||typeof stub.transitionOperation!=="function"||typeof stub.markOperationStatus!=="function"||typeof stub.markStaleOperationsUnknown!=="function") throw new Error("Durable Object RPC binding is incomplete.");
+  if(!stub||typeof stub.admitWrite!=="function"||typeof stub.transitionOperation!=="function"||typeof stub.markOperationStatus!=="function"||typeof stub.markStaleOperationsUnknown!=="function"||typeof stub.reconcilePrCreated!=="function"||typeof stub.getOperation!=="function") throw new Error("Durable Object RPC binding is incomplete.");
  } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
 
  const {idempotency_key,...requestData}=args;
@@ -129,25 +129,46 @@ async function createChangePr(args,env) {
 
  if(admission.replay) {
   let operation=admission.operation;
-  if(operation?.status==="IN_PROGRESS"&&Date.now()-operation.updatedAt>=120_000) {
+  if(!operation) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+  if(operation.status==="IN_PROGRESS"&&Date.now()-operation.updatedAt>=120_000) {
    try {
     await stub.markStaleOperationsUnknown({now:Date.now(),leaseMs:120_000});
     operation=await stub.getOperation(keyHash);
    } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
   }
+  const marker="<!-- mcp-operation:"+keyHash+" -->";
   if(operation?.status==="SUCCEEDED"&&operation.phase==="PR_CREATED") {
-   return {status:"draft_pull_request_created",repository:args.owner+"/"+args.repo,branch:operation.branchName,base_branch:args.base_branch,commit:operation.commitSha,pull_request:{number:operation.prNumber,url:operation.prUrl,draft:true,state:"open"},changed_paths:args.files.map(file=>file.path),replayed:true,safety:"Idempotent replay; no additional GitHub write was performed."};
+   let livePr;
+   try { livePr=await github(env,base+"/pulls/"+operation.prNumber); }
+   catch { throw new ToolError("WRITE_REPLAY_VERIFICATION_UNAVAILABLE"); }
+   if(!livePr||livePr.number!==operation.prNumber||livePr.html_url!==operation.prUrl||livePr.head?.ref!==operation.branchName||livePr.base?.ref!==args.base_branch||typeof livePr.body!=="string"||!livePr.body.includes(marker)) {
+    throw new ToolError("WRITE_REPLAY_VERIFICATION_FAILED",{operation_status:operation.status,phase:operation.phase});
+   }
+   return {status:"draft_pull_request_created",repository:args.owner+"/"+args.repo,branch:operation.branchName,base_branch:args.base_branch,commit:operation.commitSha,pull_request:{number:livePr.number,url:livePr.html_url,draft:livePr.draft,state:livePr.state},head_sha:livePr.head?.sha??null,head_changed_since_creation:typeof livePr.head?.sha==="string"&&livePr.head.sha!==operation.commitSha,changed_paths:args.files.map(file=>file.path),replayed:true,safety:"Idempotent replay verified against the existing GitHub PR; no GitHub write was performed."};
+  }
+  if(operation?.status==="UNKNOWN"&&operation.phase==="PR_DISPATCHED"&&operation.branchName&&operation.commitSha) {
+   let candidates;
+   try {
+    const query="/pulls?head="+encodeURIComponent(args.owner+":"+operation.branchName)+"&base="+encodeURIComponent(args.base_branch)+"&state=all";
+    candidates=await github(env,base+query);
+   } catch { throw new ToolError("WRITE_RECONCILIATION_UNAVAILABLE",{operation_status:"UNKNOWN",phase:operation.phase}); }
+   if(!Array.isArray(candidates)) throw new ToolError("WRITE_RECONCILIATION_UNAVAILABLE",{operation_status:"UNKNOWN",phase:operation.phase});
+   const matches=candidates.filter(pr=>pr&&pr.head?.ref===operation.branchName&&pr.head?.sha===operation.commitSha&&pr.base?.ref===args.base_branch&&typeof pr.body==="string"&&pr.body.includes(marker));
+   if(matches.length>1) throw new ToolError("WRITE_RECONCILIATION_CONFLICT",{matching_prs:matches.length});
+   if(matches.length===1) {
+    const match=matches[0];
+    let reconciled;
+    try {
+     reconciled=await stub.reconcilePrCreated({keyHash,now:Date.now(),branchName:operation.branchName,commitSha:operation.commitSha,prNumber:match.number,prUrl:match.html_url});
+    } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
+    if(!reconciled?.updated) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+    return {status:"draft_pull_request_created",repository:args.owner+"/"+args.repo,branch:operation.branchName,base_branch:args.base_branch,commit:operation.commitSha,pull_request:{number:match.number,url:match.html_url,draft:match.draft,state:match.state},head_sha:match.head?.sha??null,head_changed_since_creation:false,changed_paths:args.files.map(file=>file.path),replayed:true,reconciled:true,safety:"The previously ambiguous PR creation was verified by read-only GitHub evidence and reconciled in the durable operation ledger; no new PR was created."};
+   }
+   throw new ToolError("WRITE_OUTCOME_UNKNOWN",{operation_status:"UNKNOWN",phase:operation.phase,message:"No matching PR was found. The operation remains quarantined and will not be retried automatically."});
   }
   throw new ToolError(operation?.status==="UNKNOWN"?"WRITE_OUTCOME_UNKNOWN":operation?.status==="FAILED"?"WRITE_OPERATION_FAILED":"WRITE_ALREADY_IN_PROGRESS",{operation_status:operation?.status??"UNKNOWN",phase:operation?.phase??null});
  }
-
  let sideEffectStarted=false;
- const markStatus=async(status,errorCode)=>{
-  try {
-   const result=await stub.markOperationStatus({keyHash,status,now:Date.now(),errorCode});
-   if(!result?.updated&&result?.reason!=="STATUS_CONFLICT") throw new Error("operation status update rejected");
-  } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
- };
  const transition=async(expectedPhase,nextPhase,metadata={},status="IN_PROGRESS")=>{
   try {
    const result=await stub.transitionOperation({keyHash,expectedPhase,nextPhase,status,metadata,now:Date.now()});

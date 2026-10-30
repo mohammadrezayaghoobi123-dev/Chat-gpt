@@ -242,6 +242,39 @@ export class WriteControl extends DurableObject {
     });
   }
 
+  reconcilePrCreated(input) {
+    if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
+    const { keyHash, now, branchName, commitSha, prNumber, prUrl } = input;
+    assertHash(keyHash, "keyHash");
+    assertTimestamp(now, "now");
+    if (typeof branchName !== "string" || branchName.length > 255) throw new TypeError("branchName is invalid.");
+    if (typeof commitSha !== "string" || !/^[a-f0-9]{40}$/.test(commitSha)) throw new TypeError("commitSha must be a Git SHA.");
+    if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new TypeError("prNumber must be a positive integer.");
+    if (typeof prUrl !== "string" || prUrl.length > 2048 || !/^https:\/\/github\.com\//.test(prUrl)) {
+      throw new TypeError("prUrl must be a GitHub HTTPS URL.");
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.readOperation(keyHash);
+      if (!current) return { updated: false, reason: "NOT_FOUND" };
+      if (current.status !== "UNKNOWN" || current.phase !== "PR_DISPATCHED") {
+        return { updated: false, reason: "RECONCILIATION_NOT_ALLOWED", operation: current };
+      }
+      if (current.branchName !== branchName || current.commitSha !== commitSha) {
+        return { updated: false, reason: "OPERATION_IDENTITY_MISMATCH", operation: current };
+      }
+      this.ctx.storage.sql.exec(
+        `UPDATE write_operations
+         SET phase = 'PR_CREATED', status = 'SUCCEEDED', updated_at = ?, pr_number = ?, pr_url = ?
+         WHERE key_hash = ? AND status = 'UNKNOWN' AND phase = 'PR_DISPATCHED'`,
+        now,
+        prNumber,
+        prUrl,
+        keyHash,
+      );
+      return { updated: true, operation: this.readOperation(keyHash) };
+    });
+  }
+
   markOperationStatus(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
     const { keyHash, status, now, errorCode } = input;

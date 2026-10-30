@@ -21,7 +21,8 @@ function createWriteControlMock() {
   },
   async markOperationStatus(input){const op=operations.get(input.keyHash);if(!op||op.status!=="IN_PROGRESS")return{updated:false,reason:"STATUS_CONFLICT"};Object.assign(op,{status:input.status,updatedAt:input.now});return{updated:true,operation:op};},
   async markStaleOperationsUnknown(){return 0;},
-  async getOperation(keyHash){return operations.get(keyHash)??null;}
+  async getOperation(keyHash){return operations.get(keyHash)??null;},
+  async reconcilePrCreated(input){const op=operations.get(input.keyHash);if(!op||op.status!=="UNKNOWN"||op.phase!=="PR_DISPATCHED")return{updated:false};Object.assign(op,{status:"SUCCEEDED",phase:"PR_CREATED",prNumber:input.prNumber,prUrl:input.prUrl,updatedAt:input.now});return{updated:true,operation:op};}
  };
  return {idFromName:name=>name,get:()=>stub};
 }
@@ -56,6 +57,67 @@ test("write operations fail closed when the Durable Object binding is unavailabl
  try{
   const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Valid",summary:"Valid",files:[{path:"README.md",content:"x"}]}}),{...env,GITHUB_TOKEN:"unused",WRITE_CONTROL:undefined});
   const body=await response.json();assert.equal(response.status,200);assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/WRITE_CONTROL_UNAVAILABLE/);assert.equal(calls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+test("write quota denial is a structured MCP tool error with HTTP 200",async()=>{
+ const originalFetch=globalThis.fetch;let githubCalls=0;globalThis.fetch=async()=>{githubCalls++;throw new Error("GitHub must not be called")};
+ const limited={idFromName:name=>name,get:()=>({admitWrite:async()=>({admitted:false,reason:"RATE_LIMITED",retryAfterSeconds:37}),transitionOperation:async()=>({updated:false}),markOperationStatus:async()=>({updated:false}),markStaleOperationsUnknown:async()=>0,reconcilePrCreated:async()=>({updated:false}),getOperation:async()=>null})};
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Quota",summary:"Quota",files:[{path:"README.md",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:limited});
+  const body=await response.json();assert.equal(response.status,200);assert.equal(body.jsonrpc,"2.0");assert.equal(body.result.isError,true);
+  assert.deepEqual(JSON.parse(body.result.content[0].text),{error:"WRITE_RATE_LIMITED",retry_after_seconds:37});assert.equal(githubCalls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
+
+test("idempotency fingerprint conflict is a structured MCP tool error",async()=>{
+ const originalFetch=globalThis.fetch;let githubCalls=0;globalThis.fetch=async()=>{githubCalls++;throw new Error("GitHub must not be called")};
+ const conflict={idFromName:name=>name,get:()=>({admitWrite:async()=>({admitted:false,reason:"IDEMPOTENCY_CONFLICT"}),transitionOperation:async()=>({updated:false}),markOperationStatus:async()=>({updated:false}),markStaleOperationsUnknown:async()=>0,reconcilePrCreated:async()=>({updated:false}),getOperation:async()=>null})};
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Conflict",summary:"Conflict",files:[{path:"README.md",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:conflict});
+  const body=await response.json();assert.equal(response.status,200);assert.equal(body.result.isError,true);assert.deepEqual(JSON.parse(body.result.content[0].text),{error:"IDEMPOTENCY_CONFLICT"});assert.equal(githubCalls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
+
+test("successful idempotent replay verifies the existing PR marker before returning cached metadata",async()=>{
+ const originalFetch=globalThis.fetch;let keyHash=null;let calls=[];
+ const branchFor=key=>"assistant/mcp-"+key;
+ const replayStub={
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{keyHash,status:"SUCCEEDED",phase:"PR_CREATED",branchName:branchFor(input.keyHash),commitSha:"a".repeat(40),prNumber:42,prUrl:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/42"}}},
+  async transitionOperation(){throw new Error("no writes expected")},
+  async markOperationStatus(){throw new Error("no writes expected")},
+  async markStaleOperationsUnknown(){return 0},
+  async reconcilePrCreated(){throw new Error("no reconciliation expected")},
+  async getOperation(){return null}
+ };
+ globalThis.fetch=async(input,init={})=>{const method=init.method||"GET";calls.push({url:String(input),method});return new Response(JSON.stringify({number:42,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/42",draft:true,state:"open",head:{ref:branchFor(keyHash),sha:"b".repeat(40)},base:{ref:"feature/cloud-engineering-connector"},body:"proposal\\n<!-- mcp-operation:"+keyHash+" -->"}),{status:200,headers:{"content-type":"application/json"}})};
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Replay",summary:"Replay",files:[{path:"README.md",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>replayStub}});
+  const body=await response.json();const result=JSON.parse(body.result.content[0].text);assert.equal(response.status,200);assert.equal(result.replayed,true);assert.equal(result.head_changed_since_creation,true);assert.equal(result.pull_request.state,"open");assert.equal(calls.length,1);assert.equal(calls[0].method,"GET");
+ }finally{globalThis.fetch=originalFetch}
+});
+
+test("UNKNOWN PR_DISPATCHED replay reconciles exactly one marker-matched PR without creating another",async()=>{
+ const originalFetch=globalThis.fetch;let keyHash=null,reconcileCalls=0,githubMethods=[];
+ const branchFor=key=>"assistant/mcp-"+key;
+ const recoveryStub={
+  async admitWrite(input){keyHash=input.keyHash;return{admitted:true,replay:true,operation:{keyHash,status:"UNKNOWN",phase:"PR_DISPATCHED",branchName:branchFor(input.keyHash),commitSha:"c".repeat(40),updatedAt:Date.now()}}},
+  async transitionOperation(){throw new Error("no write phase transition expected")},
+  async markOperationStatus(){throw new Error("no status update expected")},
+  async markStaleOperationsUnknown(){return 0},
+  async getOperation(){return null},
+  async reconcilePrCreated(input){reconcileCalls++;assert.equal(input.keyHash,keyHash);return{updated:true,operation:{status:"SUCCEEDED",phase:"PR_CREATED"}}}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const method=init.method||"GET";githubMethods.push(method);
+  const pr={number:77,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/77",draft:true,state:"open",head:{ref:branchFor(keyHash),sha:"c".repeat(40)},base:{ref:"feature/cloud-engineering-connector"},body:"proposal\\n<!-- mcp-operation:"+keyHash+" -->"};
+  return new Response(JSON.stringify([pr]),{status:200,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Recover",summary:"Recover",files:[{path:"README.md",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>recoveryStub}});
+  const body=await response.json(),result=JSON.parse(body.result.content[0].text);
+  assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,77);assert.equal(reconcileCalls,1);assert.deepEqual(githubMethods,["GET"]);
  }finally{globalThis.fetch=originalFetch}
 });
 

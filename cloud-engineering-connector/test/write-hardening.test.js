@@ -37,6 +37,7 @@ function createWriteControlMock() {
     },
     async markStaleOperationsUnknown() { return 0; },
     async getOperation(keyHash) { return operations.get(keyHash) ?? null; },
+    async reconcilePrCreated(input) { const operation=operations.get(input.keyHash); if(!operation||operation.status!=="UNKNOWN"||operation.phase!=="PR_DISPATCHED")return{updated:false}; Object.assign(operation,{status:"SUCCEEDED",phase:"PR_CREATED",prNumber:input.prNumber,prUrl:input.prUrl,updatedAt:input.now}); return{updated:true,operation}; },
   };
   return { idFromName: (name) => name, get: () => stub };
 }

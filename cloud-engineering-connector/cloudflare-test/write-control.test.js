@@ -73,6 +73,34 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     })).resolves.toMatchObject({ updated: false, reason: "PHASE_CONFLICT" });
   });
 
+  it("reconciles an UNKNOWN PR_DISPATCHED operation only after verified PR evidence", async () => {
+    const stub = stubFor("unknown-pr-reconcile");
+    const keyHash = "6".repeat(64);
+    const commitSha = "a".repeat(40);
+    const branchName = "assistant/mcp-" + keyHash;
+    await stub.admitWrite(request(keyHash, "7".repeat(64)));
+    await stub.transitionOperation({ keyHash, expectedPhase: "RESERVED", nextPhase: "TREE_WRITTEN", now: 1_800_000_000_001 });
+    await stub.transitionOperation({ keyHash, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_WRITTEN", now: 1_800_000_000_002, metadata: { commitSha } });
+    await stub.transitionOperation({ keyHash, expectedPhase: "COMMIT_WRITTEN", nextPhase: "BRANCH_WRITTEN", now: 1_800_000_000_003, metadata: { branchName } });
+    await stub.transitionOperation({ keyHash, expectedPhase: "BRANCH_WRITTEN", nextPhase: "PR_DISPATCHED", now: 1_800_000_000_004 });
+    await stub.markOperationStatus({ keyHash, status: "UNKNOWN", now: 1_800_000_000_005, errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
+    await expect(stub.reconcilePrCreated({
+      keyHash, now: 1_800_000_000_006, branchName, commitSha, prNumber: 42,
+      prUrl: "https://github.com/acme/project/pull/42",
+    })).resolves.toMatchObject({ updated: true, operation: { status: "SUCCEEDED", phase: "PR_CREATED", prNumber: 42 } });
+  });
+
+  it("refuses UNKNOWN reconciliation unless the operation is at PR_DISPATCHED", async () => {
+    const stub = stubFor("unknown-early-phase");
+    const keyHash = "8".repeat(64);
+    await stub.admitWrite(request(keyHash, "9".repeat(64)));
+    await stub.markOperationStatus({ keyHash, status: "UNKNOWN", now: 1_800_000_000_001 });
+    await expect(stub.reconcilePrCreated({
+      keyHash, now: 1_800_000_000_002, branchName: "assistant/mcp-" + keyHash,
+      commitSha: "b".repeat(40), prNumber: 43, prUrl: "https://github.com/acme/project/pull/43",
+    })).resolves.toMatchObject({ updated: false, reason: "RECONCILIATION_NOT_ALLOWED" });
+  });
+
   it("records definite upstream rejection as terminal FAILED", async () => {
     const stub = stubFor("terminal-failure");
     const keyHash = "4".repeat(64);

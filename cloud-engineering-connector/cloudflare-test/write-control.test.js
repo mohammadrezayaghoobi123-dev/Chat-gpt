@@ -480,3 +480,28 @@ describe("Durable lease fencing",()=>{
     }finally{vi.useRealTimers();}
   });
 });
+
+
+describe("mandatory lease generation at every recovery boundary",()=>{
+  it("rejects recovery calls that omit the lease generation",async()=>{
+    const stub=stubFor("recovery-requires-generation");
+    const keyHash="a".repeat(64);
+    const baseTreeSha="1".repeat(40),parentSha="2".repeat(40),treeSha="3".repeat(40);
+    await stub.admitWrite(request(keyHash,"b".repeat(64)));
+    await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha,parentSha}});
+    await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    await expect(Promise.resolve().then(()=>stub.reconcileTreeWritten({keyHash,baseTreeSha,parentSha,treeSha})))
+      .rejects.toThrow(/leaseGeneration is required/);
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({status:"UNKNOWN",phase:"TREE_DISPATCHED",leaseGeneration:2});
+  });
+
+  it("rejects RESERVED reopen calls that omit the lease generation",async()=>{
+    const stub=stubFor("reopen-requires-generation");
+    const keyHash="c".repeat(64);
+    await stub.admitWrite(request(keyHash,"d".repeat(64)));
+    await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});
+    await expect(Promise.resolve().then(()=>stub.reopenReserved({keyHash})))
+      .rejects.toThrow(/leaseGeneration is required/);
+    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({status:"UNKNOWN",phase:"RESERVED",leaseGeneration:2});
+  });
+});

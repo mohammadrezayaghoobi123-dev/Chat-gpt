@@ -23,12 +23,6 @@ function assertHash(value, field) {
   }
 }
 
-function assertTimestamp(value, field) {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new TypeError(field + " must be a non-negative safe integer.");
-  }
-}
-
 function operationFromRow(row) {
   if (!row) return null;
   return {
@@ -97,10 +91,10 @@ export class WriteControl extends DurableObject {
 
   admitWrite(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { keyHash, requestHash, now, windowMs, limit } = input;
+    const { keyHash, requestHash, windowMs, limit } = input;
+    const now = Date.now();
     assertHash(keyHash, "keyHash");
     assertHash(requestHash, "requestHash");
-    assertTimestamp(now, "now");
     if (!Number.isSafeInteger(windowMs) || windowMs < 1 || windowMs > 3_600_000) {
       throw new TypeError("windowMs must be an integer between 1 and 3600000.");
     }
@@ -165,9 +159,9 @@ export class WriteControl extends DurableObject {
 
   transitionOperation(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { keyHash, expectedPhase, nextPhase, now } = input;
+    const { keyHash, expectedPhase, nextPhase } = input;
+    const now = Date.now();
     assertHash(keyHash, "keyHash");
-    assertTimestamp(now, "now");
     const expectedIndex = PHASES.indexOf(expectedPhase);
     if (expectedIndex < 0 || PHASES[expectedIndex + 1] !== nextPhase) {
       throw new TypeError("nextPhase must be the immediate successor of expectedPhase.");
@@ -244,9 +238,9 @@ export class WriteControl extends DurableObject {
 
   reconcileBranchWritten(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { keyHash, now, branchName, commitSha } = input;
+    const { keyHash, branchName, commitSha } = input;
+    const now = Date.now();
     assertHash(keyHash, "keyHash");
-    assertTimestamp(now, "now");
     if (branchName !== "assistant/mcp-" + keyHash) throw new TypeError("branchName does not match the deterministic operation identity.");
     if (typeof commitSha !== "string" || !/^[a-f0-9]{40}$/.test(commitSha)) throw new TypeError("commitSha must be a Git SHA.");
     return this.ctx.storage.transactionSync(() => {
@@ -273,9 +267,9 @@ export class WriteControl extends DurableObject {
 
   reconcilePrCreated(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { keyHash, now, branchName, commitSha, prNumber, prUrl } = input;
+    const { keyHash, branchName, commitSha, prNumber, prUrl } = input;
+    const now = Date.now();
     assertHash(keyHash, "keyHash");
-    assertTimestamp(now, "now");
     if (typeof branchName !== "string" || branchName.length > 255) throw new TypeError("branchName is invalid.");
     if (typeof commitSha !== "string" || !/^[a-f0-9]{40}$/.test(commitSha)) throw new TypeError("commitSha must be a Git SHA.");
     if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new TypeError("prNumber must be a positive integer.");
@@ -306,9 +300,9 @@ export class WriteControl extends DurableObject {
 
   markOperationStatus(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { keyHash, status, now, errorCode } = input;
+    const { keyHash, status, errorCode } = input;
+    const now = Date.now();
     assertHash(keyHash, "keyHash");
-    assertTimestamp(now, "now");
     if (status !== "FAILED" && status !== "UNKNOWN") {
       throw new TypeError("Only FAILED or UNKNOWN may be assigned outside a phase transition.");
     }
@@ -334,8 +328,8 @@ export class WriteControl extends DurableObject {
 
   markStaleOperationsUnknown(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
-    const { now, leaseMs } = input;
-    assertTimestamp(now, "now");
+    const { leaseMs } = input;
+    const now = Date.now();
     if (!Number.isSafeInteger(leaseMs) || leaseMs < 1 || leaseMs > 86_400_000) {
       throw new TypeError("leaseMs must be an integer between 1 and 86400000.");
     }

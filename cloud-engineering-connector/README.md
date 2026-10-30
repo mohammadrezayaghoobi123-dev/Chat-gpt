@@ -26,7 +26,7 @@ The model using this connector must perform substantive reasoning, inspect relev
 
 `create_change_pr` is the only write-capable tool in this version. It requires a client-generated `idempotency_key` containing 16–128 Base64URL characters.
 
-- A single SQLite-backed Durable Object per environment serializes admission across the shared service credential.
+- A single SQLite-backed Durable Object per environment serializes admission across the shared service credential. The Durable Object itself supplies the admission and lease clock; caller-supplied timestamps are ignored so different Worker isolates cannot skew the quota window.
 - Admission is limited to **five distinct write operations in any rolling 60-second window**. The quota is shared by all clients using that environment credential; it is not a per-user fairness limit.
 - Replaying the same key and same canonical request fingerprint returns the recorded operation without consuming a second admission. Reusing the key with different request content returns `IDEMPOTENCY_CONFLICT`.
 - Validation of the request and protected paths occurs before admission. Once admitted, an operation consumes quota even if GitHub later rejects it.

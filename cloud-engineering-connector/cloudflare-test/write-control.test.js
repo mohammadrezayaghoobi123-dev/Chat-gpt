@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 function stubFor(name = "write-control-contract") {
   return env.WRITE_CONTROL.get(env.WRITE_CONTROL.idFromName(name));
@@ -14,15 +14,27 @@ const request = (keyHash, requestHash) => ({
 });
 
 describe("WriteControl atomic admission and idempotency contract", () => {
-  it("admits at most five distinct writes in a rolling 60-second window", async () => {
-    const stub = stubFor("quota-five");
-    const results = [];
-    for (let i = 0; i < 6; i++) {
-      results.push(await stub.admitWrite(request(i.toString(16).padStart(64, "0"), (i + 100).toString(16).padStart(64, "0"))));
+  it("admits at most five distinct writes in a rolling 60-second window using the Durable Object clock", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = 1_800_000_000_000;
+      vi.setSystemTime(start);
+      const stub = stubFor("quota-five");
+      const results = [];
+      for (let i = 0; i < 5; i++) {
+        results.push(await stub.admitWrite(request(i.toString(16).padStart(64, "0"), (i + 100).toString(16).padStart(64, "0"))));
+      }
+      vi.setSystemTime(start + 59_999);
+      results.push(await stub.admitWrite({ ...request("5".repeat(64), "105".padStart(64, "0")), now: start + 86_400_000 }));
+      expect(results.filter((item) => item.admitted)).toHaveLength(5);
+      expect(results[5]).toMatchObject({ admitted: false, reason: "RATE_LIMITED" });
+      expect(results[5].retryAfterSeconds).toBeGreaterThan(0);
+      vi.setSystemTime(start + 60_001);
+      await expect(stub.admitWrite(request("6".repeat(64), "106".padStart(64, "0"))))
+        .resolves.toMatchObject({ admitted: true, replay: false });
+    } finally {
+      vi.useRealTimers();
     }
-    expect(results.filter((item) => item.admitted)).toHaveLength(5);
-    expect(results[5]).toMatchObject({ admitted: false, reason: "RATE_LIMITED" });
-    expect(results[5].retryAfterSeconds).toBeGreaterThan(0);
   });
 
   it("replays the same idempotency key without consuming a second admission", async () => {
@@ -128,18 +140,23 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     })).resolves.toMatchObject({ updated: true, operation: { status: "FAILED", errorCode: "UPSTREAM_REJECTED" } });
   });
 
-  it("moves expired in-progress operations to UNKNOWN without replaying them", async () => {
-    const stub = stubFor("stale-unknown");
-    const keyHash = "2".repeat(64);
-    await stub.admitWrite(request(keyHash, "3".repeat(64)));
-    const changed = await stub.markStaleOperationsUnknown({
-      now: 1_800_000_200_000,
-      leaseMs: 120_000,
-    });
-    expect(changed).toBeGreaterThanOrEqual(1);
-    await expect(stub.getOperation(keyHash)).resolves.toMatchObject({
-      status: "UNKNOWN",
-      phase: "RESERVED",
-    });
+  it("moves expired in-progress operations to UNKNOWN using the Durable Object clock", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = 1_800_000_000_000;
+      vi.setSystemTime(start);
+      const stub = stubFor("stale-unknown");
+      const keyHash = "2".repeat(64);
+      await stub.admitWrite(request(keyHash, "3".repeat(64)));
+      vi.setSystemTime(start + 120_001);
+      const changed = await stub.markStaleOperationsUnknown({ leaseMs: 120_000 });
+      expect(changed).toBeGreaterThanOrEqual(1);
+      await expect(stub.getOperation(keyHash)).resolves.toMatchObject({
+        status: "UNKNOWN",
+        phase: "RESERVED",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -83,21 +83,21 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     const keyHash = "f".repeat(64);
     await stub.admitWrite(request(keyHash, "1".repeat(64)));
     await expect(stub.transitionOperation({
-      keyHash,
+      keyHash,leaseGeneration:1,
       expectedPhase: "RESERVED",
       nextPhase: "TREE_DISPATCHED",
       now: 1_800_000_000_001,
       metadata: { baseTreeSha: "a".repeat(40), parentSha: "b".repeat(40) },
     })).resolves.toMatchObject({ updated: true, operation: { phase: "TREE_DISPATCHED" } });
     await expect(stub.transitionOperation({
-      keyHash,
+      keyHash,leaseGeneration:1,
       expectedPhase: "TREE_DISPATCHED",
       nextPhase: "TREE_WRITTEN",
       now: 1_800_000_000_002,
       metadata: { treeSha: "c".repeat(40) },
     })).resolves.toMatchObject({ updated: true, operation: { phase: "TREE_WRITTEN" } });
     await expect(stub.transitionOperation({
-      keyHash,
+      keyHash,leaseGeneration:1,
       expectedPhase: "RESERVED",
       nextPhase: "TREE_DISPATCHED",
       now: 1_800_000_000_003,
@@ -110,10 +110,10 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     const commitSha = "c".repeat(40);
     const branchName = "assistant/mcp-" + keyHash;
     await stub.admitWrite(request(keyHash, "d".repeat(64)));
-    await stub.transitionOperation({ keyHash, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED", now: 1_800_000_000_001, metadata: { baseTreeSha: "1".repeat(40), parentSha: "2".repeat(40) } });
-    await stub.transitionOperation({ keyHash, expectedPhase: "TREE_DISPATCHED", nextPhase: "TREE_WRITTEN", now: 1_800_000_000_001, metadata: { treeSha: "3".repeat(40) } });
-    await stub.transitionOperation({ keyHash, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED", now: 1_800_000_000_002, metadata: { commitDate: "2026-10-30T12:00:00.000Z", commitMessage: "assistant: branch recovery", authorName: "Cloud Engineering Connector", authorEmail: "mcp-connector@users.noreply.github.com", committerName: "Cloud Engineering Connector", committerEmail: "mcp-connector@users.noreply.github.com" } });
-    await stub.transitionOperation({ keyHash, expectedPhase: "COMMIT_DISPATCHED", nextPhase: "COMMIT_WRITTEN", now: 1_800_000_000_003, metadata: { commitSha } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED", now: 1_800_000_000_001, metadata: { baseTreeSha: "1".repeat(40), parentSha: "2".repeat(40) } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "TREE_DISPATCHED", nextPhase: "TREE_WRITTEN", now: 1_800_000_000_001, metadata: { treeSha: "3".repeat(40) } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED", now: 1_800_000_000_002, metadata: { commitDate: "2026-10-30T12:00:00.000Z", commitMessage: "assistant: branch recovery", authorName: "Cloud Engineering Connector", authorEmail: "mcp-connector@users.noreply.github.com", committerName: "Cloud Engineering Connector", committerEmail: "mcp-connector@users.noreply.github.com" } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "COMMIT_DISPATCHED", nextPhase: "COMMIT_WRITTEN", now: 1_800_000_000_003, metadata: { commitSha } });
     await stub.markOperationStatus({ keyHash, leaseGeneration:1, status: "UNKNOWN", now: 1_800_000_000_003, errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
     await expect(Promise.resolve().then(()=>stub.reconcileBranchWritten({keyHash,leaseGeneration:2,branchName:"assistant/mcp-unrelated",commitSha})))
       .rejects.toThrow(/deterministic operation identity/);
@@ -129,12 +129,12 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     const commitSha = "a".repeat(40);
     const branchName = "assistant/mcp-" + keyHash;
     await stub.admitWrite(request(keyHash, "7".repeat(64)));
-    await stub.transitionOperation({ keyHash, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED", now: 1_800_000_000_001, metadata: { baseTreeSha: "1".repeat(40), parentSha: "2".repeat(40) } });
-    await stub.transitionOperation({ keyHash, expectedPhase: "TREE_DISPATCHED", nextPhase: "TREE_WRITTEN", now: 1_800_000_000_001, metadata: { treeSha: "3".repeat(40) } });
-    await stub.transitionOperation({ keyHash, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED", now: 1_800_000_000_002, metadata: { commitDate: "2026-10-30T12:00:00.000Z", commitMessage: "assistant: branch recovery", authorName: "Cloud Engineering Connector", authorEmail: "mcp-connector@users.noreply.github.com", committerName: "Cloud Engineering Connector", committerEmail: "mcp-connector@users.noreply.github.com" } });
-    await stub.transitionOperation({ keyHash, expectedPhase: "COMMIT_DISPATCHED", nextPhase: "COMMIT_WRITTEN", now: 1_800_000_000_003, metadata: { commitSha } });
-    await stub.transitionOperation({ keyHash, expectedPhase: "COMMIT_WRITTEN", nextPhase: "BRANCH_WRITTEN", now: 1_800_000_000_003, metadata: { branchName } });
-    await stub.transitionOperation({ keyHash, expectedPhase: "BRANCH_WRITTEN", nextPhase: "PR_DISPATCHED", now: 1_800_000_000_004 });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED", now: 1_800_000_000_001, metadata: { baseTreeSha: "1".repeat(40), parentSha: "2".repeat(40) } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "TREE_DISPATCHED", nextPhase: "TREE_WRITTEN", now: 1_800_000_000_001, metadata: { treeSha: "3".repeat(40) } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED", now: 1_800_000_000_002, metadata: { commitDate: "2026-10-30T12:00:00.000Z", commitMessage: "assistant: branch recovery", authorName: "Cloud Engineering Connector", authorEmail: "mcp-connector@users.noreply.github.com", committerName: "Cloud Engineering Connector", committerEmail: "mcp-connector@users.noreply.github.com" } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "COMMIT_DISPATCHED", nextPhase: "COMMIT_WRITTEN", now: 1_800_000_000_003, metadata: { commitSha } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "COMMIT_WRITTEN", nextPhase: "BRANCH_WRITTEN", now: 1_800_000_000_003, metadata: { branchName } });
+    await stub.transitionOperation({ keyHash,leaseGeneration:1, expectedPhase: "BRANCH_WRITTEN", nextPhase: "PR_DISPATCHED", now: 1_800_000_000_004 });
     await stub.markOperationStatus({ keyHash, leaseGeneration:1, status: "UNKNOWN", now: 1_800_000_000_005, errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
     await expect(Promise.resolve().then(()=>stub.reconcilePrCreated({
       keyHash,leaseGeneration:2,branchName:"assistant/mcp-unrelated",commitSha,prNumber:42,prUrl:"https://github.com/acme/project/pull/42",
@@ -164,7 +164,7 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     const keyHash = "4".repeat(64);
     await stub.admitWrite(request(keyHash, "5".repeat(64)));
     await expect(stub.markOperationStatus({
-      keyHash,
+      keyHash,leaseGeneration:1,
       status: "FAILED",
       now: 1_800_000_000_001,
       errorCode: "UPSTREAM_REJECTED",
@@ -202,7 +202,7 @@ describe("Git object recovery identity contract", () => {
     const treeSha = "3".repeat(40);
     await stub.admitWrite(request(keyHash, "b".repeat(64)));
     await stub.transitionOperation({
-      keyHash, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED",
+      keyHash,leaseGeneration:1, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED",
       metadata: { baseTreeSha, parentSha },
     });
     await stub.markOperationStatus({ keyHash, leaseGeneration:1, status: "UNKNOWN", errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
@@ -239,15 +239,15 @@ describe("Git object recovery identity contract", () => {
     const committerEmail = "mcp-connector@users.noreply.github.com";
     await stub.admitWrite(request(keyHash, "d".repeat(64)));
     await stub.transitionOperation({
-      keyHash, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED",
+      keyHash,leaseGeneration:1, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED",
       metadata: { baseTreeSha, parentSha },
     });
     await stub.transitionOperation({
-      keyHash, expectedPhase: "TREE_DISPATCHED", nextPhase: "TREE_WRITTEN",
+      keyHash,leaseGeneration:1, expectedPhase: "TREE_DISPATCHED", nextPhase: "TREE_WRITTEN",
       metadata: { treeSha },
     });
     await stub.transitionOperation({
-      keyHash, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED",
+      keyHash,leaseGeneration:1, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED",
       metadata: { commitDate, commitMessage, authorName, authorEmail, committerName, committerEmail },
     });
     await stub.markOperationStatus({ keyHash, leaseGeneration:1, status: "UNKNOWN", errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
@@ -271,10 +271,10 @@ describe("Git object recovery identity contract", () => {
 async function seedCommitReady(stub,keyHash) {
   const baseTreeSha="1".repeat(40),parentSha="2".repeat(40),treeSha="3".repeat(40),commitSha="4".repeat(40);
   await stub.admitWrite(request(keyHash,"b".repeat(64)));
-  await stub.transitionOperation({keyHash,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha,parentSha}});
-  await stub.transitionOperation({keyHash,expectedPhase:"TREE_DISPATCHED",nextPhase:"TREE_WRITTEN",metadata:{treeSha}});
+  await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha,parentSha}});
+  await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"TREE_DISPATCHED",nextPhase:"TREE_WRITTEN",metadata:{treeSha}});
   await stub.transitionOperation({
-    keyHash,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",
+    keyHash,leaseGeneration:1,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",
     metadata:{
       commitDate:"2026-10-30T12:00:00.000Z",
       commitMessage:"assistant: state machine invariant",
@@ -284,7 +284,7 @@ async function seedCommitReady(stub,keyHash) {
       committerEmail:"mcp-connector@users.noreply.github.com",
     },
   });
-  await stub.transitionOperation({keyHash,expectedPhase:"COMMIT_DISPATCHED",nextPhase:"COMMIT_WRITTEN",metadata:{commitSha}});
+  await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"COMMIT_DISPATCHED",nextPhase:"COMMIT_WRITTEN",metadata:{commitSha}});
   return {baseTreeSha,parentSha,treeSha,commitSha,branchName:"assistant/mcp-"+keyHash};
 }
 
@@ -320,7 +320,7 @@ describe("Durable state transition metadata invariants",()=>{
     const stub=stubFor("invariant-tree-dispatched");
     const keyHash="1".repeat(64);
     await stub.admitWrite(request(keyHash,"2".repeat(64)));
-    await expect(Promise.resolve().then(()=>stub.transitionOperation({keyHash,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED"})))
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED"})))
       .rejects.toThrow(/TREE_DISPATCHED requires baseTreeSha and parentSha/);
   });
 
@@ -329,7 +329,7 @@ describe("Durable state transition metadata invariants",()=>{
     const keyHash="3".repeat(64);
     const {commitSha}=await seedCommitReady(stub,keyHash);
     await expect(Promise.resolve().then(()=>stub.transitionOperation({
-      keyHash,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",
+      keyHash,leaseGeneration:1,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",
       metadata:{branchName:"assistant/mcp-unrelated",commitSha},
     }))).rejects.toThrow(/deterministic operation identity/);
   });
@@ -338,14 +338,14 @@ describe("Durable state transition metadata invariants",()=>{
     const stub=stubFor("invariant-pr-dispatched");
     const keyHash="4".repeat(64);
     await stub.admitWrite(request(keyHash,"5".repeat(64)));
-    await stub.transitionOperation({keyHash,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha:"1".repeat(40),parentSha:"2".repeat(40)}});
-    await stub.transitionOperation({keyHash,expectedPhase:"TREE_DISPATCHED",nextPhase:"TREE_WRITTEN",metadata:{treeSha:"3".repeat(40)}});
-    await stub.transitionOperation({keyHash,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",metadata:{
+    await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",metadata:{baseTreeSha:"1".repeat(40),parentSha:"2".repeat(40)}});
+    await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"TREE_DISPATCHED",nextPhase:"TREE_WRITTEN",metadata:{treeSha:"3".repeat(40)}});
+    await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"TREE_WRITTEN",nextPhase:"COMMIT_DISPATCHED",metadata:{
       commitDate:"2026-10-30T12:00:00.000Z",commitMessage:"assistant: missing commit",
       authorName:"Cloud Engineering Connector",authorEmail:"mcp-connector@users.noreply.github.com",
       committerName:"Cloud Engineering Connector",committerEmail:"mcp-connector@users.noreply.github.com",
     }});
-    await expect(Promise.resolve().then(()=>stub.transitionOperation({keyHash,expectedPhase:"COMMIT_DISPATCHED",nextPhase:"COMMIT_WRITTEN"})))
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"COMMIT_DISPATCHED",nextPhase:"COMMIT_WRITTEN"})))
       .rejects.toThrow(/COMMIT_WRITTEN requires commitSha/);
   });
 
@@ -353,12 +353,12 @@ describe("Durable state transition metadata invariants",()=>{
     const stub=stubFor("invariant-pr-created");
     const keyHash="5".repeat(64);
     const {commitSha,branchName}=await seedCommitReady(stub,keyHash);
-    await stub.transitionOperation({keyHash,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",metadata:{branchName}});
-    await stub.transitionOperation({keyHash,expectedPhase:"BRANCH_WRITTEN",nextPhase:"PR_DISPATCHED"});
-    await expect(Promise.resolve().then(()=>stub.transitionOperation({keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED"})))
+    await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",metadata:{branchName}});
+    await stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"BRANCH_WRITTEN",nextPhase:"PR_DISPATCHED"});
+    await expect(Promise.resolve().then(()=>stub.transitionOperation({keyHash,leaseGeneration:1,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED"})))
       .rejects.toThrow(/PR_CREATED requires deterministic branch, commit, PR number and URL/);
     await expect(Promise.resolve().then(()=>stub.transitionOperation({
-      keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",
+      keyHash,leaseGeneration:1,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",
       metadata:{branchName,commitSha,prNumber:42,prUrl:"https://github.com/acme/project/pull/43"},
     }))).rejects.toThrow(/pull URL must match the PR number/);
     for(const prUrl of [
@@ -369,7 +369,7 @@ describe("Durable state transition metadata invariants",()=>{
       "https://github.com.evil.example/acme/project/pull/42",
     ]){
       await expect(Promise.resolve().then(()=>stub.transitionOperation({
-        keyHash,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",
+        keyHash,leaseGeneration:1,expectedPhase:"PR_DISPATCHED",nextPhase:"PR_CREATED",status:"SUCCEEDED",
         metadata:{branchName,commitSha,prNumber:42,prUrl},
       }))).rejects.toThrow(/PR_CREATED requires deterministic branch, commit, PR number and URL|pull URL must match the PR number|prUrl must be a GitHub HTTPS URL/);
     }
@@ -380,13 +380,13 @@ describe("Durable state transition metadata invariants",()=>{
     const keyHash="6".repeat(64);
     const {commitSha}=await seedCommitReady(stub,keyHash);
     const result=await stub.transitionOperation({
-      keyHash,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",
+      keyHash,leaseGeneration:1,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",
       metadata:{branchName:"assistant/mcp-"+keyHash,commitSha:"f".repeat(40)},
     });
     expect(result).toMatchObject({updated:false,reason:"OPERATION_IDENTITY_MISMATCH"});
     await expect(stub.getOperation(keyHash)).resolves.toMatchObject({commitSha});
     const treeMutation=await stub.transitionOperation({
-      keyHash,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",
+      keyHash,leaseGeneration:1,expectedPhase:"COMMIT_WRITTEN",nextPhase:"BRANCH_WRITTEN",
       metadata:{branchName:"assistant/mcp-"+keyHash,treeSha:"f".repeat(40)},
     });
     expect(treeMutation).toMatchObject({updated:false,reason:"OPERATION_IDENTITY_MISMATCH"});
@@ -431,7 +431,7 @@ describe("safe recovery before the first external side effect",()=>{
     const keyHash="9".repeat(64);
     await stub.admitWrite(request(keyHash,"a".repeat(64)));
     await stub.transitionOperation({
-      keyHash,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",
+      keyHash,leaseGeneration:1,expectedPhase:"RESERVED",nextPhase:"TREE_DISPATCHED",
       metadata:{baseTreeSha:"1".repeat(40),parentSha:"2".repeat(40)},
     });
     await stub.markOperationStatus({keyHash,leaseGeneration:1,status:"UNKNOWN",errorCode:"LEASE_EXPIRED"});

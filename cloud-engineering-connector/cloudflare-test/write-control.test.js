@@ -194,7 +194,12 @@ describe("Git object recovery identity contract", () => {
           gitMetadata: { baseTreeSha, parentSha, treeSha },
         },
       });
+    await stub.markOperationStatus({ keyHash, status: "UNKNOWN", errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
     await expect(stub.reconcileTreeWritten({ keyHash, baseTreeSha, parentSha: "4".repeat(40), treeSha }))
+      .resolves.toMatchObject({ updated: false, reason: "OPERATION_IDENTITY_MISMATCH" });
+    await expect(stub.reconcileTreeWritten({ keyHash, baseTreeSha, parentSha, treeSha }))
+      .resolves.toMatchObject({ updated: true, operation: { status: "IN_PROGRESS", phase: "TREE_WRITTEN" } });
+    await expect(stub.reconcileTreeWritten({ keyHash, baseTreeSha, parentSha, treeSha }))
       .resolves.toMatchObject({ updated: false, reason: "RECONCILIATION_NOT_ALLOWED" });
   });
 

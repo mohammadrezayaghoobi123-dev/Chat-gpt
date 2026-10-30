@@ -73,6 +73,18 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     })).resolves.toMatchObject({ updated: false, reason: "PHASE_CONFLICT" });
   });
 
+  it("records definite upstream rejection as terminal FAILED", async () => {
+    const stub = stubFor("terminal-failure");
+    const keyHash = "4".repeat(64);
+    await stub.admitWrite(request(keyHash, "5".repeat(64)));
+    await expect(stub.markOperationStatus({
+      keyHash,
+      status: "FAILED",
+      now: 1_800_000_000_001,
+      errorCode: "UPSTREAM_REJECTED",
+    })).resolves.toMatchObject({ updated: true, operation: { status: "FAILED", errorCode: "UPSTREAM_REJECTED" } });
+  });
+
   it("moves expired in-progress operations to UNKNOWN without replaying them", async () => {
     const stub = stubFor("stale-unknown");
     const keyHash = "2".repeat(64);

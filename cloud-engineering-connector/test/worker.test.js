@@ -816,3 +816,96 @@ test("create_change_pr persists deterministic Git commit identity before dispatc
   assert.deepEqual(commitPayload.committer,commitPayload.author);
  }finally{globalThis.fetch=originalFetch}
 });
+
+
+async function recoveryFixtureBlobSha(content){
+ const bytes=new TextEncoder().encode(content),header=new TextEncoder().encode("blob "+bytes.byteLength+"\\0"),object=new Uint8Array(header.byteLength+bytes.byteLength);
+ object.set(header);object.set(bytes,header.byteLength);
+ const digest=await crypto.subtle.digest("SHA-1",object);
+ return [...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+}
+function recoveryLedger(operation){
+ return {
+  async admitWrite(input){operation.keyHash=input.keyHash;return{admitted:true,replay:true,operation};},
+  async markStaleOperationsUnknown(){return 0;},
+  async getOperation(){return operation;},
+  async markOperationStatus(input){operation.status=input.status;operation.errorCode=input.errorCode;return{updated:true,operation};},
+  async transitionOperation(input){
+   if(operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false,reason:"PHASE_CONFLICT"};
+   operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";
+   if(input.metadata){
+    operation.gitMetadata={...(operation.gitMetadata??{})};
+    for(const [key,value] of Object.entries(input.metadata)){
+     if(["baseTreeSha","parentSha","treeSha","commitDate","commitMessage","authorName","authorEmail","committerName","committerEmail"].includes(key))operation.gitMetadata[key]=value;
+     else operation[key]=value;
+    }
+   }
+   return{updated:true,operation};
+  },
+  async reconcileTreeWritten(input){
+   if(operation.status!=="UNKNOWN"||operation.phase!=="TREE_DISPATCHED"||operation.gitMetadata.baseTreeSha!==input.baseTreeSha||operation.gitMetadata.parentSha!==input.parentSha)return{updated:false};
+   operation.status="IN_PROGRESS";operation.phase="TREE_WRITTEN";operation.gitMetadata.treeSha=input.treeSha;
+   return{updated:true,operation};
+  },
+  async reconcileCommitWritten(input){
+   if(operation.status!=="UNKNOWN"||operation.phase!=="COMMIT_DISPATCHED"||operation.gitMetadata.treeSha!==input.treeSha||operation.gitMetadata.parentSha!==input.parentSha)return{updated:false};
+   operation.status="IN_PROGRESS";operation.phase="COMMIT_WRITTEN";operation.commitSha=input.commitSha;
+   return{updated:true,operation};
+  },
+  async reconcilePrCreated(){return{updated:false};}
+ };
+}
+
+test("UNKNOWN COMMIT_DISPATCHED replay recreates and verifies the exact persisted commit before one branch and PR",async()=>{
+ const originalFetch=globalThis.fetch;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
+ const commitDate="2026-10-30T12:00:00.000Z",commitMessage="assistant: persisted identity";
+ const persistedIdentity={authorName:"Persisted Engineering Agent",authorEmail:"persisted-agent@example.test",committerName:"Persisted Engineering Agent",committerEmail:"persisted-agent@example.test"};
+ const operation={status:"UNKNOWN",phase:"COMMIT_DISPATCHED",createdAt:Date.parse(commitDate),updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha,treeSha,commitDate,commitMessage,...persistedIdentity}};
+ const ledger=recoveryLedger(operation),calls=[];let commitPayload=null,keyHash=null;
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";calls.push({method,url});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1"))return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/replay.txt",mode:"100644",type:"blob",sha:await recoveryFixtureBlobSha("x")}]}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+keyHash}),{status:201});
+  if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:92,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/92",draft:true,state:"open"}),{status:201});
+  throw new Error("Unexpected GitHub request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"unknown-commit-replay-0001",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Different request title ignored",summary:"Recover commit",files:[{path:"docs/replay.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>ledger}});
+  const body=await response.json(),result=JSON.parse(body.result.content[0].text);
+  assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,92);
+  assert.deepEqual(commitPayload,{message:commitMessage,tree:treeSha,parents:[parentSha],author:{name:persistedIdentity.authorName,email:persistedIdentity.authorEmail,date:commitDate},committer:{name:persistedIdentity.committerName,email:persistedIdentity.committerEmail,date:commitDate}});
+  assert.deepEqual(calls.map(call=>call.method),["GET","GET","POST","GET","POST","POST"]);
+  assert.equal(operation.phase,"PR_CREATED");assert.equal(operation.status,"SUCCEEDED");
+ }finally{globalThis.fetch=originalFetch}
+});
+
+test("UNKNOWN TREE_DISPATCHED replay repeats only the same immutable tree payload before continuing",async()=>{
+ const originalFetch=globalThis.fetch;
+ const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
+ const createdAt=Date.parse("2026-10-30T12:00:00.000Z");
+ const operation={status:"UNKNOWN",phase:"TREE_DISPATCHED",createdAt,updatedAt:Date.now(),gitMetadata:{baseTreeSha,parentSha}};
+ const ledger=recoveryLedger(operation),calls=[];let keyHash=null,treePayload=null,commitPayload=null;
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";calls.push({method,url});
+  if(method==="GET"&&url.endsWith("/git/commits/"+parentSha))return new Response(JSON.stringify({sha:parentSha,tree:{sha:baseTreeSha}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees")){treePayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:treeSha}),{status:201});}
+  if(method==="GET"&&url.includes("/git/trees/"+treeSha+"?recursive=1"))return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/replay.txt",mode:"100644",type:"blob",sha:await recoveryFixtureBlobSha("x")}]}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/refs"))return new Response(JSON.stringify({ref:"refs/heads/assistant/mcp-"+keyHash}),{status:201});
+  if(method==="POST"&&url.endsWith("/pulls"))return new Response(JSON.stringify({number:93,html_url:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/93",draft:true,state:"open"}),{status:201});
+  throw new Error("Unexpected GitHub request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:"unknown-tree-replay-0001",owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Tree recovery",summary:"Recover tree",files:[{path:"docs/replay.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>ledger}});
+  const body=await response.json(),result=JSON.parse(body.result.content[0].text);
+  assert.equal(response.status,200);assert.equal(result.reconciled,true);assert.equal(result.pull_request.number,93);
+  assert.deepEqual(treePayload,{base_tree:baseTreeSha,tree:[{path:"docs/replay.txt",mode:"100644",type:"blob",content:"x"}]});
+  assert.deepEqual(calls.map(call=>call.method),["GET","POST","GET","POST","GET","POST","POST"]);
+  assert.equal(operation.phase,"PR_CREATED");assert.equal(operation.status,"SUCCEEDED");
+ }finally{globalThis.fetch=originalFetch}
+});

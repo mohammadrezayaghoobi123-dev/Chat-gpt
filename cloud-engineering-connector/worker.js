@@ -244,7 +244,7 @@ async function createChangePr(args,env) {
   }
   if(operation?.status==="IN_PROGRESS"&&operation.phase==="TREE_WRITTEN"){
    if(!Number.isSafeInteger(operation.createdAt))throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
-   const commitDate=new Date(operation.createdAt).toISOString();
+   const commitDate=new Date(Math.floor(operation.createdAt/1000)*1000).toISOString();
    const commitMessage="assistant: "+safeTitle;
    const commitIdentity={authorName:GIT_COMMIT_AUTHOR.name,authorEmail:GIT_COMMIT_AUTHOR.email,committerName:GIT_COMMIT_AUTHOR.name,committerEmail:GIT_COMMIT_AUTHOR.email};
    let dispatched;

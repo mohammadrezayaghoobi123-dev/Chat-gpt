@@ -80,6 +80,35 @@ test("idempotency fingerprint conflict is a structured MCP tool error",async()=>
  }finally{globalThis.fetch=originalFetch}
 });
 
+
+test("a transport timeout during the first GitHub tree write is quarantined as UNKNOWN",async()=>{
+ const originalFetch=globalThis.fetch;let status=null,phase=null,githubCalls=[];
+ const key="first-tree-timeout-key-0001";
+ const operations=new Map();
+ const stub={
+  async admitWrite(input){const op={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",updatedAt:Date.now()};operations.set(input.keyHash,op);return{admitted:true,replay:false,operation:op}},
+  async transitionOperation(){throw new Error("no transition expected after a failed tree request")},
+  async markOperationStatus(input){status=input.status;const op=operations.get(input.keyHash);op.status=input.status;op.errorCode=input.errorCode;return{updated:true,operation:op}},
+  async markStaleOperationsUnknown(){return 0},
+  async getOperation(keyHash){return operations.get(keyHash)??null},
+  async reconcilePrCreated(){return{updated:false}}
+ };
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input),method=init.method||"GET";githubCalls.push({url,method});
+  if(method==="GET"&&url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt"}),{status:200});
+  if(method==="GET"&&url.includes("/git/ref/heads/feature/cloud-engineering-connector"))return new Response(JSON.stringify({object:{sha:"base-sha"}}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/base-sha"))return new Response(JSON.stringify({tree:{sha:"base-tree"}}),{status:200});
+  if(method==="POST"&&url.endsWith("/git/trees"))throw new TypeError("simulated network timeout after GitHub accepted the tree request");
+  throw new Error("Unexpected GitHub request "+method+" "+url);
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{idempotency_key:key,owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Timeout test",summary:"Verify first write ambiguity",files:[{path:"docs/proposal.txt",content:"x"}]}}),{...env,GITHUB_TOKEN:"test-token",WRITE_CONTROL:{idFromName:name=>name,get:()=>stub}});
+  const body=await response.json();assert.equal(response.status,200);assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/WRITE_OUTCOME_UNKNOWN/);
+  assert.equal(status,"UNKNOWN");assert.equal(operations.values().next().value.phase,"RESERVED");
+  assert.equal(githubCalls.filter(x=>x.method==="POST").length,1);
+ }finally{globalThis.fetch=originalFetch}
+});
+
 test("successful idempotent replay verifies the existing PR marker before returning cached metadata",async()=>{
  const originalFetch=globalThis.fetch;let keyHash=null;let calls=[];
  const branchFor=key=>"assistant/mcp-"+key;

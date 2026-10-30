@@ -173,7 +173,7 @@ async function createChangePr(args,env) {
     pr=await github(env,base+"/pulls",{method:"POST",body:JSON.stringify({title:safeTitle,body,head:branchName,base:args.base_branch,draft:true})});
    } catch(error) {
     const message=error instanceof Error?error.message:"unknown error";
-    const match=/^GitHub API (\\d{3}):/.exec(message);
+    const match=/^GitHub API (\d{3}):/.exec(message);
     const status=match?Number(match[1]):null;
     const ambiguous=status===null||status===408||status===409||status>=500;
     try { await stub.markOperationStatus({keyHash,status:ambiguous?"UNKNOWN":"FAILED",now:Date.now(),errorCode:ambiguous?"UPSTREAM_OUTCOME_UNCERTAIN":"UPSTREAM_REJECTED"}); }
@@ -235,8 +235,9 @@ async function createChangePr(args,env) {
   const baseRef=await github(env,base+"/git/ref/heads/"+encodeURIComponent(baseBranch).replace(/%2F/g,"/"));
   const parentSha=baseRef.object.sha;
   const parentCommit=await github(env,base+"/git/commits/"+parentSha);
-  const tree=await github(env,base+"/git/trees",{method:"POST",body:JSON.stringify({base_tree:parentCommit.tree.sha,tree:args.files.map(file=>({path:file.path,mode:"100644",type:"blob",content:file.content}))})});
+  // Set before dispatch: a transport failure can occur after GitHub accepted the write.
   sideEffectStarted=true;
+  const tree=await github(env,base+"/git/trees",{method:"POST",body:JSON.stringify({base_tree:parentCommit.tree.sha,tree:args.files.map(file=>({path:file.path,mode:"100644",type:"blob",content:file.content}))})});
   await transition("RESERVED","TREE_WRITTEN");
   const commit=await github(env,base+"/git/commits",{method:"POST",body:JSON.stringify({message:"assistant: "+safeTitle,tree:tree.sha,parents:[parentSha]})});
   await transition("TREE_WRITTEN","COMMIT_WRITTEN",{commitSha:commit.sha});

@@ -277,6 +277,33 @@ async function seedCommitReady(stub,keyHash) {
   return {baseTreeSha,parentSha,treeSha,commitSha,branchName:"assistant/mcp-"+keyHash};
 }
 
+describe("Idempotency tombstone retention",()=>{
+  it("retains UNKNOWN as a non-retryable replay after the admission window expires",async()=>{
+    vi.useFakeTimers({toFake:["Date"]});
+    try{
+      const start=1_800_000_000_000;
+      vi.setSystemTime(start);
+      const stub=stubFor("unknown-tombstone-retention");
+      const keyHash="7".repeat(64);
+      const requestHash="8".repeat(64);
+      const first=await stub.admitWrite(request(keyHash,requestHash));
+      expect(first).toMatchObject({admitted:true,replay:false});
+      await stub.markOperationStatus({keyHash,status:"UNKNOWN",errorCode:"UPSTREAM_OUTCOME_UNCERTAIN"});
+      vi.setSystemTime(start+3_600_001);
+      const replay=await stub.admitWrite(request(keyHash,requestHash));
+      expect(replay).toMatchObject({
+        admitted:true,replay:true,
+        operation:{keyHash,status:"UNKNOWN",phase:"RESERVED",requestHash},
+      });
+      const conflict=await stub.admitWrite(request(keyHash,"9".repeat(64)));
+      expect(conflict).toMatchObject({admitted:false,reason:"IDEMPOTENCY_CONFLICT"});
+      await expect(stub.getOperation(keyHash)).resolves.toMatchObject({status:"UNKNOWN",requestHash});
+    }finally{
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("Durable state transition metadata invariants",()=>{
   it("rejects TREE_DISPATCHED without a persisted base tree and parent identity",async()=>{
     const stub=stubFor("invariant-tree-dispatched");

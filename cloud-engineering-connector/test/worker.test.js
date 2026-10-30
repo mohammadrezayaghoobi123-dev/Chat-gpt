@@ -1118,7 +1118,7 @@ test("a successful PR POST with unavailable readback is quarantined as UNKNOWN",
  const originalFetch=globalThis.fetch;
  const parentSha="a".repeat(40),baseTreeSha="b".repeat(40),treeSha="c".repeat(40),commitSha="d".repeat(40);
  const key="pull-request-readback-unavailable-0001";
- const operations=new Map();let prPosts=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null;
+ const operations=new Map();let prPosts=0,prReads=0,ledgerStatus=null,ledgerPhase=null,commitPayload=null,createdBranch=null;
  const stub={
   async admitWrite(input){const operation={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",createdAt:input.now,updatedAt:input.now};operations.set(input.keyHash,operation);return{admitted:true,replay:false,operation};},
   async transitionOperation(input){const operation=operations.get(input.keyHash);if(!operation||operation.phase!==input.expectedPhase||operation.status!=="IN_PROGRESS")return{updated:false};operation.phase=input.nextPhase;operation.status=input.status??"IN_PROGRESS";operation.updatedAt=input.now;if(input.metadata)Object.assign(operation,input.metadata);ledgerPhase=operation.phase;ledgerStatus=operation.status;return{updated:true,operation};},

@@ -521,7 +521,7 @@ export class WriteControl extends DurableObject {
     const { keyHash, status, errorCode, leaseGeneration } = input;
     const now = Date.now();
     assertHash(keyHash, "keyHash");
-    if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw new TypeError("leaseGeneration must be a positive safe integer.");
+    if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw new TypeError("leaseGeneration is required and must be a positive safe integer.");
     if (status !== "FAILED" && status !== "UNKNOWN") {
       throw new TypeError("Only FAILED or UNKNOWN may be assigned outside a phase transition.");
     }

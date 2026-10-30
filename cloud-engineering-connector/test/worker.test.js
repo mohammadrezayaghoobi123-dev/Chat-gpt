@@ -339,7 +339,7 @@ test("create_change_pr retains branch when pull request creation outcome is unce
    return new Response(JSON.stringify({sha:treeSha,truncated:false,tree:[{path:"docs/proposal.txt",mode:"100644",type:"blob",sha:blobSha}]}),{status:200});
   }
   if(method==="POST"&&url.endsWith("/git/commits")){commitPayload=JSON.parse(init.body);return new Response(JSON.stringify({sha:commitSha}),{status:201});}
-  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha))return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:commitPayload.author,committer:commitPayload.committer}),{status:200});
+  if(method==="GET"&&url.endsWith("/git/commits/"+commitSha)){const secondPrecision=value=>({...value,date:new Date(Math.floor(Date.parse(value.date)/1000)*1000).toISOString()});return new Response(JSON.stringify({sha:commitSha,message:commitPayload.message,tree:{sha:treeSha},parents:[{sha:parentSha}],author:secondPrecision(commitPayload.author),committer:secondPrecision(commitPayload.committer)}),{status:200});}
   if(method==="POST"&&url.endsWith("/git/refs")){createdBranch=JSON.parse(init.body).ref.split("/").slice(2).join("/");return new Response(JSON.stringify({ref:"refs/heads/"+createdBranch}),{status:201})}
   if(method==="POST"&&url.endsWith("/pulls"))throw new TypeError("simulated network timeout after request dispatch");
   if(method==="DELETE"&&createdBranch&&url.endsWith("/git/refs/heads/"+createdBranch)){deleteAttempted=true;return new Response(null,{status:204})}
@@ -769,7 +769,8 @@ test("public and authentication-failure requests use independent key spaces",asy
 
 test("create_change_pr persists deterministic Git commit identity before dispatching the commit",async()=>{
  const originalFetch=globalThis.fetch;
- const createdAt=Date.parse("2026-10-30T12:00:00.000Z");
+ const createdAt=Date.parse("2026-10-30T12:00:00.123Z");
+ const expectedGitDate="2026-10-30T12:00:00.000Z";
  const events=[],metadata=[];
  let keyHash=null;
  const stub={

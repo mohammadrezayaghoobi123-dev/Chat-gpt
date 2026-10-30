@@ -168,3 +168,68 @@ describe("WriteControl atomic admission and idempotency contract", () => {
     }
   });
 });
+
+
+describe("Git object recovery identity contract", () => {
+  it("reconciles an ambiguous tree dispatch only for the persisted base tree and parent", async () => {
+    const stub = stubFor("unknown-tree-reconcile");
+    const keyHash = "a".repeat(64);
+    const baseTreeSha = "1".repeat(40);
+    const parentSha = "2".repeat(40);
+    const treeSha = "3".repeat(40);
+    await stub.admitWrite(request(keyHash, "b".repeat(64)));
+    await stub.transitionOperation({
+      keyHash, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED",
+      metadata: { baseTreeSha, parentSha },
+    });
+    await stub.markOperationStatus({ keyHash, status: "UNKNOWN", errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
+    await expect(stub.reconcileTreeWritten({ keyHash, baseTreeSha, parentSha, treeSha }))
+      .resolves.toMatchObject({
+        updated: true,
+        operation: {
+          status: "IN_PROGRESS",
+          phase: "TREE_WRITTEN",
+          gitMetadata: { baseTreeSha, parentSha, treeSha },
+        },
+      });
+    await expect(stub.reconcileTreeWritten({ keyHash, baseTreeSha, parentSha: "4".repeat(40), treeSha }))
+      .resolves.toMatchObject({ updated: false, reason: "RECONCILIATION_NOT_ALLOWED" });
+  });
+
+  it("reconciles an ambiguous commit dispatch only for its exact tree, parent, and persisted commit identity", async () => {
+    const stub = stubFor("unknown-commit-reconcile");
+    const keyHash = "c".repeat(64);
+    const baseTreeSha = "1".repeat(40);
+    const parentSha = "2".repeat(40);
+    const treeSha = "3".repeat(40);
+    const commitSha = "4".repeat(40);
+    const commitDate = "2026-10-30T12:00:00.000Z";
+    const commitMessage = "assistant: deterministic recovery";
+    await stub.admitWrite(request(keyHash, "d".repeat(64)));
+    await stub.transitionOperation({
+      keyHash, expectedPhase: "RESERVED", nextPhase: "TREE_DISPATCHED",
+      metadata: { baseTreeSha, parentSha },
+    });
+    await stub.transitionOperation({
+      keyHash, expectedPhase: "TREE_DISPATCHED", nextPhase: "TREE_WRITTEN",
+      metadata: { treeSha },
+    });
+    await stub.transitionOperation({
+      keyHash, expectedPhase: "TREE_WRITTEN", nextPhase: "COMMIT_DISPATCHED",
+      metadata: { commitDate, commitMessage },
+    });
+    await stub.markOperationStatus({ keyHash, status: "UNKNOWN", errorCode: "UPSTREAM_OUTCOME_UNCERTAIN" });
+    await expect(stub.reconcileCommitWritten({ keyHash, treeSha, parentSha, commitSha }))
+      .resolves.toMatchObject({
+        updated: true,
+        operation: {
+          status: "IN_PROGRESS",
+          phase: "COMMIT_WRITTEN",
+          commitSha,
+          gitMetadata: { baseTreeSha, parentSha, treeSha, commitDate, commitMessage },
+        },
+      });
+    await expect(stub.reconcileCommitWritten({ keyHash, treeSha: "5".repeat(40), parentSha, commitSha }))
+      .resolves.toMatchObject({ updated: false, reason: "RECONCILIATION_NOT_ALLOWED" });
+  });
+});

@@ -1,0 +1,44 @@
+name: PR 86 Preview MCP Smoke
+
+on:
+  push:
+    branches:
+      - assistant/evidence-architecture-analyzer-2026-10-31
+    paths:
+      - "cloud-engineering-connector/worker.js"
+      - "cloud-engineering-connector/console.js"
+      - "cloud-engineering-connector/test/preview-smoke.mjs"
+      - ".github/workflows/pr86-preview-smoke.yml"
+  pull_request:
+    branches:
+      - assistant/mcp-readonly-console-2026-10-31
+    paths:
+      - "cloud-engineering-connector/worker.js"
+      - "cloud-engineering-connector/console.js"
+      - "cloud-engineering-connector/test/preview-smoke.mjs"
+      - ".github/workflows/pr86-preview-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr86-preview-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview-mcp-smoke:
+    name: Live MCP protocol and read-only boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout PR source
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify immutable Preview source and exercise MCP
+        env:
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node cloud-engineering-connector/test/preview-smoke.mjs

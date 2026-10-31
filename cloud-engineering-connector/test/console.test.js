@@ -38,6 +38,9 @@ test("GET / serves a secure Master Brain MCP console without requiring an MCP to
   assert.match(html, /read_project_file/);
   assert.match(html, /engineering_standards/);
   assert.match(html, /architecture_review/);
+  assert.match(html, /architecture_analyze/);
+  assert.match(html, /id=\\?"analysisPaths\\?"/);
+  assert.match(html, /id=\\?"analyze\\?"/);
   assert.doesNotMatch(html, /localStorage|sessionStorage/);
 });
 
@@ -86,6 +89,7 @@ test("public read-only mode remains usable when a server bearer secret is config
     "read_project_file",
     "engineering_standards",
     "architecture_review",
+    "architecture_analyze",
   ]);
 });
 

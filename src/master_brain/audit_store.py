@@ -81,8 +81,12 @@ class AuditStore:
         self, path: str | os.PathLike[str], *, strict_event_types: bool = True,
         clock: Callable[[], datetime] | None = None, max_future_skew_seconds: float = 300.0,
         full_verify_interval_seconds: float | None = None,
-        monotonic: Callable[[], float] | None = None,
+        monotonic: Callable[[], float] | None = None, require_anchor: bool = False,
     ) -> None:
+        # ``require_anchor=True``: a NON-EMPTY log without its ``.head`` anchor is refused instead of being
+        # treated as a legacy log. Without it, deleting the anchor together with the last records (or a
+        # backup that forgot the anchor) would hide a truncation. Default False keeps legacy logs usable.
+        self._require_anchor = bool(require_anchor)
         # ``full_verify_interval_seconds=None`` (default): every read re-verifies the whole
         # file. A number enables the verified-prefix cache: the first read and then one read
         # per interval verify everything; reads in between verify only bytes appended since
@@ -240,6 +244,10 @@ class AuditStore:
     def _verify_anchor(self, events: list[AuditEvent]) -> None:
         anchor = self.anchor_path
         if not anchor.exists():
+            if self._require_anchor and events:
+                raise AuditStoreError(
+                    "audit head anchor is missing for a non-empty log; restore the .head file from the backup "
+                    "or, if this log never had one, adopt it explicitly (audit_recovery --adopt-anchor)")
             return  # legacy / never-anchored log; anchored on next append
         try:
             raw = json.loads(anchor.read_text(encoding="utf-8"))

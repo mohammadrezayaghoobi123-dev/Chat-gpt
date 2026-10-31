@@ -23,3 +23,10 @@ jobs:
           echo "::notice::bad_origin=$(c -X POST -H 'Origin: https://evil.example' -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$URL/mcp")"
           codes=""; for i in $(seq 1 400); do codes="$codes $(c -X POST -H "content-type: application/json" -H "accept: application/json, text/event-stream" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" "$URL/mcp")"; done
           echo "::notice::burst400_mcp=$(echo $codes | tr ' ' '\n' | sort | uniq -c | tr '\n' ' ')"
+      - name: Write-gate check (invalid arguments only; must never create anything) and concurrent burst
+        run: |
+          URL="$(tr -d ' \r\n' < .github/diag/worker_url.txt)"; URL="${URL%/}"
+          H=(-H 'content-type: application/json' -H 'accept: application/json, text/event-stream')
+          echo "::notice::write_tool_noauth=$(curl -s --max-time 15 "${H[@]}" -X POST -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_change_pr","arguments":{}}}' "$URL/mcp" | head -c 300)"
+          echo "::notice::tools_in_noauth_list=$(curl -s --max-time 15 "${H[@]}" -X POST -d '{"jsonrpc":"2.0","id":3,"method":"tools/list"}' "$URL/mcp" | grep -o '"name":"[a-z_]*"' | tr '\n' ' ')"
+          seq 1 300 | xargs -P 25 -I{} curl -s -o /dev/null -w '%{http_code}\n' --max-time 20 "${H[@]}" -X POST -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$URL/mcp" | sort | uniq -c | tr '\n' ' ' | sed 's/^/::notice::concurrent300=/'

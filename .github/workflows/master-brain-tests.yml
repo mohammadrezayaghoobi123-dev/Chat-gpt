@@ -40,6 +40,11 @@ jobs:
       - name: Run unit tests
         shell: bash   # pipefail: the job still fails exactly when the tests fail
         run: python -m unittest discover -s tests -v 2>&1 | tee unittest-out.txt
+      - name: Kernel-enforced limits (cgroup + size-limited tmpfs; needs root, so run under sudo)
+        run: |
+          sudo -E env "PATH=$PATH" PYTHONPATH=src MB_REQUIRE_CGROUP_TESTS=1 \
+            python -m unittest -v tests.test_ctp_runner.SeccompFilter tests.test_ctp_runner.KernelEnforcement 2>&1 | tee kernel-out.txt
+          grep -q "skipped" kernel-out.txt && { echo "::error::kernel-enforcement tests were skipped"; exit 1; } || true
       - name: Surface failing tests as annotations (diagnostic only; does not change the result)
         if: failure()
         run: |

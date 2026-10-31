@@ -1,4 +1,5 @@
 """CTP runner: real execution, real isolation, separate signed verification (red-first)."""
+import json
 import os
 import shutil
 import signal
@@ -693,6 +694,130 @@ class Plumbing(unittest.TestCase):
         with mock.patch.object(R.os, "killpg", side_effect=OSError("other")):
             with self.assertRaises(OSError):
                 R._killpg(proc)
+
+
+REQUIRE_CGROUP = os.environ.get("MB_REQUIRE_CGROUP_TESTS") == "1"
+
+
+def _kernel(name):
+    return bool(_STATUS.get("kernel_limits", {}).get(name))
+
+
+needs_cgroup = unittest.skipIf(not _kernel("cgroup") and not REQUIRE_CGROUP,
+                               "no usable cgroup (needs root or a delegated MB_CGROUP_ROOT)")
+needs_work_tmpfs = unittest.skipIf(not _kernel("work_tmpfs") and not REQUIRE_CGROUP,
+                                   "cannot mount a size-limited tmpfs (needs root)")
+
+
+@needs_sandbox
+class SeccompFilter(unittest.TestCase):
+    """K1/K2: a kernel syscall filter is installed in the sandbox and the probe insists on it."""
+
+    SCRIPT = """
+        import ctypes, json, os, subprocess, sys, threading
+        libc = ctypes.CDLL(None, use_errno=True)
+        res = {'seccomp': [l for l in open('/proc/self/status') if l.startswith('Seccomp:')][0].split()[1]}
+        for name, nr in (('ptrace', 101), ('bpf', 321), ('userfaultfd', 323), ('io_uring_setup', 425), ('mount', 165),
+                         ('kexec_load', 246), ('init_module', 175), ('open_by_handle_at', 304), ('unshare', 272),
+                         ('setns', 308), ('perf_event_open', 298), ('keyctl', 250)):
+            ctypes.set_errno(0)
+            rc = libc.syscall(nr, 0xffff, 0, 0, 0, 0, 0)
+            res[name] = [rc, ctypes.get_errno()]
+        # ordinary work must keep working
+        open('out/f', 'w').write('x')
+        res['subprocess'] = subprocess.run([sys.executable, '-I', '-c', 'print(7)'], capture_output=True).stdout.strip().decode()
+        t = threading.Thread(target=lambda: res.setdefault('thread', 1)); t.start(); t.join()
+        pid = os.fork()
+        if pid == 0: os._exit(3)
+        res['fork_exit'] = os.waitpid(pid, 0)[1] >> 8
+        print(json.dumps(res))
+    """
+
+    def test_filter_is_active_and_denies_dangerous_syscalls_but_not_ordinary_work(self):
+        raw = R._run_raw(spec(self.SCRIPT))
+        self.assertEqual(raw["outcome"], "pass", raw["stderr"][-300:])
+        res = json.loads(raw["stdout"])
+        self.assertEqual(res["seccomp"], "2")
+        for name in ("ptrace", "bpf", "userfaultfd", "io_uring_setup", "mount", "kexec_load", "init_module",
+                     "open_by_handle_at", "unshare", "setns", "perf_event_open", "keyctl"):
+            self.assertEqual(res[name], [-1, 1], f"{name} must fail with EPERM")
+        self.assertEqual((res["subprocess"], res["thread"], res["fork_exit"]), ("7", 1, 3))
+
+    def test_probe_requires_the_filter(self):
+        props = R.sandbox_status(refresh=True)["properties"]
+        self.assertIs(props.get("seccomp_filter_active"), True)
+        self.assertIs(props.get("dangerous_syscalls_denied"), True)
+
+    def test_unavailable_when_the_filter_cannot_be_installed(self):
+        with mock.patch.object(R, "_SECCOMP_DENY_X86_64", None):
+            st = R.sandbox_status(refresh=True)
+        self.assertFalse(st["available"])
+        R.sandbox_status(refresh=True)
+
+
+@needs_sandbox
+class KernelEnforcement(unittest.TestCase):
+    """K3-K7: the sampling watchdog is switched off, so only the kernel can stop these floods."""
+
+    def setUp(self):
+        p = mock.patch.object(R, "_watchdog_violation", return_value="")
+        p.start(); self.addCleanup(p.stop)
+
+    @needs_cgroup
+    def test_process_flood_is_stopped_by_the_kernel(self):
+        raw = R._run_raw(spec("""
+            import os, time, signal
+            kids = []; err = None
+            for i in range(1000):
+                try: pid = os.fork()
+                except OSError as e: err = e.errno; break
+                if pid == 0: time.sleep(5); os._exit(0)
+                kids.append(pid)
+            print(len(kids), err)
+            for p in kids: os.kill(p, signal.SIGKILL)
+        """, timeout_s=20))
+        n, err = raw["stdout"].decode().split()
+        self.assertEqual(err, "11")                                 # EAGAIN from pids.max
+        self.assertLessEqual(int(n), R.MAX_SANDBOX_PROCESSES + 4)
+        self.assertEqual(raw["outcome"], "inconclusive")           # K6: a hit limit never passes
+        self.assertIn("resource limit", raw["reason"])
+
+    @needs_cgroup
+    def test_aggregate_memory_flood_is_stopped_by_the_kernel(self):
+        raw = R._run_raw(spec("""
+            import os, time
+            for i in range(4):
+                if os.fork() == 0:
+                    b = bytearray(80 * 1024 * 1024)
+                    for j in range(0, len(b), 4096): b[j] = 1
+                    time.sleep(2); os._exit(0)
+            for i in range(4): os.wait()
+        """, memory_bytes=256 << 20, timeout_s=20))
+        self.assertEqual(raw["outcome"], "inconclusive")
+        self.assertIn("resource limit exceeded: memory", raw["reason"])
+
+    @needs_work_tmpfs
+    def test_disk_flood_ends_with_enospc(self):
+        with mock.patch.object(R, "MAX_WORK_BYTES", 4 << 20):
+            raw = R._run_raw(spec("""
+                chunk = b'x' * 65536; n = 0; err = None
+                for i in range(2000):
+                    try: open(f'/work/f{i}', 'wb').write(chunk); n += 1
+                    except OSError as e: err = e.errno; break
+                print(n, err)
+            """, timeout_s=20))
+        n, err = raw["stdout"].decode().split()
+        self.assertEqual(err, "28")                                 # ENOSPC
+        self.assertLessEqual(int(n) * 65536, 4 << 20)
+        self.assertEqual(raw["outcome"], "inconclusive")           # K6
+        self.assertEqual(raw["reason"], "resource limit exceeded: disk")
+
+    def test_the_record_states_which_kernel_limits_were_in_force(self):
+        raw = R._run_raw(spec("pass"))
+        env = R._environment(spec("pass"))
+        self.assertIn("kernel_limits", env)
+        self.assertEqual(set(env["kernel_limits"]), {"cgroup", "work_tmpfs", "seccomp"})
+        self.assertIs(env["kernel_limits"]["seccomp"], True)
 
 
 @needs_sandbox

@@ -16,7 +16,7 @@ test("public read-only mode must be explicitly enabled",async()=>{const r=await 
 test("public read-only tools list contains only explicit allowlisted tools",async()=>{const r=await worker.fetch(rpc("tools/list",{},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});const b=await r.json();assert.deepEqual(b.result.tools.map(tool=>tool.name),["project_inspect","read_project_file","engineering_standards","architecture_review"])});
 test("public read-only mode denies tools not on the allowlist by default",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"future_write_tool",arguments:{}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/not in the unauthenticated PUBLIC_READ_ONLY allowlist/)});
 test("public mode never permits write tools without MCP_AUTH_TOKEN",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})},GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/not in the unauthenticated PUBLIC_READ_ONLY allowlist/)});
-test("MCP rejects missing bearer token",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize"})}),env);assert.equal(r.status,401)});
+test("MCP rejects missing bearer token",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{"content-type":"application/json","cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize"})}),{...env,MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,401)});
 test("initialize advertises connector identity and tools capability",async()=>{const r=await worker.fetch(rpc("initialize",{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"test",version:"1"}}),env);const b=await r.json();assert.equal(b.result.serverInfo.name,"cloud-engineering-connector");assert.ok(b.result.capabilities.tools)});
 test("tools/list exposes all five declared tools",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();assert.deepEqual(b.result.tools.map(t=>t.name),["project_inspect","read_project_file","engineering_standards","architecture_review","create_change_pr"])});
 test("tools/list schema requires base_branch for create_change_pr",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();const tool=b.result.tools.find(t=>t.name==="create_change_pr");assert.ok(tool,"create_change_pr must be listed");assert.ok(Array.isArray(tool.inputSchema.required));assert.ok(tool.inputSchema.required.includes("base_branch"));assert.ok(Object.hasOwn(tool.inputSchema.properties,"base_branch"));assert.equal(tool.inputSchema.additionalProperties,false)});
@@ -68,7 +68,7 @@ test("MCP adds exact-origin CORS headers to allowed browser POST responses",asyn
 
 test("MCP rejects oversized request bodies before JSON parsing",async()=>{const body=JSON.stringify({jsonrpc:"2.0",id:1,method:"ping",padding:"x".repeat(1_000_001)});const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body}),env);assert.equal(r.status,413);assert.deepEqual(await r.json(),{error:"payload_too_large"})});
 
-test("MCP rejects invalid bearer tokens",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer wrong-token","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})}),env);assert.equal(r.status,401)});
+test("MCP rejects invalid bearer tokens",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer wrong-token","content-type":"application/json",accept:"application/json, text/event-stream","cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})}),{...env,MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,401)});
 
 test("MCP rejects oversized streamed request bodies without Content-Length",async()=>{
  const payload=JSON.stringify({jsonrpc:"2.0",id:1,method:"ping",padding:"x".repeat(1_000_001)});
@@ -466,4 +466,120 @@ test("id-less non-notification MCP messages are rejected before tool execution",
   }
   assert.equal(calls,0,"id-less messages must never reach tools or GitHub side effects");
  }finally{globalThis.fetch=originalFetch}
+});
+
+
+function publicReadOnlyRequestWithIp(ip){
+ const request=rpc("tools/list",{},1);
+ const headers=new Headers(request.headers);
+ headers.delete("authorization");
+ headers.set("cf-connecting-ip",ip);
+ return new Request(request,{headers});
+}
+
+test("IPv6 clients in the same /64 share a normalized public rate-limit key",async()=>{
+ const keys=[];
+ const limiter={limit:async({key})=>{keys.push(key);return{success:true}}};
+ for(const ip of ["2001:0db8:abcd:0012:0000:0000:0000:0001","2001:db8:abcd:12::ffff"]){
+  const response=await worker.fetch(publicReadOnlyRequestWithIp(ip),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:limiter});
+  assert.equal(response.status,200);
+ }
+ assert.deepEqual(keys,["public-mcp:v6/64:2001:db8:abcd:12","public-mcp:v6/64:2001:db8:abcd:12"]);
+});
+
+test("IPv4-mapped IPv6 client addresses normalize to the IPv4 rate-limit key",async()=>{
+ let key;
+ const response=await worker.fetch(publicReadOnlyRequestWithIp("::ffff:192.0.2.128"),{
+  PUBLIC_READ_ONLY:"true",
+  MCP_RATE_LIMITER:{limit:async(input)=>{key=input.key;return{success:true}}}
+ });
+ assert.equal(response.status,200);
+ assert.equal(key,"public-mcp:192.0.2.128");
+});
+
+test("malformed IPv4 and IPv6 client addresses fail closed before consuming a rate-limit bucket",async()=>{
+ let calls=0;
+ const limiter={limit:async()=>{calls++;return{success:true}}};
+ for(const ip of ["999.0.0.1","2001:::1"]){
+  const response=await worker.fetch(publicReadOnlyRequestWithIp(ip),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:limiter});
+  assert.equal(response.status,503);
+  assert.deepEqual(await response.json(),{error:"client_identity_unavailable"});
+ }
+ assert.equal(calls,0);
+});
+
+
+function requestWithAuthorization(value){
+ const headers={"content-type":"application/json",accept:"application/json, text/event-stream","cf-connecting-ip":"203.0.113.10"};
+ if(value!==undefined)headers.authorization=value;
+ return req("/mcp",{method:"POST",headers,body:JSON.stringify({jsonrpc:"2.0",id:501,method:"tools/list",params:{}})});
+}
+
+test("invalid bearer credentials are rate-limited before the 401 response",async()=>{
+ let key;
+ const response=await worker.fetch(requestWithAuthorization("Bearer wrong-secret"),{
+  ...env,
+  MCP_RATE_LIMITER:{limit:async(input)=>{key=input.key;return{success:true}}}
+ });
+ assert.equal(key,"auth-failure:203.0.113.10");
+ assert.equal(response.status,401);
+ assert.equal(response.headers.get("www-authenticate"),"Bearer");
+ assert.deepEqual(await response.json(),{error:"unauthorized"});
+});
+
+test("missing bearer credentials are rate-limited before the 401 response",async()=>{
+ let key;
+ const response=await worker.fetch(requestWithAuthorization(undefined),{
+  ...env,
+  MCP_RATE_LIMITER:{limit:async(input)=>{key=input.key;return{success:true}}}
+ });
+ assert.equal(key,"auth-failure:203.0.113.10");
+ assert.equal(response.status,401);
+ assert.deepEqual(await response.json(),{error:"unauthorized"});
+});
+
+test("auth failure limiter returns 429 and Retry-After when the quota is exhausted",async()=>{
+ const response=await worker.fetch(requestWithAuthorization("Bearer wrong-secret"),{
+  ...env,
+  MCP_RATE_LIMITER:{limit:async()=>({success:false})}
+ });
+ assert.equal(response.status,429);
+ assert.equal(response.headers.get("retry-after"),"60");
+ assert.deepEqual(await response.json(),{error:"rate_limited"});
+});
+
+test("protected authentication fails closed when the auth failure limiter is absent",async()=>{
+ const response=await worker.fetch(requestWithAuthorization("Bearer wrong-secret"),env);
+ assert.equal(response.status,503);
+ assert.deepEqual(await response.json(),{error:"rate_limiter_unavailable"});
+});
+
+test("protected authentication fails closed when the auth failure limiter throws",async()=>{
+ const response=await worker.fetch(requestWithAuthorization("Bearer wrong-secret"),{
+  ...env,
+  MCP_RATE_LIMITER:{limit:async()=>{throw new Error("backend failure containing test-secret")}}
+ });
+ assert.equal(response.status,503);
+ assert.deepEqual(await response.json(),{error:"rate_limiter_unavailable"});
+});
+
+test("a valid bearer token bypasses the auth failure quota",async()=>{
+ let calls=0;
+ const response=await worker.fetch(rpc("tools/list"),{
+  ...env,
+  MCP_RATE_LIMITER:{limit:async()=>{calls++;return{success:false}}}
+ });
+ assert.equal(response.status,200);
+ assert.equal(calls,0);
+});
+
+test("public and authentication-failure requests use independent key spaces",async()=>{
+ const keys=[];
+ const limiter={limit:async({key})=>{keys.push(key);return{success:true}}};
+ const protectedResponse=await worker.fetch(requestWithAuthorization("Bearer wrong-secret"),{...env,MCP_RATE_LIMITER:limiter});
+ const publicRequest=requestWithAuthorization(undefined);
+ const publicResponse=await worker.fetch(publicRequest,{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:limiter});
+ assert.equal(protectedResponse.status,401);
+ assert.equal(publicResponse.status,200);
+ assert.deepEqual(keys,["auth-failure:203.0.113.10","public-mcp:203.0.113.10"]);
 });

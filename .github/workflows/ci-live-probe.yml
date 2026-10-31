@@ -1,0 +1,25 @@
+name: ci-live-probe
+on:
+  push:
+    paths: [".github/diag/worker_url.txt", ".github/workflows/ci-live-probe.yml"]
+    branches: ["ci/flake-stress-2026-10-28"]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read-only probe (no secrets, no writes)
+        run: |
+          URL="$(tr -d ' \r\n' < .github/diag/worker_url.txt)"
+          if [ -z "$URL" ]; then echo "::warning::worker_url.txt is empty; nothing probed"; exit 0; fi
+          case "$URL" in https://*.workers.dev|https://*.workers.dev/) ;; *) echo "::error::URL must be https://*.workers.dev"; exit 1;; esac
+          URL="${URL%/}"
+          c() { curl -s -o /tmp/b -w '%{http_code}' --max-time 15 "$@"; }
+          echo "::notice::healthz=$(c "$URL/healthz")"
+          echo "::notice::root=$(c "$URL/")"
+          echo "::notice::tools_list_noauth=$(c -X POST -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$URL/mcp") body=$(head -c 200 /tmp/b)"
+          echo "::notice::bad_origin=$(c -X POST -H 'Origin: https://evil.example' -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$URL/mcp")"
+          codes=""; for i in $(seq 1 80); do codes="$codes $(c "$URL/healthz")"; done
+          echo "::notice::burst80=$(echo $codes | tr ' ' '\n' | sort | uniq -c | tr '\n' ' ')"

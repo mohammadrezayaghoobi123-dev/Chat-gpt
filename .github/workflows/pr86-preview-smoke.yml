@@ -39,6 +39,8 @@ jobs:
         with:
           node-version: 22
       - name: Verify immutable Preview source and exercise MCP
+        working-directory: cloud-engineering-connector
         env:
+          RUN_PREVIEW_SMOKE: "1"
           GITHUB_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: node cloud-engineering-connector/test/preview-smoke.mjs
+        run: node test/preview-smoke.mjs

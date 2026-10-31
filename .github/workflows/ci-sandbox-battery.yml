@@ -35,6 +35,21 @@ jobs:
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+      - name: Run battery as root (cgroup v2 + size-limited tmpfs available)
+        env:
+          MB_SRC: subject/src
+        run: |
+          set +e
+          sudo -E env "PATH=$PATH" python .github/diag/s3_battery.py > battery-root.out 2>&1
+          echo "exit=$?" >> battery-root.out
+          python - <<'PY'
+          def esc(s): return s.replace("%","%25").replace("\r","").replace("\n","%0A")
+          t = open("battery-root.out", errors="replace").read()
+          import re
+          parts = re.split(r"(?m)^(?==== |--- |sandbox_status|host listener)", t)
+          for i in range(0, len(parts), 3):
+              print("::notice::ROOT " + esc("".join(parts[i:i+3])[:1500]))
+          PY
       - name: Run battery
         env:
           MB_SRC: subject/src

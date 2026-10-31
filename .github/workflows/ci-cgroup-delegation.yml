@@ -31,5 +31,5 @@ jobs:
           PY
           IN
           sudo systemd-run --uid=$(id -u) --gid=$(id -g) -p Delegate=yes --wait --pipe --collect \
-            --setenv=GITHUB_WORKSPACE=$GITHUB_WORKSPACE --setenv=PATH="$(dirname $PY):/usr/bin:/bin" bash /tmp/inner.sh 2>&1 | tee out.txt
+            --setenv=GITHUB_WORKSPACE=$GITHUB_WORKSPACE --setenv=PATH="$(dirname $PY):/usr/sbin:/usr/bin:/sbin:/bin" bash /tmp/inner.sh 2>&1 | tee out.txt
           while IFS= read -r l; do echo "::notice::$(echo "$l" | head -c 300)"; done < out.txt

@@ -812,6 +812,19 @@ class KernelEnforcement(unittest.TestCase):
         self.assertEqual(raw["outcome"], "inconclusive")           # K6
         self.assertEqual(raw["reason"], "resource limit exceeded: disk")
 
+    def test_disk_flood_without_tmpfs_is_still_never_a_pass(self):
+        # Non-root hosts have no size-limited tmpfs and the sampling watchdog can miss a fast write (measured on a
+        # GitHub runner: 100 MB in 0.1 s ended as "pass"). The post-run check must still refuse a pass.
+        with mock.patch.object(R, "MAX_WORK_BYTES", 4 << 20), \
+                mock.patch.object(R, "_mount_work_tmpfs", return_value=False):
+            raw = R._run_raw(spec("""
+                chunk = b'x' * 65536
+                for i in range(128):
+                    open(f'/work/f{i}', 'wb').write(chunk)
+            """, timeout_s=20))
+        self.assertEqual(raw["outcome"], "inconclusive")
+        self.assertEqual(raw["reason"], "resource limit exceeded: disk")
+
     def test_the_record_states_which_kernel_limits_were_in_force(self):
         raw = R._run_raw(spec("pass"))
         env = R._environment(spec("pass"))

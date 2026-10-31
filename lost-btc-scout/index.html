@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101827"><meta name="description" content="ابزار رایگان و فقط‌خواندنی برای بررسی داده‌های عمومی آدرس‌های بیت‌کوین">
+<title>Lost BTC Scout</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1220;--panel:#121d2e;--line:#29384d;--text:#eef4fc;--muted:#a9b8cb;--accent:#f5a623;--green:#55d6a1;--red:#ff8b8b}*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top,#182943 0,#0b1220 60%);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.65}main{max-width:850px;margin:auto;padding:22px 16px 48px}.brand{display:flex;gap:12px;align-items:center}.logo{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;background:#2b3547;color:var(--accent);font-size:25px}.eyebrow{font-size:12px;color:var(--accent);letter-spacing:.08em}.brand h1{font-size:25px;margin:0}.sub{color:var(--muted);margin:8px 0 22px}.card{background:rgba(18,29,46,.94);border:1px solid var(--line);border-radius:18px;padding:18px;margin:14px 0}.card h2{font-size:17px;margin:0 0 12px}.formrow{display:flex;gap:9px}.formrow input{min-width:0;flex:1}input,select,button{font:inherit;border-radius:12px;padding:12px;border:1px solid var(--line)}input,select{background:#0b1422;color:var(--text);width:100%}button{background:var(--accent);color:#1b1b1b;border:0;font-weight:750;cursor:pointer}button:disabled{opacity:.55;cursor:wait}.quick{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.quick button{background:#26364c;color:var(--text);font-size:13px}.notice{border-right:3px solid var(--accent);padding:10px 12px;background:#251f16;color:#f9dfad;border-radius:8px;font-size:13px}.muted{color:var(--muted);font-size:13px}.status{margin-top:12px;color:var(--muted);font-size:14px;overflow-wrap:anywhere}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.metric{background:#0b1422;border:1px solid var(--line);border-radius:12px;padding:12px;min-width:0}.metric .label{color:var(--muted);font-size:12px}.metric .value{font-size:19px;font-weight:750;overflow-wrap:anywhere}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:3px 9px;font-size:12px;color:var(--green)}.error{color:var(--red)}a{color:#8fc8ff}.hidden{display:none}.tablewrap{overflow:auto}table{border-collapse:collapse;width:100%;font-size:13px}td,th{text-align:right;padding:9px;border-bottom:1px solid var(--line);white-space:nowrap}.foot{color:var(--muted);font-size:12px;margin-top:24px}.checks{padding-right:20px}.checks li{margin:6px 0}
+@media(min-width:600px){main{padding-top:34px}.grid{grid-template-columns:repeat(4,minmax(0,1fr))}.brand h1{font-size:30px}}@media(max-width:420px){.formrow{flex-direction:column}.formrow button{width:100%}.card{padding:14px}}
+</style></head>
+<body><main>
+<header><div class="brand"><div class="logo">₿</div><div><div class="eyebrow">FREE • PUBLIC DATA • READ ONLY</div><h1>Lost BTC Scout</h1></div></div><p class="sub">کاوشگر مستقل داده‌های عمومی بیت‌کوین — مناسب آیفون، بدون کیف‌پول و بدون کلید خصوصی.</p></header>
+<div class="notice">نکتهٔ مهم: آدرس قدیمی یا غیرفعال الزاماً بی‌صاحب نیست. این ابزار فقط داده‌های عمومی را گزارش می‌کند؛ مالکیت، رهاشدگی یا امکان برداشت را اثبات نمی‌کند.</div>
+<section class="card"><h2>بررسی آدرس بیت‌کوین</h2><label for="address" class="muted">آدرس عمومی (نه عبارت بازیابی یا کلید خصوصی)</label><div class="formrow" style="margin-top:7px"><input id="address" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="آدرس عمومی BTC را وارد کنید"><button id="scan">بررسی آدرس</button></div><div class="quick"><button id="demo">نمونهٔ عمومی برای آزمایش</button><button id="clear">پاک کردن</button></div><div id="status" class="status" role="status" aria-live="polite">آمادهٔ بررسی. برای جلوگیری از فشار روی سرویس، هر بار یک آدرس بررسی می‌شود.</div></section>
+<section id="results" class="card hidden"><h2>نتیجهٔ داده‌های عمومی</h2><div class="grid" id="metrics"></div><p id="assessment" class="muted"></p><div class="tablewrap"><table><thead><tr><th>تراکنش اخیر</th><th>تاریخ</th><th>وضعیت</th></tr></thead><tbody id="txrows"></tbody></table></div><p id="explorer"></p></section>
+<section class="card"><h2>فیلترهای تحقیقاتی</h2><p class="muted">در این نسخه، این فیلترها برای ارزیابی هر آدرس بررسی‌شده استفاده می‌شوند؛ ابزار هنوز کل بلاک‌چین را به‌صورت خودکار جست‌وجو نمی‌کند.</p><ul class="checks"><li>قدیمی بودن آخرین فعالیت — صرفاً یک نشانهٔ زمانی</li><li>موجودی بالا — صرفاً یک معیار عددی، نه نشانهٔ رهاشدگی</li><li>UTXOهای خرج‌نشده — وضعیت عمومی خروجی‌ها در زمان بررسی</li></ul><p class="muted">برای جست‌وجوی سراسری، به ایندکس کامل بلاک‌چین یا زیرساخت دادهٔ جداگانه نیاز است؛ سرویس رایگان عمومی معمولاً چنین پیمایش نامحدودی را فراهم نمی‌کند.</p></section>
+<section class="card"><h2>حریم خصوصی و ایمنی</h2><ul class="checks"><li>هیچ کلید خصوصی، عبارت بازیابی یا تراکنشی درخواست نمی‌شود.</li><li>ابزار فقط درخواست خواندن به API عمومی ارسال می‌کند.</li><li>این صفحه تضمین‌کنندهٔ سود یا کشف دارایی قابل‌برداشت نیست.</li><li>داده‌ها ممکن است ناقص یا موقتاً در دسترس نباشند؛ نتیجه را با کاوشگر مستقل بررسی کنید.</li></ul></section>
+<footer class="foot">Lost BTC Scout — نسخهٔ آزمایشی 0.1 · منبع داده: API عمومی mempool.space · هیچ وابستگی به Master Brain ندارد.</footer>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const fmt=n=>new Intl.NumberFormat('fa-IR',{maximumFractionDigits:8}).format(n);
+const dateFmt=t=>t?new Date(t*1000).toLocaleString('fa-IR'):'نامشخص';
+function validAddress(a){return /^(bc1[ac-hj-np-z02-9]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/.test(a)}
+function metric(label,value){return '<div class="metric"><div class="label">'+label+'</div><div class="value">'+value+'</div></div>'}
+async function scan(){
+ const a=$('address').value.trim(); if(!validAddress(a)){ $('status').innerHTML='<span class="error">آدرس از نظر قالب معتبر نیست. فقط آدرس عمومی بیت‌کوین را وارد کن.</span>';return}
+ $('scan').disabled=true;$('results').classList.add('hidden');$('status').textContent='در حال دریافت داده‌های عمومی…';
+ try{
+  const base='https://mempool.space/api/address/'+encodeURIComponent(a);
+  const res=await fetch(base,{headers:{'Accept':'application/json'}});
+  if(!res.ok)throw new Error(res.status===429?'محدودیت موقت درخواست؛ کمی بعد دوباره تلاش کن.':'سرویس داده پاسخ معتبر نداد (HTTP '+res.status+').');
+  const d=await res.json();
+  const chain=d.chain_stats||{}, mem=d.mempool_stats||{};
+  const received=(chain.funded_txo_sum||0)+(mem.funded_txo_sum||0);
+  const sent=(chain.spent_txo_sum||0)+(mem.spent_txo_sum||0);
+  const balance=received-sent;
+  const txCount=(chain.tx_count||0)+(mem.tx_count||0);
+  let last=null;
+  if(txCount>0){
+   const tr=await fetch(base+'/txs',{headers:{'Accept':'application/json'}});
+   if(tr.ok){const txs=await tr.json();if(Array.isArray(txs)&&txs.length){const first=txs[0];if(first.status&&first.status.block_time)last=first.status.block_time;}}
+  }
+  const utxoRes=await fetch(base+'/utxo',{headers:{'Accept':'application/json'}});
+  let utxos=[];if(utxoRes.ok){const x=await utxoRes.json();if(Array.isArray(x))utxos=x;}
+  const ageDays=last?Math.floor((Date.now()/1000-last)/86400):null;
+  $('metrics').innerHTML=metric('موجودی فعلی',fmt(balance/1e8)+' BTC')+metric('تعداد تراکنش',fmt(txCount))+metric('آخرین فعالیت تأییدشده',dateFmt(last))+metric('UTXO خرج‌نشده',fmt(utxos.length));
+  let msg=txCount===0?'برای این آدرس سابقهٔ تراکنش تأییدشده در پاسخ API دیده نشد.':(last?'از آخرین تراکنش تأییدشده حدود '+fmt(ageDays)+' روز گذشته است.':'زمان آخرین تراکنش از دادهٔ فعلی قابل تعیین نبود.');
+  msg+=' این اطلاعات به‌تنهایی مالکیت، رهاشدگی یا حق برداشت را ثابت نمی‌کند.';
+  $('assessment').textContent=msg;
+  const tbody=$('txrows');tbody.innerHTML='';
+  if(txCount===0){tbody.innerHTML='<tr><td colspan="3">تراکنش تأییدشده‌ای گزارش نشده است.</td></tr>'}
+  else{
+   const rr=await fetch(base+'/txs',{headers:{'Accept':'application/json'}});
+   if(rr.ok){const txs=await rr.json();txs.slice(0,5).forEach(t=>{const row=document.createElement('tr');const id=document.createElement('td');const link=document.createElement('a');link.href='https://mempool.space/tx/'+t.txid;link.target='_blank';link.rel='noopener noreferrer';link.textContent=t.txid.slice(0,12)+'…';id.append(link);const dt=document.createElement('td');dt.textContent=dateFmt(t.status?.block_time);const st=document.createElement('td');st.textContent=t.status?.confirmed?'تأییدشده':'تأییدنشده';row.append(id,dt,st);tbody.append(row)})}
+  }
+  $('explorer').innerHTML='مشاهدهٔ مستقل: <a href="https://mempool.space/address/'+encodeURIComponent(a)+'" target="_blank" rel="noopener noreferrer">باز کردن آدرس در mempool.space</a>';
+  $('results').classList.remove('hidden');$('status').textContent='بررسی تمام شد. نتایج فقط بازتاب داده‌های عمومی دریافتی‌اند.';
+ }catch(e){$('status').innerHTML='<span class="error">'+String(e.message||'خطای نامشخص').replace(/[<>]/g,'')+'</span> اگر مشکل ادامه داشت، سرویس API ممکن است محدود یا موقتاً قطع باشد.'}
+ finally{$('scan').disabled=false}
+}
+$('scan').addEventListener('click',scan);$('address').addEventListener('keydown',e=>{if(e.key==='Enter')scan()});$('clear').addEventListener('click',()=>{$('address').value='';$('results').classList.add('hidden');$('status').textContent='آمادهٔ بررسی.'});$('demo').addEventListener('click',()=>{$('address').value='1BoatSLRHtKNngkdXEeobR76b53LETtpyT';$('status').textContent='آدرس نمونه پر شد؛ برای مشاهدهٔ داده‌های عمومی روی «بررسی آدرس» بزن.'});
+</script></body></html>

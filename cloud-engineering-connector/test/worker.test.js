@@ -584,3 +584,22 @@ test("public and authentication-failure requests use independent key spaces",asy
  assert.deepEqual(keys,["auth-failure:203.0.113.10","public-mcp:203.0.113.10"]);
 });
 test("GitHub API requests include the required User-Agent header",async()=>{const originalFetch=globalThis.fetch;let captured;globalThis.fetch=async(_url,options)=>{captured=new Headers(options.headers);return new Response(JSON.stringify({message:"Not Found"}),{status:404,headers:{"content-type":"application/json"}})};try{await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}}),env);assert.ok(captured?.get("user-agent"),"GitHub REST requests must identify the connector with a User-Agent header")}finally{globalThis.fetch=originalFetch}});
+
+
+test("architecture_analyze does not mistake signal text inside string values for AbortSignal",async()=>{
+ const originalFetch=globalThis.fetch;
+ const source=[
+  'fetch(url, { headers: { "x-mode": "signal" } });',
+  'fetch(url, { headers: { "x-mode": "AbortSignal.timeout(1000)" } });',
+  'fetch(url, { signal: controller.signal });'
+ ].join("\\n");
+ const encoded=btoa(String.fromCharCode(...new TextEncoder().encode(source)));
+ globalThis.fetch=async()=>new Response(JSON.stringify({type:"file",path:"src/sample.js",size:new TextEncoder().encode(source).byteLength,content:encoded,encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}});
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"architecture_analyze",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",ref:"main",paths:["src/sample.js"]}}),{...env,GITHUB_TOKEN:"test-token"});
+  const body=await response.json();
+  assert.equal(body.result.isError,undefined);
+  const result=JSON.parse(body.result.content[0].text);
+  assert.deepEqual(result.findings.filter(item=>item.rule_id==="UNBOUNDED_FETCH").map(item=>item.evidence[0].line_start),[1,2]);
+ }finally{globalThis.fetch=originalFetch}
+});

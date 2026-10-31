@@ -1,0 +1,7 @@
+import test from 'node:test'; import assert from 'node:assert/strict'; import { runDecisionPipeline } from '../../master_brain/core/end-to-end-pipeline.mjs';
+const registry=[{id:'model-a',capabilities:['reasoning'],risk_levels:['low'],reliability:0.99,cost:1}];
+const analysis={verification:{status:'VERIFIED'},stability:{status:'ROBUST'},value_of_information:{status:'DECIDE_NOW'},prediction:{success_probability:0.99},risk:{impact:'LOW',probability:0.01,reversibility:'REVERSIBLE'}};
+const base={task:{objective:'safe action',risk:'low',required_capabilities:['reasoning']},registry,analysis,executed:true};
+test('execution-gate-unavailable fails closed on the real decision pipeline',async()=>{const r=await runDecisionPipeline({...base,fault_context:{execution_gate_available:false}}); assert.equal(r.executed,false); assert.equal(r.status,'HOLD');});
+test('policy-engine-unavailable fails closed on the real decision pipeline',async()=>{const r=await runDecisionPipeline({...base,fault_context:{policy_available:false}}); assert.equal(r.executed,false); assert.equal(r.status,'HOLD');});
+test('revoked authority fails closed on the real decision pipeline',async()=>{const r=await runDecisionPipeline({...base,fault_context:{authority:{status:'REVOKED'}}}); assert.equal(r.executed,false); assert.equal(r.status,'HOLD');});

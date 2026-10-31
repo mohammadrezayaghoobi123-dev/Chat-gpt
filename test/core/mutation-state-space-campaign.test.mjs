@@ -1,0 +1,3 @@
+import test from 'node:test'; import assert from 'node:assert/strict'; import { runMutationCampaign, enumerateCriticalStateSpace } from '../../master_brain/verification/harness/mutation-campaign.mjs';
+test('critical mutation campaign kills authorization-bypass mutations',async()=>{const r=await runMutationCampaign(); assert.equal(r.status,'PASS'); assert.equal(r.critical.total,r.critical.killed); assert.equal(r.critical.survived,0);});
+test('critical state-space enumeration covers authority/policy/gate interactions',()=>{const r=enumerateCriticalStateSpace(); assert.equal(r.total,8); assert.equal(r.covered,8); assert.equal(r.unsafe,0);});

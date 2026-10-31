@@ -1,0 +1,4 @@
+import test from 'node:test'; import assert from 'node:assert/strict'; import { captureReproductionManifest, reproduceExact, reproduceIndependent } from '../../master_brain/verification/harness/reproduction-controller.mjs';
+const run={result:'PASS',versions:{sut:'s1',harness:'h1'},inputs:{x:1},fault:'F01',sequence:['a'],policy:'p1',environment:'e1',dependencies:'d1',seed:7};
+test('exact reproduction requires matching manifest',()=>{const m=captureReproductionManifest(run); assert.equal(reproduceExact(m).status,'PASS');});
+test('independent reproduction requires fresh context marker',()=>{const m=captureReproductionManifest(run); assert.equal(reproduceIndependent(m,{fresh_context:true}).status,'PASS'); assert.equal(reproduceIndependent(m,{fresh_context:false}).status,'INCONCLUSIVE');});

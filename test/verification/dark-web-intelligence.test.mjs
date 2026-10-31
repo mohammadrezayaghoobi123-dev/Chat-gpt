@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { scoreAdmiralty, classifyThreatObservation, authorizeDarkWebOperation, admitThreatIntelToMemory } from '../../master_brain/threat-intelligence/dark-web-intelligence.mjs';
+test('Admiralty threshold', () => { assert.equal(scoreAdmiralty({source_reliability:'A',information_credibility:1}).status,'ACTIONABLE'); assert.equal(scoreAdmiralty({source_reliability:'C',information_credibility:1}).status,'NON_ACTIONABLE'); });
+test('unknown provenance is held', () => { const r=classifyThreatObservation({source_trust:'UNKNOWN',provenance:'UNKNOWN',source_reliability:'A',information_credibility:1}); assert.equal(r.status,'INCONCLUSIVE'); assert.equal(r.action,'HOLD'); });
+test('contradiction is held', () => { const r=classifyThreatObservation({source_reliability:'A',information_credibility:1,contradicted:true}); assert.equal(r.status,'CONFLICTED'); assert.equal(r.action,'HOLD'); });
+test('corroborated technical evidence escalates', () => { const r=classifyThreatObservation({source_trust:'KNOWN',provenance:'VERIFIED',source_reliability:'B',information_credibility:1,correlated_assets:1,technical_indicator_verified:true}); assert.equal(r.status,'CORROBORATED'); assert.equal(r.action,'ESCALATE'); });
+test('defensive operations allowed', () => { assert.equal(authorizeDarkWebOperation({operation:'READ'}).allowed,true); assert.equal(authorizeDarkWebOperation({operation:'ANALYZE'}).allowed,true); });
+test('criminal acquisition and intrusion blocked', () => { for (const operation of ['TRANSACT','CREDENTIAL_USE','MALWARE_ACQUISITION','EXPLOIT_ACQUISITION','INTRUSION']) assert.equal(authorizeDarkWebOperation({operation}).allowed,false); });
+test('unknown operation fails closed', () => { assert.equal(authorizeDarkWebOperation({operation:'UNKNOWN'}).allowed,false); });
+test('unverified intel cannot enter trusted memory', () => { const r=admitThreatIntelToMemory({observation:{source_trust:'KNOWN',provenance:'VERIFIED',source_reliability:'A',information_credibility:1},evidence_status:'UNKNOWN'}); assert.equal(r.status,'QUARANTINED'); });
+test('verified actionable intel becomes admission candidate', () => { const r=admitThreatIntelToMemory({observation:{source_trust:'KNOWN',provenance:'VERIFIED',source_reliability:'A',information_credibility:1},evidence_status:'VERIFIED'}); assert.equal(r.status,'ADMIT_CANDIDATE'); });

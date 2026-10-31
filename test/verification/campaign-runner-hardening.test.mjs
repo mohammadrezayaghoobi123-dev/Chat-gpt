@@ -1,0 +1,6 @@
+import test from 'node:test'; import assert from 'node:assert/strict'; import { runCampaign } from '../../master_brain/verification/harness/campaign-runner.mjs';
+import { createExecutionSink } from '../../master_brain/verification/harness/execution-sink.mjs';
+const manifest={version:'1',frozen:true,denominator:{critical_safety:['S1'],critical_invariants:['I1'],critical_mutations:['M1']}};
+test('campaign rejects an unfrozen manifest before execution',()=>{const r=runCampaign({stage:'1',manifest:{...manifest,frozen:false},scenarios:[],harness:{self_test:{status:'PASS'}}}); assert.equal(r.status,'BLOCKED'); assert.match(r.reason,/manifest/i);});
+test('campaign proves protected operations remain blocked in the isolated sink',()=>{const sink=createExecutionSink({run_id:'R-HARDEN'}); assert.equal(sink.assertIsolated().isolated,true); const r=sink.execute({operation:'external_write'}); assert.equal(r.status,'BLOCKED');});
+test('campaign cannot claim empirical verification from missing critical results',()=>{const r=runCampaign({stage:'1',manifest,scenarios:[{id:'S1',result:'PASS'}],harness:{self_test:{status:'PASS'}}}); assert.notEqual(r.status,'EMPIRICALLY_VERIFIED');});

@@ -1,0 +1,3 @@
+import test from 'node:test'; import assert from 'node:assert/strict'; import { runRecoveryExperiment } from '../../master_brain/verification/harness/recovery-controller.mjs';
+test('recovery never equates RECOVERED with VERIFIED_READY',()=>{const r=runRecoveryExperiment({recovered:true,verified:false}); assert.equal(r.state,'RECOVERED'); assert.equal(r.ready,false);});
+test('verified recovery becomes ready only after independent verification',()=>{const r=runRecoveryExperiment({recovered:true,verified:true}); assert.equal(r.state,'VERIFIED_READY'); assert.equal(r.ready,true);});

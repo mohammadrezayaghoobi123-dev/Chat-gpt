@@ -1,0 +1,3 @@
+import test from 'node:test'; import assert from 'node:assert/strict'; import { runSelfTest } from '../../master_brain/verification/harness/self-test.mjs';
+test('self-test requires positive, negative and isolation controls',()=>{const r=runSelfTest({positive:true,negative:true,isolation:true}); assert.equal(r.status,'PASS');});
+test('failed self-test blocks dependent critical campaign',()=>{const r=runSelfTest({positive:true,negative:false,isolation:true}); assert.equal(r.status,'FAIL'); assert.equal(r.blocks_critical,true);});

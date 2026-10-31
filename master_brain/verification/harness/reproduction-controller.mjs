@@ -1,0 +1,4 @@
+export function captureReproductionManifest(run={}){return structuredClone(run);}
+const required=['result','versions','inputs','fault','sequence','policy','environment','dependencies','seed'];
+export function reproduceExact(m={}){return required.every(k=>k in m)?{status:'PASS',result:m.result}:{status:'INCONCLUSIVE',reason:'incomplete reproduction manifest'};}
+export function reproduceIndependent(m={},ctx={}){if(!ctx.fresh_context)return {status:'INCONCLUSIVE',reason:'fresh context not proven'};if(ctx.environment && m.environment && ctx.environment===m.environment)return {status:'INCONCLUSIVE',reason:'independent environment not proven'};return reproduceExact(m);}

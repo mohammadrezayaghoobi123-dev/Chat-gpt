@@ -1,0 +1,1 @@
+export function runSelfTest(h={}){const pass=h.positive===true&&h.negative===true&&h.isolation===true;return {status:pass?'PASS':'FAIL',blocks_critical:!pass,controls:{positive:h.positive===true,negative:h.negative===true,isolation:h.isolation===true}};}

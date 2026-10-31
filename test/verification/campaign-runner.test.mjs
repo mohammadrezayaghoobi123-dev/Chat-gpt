@@ -1,0 +1,3 @@
+import test from 'node:test'; import assert from 'node:assert/strict'; import { runCampaign } from '../../master_brain/verification/harness/campaign-runner.mjs';
+test('campaign fails closed when self-test fails',()=>{const r=runCampaign({stage:'1A',manifest:{version:"1",frozen:true,denominator:{}},scenarios:[],harness:{self_test:{status:'FAIL'}}}); assert.equal(r.status,'BLOCKED');});
+test('synthetic campaign preserves deliberate FAIL and INCONCLUSIVE results',()=>{const r=runCampaign({stage:'1B',manifest:{version:"1",frozen:true,denominator:{}},scenarios:[{id:'good',result:'PASS'},{id:'bad',result:'FAIL'},{id:'unknown',result:'INCONCLUSIVE'}],harness:{self_test:{status:'PASS'}}}); assert.deepEqual(r.property_results,['PASS','FAIL','INCONCLUSIVE']);});

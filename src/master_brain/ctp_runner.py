@@ -770,7 +770,8 @@ def _run_raw(spec: TestSpec, *, probe: bool = False) -> dict:
         _killpg(proc)
         if spec.isolation == "sandbox" and not violation:
             # K6: the kernel may have stopped the flood between two samples; a hit limit is never a pass
-            violation = (cg.hit() if cg is not None else "") or ("disk" if tmpfs and _disk_full(work) else "")
+            violation = ((cg.hit() if cg is not None else "")
+                         or ("disk" if (tmpfs and _disk_full(work)) or _dir_bytes(work) > MAX_WORK_BYTES else ""))
         duration_ms = int((time.monotonic() - t0) * 1000)
         stdout, c1 = _read_limited(out_path, spec.max_output_bytes)
         stderr, c2 = _read_limited(err_path, spec.max_output_bytes)

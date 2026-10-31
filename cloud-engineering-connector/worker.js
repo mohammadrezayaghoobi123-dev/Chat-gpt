@@ -71,7 +71,7 @@ function decodeBase64Utf8(value){const binary=atob(value.replace(/\n/g,""));retu
 async function projectInspect(args,env){const base=repoPath(args.owner,args.repo);const repo=await github(env,base);const branch=args.branch||repo.default_branch;if(!validBranchName(branch))throw new Error("Invalid branch name.");const ref=await github(env,base+"/commits/"+encodeURIComponent(branch).replace(/%2F/g,"/"));const tree=await github(env,base+"/git/trees/"+encodeURIComponent(ref.commit.tree.sha)+"?recursive=1");const files=(tree.tree||[]).filter(x=>x.type==="blob");return{repository:repo.full_name,visibility:repo.private?"private":"public",default_branch:repo.default_branch,inspected_branch:branch,latest_commit:{sha:ref.sha,message:ref.commit.message,date:ref.commit.committer?.date},tree_truncated:Boolean(tree.truncated),files:files.slice(0,500).map(x=>({path:x.path,size:x.size})),file_count_returned:Math.min(500,files.length),note:"Repository metadata is observed data; architectural conclusions must be grounded in returned files and explicit assumptions."}}
 async function readProjectFile(args,env){const base=repoPath(args.owner,args.repo);validatePath(args.path);const ref=args.ref?"?ref="+encodeURIComponent(args.ref):"";const file=await github(env,base+"/contents/"+args.path.split("/").map(encodeURIComponent).join("/") + ref,{maxResponseBytes:150_000});if(Array.isArray(file)||file.type!=="file"||typeof file.content!=="string")throw new Error("Path is not a readable text file.");if(!Number.isSafeInteger(file.size)||file.size<0)throw new Error("File size metadata is invalid; refusing to read the file.");if(file.size>MAX_READ_FILE_BYTES)throw new Error("File exceeds the maximum readable size of "+MAX_READ_FILE_BYTES+" bytes.");const content=decodeBase64Utf8(file.content);const actualBytes=new TextEncoder().encode(content).byteLength;if(actualBytes>MAX_READ_FILE_BYTES)throw new Error("Decoded file exceeds the maximum readable size of "+MAX_READ_FILE_BYTES+" bytes.");if(actualBytes!==file.size)throw new Error("File size metadata does not match decoded content; refusing to return potentially inconsistent data.");return{repository:args.owner+"/"+args.repo,path:file.path,ref:args.ref||"default branch",size:actualBytes,content}}
 function fetchCallHasAbortSignal(line,openIndex){
- let depth=1;let quote="";let escaped=false;
+ let depth=1;let quote="";let escaped=false;let code="";
  for(let index=openIndex+1;index<line.length;index++){
   const character=line[index];
   if(quote){
@@ -83,7 +83,8 @@ function fetchCallHasAbortSignal(line,openIndex){
   if(character==="'"||character==='"'||character.charCodeAt(0)===96){quote=character;continue;}
   if(character==="/"&&line[index+1]==="/")break;
   if(character==="(")depth++;
-  else if(character===")"&&--depth===0)return /\b(?:signal\b|AbortSignal\s*\.)/.test(line.slice(openIndex+1,index));
+  else if(character===")"&&--depth===0)return /\b(?:signal\b|AbortSignal\s*\.)/.test(code);
+  code+=character;
  }
  return false;
 }

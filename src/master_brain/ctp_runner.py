@@ -301,6 +301,57 @@ def read_blob(evidence_dir: Path, digest: str) -> bytes:
 # ---------------------------------------------------------------------- sandbox
 
 
+# Kernel syscall filter (classic BPF, default allow). x86_64 numbers; any other architecture fails closed
+# because the launcher refuses to run and the probe then reports the sandbox unavailable.
+_SECCOMP_DENY_X86_64 = (
+    101,   # ptrace
+    310, 311,   # process_vm_readv / process_vm_writev
+    312,   # kcmp
+    438,   # pidfd_getfd
+    165, 166, 155, 161,   # mount, umount2, pivot_root, chroot
+    428, 429, 430, 431, 432, 433, 442,   # open_tree move_mount fsopen fsconfig fsmount fspick mount_setattr
+    272, 308,   # unshare, setns
+    167, 168, 169, 163,   # swapon swapoff reboot acct
+    164, 159, 227, 305,   # settimeofday adjtimex clock_settime clock_adjtime
+    175, 176, 313,   # init_module delete_module finit_module
+    246, 320,   # kexec_load kexec_file_load
+    172, 173,   # iopl ioperm
+    103, 179, 212,   # syslog quotactl lookup_dcookie
+    321, 298, 323,   # bpf perf_event_open userfaultfd
+    248, 249, 250,   # add_key request_key keyctl
+    303, 304,   # name_to_handle_at open_by_handle_at
+    425, 426, 427,   # io_uring_setup / enter / register
+)
+
+_SECCOMP_EXEC_PY = r"""
+import ctypes, os, struct, sys
+deny = [int(x) for x in sys.argv[1].split(",")]
+argv = sys.argv[2:]
+if os.uname().machine != "x86_64" or not deny:
+    sys.stderr.write("seccomp: unsupported architecture or empty filter\n"); os._exit(125)
+ins = []
+def op(code, jt, jf, k): ins.append(struct.pack("HBBI", code, jt, jf, k))
+op(0x20, 0, 0, 4)                 # A = arch
+op(0x15, 1, 0, 0xC000003E)        # == AUDIT_ARCH_X86_64 ? skip the kill
+op(0x06, 0, 0, 0x80000000)        # SECCOMP_RET_KILL_PROCESS (other ABIs, e.g. ia32 emulation)
+op(0x20, 0, 0, 0)                 # A = syscall nr
+op(0x45, 0, 1, 0x40000000)        # x32 ABI bit set ?
+op(0x06, 0, 0, 0x80000000)
+for nr in deny:
+    op(0x15, 0, 1, nr)
+    op(0x06, 0, 0, 0x00050000 | 1)    # SECCOMP_RET_ERRNO | EPERM
+op(0x06, 0, 0, 0x7FFF0000)        # allow
+prog = b"".join(ins)
+buf = ctypes.create_string_buffer(prog, len(prog))
+class Fprog(ctypes.Structure):
+    _fields_ = [("len", ctypes.c_ushort), ("filter", ctypes.c_void_p)]
+fp = Fprog(len(ins), ctypes.cast(buf, ctypes.c_void_p))
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(38, 1, 0, 0, 0) != 0 or libc.prctl(22, 2, ctypes.byref(fp)) != 0:
+    sys.stderr.write("seccomp: cannot install filter (errno %d)\n" % ctypes.get_errno()); os._exit(125)
+os.execv(argv[0], argv)
+"""
+
 _PROBE_PY = r"""
 import json, os, socket, sys
 r = {}
@@ -327,6 +378,14 @@ import ctypes
 _libc = ctypes.CDLL(None, use_errno=True)
 r["no_nested_userns"] = _libc.unshare(0x10000000) != 0
 r["no_mount"] = _libc.mount(b"x", b"/work", b"tmpfs", 0, None) != 0
+try:
+    r["seccomp_filter_active"] = any(l.split()[:2] == ["Seccomp:", "2"] for l in open("/proc/self/status"))
+except Exception:
+    r["seccomp_filter_active"] = False
+def _eperm(nr):
+    ctypes.set_errno(0)
+    return _libc.syscall(nr, 0xffff, 0, 0, 0, 0, 0) == -1 and ctypes.get_errno() == 1
+r["dangerous_syscalls_denied"] = all(_eperm(n) for n in (101, 321, 323, 425, 165, 246))
 r["only_work_and_system_visible"] = set(os.listdir("/")) <= {
     "usr","bin","sbin","lib","lib32","lib64","etc","work","proc","tmp","dev","opt","home","srv","var","root","run","mnt","media","sys","boot"} \
     and not os.path.exists("/home/claude") and not os.path.exists("/root/.ssh")
@@ -367,17 +426,22 @@ def _script_for(root: str, workdir: str, ro: list[str], argv: tuple[str, ...],
         "mount -o remount,bind,ro /", "cd /work",
     ]
     envs = " ".join(q(f"{k}={v}") for k, v in (("HOME", "/work"), ("PATH", "/usr/bin:/bin"), *env))
+    deny = ",".join(str(n) for n in (_SECCOMP_DENY_X86_64 or ()))
     lines.append(
         "exec setpriv --no-new-privs --bounding-set=-all --inh-caps=-all -- "
-        f"env -i {envs} {' '.join(q(a) for a in argv)}")
+        f"env -i {envs} {q(os.path.realpath(sys.executable))} -I -c {q(_SECCOMP_EXEC_PY)} {q(deny)} "
+        f"{' '.join(q(a) for a in argv)}")
     return "\n".join(lines) + "\n"
 
 
-def _limits_preexec(spec: TestSpec) -> Callable[[], None]:
+def _limits_preexec(spec: TestSpec, cgroup_procs: tuple[str, ...] = ()) -> Callable[[], None]:
     cpu = int(spec.timeout_s) + 2
 
     def apply() -> None:
         os.setsid()
+        for f in cgroup_procs:               # join before exec: no window in which a child escapes the cgroup
+            with open(f, "w") as fh:
+                fh.write("0")
         # The test must not inherit the parent's signal state: a runner started under nohup / a
         # supervisor would otherwise hand SIG_IGN (SIGHUP, ...) and a blocked mask to the code
         # under test, so a signal death would be reported as a clean exit.
@@ -435,8 +499,159 @@ def _probe() -> dict:
     except ValueError:
         return {"available": False, "properties": {}, "reason": "probe output unreadable"}
     ok = bool(props) and all(v is True for v in props.values())
-    return {"available": ok, "properties": props,
+    return {"available": ok, "properties": props, "kernel_limits": kernel_limits(),
             "reason": "" if ok else "probe properties failed: " + ", ".join(k for k, v in props.items() if v is not True)}
+
+
+# ---------------------------------------------------------------- kernel-enforced limits
+# cgroup (memory + pids, v1 or v2) and a size-limited tmpfs for ./work. Unlike the sampling watchdog these are
+# enforced by the kernel at the moment of allocation, so a burst between two samples cannot pass the ceiling.
+# Both are best effort in *availability* (they need root or a delegated cgroup) and honest in *reporting*:
+# ``kernel_limits`` says which were in force, and any run that hit one can never be a "pass" (K6).
+
+
+class _Cgroup:
+    def __init__(self, dirs: list[str], v2: bool):
+        self.dirs, self.v2 = dirs, v2
+
+    def procs_files(self) -> list[str]:
+        return [os.path.join(d, "cgroup.procs") for d in self.dirs]
+
+    def _read(self, name: str) -> str:
+        for d in self.dirs:
+            try:
+                with open(os.path.join(d, name)) as fh:
+                    return fh.read()
+            except OSError:
+                continue
+        return ""
+
+    def hit(self) -> str:
+        """\"memory\" / \"processes\" if the kernel refused or killed something at a limit, else \"\"."""
+        try:
+            if self.v2:
+                ev = dict(l.split() for l in self._read("memory.events").splitlines() if len(l.split()) == 2)
+                if int(ev.get("oom_kill", 0)):
+                    return "memory"
+                pe = dict(l.split() for l in self._read("pids.events").splitlines() if len(l.split()) == 2)
+                return "processes" if int(pe.get("max", 0)) else ""
+            oc = dict(l.split() for l in self._read("memory.oom_control").splitlines() if len(l.split()) == 2)
+            if int(oc["oom_kill"]) if "oom_kill" in oc else int(self._read("memory.failcnt").strip() or 0):
+                return "memory"
+            pe = dict(l.split() for l in self._read("pids.events").splitlines() if len(l.split()) == 2)
+            return "processes" if int(pe.get("max", 0)) else ""
+        except ValueError:
+            return ""
+
+    def destroy(self) -> None:
+        for d in self.dirs:
+            for _ in range(100):
+                try:
+                    if self.v2 and os.path.exists(os.path.join(d, "cgroup.kill")):
+                        with open(os.path.join(d, "cgroup.kill"), "w") as fh:
+                            fh.write("1")
+                    else:
+                        with open(os.path.join(d, "cgroup.procs")) as pf:
+                            pids = pf.read().split()
+                        for pid in pids:
+                            try:
+                                os.kill(int(pid), signal.SIGKILL)
+                            except OSError:
+                                pass
+                    os.rmdir(d)
+                    break
+                except FileNotFoundError:
+                    break
+                except OSError:
+                    time.sleep(0.01)
+
+
+def _cgroup_create(memory_bytes: int) -> "_Cgroup | None":
+    """A fresh cgroup with memory and pids limits, or None when the host does not allow it."""
+    name = "mb-ctp-" + uuid.uuid4().hex[:12]
+    made: list[str] = []
+    try:
+        override = os.environ.get("MB_CGROUP_ROOT")
+        root = override or "/sys/fs/cgroup"
+        if os.path.exists(os.path.join(root, "cgroup.controllers")):           # cgroup v2
+            parent = os.path.join(root, "mb-ctp") if not override else root
+            os.makedirs(parent, exist_ok=True)
+            try:
+                with open(os.path.join(root, "cgroup.subtree_control"), "w") as fh:
+                    fh.write("+memory +pids")
+                if parent != root:
+                    with open(os.path.join(parent, "cgroup.subtree_control"), "w") as fh:
+                        fh.write("+memory +pids")
+            except OSError:
+                pass
+            d = os.path.join(parent, name)
+            os.mkdir(d); made.append(d)
+            with open(os.path.join(d, "memory.max"), "w") as fh:
+                fh.write(str(memory_bytes))
+            with open(os.path.join(d, "memory.swap.max"), "w") as fh:
+                fh.write("0")
+            with open(os.path.join(d, "pids.max"), "w") as fh:
+                fh.write(str(MAX_SANDBOX_PROCESSES))
+            return _Cgroup(made, True)
+        if override:
+            return None
+        for ctl in ("memory", "pids"):                                          # cgroup v1
+            base = os.path.join(root, ctl)
+            if not os.path.isdir(base):
+                raise OSError(ctl)
+            d = os.path.join(base, "mb-ctp", name)
+            os.makedirs(d, exist_ok=True); made.append(d)
+        with open(os.path.join(made[0], "memory.limit_in_bytes"), "w") as fh:
+            fh.write(str(memory_bytes))
+        with open(os.path.join(made[1], "pids.max"), "w") as fh:
+            fh.write(str(MAX_SANDBOX_PROCESSES))
+        return _Cgroup(made, False)
+    except (OSError, ValueError):
+        for d in reversed(made):
+            try:
+                os.rmdir(d)
+            except OSError:
+                pass
+        return None
+
+
+def _mount_work_tmpfs(work: str) -> bool:
+    """Size-limited tmpfs over ./work (the kernel returns ENOSPC at the cap). Needs real root."""
+    if os.geteuid() != 0:
+        return False
+    r = subprocess.run(["mount", "-t", "tmpfs", "-o", f"size={MAX_WORK_BYTES},mode=0700,nosuid,nodev", "tmpfs", work],
+                       capture_output=True)
+    return r.returncode == 0
+
+
+def _umount(path: str) -> None:
+    for flags in ([], ["-l"]):
+        if subprocess.run(["umount", *flags, path], capture_output=True).returncode == 0:
+            return
+
+
+def _disk_full(work: str) -> bool:
+    try:
+        st = os.statvfs(work)
+    except OSError:
+        return False
+    return st.f_blocks > 0 and st.f_bavail * st.f_frsize < 64 * 1024
+
+
+def kernel_limits() -> dict:
+    """What this host can really enforce in the kernel right now (probed, not assumed)."""
+    cg = _cgroup_create(64 << 20)
+    cgroup = cg is not None
+    if cg is not None:
+        cg.destroy()
+    tmp = tempfile.mkdtemp(prefix="ctp-kl-")
+    try:
+        tmpfs = _mount_work_tmpfs(tmp)
+        if tmpfs:
+            _umount(tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return {"cgroup": cgroup, "work_tmpfs": tmpfs, "seccomp": True}
 
 
 # ------------------------------------------------------------------------ running
@@ -480,9 +695,14 @@ def _run_raw(spec: TestSpec, *, probe: bool = False) -> dict:
     os.chmod(base, 0o700)
     work = os.path.join(base, "work")
     root = os.path.join(base, "root")
+    cg: "_Cgroup | None" = None
+    tmpfs = False
     try:
-        for d in (work, root, os.path.join(work, "code"), os.path.join(work, "inputs"),
-                  os.path.join(work, "out")):
+        os.mkdir(work, 0o700)
+        if spec.isolation == "sandbox":
+            tmpfs = _mount_work_tmpfs(work)
+            cg = _cgroup_create(spec.memory_bytes)
+        for d in (root, os.path.join(work, "code"), os.path.join(work, "inputs"), os.path.join(work, "out")):
             os.mkdir(d, 0o700)
         for sub, items in (("code", spec.code), ("inputs", spec.inputs)):
             for name, data in items:
@@ -491,7 +711,7 @@ def _run_raw(spec: TestSpec, *, probe: bool = False) -> dict:
         before_inputs = _tree_digest(work, ("code", "inputs"))
         out_path, err_path = os.path.join(base, "stdout"), os.path.join(base, "stderr")
         if spec.isolation == "sandbox":
-            ro = [d for d in _SYSTEM_RO if os.path.exists(d)] + list(spec.ro_paths)
+            ro = [d for d in _SYSTEM_RO if os.path.exists(d)] + list(spec.ro_paths) + list(python_ro_paths())
             ro = sorted(set(ro))
             script = os.path.join(base, "launch.sh")
             Path(script).write_text(_script_for(root, work, ro, spec.argv, spec.env))
@@ -511,7 +731,8 @@ def _run_raw(spec: TestSpec, *, probe: bool = False) -> dict:
         with open(out_path, "wb") as so, open(err_path, "wb") as se:
             try:
                 proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=so,
-                                        stderr=se, preexec_fn=_limits_preexec(spec), close_fds=True)
+                                        stderr=se, preexec_fn=_limits_preexec(spec, tuple(cg.procs_files()) if cg else ()),
+                                        close_fds=True)
             except OSError as exc:
                 return _result(spec, started, 0, None, None, "inconclusive",
                                f"spawn failed: {exc.__class__.__name__}", b"", b"", "", True)
@@ -535,6 +756,10 @@ def _run_raw(spec: TestSpec, *, probe: bool = False) -> dict:
                     over_memory = over_memory + 1 if violation == "memory?" else 0
                     if violation == "memory?":
                         violation = "memory" if over_memory >= 3 else ""
+                    if not violation and cg is not None:
+                        violation = cg.hit()
+                    if not violation and tmpfs and tick % 20 == 0 and _disk_full(work):
+                        violation = "disk"
                     if violation:
                         break
                 time.sleep(0.01)
@@ -543,6 +768,9 @@ def _run_raw(spec: TestSpec, *, probe: bool = False) -> dict:
             proc.wait()
         # a grandchild may outlive the leader; always clean the group
         _killpg(proc)
+        if spec.isolation == "sandbox" and not violation:
+            # K6: the kernel may have stopped the flood between two samples; a hit limit is never a pass
+            violation = (cg.hit() if cg is not None else "") or ("disk" if tmpfs and _disk_full(work) else "")
         duration_ms = int((time.monotonic() - t0) * 1000)
         stdout, c1 = _read_limited(out_path, spec.max_output_bytes)
         stderr, c2 = _read_limited(err_path, spec.max_output_bytes)
@@ -571,6 +799,10 @@ def _run_raw(spec: TestSpec, *, probe: bool = False) -> dict:
             outcome, reason = "inconclusive", f"abnormal exit code {exit_code}"
         return _result(spec, started, duration_ms, exit_code, sig, outcome, reason, stdout, stderr, manifest, intact)
     finally:
+        if cg is not None:
+            cg.destroy()
+        if tmpfs:
+            _umount(work)
         shutil.rmtree(base, ignore_errors=True)
 
 
@@ -663,7 +895,8 @@ def _environment(spec: TestSpec) -> dict:
     return {"platform": sys.platform, "python": ".".join(map(str, sys.version_info[:3])),
             "isolation": spec.isolation, "timeout_s": spec.timeout_s, "memory_bytes": spec.memory_bytes,
             "max_output_bytes": spec.max_output_bytes, "env_names": sorted(k for k, _ in spec.env),
-            "network": "denied (net namespace)" if spec.isolation == "sandbox" else "not restricted"}
+            "network": "denied (net namespace)" if spec.isolation == "sandbox" else "not restricted",
+            **({"kernel_limits": dict(sandbox_status().get("kernel_limits", {}))} if spec.isolation == "sandbox" else {})}
 
 
 def run_test(spec: TestSpec, *, case_id: str, test_id: str, runner_id: str,

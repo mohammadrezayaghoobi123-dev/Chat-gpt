@@ -1,0 +1,14 @@
+name: ci-healthz
+on:
+  push:
+    paths: [".github/workflows/ci-healthz.yml"]
+    branches: ["ci/flake-stress-2026-10-28"]
+permissions:
+  contents: read
+jobs:
+  h:
+    runs-on: ubuntu-latest
+    steps:
+      - name: healthz (read-only, one request)
+        run: |
+          echo "::notice::healthz=$(curl -s --max-time 15 https://chat-gpt111.mohammadrezayaghoobi123.workers.dev/healthz)"

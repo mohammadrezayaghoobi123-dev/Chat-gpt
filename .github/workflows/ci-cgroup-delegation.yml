@@ -1,0 +1,35 @@
+name: ci-cgroup-delegation
+on:
+  push:
+    branches: ["diag/cgroup-delegation-2026-10-31"]
+permissions:
+  contents: read
+jobs:
+  deleg:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: userns
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Non-root run inside a systemd-delegated cgroup (MB_CGROUP_ROOT)
+        run: |
+          PY=$(command -v python)
+          cat > /tmp/inner.sh <<'IN'
+          set -e
+          C=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)
+          mkdir "$C/leaf"; echo $$ > "$C/leaf/cgroup.procs"
+          echo "+memory +pids" > "$C/cgroup.subtree_control"
+          echo "::notice::inner uid=$(id -u) cgroup=$C controllers=$(cat $C/cgroup.controllers)"
+          export MB_CGROUP_ROOT="$C" MB_REQUIRE_CGROUP_TESTS=1 PYTHONPATH=$GITHUB_WORKSPACE/src
+          cd $GITHUB_WORKSPACE
+          python -m unittest -v tests.test_ctp_runner.KernelEnforcement.test_process_flood_is_stopped_by_the_kernel tests.test_ctp_runner.KernelEnforcement.test_aggregate_memory_flood_is_stopped_by_the_kernel 2>&1 | tail -15
+          python - <<'PY'
+          from master_brain import ctp_runner as R
+          print("kernel_limits", R.sandbox_status(refresh=True)["kernel_limits"])
+          PY
+          IN
+          sudo systemd-run --uid=$(id -u) --gid=$(id -g) -p Delegate=yes --wait --pipe --collect \
+            --setenv=GITHUB_WORKSPACE=$GITHUB_WORKSPACE --setenv=PATH="$(dirname $PY):/usr/bin:/bin" bash /tmp/inner.sh 2>&1 | tee out.txt
+          while IFS= read -r l; do echo "::notice::$(echo "$l" | head -c 300)"; done < out.txt

@@ -19,7 +19,7 @@ jobs:
           c() { curl -s -o /tmp/b -w '%{http_code}' --max-time 15 "$@"; }
           echo "::notice::healthz=$(c "$URL/healthz")"
           echo "::notice::root=$(c "$URL/")"
-          echo "::notice::tools_list_noauth=$(c -X POST -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$URL/mcp") body=$(head -c 200 /tmp/b)"
-          echo "::notice::bad_origin=$(c -X POST -H 'Origin: https://evil.example' -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$URL/mcp")"
-          codes=""; for i in $(seq 1 80); do codes="$codes $(c "$URL/healthz")"; done
-          echo "::notice::burst80=$(echo $codes | tr ' ' '\n' | sort | uniq -c | tr '\n' ' ')"
+          echo "::notice::tools_list_noauth=$(c -X POST -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$URL/mcp") body=$(head -c 200 /tmp/b)"
+          echo "::notice::bad_origin=$(c -X POST -H 'Origin: https://evil.example' -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$URL/mcp")"
+          codes=""; for i in $(seq 1 80); do codes="$codes $(c -X POST -H "content-type: application/json" -H "accept: application/json, text/event-stream" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" "$URL/mcp")"; done
+          echo "::notice::burst80_mcp=$(echo $codes | tr ' ' '\n' | sort | uniq -c | tr '\n' ' ')"

@@ -592,7 +592,7 @@ test("architecture_analyze does not mistake signal text inside string values for
   'fetch(url, { headers: { "x-mode": "signal" } });',
   'fetch(url, { headers: { "x-mode": "AbortSignal.timeout(1000)" } });',
   'fetch(url, { signal: controller.signal });'
- ].join("\\n");
+ ].join("\n");
  const encoded=btoa(String.fromCharCode(...new TextEncoder().encode(source)));
  globalThis.fetch=async()=>new Response(JSON.stringify({type:"file",path:"src/sample.js",size:new TextEncoder().encode(source).byteLength,content:encoded,encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}});
  try{

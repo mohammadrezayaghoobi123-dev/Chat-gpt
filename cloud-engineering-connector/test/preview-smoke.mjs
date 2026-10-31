@@ -9,7 +9,7 @@ const HEAD_SHA = process.env.GITHUB_SHA;
 if (process.env.RUN_PREVIEW_SMOKE !== "1") {
   console.log("Preview smoke checks are opt-in; set RUN_PREVIEW_SMOKE=1 to execute live requests.");
 } else {
-async function gitBlob(path) {
+function gitBlob(path) {
   return execFileSync("git", ["hash-object", path], { encoding: "utf8" }).trim();
 }
 

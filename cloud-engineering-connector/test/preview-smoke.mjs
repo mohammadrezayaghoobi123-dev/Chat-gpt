@@ -4,16 +4,18 @@ import { execFileSync } from "node:child_process";
 const PREVIEW_URL = "https://c5bebbcd-chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev";
 const EXPECTED_WORKER_BLOB = "5564486d81d7623f5c5aa545be9845d378ad14e5";
 const EXPECTED_CONSOLE_BLOB = "914d2f71c2cc0d18b3d16c94edfa78b5584ac46a";
-const REPOSITORY = "mohammadrezayaghoobi123-dev/Chat-gpt";
 const HEAD_SHA = process.env.GITHUB_SHA;
 
-function gitBlob(path) {
+if (process.env.RUN_PREVIEW_SMOKE !== "1") {
+  console.log("Preview smoke checks are opt-in; set RUN_PREVIEW_SMOKE=1 to execute live requests.");
+} else {
+async function gitBlob(path) {
   return execFileSync("git", ["hash-object", path], { encoding: "utf8" }).trim();
 }
 
-assert.equal(gitBlob("cloud-engineering-connector/worker.js"), EXPECTED_WORKER_BLOB,
+assert.equal(gitBlob("worker.js"), EXPECTED_WORKER_BLOB,
   "Preview worker source drifted; upload a new immutable Preview before running smoke tests.");
-assert.equal(gitBlob("cloud-engineering-connector/console.js"), EXPECTED_CONSOLE_BLOB,
+assert.equal(gitBlob("console.js"), EXPECTED_CONSOLE_BLOB,
   "Preview console source drifted; upload a new immutable Preview before running smoke tests.");
 
 async function rpc(id, method, params = {}) {
@@ -133,3 +135,4 @@ console.log(JSON.stringify({
     findings_truncated: analysis.findings_truncated
   }
 }, null, 2));
+}

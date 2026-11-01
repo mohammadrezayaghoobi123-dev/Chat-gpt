@@ -142,6 +142,23 @@ describe("Cloudflare Workers runtime: global daily Neuron budget", () => {
     expect(current.body.reserved_neurons).toBe(900);
   });
 
+  it("charges an abandoned reservation in full when its TTL expires", async () => {
+    const reservation = await reserve(275);
+    expect(reservation.response.status).toBe(201);
+
+    await runInDurableObject(budgetStub(), async (instance, state) => {
+      const ledger = await state.storage.get("budget-ledger");
+      const today = new Date().toISOString().slice(0, 10);
+      ledger.days[today].reservations[reservation.requestId].created_at = Date.now() - 60 * 60 * 1000 - 1;
+      await state.storage.put("budget-ledger", ledger);
+      await instance.alarm();
+    });
+
+    const current = await status();
+    expect(current.body.used_neurons).toBe(275);
+    expect(current.body.reserved_neurons).toBe(0);
+  });
+
   it("records usage above the reservation rather than silently discarding an overrun", async () => {
     const reservation = await reserve(100);
     expect(reservation.response.status).toBe(201);

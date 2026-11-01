@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker.js";
-const env={MCP_AUTH_TOKEN:"test-secret"};
+const env={MCP_AUTH_TOKEN:"test-secret",MCP_RATE_LIMITER:{limit:async()=>({success:true})}};
 const req=(path,options={})=>new Request("https://example.test"+path,options);
 const rpc=(method,params={},id=1)=>req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})});
 test("health reports cloud execution without laptop dependency",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers")});
@@ -563,14 +563,14 @@ test("protected authentication fails closed when the auth failure limiter throws
  assert.deepEqual(await response.json(),{error:"rate_limiter_unavailable"});
 });
 
-test("a valid bearer token bypasses the auth failure quota",async()=>{
- let calls=0;
+test("a valid bearer token uses its own quota rather than the auth-failure quota",async()=>{
+ let key;
  const response=await worker.fetch(rpc("tools/list"),{
   ...env,
-  MCP_RATE_LIMITER:{limit:async()=>{calls++;return{success:false}}}
+  MCP_RATE_LIMITER:{limit:async({key:received})=>{key=received;return{success:false}}}
  });
- assert.equal(response.status,200);
- assert.equal(calls,0);
+ assert.equal(response.status,429);
+ assert.equal(key,"authenticated-mcp:203.0.113.10");
 });
 
 test("public and authentication-failure requests use independent key spaces",async()=>{

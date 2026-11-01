@@ -1,12 +1,18 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 const DAILY_CAP = 1_000;
 
 function budgetStub() {
   return env.AGENT_BUDGET.get(env.AGENT_BUDGET.idFromName("global"));
 }
+
+beforeEach(async () => {
+  await runInDurableObject(budgetStub(), async (_instance, state) => {
+    await state.storage.deleteAll();
+  });
+});
 
 async function reserve(neurons, requestId = crypto.randomUUID()) {
   const response = await budgetStub().fetch(new Request("https://budget.internal/reserve", {

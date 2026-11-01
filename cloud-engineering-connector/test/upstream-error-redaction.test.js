@@ -8,7 +8,7 @@ const MCP = "mcp-secret-value";
 const GH = "ghp_FAKE_TOKEN_FOR_TEST_0123456789";
 const OWNER = "mohammadrezayaghoobi123-dev", REPO = "Chat-gpt";
 const headers = { "content-type": "application/json", accept: "application/json, text/event-stream",
-  authorization: "Bearer " + MCP, "mcp-protocol-version": "2025-03-26" };
+  authorization: "Bearer " + MCP, "mcp-protocol-version": "2025-03-26", "cf-connecting-ip": "203.0.113.10" };
 
 async function callWith(env, status, upstreamBody) {
   const original = globalThis.fetch;
@@ -18,7 +18,7 @@ async function callWith(env, status, upstreamBody) {
       method: "POST", headers,
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call",
         params: { name: "project_inspect", arguments: { owner: OWNER, repo: REPO } } }),
-    }), env);
+    }), { ...env, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const text = await response.text();
     return { text, error: JSON.parse(JSON.parse(text).result.content[0].text).error };
   } finally { globalThis.fetch = original; }

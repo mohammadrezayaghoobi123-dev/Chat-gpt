@@ -1,5 +1,20 @@
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+export const SESSION_RATE_LIMIT = 8;
+export const SESSION_RATE_WINDOW_MS = 60_000;
+
+export function recordSessionActivity(recentRequests, now) {
+  if (!Number.isFinite(now)) throw new TypeError("now must be a finite timestamp.");
+  const activeRequests = (Array.isArray(recentRequests) ? recentRequests : [])
+    .filter(timestamp => Number.isFinite(timestamp) && timestamp <= now &&
+      now - timestamp < SESSION_RATE_WINDOW_MS);
+  if (activeRequests.length >= SESSION_RATE_LIMIT) {
+    return { allowed: false, activeRequests };
+  }
+  activeRequests.push(now);
+  return { allowed: true, activeRequests, lastActivity: now };
+}
+
 export function isSessionExpired(lastActivity, now = Date.now()) {
   return !Number.isFinite(lastActivity) || !Number.isFinite(now) ||
     now - lastActivity >= SESSION_TTL_MS;

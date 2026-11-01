@@ -82,7 +82,7 @@
 
 - [x] Audit CORS, CSP/security headers, HTML escaping, DOM sinks, CSRF exposure, cookies, debug routes, and upload handlers; HTTPS-only CORS and restrictive headers are now enforced.
 - [x] Audit direct database/SQL usage; the inspected services use Durable Object storage and GitHub APIs, with no direct SQL query surface.
-- [ ] Scan current tree and all reachable history for credential patterns with a dedicated secret scanner; never expose values. (Still open; PR #99 evidence requires independent revalidation.)
+- [x] Scan current tree and all fetched refs/reachable history with Gitleaks 8.30.1; no findings after exact-value, commit-scoped allowlists for verified synthetic fixtures. Latest scan: 1,490 commits / 5.26 MB / zero findings.
 - [x] Commit package-lock.json for both packages; CI uses npm ci and npm audit --audit-level=moderate. Latest runs reported 0 vulnerabilities in both packages. Vitest upgraded to 4.1.12 to resolve two moderate @vitest/mocker advisories.
 - [x] Review GitHub Actions permissions and trigger scope; CI uses contents:read, full-SHA-pinned actions, and push triggers for security/**. Non-blocking Node 20 deprecation warnings remain for the v4 action SHAs.
 - [x] Record non-applicable features: password hashing, cookie sessions, multipart uploads, and direct SQL are not present in the inspected services.
@@ -91,7 +91,7 @@
 
 - [x] Re-run all relevant tests from fresh GitHub Actions runs.
 - [x] Review the complete changed-file list and PR patches against the base.
-- [x] Confirm `main` SHA is unchanged and no deployment/secret/binding operation was issued. Hosted Worker state was not re-read in this code-only execution and remains a separate evidence domain.
+- [x] Confirm `main` SHA is unchanged; read-only Cloudflare binding metadata was reviewed. No deployment, secret, binding, route, or billing mutation was issued.
 - [x] Record hosted Cloudflare canary gaps separately; no production canary was run.
 - [x] Keep the PR Draft; live secret migration, rotation, and deployment remain separately gated.
 
@@ -107,4 +107,22 @@
 - Dependency graph is now committed in both package lockfiles. A one-shot lockfile-generation workflow committed the lockfiles and removed itself; it is absent from the final tree.
 - `main` remains at `f2cae91de818385ec48daafc43c621b9e2cc0675` and is still unprotected (`protected:false)); this P0 repository control remains unresolved.
 - No live Worker deployment, route/binding/secret change, credential rotation, or billing change was performed. Live configuration, hosted canary, and secret-type verification remain outstanding.
-- Remaining high-priority work: full reachable-history secret scan, live Cloudflare binding-type review, branch protection/required checks, and hosted staging canary after separate approval.
+- Remaining high-priority work: protect `main` and require checks; remediate the Production `GITHUB_TOKEN` plain-text binding through separately approved revocation/rotation and Secret binding; enable Cloudflare account 2FA; validate a hosted staging canary after separate approval. Billing plan remains unverified.
+
+
+### Hosted Configuration Evidence — Read Only
+
+- Cloudflare account setting `enforce_twofactor=false`; no account security setting was changed.
+- Production Worker `chat-gpt111`: `MCP_AUTH_TOKEN`, `MCP_ALLOWED_ORIGINS`, and `PUBLIC_READ_ONLY` are `secret_text`; `MCP_RATE_LIMITER` is configured at 60 requests / 60 seconds; `SERVICE_MODE` is plain text `cloud`.
+- Critical Production finding: `GITHUB_TOKEN` is configured as `plain_text`, not `secret_text`. Its value was not copied into this report. Treat it as potentially compromised until the owner verifies it; rotate/revoke if valid, then recreate it as a repository-scoped least-privilege Secret. This operational remediation was not performed.
+- Staging Worker `chat-gpt111-staging`: `MCP_AUTH_TOKEN` and `MCP_ALLOWED_ORIGINS` are `secret_text`; `PUBLIC_READ_ONLY` is plain text `true`; `MCP_RATE_LIMITER` is separately namespaced at 60 requests / 60 seconds; no `GITHUB_TOKEN` binding is present.
+- Only the two Connector Workers above were listed; no separately named Cloud Agent Worker was found in this account listing. Cloud Agent code CI does not establish a hosted Agent deployment.
+- Account `usage_model=standard` is not sufficient evidence of the Cloudflare billing plan; billing remains unverified.
+- All Cloudflare calls in this pass were read-only. No secret values were requested from the secrets endpoint.
+
+### Secret Scan Evidence — Current Branch
+
+- The Gitleaks workflow scans the PR change range and all fetched Git refs with `fetch-depth: 0` and `--log-opts=--all`.
+- Run `41320949124` on the current security branch: 1,490 commits and approximately 5.26 MB scanned; zero findings.
+- Historical suppressions were narrowed from broad field-name/pattern allowlists to exact synthetic fixture values, exact historical commits, and exact file paths. The AWS-shaped test value was verified as a sequential alphabetic placeholder before its exact-value allowlist was retained.
+- The repository has one full-history secret-scan workflow in the final tree; the duplicate workflow was removed/consolidated by a subsequent repository-owner commit and that commit was preserved.

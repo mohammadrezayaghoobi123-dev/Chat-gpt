@@ -383,3 +383,20 @@ test("authentication failure limiter rejects missing or malformed Cloudflare cli
   }
   assert.equal(limiterCalls, 0);
 });
+
+
+test("Cloud Agent adds HSTS to HTTPS JSON and console responses but not HTTP", async () => {
+  const httpsHealth = await worker.fetch(new Request("https://agent.example/healthz"), publicEnv());
+  assert.equal(httpsHealth.status, 200);
+  assert.equal(httpsHealth.headers.get("strict-transport-security"), "max-age=31536000");
+  assert.equal(httpsHealth.headers.get("x-frame-options"), "DENY");
+
+  const httpsConsole = await worker.fetch(new Request("https://agent.example/"), publicEnv());
+  assert.equal(httpsConsole.status, 200);
+  assert.equal(httpsConsole.headers.get("strict-transport-security"), "max-age=31536000");
+  assert.match(httpsConsole.headers.get("content-security-policy"), /script-src 'nonce-/);
+
+  const httpHealth = await worker.fetch(new Request("http://agent.example/healthz"), publicEnv());
+  assert.equal(httpHealth.status, 200);
+  assert.equal(httpHealth.headers.get("strict-transport-security"), null);
+});

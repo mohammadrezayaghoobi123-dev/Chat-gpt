@@ -148,7 +148,11 @@ export async function readTextBounded(stream, contentLength, maxBytes) {
     combined.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new TextDecoder().decode(combined);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(combined);
+  } catch {
+    throw new Error("Body is not valid UTF-8 text.");
+  }
 }
 
 function constantTimeTextEqual(left, right) {
@@ -193,6 +197,18 @@ export function validateToolCall(call) {
     throw new TypeError("Malformed or oversized model tool arguments.");
   }
   return { id, type: "function", function: { name, arguments: args } };
+}
+
+export function validateToolCalls(calls, remainingBudget) {
+  if (!Array.isArray(calls) || !Number.isSafeInteger(remainingBudget) || remainingBudget < 0 ||
+      calls.length > remainingBudget) {
+    throw new TypeError("Invalid or excessive model tool-call batch.");
+  }
+  const validated = calls.map(validateToolCall);
+  if (new Set(validated.map(call => call.id)).size !== validated.length) {
+    throw new TypeError("Duplicate model tool-call identifiers.");
+  }
+  return validated;
 }
 
 export function parseToolArguments(raw, allowedKeys) {

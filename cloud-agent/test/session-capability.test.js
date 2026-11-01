@@ -212,6 +212,24 @@ test("wrong session capability is rejected for chat before model invocation", as
   assert.equal(storage.values.has("history"), false);
 });
 
+test("a session capability cannot cross Durable Object session ownership boundaries", async () => {
+  const firstCapability = "a".repeat(43);
+  const secondCapability = "b".repeat(43);
+  const first = await makeInitializedAgent(firstCapability);
+  const second = await makeInitializedAgent(secondCapability, {
+    history: [{ role: "assistant", content: "session B private history" }]
+  });
+  const response = await second.agent.fetch(new Request("https://agent-session.internal/history", {
+    headers: { "x-session-token": firstCapability }
+  }));
+  assert.equal(response.status, 401);
+  assert.deepEqual(second.storage.values.get("history"), [
+    { role: "assistant", content: "session B private history" }
+  ]);
+  assert.equal(second.storage.values.has("rate-window"), false);
+  assert.equal(first.storage.values.has("history"), false);
+});
+
 test("valid session capability permits access to that session's history", async () => {
   const { agent } = await makeInitializedAgent(SESSION_TOKEN, {
     history: [{ role: "assistant", content: "private history" }]
@@ -223,6 +241,29 @@ test("valid session capability permits access to that session's history", async 
   assert.deepEqual(await response.json(), {
     messages: [{ role: "assistant", content: "private history" }]
   });
+});
+
+test("history projects only user-facing role and content and never returns stored capability metadata", async () => {
+  const { agent, storage, tokenHash } = await makeInitializedAgent(SESSION_TOKEN);
+  storage.values.set("history", [
+    { role: "user", content: "question", session_token: SESSION_TOKEN },
+    { role: "assistant", content: "safe answer", token_hash: tokenHash },
+    { role: "tool", content: "tool output", session_token: SESSION_TOKEN }
+  ]);
+  const response = await agent.fetch(new Request("https://agent-session.internal/history", {
+    headers: { "x-session-token": SESSION_TOKEN }
+  }));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body, {
+    messages: [
+      { role: "user", content: "question" },
+      { role: "assistant", content: "safe answer" }
+    ]
+  });
+  const serialized = JSON.stringify(body);
+  assert.equal(serialized.includes(SESSION_TOKEN), false);
+  assert.equal(serialized.includes(tokenHash), false);
 });
 
 test("valid session capability permits chat and history persists only after authorization", async () => {
@@ -237,14 +278,23 @@ test("valid session capability permits chat and history persists only after auth
   assert.equal(storage.values.get("history")[0].content, "run authorized chat");
 });
 
-test("expired sessions delete the verifier and reject further access", async () => {
+test("expired sessions delete history, rate state, and verifier before rejecting further access", async () => {
   const stale = Date.now() - 8 * 24 * 60 * 60 * 1000;
   const { agent, storage } = await makeInitializedAgent(SESSION_TOKEN, {
+    history: [{ role: "assistant", content: "expired private history" }],
+    "rate-window": [stale],
     "last-activity-at": stale
   });
   const response = await agent.fetch(new Request("https://agent-session.internal/history", {
     headers: { "x-session-token": SESSION_TOKEN }
   }));
   assert.equal(response.status, 410);
+  assert.equal(storage.values.has("history"), false);
+  assert.equal(storage.values.has("rate-window"), false);
+  assert.equal(storage.values.has("last-activity-at"), false);
   assert.equal(storage.values.has("session-token-hash"), false);
+  const secondAttempt = await agent.fetch(new Request("https://agent-session.internal/history", {
+    headers: { "x-session-token": SESSION_TOKEN }
+  }));
+  assert.equal(secondAttempt.status, 401);
 });

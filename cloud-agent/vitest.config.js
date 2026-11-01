@@ -4,12 +4,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [
     cloudflareTest({
-      wrangler: { configPath: "./wrangler.test.toml" },
-      miniflare: {
-        bindings: {
-          AGENT_AUTH_TOKEN: "test-only-cloud-agent-token-0123456789abcdef0123456789"
-        }
-      }
+      wrangler: { configPath: "./wrangler.test.toml" }
     })
   ],
   test: {

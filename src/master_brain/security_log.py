@@ -79,10 +79,12 @@ class SecurityLog:
     def __init__(self, path: str | Path, *, clock: Callable[[], datetime] | None = None,
                  monotonic: Callable[[], float] = time.monotonic, window_seconds: float = 60.0,
                  max_best_effort_per_window: int = 60,
-                 full_verify_interval_seconds: float | None = None) -> None:
+                 full_verify_interval_seconds: float | None = None,
+                 require_anchor: bool = False) -> None:
         if not (window_seconds > 0 and max_best_effort_per_window >= 1):
             raise ValueError("window_seconds must be > 0 and max_best_effort_per_window >= 1")
-        self.store = AuditStore(path, clock=clock, full_verify_interval_seconds=full_verify_interval_seconds)
+        self.store = AuditStore(path, clock=clock, full_verify_interval_seconds=full_verify_interval_seconds,
+                                require_anchor=require_anchor)
         self.path = self.store.path
         self._monotonic = monotonic
         self._window = float(window_seconds)

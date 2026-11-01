@@ -48,3 +48,10 @@ event = AuditRecord(
 )
 line = event.to_stable_json()
 ```
+
+## Missing head anchor (`.head`) — R5-1
+The service (`serve`) refuses to start, and refuses to append at runtime, when the mission audit log (`audit.jsonl`) **or the security log (`accounts.security.jsonl`)** is non-empty but its `<log>.head` anchor is missing (suffix truncation plus deleted anchor, or a backup that forgot the `.head` file). Empty and anchored logs are accepted.
+- Normal remedy: restore the `.head` from the backup that matches the log.
+- If the log never had an anchor (legacy) or the operator accepts it as it is: `python -m master_brain.audit_recovery --path <log> --adopt-anchor` (dry run) then again with `--apply`. The adoption is recorded in the chain as `audit.anchor_adopted` (who, how many events, adopted head hash).
+- Backup rule (R5-2): stop the service first. If it must stay live, copy `.head` FIRST, then the log, and keep both.
+- Library/CLI tools (`security_log verify`, `accounts`) stay lenient on purpose so a legacy log can still be inspected.

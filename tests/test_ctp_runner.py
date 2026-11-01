@@ -373,6 +373,11 @@ class ChainBase(unittest.TestCase):
                                  original_execution_id=rec.execution_id, verifier_id=verifier,
                                  signer=signer or self.signer)
 
+    def verify_n(self, rec, s=None, verifier="verifier-b", signer=None, case="c1", test="t1", runs=R.MIN_INDEPENDENT_RUNS - 1):
+        return R.verify_by_reruns(self.store, s or self.spec, case_id=case, test_id=test,
+                                  original_execution_id=rec.execution_id, verifier_id=verifier,
+                                  signer=signer or self.signer, runs=runs)
+
     def state(self, case="c1", test="t1"):
         return R.ctp_test_state(self.store, self.trust, case, test)
 
@@ -410,12 +415,13 @@ class Chain(ChainBase):
                 s = spec(script)
                 case_id = "c-" + str(want.value)
                 rec = self.execute(s, case=case_id)
-                res = self.verify(rec, s, case=case_id)
+                res = self.verify_n(rec, s, case=case_id)
                 self.assertEqual(res["verdict"], "reproduced")
+                self.assertEqual(res["runs"], R.MIN_INDEPENDENT_RUNS - 1)
                 self.assertEqual(self.state(case_id).state, "verified_reproduced")
                 t = R.apply_to_case(make_case(case_id), self.store, self.trust, "t1").tests[0]
                 self.assertEqual(t.status, want)
-                self.assertEqual(len(t.evidence_ids), 3)
+                self.assertEqual(len(t.evidence_ids), 1 + 2 * (R.MIN_INDEPENDENT_RUNS - 1))
                 self.assertEqual(t.execution_provenance.independent_group, "verifier:verifier-b")
 
     def test_nondeterministic_test_is_not_reproduced(self):
@@ -467,7 +473,7 @@ class Chain(ChainBase):
 
     def test_revoked_key_no_longer_verifies(self):
         rec = self.execute()
-        self.verify(rec)
+        self.verify_n(rec)
         self.assertEqual(self.state().state, "verified_reproduced")
         self.trust.revoke("vk1")
         self.assertEqual(self.state().state, "inconsistent")
@@ -523,7 +529,7 @@ class Chain(ChainBase):
 
     def test_verification_of_another_test_does_not_leak(self):
         rec = self.execute(test="t1")
-        self.verify(rec, test="t1")
+        self.verify_n(rec, test="t1")
         self.assertEqual(self.state(test="t2").state, "not_run")
         self.execute(test="t2")
         self.assertEqual(self.state(test="t2").state, "executed_unverified")
@@ -1094,9 +1100,44 @@ class ChainForgeries(ChainBase):
         return rec, rerun
 
     def test_baseline_forgery_helper_is_valid_when_everything_is_right(self):
-        rec, rerun = self.pair()
-        self.forge(rec, rerun)
+        rec = self.execute()
+        for i in range(R.MIN_INDEPENDENT_RUNS - 1):
+            self.forge(rec, self.execute(runner="verifier-b"), event_id=f"ctp-verify-forged-{i}")
         self.assertEqual(self.state().state, "verified_reproduced")
+
+    def test_stage6_fewer_than_min_runs_is_never_a_result(self):
+        """L-S6-1: two agreeing executions are not enough; the state names the shortfall."""
+        for n in range(1, R.MIN_INDEPENDENT_RUNS - 1):
+            self.setUp()
+            rec = self.execute()
+            for i in range(n):
+                self.forge(rec, self.execute(runner="verifier-b"), event_id=f"ctp-verify-forged-{i}")
+            st = self.state()
+            self.assertEqual(st.state, "insufficient_runs", n)
+            self.assertIn(f"{n + 1} of {R.MIN_INDEPENDENT_RUNS}", " ".join(st.problems))
+            t = R.apply_to_case(make_case(), self.store, self.trust, "t1").tests[0]
+            self.assertEqual(t.status, TestStatus.INCONCLUSIVE)
+
+    def test_stage6_the_same_rerun_cannot_be_counted_twice(self):
+        rec = self.execute()
+        rerun = self.execute(runner="verifier-b")
+        for i in range(R.MIN_INDEPENDENT_RUNS - 1):
+            self.forge(rec, rerun, event_id=f"ctp-verify-forged-{i}")           # same rerun, repeated
+        self.assertEqual(self.state().state, "insufficient_runs")
+
+    def test_stage6_the_floor_cannot_be_lowered(self):
+        for bad in (1, 2, R.MIN_INDEPENDENT_RUNS - 1, 0, -1, True, None, "5", R.MAX_INDEPENDENT_RUNS + 1):
+            with self.assertRaises(R.RunnerError):
+                R.ctp_test_state(self.store, self.trust, "c1", "t1", min_runs=bad)
+
+    def test_stage6_one_disagreeing_rerun_vetoes_and_stops_the_series(self):
+        counter = Path(self.tmp.name, "counter"); counter.write_text("0")
+        s = spec(f"p={str(counter)!r}; n=int(open(p).read())+1; open(p,'w').write(str(n)); print(n)", isolation="none")
+        rec = self.execute(s)
+        res = self.verify_n(rec, s)                                              # a stateful (nondeterministic) test
+        self.assertEqual(res["verdict"], "not_reproduced")
+        self.assertEqual(res["runs"], 1)                                         # stopped at the first disagreement
+        self.assertEqual(self.state().state, "not_reproduced")
 
     def test_each_identity_rule_alone_is_enough_to_reject(self):
         for label, kw in (("event actor differs", dict(event_actor="someone-else")),):
@@ -1152,7 +1193,7 @@ class ChainForgeries(ChainBase):
         marker = Path(self.tmp.name, "marker"); marker.write_text("A")
         s = spec(f"print(open({str(marker)!r}).read())", isolation="none")
         rec = self.execute(s)
-        self.assertEqual(self.verify(rec, s)["verdict"], "reproduced")
+        self.assertEqual(self.verify_n(rec, s)["verdict"], "reproduced")
         self.assertEqual(self.state().state, "verified_reproduced")
         marker.write_text("B")                                                  # the world changed: a second verifier disagrees
         other = Ed25519Signer.generate("vk2")
@@ -1164,7 +1205,7 @@ class ChainForgeries(ChainBase):
 
     def test_two_verifications_of_the_same_test_both_evaluate(self):
         rec = self.execute()
-        self.verify(rec)
+        self.verify_n(rec)
         other = Ed25519Signer.generate("vk2")
         self.trust.add_key("vk2", "verifier:verifier-c", other.public_key_bytes())
         self.verify(rec, verifier="verifier-c", signer=other)                   # reads a log that already holds a verification

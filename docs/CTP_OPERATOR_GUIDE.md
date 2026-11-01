@@ -58,7 +58,8 @@ curl -s $H/v1/ctp/runs/$RID -H "$T"                                           # 
 | `approved` | not_run | امضا معتبر؛ هنوز اجرا نشده |
 | `approval_expired` | not_run | مهلت تمام شد؛ درخواست جدید لازم است |
 | `executed_unverified` | **inconclusive** | اجرا شد ولی تأیید مستقل نشده؛ `provisional_outcome` نتیجه نیست |
-| `verified_pass` / `verified_fail` | pass / fail | بازاجرای مستقل با اثر انگشت یکسان؛ **فقط برای همین آزمون ثبت‌شده** |
+| `insufficient_runs` | inconclusive | بازاجراهای هم‌خوان هست ولی کمتر از حداقل (۵ اجرا در کل)؛ `ctp_verify` را دوباره اجرا کنید تا ادامه دهد |
+| `verified_pass` / `verified_fail` | pass / fail | اجرای اصلی + ۴ بازاجرای مستقل، همه با اثر انگشت یکسان؛ **فقط برای همین آزمون ثبت‌شده** |
 | `not_reproduced` / `not_confirmable` | inconclusive | بازاجرا متفاوت بود یا اجرا ناتمام بود |
 | `outcome_unknown` | inconclusive | claim ثبت شد ولی نتیجه ثبت نشد؛ **هرگز خودکار دوباره اجرا نمی‌شود** (درخواست جدید بدهید) |
 | `aborted` | not_run | runner امتناع کرد؛ چیزی اجرا نشد |

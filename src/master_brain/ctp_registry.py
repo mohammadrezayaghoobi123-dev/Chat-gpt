@@ -23,7 +23,8 @@ import re
 import sys
 from dataclasses import dataclass
 
-from master_brain.ctp_runner import RunnerError, TestSpec, python_ro_paths
+from master_brain.ctp_runner import (MAX_INDEPENDENT_RUNS, MIN_INDEPENDENT_RUNS, RunnerError, TestSpec,
+                                     python_ro_paths)
 
 REGISTRY_SCHEMA_VERSION = 1
 MAX_REGISTERED_TIMEOUT_S = 60.0
@@ -42,6 +43,8 @@ class RegisteredTest:
     title: str
     description: str
     spec: TestSpec
+    # Stage 6 (L-S6-1): total agreeing executions required before PASS/FAIL; the floor is not negotiable.
+    min_runs: int = MIN_INDEPENDENT_RUNS
 
     def spec_digest(self) -> str:
         return self.spec.digest()
@@ -67,6 +70,10 @@ class CtpRegistry:
                     raise RegistryError(f"{label} must be 1..1000 characters")
             if not isinstance(t.spec, TestSpec):
                 raise RegistryError("spec must be a TestSpec")
+            if not isinstance(t.min_runs, int) or isinstance(t.min_runs, bool) \
+                    or not MIN_INDEPENDENT_RUNS <= t.min_runs <= MAX_INDEPENDENT_RUNS:
+                raise RegistryError(
+                    f"min_runs must be an integer in {MIN_INDEPENDENT_RUNS}..{MAX_INDEPENDENT_RUNS}")
             if t.spec.isolation != "sandbox":
                 raise RegistryError("registered tests must run in the sandbox (isolation='sandbox')")
             if not 0 < t.spec.timeout_s <= MAX_REGISTERED_TIMEOUT_S:

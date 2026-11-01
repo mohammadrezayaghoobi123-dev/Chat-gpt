@@ -62,7 +62,7 @@ test("a thrown fetch error is redacted and a null JSON body does not leak intern
   const run = async (impl) => { globalThis.fetch = impl; try {
     const r = await worker.fetch(new Request("https://example.test/mcp", { method: "POST", headers,
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "project_inspect", arguments: { owner: OWNER, repo: REPO } } }) }),
-      { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH });
+      { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     return await r.text(); } finally { globalThis.fetch = original; } };
   const thrown = await run(async () => { throw new TypeError("fetch failed token=" + GH + " " + MCP); });
   assert.ok(!thrown.includes(GH) && !thrown.includes(MCP), "secret in thrown error");

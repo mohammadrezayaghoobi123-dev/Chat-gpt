@@ -90,19 +90,33 @@ export class AgentBudget extends DurableObject {
     return ledger.days[day];
   }
 
+  pruneOldDays(ledger, now = Date.now()) {
+    const cutoff = utcDay(now - 2 * DAY_MS);
+    for (const [day, bucket] of Object.entries(ledger.days)) {
+      if (day < cutoff && Object.keys(bucket.reservations).length === 0) {
+        delete ledger.days[day];
+      }
+    }
+  }
+
   async writeLedger(ledger) {
+    this.pruneOldDays(ledger);
     await this.ctx.storage.put("budget-ledger", ledger);
     await this.scheduleAlarm(ledger);
   }
 
   async scheduleAlarm(ledger, now = Date.now()) {
-    let next = nextUtcMidnight(now);
+    let next = Number.POSITIVE_INFINITY;
     for (const bucket of Object.values(ledger.days)) {
       for (const reservation of Object.values(bucket.reservations)) {
         if (reservation && Number.isSafeInteger(reservation.created_at)) {
           next = Math.min(next, reservation.created_at + RESERVATION_TTL_MS);
         }
       }
+    }
+    if (!Number.isFinite(next)) {
+      await this.ctx.storage.deleteAlarm();
+      return;
     }
     await this.ctx.storage.setAlarm(Math.max(now + 1_000, next));
   }
@@ -225,7 +239,7 @@ export class AgentBudget extends DurableObject {
     return this.enqueue(async () => {
       const now = Date.now();
       const ledger = await this.readLedger();
-      for (const [day, bucket] of Object.entries(ledger.days)) {
+      for (const bucket of Object.values(ledger.days)) {
         for (const [requestId, reservation] of Object.entries(bucket.reservations)) {
           if (reservation && Number.isSafeInteger(reservation.created_at) &&
               now - reservation.created_at >= RESERVATION_TTL_MS) {
@@ -235,10 +249,8 @@ export class AgentBudget extends DurableObject {
             delete bucket.reservations[requestId];
           }
         }
-        if (day < utcDay(now - 2 * DAY_MS) && Object.keys(bucket.reservations).length === 0) {
-          delete ledger.days[day];
-        }
       }
+      this.pruneOldDays(ledger, now);
       await this.ctx.storage.put("budget-ledger", ledger);
       await this.scheduleAlarm(ledger, now);
     });

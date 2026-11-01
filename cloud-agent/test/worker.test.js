@@ -197,6 +197,18 @@ test("malformed and oversized chat requests are rejected before model invocation
   assert.equal(storage.values.get("rate-window").length, 2);
 });
 
+test("daily budget denial blocks Workers AI before inference", async () => {
+  let modelCalls = 0;
+  const { agent, storage } = await makeAgent({
+    ai: { run: async () => { modelCalls += 1; return {}; } },
+    budget: makeBudgetBinding({ reserveStatus: 429 })
+  });
+  const response = await agent.fetch(chatRequest("must be blocked by budget"));
+  assert.equal(response.status, 429);
+  assert.equal(modelCalls, 0);
+  assert.equal(storage.values.has("history"), false);
+});
+
 test("history endpoint is rate-limited and preserves active stored history", async () => {
   const recent = Date.now() - 1_000;
   const staleRequest = Date.now() - 60_001;

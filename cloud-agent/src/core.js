@@ -13,6 +13,16 @@ const BLOCKED_PATHS = [
   /\.tfvars\.json$/i
 ];
 
+export function buildGitHubContentsApiUrl(owner, repo, path, ref) {
+  if (typeof owner !== "string" || !/^[A-Za-z0-9_.-]{1,100}$/.test(owner)) throw new TypeError("Invalid GitHub owner.");
+  if (typeof repo !== "string" || !/^[A-Za-z0-9_.-]{1,100}$/.test(repo)) throw new TypeError("Invalid GitHub repository.");
+  if (!isSafeRepoPath(path)) throw new TypeError("Invalid repository path.");
+  if (!isSafeRef(ref)) throw new TypeError("Invalid repository ref.");
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  return "https://api.github.com/repos/" + encodeURIComponent(owner) + "/" +
+    encodeURIComponent(repo) + "/contents/" + encodedPath + "?ref=" + encodeURIComponent(ref);
+}
+
 export function isSessionId(value) {
   return typeof value === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);

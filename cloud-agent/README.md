@@ -7,6 +7,7 @@ A separate, model-hosted cloud assistant for engineering work. It is intentional
 - Cloudflare Worker HTTP API and a small same-origin browser console.
 - Workers AI model: `@cf/zai-org/glm-4.7-flash`.
 - SQLite-backed Durable Object sessions for durable conversation history.
+- A single global Durable Object budget ledger that serializes daily Workers AI Neuron reservations across sessions.
 - Required bearer authentication through the `AGENT_AUTH_TOKEN` Worker secret.
 - Read-only GitHub tools for the public repository `mohammadrezayaghoobi123-dev/Chat-gpt`.
 - Strict request, history, tool-call, file-path, and output bounds.
@@ -23,7 +24,9 @@ Cloudflare currently documents:
 - Workers Free: 100,000 Worker requests/day and 10 ms CPU time per invocation.
 - SQLite-backed Durable Objects are available on Workers Free, with published daily request, duration, and storage allowances.
 
-Free allocations are quotas, not guarantees of uninterrupted availability. The agent must return a clear quota/capacity error rather than silently switching to a paid model or creating billable usage.
+Free allocations are quotas, not guarantees of uninterrupted availability. The agent enforces a project-local ceiling of 1,000 Neurons per UTC day (10% of the documented free allocation). It reserves a conservative estimate before every model invocation, settles against returned prompt/completion usage when available, and consumes the full reservation when usage metadata is missing or inference fails. If reservation or settlement cannot be verified, inference is blocked.
+
+This cap applies only to this Worker environment. Workers AI's 10,000-Neuron allocation is account-wide and shared with other projects. On Workers Paid, usage beyond that account allocation is billed at the published rate; this project's cap cannot prevent other account workloads from consuming the remaining allocation. The account plan and account-wide usage are not verified here. Pricing references: [Workers AI pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/) and [GLM-4.7-Flash model pricing](https://developers.cloudflare.com/workers-ai/models/glm-4.7-flash/).
 
 The quick-start Cloudflare Agents example currently uses GLM-5.3-Flash, which requires paid access. This project deliberately uses GLM-4.7-Flash instead; do not silently replace it with a paid-only model.
 
@@ -40,9 +43,10 @@ npm run check
 
 1. Bind Workers AI as `AI`.
 2. Bind the SQLite Durable Object class `AgentSession` as `AGENT_SESSIONS`.
-3. Add `AGENT_AUTH_TOKEN` as a Cloudflare Worker **secret**, not a plain-text variable.
-4. Keep the worker private behind bearer authentication. Do not add public unauthenticated chat.
-5. Do not deploy this worker to an existing Production or Staging service. It has its own Worker name: `master-brain-cloud-agent`.
+3. Bind the global SQLite Durable Object class `AgentBudget` as `AGENT_BUDGET`.
+4. Add `AGENT_AUTH_TOKEN` as a Cloudflare Worker **secret**, not a plain-text variable.
+5. Keep the worker private behind bearer authentication. Do not add public unauthenticated chat.
+6. Do not deploy this worker to an existing Production or Staging service. It has its own Worker name: `master-brain-cloud-agent`.
 
 ## API
 
@@ -69,7 +73,7 @@ The browser console keeps the session capability in page memory only. The Durabl
 
 ## Verification status
 
-The current capability-isolation change passed GitHub Actions on Node.js 22: 40/40 Node unit tests, 6/6 Cloudflare Workers runtime tests using the Workers Vitest integration, syntax checks, and Wrangler configuration dry-run. The runtime suite exercises real local `workerd`/Miniflare Durable Objects, SQLite-backed storage, session isolation, expiry, and alarm cleanup. The test harness deliberately omits the Workers AI binding and mocks the rate limiter, so it does not invoke billable model inference or connect to production resources.
+The current capability-isolation and daily-budget changes passed GitHub Actions on Node.js 22: 41/41 Node unit tests, 15/15 Cloudflare Workers runtime tests using the Workers Vitest integration, syntax checks, and Wrangler configuration dry-run. The runtime suite exercises real local `workerd`/Miniflare Durable Objects, SQLite-backed session and budget storage, cross-session isolation, budget reservation/settlement, concurrent cap enforcement, expiry, and alarm cleanup. The test harness deliberately omits the Workers AI binding and mocks the rate limiter, so it does not invoke billable model inference or connect to production resources.
 
 The production Wrangler compatibility date is `2026-10-31`; the bundled test runtime currently supports through `2026-10-30`, so `wrangler.test.toml` uses that date. This one-day compatibility gap must be revalidated when the Workers Vitest plugin/runtime is upgraded. Local `workerd` tests improve confidence but do not replace a hosted Cloudflare canary test.
 

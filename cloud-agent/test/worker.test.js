@@ -74,7 +74,8 @@ async function makeAgent({ storage, ai = { run: async () => ({ choices: [{ messa
   const digest = await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   const tokenHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
   storage ||= makeStorage({ "last-activity-at": Date.now() });
-  if (!(await storage.get("session-token-hash"))) await storage.put("session-token-hash", tokenHash);\n  if (!(await storage.get("principal-id"))) await storage.put("principal-id", "owner");
+  if (!(await storage.get("session-token-hash"))) await storage.put("session-token-hash", tokenHash);
+  if (!(await storage.get("principal-id"))) await storage.put("principal-id", "owner");
   const ctx = { storage };
   const env = { AI: ai, AGENT_BUDGET: budget || makeBudgetBinding() };
   return { agent: new AgentSession(ctx, env), storage, env };

@@ -6,6 +6,7 @@ import {
   MAX_TOOL_CALLS,
   MAX_TOOL_ROUNDS,
   boundedHistory,
+  buildGitHubContentsApiUrl,
   extractAssistantText,
   isAuthorized,
   isSafeRef,
@@ -75,8 +76,11 @@ function json(data, status = 200, headers = {}) {
   });
 }
 
-async function githubJson(path) {
-  const response = await fetch("https://api.github.com" + path, {
+async function githubJson(pathOrUrl) {
+  const url = pathOrUrl.startsWith("https://api.github.com/")
+    ? pathOrUrl
+    : "https://api.github.com" + pathOrUrl;
+  const response = await fetch(url, {
     headers: {
       "accept": "application/vnd.github+json",
       "user-agent": "master-brain-cloud-agent/0.1.0",
@@ -90,17 +94,29 @@ async function githubJson(path) {
 }
 
 async function readRawFile(path, ref) {
-  if (!isSafeRepoPath(path)) throw new Error("Rejected unsafe or protected repository path.");
-  if (!isSafeRef(ref)) throw new Error("Invalid repository ref.");
-  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
-  const url = "https://raw.githubusercontent.com/" + OWNER + "/" + REPO + "/" + ref + "/" + encodedPath;
-  const response = await fetch(url, {
-    headers: { "user-agent": "master-brain-cloud-agent/0.1.0" },
-    signal: AbortSignal.timeout(8_000)
-  });
-  if (!response.ok) throw new Error("File read failed with HTTP " + response.status);
-  const text = await readTextBounded(response.body, response.headers.get("content-length"), MAX_FILE_BYTES);
-  return { repository: OWNER + "/" + REPO, ref, path, content: text };
+  const payload = await githubJson(buildGitHubContentsApiUrl(OWNER, REPO, path, ref));
+  if (payload?.type !== "file" || payload.encoding !== "base64" || typeof payload.content !== "string") {
+    throw new Error("GitHub did not return a regular base64-encoded file.");
+  }
+  const encoded = payload.content.replace(/\\s/g, "");
+  if (encoded.length > Math.ceil(MAX_FILE_BYTES / 3) * 4 + 8) {
+    throw new Error("File exceeds the 50 KB read limit.");
+  }
+  let binary;
+  try {
+    binary = atob(encoded);
+  } catch {
+    throw new Error("GitHub returned invalid base64 file content.");
+  }
+  if (binary.length > MAX_FILE_BYTES) throw new Error("File exceeds the 50 KB read limit.");
+  const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+  let content;
+  try {
+    content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("File is not valid UTF-8 text.");
+  }
+  return { repository: OWNER + "/" + REPO, ref, path, content };
 }
 
 async function executeTool(name, rawArguments) {

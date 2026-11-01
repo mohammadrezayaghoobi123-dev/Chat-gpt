@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
+import { Script } from "node:vm";
 import { readFile } from "node:fs/promises";
 
 const coreSource = await readFile(new URL("../src/core.js", import.meta.url), "utf8");
@@ -96,6 +97,10 @@ test("console CSP uses the same nonce for style and script and forbids unsafe-in
   assert.equal(csp.includes("unsafe-inline"), false);
   assert.ok(html.includes('<style nonce="' + nonce + '">'));
   assert.ok(html.includes('<script nonce="' + nonce + '">'));
+  const inlineScript = html.match(/<script nonce="[^"]+">([\\s\\S]*?)<\\/script>/)?.[1];
+  assert.ok(inlineScript);
+  assert.doesNotThrow(() => new Script(inlineScript));
+  assert.match(inlineScript, /x-session-token/);
   assert.equal(response.headers.get("cache-control"), "no-store");
 });
 

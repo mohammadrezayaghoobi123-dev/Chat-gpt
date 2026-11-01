@@ -841,3 +841,66 @@ test("create_change_pr authorization matrix denies unauthenticated and incomplet
     globalThis.fetch = originalFetch;
   }
 });
+
+
+test("legacy notification responses receive global security and HTTPS transport headers", async () => {
+  const headers = {
+    authorization: "Bearer " + env.MCP_AUTH_TOKEN,
+    "content-type": "application/json",
+    accept: "application/json, text/event-stream"
+  };
+  const body = JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" });
+  const httpsResponse = await worker.fetch(req("/mcp", { method: "POST", headers, body }), env);
+  assert.equal(httpsResponse.status, 202);
+  assert.equal(httpsResponse.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(httpsResponse.headers.get("x-frame-options"), "DENY");
+  assert.equal(httpsResponse.headers.get("content-security-policy"), "default-src 'none'; frame-ancestors 'none'");
+  assert.equal(httpsResponse.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(httpsResponse.headers.get("permissions-policy"), "camera=(), microphone=(), geolocation=()");
+  assert.equal(httpsResponse.headers.get("cross-origin-resource-policy"), "same-origin");
+  assert.equal(httpsResponse.headers.get("strict-transport-security"), "max-age=31536000");
+  assert.equal(httpsResponse.headers.get("cache-control"), "no-store");
+
+  const httpResponse = await worker.fetch(new Request("http://example.test/mcp", {
+    method: "POST",
+    headers: { ...headers, "cf-connecting-ip": "203.0.113.10" },
+    body
+  }), env);
+  assert.equal(httpResponse.status, 202);
+  assert.equal(httpResponse.headers.get("strict-transport-security"), null);
+});
+
+test("modern subscription SSE responses retain stream headers and receive global security headers", async () => {
+  const response = await worker.fetch(req("/mcp", {
+    method: "POST",
+    headers: {
+      authorization: "Bearer " + env.MCP_AUTH_TOKEN,
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "MCP-Protocol-Version": "2026-07-28",
+      "Mcp-Method": "subscriptions/listen"
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 91,
+      method: "subscriptions/listen",
+      params: {
+        notifications: {},
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          "io.modelcontextprotocol/clientCapabilities": {}
+        }
+      }
+    })
+  }), env);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type"), /^text\/event-stream/);
+  assert.equal(response.headers.get("cache-control"), "no-cache, no-transform");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+  assert.equal(response.headers.get("content-security-policy"), "default-src 'none'; frame-ancestors 'none'");
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(response.headers.get("permissions-policy"), "camera=(), microphone=(), geolocation=()");
+  assert.equal(response.headers.get("cross-origin-resource-policy"), "same-origin");
+  assert.equal(response.headers.get("strict-transport-security"), "max-age=31536000");
+});

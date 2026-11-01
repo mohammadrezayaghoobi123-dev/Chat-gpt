@@ -200,20 +200,26 @@ export async function readTextBounded(stream, contentLength, maxBytes) {
   }
 }
 
+const MAX_AUTH_TOKEN_BYTES = 512;
+
 function constantTimeTextEqual(left, right) {
-  const a = new TextEncoder().encode(left);
-  const b = new TextEncoder().encode(right);
+  const encoder = new TextEncoder();
+  const a = encoder.encode(left);
+  const b = encoder.encode(right);
+  if (a.length > MAX_AUTH_TOKEN_BYTES || b.length > MAX_AUTH_TOKEN_BYTES) return false;
   let difference = a.length ^ b.length;
-  const length = Math.max(a.length, b.length);
-  for (let i = 0; i < length; i += 1) difference |= (a[i] ?? 0) ^ (b[i] ?? 0);
+  for (let i = 0; i < MAX_AUTH_TOKEN_BYTES; i += 1) {
+    difference |= (a[i] ?? 0) ^ (b[i] ?? 0);
+  }
   return difference === 0;
 }
 
 export function isAuthorized(header, expectedToken) {
-  if (typeof header !== "string" || typeof expectedToken !== "string" || expectedToken.length < 32) return false;
+  if (typeof header !== "string" || typeof expectedToken !== "string" ||
+      expectedToken.length < 32 || expectedToken.length > MAX_AUTH_TOKEN_BYTES) return false;
   if (!header.startsWith("Bearer ")) return false;
   const supplied = header.slice(7);
-  if (!supplied || supplied.length > 512) return false;
+  if (!supplied || supplied.length > MAX_AUTH_TOKEN_BYTES) return false;
   return constantTimeTextEqual(supplied, expectedToken);
 }
 

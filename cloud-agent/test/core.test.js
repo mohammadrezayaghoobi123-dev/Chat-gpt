@@ -14,7 +14,8 @@ import {
   SESSION_TTL_MS,
   parseToolArguments,
   readTextBounded,
-  recordSessionActivity
+  recordSessionActivity,
+  validateToolCall
 } from "../src/core.js";
 
 test("accepts UUID session identifiers and rejects path-like identifiers", () => {
@@ -39,6 +40,13 @@ test("allows ordinary source paths and blocks credential or traversal paths", ()
   assert.equal(isSafeRepoPath("config/prod-secrets.yml"), false);
   assert.equal(isSafeRepoPath("config/api-token.json"), false);
   assert.equal(isSafeRepoPath("deployment/private-key.backup"), false);
+  assert.equal(isSafeRepoPath("deploy/service-account.json"), false);
+  assert.equal(isSafeRepoPath("config/firebase-adminsdk-prod.json"), false);
+  assert.equal(isSafeRepoPath("ops/kubeconfig"), false);
+  assert.equal(isSafeRepoPath(".npmrc"), false);
+  assert.equal(isSafeRepoPath(".git-credentials"), false);
+  assert.equal(isSafeRepoPath("terraform/prod.tfstate"), false);
+  assert.equal(isSafeRepoPath("certs/client.crt"), false);
   assert.equal(isSafeRepoPath("C:\\Users\\user\\secret.txt"), false);
 });
 
@@ -204,4 +212,17 @@ test("session rate window discards expired entries and rejects the ninth request
   const blocked = recordSessionActivity(allowed.activeRequests, now + 1);
   assert.equal(blocked.allowed, false);
   assert.equal(blocked.activeRequests.length, 8);
+});
+
+test("validates model tool-call envelopes before execution", () => {
+  const valid = {
+    id: "call_123-abc",
+    type: "function",
+    function: { name: "read_project_file", arguments: "{\"path\":\"README.md\"}" }
+  };
+  assert.deepEqual(validateToolCall(valid), valid);
+  assert.throws(() => validateToolCall({ ...valid, id: "bad id" }), /identifier/);
+  assert.throws(() => validateToolCall({ ...valid, type: "other" }), /Malformed/);
+  assert.throws(() => validateToolCall({ ...valid, function: { ...valid.function, name: "run_shell" } }), /Unknown/);
+  assert.throws(() => validateToolCall({ ...valid, function: { ...valid.function, arguments: "x".repeat(4097) } }), /oversized/);
 });

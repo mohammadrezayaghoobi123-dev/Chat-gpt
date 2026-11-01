@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { webcrypto } from "node:crypto";
 
 const coreSource = await readFile(new URL("../src/core.js", import.meta.url), "utf8");
 const workerSource = await readFile(new URL("../src/worker.js", import.meta.url), "utf8");
@@ -12,11 +13,35 @@ const testableWorkerSource = workerSource
   )
   .replace('from "./core.js"', 'from "' + coreUrl + '"');
 const workerUrl = "data:text/javascript;base64," + Buffer.from(testableWorkerSource).toString("base64");
-const { default: worker } = await import(workerUrl);
+const { default: worker, AgentSession } = await import(workerUrl);
 
 const TOKEN = "t".repeat(48);
 const SESSION = "550e8400-e29b-41d4-a716-446655440000";
-const SESSION_TOKEN = "s".repeat(64);
+const SESSION_TOKEN = "s".repeat(43);
+
+function makeStorage(initial = {}) {
+  const values = new Map(Object.entries(initial));
+  const alarms = [];
+  return {
+    values,
+    alarms,
+    async get(key) { return values.get(key); },
+    async put(keyOrEntries, value) {
+      if (arguments.length === 1 && keyOrEntries && typeof keyOrEntries === "object") {
+        for (const [key, entry] of Object.entries(keyOrEntries)) values.set(key, entry);
+      } else {
+        values.set(keyOrEntries, value);
+      }
+    },
+    async delete(keys) {
+      const list = Array.isArray(keys) ? keys : [keys];
+      let count = 0;
+      for (const key of list) if (values.delete(key)) count += 1;
+      return count;
+    },
+    async setAlarm(timestamp) { alarms.push(timestamp); }
+  };
+}
 
 function envWithSessionStub({ sessionResponse = Response.json({ initialized: true }), onForward } = {}) {
   return {
@@ -45,7 +70,23 @@ function authorizedRequest(path, { method = "GET", body, sessionToken } = {}) {
   });
 }
 
-test("authenticated session creation returns an independent session capability", async () => {
+async function makeInitializedAgent(token = SESSION_TOKEN, initial = {}) {
+  const storage = makeStorage(initial);
+  const agent = new AgentSession({ storage }, {
+    AI: { run: async () => ({ choices: [{ message: { role: "assistant", content: "authorized response" } }] }) }
+  });
+  const digest = await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  const tokenHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+  const initialized = await agent.fetch(new Request("https://agent-session.internal/initialize", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token_hash: tokenHash })
+  }));
+  assert.equal(initialized.status, 201);
+  return { agent, storage, tokenHash };
+}
+
+test("authenticated session creation returns a random capability and stores only its SHA-256 verifier", async () => {
   let forwarded;
   const response = await worker.fetch(
     authorizedRequest("/api/sessions", { method: "POST" }),
@@ -54,11 +95,26 @@ test("authenticated session creation returns an independent session capability",
   assert.equal(response.status, 201);
   const body = await response.json();
   assert.match(body.session_id, /^[0-9a-f-]{36}$/i);
-  assert.match(body.session_token, /^[A-Za-z0-9_-]{40,}$/);
+  assert.match(body.session_token, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(forwarded.method, "POST");
   assert.equal(new URL(forwarded.url).pathname, "/initialize");
   const init = await forwarded.json();
-  assert.equal(init.session_token, body.session_token);
+  assert.match(init.token_hash, /^[0-9a-f]{64}$/);
+  assert.equal(Object.hasOwn(init, "session_token"), false);
+  assert.notEqual(init.token_hash, body.session_token);
+});
+
+test("session initialization is one-time and persists only a verifier", async () => {
+  const { agent, storage, tokenHash } = await makeInitializedAgent();
+  assert.equal(storage.values.get("session-token-hash"), tokenHash);
+  assert.equal(storage.values.has("session_token"), false);
+  const duplicate = await agent.fetch(new Request("https://agent-session.internal/initialize", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token_hash: "b".repeat(64) })
+  }));
+  assert.equal(duplicate.status, 409);
+  assert.equal(storage.values.get("session-token-hash"), tokenHash);
 });
 
 test("session chat rejects a missing per-session capability before Durable Object access", async () => {
@@ -81,7 +137,7 @@ test("session history rejects a missing per-session capability before Durable Ob
   assert.equal(doCalls, 0);
 });
 
-test("session chat forwards the supplied capability only to the owning Durable Object", async () => {
+test("session chat forwards the capability header to the selected Durable Object", async () => {
   let forwarded;
   const response = await worker.fetch(
     authorizedRequest("/api/sessions/" + SESSION + "/chat", {
@@ -93,4 +149,53 @@ test("session chat forwards the supplied capability only to the owning Durable O
   );
   assert.equal(response.status, 200);
   assert.equal(forwarded.headers.get("x-session-token"), SESSION_TOKEN);
+});
+
+test("wrong session capability is rejected before history or rate state is accessed", async () => {
+  const { agent, storage } = await makeInitializedAgent(SESSION_TOKEN, {
+    history: [{ role: "assistant", content: "private history" }]
+  });
+  const response = await agent.fetch(new Request("https://agent-session.internal/history", {
+    headers: { "x-session-token": "x".repeat(43) }
+  }));
+  assert.equal(response.status, 401);
+  assert.equal(storage.values.get("history")[0].content, "private history");
+  assert.equal(storage.values.has("rate-window"), false);
+});
+
+test("valid session capability permits access to that session's history", async () => {
+  const { agent } = await makeInitializedAgent(SESSION_TOKEN, {
+    history: [{ role: "assistant", content: "private history" }]
+  });
+  const response = await agent.fetch(new Request("https://agent-session.internal/history", {
+    headers: { "x-session-token": SESSION_TOKEN }
+  }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    messages: [{ role: "assistant", content: "private history" }]
+  });
+});
+
+test("valid session capability permits chat and history persists only after authorization", async () => {
+  const { agent, storage } = await makeInitializedAgent();
+  const response = await agent.fetch(new Request("https://agent-session.internal/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-session-token": SESSION_TOKEN },
+    body: JSON.stringify({ message: "run authorized chat" })
+  }));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).answer, "authorized response");
+  assert.equal(storage.values.get("history")[0].content, "run authorized chat");
+});
+
+test("expired sessions delete the verifier and reject further access", async () => {
+  const stale = Date.now() - 8 * 24 * 60 * 60 * 1000;
+  const { agent, storage } = await makeInitializedAgent(SESSION_TOKEN, {
+    "last-activity-at": stale
+  });
+  const response = await agent.fetch(new Request("https://agent-session.internal/history", {
+    headers: { "x-session-token": SESSION_TOKEN }
+  }));
+  assert.equal(response.status, 410);
+  assert.equal(storage.values.has("session-token-hash"), false);
 });

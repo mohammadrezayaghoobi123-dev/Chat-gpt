@@ -29,6 +29,8 @@ jobs:
           node-version: 22
       - name: Install pinned test dependencies
         run: npm install --no-audit --no-fund --legacy-peer-deps
+      - name: Audit npm dependency advisories
+        run: npm audit --audit-level=high
       - name: Syntax checks
         run: npm run check
       - name: Unit tests

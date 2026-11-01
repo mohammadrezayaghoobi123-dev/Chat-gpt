@@ -11,6 +11,7 @@ function budgetStub() {
 beforeEach(async () => {
   await runInDurableObject(budgetStub(), async (_instance, state) => {
     await state.storage.deleteAll();
+    await state.storage.deleteAlarm();
   });
 });
 

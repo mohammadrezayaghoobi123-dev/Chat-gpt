@@ -33,6 +33,9 @@ test("allows ordinary source paths and blocks credential or traversal paths", ()
   assert.equal(isSafeRepoPath("../../.env"), false);
   assert.equal(isSafeRepoPath(".github/workflows/deploy.yml"), false);
   assert.equal(isSafeRepoPath("secrets/token.txt"), false);
+  assert.equal(isSafeRepoPath("config/prod-secrets.yml"), false);
+  assert.equal(isSafeRepoPath("config/api-token.json"), false);
+  assert.equal(isSafeRepoPath("deployment/private-key.backup"), false);
   assert.equal(isSafeRepoPath("C:\\Users\\user\\secret.txt"), false);
 });
 

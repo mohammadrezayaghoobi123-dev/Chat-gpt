@@ -13,6 +13,16 @@ const BLOCKED_PATHS = [
   /\.tfvars\.json$/i
 ];
 
+export function createSerialExecutor() {
+  let tail = Promise.resolve();
+  return function execute(task) {
+    if (typeof task !== "function") return Promise.reject(new TypeError("Task must be a function."));
+    const result = tail.then(task);
+    tail = result.then(() => undefined, () => undefined);
+    return result;
+  };
+}
+
 export function buildGitHubContentsApiUrl(owner, repo, path, ref) {
   if (typeof owner !== "string" || !/^[A-Za-z0-9_.-]{1,100}$/.test(owner)) throw new TypeError("Invalid GitHub owner.");
   if (typeof repo !== "string" || !/^[A-Za-z0-9_.-]{1,100}$/.test(repo)) throw new TypeError("Invalid GitHub repository.");

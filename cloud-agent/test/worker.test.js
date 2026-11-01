@@ -46,7 +46,7 @@ async function makeAgent({ storage, ai = { run: async () => ({ choices: [{ messa
   const token = "s".repeat(43);
   const digest = await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   const tokenHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
-  storage ||= makeStorage();
+  storage ||= makeStorage({ "last-activity-at": Date.now() });
   if (!(await storage.get("session-token-hash"))) await storage.put("session-token-hash", tokenHash);
   const ctx = { storage };
   const env = { AI: ai };
@@ -172,18 +172,19 @@ test("malformed and oversized chat requests are rejected before model invocation
   assert.equal(storage.values.get("rate-window").length, 2);
 });
 
-test("history endpoint is rate-limited and expires stale stored history", async () => {
-  const stale = Date.now() - 8 * 24 * 60 * 60 * 1000;
+test("history endpoint is rate-limited and preserves active stored history", async () => {
+  const recent = Date.now() - 1_000;
+  const staleRequest = Date.now() - 60_001;
   const storage = makeStorage({
-    history: [{ role: "assistant", content: "stale" }],
-    "rate-window": [stale],
-    "last-activity-at": stale
+    history: [{ role: "assistant", content: "active" }],
+    "rate-window": [staleRequest],
+    "last-activity-at": recent
   });
   const { agent } = await makeAgent({ storage });
   const response = await agent.fetch(historyRequest());
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { messages: [] });
-  assert.equal(storage.values.has("history"), false);
+  assert.deepEqual(await response.json(), { messages: [{ role: "assistant", content: "active" }] });
+  assert.equal(storage.values.has("history"), true);
   assert.equal(storage.values.get("rate-window").length, 1);
   for (let i = 0; i < 7; i += 1) assert.equal((await agent.fetch(historyRequest())).status, 200);
   assert.equal((await agent.fetch(historyRequest())).status, 429);

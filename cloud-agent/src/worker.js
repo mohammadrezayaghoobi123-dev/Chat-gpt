@@ -220,7 +220,8 @@ button:disabled{opacity:.5;cursor:wait}
  const send=document.getElementById("send");
  const status=document.getElementById("status");
  const output=document.getElementById("output");
- let sessionId=null;\n let sessionCapability=null;
+ let sessionId=null;
+ let sessionCapability=null;
  send.addEventListener("click",async()=>{
   const token=tokenInput.value;
   const message=promptInput.value.trim();

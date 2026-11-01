@@ -1,0 +1,16 @@
+name = "master-brain-cloud-agent"
+main = "src/worker.js"
+compatibility_date = "2026-10-31"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "AGENT_SESSIONS"
+class_name = "AgentSession"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AgentSession"]

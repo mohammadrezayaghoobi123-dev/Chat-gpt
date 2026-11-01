@@ -57,7 +57,7 @@ condition = "AND"
 commits = ["59e0ef03557fb9afac2cc879197e2067d074c235"]
 paths = ['''^cloud-engineering-connector/test/worker\.test\.js$''']
 regexTarget = "line"
-regexes = ['''MCP_AUTH_TOKEN''']
+regexes = ['''MCP_AUTH_TOKEN\s*:\s*["']0123456789abcdef0123456789abcdef["']''']
 
 [[allowlists]]
 description = "Synthetic credential fixture in connector credential-matrix test; exact commit and path only."
@@ -66,7 +66,7 @@ condition = "AND"
 commits = ["6c079c67e457956bd1446511fe21327da71313b1"]
 paths = ['''^cloud-engineering-connector/test/credential-matrix\.test\.js$''']
 regexTarget = "line"
-regexes = ['''const SECRET''']
+regexes = ['''const\s+SECRET\s*=\s*["']0123456789abcdef0123456789abcdef["']''']
 
 [[allowlists]]
 description = "Synthetic bearer fixture in connector worker test; exact commit and path only."
@@ -75,4 +75,4 @@ condition = "AND"
 commits = ["ffa7b132922370296651499b60bd95212c39f69b"]
 paths = ['''^cloud-engineering-connector/test/worker\.test\.js$''']
 regexTarget = "line"
-regexes = ['''const token''']
+regexes = ['''const\s+token\s*=\s*["']0123456789abcdef0123456789abcdef["']''']

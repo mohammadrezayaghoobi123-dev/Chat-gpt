@@ -82,7 +82,16 @@ const TOOL_DEFINITIONS = [
 function json(data, status = 200, headers = {}) {
   return Response.json(data, {
     status,
-    headers: { "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers }
+    headers: {
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+      "referrer-policy": "no-referrer",
+      "permissions-policy": "camera=(), microphone=(), geolocation=()",
+      "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "strict-transport-security": "max-age=31536000",
+      ...headers
+    }
   });
 }
 
@@ -522,7 +531,10 @@ export default {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
           "x-content-type-options": "nosniff",
+          "x-frame-options": "DENY",
           "referrer-policy": "no-referrer",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "strict-transport-security": "max-age=31536000",
           "content-security-policy": "default-src 'none'; connect-src 'self'; style-src 'nonce-" + nonce + "'; script-src 'nonce-" + nonce + "'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
         }
       });

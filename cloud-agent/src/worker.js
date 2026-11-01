@@ -19,7 +19,7 @@ import {
   parseToolArguments,
   readTextBounded,
   recordSessionActivity,
-  validateToolCall
+  validateToolCalls
 } from "./core.js";
 
 const VERSION = "0.1.0";
@@ -300,13 +300,7 @@ export class AgentSession extends DurableObject {
           finalText = extractAssistantText(message);
           break;
         }
-        if (rawCalls.length > MAX_TOOL_CALLS - toolCallsUsed) {
-          throw new Error("Tool-call budget exceeded.");
-        }
-        const calls = rawCalls.map(validateToolCall);
-        if (new Set(calls.map(call => call.id)).size !== calls.length) {
-          throw new Error("Duplicate model tool-call identifiers.");
-        }
+        const calls = validateToolCalls(rawCalls, MAX_TOOL_CALLS - toolCallsUsed);
         messages.push({ ...message, tool_calls: calls });
         for (const call of calls) {
           toolCallsUsed += 1;

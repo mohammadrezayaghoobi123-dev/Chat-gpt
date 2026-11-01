@@ -585,23 +585,25 @@ test("protected authentication fails closed when the auth failure limiter throws
  assert.deepEqual(await response.json(),{error:"rate_limiter_unavailable"});
 });
 
-test("a valid bearer token bypasses the auth failure quota",async()=>{
- let calls=0;
+test("a valid bearer token uses the authenticated quota, not the auth-failure quota",async()=>{
+ const keys=[];
  const response=await worker.fetch(rpc("tools/list"),{
   ...env,
-  MCP_RATE_LIMITER:{limit:async()=>{calls++;return{success:false}}}
+  MCP_RATE_LIMITER:{limit:async({key})=>{keys.push(key);return{success:true}}}
  });
  assert.equal(response.status,200);
- assert.equal(calls,0);
+ assert.deepEqual(keys,["authenticated-mcp:203.0.113.10"]);
 });
 
-test("public and authentication-failure requests use independent key spaces",async()=>{
+test("public, authentication-failure, and authenticated requests use independent key spaces",async()=>{
  const keys=[];
  const limiter={limit:async({key})=>{keys.push(key);return{success:true}}};
  const protectedResponse=await worker.fetch(requestWithAuthorization("Bearer wrong-secret"),{...env,MCP_RATE_LIMITER:limiter});
  const publicRequest=requestWithAuthorization(undefined);
  const publicResponse=await worker.fetch(publicRequest,{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:limiter});
+ const authenticatedResponse=await worker.fetch(rpc("tools/list"),{...env,MCP_RATE_LIMITER:limiter});
  assert.equal(protectedResponse.status,401);
  assert.equal(publicResponse.status,200);
- assert.deepEqual(keys,["auth-failure:203.0.113.10","public-mcp:203.0.113.10"]);
+ assert.equal(authenticatedResponse.status,200);
+ assert.deepEqual(keys,["auth-failure:203.0.113.10","public-mcp:203.0.113.10","authenticated-mcp:203.0.113.10"]);
 });

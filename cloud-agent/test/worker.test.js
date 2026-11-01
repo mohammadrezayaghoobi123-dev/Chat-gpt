@@ -111,6 +111,12 @@ test("health endpoint returns liveness metadata without exposing secrets", async
   assert.equal(body.ok, true);
   assert.equal(body.mode, "read-only");
   assert.equal(JSON.stringify(body).includes(TOKEN), false);
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(response.headers.get("permissions-policy"), "camera=(), microphone=(), geolocation=()");
+  assert.equal(response.headers.get("strict-transport-security"), "max-age=31536000");
+  assert.equal(response.headers.get("content-security-policy"), "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
 });
 
 test("console CSP uses the same nonce for style and script and forbids unsafe-inline", async () => {
@@ -130,6 +136,9 @@ test("console CSP uses the same nonce for style and script and forbids unsafe-in
   assert.doesNotThrow(() => new Script(inlineScript));
   assert.match(inlineScript, /x-session-token/);
   assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+  assert.equal(response.headers.get("permissions-policy"), "camera=(), microphone=(), geolocation=()");
+  assert.equal(response.headers.get("strict-transport-security"), "max-age=31536000");
 });
 
 test("API rejects missing bearer auth before rate limiting or Durable Object access", async () => {

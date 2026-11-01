@@ -79,10 +79,20 @@ const TOOL_DEFINITIONS = [
   }
 ];
 
+const SECURITY_HEADERS = {
+  "cache-control": "no-store",
+  "x-content-type-options": "nosniff",
+  "x-frame-options": "DENY",
+  "referrer-policy": "no-referrer",
+  "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+  "permissions-policy": "camera=(), microphone=(), geolocation=()",
+  "cross-origin-resource-policy": "same-origin"
+};
+
 function json(data, status = 200, headers = {}) {
   return Response.json(data, {
     status,
-    headers: { "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers }
+    headers: { ...SECURITY_HEADERS, ...headers }
   });
 }
 
@@ -521,8 +531,7 @@ export default {
         headers: {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
-          "x-content-type-options": "nosniff",
-          "referrer-policy": "no-referrer",
+          ...SECURITY_HEADERS,
           "content-security-policy": "default-src 'none'; connect-src 'self'; style-src 'nonce-" + nonce + "'; script-src 'nonce-" + nonce + "'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
         }
       });

@@ -58,6 +58,12 @@ from master_brain.audit_store import AuditStore, NOW
 from master_brain.ctp import CTPCase, ExecutionProvenance, TestStatus, record_test_execution
 
 VERIFICATION_DOMAIN = b"master-brain/ctp-verification/v1\n"
+# Stage 6 (L-S6-1): "reproduced" means "executions agreed", not "deterministic". One agreeing re-run lets a
+# coin-flip test through ~50% of the time (measured: 47/100), so PASS/FAIL needs the original plus at least
+# MIN_INDEPENDENT_RUNS-1 independent re-runs, all agreeing. Any single disagreement vetoes (see ctp_test_state).
+MIN_INDEPENDENT_RUNS = 5
+MAX_INDEPENDENT_RUNS = 100
+
 EXECUTED = "ctp.test_executed"
 VERIFIED = "ctp.test_verified"
 SIGNATURE_ALG = "ed25519"
@@ -928,7 +934,7 @@ def run_test(spec: TestSpec, *, case_id: str, test_id: str, runner_id: str,
 _LIMITATIONS = (
     "Executed on the same host as the recorder; not an attested environment.",
     "Isolation is namespaces + rlimits only (no cgroups, no seccomp) when isolation=sandbox; none otherwise.",
-    "Result is provisional until independently re-run and signed by a different identity.",
+    "Result is provisional until independently re-run (at least MIN_INDEPENDENT_RUNS executions in total) and signed by a different identity.",
 )
 
 
@@ -1029,6 +1035,25 @@ def verify_by_rerun(store: AuditStore, spec: TestSpec, *, case_id: str, test_id:
             "rerun_execution_id": rerun.execution_id}
 
 
+def verify_by_reruns(store: AuditStore, spec: TestSpec, *, case_id: str, test_id: str,
+                     original_execution_id: str, verifier_id: str, signer: Any, runs: int = MIN_INDEPENDENT_RUNS - 1,
+                     evidence_dir: Path | None = None) -> dict:
+    """``runs`` independent re-runs, each recorded and signed; stops at the first disagreement (a veto)."""
+    if not isinstance(runs, int) or isinstance(runs, bool) or not 1 <= runs <= MAX_INDEPENDENT_RUNS - 1:
+        raise RunnerError("runs must be a positive integer below MAX_INDEPENDENT_RUNS")
+    done: list[dict] = []
+    for _ in range(runs):
+        r = verify_by_rerun(store, spec, case_id=case_id, test_id=test_id, original_execution_id=original_execution_id,
+                            verifier_id=verifier_id, signer=signer, evidence_dir=evidence_dir)
+        done.append(r)
+        if r["verdict"] != "reproduced":
+            break
+    verdicts = {r["verdict"] for r in done}
+    verdict = "not_reproduced" if "not_reproduced" in verdicts else (
+        "not_confirmable" if "not_confirmable" in verdicts else "reproduced")
+    return {"verdict": verdict, "runs": len(done), "results": done}
+
+
 def store_event_payload(store: AuditStore, execution_id: str) -> dict:
     for e in store.read_all():
         if e.event_type == EXECUTED and e.payload.get("execution_id") == execution_id:
@@ -1039,22 +1064,36 @@ def store_event_payload(store: AuditStore, execution_id: str) -> dict:
 @dataclass(frozen=True)
 class TestState:
     __test__ = False
-    state: str                  # not_run | executed_unverified | verified_reproduced | not_reproduced | not_confirmable | inconsistent
+    state: str                  # not_run | executed_unverified | insufficient_runs | verified_reproduced | not_reproduced | not_confirmable | inconsistent
     outcome: str | None = None  # pass/fail/inconclusive when verified_reproduced
     execution_ids: tuple[str, ...] = ()
     verification_event_id: str | None = None
     problems: tuple[str, ...] = ()
+    verification_event_ids: tuple[str, ...] = ()   # every agreeing verification that counted
 
 
-def ctp_test_state(store: AuditStore, trust_store: Any, case_id: str, test_id: str) -> TestState:
-    """Recompute the state from the chain alone; nothing here trusts a recorded verdict."""
+def _check_min_runs(min_runs: object) -> int:
+    if not isinstance(min_runs, int) or isinstance(min_runs, bool) \
+            or not MIN_INDEPENDENT_RUNS <= min_runs <= MAX_INDEPENDENT_RUNS:
+        raise RunnerError(f"min_runs must be an integer in {MIN_INDEPENDENT_RUNS}..{MAX_INDEPENDENT_RUNS}")
+    return min_runs
+
+
+def ctp_test_state(store: AuditStore, trust_store: Any, case_id: str, test_id: str, *,
+                   min_runs: int = MIN_INDEPENDENT_RUNS) -> TestState:
+    """Recompute the state from the chain alone; nothing here trusts a recorded verdict.
+
+    ``verified_reproduced`` needs ``min_runs - 1`` valid agreeing re-runs (distinct executions) of ONE original;
+    fewer is ``insufficient_runs`` (never a result). The floor is MIN_INDEPENDENT_RUNS and cannot be lowered here.
+    """
+    min_runs = _check_min_runs(min_runs)
     events = store.read_all()  # raises on a tampered chain: evaluation stops
     subject = _subject(case_id, test_id)
     execs = {e.payload["execution_id"]: e for e in events if e.event_type == EXECUTED and e.subject_ref == subject}
     if not execs:
         return TestState("not_run")
     problems: list[str] = []
-    verdicts: list[tuple[str, str, str]] = []  # (verdict, event_id, original id)
+    verdicts: list[tuple[str, str, str, str]] = []  # (verdict, event_id, original id, rerun id)
     for ev in (e for e in events if e.event_type == VERIFIED and e.subject_ref == subject):
         p = ev.payload
         orig, rerun = execs.get(p.get("original_execution_id")), execs.get(p.get("rerun_execution_id"))
@@ -1081,25 +1120,38 @@ def ctp_test_state(store: AuditStore, trust_store: Any, case_id: str, test_id: s
         if why:
             problems.append(f"{ev.event_id}: {why}")
         else:
-            verdicts.append((p["verdict"], ev.event_id, p["original_execution_id"]))
+            verdicts.append((p["verdict"], ev.event_id, p["original_execution_id"], p["rerun_execution_id"]))
     ids = tuple(execs)
     if verdicts:
         # A valid signed "not reproduced" vetoes everything else; an inconclusive re-run is not a contradiction.
-        for wanted in ("not_reproduced", "reproduced", "not_confirmable"):
-            hit = next((v for v in verdicts if v[0] == wanted), None)
-            if hit:
-                orig_out = execs[hit[2]].payload["outcome"]
-                if wanted == "reproduced":
-                    return TestState("verified_reproduced", orig_out, ids, hit[1], tuple(problems))
-                return TestState(wanted, None, ids, hit[1], tuple(problems))
+        veto = next((v for v in verdicts if v[0] == "not_reproduced"), None)
+        if veto:
+            return TestState("not_reproduced", None, ids, veto[1], tuple(problems))
+        agreeing: dict[str, dict[str, str]] = {}      # original -> {rerun id: verification event id}
+        for v, ev_id, orig_id, rerun_id in verdicts:
+            if v == "reproduced" and rerun_id != orig_id:
+                agreeing.setdefault(orig_id, {})[rerun_id] = ev_id
+        enough = next((o for o, r in agreeing.items() if len(r) >= min_runs - 1), None)
+        if enough is not None:
+            evs = tuple(agreeing[enough].values())
+            return TestState("verified_reproduced", execs[enough].payload["outcome"], ids, evs[0],
+                             tuple(problems), evs)
+        hit = next((v for v in verdicts if v[0] == "not_confirmable"), None)
+        if hit:
+            return TestState("not_confirmable", None, ids, hit[1], tuple(problems))
+        if agreeing:
+            return TestState("insufficient_runs", None, ids, None,
+                             tuple(problems) + (f"{max(len(r) for r in agreeing.values()) + 1} of {min_runs} "
+                                                "required agreeing executions",))
     if problems:
         return TestState("inconsistent", None, ids, None, tuple(problems))
     return TestState("executed_unverified", None, ids)
 
 
-def apply_to_case(case: CTPCase, store: AuditStore, trust_store: Any, test_id: str) -> CTPCase:
+def apply_to_case(case: CTPCase, store: AuditStore, trust_store: Any, test_id: str, *,
+                  min_runs: int = MIN_INDEPENDENT_RUNS) -> CTPCase:
     """Update a CTP case from the chain. PASS/FAIL only after verified reproduction."""
-    st = ctp_test_state(store, trust_store, case.case_id, test_id)
+    st = ctp_test_state(store, trust_store, case.case_id, test_id, min_runs=min_runs)
     if st.state == "not_run":
         return case
     latest_id = st.execution_ids[-1]
@@ -1108,16 +1160,19 @@ def apply_to_case(case: CTPCase, store: AuditStore, trust_store: Any, test_id: s
         method="real subprocess execution with SHA-256 fingerprints", independent_group=group,
         independence_basis=basis, limitations=_LIMITATIONS)
     if st.state == "verified_reproduced" and st.outcome in ("pass", "fail"):
-        ver = next(e for e in store.read_all() if e.event_id == st.verification_event_id)
+        vers = [e for e in store.read_all() if e.event_id in st.verification_event_ids]
+        ver = vers[0]
         return record_test_execution(
             case, test_id, TestStatus.PASS if st.outcome == "pass" else TestStatus.FAIL,
-            f"re-run reproduced identical fingerprints; outcome={st.outcome}",
-            tuple(f"ctp-exec-{i}" for i in (ver.payload["original_execution_id"], ver.payload["rerun_execution_id"]))
-            + (st.verification_event_id,),
+            f"{len(vers) + 1} independent executions agreed on identical fingerprints; outcome={st.outcome}",
+            (f"ctp-exec-{ver.payload['original_execution_id']}",)
+            + tuple(f"ctp-exec-{e.payload['rerun_execution_id']}" for e in vers)
+            + tuple(e.event_id for e in vers),
             provenance_for(f"verifier:{ver.payload['verifier_id']}",
                            "different identity and signing key re-ran the spec; same host"))
     notes = {
         "executed_unverified": "executed but not independently verified",
+        "insufficient_runs": "too few agreeing independent executions to rule out nondeterminism: " + "; ".join(st.problems),
         "not_reproduced": "independent re-run did not reproduce the result",
         "not_confirmable": "an execution was inconclusive; result cannot be confirmed",
         "inconsistent": "verification records are invalid: " + "; ".join(st.problems),

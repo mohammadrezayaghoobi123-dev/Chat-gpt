@@ -93,10 +93,10 @@ class Base(unittest.TestCase):
         return cm.exception.code
 
     def verify(self, rid, signer=None, verifier_id="v1"):
-        return R.verify_by_rerun(self.store, self.registry.get(TEST_ID).spec, case_id=rid, test_id=TEST_ID,
-                                 original_execution_id=self.ops.get_run(ALICE, rid)["executions"][0]["execution_id"],
-                                 verifier_id=verifier_id, signer=signer or self.verifier_key,
-                                 evidence_dir=self.evidence)
+        return R.verify_by_reruns(self.store, self.registry.get(TEST_ID).spec, case_id=rid, test_id=TEST_ID,
+                                  original_execution_id=self.ops.get_run(ALICE, rid)["executions"][0]["execution_id"],
+                                  verifier_id=verifier_id, signer=signer or self.verifier_key,
+                                  evidence_dir=self.evidence)
 
 
 @needs_sandbox
@@ -423,6 +423,23 @@ class OutcomeSemantics(Base):
         state = O.derive_run_state(self.store, self.trust, rid)
         self.assertEqual((state.status, state.final_ctp_status), ("executed_unverified", "inconclusive"))
 
+    def test_stage6_one_agreeing_rerun_is_insufficient_and_is_not_a_result(self):
+        """L-S6-1: a single agreeing re-run must not yield PASS/FAIL (a coin-flip test passes it ~50% of the time)."""
+        rid = self.approved()
+        self.ops.execute(ALICE, rid, O.RunExecuteRequest())
+        R.verify_by_rerun(self.store, self.registry.get(TEST_ID).spec, case_id=rid, test_id=TEST_ID,
+                          original_execution_id=self.ops.get_run(ALICE, rid)["executions"][0]["execution_id"],
+                          verifier_id="v1", signer=self.verifier_key, evidence_dir=self.evidence)
+        view = self.ops.get_run(ALICE, rid)
+        self.assertEqual((view["status"], view["final_ctp_status"]), ("insufficient_runs", "inconclusive"))
+
+    def test_stage6_registry_refuses_a_floor_below_the_minimum(self):
+        t = self.registry.get(TEST_ID)
+        for bad in (1, 2, R.MIN_INDEPENDENT_RUNS - 1, True, None, R.MAX_INDEPENDENT_RUNS + 1):
+            with self.assertRaises(RegistryError):
+                CtpRegistry((RegisteredTest(t.test_id, t.title, t.description, t.spec, min_runs=bad),))
+        CtpRegistry((RegisteredTest(t.test_id, t.title, t.description, t.spec, min_runs=R.MIN_INDEPENDENT_RUNS + 3),))
+
     def test_verifier_must_be_a_different_identity_and_key(self):
         rid = self.approved()
         self.ops.execute(ALICE, rid, O.RunExecuteRequest())
@@ -442,7 +459,7 @@ class OutcomeSemantics(Base):
         self.ops = self.make_ops()
         rid = self.approved(test_id="always-fails")
         self.ops.execute(ALICE, rid, O.RunExecuteRequest())
-        R.verify_by_rerun(self.store, failing.spec, case_id=rid, test_id="always-fails",
+        R.verify_by_reruns(self.store, failing.spec, case_id=rid, test_id="always-fails",
                           original_execution_id=self.ops.get_run(ALICE, rid)["executions"][0]["execution_id"],
                           verifier_id="v1", signer=self.verifier_key, evidence_dir=self.evidence)
         view = self.ops.get_run(ALICE, rid)
@@ -455,7 +472,7 @@ class OutcomeSemantics(Base):
         self.ops = self.make_ops()
         rid = self.approved(test_id="crashes")
         self.ops.execute(ALICE, rid, O.RunExecuteRequest())
-        R.verify_by_rerun(self.store, crash.spec, case_id=rid, test_id="crashes",
+        R.verify_by_reruns(self.store, crash.spec, case_id=rid, test_id="crashes",
                           original_execution_id=self.ops.get_run(ALICE, rid)["executions"][0]["execution_id"],
                           verifier_id="v1", signer=self.verifier_key, evidence_dir=self.evidence)
         view = self.ops.get_run(ALICE, rid)

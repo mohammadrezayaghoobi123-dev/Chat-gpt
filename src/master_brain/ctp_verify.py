@@ -6,12 +6,13 @@
 Why a separate process: the web server (executor) never holds a verifier key. This process
 1. re-validates the whole request -> approval -> claim -> execution chain from the audit log
    (signature against the trust store, matching digests, claim inside the approval window),
-2. refuses unless the run is ``executed_unverified`` and its key is bound to ``verifier:<id>``
+2. refuses unless the run is ``executed_unverified`` (or ``insufficient_runs``, to resume) and its key is bound to ``verifier:<id>``
    with an id different from the executor,
-3. re-runs the same registered spec in the sandbox and signs what it observed (``ctp.test_verified``).
+3. re-runs the same registered spec in the sandbox at least ``min_runs - 1`` times (default 4, so 5 agreeing
+   executions in total) and signs what it observed each time (``ctp.test_verified``); one disagreement vetoes.
 
 Limits (stated, not hidden): same host, so this is process- and key-isolation, not independent
-hardware or an independent environment; it assumes deterministic test output; whoever controls the
+hardware or an independent environment; several agreeing runs make nondeterminism unlikely, not impossible; whoever controls the
 host controls both.
 """
 from __future__ import annotations
@@ -26,7 +27,7 @@ from master_brain.approval_keys import KeyToolError, load_signer
 from master_brain.audit_store import AuditStore
 from master_brain.ctp_operations import REQUEST_ID, audit_run_chain, derive_run_state
 from master_brain.ctp_registry import builtin_registry
-from master_brain.ctp_runner import RunnerError, SandboxUnavailable, verify_by_rerun
+from master_brain.ctp_runner import RunnerError, SandboxUnavailable, verify_by_reruns
 from master_brain.serve import StartupRefused, load_trust_store
 
 
@@ -46,21 +47,27 @@ def verify_request(data_dir: Path, approval_keys: Path, signer, request_id: str)
     problems = audit_run_chain(store, trust, request_id)
     if problems:
         raise VerifyRefused("the run's approval/claim/execution chain is not valid: " + "; ".join(problems))
-    state = derive_run_state(store, trust, request_id)
-    if state.status != "executed_unverified" or state.test_state is None:
+    registry = builtin_registry()
+    state = derive_run_state(store, trust, request_id, registry=registry)
+    if state.status not in ("executed_unverified", "insufficient_runs") or state.test_state is None:
         raise VerifyRefused(f"nothing to verify: run status is {state.status}")
     ids = state.test_state.execution_ids
-    if len(ids) != 1:
-        raise VerifyRefused("exactly one unverified execution is expected")
     req = next(e for e in store.read_all() if e.event_type == "ctp.run_requested"
                and e.subject_ref == f"ctp-run:{request_id}")
-    test = builtin_registry().get(req.payload["test_id"])
+    test = registry.get(req.payload["test_id"])
     if test is None:
         raise VerifyRefused("the test is no longer registered")
-    result = verify_by_rerun(
-        store, test.spec, case_id=request_id, test_id=test.test_id, original_execution_id=ids[0],
-        verifier_id=verifier_id, signer=signer, evidence_dir=Path(data_dir) / "ctp-evidence")
-    after = derive_run_state(store, trust, request_id)
+    # The run's own original execution is the first one; its re-runs are the executions after it. A previous
+    # verifier call that stopped early is resumed: only the missing agreeing re-runs are performed.
+    original = ids[0]
+    have = len({e.payload["rerun_execution_id"] for e in store.read_all()
+                if e.event_type == "ctp.test_verified" and e.payload.get("original_execution_id") == original
+                and e.payload.get("verdict") == "reproduced"})
+    missing = max(1, test.min_runs - 1 - have)
+    result = verify_by_reruns(
+        store, test.spec, case_id=request_id, test_id=test.test_id, original_execution_id=original,
+        verifier_id=verifier_id, signer=signer, runs=missing, evidence_dir=Path(data_dir) / "ctp-evidence")
+    after = derive_run_state(store, trust, request_id, registry=registry)
     return {"request_id": request_id, "verdict": result.get("verdict"), "status": after.status,
             "final_ctp_status": after.final_ctp_status, "reason": after.reason}
 

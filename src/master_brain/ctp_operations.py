@@ -40,7 +40,7 @@ from master_brain.approvers import ApproverPolicy
 from master_brain.audit_store import NOW, AuditStore, AuditStoreError
 from master_brain.ctp_registry import REGISTRY_SCHEMA_VERSION, CtpRegistry, RegisteredTest
 from master_brain.ctp_runner import (
-    EXECUTED, RunnerError, SandboxUnavailable, TestState, ctp_test_state, execute_and_record,
+    EXECUTED, MIN_INDEPENDENT_RUNS, RunnerError, SandboxUnavailable, TestState, ctp_test_state, execute_and_record,
     sandbox_status,
 )
 from master_brain.identity import Identity
@@ -219,7 +219,7 @@ class RunState:
 
 
 def derive_run_state(store: AuditStore, verifier: ApprovalVerifier | None, request_id: str, *,
-                     now: datetime | None = None) -> RunState:
+                     now: datetime | None = None, registry: CtpRegistry | None = None) -> RunState:
     ev = _events_for(store, request_id)
     req = next((e for e in ev if e.event_type == REQUESTED), None)
     if req is None:
@@ -243,7 +243,9 @@ def derive_run_state(store: AuditStore, verifier: ApprovalVerifier | None, reque
         if exp is None or exp <= now:
             return RunState("approval_expired", "not_run", "the approval expired before execution", (), None)
         return RunState("approved", "not_run", "approved; not yet executed", (), None)
-    st = ctp_test_state(store, verifier, request_id, test_id)
+    reg = registry.get(test_id) if registry is not None else None
+    st = ctp_test_state(store, verifier, request_id, test_id,
+                        min_runs=reg.min_runs if reg is not None else MIN_INDEPENDENT_RUNS)
     if chain or st.state == "inconsistent":
         return RunState("inconsistent", "inconclusive", "evidence or approval chain failed validation",
                         tuple(chain) + tuple(st.problems), st)
@@ -255,9 +257,13 @@ def derive_run_state(store: AuditStore, verifier: ApprovalVerifier | None, reque
     if st.state == "executed_unverified":
         return RunState("executed_unverified", "inconclusive",
                         "executed but not independently verified; the provisional outcome is not a result", (), st)
+    if st.state == "insufficient_runs":
+        return RunState("insufficient_runs", "inconclusive",
+                        "some independent re-runs agree, but too few to rule out nondeterminism; not a result",
+                        tuple(st.problems), st)
     if st.state == "verified_reproduced" and st.outcome in ("pass", "fail"):
         return RunState(f"verified_{st.outcome}", st.outcome,
-                        "independently re-run by another identity with identical fingerprints", (), st)
+                        "independently re-run by another identity, all executions agreed on identical fingerprints", (), st)
     return RunState(st.state, "inconclusive", {
         "not_reproduced": "the independent re-run did not reproduce the result",
         "not_confirmable": "an execution was inconclusive; the result cannot be confirmed",
@@ -546,7 +552,7 @@ class CtpOperations:
     def _view(self, request_id: str, events: list | None = None) -> dict[str, Any]:
         ev = events if events is not None else _events_for(self._store, request_id)
         req = next(e for e in ev if e.event_type == REQUESTED)
-        state = derive_run_state(self._store, self._verifier, request_id)
+        state = derive_run_state(self._store, self._verifier, request_id, registry=self._registry)
         view: dict[str, Any] = {
             "api_version": API_VERSION, "request_id": request_id, "test_id": req.payload["test_id"],
             "requester": req.payload["requester"], "requested_at": req.recorded_at,

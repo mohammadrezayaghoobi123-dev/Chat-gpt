@@ -220,7 +220,8 @@ class SeparateVerifier(Base):
     def test_verification_is_single_shot_and_idempotent_refusal(self):
         self.assertEqual(self.cli(), 0)
         self.assertEqual(self.cli(), 2)         # nothing left to verify
-        self.assertEqual([e.event_type for e in self.store.read_all()].count("ctp.test_verified"), 1)
+        self.assertEqual([e.event_type for e in self.store.read_all()].count("ctp.test_verified"),
+                         R.MIN_INDEPENDENT_RUNS - 1)
 
     def test_runner_never_holds_the_verifier_key(self):
         text = (Path(O.__file__)).read_text()

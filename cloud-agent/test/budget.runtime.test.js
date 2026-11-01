@@ -12,6 +12,7 @@ beforeEach(async () => {
   await runInDurableObject(budgetStub(), async (_instance, state) => {
     await state.storage.deleteAll();
     await state.storage.deleteAlarm();
+    await state.storage.delete("request-rate-state");
   });
 });
 
@@ -32,12 +33,63 @@ async function settle(requestId, actualNeurons, success = true) {
   }));
 }
 
+async function requestLimit(principalId, requestId = crypto.randomUUID()) {
+  const response = await budgetStub().fetch(new Request("https://budget.internal/request-limit", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ request_id: requestId, principal_id: principalId })
+  }));
+  return { response, body: await response.json() };
+}
+
 async function status() {
   const response = await budgetStub().fetch(new Request("https://budget.internal/status"));
   return { response, body: await response.json() };
 }
 
 describe("Cloudflare Workers runtime: global daily Neuron budget", () => {
+  it("enforces a strict 12-per-minute sliding window for each principal", async () => {
+    const outcomes = await Promise.all(
+      Array.from({ length: 13 }, () => requestLimit("tester-a"))
+    );
+    expect(outcomes.filter(item => item.response.status === 200)).toHaveLength(12);
+    expect(outcomes.filter(item => item.response.status === 429)).toHaveLength(1);
+  });
+
+  it("keeps principal windows independent while sharing the aggregate window", async () => {
+    const first = await Promise.all(Array.from({ length: 12 }, () => requestLimit("tester-a")));
+    const second = await Promise.all(Array.from({ length: 12 }, () => requestLimit("tester-b")));
+    expect(first.every(item => item.response.status === 200)).toBe(true);
+    expect(second.every(item => item.response.status === 200)).toBe(true);
+  });
+
+  it("enforces a strict 60-per-minute aggregate limit across principals", async () => {
+    const accepted = [];
+    for (let user = 0; user < 5; user += 1) {
+      for (let request = 0; request < 12; request += 1) {
+        accepted.push(await requestLimit("tester-" + user));
+      }
+    }
+    expect(accepted.every(item => item.response.status === 200)).toBe(true);
+    expect((await requestLimit("tester-six")).response.status).toBe(429);
+  });
+
+  it("accepts the valid principal identifier constructor without reading inherited properties", async () => {
+    const first = await requestLimit("constructor");
+    expect(first.response.status).toBe(200);
+    expect(first.body.allowed).toBe(true);
+
+    const second = await requestLimit("constructor");
+    expect(second.response.status).toBe(200);
+    expect(second.body.allowed).toBe(true);
+  });
+
+  it("rejects invalid principal identifiers before consuming request capacity", async () => {
+    const invalid = await requestLimit("../owner");
+    expect(invalid.response.status).toBe(400);
+    expect((await requestLimit("valid-user")).response.status).toBe(200);
+  });
+
   it("reserves budget before inference and reports the remaining daily allowance", async () => {
     const result = await reserve(600);
     expect(result.response.status).toBe(201);

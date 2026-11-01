@@ -346,8 +346,8 @@ button:disabled{opacity:.5;cursor:wait}
 <p>Independent cloud engineering assistant · read-only repository access · no laptop dependency</p>
 <section class="panel">
 <label for="token">Access token</label>
-<input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your personal access token">
-<p class="small">Your token remains in this page's memory only. It is not saved to browser storage.</p>
+<input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your Cloud Agent access token">
+<p class="small">Use the Cloud Agent token, not your GitHub PAT. The token remains in this page's memory only and is not saved to browser storage.</p>
 </section>
 <section class="panel">
 <label for="prompt">Engineering task</label>

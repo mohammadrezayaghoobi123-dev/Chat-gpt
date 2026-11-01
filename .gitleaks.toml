@@ -49,3 +49,30 @@ commits = ["2707fe59768b3a98d2598cdd3d43f9d5e57510c4"]
 paths = ['''^tests/test_audit_policy\.py$''']
 regexTarget = "line"
 regexes = ['''sk-live-1234567890abcdef''']
+
+[[allowlists]]
+description = "Synthetic MCP bearer fixtures in connector tests; exact commit and path only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["59e0ef03557fb9afac2cc879197e2067d074c235"]
+paths = ['''^cloud-engineering-connector/test/worker\.test\.js$''']
+regexTarget = "line"
+regexes = ['''MCP_AUTH_TOKEN''']
+
+[[allowlists]]
+description = "Synthetic credential fixture in connector credential-matrix test; exact commit and path only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["6c079c67e457956bd1446511fe21327da71313b1"]
+paths = ['''^cloud-engineering-connector/test/credential-matrix\.test\.js$''']
+regexTarget = "line"
+regexes = ['''const SECRET''']
+
+[[allowlists]]
+description = "Synthetic bearer fixture in connector worker test; exact commit and path only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["ffa7b132922370296651499b60bd95212c39f69b"]
+paths = ['''^cloud-engineering-connector/test/worker\.test\.js$''']
+regexTarget = "line"
+regexes = ['''const token''']

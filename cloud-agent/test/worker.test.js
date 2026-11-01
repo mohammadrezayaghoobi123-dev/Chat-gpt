@@ -42,11 +42,12 @@ function makeStorage(initial = {}) {
   };
 }
 
-async function makeAgent({ storage, ai = { run: async () => ({ choices: [{ message: { role: "assistant", content: "verified test response" } }] }) } = {}) {
+async function makeAgent({ storage, ai = { run: async () => ({ choices: [{ message: { role: "assistant", content: "verified test response" } }] }) } } = {}) {
   const token = "s".repeat(43);
   const digest = await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   const tokenHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
-  storage ||= makeStorage({ "session-token-hash": tokenHash });
+  storage ||= makeStorage();
+  if (!(await storage.get("session-token-hash"))) await storage.put("session-token-hash", tokenHash);
   const ctx = { storage };
   const env = { AI: ai };
   return { agent: new AgentSession(ctx, env), storage, env };

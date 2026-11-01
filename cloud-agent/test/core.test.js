@@ -4,6 +4,7 @@ import {
   boundedHistory,
   decodeGitHubBase64Text,
   createSerialExecutor,
+  consumeRateLimit,
   buildGitHubContentsApiUrl,
   extractAssistantText,
   isAuthorized,
@@ -228,4 +229,11 @@ test("validates model tool-call envelopes before execution", () => {
   assert.throws(() => validateToolCalls([{ ...valid, function: { ...valid.function, arguments: "x".repeat(4097) } }], 1), /oversized/);
   assert.throws(() => validateToolCalls([valid, valid], 2), /Duplicate/);
   assert.throws(() => validateToolCalls([valid], 0), /excessive/);
+});
+
+test("global rate-limit binding allows, denies, and fails closed on invalid bindings", async () => {
+  assert.equal(await consumeRateLimit({ limit: async input => ({ success: input.key === "agent" }) }, "agent"), true);
+  assert.equal(await consumeRateLimit({ limit: async () => ({ success: false }) }, "agent"), false);
+  await assert.rejects(consumeRateLimit(null, "agent"), /invalid/);
+  await assert.rejects(consumeRateLimit({ limit: async () => ({}) }, "agent"), /invalid decision/);
 });

@@ -44,11 +44,11 @@
 - Existing `enforceRateLimit(request, env, keyPrefix)` remains the shared fail-closed limiter.
 - Authenticated requests use a distinct `authenticated-mcp:` namespace, separate from `auth-failure:` and `public-mcp:`.
 
-- [ ] Add tests proving authenticated requests consume the authenticated namespace.
-- [ ] Add tests proving a denied authenticated request returns 429 with Retry-After and does not execute MCP methods.
-- [ ] Add tests proving limiter outage or malformed client identity fails closed with 503.
-- [ ] Run the focused test and verify expected failure before production changes.
-- [ ] Apply minimal change and run the full connector test suite.
+- [x] Add tests proving authenticated requests consume the authenticated namespace.
+- [x] Add tests proving a denied authenticated request returns 429 with Retry-After and does not execute MCP methods.
+- [x] Add tests proving limiter outage or malformed client identity fails closed with 503.
+- [x] Run the focused test and verify expected failure before production changes.
+- [x] Apply minimal change and run the full connector test suite (141/141).
 
 ### Task 2: Authorization and Server-Side Input Boundary
 
@@ -68,11 +68,11 @@
 - Review/modify: `cloud-agent/src/worker.js`, `cloud-agent/src/core.js`, `cloud-agent/src/budget.js`
 - Review/modify: `cloud-agent/test/*.test.js`, `cloud-agent/wrangler*.toml`
 
-- [ ] Verify per-session capability isolation and constant-time verifier comparison.
+- [x] Verify per-session capability isolation and constant-time verifier comparison.
 - [ ] Verify session expiry, ownership boundaries, and that no capability or token is logged or returned from history.
-- [ ] Verify daily budget reservations fail closed and cannot be bypassed through concurrent sessions.
-- [ ] Add regression tests for every confirmed gap before code changes.
-- [ ] Run Node and Workers Vitest/workerd suites.
+- [x] Verify daily budget reservations fail closed and cannot be bypassed through concurrent sessions.
+- [x] Add regression tests for confirmed auth-failure rate-limit gap before code changes.
+- [x] Run Node and Workers Vitest/workerd suites (47/47 Node; 15/15 runtime).
 
 ### Task 4: Browser, Transport, and Operational Security
 
@@ -80,17 +80,17 @@
 - Review: browser console/static assets and deployment configuration.
 - Review: `.github/workflows/*.yml`, package manifests, lockfiles, ignore rules and Git history.
 
-- [ ] Audit CORS, CSP/security headers, HTML escaping, DOM sinks, CSRF exposure, cookies, debug routes, and upload handlers.
-- [ ] Audit direct database/SQL usage and document whether injection is applicable.
+- [x] Audit CORS, CSP/security headers, HTML escaping, DOM sinks, CSRF exposure, cookies, debug routes, and upload handlers; HTTPS-only CORS and restrictive headers are now enforced.
+- [x] Audit direct database/SQL usage; the inspected services use Durable Object storage and GitHub APIs, with no direct SQL query surface.
 - [ ] Scan current tree and all reachable history for credential patterns with a dedicated secret scanner; never expose values.
-- [ ] Run dependency advisory scans using the repository's lockfile and package manager.
-- [ ] Review GitHub Actions permissions, third-party action pinning, and workflow trigger trust boundaries.
-- [ ] Record non-applicable features and evidence.
+- [x] Run npm audit at high severity in both CI workflows; no high-severity advisories reported. Committed lockfiles remain outstanding.
+- [x] Review GitHub Actions permissions and trigger scope; pin connector actions to verified full SHAs (Cloud Agent actions were already pinned).
+- [x] Record non-applicable features: password hashing, cookie sessions, multipart uploads, and direct SQL are not present in the inspected services.
 
 ### Task 5: Independent Verification and Report
 
-- [ ] Re-run all relevant tests from a fresh workflow run.
-- [ ] Review the complete diff against the base and inspect every changed line.
-- [ ] Confirm `main` and deployed Workers remain unchanged.
-- [ ] Record hosted Cloudflare canary gaps separately; do not claim them tested.
-- [ ] Keep the PR Draft until all code-level gates pass and live configuration changes are separately approved.
+- [x] Re-run all relevant tests from fresh GitHub Actions runs.
+- [x] Review the complete changed-file list and PR patches against the base.
+- [x] Confirm `main` and deployed Workers remain unchanged.
+- [x] Record hosted Cloudflare canary gaps separately; no production canary was run.
+- [x] Keep the PR Draft; live secret migration, rotation, and deployment remain separately gated.

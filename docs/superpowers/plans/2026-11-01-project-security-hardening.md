@@ -126,3 +126,19 @@
 - Latest scan run `41321747587` on report head `54b5facd` (code/workflow head `889640ec`): 1,497 commits and approximately 5.28 MB scanned; zero findings.
 - Historical suppressions were narrowed from broad field-name/pattern allowlists to exact synthetic fixture values, exact historical commits, and exact file paths. The AWS-shaped test value was verified as a sequential alphabetic placeholder before its exact-value allowlist was retained.
 - The repository has one full-history secret-scan workflow in the final tree; the duplicate workflow was removed/consolidated by a subsequent repository-owner commit and that commit was preserved.
+
+
+### Execution Record — CI Runtime and Action Supply-Chain Refresh — 2026-11-01
+
+- Refreshed all repository workflow references to signed, full-commit-SHA pins:
+  - `actions/checkout` v7.0.1: `3d3c42e5aac5ba805825da76410c181273ba90b1`; GitHub commit signature verified.
+  - `actions/setup-node` v7.1.0: `949feb2413d6458794dcd2491c4babbbce0c15c1`; GitHub commit signature verified.
+  - Explicitly disabled setup-node package-manager caching with `package-manager-cache: false`; Node project runtime remains pinned to major 22.
+  - Migrated `gitleaks/gitleaks-action` from deprecated v2.3.9 / Node 20 to v3.0.0 / Node 24: `e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e`; GitHub commit signature verified. Inputs and behavior are unchanged per upstream release notes.
+- Latest head: `ba939f362495cde3918fe5f583d69a3e024f8ebf`.
+- Latest CI evidence on this exact head:
+  - Connector run `41322316542`: 152/152 tests; npm audit 0 vulnerabilities; both Wrangler dry-runs passed.
+  - Cloud Agent run `41322316450`: 52/52 Node tests; 15/15 Workers runtime tests; npm audit 0 vulnerabilities; Wrangler dry-run passed.
+  - Full-history Gitleaks run `41322316428`: 1,502 commits / approximately 5.28 MB; zero findings.
+- Gitleaks v3 itself completed successfully. Its logs still include upstream Node dependency deprecation warnings (`punycode`, `url.parse`); these are non-failing and should be tracked for upstream remediation.
+- No changes to `main`, Production resources, secrets, routes, bindings, billing, or deployments. PR #101 remains Draft.

@@ -12,7 +12,11 @@ const testableWorkerSource = workerSource
     'import { DurableObject } from "cloudflare:workers";',
     "class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }"
   )
-  .replace('from "./core.js"', 'from "' + coreUrl + '"');
+  .replace('from "./core.js"', 'from "' + coreUrl + '" )
+  .replace(
+    'import { AgentBudget, DAILY_NEURON_BUDGET } from "./budget.js";',
+    "const DAILY_NEURON_BUDGET = 1000; class AgentBudget {}"
+  );
 const workerUrl = "data:text/javascript;base64," + Buffer.from(testableWorkerSource).toString("base64");
 const { default: worker, AgentSession } = await import(workerUrl);
 
@@ -43,14 +47,28 @@ function makeStorage(initial = {}) {
   };
 }
 
-async function makeAgent({ storage, ai = { run: async () => ({ choices: [{ message: { role: "assistant", content: "verified test response" } }] }) } } = {}) {
+function makeBudgetBinding({ reserveStatus = 201, settleStatus = 200 } = {}) {
+  return {
+    idFromName: name => name,
+    get: () => ({
+      fetch: async request => {
+        const path = new URL(request.url).pathname;
+        if (path === "/reserve") return Response.json({ reserved_neurons: 10 }, { status: reserveStatus });
+        if (path === "/settle") return Response.json({ settled: true }, { status: settleStatus });
+        return new Response("not found", { status: 404 });
+      }
+    })
+  };
+}
+
+async function makeAgent({ storage, ai = { run: async () => ({ choices: [{ message: { role: "assistant", content: "verified test response" } }] }) }, budget } = {}) {
   const token = "s".repeat(43);
   const digest = await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   const tokenHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
   storage ||= makeStorage({ "last-activity-at": Date.now() });
   if (!(await storage.get("session-token-hash"))) await storage.put("session-token-hash", tokenHash);
   const ctx = { storage };
-  const env = { AI: ai };
+  const env = { AI: ai, AGENT_BUDGET: budget || makeBudgetBinding() };
   return { agent: new AgentSession(ctx, env), storage, env };
 }
 

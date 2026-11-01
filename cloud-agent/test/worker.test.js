@@ -202,7 +202,7 @@ test("malformed and oversized chat requests are rejected before model invocation
   assert.equal(malformed.status, 400);
   const oversized = await agent.fetch(new Request("https://agent-session.internal/chat", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-session-token": "s".repeat(43) },
+    headers: { "content-type": "application/json", "x-session-token": "s".repeat(43), "x-principal-id": "owner" },
     body: "x".repeat(12_001)
   }));
   assert.equal(oversized.status, 413);

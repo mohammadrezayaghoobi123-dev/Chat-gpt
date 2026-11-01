@@ -130,6 +130,22 @@ test("console CSP uses the same nonce for style and script and forbids unsafe-in
   assert.doesNotThrow(() => new Script(inlineScript));
   assert.match(inlineScript, /x-session-token/);
   assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(response.headers.get("permissions-policy"), "camera=(), microphone=(), geolocation=()");
+  assert.equal(response.headers.get("cross-origin-resource-policy"), "same-origin");
+});
+
+test("Cloud Agent JSON API responses carry restrictive browser security headers", async () => {
+  const response = await worker.fetch(new Request("https://agent.example/api/sessions", { method: "POST" }), publicEnv());
+  assert.equal(response.status, 401);
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(response.headers.get("content-security-policy"), "default-src 'none'; frame-ancestors 'none'");
+  assert.equal(response.headers.get("permissions-policy"), "camera=(), microphone=(), geolocation=()");
+  assert.equal(response.headers.get("cross-origin-resource-policy"), "same-origin");
 });
 
 test("API rejects missing bearer auth after consuming the isolated auth-failure quota", async () => {

@@ -29,6 +29,12 @@ REGISTRY_SCHEMA_VERSION = 1
 MAX_REGISTERED_TIMEOUT_S = 60.0
 MAX_REGISTERED_MEMORY = 1 << 30
 MAX_REGISTERED_TESTS = 64
+# Stage 6 (L-S6-1): one agreeing re-run cannot separate a deterministic test from a random one that happened to
+# agree (p=0.5 coin: reproduced in 47/100 pairs; p=0.02 flake: missed in 99/100). A test that makes a scientific
+# claim therefore needs >= 5 independent signed reproductions (all must agree; any valid disagreement vetoes).
+CLAIM_CLASSES = ("platform-selftest", "scientific")
+MIN_SCIENTIFIC_VERIFICATIONS = 5
+MAX_REQUIRED_VERIFICATIONS = 30
 _TEST_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 
@@ -42,6 +48,9 @@ class RegisteredTest:
     title: str
     description: str
     spec: TestSpec
+    # Secure by default: a new test is a scientific claim and needs MIN_SCIENTIFIC_VERIFICATIONS reproductions.
+    claim_class: str = "scientific"
+    required_verifications: int = MIN_SCIENTIFIC_VERIFICATIONS
 
     def spec_digest(self) -> str:
         return self.spec.digest()
@@ -67,6 +76,14 @@ class CtpRegistry:
                     raise RegistryError(f"{label} must be 1..1000 characters")
             if not isinstance(t.spec, TestSpec):
                 raise RegistryError("spec must be a TestSpec")
+            if t.claim_class not in CLAIM_CLASSES:
+                raise RegistryError(f"claim_class must be one of {CLAIM_CLASSES}")
+            rv = t.required_verifications
+            if not (isinstance(rv, int) and not isinstance(rv, bool) and 1 <= rv <= MAX_REQUIRED_VERIFICATIONS):
+                raise RegistryError(f"required_verifications must be an integer in 1..{MAX_REQUIRED_VERIFICATIONS}")
+            if t.claim_class == "scientific" and rv < MIN_SCIENTIFIC_VERIFICATIONS:
+                raise RegistryError(
+                    f"a scientific test needs required_verifications >= {MIN_SCIENTIFIC_VERIFICATIONS}")
             if t.spec.isolation != "sandbox":
                 raise RegistryError("registered tests must run in the sandbox (isolation='sandbox')")
             if not 0 < t.spec.timeout_s <= MAX_REGISTERED_TIMEOUT_S:
@@ -89,7 +106,9 @@ class CtpRegistry:
 
     def digest(self) -> str:
         """Identity of the whole registry (ids + spec digests), recorded with every request."""
-        body = json.dumps([[t.test_id, t.spec_digest()] for t in self.all()], separators=(",", ":"))
+        body = json.dumps([[t.test_id, t.spec_digest()] + ([t.claim_class, t.required_verifications]
+                                                            if t.claim_class != "platform-selftest" or t.required_verifications != 1
+                                                            else []) for t in self.all()], separators=(",", ":"))
         return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
@@ -139,15 +158,17 @@ def builtin_registry() -> CtpRegistry:
             "From inside the sandbox: no external network, read-only root, private pid space. "
             "A platform self-test, not a scientific claim.",
             spec("t.py", _ISOLATION_SELFCHECK,
-                 "exit 0 iff the test code observes network denial, a read-only root and a private pid space")),
+                 "exit 0 iff the test code observes network denial, a read-only root and a private pid space"),
+            claim_class="platform-selftest", required_verifications=1),
         RegisteredTest(
             "sha256-known-answer", "SHA-256 known-answer test",
             "Hashes a fixed input and compares it with the published FIPS 180 test vector. "
             "Deterministic; exercises the execute/verify/reproduce path.",
             spec("t.py", _SHA256_KAT, "exit 0 iff SHA-256('abc') equals the published test vector",
-                 inputs=(("message.bin", b"abc"),))),
+                 inputs=(("message.bin", b"abc"),)),
+            claim_class="platform-selftest", required_verifications=1),
     ))
 
 
-__all__ = ["CtpRegistry", "RegisteredTest", "RegistryError", "builtin_registry",
+__all__ = ["CLAIM_CLASSES", "MIN_SCIENTIFIC_VERIFICATIONS", "CtpRegistry", "RegisteredTest", "RegistryError", "builtin_registry",
            "REGISTRY_SCHEMA_VERSION"]

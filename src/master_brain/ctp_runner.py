@@ -1046,8 +1046,17 @@ class TestState:
     problems: tuple[str, ...] = ()
 
 
-def ctp_test_state(store: AuditStore, trust_store: Any, case_id: str, test_id: str) -> TestState:
-    """Recompute the state from the chain alone; nothing here trusts a recorded verdict."""
+def ctp_test_state(store: AuditStore, trust_store: Any, case_id: str, test_id: str, *,
+                   min_verifications: int = 1) -> TestState:
+    """Recompute the state from the chain alone; nothing here trusts a recorded verdict.
+
+    ``min_verifications`` (Stage 6, L-S6-1): a single agreeing re-run cannot tell a deterministic test from a
+    random one that happened to agree (a p=0.5 coin was "reproduced" in 47/100 pairs). ``verified_reproduced``
+    therefore needs at least this many *valid, signed, distinct* reproducing re-runs of the same original;
+    fewer leaves the test ``executed_unverified``. Any valid ``not_reproduced`` still vetoes everything.
+    """
+    if not (isinstance(min_verifications, int) and not isinstance(min_verifications, bool) and min_verifications >= 1):
+        raise RunnerError("min_verifications must be an integer >= 1")
     events = store.read_all()  # raises on a tampered chain: evaluation stops
     subject = _subject(case_id, test_id)
     execs = {e.payload["execution_id"]: e for e in events if e.event_type == EXECUTED and e.subject_ref == subject}
@@ -1055,6 +1064,7 @@ def ctp_test_state(store: AuditStore, trust_store: Any, case_id: str, test_id: s
         return TestState("not_run")
     problems: list[str] = []
     verdicts: list[tuple[str, str, str]] = []  # (verdict, event_id, original id)
+    valid_payloads: list[tuple[str, Mapping]] = []
     for ev in (e for e in events if e.event_type == VERIFIED and e.subject_ref == subject):
         p = ev.payload
         orig, rerun = execs.get(p.get("original_execution_id")), execs.get(p.get("rerun_execution_id"))
@@ -1082,6 +1092,7 @@ def ctp_test_state(store: AuditStore, trust_store: Any, case_id: str, test_id: s
             problems.append(f"{ev.event_id}: {why}")
         else:
             verdicts.append((p["verdict"], ev.event_id, p["original_execution_id"]))
+            valid_payloads.append((p["verdict"], p))
     ids = tuple(execs)
     if verdicts:
         # A valid signed "not reproduced" vetoes everything else; an inconclusive re-run is not a contradiction.
@@ -1090,6 +1101,12 @@ def ctp_test_state(store: AuditStore, trust_store: Any, case_id: str, test_id: s
             if hit:
                 orig_out = execs[hit[2]].payload["outcome"]
                 if wanted == "reproduced":
+                    reruns = {p2["rerun_execution_id"] for v2, p2 in valid_payloads
+                              if v2 == "reproduced" and p2["original_execution_id"] == hit[2]}
+                    if len(reruns) < min_verifications:
+                        problems.append(f"{len(reruns)} of {min_verifications} required independent "
+                                        "reproductions recorded")
+                        return TestState("executed_unverified", None, ids, None, tuple(problems))
                     return TestState("verified_reproduced", orig_out, ids, hit[1], tuple(problems))
                 return TestState(wanted, None, ids, hit[1], tuple(problems))
     if problems:
@@ -1097,9 +1114,10 @@ def ctp_test_state(store: AuditStore, trust_store: Any, case_id: str, test_id: s
     return TestState("executed_unverified", None, ids)
 
 
-def apply_to_case(case: CTPCase, store: AuditStore, trust_store: Any, test_id: str) -> CTPCase:
+def apply_to_case(case: CTPCase, store: AuditStore, trust_store: Any, test_id: str, *,
+                  min_verifications: int = 1) -> CTPCase:
     """Update a CTP case from the chain. PASS/FAIL only after verified reproduction."""
-    st = ctp_test_state(store, trust_store, case.case_id, test_id)
+    st = ctp_test_state(store, trust_store, case.case_id, test_id, min_verifications=min_verifications)
     if st.state == "not_run":
         return case
     latest_id = st.execution_ids[-1]

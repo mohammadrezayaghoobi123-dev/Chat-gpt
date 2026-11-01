@@ -38,7 +38,8 @@ from master_brain.api_contracts import (
 from master_brain.approval_signing import ApprovalVerifier, build_signing_message, verify_approval_event
 from master_brain.approvers import ApproverPolicy
 from master_brain.audit_store import NOW, AuditStore, AuditStoreError
-from master_brain.ctp_registry import REGISTRY_SCHEMA_VERSION, CtpRegistry, RegisteredTest
+from master_brain.ctp_registry import (
+    MIN_SCIENTIFIC_VERIFICATIONS, REGISTRY_SCHEMA_VERSION, CtpRegistry, RegisteredTest)
 from master_brain.ctp_runner import (
     EXECUTED, RunnerError, SandboxUnavailable, TestState, ctp_test_state, execute_and_record,
     sandbox_status,
@@ -219,7 +220,7 @@ class RunState:
 
 
 def derive_run_state(store: AuditStore, verifier: ApprovalVerifier | None, request_id: str, *,
-                     now: datetime | None = None) -> RunState:
+                     now: datetime | None = None, min_verifications: int = 1) -> RunState:
     ev = _events_for(store, request_id)
     req = next((e for e in ev if e.event_type == REQUESTED), None)
     if req is None:
@@ -243,7 +244,7 @@ def derive_run_state(store: AuditStore, verifier: ApprovalVerifier | None, reque
         if exp is None or exp <= now:
             return RunState("approval_expired", "not_run", "the approval expired before execution", (), None)
         return RunState("approved", "not_run", "approved; not yet executed", (), None)
-    st = ctp_test_state(store, verifier, request_id, test_id)
+    st = ctp_test_state(store, verifier, request_id, test_id, min_verifications=min_verifications)
     if chain or st.state == "inconsistent":
         return RunState("inconsistent", "inconclusive", "evidence or approval chain failed validation",
                         tuple(chain) + tuple(st.problems), st)
@@ -302,6 +303,7 @@ class CtpOperations:
             s = t.spec
             out.append({"test_id": t.test_id, "title": t.title, "description": t.description,
                         "spec_digest": t.spec_digest(), "criterion": s.criterion, "isolation": s.isolation,
+                        "claim_class": t.claim_class, "required_verifications": t.required_verifications,
                         "limits": {"timeout_s": s.timeout_s, "memory_bytes": s.memory_bytes,
                                    "max_output_bytes": s.max_output_bytes}})
         return out
@@ -546,7 +548,9 @@ class CtpOperations:
     def _view(self, request_id: str, events: list | None = None) -> dict[str, Any]:
         ev = events if events is not None else _events_for(self._store, request_id)
         req = next(e for e in ev if e.event_type == REQUESTED)
-        state = derive_run_state(self._store, self._verifier, request_id)
+        reg = self._registry.get(req.payload["test_id"])
+        state = derive_run_state(self._store, self._verifier, request_id,
+                                 min_verifications=reg.required_verifications if reg else MIN_SCIENTIFIC_VERIFICATIONS)
         view: dict[str, Any] = {
             "api_version": API_VERSION, "request_id": request_id, "test_id": req.payload["test_id"],
             "requester": req.payload["requester"], "requested_at": req.recorded_at,

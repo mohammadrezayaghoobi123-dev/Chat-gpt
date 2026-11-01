@@ -437,7 +437,8 @@ class OutcomeSemantics(Base):
     def test_failing_registered_test_is_a_verified_fail_not_an_error(self):
         t = self.registry.get(TEST_ID)
         failing = RegisteredTest("always-fails", "t", "d", replace(
-            t.spec, code=(("t.py", b"import sys; sys.exit(17)"),), inputs=()))
+            t.spec, code=(("t.py", b"import sys; sys.exit(17)"),), inputs=()),
+            claim_class="platform-selftest", required_verifications=1)
         self.registry = CtpRegistry((failing,))
         self.ops = self.make_ops()
         rid = self.approved(test_id="always-fails")
@@ -827,7 +828,8 @@ class ServiceEdges(Base):
         tests = self.ops.list_tests(ALICE)
         self.assertEqual(len(tests), 2)
         for t in tests:
-            self.assertEqual(set(t), {"test_id", "title", "description", "spec_digest", "criterion", "isolation", "limits"})
+            self.assertEqual(set(t), {"test_id", "title", "description", "spec_digest", "criterion", "isolation", "limits",
+                                  "claim_class", "required_verifications"})
             self.assertEqual(t["spec_digest"], self.registry.get(t["test_id"]).spec_digest())
 
 

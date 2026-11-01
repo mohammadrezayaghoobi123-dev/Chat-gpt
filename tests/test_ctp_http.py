@@ -115,7 +115,8 @@ class OverHttp(Base):
         self.assertEqual(st, 200)
         self.assertEqual({t["test_id"] for t in tests["tests"]}, {"sandbox-isolation-selfcheck", TEST_ID})
         for t in tests["tests"]:     # the listing exposes digests and limits, never the code, argv or inputs
-            self.assertEqual(set(t), {"test_id", "title", "description", "spec_digest", "criterion", "isolation", "limits"})
+            self.assertEqual(set(t), {"test_id", "title", "description", "spec_digest", "criterion", "isolation", "limits",
+                                  "claim_class", "required_verifications"})
         rid, done = self.full_flow_until_executed()
         self.assertEqual((done["status"], done["final_ctp_status"]), ("executed_unverified", "inconclusive"))
         self.assertEqual(self.verify_cli(rid), 0)

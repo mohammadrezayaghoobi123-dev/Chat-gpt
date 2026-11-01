@@ -46,21 +46,24 @@ def verify_request(data_dir: Path, approval_keys: Path, signer, request_id: str)
     problems = audit_run_chain(store, trust, request_id)
     if problems:
         raise VerifyRefused("the run's approval/claim/execution chain is not valid: " + "; ".join(problems))
-    state = derive_run_state(store, trust, request_id)
-    if state.status != "executed_unverified" or state.test_state is None:
-        raise VerifyRefused(f"nothing to verify: run status is {state.status}")
-    ids = state.test_state.execution_ids
-    if len(ids) != 1:
-        raise VerifyRefused("exactly one unverified execution is expected")
-    req = next(e for e in store.read_all() if e.event_type == "ctp.run_requested"
-               and e.subject_ref == f"ctp-run:{request_id}")
+    req = next((e for e in store.read_all() if e.event_type == "ctp.run_requested"
+                and e.subject_ref == f"ctp-run:{request_id}"), None)
+    if req is None:
+        raise VerifyRefused("no such request")
     test = builtin_registry().get(req.payload["test_id"])
     if test is None:
         raise VerifyRefused("the test is no longer registered")
+    need = test.required_verifications
+    state = derive_run_state(store, trust, request_id, min_verifications=need)
+    if state.status != "executed_unverified" or state.test_state is None:
+        raise VerifyRefused(f"nothing to verify: run status is {state.status}")
+    ids = state.test_state.execution_ids
+    # ids[0] is the original; further ids are earlier independent re-runs of it (a scientific test needs
+    # several, Stage 6 L-S6-1). The original is always the first recorded execution.
     result = verify_by_rerun(
         store, test.spec, case_id=request_id, test_id=test.test_id, original_execution_id=ids[0],
         verifier_id=verifier_id, signer=signer, evidence_dir=Path(data_dir) / "ctp-evidence")
-    after = derive_run_state(store, trust, request_id)
+    after = derive_run_state(store, trust, request_id, min_verifications=need)
     return {"request_id": request_id, "verdict": result.get("verdict"), "status": after.status,
             "final_ctp_status": after.final_ctp_status, "reason": after.reason}
 

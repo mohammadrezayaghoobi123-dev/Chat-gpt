@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker.js";
 const env={MCP_AUTH_TOKEN:"test-secret-for-mcp-auth-token-32",MCP_RATE_LIMITER:{limit:async()=>({success:true})}};
-const req=(path,options={})=>new Request("https://example.test"+path,options);
+const req=(path,options={})=>{const headers=new Headers(options.headers||{});if(!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers});};
 const rpc=(method,params={},id=1)=>req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret-for-mcp-auth-token-32","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})});
 test("health reports cloud execution without exposing credential configuration",async()=>{const r=await worker.fetch(req("/healthz"),{GITHUB_TOKEN:"do-not-disclose",MCP_AUTH_TOKEN:"also-secret-for-mcp-auth-token-32"});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers");assert.equal("github_configured" in b,false);assert.equal("auth_configured" in b,false)});
 test("MCP fails closed when the configured bearer secret is shorter than 32 characters",async()=>{

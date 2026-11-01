@@ -38,7 +38,9 @@ jobs:
           node-version: "22"
       - name: Install dependencies
         run: npm install --ignore-scripts --no-fund
-      - name: Audit installed dependencies\n        run: npm audit --audit-level=high\n      - name: Run tests
+      - name: Audit installed dependencies
+        run: npm audit --audit-level=high
+      - name: Run tests
         run: npm test
       - name: Check JavaScript syntax
         run: npm run check

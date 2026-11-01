@@ -758,3 +758,86 @@ test("create_change_pr rejects top-level and nested unknown properties before an
     globalThis.fetch = originalFetch;
   }
 });
+
+
+test("create_change_pr authorization matrix denies unauthenticated and incomplete credential states", async () => {
+  const originalFetch = globalThis.fetch;
+  let githubCalls = 0;
+  globalThis.fetch = async () => { githubCalls += 1; throw new Error("GitHub must not be called for denied writes"); };
+  try {
+    const token = "0123456789abcdef0123456789abcdef";
+    const argumentsValue = {
+      owner: "mohammadrezayaghoobi123-dev",
+      repo: "Chat-gpt",
+      base_branch: "feature/cloud-engineering-connector",
+      title: "Authorization matrix",
+      summary: "Write access must require authenticated MCP and GitHub credentials.",
+      files: [{ path: "docs/proposal.md", content: "proposal" }]
+    };
+    const request = authorization => req("/mcp", {
+      method: "POST",
+      headers: {
+        ...(authorization ? { authorization } : {}),
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream"
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 77,
+        method: "tools/call",
+        params: { name: "create_change_pr", arguments: argumentsValue }
+      })
+    });
+    const cases = [
+      {
+        name: "MCP auth disabled even when GitHub token exists",
+        request: request(null),
+        env: { GITHUB_TOKEN: "unused" },
+        status: 503,
+        topLevelError: "server_misconfigured"
+      },
+      {
+        name: "public read-only caller without bearer",
+        request: request(null),
+        env: { PUBLIC_READ_ONLY: "true", GITHUB_TOKEN: "unused", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } },
+        status: 200,
+        resultError: /not in the unauthenticated PUBLIC_READ_ONLY allowlist/
+      },
+      {
+        name: "public read-only caller with invalid bearer",
+        request: request("Bearer invalid"),
+        env: { PUBLIC_READ_ONLY: "true", MCP_AUTH_TOKEN: token, GITHUB_TOKEN: "unused", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } },
+        status: 401,
+        topLevelError: "unauthorized"
+      },
+      {
+        name: "short configured MCP token",
+        request: request("Bearer short-token"),
+        env: { PUBLIC_READ_ONLY: "true", MCP_AUTH_TOKEN: "short-token", GITHUB_TOKEN: "unused" },
+        status: 503,
+        topLevelError: "server_misconfigured"
+      },
+      {
+        name: "valid MCP bearer without GitHub credential",
+        request: request("Bearer " + token),
+        env: { PUBLIC_READ_ONLY: "true", MCP_AUTH_TOKEN: token, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } },
+        status: 200,
+        resultError: /requires configured MCP_AUTH_TOKEN and GITHUB_TOKEN/
+      }
+    ];
+    for (const item of cases) {
+      const response = await worker.fetch(item.request, item.env);
+      assert.equal(response.status, item.status, item.name);
+      const body = await response.json();
+      if (item.topLevelError) {
+        assert.equal(body.error, item.topLevelError, item.name);
+      } else {
+        assert.equal(body.result.isError, true, item.name);
+        assert.match(body.result.content[0].text, item.resultError, item.name);
+      }
+    }
+    assert.equal(githubCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

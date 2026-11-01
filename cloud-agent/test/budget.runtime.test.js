@@ -74,6 +74,19 @@ describe("Cloudflare Workers runtime: global daily Neuron budget", () => {
     expect((await requestLimit("tester-six")).response.status).toBe(429);
   });
 
+  it.each(["constructor", "toString"])(
+    "accepts the valid principal identifier %s without reading inherited properties",
+    async principalId => {
+      const first = await requestLimit(principalId);
+      expect(first.response.status).toBe(200);
+      expect(first.body.allowed).toBe(true);
+
+      const second = await requestLimit(principalId);
+      expect(second.response.status).toBe(200);
+      expect(second.body.allowed).toBe(true);
+    }
+  );
+
   it("rejects invalid principal identifiers before consuming request capacity", async () => {
     const invalid = await requestLimit("../owner");
     expect(invalid.response.status).toBe(400);

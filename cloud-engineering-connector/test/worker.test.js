@@ -88,6 +88,22 @@ test("GitHub API response limits enforce streamed bytes with absent or lying Con
 
 test("MCP CORS preflight allows only configured origins and required headers",async()=>{const allowedEnv={...env,MCP_ALLOWED_ORIGINS:"https://client.example"};const good=req("/mcp",{method:"OPTIONS",headers:{origin:"https://client.example","access-control-request-method":"POST","access-control-request-headers":"authorization, content-type, accept, MCP-Protocol-Version, Mcp-Method, Mcp-Name"}});const ok=await worker.fetch(good,allowedEnv);assert.equal(ok.status,204);assert.equal(ok.headers.get("access-control-allow-origin"),"https://client.example");assert.match(ok.headers.get("access-control-allow-headers"),/Mcp-Name/i);const badOrigin=await worker.fetch(req("/mcp",{method:"OPTIONS",headers:{origin:"https://evil.example","access-control-request-method":"POST"}}),allowedEnv);assert.equal(badOrigin.status,403);const badHeader=await worker.fetch(req("/mcp",{method:"OPTIONS",headers:{origin:"https://client.example","access-control-request-method":"POST","access-control-request-headers":"x-evil-header"}}),allowedEnv);assert.equal(badHeader.status,400)});
 
+test("MCP rejects insecure HTTP origins even when they appear in the allowlist",async()=>{
+ const allowedEnv={...env,MCP_ALLOWED_ORIGINS:"http://client.example"};
+ const preflight=await worker.fetch(req("/mcp",{method:"OPTIONS",headers:{
+  origin:"http://client.example",
+  "access-control-request-method":"POST",
+  "access-control-request-headers":"authorization,content-type"
+ }}),allowedEnv);
+ assert.equal(preflight.status,403);
+ const post=await worker.fetch(req("/mcp",{method:"POST",headers:{
+  origin:"http://client.example",
+  authorization:"Bearer test-secret",
+  "content-type":"application/json",
+  accept:"application/json, text/event-stream"
+ },body:JSON.stringify({jsonrpc:"2.0",id:92,method:"ping"})}),allowedEnv);
+ assert.equal(post.status,403);
+});
 test("MCP adds exact-origin CORS headers to allowed browser POST responses",async()=>{const allowedEnv={...env,MCP_ALLOWED_ORIGINS:"https://client.example"};const request=req("/mcp",{method:"POST",headers:{origin:"https://client.example",authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:91,method:"ping"})});const r=await worker.fetch(request,allowedEnv);assert.equal(r.status,200);assert.equal(r.headers.get("access-control-allow-origin"),"https://client.example");assert.match(r.headers.get("vary"),/Origin/i)});
 
 test("MCP rejects oversized request bodies before JSON parsing",async()=>{const body=JSON.stringify({jsonrpc:"2.0",id:1,method:"ping",padding:"x".repeat(1_000_001)});const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body}),env);assert.equal(r.status,413);assert.deepEqual(await r.json(),{error:"payload_too_large"})});

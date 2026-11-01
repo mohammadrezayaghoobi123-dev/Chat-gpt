@@ -238,6 +238,19 @@ test("model usage is settled against the reserved Neuron estimate", async () => 
   assert.equal(settlement.actual_neurons, 10);
 });
 
+test("model failure settles the full reservation conservatively", async () => {
+  let settlement;
+  const budget = makeBudgetBinding({ onSettle: body => { settlement = body; } });
+  const { agent } = await makeAgent({
+    budget,
+    ai: { run: async () => { throw new Error("simulated inference failure"); } }
+  });
+  const response = await agent.fetch(chatRequest("force model failure"));
+  assert.equal(response.status, 503);
+  assert.equal(settlement.success, false);
+  assert.equal(Object.hasOwn(settlement, "actual_neurons"), false);
+});
+
 test("missing model usage metadata consumes the full reservation", async () => {
   let reservation;
   let settlement;

@@ -106,9 +106,9 @@ test("encodes slash-containing branch refs in the GitHub Contents API query, not
 test("decodes bounded UTF-8 GitHub base64 content and rejects malformed or oversized data", () => {
   const bytes = new TextEncoder().encode("café");
   const encoded = btoa(String.fromCharCode(...bytes));
-  assert.equal(decodeGitHubBase64Text(encoded, 4), "café");
-  assert.equal(decodeGitHubBase64Text(encoded.slice(0, 4) + "\n" + encoded.slice(4), 4), "café");
-  assert.throws(() => decodeGitHubBase64Text(encoded, 3), /File exceeds/);
+  assert.equal(decodeGitHubBase64Text(encoded, 5), "café");
+  assert.equal(decodeGitHubBase64Text(encoded.slice(0, 4) + "\n" + encoded.slice(4), 5), "café");
+  assert.throws(() => decodeGitHubBase64Text(encoded, 4), /File exceeds/);
   assert.throws(() => decodeGitHubBase64Text("not base64!", 100), /invalid base64/i);
 });
 

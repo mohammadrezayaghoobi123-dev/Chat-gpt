@@ -132,17 +132,43 @@ test("console CSP uses the same nonce for style and script and forbids unsafe-in
   assert.equal(response.headers.get("cache-control"), "no-store");
 });
 
-test("API rejects missing bearer auth before rate limiting or Durable Object access", async () => {
-  let limiterCalls = 0;
+test("API rejects missing bearer auth after consuming the isolated auth-failure quota", async () => {
+  const limiterKeys = [];
   let doCalls = 0;
   const env = publicEnv({
-    AGENT_RATE_LIMITER: { limit: async () => { limiterCalls += 1; return { success: true }; } },
+    AGENT_RATE_LIMITER: { limit: async ({ key }) => { limiterKeys.push(key); return { success: true }; } },
     AGENT_SESSIONS: { idFromName: () => "id", get: () => ({ fetch: async () => { doCalls += 1; return new Response(); } }) }
   });
   const response = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST" }), env);
   assert.equal(response.status, 401);
-  assert.equal(limiterCalls, 0);
+  assert.deepEqual(limiterKeys, ["master-brain-cloud-agent-auth-failure"]);
   assert.equal(doCalls, 0);
+});
+
+test("invalid bearer auth is rate-limited independently and returns 429 after quota exhaustion", async () => {
+  let calls = 0;
+  const env = publicEnv({
+    AGENT_RATE_LIMITER: { limit: async ({ key }) => {
+      calls += 1;
+      assert.equal(key, "master-brain-cloud-agent-auth-failure");
+      return { success: false };
+    } }
+  });
+  const response = await worker.fetch(new Request("https://agent.example/api/sessions", {
+    method: "POST",
+    headers: { authorization: "Bearer invalid-token" }
+  }), env);
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("retry-after"), "60");
+  assert.equal(calls, 1);
+});
+
+test("invalid bearer auth fails closed when the auth-failure limiter is unavailable", async () => {
+  const response = await worker.fetch(new Request("https://agent.example/api/sessions", {
+    method: "POST",
+    headers: { authorization: "Bearer invalid-token" }
+  }), publicEnv({ AGENT_RATE_LIMITER: undefined }));
+  assert.equal(response.status, 503);
 });
 
 test("global rate limiter fails closed and rejects before creating a session", async () => {

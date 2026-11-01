@@ -11,7 +11,11 @@ const testableWorkerSource = workerSource
     'import { DurableObject } from "cloudflare:workers";',
     "class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }"
   )
-  .replace('from "./core.js"', 'from "' + coreUrl + '"');
+  .replace('from "./core.js"', 'from "' + coreUrl + '"')
+  .replace(
+    'import { AgentBudget, DAILY_NEURON_BUDGET } from "./budget.js";',
+    "const DAILY_NEURON_BUDGET = 1000; class AgentBudget {}"
+  );
 const workerUrl = "data:text/javascript;base64," + Buffer.from(testableWorkerSource).toString("base64");
 const { default: worker, AgentSession } = await import(workerUrl);
 
@@ -70,10 +74,25 @@ function authorizedRequest(path, { method = "GET", body, sessionToken } = {}) {
   });
 }
 
+function makeBudgetBinding() {
+  return {
+    idFromName: name => name,
+    get: () => ({
+      fetch: async request => {
+        const path = new URL(request.url).pathname;
+        if (path === "/reserve") return Response.json({ reserved_neurons: 10 }, { status: 201 });
+        if (path === "/settle") return Response.json({ settled: true });
+        return new Response("not found", { status: 404 });
+      }
+    })
+  };
+}
+
 async function makeInitializedAgent(token = SESSION_TOKEN, initial = {}) {
   const storage = makeStorage(initial);
   const agent = new AgentSession({ storage }, {
-    AI: { run: async () => ({ choices: [{ message: { role: "assistant", content: "authorized response" } }] }) }
+    AI: { run: async () => ({ choices: [{ message: { role: "assistant", content: "authorized response" } }] }) },
+    AGENT_BUDGET: makeBudgetBinding()
   });
   const digest = await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   const tokenHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");

@@ -115,6 +115,14 @@ test("health endpoint returns liveness metadata without exposing secrets", async
   assert.equal(JSON.stringify(body).includes(TOKEN), false);
 });
 
+test("console identifies the Cloud Agent credential and explicitly rejects GitHub PAT use", async () => {
+  const response = await worker.fetch(new Request("https://agent.example/"), publicEnv());
+  const html = await response.text();
+  assert.match(html, /Paste your Cloud Agent access token/);
+  assert.match(html, /Use the Cloud Agent token, not your GitHub PAT/);
+  assert.doesNotMatch(html, /Paste your personal access token/i);
+});
+
 test("console CSP uses the same nonce for style and script and forbids unsafe-inline", async () => {
   const response = await worker.fetch(new Request("https://agent.example/"), publicEnv());
   const csp = response.headers.get("content-security-policy");

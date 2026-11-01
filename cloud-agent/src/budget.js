@@ -177,7 +177,9 @@ export class AgentBudget extends DurableObject {
           else delete rateState.principals[principalId];
         }
 
-        const principalRequests = rateState.principals[body.principal_id] || [];
+        const principalRequests = Object.hasOwn(rateState.principals, body.principal_id)
+          ? rateState.principals[body.principal_id]
+          : [];
         const globalBlocked = rateState.global.length >= AGGREGATE_REQUEST_LIMIT;
         const principalBlocked = principalRequests.length >= PER_PRINCIPAL_REQUEST_LIMIT;
         if (globalBlocked || principalBlocked) {

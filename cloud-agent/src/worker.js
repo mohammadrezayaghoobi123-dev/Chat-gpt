@@ -8,6 +8,7 @@ import {
   boundedHistory,
   buildGitHubContentsApiUrl,
   decodeGitHubBase64Text,
+  createSerialExecutor,
   extractAssistantText,
   isAuthorized,
   isSafeRef,
@@ -220,7 +221,16 @@ button:disabled{opacity:.5;cursor:wait}
 }
 
 export class AgentSession extends DurableObject {
-  async fetch(request) {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.runSerial = createSerialExecutor();
+  }
+
+  fetch(request) {
+    return this.runSerial(() => this.handleRequest(request));
+  }
+
+  async handleRequest(request) {
     const url = new URL(request.url);
     if (url.pathname === "/history" && request.method === "GET") {
       return json({ messages: boundedHistory(await this.ctx.storage.get("history")) });

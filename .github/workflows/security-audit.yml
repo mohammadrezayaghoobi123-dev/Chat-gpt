@@ -52,6 +52,6 @@ jobs:
         with:
           node-version: "22"
       - name: Resolve exact declared dependencies
-        run: npm install --ignore-scripts --no-fund
+        run: npm install --ignore-scripts --no-fund --legacy-peer-deps
       - name: Audit dependency tree
         run: npm audit --audit-level=high

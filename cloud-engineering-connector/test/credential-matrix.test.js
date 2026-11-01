@@ -116,3 +116,29 @@ test("healthz never returns secret values", async () => {
   const text = await r.text();
   assert.ok(!text.includes(SECRET) && !text.includes(GH));
 });
+
+
+test("health endpoint never reveals credential configuration booleans", async () => {
+  const response = await worker.fetch(new Request("https://example.test/healthz"), {
+    MCP_AUTH_TOKEN: SECRET,
+    GITHUB_TOKEN: GH
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(Object.hasOwn(body, "github_configured"), false);
+  assert.equal(Object.hasOwn(body, "auth_configured"), false);
+});
+
+test("short configured MCP token fails closed before rate limiting or request parsing", async () => {
+  let limiterCalls = 0;
+  const response = await worker.fetch(post({ jsonrpc: "2.0", id: 1, method: "tools/list" }, "Bearer short"), {
+    MCP_AUTH_TOKEN: "short",
+    MCP_RATE_LIMITER: { limit: async () => { limiterCalls++; return { success: true }; } }
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    error: "server_misconfigured",
+    message: "MCP_AUTH_TOKEN must be at least 32 characters."
+  });
+  assert.equal(limiterCalls, 0);
+});

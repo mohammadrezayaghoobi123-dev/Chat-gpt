@@ -49,6 +49,32 @@ export function decodeGitHubBase64Text(encodedContent, maxBytes) {
   }
 }
 
+export function decodeGitHubBase64Text(encodedContent, maxBytes) {
+  if (typeof encodedContent !== "string" || !Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new TypeError("Invalid base64 content or byte limit.");
+  }
+  const normalized = encodedContent.replace(/[\t\n\f\r ]/g, "");
+  if (normalized.length > Math.ceil(maxBytes / 3) * 4 + 4) {
+    throw new Error("File exceeds the configured read limit.");
+  }
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==?|[A-Za-z0-9+/]{3}=?)?$/.test(normalized)) {
+    throw new Error("GitHub returned invalid base64 file content.");
+  }
+  let binary;
+  try {
+    binary = atob(normalized);
+  } catch {
+    throw new Error("GitHub returned invalid base64 file content.");
+  }
+  if (binary.length > maxBytes) throw new Error("File exceeds the configured read limit.");
+  const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("File is not valid UTF-8 text.");
+  }
+}
+
 export function isSessionId(value) {
   return typeof value === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);

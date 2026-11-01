@@ -471,11 +471,16 @@ export default {
       const tokenHash = await hashSessionCapability(sessionCapability);
       const id = env.AGENT_SESSIONS.idFromName(newSessionId);
       const stub = env.AGENT_SESSIONS.get(id);
-      const initialized = await stub.fetch(new Request("https://agent-session.internal/initialize", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token_hash: tokenHash })
-      }));
+      let initialized;
+      try {
+        initialized = await stub.fetch(new Request("https://agent-session.internal/initialize", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token_hash: tokenHash })
+        }));
+      } catch {
+        return json({ error: "Session initialization failed." }, 503);
+      }
       if (!initialized.ok) return json({ error: "Session initialization failed." }, 503);
       return json({ session_id: newSessionId, session_token: sessionCapability }, 201);
     }

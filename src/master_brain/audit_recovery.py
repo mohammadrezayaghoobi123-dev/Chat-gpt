@@ -32,6 +32,7 @@ from master_brain.audit_store import NOW, AuditStore, AuditStoreError
 
 MAX_FRAGMENT_BYTES = 1024 * 1024  # one record is far smaller; more than this is not a torn append
 RECOVERED_EVENT_TYPE = "audit.tail_recovered"
+ADOPTED_EVENT_TYPE = "audit.anchor_adopted"
 
 
 class RecoveryRefused(RuntimeError):
@@ -118,14 +119,60 @@ def recover_torn_tail(path: str | os.PathLike[str], *, actor: str, apply: bool =
         return RecoveryReport("recovered", count, len(fragment), digest, evidence)
 
 
+@dataclass(frozen=True)
+class AdoptReport:
+    status: str  # anchor_missing (dry run) | adopted
+    complete_events: int
+    head_hash: str
+
+
+def adopt_anchor(path: str | os.PathLike[str], *, actor: str, apply: bool = False,
+                 clock: Callable[[], datetime] | None = None) -> AdoptReport:
+    """Explicitly give a verified log that has no ``.head`` anchor one (legacy logs, or an operator who accepts
+    the log as it is). Refuses when an anchor exists or the chain does not verify. The adoption is recorded in
+    the chain as ``audit.anchor_adopted`` (who, how many events, the head hash that was adopted)."""
+    store = AuditStore(path, clock=clock)  # not strict: this is the one place a missing anchor is acceptable
+    if not store.path.is_file():
+        raise RecoveryRefused("no such log")
+    with store._exclusive_lock():
+        if store.anchor_path.exists():
+            raise RecoveryRefused("an anchor already exists; adopting would overwrite protection")
+        try:
+            events = store.read_all()
+        except AuditStoreError as exc:
+            raise RecoveryRefused(f"the log does not verify; refusing to adopt it ({exc})") from exc
+        if not events:
+            raise RecoveryRefused("the log is empty; nothing to adopt")
+        head = events[-1].event_hash
+        if not apply:
+            return AdoptReport("anchor_missing", len(events), head)
+        store._append_locked(
+            event_id=f"anchor-adopted:{head[:16]}", event_type=ADOPTED_EVENT_TYPE, recorded_at=NOW,
+            actor=actor, subject_ref="log:audit", payload={"complete_events": len(events), "head_hash": head})
+        return AdoptReport("adopted", len(events), head)
+
+
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m master_brain.audit_recovery",
         description="Recover an audit/security log whose last record was torn by a crash (dry run by default).")
     parser.add_argument("--path", required=True, help="the JSONL log (mission audit or security log)")
     parser.add_argument("--apply", action="store_true", help="actually recover (otherwise only report)")
+    parser.add_argument("--adopt-anchor", action="store_true",
+                        help="give a verified log without a .head anchor one (recorded in the chain)")
     args = parser.parse_args(argv)
     from master_brain.accounts import operator_actor
+    if args.adopt_anchor:
+        try:
+            rep = adopt_anchor(args.path, actor=operator_actor(), apply=args.apply)
+        except RecoveryRefused as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 1
+        if rep.status == "anchor_missing":
+            print(f"no anchor: {rep.complete_events} events verify (head {rep.head_hash}); run again with --apply to adopt")
+        else:
+            print(f"adopted: anchor written for {rep.complete_events} events (head {rep.head_hash})")
+        return 0
     try:
         report = recover_torn_tail(args.path, actor=operator_actor(), apply=args.apply)
     except RecoveryRefused as exc:
@@ -145,4 +192,4 @@ def _main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     sys.exit(_main())
 
-__all__ = ["MAX_FRAGMENT_BYTES", "RECOVERED_EVENT_TYPE", "RecoveryRefused", "RecoveryReport", "recover_torn_tail"]
+__all__ = ["ADOPTED_EVENT_TYPE", "AdoptReport", "adopt_anchor", "MAX_FRAGMENT_BYTES", "RECOVERED_EVENT_TYPE", "RecoveryRefused", "RecoveryReport", "recover_torn_tail"]

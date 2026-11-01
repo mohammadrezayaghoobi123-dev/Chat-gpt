@@ -147,12 +147,14 @@ def load_trust_store(path: str | os.PathLike[str]):
 
 
 # ----------------------------------------------------------------------------- start-up checks
-def _verify_log(path: Path, name: str) -> None:
+def _verify_log(path: Path, name: str, *, require_anchor: bool = False) -> None:
     try:
-        count = len(AuditStore(path).read_all())
+        count = len(AuditStore(path, require_anchor=require_anchor).read_all())
     except AuditStoreError as exc:
         hint = (f"; if this is a crash artifact, inspect it with: python -m master_brain.audit_recovery --path {path}"
-                if "unterminated" in str(exc) else "; refusing to start (the log is damaged — do not repair it blindly)")
+                if "unterminated" in str(exc) else
+                f"; restore the .head file from the backup, or adopt the log explicitly with: python -m master_brain.audit_recovery --path {path} --adopt-anchor"
+                if "anchor is missing" in str(exc) else "; refusing to start (the log is damaged — do not repair it blindly)")
         raise StartupRefused(f"the {name} did not verify ({exc}){hint}") from exc
     del count
 
@@ -168,7 +170,7 @@ def preflight(data_dir: str | os.PathLike[str]) -> list[str]:
         raise StartupRefused("the data path is not a directory")
     if os.name != "nt" and data.stat().st_mode & 0o077:
         raise StartupRefused("the data directory has permissions that let other users in; run: chmod 700 " + str(data))
-    _verify_log(data / "audit.jsonl", "mission audit log")
+    _verify_log(data / "audit.jsonl", "mission audit log", require_anchor=True)
     accounts = AccountStore(data / "accounts.sqlite", full_verify_interval_seconds=FULL_VERIFY_SECONDS)
     _verify_log(accounts.security_log.path, "security log")
     totals = accounts.counts()
@@ -267,7 +269,8 @@ def build(config: ServeConfig, *, pubmed_fetcher: Any = None) -> Built:
         execution = ExecutionConfig(catalog, SQLiteExecutionRegistry(str(data / "registry.sqlite")),
                                     dispatch_timeout_seconds=30.0)
     ctp = None
-    audit_store = AuditStore(data / "audit.jsonl", full_verify_interval_seconds=FULL_VERIFY_SECONDS)
+    audit_store = AuditStore(data / "audit.jsonl", full_verify_interval_seconds=FULL_VERIFY_SECONDS,
+                             require_anchor=True)
     if config.ctp_builtin_tests:
         from master_brain.ctp_operations import CtpOperations
         from master_brain.ctp_registry import builtin_registry

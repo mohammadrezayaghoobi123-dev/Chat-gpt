@@ -93,6 +93,7 @@ class AuditPayloadPolicyTests(unittest.TestCase):
 
 EXPECTED_ALLOW_LIST = {
     "audit.tail_recovered": {"discarded_bytes", "complete_events", "fragment_sha256"},
+    "audit.anchor_adopted": {"complete_events", "head_hash"},
     "security.login_succeeded": {"address"},
     "security.login_failed": {"address", "reason"},
     "security.login_throttled": {"address", "scope"},

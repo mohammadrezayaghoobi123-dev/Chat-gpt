@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 export TS_SOCKET="/tmp/tailscaled.sock"
 export TS_STATE_DIR="/var/lib/tailscale"
@@ -12,11 +13,14 @@ fi
 
 if command -v tailscaled >/dev/null 2>&1 && [ "${CODESPACES:-false}" = "true" ]; then
   sudo mkdir -p /var/lib/tailscale
+  sudo chmod 700 /var/lib/tailscale
   if [ -f /tmp/tailscaled.state ] && [ ! -f /var/lib/tailscale/tailscaled.state ]; then
     sudo cp -p /tmp/tailscaled.state /var/lib/tailscale/tailscaled.state
+    sudo chmod 600 /var/lib/tailscale/tailscaled.state
   fi
   if ! pgrep -x tailscaled >/dev/null 2>&1; then
     sudo nohup /usr/sbin/tailscaled --statedir=/var/lib/tailscale --socket=/tmp/tailscaled.sock --tun=userspace-networking >/tmp/tailscaled.log 2>&1 </dev/null &
+    chmod 600 /tmp/tailscaled.log
   fi
 fi
 

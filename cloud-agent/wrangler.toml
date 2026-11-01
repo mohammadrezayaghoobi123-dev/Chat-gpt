@@ -11,9 +11,17 @@ binding = "AI"
 name = "AGENT_SESSIONS"
 class_name = "AgentSession"
 
+[[durable_objects.bindings]]
+name = "AGENT_BUDGET"
+class_name = "AgentBudget"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["AgentSession"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["AgentBudget"]
 
 [[ratelimits]]
 name = "AGENT_RATE_LIMITER"

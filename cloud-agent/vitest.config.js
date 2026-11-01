@@ -8,7 +8,7 @@ export default defineConfig({
     })
   ],
   test: {
-    include: ["test/runtime.test.js", "test/budget.runtime.test.js"],
+    include: ["test/runtime.test.js", "test/budget.runtime.test.js", "test/principal.runtime.test.js"],
     testTimeout: 15_000,
     hookTimeout: 15_000
   }

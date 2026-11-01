@@ -10,6 +10,7 @@ import {
   buildGitHubContentsApiUrl,
   decodeGitHubBase64Text,
   createSerialExecutor,
+  consumeRateLimit,
   extractAssistantText,
   isAuthorized,
   isSafeRef,
@@ -383,6 +384,17 @@ export default {
     }
     const sessionId = match[1];
     if (!isSessionId(sessionId)) return json({ error: "Invalid session identifier." }, 400);
+
+    let rateAllowed;
+    try {
+      rateAllowed = await consumeRateLimit(env.AGENT_RATE_LIMITER, "master-brain-cloud-agent");
+    } catch {
+      return json({ error: "The global rate limiter is unavailable." }, 503);
+    }
+    if (!rateAllowed) {
+      return json({ error: "Global request rate limit reached. Retry in one minute." }, 429, { "retry-after": "60" });
+    }
+
     const id = env.AGENT_SESSIONS.idFromName(sessionId.toLowerCase());
     const stub = env.AGENT_SESSIONS.get(id);
     return stub.fetch(new Request("https://agent-session.internal/" + match[2], request));

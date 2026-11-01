@@ -47,14 +47,22 @@ function makeStorage(initial = {}) {
   };
 }
 
-function makeBudgetBinding({ reserveStatus = 201, settleStatus = 200 } = {}) {
+function makeBudgetBinding({ reserveStatus = 201, settleStatus = 200, onReserve, onSettle } = {}) {
   return {
     idFromName: name => name,
     get: () => ({
       fetch: async request => {
         const path = new URL(request.url).pathname;
-        if (path === "/reserve") return Response.json({ reserved_neurons: 10 }, { status: reserveStatus });
-        if (path === "/settle") return Response.json({ settled: true }, { status: settleStatus });
+        if (path === "/reserve") {
+          const body = await request.json();
+          onReserve?.(body);
+          return Response.json({ reserved_neurons: body.neurons }, { status: reserveStatus });
+        }
+        if (path === "/settle") {
+          const body = await request.json();
+          onSettle?.(body);
+          return Response.json({ settled: true }, { status: settleStatus });
+        }
         return new Response("not found", { status: 404 });
       }
     })
@@ -207,6 +215,47 @@ test("daily budget denial blocks Workers AI before inference", async () => {
   assert.equal(response.status, 429);
   assert.equal(modelCalls, 0);
   assert.equal(storage.values.has("history"), false);
+});
+
+test("model usage is settled against the reserved Neuron estimate", async () => {
+  let reservation;
+  let settlement;
+  const budget = makeBudgetBinding({
+    onReserve: body => { reservation = body; },
+    onSettle: body => { settlement = body; }
+  });
+  const { agent } = await makeAgent({
+    budget,
+    ai: { run: async () => ({
+      usage: { prompt_tokens: 1_000, completion_tokens: 100 },
+      choices: [{ message: { role: "assistant", content: "budget-accounted answer" } }]
+    }) }
+  });
+  const response = await agent.fetch(chatRequest("measure actual usage"));
+  assert.equal(response.status, 200);
+  assert.ok(reservation.neurons >= 10);
+  assert.equal(settlement.success, true);
+  assert.equal(settlement.actual_neurons, 10);
+});
+
+test("missing model usage metadata consumes the full reservation", async () => {
+  let reservation;
+  let settlement;
+  const budget = makeBudgetBinding({
+    onReserve: body => { reservation = body; },
+    onSettle: body => { settlement = body; }
+  });
+  const { agent } = await makeAgent({
+    budget,
+    ai: { run: async () => ({
+      choices: [{ message: { role: "assistant", content: "no usage metadata" } }]
+    }) }
+  });
+  const response = await agent.fetch(chatRequest("missing usage data"));
+  assert.equal(response.status, 200);
+  assert.equal(settlement.success, true);
+  assert.equal(Object.hasOwn(settlement, "actual_neurons"), false);
+  assert.ok(reservation.neurons > 0);
 });
 
 test("history endpoint is rate-limited and preserves active stored history", async () => {

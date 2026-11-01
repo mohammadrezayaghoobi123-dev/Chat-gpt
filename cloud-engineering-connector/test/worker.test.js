@@ -904,3 +904,19 @@ test("modern subscription SSE responses retain stream headers and receive global
   assert.equal(response.headers.get("cross-origin-resource-policy"), "same-origin");
   assert.equal(response.headers.get("strict-transport-security"), "max-age=31536000");
 });
+
+test("overlong configured MCP bearer tokens fail closed before authentication",async()=>{
+ const token="x".repeat(513);
+ let limiterCalls=0;
+ const response=await worker.fetch(req("/mcp",{method:"POST",headers:{
+  authorization:"Bearer "+token,
+  "content-type":"application/json",
+  accept:"application/json, text/event-stream"
+ },body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})}),{
+  MCP_AUTH_TOKEN:token,
+  MCP_RATE_LIMITER:{limit:async()=>{limiterCalls++;return{success:true}}}
+ });
+ assert.equal(response.status,503);
+ assert.deepEqual(await response.json(),{error:"server_misconfigured",message:"MCP_AUTH_TOKEN must be between 32 and 512 characters."});
+ assert.equal(limiterCalls,0);
+});

@@ -1,0 +1,39 @@
+title = "Project Gitleaks configuration"
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Known synthetic curl bearer value in rate-limit probe; scoped to its exact historical commit and line."
+targetRules = ["curl-auth-header"]
+condition = "AND"
+commits = ["7984973353e49b218a5621ed9257ccea0cf1fff7"]
+paths = ['''^\.github/workflows/ci-live-probe\.yml$''']
+regexTarget = "line"
+regexes = ['''wrong-probe-token''']
+
+[[allowlists]]
+description = "Known synthetic idempotency fixture in connector unit test; scoped to its exact historical commit and line."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["af1d557bd1de6b38856e931272130774130caca4"]
+paths = ['''^cloud-engineering-connector/test/worker\.test\.js$''']
+regexTarget = "line"
+regexes = ['''idempotency_key''']
+
+[[allowlists]]
+description = "AWS example credential used as a negative-test fixture; scoped to its exact historical commit and line."
+targetRules = ["aws-access-token"]
+condition = "AND"
+commits = ["2707fe59768b3a98d2598cdd3d43f9d5e57510c4"]
+paths = ['''^tests/test_audit_policy\.py$''']
+regexTarget = "line"
+regexes = ['''AKIA[A-Z0-9]{16}''']
+
+[[allowlists]]
+description = "Synthetic API-key-shaped input used to test audit payload rejection; scoped to its exact historical commit and line."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["2707fe59768b3a98d2598cdd3d43f9d5e57510c4"]
+paths = ['''^tests/test_audit_policy\.py$''']
+regexTarget = "line"
+regexes = ['''api_key''']

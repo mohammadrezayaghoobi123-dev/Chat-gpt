@@ -1,3 +1,10 @@
+export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function isSessionExpired(lastActivity, now = Date.now()) {
+  return !Number.isFinite(lastActivity) || !Number.isFinite(now) ||
+    now - lastActivity >= SESSION_TTL_MS;
+}
+
 export const MAX_MESSAGE_CHARS = 8_000;
 export const MAX_HISTORY_MESSAGES = 16;
 export const MAX_FILE_BYTES = 50_000;

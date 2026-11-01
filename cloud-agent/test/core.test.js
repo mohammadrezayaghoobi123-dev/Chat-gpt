@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   boundedHistory,
+  buildGitHubContentsApiUrl,
   extractAssistantText,
   isAuthorized,
   isSafeRef,
@@ -86,4 +87,16 @@ test("rejects an oversized streamed body even when content length is absent or f
   });
   await assert.rejects(readTextBounded(stream, null, 3), /Body exceeds configured limit/);
   await assert.rejects(readTextBounded(new Response("é").body, "1", 1), /Body exceeds configured limit/);
+});
+
+test("encodes slash-containing branch refs in the GitHub Contents API query, not the URL path", () => {
+  assert.equal(
+    buildGitHubContentsApiUrl(
+      "mohammadrezayaghoobi123-dev",
+      "Chat-gpt",
+      "cloud-agent/src/worker.js",
+      "feature/independent-cloud-agent"
+    ),
+    "https://api.github.com/repos/mohammadrezayaghoobi123-dev/Chat-gpt/contents/cloud-agent/src/worker.js?ref=feature%2Findependent-cloud-agent"
+  );
 });

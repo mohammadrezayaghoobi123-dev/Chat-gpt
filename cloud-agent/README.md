@@ -69,7 +69,9 @@ The browser console keeps the session capability in page memory only. The Durabl
 
 ## Verification status
 
-The current capability-isolation change passed the GitHub Actions Node.js 22 checks: 38/38 unit tests, syntax checks, and Wrangler configuration dry-run. These tests use a Node Durable Object stub; they do not establish production Cloudflare Durable Object, SQLite, alarm, concurrency, or Workers AI behavior. A Cloudflare Workers runtime integration suite remains a release gate.
+The current capability-isolation change passed GitHub Actions on Node.js 22: 40/40 Node unit tests, 6/6 Cloudflare Workers runtime tests using the Workers Vitest integration, syntax checks, and Wrangler configuration dry-run. The runtime suite exercises real local `workerd`/Miniflare Durable Objects, SQLite-backed storage, session isolation, expiry, and alarm cleanup. The test harness deliberately omits the Workers AI binding and mocks the rate limiter, so it does not invoke billable model inference or connect to production resources.
+
+The production Wrangler compatibility date is `2026-10-31`; the bundled test runtime currently supports through `2026-10-30`, so `wrangler.test.toml` uses that date. This one-day compatibility gap must be revalidated when the Workers Vitest plugin/runtime is upgraded. Local `workerd` tests improve confidence but do not replace a hosted Cloudflare canary test.
 
 ## Release status
 

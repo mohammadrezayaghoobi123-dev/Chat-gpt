@@ -123,7 +123,7 @@ describe("Cloudflare Workers runtime: global daily Neuron budget", () => {
             used: 900,
             reserved: 100,
             reservations: {
-              [oldRequestId]: { neurons: 100, day: yesterday }
+              [oldRequestId]: { neurons: 100, day: yesterday, created_at: Date.now() }
             },
             settled: {}
           }

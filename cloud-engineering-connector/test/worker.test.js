@@ -917,6 +917,6 @@ test("overlong configured MCP bearer tokens fail closed before authentication",a
   MCP_RATE_LIMITER:{limit:async()=>{limiterCalls++;return{success:true}}}
  });
  assert.equal(response.status,503);
- assert.deepEqual(await response.json(),{error:"server_misconfigured",message:"MCP_AUTH_TOKEN must be between 32 and 512 characters."});
+ assert.deepEqual(await response.json(),{error:"server_misconfigured",message:"MCP_AUTH_TOKEN must be at most 512 characters."});
  assert.equal(limiterCalls,0);
 });

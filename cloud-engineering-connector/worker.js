@@ -109,4 +109,12 @@ async function handleRequest(request,env){const url=new URL(request.url);if(requ
 
 function applyCors(request,env,response){if(new URL(request.url).pathname!=="/mcp")return response;const origin=request.headers.get("origin");if(!origin||!originAllowed(request,env))return response;const headers=new Headers(response.headers);headers.set("access-control-allow-origin",origin);headers.set("access-control-expose-headers","MCP-Protocol-Version");const vary=headers.get("vary");if(!vary)headers.set("vary","Origin");else if(!vary.split(",").some(value=>value.trim().toLowerCase()==="origin"))headers.set("vary",vary+", Origin");return new Response(response.body,{status:response.status,statusText:response.statusText,headers})}
 
-export default{async fetch(request,env){const response=await handleRequest(request,env);return applyCors(request,env,response)}};
+function applySecurityHeaders(request,response){
+ const headers=new Headers(response.headers);
+ for(const [name,value] of Object.entries(SECURITY_HEADERS))if(!headers.has(name))headers.set(name,value);
+ if(new URL(request.url).protocol==="https:")headers.set("strict-transport-security","max-age=31536000");
+ else headers.delete("strict-transport-security");
+ if(!headers.has("cache-control"))headers.set("cache-control","no-store");
+ return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
+}
+export default{async fetch(request,env){let response;try{response=await handleRequest(request,env)}catch{response=json({error:"internal_error"},500)}return applySecurityHeaders(request,applyCors(request,env,response))}};

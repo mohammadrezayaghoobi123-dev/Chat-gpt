@@ -7,7 +7,7 @@ import worker from "../worker.js";
 
 const SECRET = "mcp-secret-value-with-at-least-32-characters";
 const GH = "ghp_FAKE_TOKEN_FOR_TEST_0123456789";
-const callWorker = (request, env = {}) => callWorker(request, { MCP_RATE_LIMITER: { limit: async () => ({ success: true }) }, ...env });
+const callWorker = (request, env = {}) => worker.fetch(request, { MCP_RATE_LIMITER: { limit: async () => ({ success: true }) }, ...env });
 const post = (body, auth) => new Request("https://example.test/mcp", {
   method: "POST",
   headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "cf-connecting-ip": "203.0.113.10", ...(auth ? { authorization: auth } : {}) },

@@ -32,6 +32,9 @@ jobs:
           GITLEAKS_ENABLE_COMMENTS: "false"
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
 
+      - name: Scan every fetched Git ref and commit
+        run: /tmp/gitleaks-8.30.1/gitleaks git --redact --exit-code 2 --log-opts="--all" .
+
   shell-script-validation:
     name: Validate Dev Container shell scripts
     runs-on: ubuntu-latest

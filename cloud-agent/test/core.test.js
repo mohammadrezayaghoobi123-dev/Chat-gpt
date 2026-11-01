@@ -10,6 +10,8 @@ import {
   isSafeRef,
   isSafeRepoPath,
   isSessionId,
+  isSessionExpired,
+  SESSION_TTL_MS,
   parseToolArguments,
   readTextBounded
 } from "../src/core.js";
@@ -173,4 +175,12 @@ test("serial executor rejects excess queued work instead of growing without boun
   await Promise.allSettled([first, second]);
   assert.equal(outcome, "SESSION_QUEUE_FULL");
   assert.equal(secondRan, false);
+});
+
+test("session history expires after seven inactive days and when no timestamp exists", () => {
+  const now = 2_000_000_000_000;
+  assert.equal(SESSION_TTL_MS, 7 * 24 * 60 * 60 * 1000);
+  assert.equal(isSessionExpired(now - SESSION_TTL_MS + 1, now), false);
+  assert.equal(isSessionExpired(now - SESSION_TTL_MS, now), true);
+  assert.equal(isSessionExpired(undefined, now), true);
 });

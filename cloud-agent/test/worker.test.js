@@ -97,7 +97,9 @@ test("console CSP uses the same nonce for style and script and forbids unsafe-in
   assert.equal(csp.includes("unsafe-inline"), false);
   assert.ok(html.includes('<style nonce="' + nonce + '">'));
   assert.ok(html.includes('<script nonce="' + nonce + '">'));
-  const inlineScript = html.match(/<script nonce="[^"]+">([\\s\\S]*?)<\\/script>/)?.[1];
+  const scriptStart = html.indexOf('<script nonce="' + nonce + '">') + ('<script nonce="' + nonce + '">').length;
+  const scriptEnd = html.indexOf("</script>", scriptStart);
+  const inlineScript = html.slice(scriptStart, scriptEnd);
   assert.ok(inlineScript);
   assert.doesNotThrow(() => new Script(inlineScript));
   assert.match(inlineScript, /x-session-token/);

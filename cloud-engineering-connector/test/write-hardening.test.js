@@ -4,10 +4,10 @@ import assert from "node:assert/strict";
 import worker from "../worker.js";
 
 const MCP = "mcp-secret-value", GH = "ghp_FAKE_TOKEN_FOR_TEST_0123456789";
-const env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH };
+const env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } };
 const OWNER = "mohammadrezayaghoobi123-dev", REPO = "Chat-gpt";
 const headers = { "content-type": "application/json", accept: "application/json, text/event-stream",
-  authorization: "Bearer " + MCP, "mcp-protocol-version": "2025-03-26" };
+  authorization: "Bearer " + MCP, "mcp-protocol-version": "2025-03-26", "cf-connecting-ip": "203.0.113.10" };
 const call = (name, args) => worker.fetch(new Request("https://example.test/mcp", { method: "POST", headers,
   body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) }), env);
 const pr = (files, extra = {}) => ({ owner: OWNER, repo: REPO, base_branch: "feature/cloud-engineering-connector",

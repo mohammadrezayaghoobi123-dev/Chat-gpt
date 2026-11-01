@@ -1,0 +1,228 @@
+import { DurableObject } from "cloudflare:workers";
+import { readTextBounded } from "./core.js";
+
+export const DAILY_NEURON_BUDGET = 1_000;
+const RESERVATION_TTL_MS = 60 * 60 * 1_000;
+const DAY_MS = 24 * 60 * 60 * 1_000;
+const MAX_SETTLEMENT_NEURONS = 1_000_000;
+
+function json(data, status = 200, headers = {}) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers }
+  });
+}
+
+function utcDay(timestamp = Date.now()) {
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
+function nextUtcMidnight(timestamp = Date.now()) {
+  const now = new Date(timestamp);
+  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+}
+
+function validRequestId(value) {
+  return typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function newBucket() {
+  return { used: 0, reserved: 0, reservations: {}, settled: {} };
+}
+
+function validBucket(bucket) {
+  return bucket && typeof bucket === "object" &&
+    Number.isSafeInteger(bucket.used) && bucket.used >= 0 &&
+    Number.isSafeInteger(bucket.reserved) && bucket.reserved >= 0 &&
+    bucket.reservations && typeof bucket.reservations === "object" &&
+    bucket.settled && typeof bucket.settled === "object";
+}
+
+function validLedger(ledger) {
+  if (!ledger || typeof ledger !== "object" || !ledger.days || typeof ledger.days !== "object") return false;
+  return Object.values(ledger.days).every(validBucket);
+}
+
+export class AgentBudget extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.queue = Promise.resolve();
+  }
+
+  enqueue(operation) {
+    const result = this.queue.then(operation);
+    this.queue = result.catch(() => undefined);
+    return result;
+  }
+
+  fetch(request) {
+    return this.enqueue(() => this.handleRequest(request));
+  }
+
+  async readLedger() {
+    const ledger = await this.ctx.storage.get("budget-ledger");
+    if (ledger === undefined) return { days: {} };
+    if (!validLedger(ledger)) throw new Error("Budget ledger is invalid.");
+    return ledger;
+  }
+
+  bucketFor(ledger, day) {
+    if (!ledger.days[day]) ledger.days[day] = newBucket();
+    return ledger.days[day];
+  }
+
+  async writeLedger(ledger) {
+    await this.ctx.storage.put("budget-ledger", ledger);
+    await this.scheduleAlarm(ledger);
+  }
+
+  async scheduleAlarm(ledger, now = Date.now()) {
+    let next = nextUtcMidnight(now);
+    for (const bucket of Object.values(ledger.days)) {
+      for (const reservation of Object.values(bucket.reservations)) {
+        if (reservation && Number.isSafeInteger(reservation.created_at)) {
+          next = Math.min(next, reservation.created_at + RESERVATION_TTL_MS);
+        }
+      }
+    }
+    await this.ctx.storage.setAlarm(Math.max(now + 1_000, next));
+  }
+
+  async handleRequest(request) {
+    const url = new URL(request.url);
+    try {
+      if (url.pathname === "/status" && request.method === "GET") {
+        const ledger = await this.readLedger();
+        const day = utcDay();
+        const bucket = this.bucketFor(ledger, day);
+        return json({
+          day,
+          cap_neurons: DAILY_NEURON_BUDGET,
+          used_neurons: bucket.used,
+          reserved_neurons: bucket.reserved,
+          remaining_neurons: Math.max(0, DAILY_NEURON_BUDGET - bucket.used - bucket.reserved),
+          over_budget: bucket.used + bucket.reserved > DAILY_NEURON_BUDGET
+        });
+      }
+
+      if ((url.pathname !== "/reserve" && url.pathname !== "/settle") || request.method !== "POST") {
+        return json({ error: "Not found." }, 404);
+      }
+
+      let body;
+      try {
+        const text = await readTextBounded(request.body, request.headers.get("content-length"), 2_048);
+        body = JSON.parse(text);
+      } catch {
+        return json({ error: "Invalid budget request." }, 400);
+      }
+      if (!body || !validRequestId(body.request_id)) {
+        return json({ error: "A valid request_id is required." }, 400);
+      }
+
+      const ledger = await this.readLedger();
+      if (url.pathname === "/reserve") {
+        if (!Number.isSafeInteger(body.neurons) || body.neurons < 1 || body.neurons > DAILY_NEURON_BUDGET) {
+          return json({ error: "neurons must be an integer within the daily budget." }, 400);
+        }
+        for (const bucket of Object.values(ledger.days)) {
+          if (Object.hasOwn(bucket.reservations, body.request_id) || Object.hasOwn(bucket.settled, body.request_id)) {
+            return json({ error: "Duplicate budget request_id." }, 409);
+          }
+        }
+
+        const day = utcDay();
+        const bucket = this.bucketFor(ledger, day);
+        if (bucket.used + bucket.reserved + body.neurons > DAILY_NEURON_BUDGET) {
+          const retryAfter = Math.max(1, Math.ceil((nextUtcMidnight() - Date.now()) / 1_000));
+          return json({
+            error: "Daily model budget exhausted.",
+            day,
+            cap_neurons: DAILY_NEURON_BUDGET,
+            used_neurons: bucket.used,
+            reserved_neurons: bucket.reserved
+          }, 429, { "retry-after": String(retryAfter) });
+        }
+
+        bucket.reservations[body.request_id] = {
+          neurons: body.neurons,
+          day,
+          created_at: Date.now()
+        };
+        bucket.reserved += body.neurons;
+        await this.writeLedger(ledger);
+        return json({ request_id: body.request_id, day, reserved_neurons: body.neurons }, 201);
+      }
+
+      if (typeof body.success !== "boolean") {
+        return json({ error: "success must be a boolean." }, 400);
+      }
+
+      let reservation;
+      let reservationBucket;
+      for (const bucket of Object.values(ledger.days)) {
+        if (Object.hasOwn(bucket.settled, body.request_id)) {
+          return json({
+            request_id: body.request_id,
+            actual_neurons: bucket.settled[body.request_id],
+            already_settled: true
+          });
+        }
+        if (Object.hasOwn(bucket.reservations, body.request_id)) {
+          reservation = bucket.reservations[body.request_id];
+          reservationBucket = bucket;
+          break;
+        }
+      }
+      if (!reservation || !reservationBucket) return json({ error: "Budget reservation not found." }, 404);
+
+      let actualNeurons = reservation.neurons;
+      if (body.success && body.actual_neurons !== undefined) {
+        if (!Number.isSafeInteger(body.actual_neurons) ||
+            body.actual_neurons < 0 || body.actual_neurons > MAX_SETTLEMENT_NEURONS) {
+          return json({ error: "actual_neurons is invalid." }, 400);
+        }
+        actualNeurons = body.actual_neurons;
+      }
+
+      reservationBucket.reserved = Math.max(0, reservationBucket.reserved - reservation.neurons);
+      reservationBucket.used += actualNeurons;
+      reservationBucket.settled[body.request_id] = actualNeurons;
+      delete reservationBucket.reservations[body.request_id];
+      await this.writeLedger(ledger);
+
+      return json({
+        request_id: body.request_id,
+        actual_neurons: actualNeurons,
+        reservation_overrun: actualNeurons > reservation.neurons,
+        over_budget: reservationBucket.used + reservationBucket.reserved > DAILY_NEURON_BUDGET
+      });
+    } catch {
+      return json({ error: "Budget service unavailable; inference is blocked." }, 503);
+    }
+  }
+
+  alarm() {
+    return this.enqueue(async () => {
+      const now = Date.now();
+      const ledger = await this.readLedger();
+      for (const [day, bucket] of Object.entries(ledger.days)) {
+        for (const [requestId, reservation] of Object.entries(bucket.reservations)) {
+          if (reservation && Number.isSafeInteger(reservation.created_at) &&
+              now - reservation.created_at >= RESERVATION_TTL_MS) {
+            bucket.reserved = Math.max(0, bucket.reserved - reservation.neurons);
+            bucket.used += reservation.neurons;
+            bucket.settled[requestId] = reservation.neurons;
+            delete bucket.reservations[requestId];
+          }
+        }
+        if (day < utcDay(now - 2 * DAY_MS) && Object.keys(bucket.reservations).length === 0) {
+          delete ledger.days[day];
+        }
+      }
+      await this.ctx.storage.put("budget-ledger", ledger);
+      await this.scheduleAlarm(ledger, now);
+    });
+  }
+}

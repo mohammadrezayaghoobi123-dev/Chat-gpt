@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker.js";
-const env={MCP_AUTH_TOKEN:"test-secret"};
+const env={MCP_AUTH_TOKEN:"test-secret",MCP_RATE_LIMITER:{limit:async()=>({success:true})}};
 const req=(path,options={})=>new Request("https://example.test"+path,options);
 const rpc=(method,params={},id=1)=>req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})});
 test("health reports cloud execution without laptop dependency",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers")});
@@ -13,7 +13,7 @@ test("public read-only mode fails closed when rate limiter returns malformed res
 test("public read-only mode rate limits by Cloudflare client IP",async()=>{let key;const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async(input)=>{key=input.key;return{success:false}}}});assert.equal(key,"public-mcp:203.0.113.10");assert.equal(r.status,429);assert.equal(r.headers.get("retry-after"),"60");assert.deepEqual(await r.json(),{error:"rate_limited"})});
 test("authenticated MCP requests consume a separate authenticated rate-limit namespace",async()=>{let key;const r=await worker.fetch(rpc("tools/list"),{...env,PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async(input)=>{key=input.key;return{success:true}}}});assert.equal(r.status,200);assert.equal(key,"authenticated-mcp:203.0.113.10")});
 test("authenticated MCP requests are rejected when their rate limit is exceeded",async()=>{let calls=0;const r=await worker.fetch(rpc("tools/list"),{...env,MCP_RATE_LIMITER:{limit:async(input)=>{calls++;assert.equal(input.key,"authenticated-mcp:203.0.113.10");return{success:false}}}});assert.equal(r.status,429);assert.equal(r.headers.get("retry-after"),"60");assert.equal(calls,1);assert.deepEqual(await r.json(),{error:"rate_limited"})});
-test("authenticated MCP requests fail closed when the rate limiter is unavailable",async()=>{const r=await worker.fetch(rpc("tools/list"),env);assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"rate_limiter_unavailable"})});
+test("authenticated MCP requests fail closed when the rate limiter is unavailable",async()=>{const r=await worker.fetch(rpc("tools/list"),{MCP_AUTH_TOKEN:env.MCP_AUTH_TOKEN});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"rate_limiter_unavailable"})});
 test("authenticated MCP requests fail closed when Cloudflare client identity is missing",async()=>{const request=rpc("tools/list");const headers=new Headers(request.headers);headers.delete("cf-connecting-ip");const r=await worker.fetch(new Request(request,{headers}),{...env,MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"client_identity_unavailable"})});
 test("public read-only mode must be explicitly enabled",async()=>{const r=await worker.fetch(rpc("initialize",{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"test",version:"1"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,200);const b=await r.json();assert.equal(b.result.serverInfo.name,"cloud-engineering-connector")});
 test("public read-only tools list contains only explicit allowlisted tools",async()=>{const r=await worker.fetch(rpc("tools/list",{},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});const b=await r.json();assert.deepEqual(b.result.tools.map(tool=>tool.name),["project_inspect","read_project_file","engineering_standards","architecture_review"])});
@@ -552,7 +552,7 @@ test("auth failure limiter returns 429 and Retry-After when the quota is exhaust
 });
 
 test("protected authentication fails closed when the auth failure limiter is absent",async()=>{
- const response=await worker.fetch(requestWithAuthorization("Bearer wrong-secret"),env);
+ const response=await worker.fetch(requestWithAuthorization("Bearer wrong-secret"),{MCP_AUTH_TOKEN:env.MCP_AUTH_TOKEN});
  assert.equal(response.status,503);
  assert.deepEqual(await response.json(),{error:"rate_limiter_unavailable"});
 });
@@ -566,14 +566,14 @@ test("protected authentication fails closed when the auth failure limiter throws
  assert.deepEqual(await response.json(),{error:"rate_limiter_unavailable"});
 });
 
-test("a valid bearer token bypasses the auth failure quota",async()=>{
- let calls=0;
+test("a valid bearer token uses only the authenticated quota, not the auth-failure quota",async()=>{
+ const keys=[];
  const response=await worker.fetch(rpc("tools/list"),{
   ...env,
-  MCP_RATE_LIMITER:{limit:async()=>{calls++;return{success:false}}}
+  MCP_RATE_LIMITER:{limit:async({key})=>{keys.push(key);return{success:true}}}
  });
  assert.equal(response.status,200);
- assert.equal(calls,0);
+ assert.deepEqual(keys,["authenticated-mcp:203.0.113.10"]);
 });
 
 test("public and authentication-failure requests use independent key spaces",async()=>{

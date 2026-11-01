@@ -288,6 +288,7 @@ export class AgentSession extends DurableObject {
         const raw = await this.env.AI.run(MODEL, {
           messages,
           tools: TOOL_DEFINITIONS,
+          parallel_tool_calls: false,
           max_completion_tokens: 1_024,
           temperature: 0
         });

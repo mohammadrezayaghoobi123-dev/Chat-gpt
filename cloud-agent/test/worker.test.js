@@ -298,7 +298,7 @@ test("successful inference with zero-reported token usage still incurs a nonzero
   const budget = makeBudgetBinding({
     onSettle: body => { settlement = body; }
   });
-  const agent = await makeAgent({
+  const { agent } = await makeAgent({
     budget,
     ai: {
       run: async () => ({

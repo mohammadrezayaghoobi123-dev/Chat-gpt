@@ -5,6 +5,7 @@ import {
   MAX_MESSAGE_CHARS,
   MAX_TOOL_CALLS,
   MAX_TOOL_ROUNDS,
+  SESSION_TTL_MS,
   boundedHistory,
   buildGitHubContentsApiUrl,
   decodeGitHubBase64Text,
@@ -14,6 +15,7 @@ import {
   isSafeRef,
   isSafeRepoPath,
   isSessionId,
+  isSessionExpired,
   parseToolArguments,
   readTextBounded
 } from "./core.js";
@@ -238,9 +240,11 @@ export class AgentSession extends DurableObject {
   async handleRequest(request) {
     const url = new URL(request.url);
     if (url.pathname === "/history" && request.method === "GET") {
+      await this.expireIfNeeded();
       return json({ messages: boundedHistory(await this.ctx.storage.get("history")) });
     }
     if (url.pathname !== "/chat" || request.method !== "POST") return json({ error: "Not found" }, 404);
+    await this.expireIfNeeded();
 
     const recentRequests = (await this.ctx.storage.get("rate-window")) || [];
     const now = Date.now();
@@ -319,8 +323,32 @@ export class AgentSession extends DurableObject {
       { role: "user", content: body.message.trim() },
       { role: "assistant", content: finalText }
     ]).slice(-MAX_HISTORY_MESSAGES);
-    await this.ctx.storage.put("history", nextHistory);
+    const lastActivity = Date.now();
+    await this.ctx.storage.put({
+      history: nextHistory,
+      "last-activity-at": lastActivity
+    });
+    await this.ctx.storage.setAlarm(lastActivity + SESSION_TTL_MS);
     return json({ answer: finalText, model: MODEL, tool_calls: toolCallsUsed, read_only: true });
+  }
+
+  async expireIfNeeded() {
+    const lastActivity = await this.ctx.storage.get("last-activity-at");
+    if (!isSessionExpired(lastActivity, Date.now())) return false;
+    await this.ctx.storage.delete(["history", "rate-window", "last-activity-at"]);
+    return true;
+  }
+
+  alarm() {
+    return this.runSerial(async () => {
+      const expired = await this.expireIfNeeded();
+      if (!expired) {
+        const lastActivity = await this.ctx.storage.get("last-activity-at");
+        if (Number.isFinite(lastActivity)) {
+          await this.ctx.storage.setAlarm(lastActivity + SESSION_TTL_MS);
+        }
+      }
+    });
   }
 }
 

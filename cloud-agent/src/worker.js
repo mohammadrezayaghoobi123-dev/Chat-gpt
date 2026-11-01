@@ -446,7 +446,10 @@ export class AgentSession extends DurableObject {
 
     const storedPrincipalId = await this.ctx.storage.get("principal-id");
     const suppliedPrincipalId = request.headers.get("x-principal-id");
-    if (!isValidPrincipalId(storedPrincipalId) || suppliedPrincipalId !== storedPrincipalId) {
+    if (!isValidPrincipalId(storedPrincipalId)) {
+      return json({ error: "Unauthorized" }, 401, { "www-authenticate": "Session" });
+    }
+    if (suppliedPrincipalId !== storedPrincipalId) {
       return json({ error: "Session belongs to a different principal." }, 403);
     }
 

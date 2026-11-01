@@ -136,7 +136,7 @@ test("authenticated routing canonicalizes UUID case before Durable Object lookup
     }
   });
   const response = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION.toUpperCase() + "/history", {
-    headers: { authorization: "Bearer " + TOKEN }
+    headers: { authorization: "Bearer " + TOKEN, "x-session-token": "s".repeat(43) }
   }), env);
   assert.equal(response.status, 200);
   assert.equal(routedName, SESSION);
@@ -164,7 +164,7 @@ test("malformed and oversized chat requests are rejected before model invocation
   assert.equal(malformed.status, 400);
   const oversized = await agent.fetch(new Request("https://agent-session.internal/chat", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-session-token": "s".repeat(43) },
     body: "x".repeat(12_001)
   }));
   assert.equal(oversized.status, 413);
@@ -200,5 +200,6 @@ test("alarm idempotently removes expired session state", async () => {
   await agent.alarm();
   assert.equal(storage.values.has("history"), false);
   assert.equal(storage.values.has("rate-window"), false);
-  assert.equal(storage.values.has("last-activity-at"), false);\n  assert.equal(storage.values.has("session-token-hash"), false);
+  assert.equal(storage.values.has("last-activity-at"), false);
+  assert.equal(storage.values.has("session-token-hash"), false);
 });

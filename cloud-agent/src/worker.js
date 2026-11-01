@@ -241,13 +241,11 @@ export class AgentSession extends DurableObject {
 
   async handleRequest(request) {
     const url = new URL(request.url);
-    if (url.pathname === "/history" && request.method === "GET") {
-      await this.expireIfNeeded();
-      return json({ messages: boundedHistory(await this.ctx.storage.get("history")) });
-    }
-    if (url.pathname !== "/chat" || request.method !== "POST") return json({ error: "Not found" }, 404);
-    await this.expireIfNeeded();
+    const isHistoryRequest = url.pathname === "/history" && request.method === "GET";
+    const isChatRequest = url.pathname === "/chat" && request.method === "POST";
+    if (!isHistoryRequest && !isChatRequest) return json({ error: "Not found" }, 404);
 
+    await this.expireIfNeeded();
     const activity = recordSessionActivity(await this.ctx.storage.get("rate-window"), Date.now());
     if (!activity.allowed) {
       return json({ error: "Session rate limit reached. Wait one minute and retry." }, 429);
@@ -257,6 +255,10 @@ export class AgentSession extends DurableObject {
       "last-activity-at": activity.lastActivity
     });
     await this.ctx.storage.setAlarm(activity.lastActivity + SESSION_TTL_MS);
+
+    if (isHistoryRequest) {
+      return json({ messages: boundedHistory(await this.ctx.storage.get("history")) });
+    }
 
     let body;
     try {
@@ -302,6 +304,9 @@ export class AgentSession extends DurableObject {
           throw new Error("Tool-call budget exceeded.");
         }
         const calls = rawCalls.map(validateToolCall);
+        if (new Set(calls.map(call => call.id)).size !== calls.length) {
+          throw new Error("Duplicate model tool-call identifiers.");
+        }
         messages.push({ ...message, tool_calls: calls });
         for (const call of calls) {
           toolCallsUsed += 1;
@@ -383,7 +388,7 @@ export default {
     }
     const sessionId = match[1];
     if (!isSessionId(sessionId)) return json({ error: "Invalid session identifier." }, 400);
-    const id = env.AGENT_SESSIONS.idFromName(sessionId);
+    const id = env.AGENT_SESSIONS.idFromName(sessionId.toLowerCase());
     const stub = env.AGENT_SESSIONS.get(id);
     return stub.fetch(new Request("https://agent-session.internal/" + match[2], request));
   }

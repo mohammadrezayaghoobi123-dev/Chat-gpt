@@ -51,6 +51,10 @@ function envWithSessionStub({ sessionResponse = Response.json({ initialized: tru
   return {
     AGENT_AUTH_TOKEN: TOKEN,
     AGENT_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    AGENT_BUDGET: {
+      idFromName: name => name,
+      get: () => ({ fetch: async request => Response.json({ allowed: true, reserved_neurons: 1 }) })
+    },
     AGENT_SESSIONS: {
       idFromName: name => name,
       get: () => ({
@@ -99,7 +103,7 @@ async function makeInitializedAgent(token = SESSION_TOKEN, initial = {}) {
   const initialized = await agent.fetch(new Request("https://agent-session.internal/initialize", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ token_hash: tokenHash })
+    body: JSON.stringify({ token_hash: tokenHash, principal_id: "owner" })
   }));
   assert.equal(initialized.status, 201);
   if (Object.hasOwn(initial, "last-activity-at")) {
@@ -188,7 +192,7 @@ test("wrong session capability is rejected before history or rate state is acces
     history: [{ role: "assistant", content: "private history" }]
   });
   const response = await agent.fetch(new Request("https://agent-session.internal/history", {
-    headers: { "x-session-token": "x".repeat(43) }
+    headers: { "x-session-token": "x".repeat(43), "x-principal-id": "owner" }
   }));
   assert.equal(response.status, 401);
   assert.equal(storage.values.get("history")[0].content, "private history");
@@ -217,7 +221,7 @@ test("valid session capability permits access to that session's history", async 
     history: [{ role: "assistant", content: "private history" }]
   });
   const response = await agent.fetch(new Request("https://agent-session.internal/history", {
-    headers: { "x-session-token": SESSION_TOKEN }
+    headers: { "x-session-token": SESSION_TOKEN, "x-principal-id": "owner" }
   }));
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {

@@ -97,6 +97,10 @@ function publicEnv(overrides = {}) {
   return {
     AGENT_AUTH_TOKEN: TOKEN,
     AGENT_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    AGENT_BUDGET: {
+      idFromName: name => name,
+      get: () => ({ fetch: async request => Response.json({ allowed: true, reserved_neurons: 1 }) })
+    },
     AGENT_SESSIONS: {
       idFromName: name => name,
       get: () => ({ fetch: async request => Response.json({ forwarded: new URL(request.url).pathname }) })

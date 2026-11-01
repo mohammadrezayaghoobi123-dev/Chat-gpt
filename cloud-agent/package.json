@@ -1,0 +1,14 @@
+{
+  "name": "master-brain-cloud-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Independent Cloudflare Workers AI engineering agent with read-only GitHub tools.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/core.js && node --check src/worker.js && node --check test/core.test.js"
+  }
+}

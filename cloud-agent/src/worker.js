@@ -158,6 +158,24 @@ function getCompletion(result) {
   return result;
 }
 
+function createSessionCapability() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes)).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+}
+
+async function hashSessionCapability(capability) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(capability));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function constantTimeHexEqual(left, right) {
+  if (typeof left !== "string" || typeof right !== "string" ||
+      !/^[0-9a-f]{64}$/.test(left) || !/^[0-9a-f]{64}$/.test(right)) return false;
+  let difference = 0;
+  for (let i = 0; i < 64; i += 1) difference |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  return difference === 0;
+}
+
 function renderConsole(nonce) {
   const html = `<!doctype html>
 <html lang="en">
@@ -202,14 +220,21 @@ button:disabled{opacity:.5;cursor:wait}
  const send=document.getElementById("send");
  const status=document.getElementById("status");
  const output=document.getElementById("output");
- const sessionId=crypto.randomUUID();
+ let sessionId=null;\n let sessionCapability=null;
  send.addEventListener("click",async()=>{
   const token=tokenInput.value;
   const message=promptInput.value.trim();
   if(!token||!message){status.textContent="Enter the access token and a task.";return;}
   send.disabled=true;status.textContent="Working…";output.textContent="";
   try{
-   const response=await fetch("/api/sessions/"+sessionId+"/chat",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+token},body:JSON.stringify({message})});
+   if(!sessionId||!sessionCapability){
+    const created=await fetch("/api/sessions",{method:"POST",headers:{"authorization":"Bearer "+token}});
+    const createdData=await created.json();
+    if(!created.ok)throw new Error(createdData.error||("Session creation failed: HTTP "+created.status));
+    sessionId=createdData.session_id;
+    sessionCapability=createdData.session_token;
+   }
+   const response=await fetch("/api/sessions/"+sessionId+"/chat",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+token,"x-session-token":sessionCapability},body:JSON.stringify({message})});
    const data=await response.json();
    if(!response.ok)throw new Error(data.error||("HTTP "+response.status));
    output.textContent=data.answer||"No user-facing answer was returned.";
@@ -242,11 +267,48 @@ export class AgentSession extends DurableObject {
 
   async handleRequest(request) {
     const url = new URL(request.url);
+    if (url.pathname === "/initialize" && request.method === "POST") {
+      let initialization;
+      try {
+        const text = await readTextBounded(request.body, request.headers.get("content-length"), 256);
+        initialization = JSON.parse(text);
+      } catch {
+        return json({ error: "Invalid session initialization." }, 400);
+      }
+      if (!initialization || typeof initialization.token_hash !== "string" ||
+          !/^[0-9a-f]{64}$/.test(initialization.token_hash)) {
+        return json({ error: "Invalid session initialization." }, 400);
+      }
+      if (await this.ctx.storage.get("session-token-hash")) {
+        return json({ error: "Session is already initialized." }, 409);
+      }
+      const initializedAt = Date.now();
+      await this.ctx.storage.put({
+        "session-token-hash": initialization.token_hash,
+        "last-activity-at": initializedAt
+      });
+      await this.ctx.storage.setAlarm(initializedAt + SESSION_TTL_MS);
+      return json({ initialized: true }, 201);
+    }
+
     const isHistoryRequest = url.pathname === "/history" && request.method === "GET";
     const isChatRequest = url.pathname === "/chat" && request.method === "POST";
     if (!isHistoryRequest && !isChatRequest) return json({ error: "Not found" }, 404);
 
-    await this.expireIfNeeded();
+    const storedCapabilityHash = await this.ctx.storage.get("session-token-hash");
+    const suppliedCapability = request.headers.get("x-session-token");
+    if (typeof storedCapabilityHash !== "string" || !/^[0-9a-f]{64}$/.test(storedCapabilityHash) ||
+        typeof suppliedCapability !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(suppliedCapability)) {
+      return json({ error: "Unauthorized" }, 401, { "www-authenticate": "Session" });
+    }
+    const suppliedCapabilityHash = await hashSessionCapability(suppliedCapability);
+    if (!constantTimeHexEqual(suppliedCapabilityHash, storedCapabilityHash)) {
+      return json({ error: "Unauthorized" }, 401, { "www-authenticate": "Session" });
+    }
+
+    if (await this.expireIfNeeded()) {
+      return json({ error: "Session expired." }, 410);
+    }
     const activity = recordSessionActivity(await this.ctx.storage.get("rate-window"), Date.now());
     if (!activity.allowed) {
       return json({ error: "Session rate limit reached. Wait one minute and retry." }, 429);
@@ -341,7 +403,7 @@ export class AgentSession extends DurableObject {
   async expireIfNeeded() {
     const lastActivity = await this.ctx.storage.get("last-activity-at");
     if (!isSessionExpired(lastActivity, Date.now())) return false;
-    await this.ctx.storage.delete(["history", "rate-window", "last-activity-at"]);
+    await this.ctx.storage.delete(["history", "rate-window", "last-activity-at", "session-token-hash"]);
     return true;
   }
 
@@ -377,13 +439,20 @@ export default {
       });
     }
 
+    const isCreateSession = url.pathname === "/api/sessions" && request.method === "POST";
     const match = /^\/api\/sessions\/([0-9a-f-]{36})\/(chat|history)$/i.exec(url.pathname);
-    if (!match) return json({ error: "Not found" }, 404);
+    if (!isCreateSession && !match) return json({ error: "Not found" }, 404);
     if (!isAuthorized(request.headers.get("authorization"), env.AGENT_AUTH_TOKEN)) {
       return json({ error: "Unauthorized" }, 401, { "www-authenticate": "Bearer" });
     }
-    const sessionId = match[1];
-    if (!isSessionId(sessionId)) return json({ error: "Invalid session identifier." }, 400);
+    const sessionId = match?.[1];
+    if (sessionId && !isSessionId(sessionId)) return json({ error: "Invalid session identifier." }, 400);
+    if (match) {
+      const capability = request.headers.get("x-session-token");
+      if (typeof capability !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(capability)) {
+        return json({ error: "Session capability required." }, 401, { "www-authenticate": "Session" });
+      }
+    }
 
     let rateAllowed;
     try {
@@ -393,6 +462,21 @@ export default {
     }
     if (!rateAllowed) {
       return json({ error: "Global request rate limit reached. Retry in one minute." }, 429, { "retry-after": "60" });
+    }
+
+    if (isCreateSession) {
+      const newSessionId = crypto.randomUUID();
+      const sessionCapability = createSessionCapability();
+      const tokenHash = await hashSessionCapability(sessionCapability);
+      const id = env.AGENT_SESSIONS.idFromName(newSessionId);
+      const stub = env.AGENT_SESSIONS.get(id);
+      const initialized = await stub.fetch(new Request("https://agent-session.internal/initialize", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token_hash: tokenHash })
+      }));
+      if (!initialized.ok) return json({ error: "Session initialization failed." }, 503);
+      return json({ session_id: newSessionId, session_token: sessionCapability }, 201);
     }
 
     const id = env.AGENT_SESSIONS.idFromName(sessionId.toLowerCase());

@@ -8,8 +8,8 @@ const env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: 
 const OWNER = "mohammadrezayaghoobi123-dev", REPO = "Chat-gpt";
 const headers = { "content-type": "application/json", accept: "application/json, text/event-stream",
   authorization: "Bearer " + MCP, "mcp-protocol-version": "2025-03-26", "cf-connecting-ip": "203.0.113.10" };
-const call = (name, args) => worker.fetch(new Request("https://example.test/mcp", { method: "POST", headers,
-  body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) }), env);
+const call = (name, args, overrides = {}) => worker.fetch(new Request("https://example.test/mcp", { method: "POST", headers,
+  body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) }), { ...env, ...overrides });
 const pr = (files, extra = {}) => ({ owner: OWNER, repo: REPO, base_branch: "feature/cloud-engineering-connector",
   title: "Example", summary: "Test", files, ...extra });
 
@@ -59,7 +59,7 @@ test("PR title is collapsed to one line and summary mentions are neutralised", a
     if (url.endsWith("/pulls")) return new Response(JSON.stringify({ number: 1, html_url: "https://example.test/pr/1" }), { status: 201 });
     return new Response(JSON.stringify({ default_branch: "main", object: { sha: "p" }, tree: { sha: "bt" } }), { status: 200 });
   }, async (calls) => {
-    await call("create_change_pr", pr([{ path: "README.md", content: "x" }], { title: "x @octocat\nInjected: y", summary: "cc @someone @org/team" }));
+    await call("create_change_pr", pr([{ path: "README.md", content: "x" }], { title: "x @octocat\nInjected: y", summary: "cc @someone @org/team" }), { PUBLIC_READ_ONLY: "true" });
     const commit = calls.find(c => c.url.endsWith("/git/commits"));
     const pull = calls.find(c => c.url.endsWith("/pulls"));
     assert.ok(commit && pull, "flow did not reach commit/pull: " + calls.map(c => c.url).join(" | "));

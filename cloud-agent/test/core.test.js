@@ -164,7 +164,7 @@ test("serial executor rejects excess queued work instead of growing without boun
   });
   const outcome = await Promise.race([
     second.then(() => "ran", error => error?.code),
-    Promise.resolve("still-queued")
+    new Promise(resolve => setImmediate(() => resolve("still-queued")))
   ]);
   releaseFirst("first");
   await Promise.allSettled([first, second]);

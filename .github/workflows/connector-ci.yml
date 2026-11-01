@@ -12,6 +12,7 @@ on:
       - "release/production"
       - "assistant/**"
       - "security/**"
+      - "integration/**"
     paths:
       - "cloud-engineering-connector/**"
       - ".github/workflows/connector-ci.yml"

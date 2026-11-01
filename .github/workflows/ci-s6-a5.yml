@@ -1,0 +1,40 @@
+name: ci-s6-a5 (Stage 6 A5, read-only)
+
+# Stage 6 cross-environment arm: runs the two registered CTP self-tests 30 times each on a GitHub runner
+# against the frozen subject commit and surfaces fingerprints as an annotation. Writes nothing.
+on:
+  push:
+    branches:
+      - ci/flake-stress-2026-10-28
+    paths:
+      - .github/workflows/ci-s6-a5.yml
+      - .github/diag/s6_a5.py
+
+permissions:
+  contents: read
+
+jobs:
+  a5:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: a1e11adeddf72587d93283b08b13e7b713bcfb4e
+          path: subject
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Allow unprivileged user namespaces
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+      - name: Run A5 as root
+        env:
+          MB_SRC: subject/src
+        run: |
+          set +e
+          sudo -E env "PATH=$PATH" python .github/diag/s6_a5.py > a5.out 2> a5.err
+          echo "exit=$?" >> a5.out
+          echo "::notice title=s6-a5::$(tr '\n' ' ' < a5.out | head -c 3500)"
+          echo "::notice title=s6-a5-err::$(tail -c 800 a5.err | tr '\n' ' ')"

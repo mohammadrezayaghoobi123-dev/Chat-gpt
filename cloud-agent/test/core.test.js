@@ -7,7 +7,8 @@ import {
   isSafeRef,
   isSafeRepoPath,
   isSessionId,
-  parseToolArguments
+  parseToolArguments,
+  readTextBounded
 } from "../src/core.js";
 
 test("accepts UUID session identifiers and rejects path-like identifiers", () => {
@@ -63,4 +64,26 @@ test("extracts only user-facing text from model message content", () => {
   assert.equal(extractAssistantText({ content: "answer" }), "answer");
   assert.equal(extractAssistantText({ content: [{ type: "text", text: "one" }, { type: "image" }, { type: "text", text: "two" }] }), "one\ntwo");
   assert.equal(extractAssistantText({ content: null, reasoning: "private reasoning" }), "");
+});
+
+test("reads a stream within its byte limit", async () => {
+  assert.equal(await readTextBounded(new Response("hello").body, null, 5), "hello");
+});
+
+test("rejects a declared oversized body before reading it", async () => {
+  await assert.rejects(
+    readTextBounded(new Response("oversized").body, "9", 8),
+    /Body exceeds configured limit/
+  );
+});
+
+test("rejects an oversized streamed body even when content length is absent or false", async () => {
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("four"));
+      controller.close();
+    }
+  });
+  await assert.rejects(readTextBounded(stream, null, 3), /Body exceeds configured limit/);
+  await assert.rejects(readTextBounded(new Response("é").body, "1", 1), /Body exceeds configured limit/);
 });

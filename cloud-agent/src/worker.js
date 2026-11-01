@@ -422,6 +422,7 @@ export class AgentSession extends DurableObject {
       const initializedAt = Date.now();
       await this.ctx.storage.put({
         "session-token-hash": initialization.token_hash,
+        "principal-id": initialization.principal_id,
         "last-activity-at": initializedAt
       });
       await this.ctx.storage.setAlarm(initializedAt + SESSION_TTL_MS);

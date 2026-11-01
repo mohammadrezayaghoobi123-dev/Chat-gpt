@@ -142,3 +142,14 @@
   - Full-history Gitleaks run `41322316428`: 1,502 commits / approximately 5.28 MB; zero findings.
 - Gitleaks v3 itself completed successfully. Its logs still include upstream Node dependency deprecation warnings (`punycode`, `url.parse`); these are non-failing and should be tracked for upstream remediation.
 - No changes to `main`, Production resources, secrets, routes, bindings, billing, or deployments. PR #101 remains Draft.
+
+
+### Execution Record — Secret Allowlist Precision and PR Overlap Review — 2026-11-01
+
+- A focused review of .gitleaks.toml found three historical allowlists scoped to exact commit/path/rule but matching generic identifiers (MCP_AUTH_TOKEN, const SECRET, and const token) rather than the synthetic fixture literal. This was broader than the stated policy and could suppress a finding on those exact lines.
+- Replaced all three regexes with exact matching of the verified synthetic 32-character fixture value, retaining the existing exact commit, file path, and target-rule constraints.
+- Gitleaks run 41322485860 on head bf875196f574bed8d1f993e7758c9cb6c04a20f9 passed: 1,504 commits / approximately 5.28 MB / zero findings. The workflow's PR-diff scan and full-history scan both completed.
+- PR #97 and PR #101 are both Draft and target the same base hardening/daily-neuron-budget at c0f3be179a62985aa9abf67dec8e10b39ba72518. PR #101 is the more complete canonical hardening candidate: it contains lockfiles, npm ci, moderate-level audit gates, full-history scanning, and the session/rate-limit/security-header fixes. PR #97's separate security-audit.yml duplicates scanning and uses npm install without committed lockfiles and npm audit --audit-level=high; merging both unchanged would create redundant and less reproducible checks.
+- PR #97 contains potentially useful non-overlapping additions (.github/dependabot.yml, .gitignore, and .devcontainer permission/log hardening). These should be evaluated for selective porting; do not merge PR #97 wholesale or merge both Draft PRs as-is.
+- Review limitation: Connector constantTimeEqual avoids early exit on differing content but loops to max(left.length, right.length), so execution remains length-dependent. Do not claim a strict constant-time guarantee. This is recorded for follow-up assessment; no timing benchmark or exploitability test has been performed.
+- main remains unchanged at f2cae91de818385ec48daafc43c621b9e2cc0675 and unprotected. No merge, deployment, live secret mutation, or credential rotation was performed.

@@ -352,7 +352,7 @@ test("authentication failure quota is isolated by Cloudflare client IP", async (
   const env = publicEnv({
     AGENT_RATE_LIMITER: { limit: async ({ key }) => { limiterKeys.push(key); return { success: true }; } }
   });
-  for (const ip of ["203.0.113.10", "203.0.113.11"]) {
+  for (const ip of ["203.0.113.10", "203.0.113.11", "2001:db8:abcd:12::1", "2001:db8:abcd:12::2"]) {
     const response = await worker.fetch(new Request("https://agent.example/api/sessions", {
       method: "POST",
       headers: { "cf-connecting-ip": ip }
@@ -361,7 +361,9 @@ test("authentication failure quota is isolated by Cloudflare client IP", async (
   }
   assert.deepEqual(limiterKeys, [
     "master-brain-cloud-agent-auth-failure:203.0.113.10",
-    "master-brain-cloud-agent-auth-failure:203.0.113.11"
+    "master-brain-cloud-agent-auth-failure:203.0.113.11",
+    "master-brain-cloud-agent-auth-failure:v6/64:2001:db8:abcd:12",
+    "master-brain-cloud-agent-auth-failure:v6/64:2001:db8:abcd:12"
   ]);
 });
 

@@ -165,6 +165,7 @@ describe("Cloudflare Workers runtime: global daily Neuron budget", () => {
 
     const settled = await settle(reservation.requestId, 150);
     expect(settled.status).toBe(200);
+    expect((await settled.json()).reservation_overrun).toBe(true);
     const current = await status();
     expect(current.body.used_neurons).toBe(150);
     expect(current.body.over_budget).toBe(false);

@@ -39,7 +39,7 @@ condition = "AND"
 commits = ["2707fe59768b3a98d2598cdd3d43f9d5e57510c4"]
 paths = ['''^tests/test_audit_policy\.py$''']
 regexTarget = "line"
-regexes = ['''AKIAIOSFODNN7EXAMPLE''']
+regexes = ['''AKIAABCDEFGHIJKLMNOP''']
 
 [[allowlists]]
 description = "Synthetic API-key-shaped negative-test value, restricted to its exact historical commit, file, and value."

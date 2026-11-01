@@ -18,7 +18,7 @@ async function withFetch(handler, fn) {
   globalThis.fetch = async (url, init = {}) => { calls.push({ url: String(url), body: init.body }); return handler(String(url), init); };
   try { return await fn(calls); } finally { globalThis.fetch = original; }
 }
-const text = async (r) => JSON.parse((await r.json()).result.content[0].text);
+const text = async (r) => { const body = await r.json(); if (!body.result?.content?.[0]?.text) throw new Error("HTTP " + r.status + ": " + JSON.stringify(body)); return JSON.parse(body.result.content[0].text); };
 
 test("write path denylist covers env variants, key material, tfstate dirs and review-control files", async () => {
   const bad = [".env-prod", ".env_local", "a/.env.production", ".dev.vars", ".dev.vars.production", "config/.dev.vars.local", "prod.auto.tfvars.json", "terraform.tfstate.d/x", "x/.terraform/y",

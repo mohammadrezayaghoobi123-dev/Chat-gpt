@@ -1,12 +1,24 @@
-import { env, exports } from "cloudflare:workers";
+import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import worker from "../src/worker.js";
 
 const BASE = "https://agent-runtime.test";
-const AUTH = env.AGENT_AUTH_TOKEN;
+const AUTH = "test-only-cloud-agent-token-0123456789abcdef0123456789";
+const testEnv = {
+  AGENT_AUTH_TOKEN: AUTH,
+  AGENT_SESSIONS: env.AGENT_SESSIONS,
+  AGENT_RATE_LIMITER: {
+    limit: async () => ({ success: true })
+  }
+};
+
+async function fetchWorker(path, init = {}) {
+  return worker.fetch(new Request(BASE + path, init), testEnv);
+}
 
 async function createSession() {
-  const response = await exports.default.fetch(BASE + "/api/sessions", {
+  const response = await fetchWorker("/api/sessions", {
     method: "POST",
     headers: { authorization: "Bearer " + AUTH }
   });
@@ -37,8 +49,8 @@ describe("Cloudflare Workers runtime: session capability isolation", () => {
 
   it("rejects a missing capability at the Worker boundary", async () => {
     const session = await createSession();
-    const response = await exports.default.fetch(
-      BASE + "/api/sessions/" + session.session_id + "/history",
+    const response = await fetchWorker(
+      "/api/sessions/" + session.session_id + "/history",
       { headers: { authorization: "Bearer " + AUTH } }
     );
     expect(response.status).toBe(401);
@@ -48,8 +60,8 @@ describe("Cloudflare Workers runtime: session capability isolation", () => {
     const first = await createSession();
     const second = await createSession();
 
-    const crossSession = await exports.default.fetch(
-      BASE + "/api/sessions/" + second.session_id + "/history",
+    const crossSession = await fetchWorker(
+      "/api/sessions/" + second.session_id + "/history",
       {
         headers: {
           authorization: "Bearer " + AUTH,
@@ -59,8 +71,8 @@ describe("Cloudflare Workers runtime: session capability isolation", () => {
     );
     expect(crossSession.status).toBe(401);
 
-    const ownSession = await exports.default.fetch(
-      BASE + "/api/sessions/" + second.session_id + "/history",
+    const ownSession = await fetchWorker(
+      "/api/sessions/" + second.session_id + "/history",
       {
         headers: {
           authorization: "Bearer " + AUTH,
@@ -81,8 +93,8 @@ describe("Cloudflare Workers runtime: session capability isolation", () => {
       ]);
     });
 
-    const denied = await exports.default.fetch(
-      BASE + "/api/sessions/" + session.session_id + "/history",
+    const denied = await fetchWorker(
+      "/api/sessions/" + session.session_id + "/history",
       {
         headers: {
           authorization: "Bearer " + AUTH,
@@ -92,8 +104,8 @@ describe("Cloudflare Workers runtime: session capability isolation", () => {
     );
     expect(denied.status).toBe(401);
 
-    const allowed = await exports.default.fetch(
-      BASE + "/api/sessions/" + session.session_id + "/history",
+    const allowed = await fetchWorker(
+      "/api/sessions/" + session.session_id + "/history",
       {
         headers: {
           authorization: "Bearer " + AUTH,
@@ -114,8 +126,8 @@ describe("Cloudflare Workers runtime: session capability isolation", () => {
       await state.storage.put("last-activity-at", Date.now() - 8 * 24 * 60 * 60 * 1000);
     });
 
-    const response = await exports.default.fetch(
-      BASE + "/api/sessions/" + session.session_id + "/history",
+    const response = await fetchWorker(
+      "/api/sessions/" + session.session_id + "/history",
       {
         headers: {
           authorization: "Bearer " + AUTH,

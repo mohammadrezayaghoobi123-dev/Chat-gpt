@@ -97,7 +97,7 @@ export function decodeGitHubBase64Text(encodedContent, maxBytes) {
 export function rateLimitClientKey(ip) {
   if (typeof ip !== "string" || ip.length < 2 || ip.length > 128) return null;
 
-  const ipv4Pattern = /^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$/;
+  const ipv4Pattern = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
   const parseIpv4 = value => {
     const match = ipv4Pattern.exec(value);
     if (!match) return null;
@@ -110,7 +110,7 @@ export function rateLimitClientKey(ip) {
 
   if (!ip.includes(":") || !/^[0-9a-fA-F:.]+$/.test(ip)) return null;
   let address = ip.toLowerCase();
-  const mappedTail = /^(.*:)(\\d{1,3}(?:\\.\\d{1,3}){3})$/.exec(address);
+  const mappedTail = /^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/.exec(address);
   if (mappedTail) {
     const octets = parseIpv4(mappedTail[2]);
     if (!octets) return null;

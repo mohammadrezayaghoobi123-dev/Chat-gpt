@@ -7,7 +7,7 @@ export const MAX_TOOL_CALLS = 4;
 const BLOCKED_PATHS = [
   /(^|\/)(?:\.git|\.github|\.ssh|\.aws|\.azure|\.kube|\.docker)(?:\/|$)/i,
   /(^|\/)(?:\.env[^/]*|\.dev\.vars(?:\.[^/]*)?)(?:\/|$)/i,
-  /(^|\/)(?:secrets?|credentials?)(?:[._-][^/]*)?(?:\/|$)/i,
+  /(^|\/)[^/]*(?:secret|credential|token|private[_-]?key)[^/]*(?:\/|$)/i,
   /(^|\/)(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|known_hosts|authorized_keys)$/i,
   /\.(?:pem|key|p12|p8|pfx|tfstate|tfvars)$/i,
   /\.tfvars\.json$/i

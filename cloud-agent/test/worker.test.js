@@ -198,7 +198,7 @@ test("Durable Object chat persists bounded history and schedules expiry", async 
 test("malformed and oversized chat requests are rejected before model invocation but still count toward rate limits", async () => {
   let modelCalls = 0;
   const { agent, storage } = await makeAgent({ ai: { run: async () => { modelCalls += 1; return {}; } } });
-  const malformed = await agent.fetch(new Request("https://agent-session.internal/chat", { method: "POST", headers: { "x-session-token": "s".repeat(43) }, body: "{" }));
+  const malformed = await agent.fetch(new Request("https://agent-session.internal/chat", { method: "POST", headers: { "x-session-token": "s".repeat(43), "x-principal-id": "owner" }, body: "{" }));
   assert.equal(malformed.status, 400);
   const oversized = await agent.fetch(new Request("https://agent-session.internal/chat", {
     method: "POST",

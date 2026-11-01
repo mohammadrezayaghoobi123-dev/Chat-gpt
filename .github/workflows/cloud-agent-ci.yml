@@ -1,0 +1,34 @@
+name: Cloud Agent CI
+
+on:
+  push:
+    branches:
+      - feature/independent-cloud-agent
+    paths:
+      - "cloud-agent/**"
+      - ".github/workflows/cloud-agent-ci.yml"
+  pull_request:
+    paths:
+      - "cloud-agent/**"
+      - ".github/workflows/cloud-agent-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloud-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax checks
+        run: npm run check
+      - name: Unit tests
+        run: npm test
+      - name: Wrangler configuration dry-run
+        run: npx --yes wrangler@4.155.0 deploy --dry-run

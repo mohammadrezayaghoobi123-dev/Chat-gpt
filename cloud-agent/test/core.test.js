@@ -221,8 +221,8 @@ test("validates model tool-call envelopes before execution", () => {
     type: "function",
     function: { name: "read_project_file", arguments: "{\"path\":\"README.md\"}" }
   };
-  assert.deepEqual(validateToolCall(valid), valid);
-  assert.throws(() => validateToolCall({ ...valid, id: "bad id" }), /identifier/);
+  assert.deepEqual(validateToolCalls([valid], 1), [valid]);
+  assert.throws(() => validateToolCalls([{ ...valid, id: "bad id" }], 1), /identifier/);
   assert.throws(() => validateToolCalls([{ ...valid, type: "other" }], 1), /Malformed/);
   assert.throws(() => validateToolCalls([{ ...valid, function: { ...valid.function, name: "run_shell" } }], 1), /Unknown/);
   assert.throws(() => validateToolCalls([{ ...valid, function: { ...valid.function, arguments: "x".repeat(4097) } }], 1), /oversized/);

@@ -196,10 +196,10 @@ function actualNeuronsFromUsage(raw) {
       !Number.isSafeInteger(usage.completion_tokens) || usage.completion_tokens < 0) {
     return null;
   }
-  return Math.ceil(
+  return Math.max(1, Math.ceil(
     (usage.prompt_tokens * INPUT_NEURONS_PER_MILLION +
       usage.completion_tokens * OUTPUT_NEURONS_PER_MILLION) / 1_000_000
-  );
+  ));
 }
 
 async function reserveModelBudget(env, messages) {

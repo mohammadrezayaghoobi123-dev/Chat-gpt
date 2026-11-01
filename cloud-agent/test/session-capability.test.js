@@ -107,6 +107,16 @@ test("authenticated session creation returns a random capability and stores only
   assert.notEqual(init.token_hash, body.session_token);
 });
 
+test("session creation fails closed when Durable Object initialization fails", async () => {
+  const response = await worker.fetch(
+    authorizedRequest("/api/sessions", { method: "POST" }),
+    envWithSessionStub({ sessionResponse: new Response("unavailable", { status: 503 }) })
+  );
+  assert.equal(response.status, 503);
+  const body = await response.json();
+  assert.equal(Object.hasOwn(body, "session_token"), false);
+});
+
 test("session initialization is one-time and persists only a verifier", async () => {
   const { agent, storage, tokenHash } = await makeInitializedAgent();
   assert.equal(storage.values.get("session-token-hash"), tokenHash);
@@ -164,6 +174,23 @@ test("wrong session capability is rejected before history or rate state is acces
   assert.equal(response.status, 401);
   assert.equal(storage.values.get("history")[0].content, "private history");
   assert.equal(storage.values.has("rate-window"), false);
+});
+
+test("wrong session capability is rejected for chat before model invocation", async () => {
+  let modelCalls = 0;
+  const { agent, storage } = await makeInitializedAgent();
+  agent.env.AI.run = async () => {
+    modelCalls += 1;
+    return { choices: [{ message: { role: "assistant", content: "must not run" } }] };
+  };
+  const response = await agent.fetch(new Request("https://agent-session.internal/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-session-token": "x".repeat(43) },
+    body: JSON.stringify({ message: "unauthorized prompt" })
+  }));
+  assert.equal(response.status, 401);
+  assert.equal(modelCalls, 0);
+  assert.equal(storage.values.has("history"), false);
 });
 
 test("valid session capability permits access to that session's history", async () => {

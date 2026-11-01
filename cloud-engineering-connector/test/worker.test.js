@@ -78,7 +78,7 @@ test("MCP rejects oversized streamed request bodies without Content-Length",asyn
  const bytes=new TextEncoder().encode(payload);
  let offset=0;
  const stream=new ReadableStream({pull(controller){if(offset>=bytes.length){controller.close();return}const end=Math.min(offset+64_000,bytes.length);controller.enqueue(bytes.slice(offset,end));offset=end}});
- const request=new Request("https://example.test/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body:stream,duplex:"half"});
+ const request=new Request("https://example.test/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream","cf-connecting-ip":"203.0.113.10"},body:stream,duplex:"half"});
  assert.equal(request.headers.has("content-length"),false);
  const r=await worker.fetch(request,env);
  assert.equal(r.status,413);

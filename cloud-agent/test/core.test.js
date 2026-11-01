@@ -59,6 +59,18 @@ test("requires an exact bearer token and a sufficiently long configured secret",
   assert.equal(isAuthorized("Bearer " + token, "short"), false);
 });
 
+test("rejects bearer secrets whose UTF-8 encoding exceeds the fixed comparison bound", () => {
+  const oversizedUtf8Token = "é".repeat(257);
+  assert.equal(oversizedUtf8Token.length, 257);
+  assert.equal(isAuthorized("Bearer " + oversizedUtf8Token, oversizedUtf8Token), false);
+});
+
+test("rejects configured bearer secrets longer than 512 characters", () => {
+  const oversizedToken = "a".repeat(513);
+  assert.equal(isAuthorized("Bearer " + oversizedToken, oversizedToken), false);
+});
+
+
 test("bounds persisted history to user and assistant messages only", () => {
   const history = [
     { role: "system", content: "must not persist" },

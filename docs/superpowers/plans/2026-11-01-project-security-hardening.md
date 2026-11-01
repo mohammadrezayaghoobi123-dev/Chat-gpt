@@ -48,7 +48,7 @@
 - [x] Add tests proving a denied authenticated request returns 429 with Retry-After and does not execute MCP methods.
 - [x] Add tests proving limiter outage or malformed client identity fails closed with 503.
 - [x] Run the focused test and verify expected failure before production changes.
-- [x] Apply minimal change and run the full connector test suite (150/150 on the latest verified Connector CI run).
+- [x] Apply minimal change and run the full connector test suite (152/152 on the latest verified Connector CI run).
 
 ### Task 2: Authorization and Server-Side Input Boundary
 
@@ -60,7 +60,7 @@
 - [x] Test write-tool denial under unauthenticated, public-read-only, invalid-bearer, short-token, and missing-GitHub-credential configurations.
 - [x] Test unknown tool names, extra properties, malformed JSON-RPC params, repository identifiers, branch names, file paths, file sizes, and file counts.
 - [x] Fix only demonstrated gaps; retain server-side allowlists and fail-closed behavior. No additional Task 2 production defect was reproduced; new boundary tests pass.
-- [x] Run all connector tests (150/150).
+- [x] Run all connector tests (152/152).
 
 ### Task 3: Cloud Agent Session and Budget Authorization
 
@@ -72,7 +72,7 @@
 - [x] Verify session expiry, cross-session ownership boundaries, and capability/history secrecy. Expiry removes history, rate state, timestamp, and verifier; history returns only role/content; no console/logger calls exist in Agent worker/core/budget source.
 - [x] Verify daily budget reservations fail closed and cannot be bypassed through concurrent sessions.
 - [x] Add regression tests for confirmed auth-failure rate-limit gap before code changes.
-- [x] Run Node and Workers Vitest/workerd suites (51/51 Node; 15/15 runtime).
+- [x] Run Node and Workers Vitest/workerd suites (52/52 Node; 15/15 runtime).
 
 ### Task 4: Browser, Transport, and Operational Security
 
@@ -80,9 +80,9 @@
 - Review: browser console/static assets and deployment configuration.
 - Review: `.github/workflows/*.yml`, package manifests, lockfiles, ignore rules and Git history.
 
-- [x] Audit CORS, CSP/security headers, HTML escaping, DOM sinks, CSRF exposure, cookies, debug routes, and upload handlers; HTTPS-only CORS and restrictive headers are now enforced.
+- [x] Audit CORS, CSP/security headers, HTML escaping, DOM sinks, CSRF exposure, cookies, debug routes, and upload handlers; a global response wrapper now enforces restrictive headers on JSON, preflight, 202 notification, SSE, and HTML responses, with HSTS only over HTTPS.
 - [x] Audit direct database/SQL usage; the inspected services use Durable Object storage and GitHub APIs, with no direct SQL query surface.
-- [x] Scan current tree and all fetched refs/reachable history with Gitleaks 8.30.1; no findings after exact-value, commit-scoped allowlists for verified synthetic fixtures. Latest scan: 1,490 commits / 5.26 MB / zero findings.
+- [x] Scan current tree and all fetched refs/reachable history with Gitleaks 8.30.1; no findings after exact-value, commit-scoped allowlists for verified synthetic fixtures. Latest scan: 1,496 commits / 5.27 MB / zero findings.
 - [x] Commit package-lock.json for both packages; CI uses npm ci and npm audit --audit-level=moderate. Latest runs reported 0 vulnerabilities in both packages. Vitest upgraded to 4.1.12 to resolve two moderate @vitest/mocker advisories.
 - [x] Review GitHub Actions permissions and trigger scope; CI uses contents:read, full-SHA-pinned actions, and push triggers for security/**. Non-blocking Node 20 deprecation warnings remain for the v4 action SHAs.
 - [x] Record non-applicable features: password hashing, cookie sessions, multipart uploads, and direct SQL are not present in the inspected services.
@@ -100,12 +100,12 @@
 
 - Isolated branch: `security/project-security-hardening`; PR #101 remains Draft.
 - Base: `hardening/daily-neuron-budget` at `c0f3be179a62985aa9abf67dec8e10b39ba72518`; merge-base verified; no commits behind base.
-- Latest branch head at this record: `3cb8641a66fe47316bac698ff4718760c37e3042`. The repository owner subsequently consolidated the secret-scan workflow; that commit was preserved.
-- TDD evidence for the authentication and rate-limit defects: regression tests failed on the pre-fix implementation, then passed after the minimum fixes. The session ownership/history tests are characterization coverage of existing safeguards; no production change was required for those checks.
-- Latest Connector CI: run `41321145655`; 150/150 tests, moderate-level npm audit with 0 vulnerabilities, syntax checks, and Production/Staging Wrangler dry-runs passed.
-- Latest Cloud Agent CI: run `41321145654`; 51/51 Node tests, 15/15 Vitest/workerd tests, moderate-level npm audit with 0 vulnerabilities, syntax checks, and Wrangler dry-run passed.
+- Latest code/workflow head at this record: `889640ec7594a4b47298c5d08643e0c6dffa46ae`. The repository owner consolidated the secret-scan workflow; that commit was preserved.
+- TDD evidence: authentication/rate-limit regressions and the later response-header/HSTS tests failed on the pre-fix implementation, then passed after minimum fixes. Session ownership/history tests are characterization coverage of existing safeguards; no production change was required for those checks.
+- Latest Connector CI: run `41321606070`; 152/152 tests, moderate-level npm audit with 0 vulnerabilities, syntax checks, and Production/Staging Wrangler dry-runs passed.
+- Latest Cloud Agent CI: run `41321605788` (PR) and `41321601835` (push); 52/52 Node tests, 15/15 Vitest/workerd tests, moderate-level npm audit with 0 vulnerabilities, syntax checks, and Wrangler dry-run passed.
 - Dependency graph is now committed in both package lockfiles. A one-shot lockfile-generation workflow committed the lockfiles and removed itself; it is absent from the final tree.
-- `main` remains at `f2cae91de818385ec48daafc43c621b9e2cc0675` and is still unprotected (`protected:false)); this P0 repository control remains unresolved.
+- `main` remains at `f2cae91de818385ec48daafc43c621b9e2cc0675` and is still unprotected (`protected:false`); this P0 repository control remains unresolved.
 - No live Worker deployment, route/binding/secret change, credential rotation, or billing change was performed. Read-only binding metadata was reviewed; Production `GITHUB_TOKEN` is `plain_text` and account 2FA enforcement is disabled. Hosted canary remains outstanding.
 - Remaining high-priority work: protect `main` and require checks; remediate the Production `GITHUB_TOKEN` plain-text binding through separately approved revocation/rotation and Secret binding; enable Cloudflare account 2FA; validate a hosted staging canary after separate approval. Billing plan remains unverified.
 
@@ -123,6 +123,6 @@
 ### Secret Scan Evidence — Current Branch
 
 - The Gitleaks workflow scans the PR change range and all fetched Git refs with `fetch-depth: 0` and `--log-opts=--all`.
-- Latest scan run `41321141065` on branch head `3cb8641a`: 1,491 commits and approximately 5.27 MB scanned; zero findings.
+- Latest scan run `41321601825` on branch head `889640ec`: 1,496 commits and approximately 5.27 MB scanned; zero findings.
 - Historical suppressions were narrowed from broad field-name/pattern allowlists to exact synthetic fixture values, exact historical commits, and exact file paths. The AWS-shaped test value was verified as a sequential alphabetic placeholder before its exact-value allowlist was retained.
 - The repository has one full-history secret-scan workflow in the final tree; the duplicate workflow was removed/consolidated by a subsequent repository-owner commit and that commit was preserved.

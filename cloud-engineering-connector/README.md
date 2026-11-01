@@ -57,6 +57,11 @@ Cloudflare Workers has a free tier subject to current quotas and account eligibi
 
 ## Security
 
+- `MCP_AUTH_TOKEN` must be configured as a Cloudflare Secret and contain at least 32 characters. Weak or malformed configured values fail closed with HTTP 503; a valid token is compared without an early-exit string comparison.
+- Authenticated requests, authentication failures, and explicitly public read-only requests use separate IP-based rate-limit key spaces. The configured Cloudflare Rate Limiting binding currently allows 60 requests per minute per key; authenticated calls are not exempt.
+- Browser origins must exactly match `MCP_ALLOWED_ORIGINS`. HTTPS is required except for explicitly configured loopback origins used in local development. Requests without an Origin header remain supported for non-browser MCP clients.
+- Responses include baseline browser security headers: HSTS on HTTPS, CSP, frame denial, MIME sniffing protection, Referrer-Policy, and a restrictive Permissions-Policy.
+- The connector does not use browser cookies, password authentication, direct SQL databases, or a traditional multipart file-upload endpoint. These controls are therefore not applicable to the current implementation; GitHub file creation is a separate authenticated draft-PR operation with path and size bounds.
 - Inbound MCP request bodies are capped at 1,000,000 bytes.
 - GitHub API responses are capped at 2,000,000 bytes by default; `read_project_file` uses a stricter 150,000-byte cap.
 - Missing-token diagnostics are actionable; write operations remain denied without required credentials. boundaries and limitations

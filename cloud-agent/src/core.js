@@ -199,6 +199,17 @@ export function validateToolCall(call) {
   return { id, type: "function", function: { name, arguments: args } };
 }
 
+export async function consumeRateLimit(binding, key) {
+  if (!binding || typeof binding.limit !== "function" || typeof key !== "string" || !key) {
+    throw new TypeError("Rate limiter binding or key is invalid.");
+  }
+  const result = await binding.limit({ key });
+  if (!result || typeof result.success !== "boolean") {
+    throw new Error("Rate limiter returned an invalid decision.");
+  }
+  return result.success;
+}
+
 export function validateToolCalls(calls, remainingBudget) {
   if (!Array.isArray(calls) || !Number.isSafeInteger(remainingBudget) || remainingBudget < 0 ||
       calls.length > remainingBudget) {

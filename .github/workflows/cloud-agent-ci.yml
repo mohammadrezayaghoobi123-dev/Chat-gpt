@@ -28,7 +28,7 @@ jobs:
         with:
           node-version: 22
       - name: Install pinned test dependencies
-        run: npm install --no-audit --no-fund --package-lock=false
+        run: npm install --no-audit --no-fund
       - name: Syntax checks
         run: npm run check
       - name: Unit tests

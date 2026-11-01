@@ -12,7 +12,7 @@ const testableWorkerSource = workerSource
     'import { DurableObject } from "cloudflare:workers";',
     "class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }"
   )
-  .replace('from "./core.js"', 'from "' + coreUrl + '" )
+  .replace('from "./core.js"', 'from "' + coreUrl + '"')
   .replace(
     'import { AgentBudget, DAILY_NEURON_BUDGET } from "./budget.js";',
     "const DAILY_NEURON_BUDGET = 1000; class AgentBudget {}"

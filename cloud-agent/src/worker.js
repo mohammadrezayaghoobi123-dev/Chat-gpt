@@ -1,4 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
+import { AgentBudget, DAILY_NEURON_BUDGET } from "./budget.js";
+
+export { AgentBudget };
 import {
   MAX_FILE_BYTES,
   MAX_HISTORY_MESSAGES,
@@ -156,6 +159,76 @@ async function executeTool(name, rawArguments) {
 function getCompletion(result) {
   if (result && typeof result === "object" && result.response && typeof result.response === "object") return result.response;
   return result;
+}
+
+const INPUT_NEURONS_PER_MILLION = 5_500;
+const OUTPUT_NEURONS_PER_MILLION = 36_400;
+const MAX_COMPLETION_TOKENS = 1_024;
+
+function estimateReservedNeurons(messages) {
+  const payloadBytes = new TextEncoder().encode(JSON.stringify({
+    messages,
+    tools: TOOL_DEFINITIONS
+  })).length;
+  const estimatedInputTokens = Math.ceil(payloadBytes * 1.1) + 128;
+  return Math.max(1, Math.ceil(
+    (estimatedInputTokens * INPUT_NEURONS_PER_MILLION +
+      MAX_COMPLETION_TOKENS * OUTPUT_NEURONS_PER_MILLION) / 1_000_000
+  ));
+}
+
+function actualNeuronsFromUsage(raw) {
+  const completion = getCompletion(raw);
+  const usage = raw?.usage || completion?.usage;
+  if (!usage ||
+      !Number.isSafeInteger(usage.prompt_tokens) || usage.prompt_tokens < 0 ||
+      !Number.isSafeInteger(usage.completion_tokens) || usage.completion_tokens < 0) {
+    return null;
+  }
+  return Math.ceil(
+    (usage.prompt_tokens * INPUT_NEURONS_PER_MILLION +
+      usage.completion_tokens * OUTPUT_NEURONS_PER_MILLION) / 1_000_000
+  );
+}
+
+async function reserveModelBudget(env, messages) {
+  const neurons = estimateReservedNeurons(messages);
+  if (neurons > DAILY_NEURON_BUDGET) {
+    return { ok: false, status: 429, error: "This request exceeds the remaining daily model budget." };
+  }
+  const requestId = crypto.randomUUID();
+  const id = env.AGENT_BUDGET.idFromName("global");
+  const stub = env.AGENT_BUDGET.get(id);
+  const response = await stub.fetch(new Request("https://agent-budget.internal/reserve", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ request_id: requestId, neurons })
+  }));
+  if (response.status === 429) {
+    const result = await response.json().catch(() => ({}));
+    return {
+      ok: false,
+      status: 429,
+      error: result.error || "The daily model budget is exhausted.",
+      retryAfter: response.headers.get("retry-after")
+    };
+  }
+  if (!response.ok) throw new Error("Daily model budget reservation failed.");
+  return { ok: true, requestId, reservedNeurons: neurons, stub };
+}
+
+async function settleModelBudget(reservation, raw, success) {
+  const actualNeurons = success ? actualNeuronsFromUsage(raw) : null;
+  const response = await reservation.stub.fetch(new Request("https://agent-budget.internal/settle", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      request_id: reservation.requestId,
+      success,
+      ...(actualNeurons === null ? {} : { actual_neurons: actualNeurons })
+    })
+  }));
+  if (!response.ok) throw new Error("Daily model budget settlement failed.");
 }
 
 function createSessionCapability() {
@@ -349,13 +422,28 @@ export class AgentSession extends DurableObject {
 
     try {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-        const raw = await this.env.AI.run(MODEL, {
-          messages,
-          tools: TOOL_DEFINITIONS,
-          parallel_tool_calls: false,
-          max_completion_tokens: 1_024,
-          temperature: 0
-        });
+        const reservation = await reserveModelBudget(this.env, messages);
+        if (!reservation.ok) {
+          return json(
+            { error: reservation.error },
+            reservation.status,
+            reservation.retryAfter ? { "retry-after": reservation.retryAfter } : {}
+          );
+        }
+        let raw;
+        try {
+          raw = await this.env.AI.run(MODEL, {
+            messages,
+            tools: TOOL_DEFINITIONS,
+            parallel_tool_calls: false,
+            max_completion_tokens: MAX_COMPLETION_TOKENS,
+            temperature: 0
+          });
+        } catch (error) {
+          await settleModelBudget(reservation, null, false);
+          throw error;
+        }
+        await settleModelBudget(reservation, raw, true);
         const completion = getCompletion(raw);
         const message = completion?.choices?.[0]?.message;
         if (!message) throw new Error("Model returned no completion message.");

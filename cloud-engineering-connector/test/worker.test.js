@@ -667,7 +667,7 @@ test("create_change_pr rejects more than twelve files before any GitHub request"
     }), { ...env, GITHUB_TOKEN: "unused" });
     const body = await response.json();
     assert.equal(body.result.isError, true);
-    assert.match(body.result.content[0].text, /between 1 and 12 files/);
+    assert.match(body.result.content[0].text, /has too many items/);
     assert.equal(calls, 0);
   } finally {
     globalThis.fetch = originalFetch;

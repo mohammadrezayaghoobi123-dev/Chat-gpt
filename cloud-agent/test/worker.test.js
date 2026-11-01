@@ -138,7 +138,7 @@ test("console CSP uses the same nonce for style and script and forbids unsafe-in
 });
 
 test("Cloud Agent JSON API responses carry restrictive browser security headers", async () => {
-  const response = await worker.fetch(new Request("https://agent.example/api/sessions", { method: "POST" }), publicEnv());
+  const response = await worker.fetch(new Request("https://agent.example/api/sessions", { method: "POST", headers: { "cf-connecting-ip": "203.0.113.10" } }), publicEnv());
   assert.equal(response.status, 401);
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   assert.equal(response.headers.get("x-frame-options"), "DENY");

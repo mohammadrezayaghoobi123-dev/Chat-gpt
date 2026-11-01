@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /cloud-agent
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cloud-agent-dependencies:
+        patterns:
+          - "*"
+  - package-ecosystem: npm
+    directory: /cloud-engineering-connector
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      connector-dependencies:
+        patterns:
+          - "*"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

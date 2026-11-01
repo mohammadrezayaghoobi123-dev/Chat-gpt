@@ -83,6 +83,9 @@ async function makeInitializedAgent(token = SESSION_TOKEN, initial = {}) {
     body: JSON.stringify({ token_hash: tokenHash })
   }));
   assert.equal(initialized.status, 201);
+  if (Object.hasOwn(initial, "last-activity-at")) {
+    await storage.put("last-activity-at", initial["last-activity-at"]);
+  }
   return { agent, storage, tokenHash };
 }
 

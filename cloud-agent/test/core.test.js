@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   boundedHistory,
+  decodeGitHubBase64Text,
   buildGitHubContentsApiUrl,
   extractAssistantText,
   isAuthorized,
@@ -99,4 +100,12 @@ test("encodes slash-containing branch refs in the GitHub Contents API query, not
     ),
     "https://api.github.com/repos/mohammadrezayaghoobi123-dev/Chat-gpt/contents/cloud-agent/src/worker.js?ref=feature%2Findependent-cloud-agent"
   );
+});
+
+test("decodes bounded UTF-8 GitHub base64 content and rejects malformed or oversized data", () => {
+  const bytes = new TextEncoder().encode("café");
+  const encoded = btoa(String.fromCharCode(...bytes));
+  assert.equal(decodeGitHubBase64Text(encoded, 4), "café");
+  assert.throws(() => decodeGitHubBase64Text(encoded, 3), /File exceeds/);
+  assert.throws(() => decodeGitHubBase64Text("not base64!", 100), /invalid base64/i);
 });

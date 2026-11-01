@@ -590,8 +590,20 @@ export class AgentSession extends DurableObject {
   }
 }
 
-export default {
-  async fetch(request, env) {
+function applySecurityHeaders(request, response) {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+    if (!headers.has(name)) headers.set(name, value);
+  }
+  if (new URL(request.url).protocol === "https:") {
+    headers.set("strict-transport-security", "max-age=31536000");
+  } else {
+    headers.delete("strict-transport-security");
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+async function handleFetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/healthz" && request.method === "GET") {
       return json({ ok: true, service: "master-brain-cloud-agent", version: VERSION, model: MODEL, mode: "read-only" });
@@ -617,9 +629,13 @@ export default {
       if (principal.status === 401) {
         let authFailureAllowed;
         try {
+          const clientKey = rateLimitClientKey(request.headers.get("cf-connecting-ip"));
+          if (!clientKey) {
+            return json({ error: "A valid Cloudflare client IP is required for authentication throttling." }, 503);
+          }
           authFailureAllowed = await consumeRateLimit(
             env.AGENT_RATE_LIMITER,
-            "auth-failure:" + rateLimitClientKey(request.headers.get("cf-connecting-ip"))
+            "master-brain-cloud-agent-auth-failure:" + clientKey
           );
         } catch {
           return json({ error: "The authentication rate limiter is unavailable." }, 503);
@@ -680,5 +696,14 @@ export default {
     const forwardedHeaders = new Headers(forwarded.headers);
     forwardedHeaders.set("x-principal-id", principalId);
     return stub.fetch(new Request(forwarded, { headers: forwardedHeaders }));
+}
+
+export default {
+  async fetch(request, env) {
+    try {
+      return applySecurityHeaders(request, await handleFetch(request, env));
+    } catch {
+      return applySecurityHeaders(request, json({ error: "Internal server error" }, 500));
+    }
   }
 };

@@ -29,6 +29,7 @@ const testEnv = {
 async function fetchWorker(path, token = AUTH, envOverride = testEnv, init = {}) {
   const headers = new Headers(init.headers || {});
   headers.set("authorization", "Bearer " + token);
+  if (!headers.has("cf-connecting-ip")) headers.set("cf-connecting-ip", "203.0.113.10");
   return worker.fetch(new Request(BASE + path, { ...init, headers }), envOverride);
 }
 

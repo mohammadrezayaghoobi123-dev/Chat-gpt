@@ -75,6 +75,7 @@ async function makeAgent({ storage, ai = { run: async () => ({ choices: [{ messa
   const tokenHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
   storage ||= makeStorage({ "last-activity-at": Date.now() });
   if (!(await storage.get("session-token-hash"))) await storage.put("session-token-hash", tokenHash);
+  if (!(await storage.get("principal-id"))) await storage.put("principal-id", "owner");
   const ctx = { storage };
   const env = { AI: ai, AGENT_BUDGET: budget || makeBudgetBinding() };
   return { agent: new AgentSession(ctx, env), storage, env };
@@ -83,19 +84,20 @@ async function makeAgent({ storage, ai = { run: async () => ({ choices: [{ messa
 function chatRequest(message = "inspect this project") {
   return new Request("https://agent-session.internal/chat", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-session-token": "s".repeat(43) },
+    headers: { "content-type": "application/json", "x-session-token": "s".repeat(43), "x-principal-id": "owner" },
     body: JSON.stringify({ message })
   });
 }
 
 function historyRequest() {
-  return new Request("https://agent-session.internal/history", { method: "GET", headers: { "x-session-token": "s".repeat(43) } });
+  return new Request("https://agent-session.internal/history", { method: "GET", headers: { "x-session-token": "s".repeat(43), "x-principal-id": "owner" } });
 }
 
 function publicEnv(overrides = {}) {
   return {
     AGENT_AUTH_TOKEN: TOKEN,
     AGENT_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    AGENT_BUDGET: { idFromName: name => name, get: () => ({ fetch: async () => Response.json({ allowed: true }) }) },
     AGENT_SESSIONS: {
       idFromName: name => name,
       get: () => ({ fetch: async request => Response.json({ forwarded: new URL(request.url).pathname }) })
@@ -187,19 +189,22 @@ test("invalid bearer auth fails closed when the auth-failure limiter is unavaila
   assert.equal(response.status, 503);
 });
 
-test("global rate limiter fails closed and rejects before creating a session", async () => {
-  let doCalls = 0;
+test("authenticated traffic is not charged against the failed-authentication IP quota", async () => {
+  let limiterCalls = 0;
+  let forwardedPrincipal;
   const env = publicEnv({
-    AGENT_RATE_LIMITER: { limit: async () => ({ success: false }) },
-    AGENT_SESSIONS: { idFromName: () => "id", get: () => ({ fetch: async () => { doCalls += 1; return new Response(); } }) }
+    AGENT_RATE_LIMITER: { limit: async () => { limiterCalls += 1; return { success: false }; } },
+    AGENT_SESSIONS: { idFromName: () => "id", get: () => ({ fetch: async request => {
+      forwardedPrincipal = request.headers.get("x-principal-id");
+      return Response.json({ ok: true });
+    } }) }
   });
-  const denied = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST", headers: { authorization: "Bearer " + TOKEN, "x-session-token": "s".repeat(43) } }), env);
-  assert.equal(denied.status, 429);
-  assert.equal(denied.headers.get("retry-after"), "60");
-  env.AGENT_RATE_LIMITER = { limit: async () => { throw new Error("binding unavailable"); } };
-  const unavailable = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST", headers: { authorization: "Bearer " + TOKEN, "x-session-token": "s".repeat(43) } }), env);
-  assert.equal(unavailable.status, 503);
-  assert.equal(doCalls, 0);
+  const response = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/history", {
+    headers: { authorization: "Bearer " + TOKEN, "x-session-token": "s".repeat(43) }
+  }), env);
+  assert.equal(response.status, 200);
+  assert.equal(limiterCalls, 0);
+  assert.equal(forwardedPrincipal, "owner");
 });
 
 test("authenticated routing canonicalizes UUID case before Durable Object lookup", async () => {

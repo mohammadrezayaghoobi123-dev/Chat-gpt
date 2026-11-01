@@ -28,5 +28,5 @@ name = "AGENT_RATE_LIMITER"
 namespace_id = "931120261101"
 
 [ratelimits.simple]
-limit = 12
+limit = 60
 period = 60

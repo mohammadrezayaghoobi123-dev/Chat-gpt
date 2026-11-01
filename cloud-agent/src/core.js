@@ -5,12 +5,12 @@ export const MAX_TOOL_ROUNDS = 3;
 export const MAX_TOOL_CALLS = 4;
 
 const BLOCKED_PATHS = [
-  /(^|\/)(?:\.git|\.github|\.ssh|\.aws|\.azure|\.kube|\.docker)(?:\/|$)/i,
-  /(^|\/)(?:\.env[^/]*|\.dev\.vars(?:\.[^/]*)?)(?:\/|$)/i,
-  /(^|\/)(?:secrets?|credentials?)(?:[._-][^/]*)?(?:\/|$)/i,
-  /(^|\/)(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|known_hosts|authorized_keys)$/i,
-  /\.(?:pem|key|p12|p8|pfx|tfstate|tfvars)$/i,
-  /\.tfvars\.json$/i
+  /(^|\\/)(?:\\.git|\\.github|\\.ssh|\\.aws|\\.azure|\\.kube|\\.docker)(?:\\/|$)/i,
+  /(^|\\/)(?:\\.env[^/]*|\\.dev\\.vars(?:\\.[^/]*)?)(?:\\/|$)/i,
+  /(^|\\/)(?:secrets?|credentials?)(?:[._-][^/]*)?(?:\\/|$)/i,
+  /(^|\\/)(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|known_hosts|authorized_keys)$/i,
+  /\\.(?:pem|key|p12|p8|pfx|tfstate|tfvars)$/i,
+  /\\.tfvars\\.json$/i
 ];
 
 export function isSessionId(value) {
@@ -26,9 +26,48 @@ export function isSafeRef(value) {
 
 export function isSafeRepoPath(path) {
   if (typeof path !== "string" || path.length < 1 || path.length > 240) return false;
-  if (path.startsWith("/") || path.includes("\\") || /[\u0000-\u001f\u007f\u200b-\u200f\u2060\ufeff]/.test(path)) return false;
+  if (path.startsWith("/") || path.includes("\\\\") || /[\\u0000-\\u001f\\u007f\\u200b-\\u200f\\u2060\\ufeff]/.test(path)) return false;
   if (path.split("/").some(part => !part || part === "." || part === ".." || /[ .]$/.test(part))) return false;
   return !BLOCKED_PATHS.some(pattern => pattern.test(path));
+}
+
+export async function readTextBounded(stream, contentLength, maxBytes) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new TypeError("maxBytes must be a non-negative safe integer.");
+  const declaredLength = contentLength === null || contentLength === undefined || contentLength === ""
+    ? null
+    : Number(contentLength);
+  if (declaredLength !== null && Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    try { await stream?.cancel(); } catch {}
+    throw new Error("Body exceeds configured limit.");
+  }
+  if (!stream) return "";
+
+  const reader = stream.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      totalBytes += chunk.byteLength;
+      if (totalBytes > maxBytes) {
+        try { await reader.cancel(); } catch {}
+        throw new Error("Body exceeds configured limit.");
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const combined = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(combined);
 }
 
 function constantTimeTextEqual(left, right) {
@@ -76,7 +115,7 @@ export function extractAssistantText(message) {
     return message.content
       .filter(part => part && part.type === "text" && typeof part.text === "string")
       .map(part => part.text)
-      .join("\n")
+      .join("\\n")
       .slice(0, MAX_MESSAGE_CHARS);
   }
   return "";

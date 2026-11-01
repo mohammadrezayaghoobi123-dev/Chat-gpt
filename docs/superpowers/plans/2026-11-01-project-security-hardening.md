@@ -82,7 +82,7 @@
 
 - [x] Audit CORS, CSP/security headers, HTML escaping, DOM sinks, CSRF exposure, cookies, debug routes, and upload handlers; a global response wrapper now enforces restrictive headers on JSON, preflight, 202 notification, SSE, and HTML responses, with HSTS only over HTTPS.
 - [x] Audit direct database/SQL usage; the inspected services use Durable Object storage and GitHub APIs, with no direct SQL query surface.
-- [x] Scan current tree and all fetched refs/reachable history with Gitleaks 8.30.1; no findings after exact-value, commit-scoped allowlists for verified synthetic fixtures. Latest scan: 1,496 commits / 5.27 MB / zero findings.
+- [x] Scan current tree and all fetched refs/reachable history with Gitleaks 8.30.1; no findings after exact-value, commit-scoped allowlists for verified synthetic fixtures. Latest scan: 1,497 commits / 5.28 MB / zero findings.
 - [x] Commit package-lock.json for both packages; CI uses npm ci and npm audit --audit-level=moderate. Latest runs reported 0 vulnerabilities in both packages. Vitest upgraded to 4.1.12 to resolve two moderate @vitest/mocker advisories.
 - [x] Review GitHub Actions permissions and trigger scope; CI uses contents:read, full-SHA-pinned actions, and push triggers for security/**. Non-blocking Node 20 deprecation warnings remain for the v4 action SHAs.
 - [x] Record non-applicable features: password hashing, cookie sessions, multipart uploads, and direct SQL are not present in the inspected services.
@@ -102,8 +102,8 @@
 - Base: `hardening/daily-neuron-budget` at `c0f3be179a62985aa9abf67dec8e10b39ba72518`; merge-base verified; no commits behind base.
 - Latest code/workflow head at this record: `889640ec7594a4b47298c5d08643e0c6dffa46ae`. The repository owner consolidated the secret-scan workflow; that commit was preserved.
 - TDD evidence: authentication/rate-limit regressions and the later response-header/HSTS tests failed on the pre-fix implementation, then passed after minimum fixes. Session ownership/history tests are characterization coverage of existing safeguards; no production change was required for those checks.
-- Latest Connector CI: run `41321606070`; 152/152 tests, moderate-level npm audit with 0 vulnerabilities, syntax checks, and Production/Staging Wrangler dry-runs passed.
-- Latest Cloud Agent CI: run `41321605788` (PR) and `41321601835` (push); 52/52 Node tests, 15/15 Vitest/workerd tests, moderate-level npm audit with 0 vulnerabilities, syntax checks, and Wrangler dry-run passed.
+- Latest Connector CI: run `41321751976`; 152/152 tests, moderate-level npm audit with 0 vulnerabilities, syntax checks, and Production/Staging Wrangler dry-runs passed.
+- Latest Cloud Agent CI: run `41321751904` (PR) and `41321601835` (push); 52/52 Node tests, 15/15 Vitest/workerd tests, moderate-level npm audit with 0 vulnerabilities, syntax checks, and Wrangler dry-run passed.
 - Dependency graph is now committed in both package lockfiles. A one-shot lockfile-generation workflow committed the lockfiles and removed itself; it is absent from the final tree.
 - `main` remains at `f2cae91de818385ec48daafc43c621b9e2cc0675` and is still unprotected (`protected:false`); this P0 repository control remains unresolved.
 - No live Worker deployment, route/binding/secret change, credential rotation, or billing change was performed. Read-only binding metadata was reviewed; Production `GITHUB_TOKEN` is `plain_text` and account 2FA enforcement is disabled. Hosted canary remains outstanding.
@@ -123,6 +123,6 @@
 ### Secret Scan Evidence — Current Branch
 
 - The Gitleaks workflow scans the PR change range and all fetched Git refs with `fetch-depth: 0` and `--log-opts=--all`.
-- Latest scan run `41321601825` on branch head `889640ec`: 1,496 commits and approximately 5.27 MB scanned; zero findings.
+- Latest scan run `41321747587` on report head `54b5facd` (code/workflow head `889640ec`): 1,497 commits and approximately 5.28 MB scanned; zero findings.
 - Historical suppressions were narrowed from broad field-name/pattern allowlists to exact synthetic fixture values, exact historical commits, and exact file paths. The AWS-shaped test value was verified as a sequential alphabetic placeholder before its exact-value allowlist was retained.
 - The repository has one full-history secret-scan workflow in the final tree; the duplicate workflow was removed/consolidated by a subsequent repository-owner commit and that commit was preserved.

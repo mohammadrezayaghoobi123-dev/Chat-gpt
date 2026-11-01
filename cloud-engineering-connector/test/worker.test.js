@@ -643,3 +643,118 @@ test("short configured MCP bearer tokens fail closed without consuming a rate-li
  assert.deepEqual(await response.json(),{error:"server_misconfigured",message:"MCP_AUTH_TOKEN must be at least 32 characters."});
  assert.equal(limiterCalls,0);
 });
+
+
+test("create_change_pr rejects more than twelve files before any GitHub request", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls += 1; throw new Error("GitHub must not be called for excess file count"); };
+  try {
+    const files = Array.from({ length: 13 }, (_, index) => ({
+      path: "docs/file-" + index + ".md",
+      content: "proposal"
+    }));
+    const response = await worker.fetch(rpc("tools/call", {
+      name: "create_change_pr",
+      arguments: {
+        owner: "mohammadrezayaghoobi123-dev",
+        repo: "Chat-gpt",
+        base_branch: "feature/cloud-engineering-connector",
+        title: "Example",
+        summary: "Test file-count boundary",
+        files
+      }
+    }), { ...env, GITHUB_TOKEN: "unused" });
+    const body = await response.json();
+    assert.equal(body.result.isError, true);
+    assert.match(body.result.content[0].text, /between 1 and 12 files/);
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("create_change_pr enforces per-file UTF-8 byte limits before any GitHub request", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls += 1; throw new Error("GitHub must not be called for oversized file"); };
+  try {
+    const response = await worker.fetch(rpc("tools/call", {
+      name: "create_change_pr",
+      arguments: {
+        owner: "mohammadrezayaghoobi123-dev",
+        repo: "Chat-gpt",
+        base_branch: "feature/cloud-engineering-connector",
+        title: "Example",
+        summary: "Test per-file size boundary",
+        files: [{ path: "docs/large.md", content: "x".repeat(100_001) }]
+      }
+    }), { ...env, GITHUB_TOKEN: "unused" });
+    const body = await response.json();
+    assert.equal(body.result.isError, true);
+    assert.match(body.result.content[0].text, /File exceeds 100 KB limit/);
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("create_change_pr enforces the combined 500 KB UTF-8 budget before any GitHub request", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls += 1; throw new Error("GitHub must not be called for combined oversized change"); };
+  try {
+    const files = Array.from({ length: 6 }, (_, index) => ({
+      path: "docs/large-" + index + ".md",
+      content: "x".repeat(90_000)
+    }));
+    const response = await worker.fetch(rpc("tools/call", {
+      name: "create_change_pr",
+      arguments: {
+        owner: "mohammadrezayaghoobi123-dev",
+        repo: "Chat-gpt",
+        base_branch: "feature/cloud-engineering-connector",
+        title: "Example",
+        summary: "Test combined size boundary",
+        files
+      }
+    }), { ...env, GITHUB_TOKEN: "unused" });
+    const body = await response.json();
+    assert.equal(body.result.isError, true);
+    assert.match(body.result.content[0].text, /Combined change exceeds 500 KB/);
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("create_change_pr rejects top-level and nested unknown properties before any GitHub request", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls += 1; throw new Error("GitHub must not be called for schema-invalid properties"); };
+  try {
+    const base = {
+      owner: "mohammadrezayaghoobi123-dev",
+      repo: "Chat-gpt",
+      base_branch: "feature/cloud-engineering-connector",
+      title: "Example",
+      summary: "Test additionalProperties",
+      files: [{ path: "docs/proposal.md", content: "proposal" }]
+    };
+    for (const args of [
+      { ...base, unexpected: true },
+      { ...base, files: [{ ...base.files[0], mode: "100755" }] }
+    ]) {
+      const response = await worker.fetch(rpc("tools/call", {
+        name: "create_change_pr",
+        arguments: args
+      }), { ...env, GITHUB_TOKEN: "unused" });
+      const body = await response.json();
+      assert.equal(body.result.isError, true);
+      assert.match(body.result.content[0].text, /contains unsupported property/);
+    }
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -94,6 +94,51 @@ export function decodeGitHubBase64Text(encodedContent, maxBytes) {
   }
 }
 
+export function rateLimitClientKey(ip) {
+  if (typeof ip !== "string" || ip.length < 2 || ip.length > 128) return null;
+
+  const ipv4Pattern = /^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$/;
+  const parseIpv4 = value => {
+    const match = ipv4Pattern.exec(value);
+    if (!match) return null;
+    const octets = match.slice(1).map(Number);
+    return octets.every(octet => octet <= 255) ? octets : null;
+  };
+
+  const ipv4 = parseIpv4(ip);
+  if (ipv4) return ipv4.join(".");
+
+  if (!ip.includes(":") || !/^[0-9a-fA-F:.]+$/.test(ip)) return null;
+  let address = ip.toLowerCase();
+  const mappedTail = /^(.*:)(\\d{1,3}(?:\\.\\d{1,3}){3})$/.exec(address);
+  if (mappedTail) {
+    const octets = parseIpv4(mappedTail[2]);
+    if (!octets) return null;
+    address = mappedTail[1] + ((octets[0] << 8) | octets[1]).toString(16) +
+      ":" + ((octets[2] << 8) | octets[3]).toString(16);
+  }
+
+  const halves = address.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  let groups;
+  if (halves.length === 2) {
+    const fill = 8 - head.length - tail.length;
+    if (fill < 1) return null;
+    groups = [...head, ...Array(fill).fill("0"), ...tail];
+  } else {
+    groups = head;
+  }
+  if (groups.length !== 8 || groups.some(group => !/^[0-9a-f]{1,4}$/.test(group))) return null;
+
+  const value = groups.map(group => Number.parseInt(group, 16));
+  if (value.slice(0, 5).every(group => group === 0) && value[5] === 0xffff) {
+    return [value[6] >> 8, value[6] & 255, value[7] >> 8, value[7] & 255].join(".");
+  }
+  return "v6/64:" + value.slice(0, 4).map(group => group.toString(16)).join(":");
+}
+
 export function isSessionId(value) {
   return typeof value === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);

@@ -13,12 +13,25 @@ const BLOCKED_PATHS = [
   /\.tfvars\.json$/i
 ];
 
-export function createSerialExecutor() {
+export function createSerialExecutor(maxPending = 8) {
+  if (!Number.isSafeInteger(maxPending) || maxPending < 1) {
+    throw new TypeError("maxPending must be a positive safe integer.");
+  }
   let tail = Promise.resolve();
+  let pending = 0;
   return function execute(task) {
     if (typeof task !== "function") return Promise.reject(new TypeError("Task must be a function."));
+    if (pending >= maxPending) {
+      const error = new Error("Session request queue is full.");
+      error.code = "SESSION_QUEUE_FULL";
+      return Promise.reject(error);
+    }
+    pending += 1;
     const result = tail.then(task);
-    tail = result.then(() => undefined, () => undefined);
+    tail = result.then(
+      () => { pending -= 1; },
+      () => { pending -= 1; }
+    );
     return result;
   };
 }

@@ -227,7 +227,12 @@ export class AgentSession extends DurableObject {
   }
 
   fetch(request) {
-    return this.runSerial(() => this.handleRequest(request));
+    return this.runSerial(() => this.handleRequest(request)).catch(error => {
+      if (error?.code === "SESSION_QUEUE_FULL") {
+        return json({ error: "Session is busy. Retry shortly." }, 429, { "retry-after": "5" });
+      }
+      throw error;
+    });
   }
 
   async handleRequest(request) {

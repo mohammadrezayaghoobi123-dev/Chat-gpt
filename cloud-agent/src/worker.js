@@ -23,6 +23,7 @@ import {
   parseToolArguments,
   readTextBounded,
   recordSessionActivity,
+  rateLimitClientKey,
   validateToolCalls
 } from "./core.js";
 
@@ -541,11 +542,15 @@ export default {
     const match = /^\/api\/sessions\/([0-9a-f-]{36})\/(chat|history)$/i.exec(url.pathname);
     if (!isCreateSession && !match) return json({ error: "Not found" }, 404);
     if (!isAuthorized(request.headers.get("authorization"), env.AGENT_AUTH_TOKEN)) {
+      const clientKey = rateLimitClientKey(request.headers.get("cf-connecting-ip"));
+      if (!clientKey) {
+        return json({ error: "The authentication rate limiter or client identity is unavailable." }, 503);
+      }
       let authFailureAllowed;
       try {
         authFailureAllowed = await consumeRateLimit(
           env.AGENT_RATE_LIMITER,
-          "master-brain-cloud-agent-auth-failure"
+          "master-brain-cloud-agent-auth-failure:" + clientKey
         );
       } catch {
         return json({ error: "The authentication rate limiter is unavailable." }, 503);

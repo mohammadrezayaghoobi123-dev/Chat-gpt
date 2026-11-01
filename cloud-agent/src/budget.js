@@ -5,6 +5,10 @@ export const DAILY_NEURON_BUDGET = 1_000;
 const RESERVATION_TTL_MS = 60 * 60 * 1_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const MAX_SETTLEMENT_NEURONS = 1_000_000;
+const RATE_WINDOW_MS = 60_000;
+const PER_PRINCIPAL_REQUEST_LIMIT = 12;
+const AGGREGATE_REQUEST_LIMIT = 60;
+const MAX_RATE_PRINCIPALS = 128;
 
 function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
@@ -53,6 +57,28 @@ function validBucket(bucket) {
   );
   const reservationTotal = reservations.reduce((total, [, reservation]) => total + reservation.neurons, 0);
   return reservationsValid && settledValid && reservationTotal === bucket.reserved;
+}
+
+function validPrincipalId(value) {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(value);
+}
+
+function validRateState(state) {
+  if (!state || typeof state !== "object" ||
+      !Array.isArray(state.global) ||
+      !state.principals || typeof state.principals !== "object" ||
+      Array.isArray(state.principals) ||
+      Object.keys(state.principals).length > MAX_RATE_PRINCIPALS) return false;
+  const validTimestamps = values => Array.isArray(values) &&
+    values.length <= AGGREGATE_REQUEST_LIMIT &&
+    values.every(value => Number.isSafeInteger(value) && value >= 0);
+  return validTimestamps(state.global) &&
+    Object.entries(state.principals).every(([principalId, values]) =>
+      validPrincipalId(principalId) &&
+      Array.isArray(values) &&
+      values.length <= PER_PRINCIPAL_REQUEST_LIMIT &&
+      values.every(value => Number.isSafeInteger(value) && value >= 0)
+    );
 }
 
 function validLedger(ledger) {
@@ -124,6 +150,67 @@ export class AgentBudget extends DurableObject {
   async handleRequest(request) {
     const url = new URL(request.url);
     try {
+      if (url.pathname === "/request-limit" && request.method === "POST") {
+        let body;
+        try {
+          const text = await readTextBounded(request.body, request.headers.get("content-length"), 1_024);
+          body = JSON.parse(text);
+        } catch {
+          return json({ error: "Invalid request-limit payload." }, 400);
+        }
+        if (!body || !validRequestId(body.request_id) || !validPrincipalId(body.principal_id)) {
+          return json({ error: "A valid request_id and principal_id are required." }, 400);
+        }
+
+        const storedRateState = await this.ctx.storage.get("request-rate-state");
+        const rateState = storedRateState === undefined
+          ? { global: [], principals: {} }
+          : storedRateState;
+        if (!validRateState(rateState)) throw new Error("Request-rate ledger is invalid.");
+
+        const now = Date.now();
+        const cutoff = now - RATE_WINDOW_MS;
+        rateState.global = rateState.global.filter(timestamp => timestamp > cutoff);
+        for (const [principalId, timestamps] of Object.entries(rateState.principals)) {
+          const recent = timestamps.filter(timestamp => timestamp > cutoff);
+          if (recent.length) rateState.principals[principalId] = recent;
+          else delete rateState.principals[principalId];
+        }
+
+        const principalRequests = Object.hasOwn(rateState.principals, body.principal_id)
+          ? rateState.principals[body.principal_id]
+          : [];
+        const globalBlocked = rateState.global.length >= AGGREGATE_REQUEST_LIMIT;
+        const principalBlocked = principalRequests.length >= PER_PRINCIPAL_REQUEST_LIMIT;
+        if (globalBlocked || principalBlocked) {
+          const retryAt = Math.max(
+            globalBlocked ? rateState.global[0] + RATE_WINDOW_MS : now,
+            principalBlocked ? principalRequests[0] + RATE_WINDOW_MS : now
+          );
+          const retryAfter = Math.max(1, Math.ceil((retryAt - now) / 1_000));
+          await this.ctx.storage.put("request-rate-state", rateState);
+          return json({
+            error: globalBlocked ? "Aggregate request rate limit reached." : "Principal request rate limit reached.",
+            principal_limit: PER_PRINCIPAL_REQUEST_LIMIT,
+            aggregate_limit: AGGREGATE_REQUEST_LIMIT
+          }, 429, { "retry-after": String(retryAfter) });
+        }
+
+        if (!Object.hasOwn(rateState.principals, body.principal_id) &&
+            Object.keys(rateState.principals).length >= MAX_RATE_PRINCIPALS) {
+          throw new Error("Request-rate principal capacity reached.");
+        }
+        rateState.global.push(now);
+        principalRequests.push(now);
+        rateState.principals[body.principal_id] = principalRequests;
+        await this.ctx.storage.put("request-rate-state", rateState);
+        return json({
+          allowed: true,
+          principal_limit: PER_PRINCIPAL_REQUEST_LIMIT,
+          aggregate_limit: AGGREGATE_REQUEST_LIMIT
+        });
+      }
+
       if (url.pathname === "/status" && request.method === "GET") {
         const ledger = await this.readLedger();
         const day = utcDay();

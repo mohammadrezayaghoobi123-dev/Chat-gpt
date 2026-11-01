@@ -97,23 +97,6 @@ function json(data, status = 200, headers = {}) {
   });
 }
 
-function applySecurityHeaders(request, response) {
-  const headers = new Headers(response.headers);
-  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
-    if (!headers.has(name)) headers.set(name, value);
-  }
-  if (new URL(request.url).protocol === "https:") {
-    headers.set("strict-transport-security", "max-age=31536000");
-  } else {
-    headers.delete("strict-transport-security");
-  }
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers
-  });
-}
-
 async function githubJson(pathOrUrl) {
   const url = pathOrUrl.startsWith("https://api.github.com/")
     ? pathOrUrl
@@ -277,6 +260,68 @@ function constantTimeHexEqual(left, right) {
   return difference === 0;
 }
 
+function isValidPrincipalId(value) {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(value);
+}
+
+function parseUserKeyRegistry(value) {
+  if (value === undefined || value === null || value === "") return { ok: true, users: [] };
+  if (typeof value !== "string") return { ok: false, users: [] };
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return { ok: false, users: [] };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, users: [] };
+  const entries = Object.entries(parsed);
+  if (entries.length > 100) return { ok: false, users: [] };
+  const seenHashes = new Set();
+  for (const [principalId, hash] of entries) {
+    if (!isValidPrincipalId(principalId) || principalId === "owner" ||
+        typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash) || seenHashes.has(hash)) {
+      return { ok: false, users: [] };
+    }
+    seenHashes.add(hash);
+  }
+  return { ok: true, users: entries };
+}
+
+async function resolvePrincipal(request, env) {
+  const registry = parseUserKeyRegistry(env.AGENT_USER_KEYS);
+  if (!registry.ok) return { ok: false, status: 503, error: "User identity registry is invalid." };
+
+  const authorization = request.headers.get("authorization");
+  if (isAuthorized(authorization, env.AGENT_AUTH_TOKEN)) {
+    return { ok: true, principalId: "owner" };
+  }
+
+  const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(authorization || "");
+  if (!match) return { ok: false, status: 401, error: "Unauthorized" };
+  const tokenHash = await hashSessionCapability(match[1]);
+  let principalId = null;
+  for (const [candidate, expectedHash] of registry.users) {
+    if (constantTimeHexEqual(tokenHash, expectedHash)) principalId = candidate;
+  }
+  return principalId
+    ? { ok: true, principalId }
+    : { ok: false, status: 401, error: "Unauthorized" };
+}
+
+async function consumePrincipalRequestLimit(env, principalId) {
+  const stub = env.AGENT_BUDGET.get(env.AGENT_BUDGET.idFromName("global"));
+  const response = await stub.fetch(new Request("https://agent-budget.internal/request-limit", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ request_id: crypto.randomUUID(), principal_id: principalId })
+  }));
+  if (response.status === 429) {
+    return { allowed: false, retryAfter: response.headers.get("retry-after") || "60" };
+  }
+  if (!response.ok) throw new Error("Strict request limiter unavailable.");
+  return { allowed: true };
+}
+
 function renderConsole(nonce) {
   const html = `<!doctype html>
 <html lang="en">
@@ -301,8 +346,8 @@ button:disabled{opacity:.5;cursor:wait}
 <p>Independent cloud engineering assistant · read-only repository access · no laptop dependency</p>
 <section class="panel">
 <label for="token">Access token</label>
-<input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the AGENT_AUTH_TOKEN secret">
-<p class="small">The token remains in this page's memory only. It is not saved to browser storage.</p>
+<input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your personal access token">
+<p class="small">Your token remains in this page's memory only. It is not saved to browser storage.</p>
 </section>
 <section class="panel">
 <label for="prompt">Engineering task</label>
@@ -372,13 +417,14 @@ export class AgentSession extends DurableObject {
     if (url.pathname === "/initialize" && request.method === "POST") {
       let initialization;
       try {
-        const text = await readTextBounded(request.body, request.headers.get("content-length"), 256);
+        const text = await readTextBounded(request.body, request.headers.get("content-length"), 512);
         initialization = JSON.parse(text);
       } catch {
         return json({ error: "Invalid session initialization." }, 400);
       }
       if (!initialization || typeof initialization.token_hash !== "string" ||
-          !/^[0-9a-f]{64}$/.test(initialization.token_hash)) {
+          !/^[0-9a-f]{64}$/.test(initialization.token_hash) ||
+          !isValidPrincipalId(initialization.principal_id)) {
         return json({ error: "Invalid session initialization." }, 400);
       }
       if (await this.ctx.storage.get("session-token-hash")) {
@@ -387,6 +433,7 @@ export class AgentSession extends DurableObject {
       const initializedAt = Date.now();
       await this.ctx.storage.put({
         "session-token-hash": initialization.token_hash,
+        "principal-id": initialization.principal_id,
         "last-activity-at": initializedAt
       });
       await this.ctx.storage.setAlarm(initializedAt + SESSION_TTL_MS);
@@ -396,6 +443,12 @@ export class AgentSession extends DurableObject {
     const isHistoryRequest = url.pathname === "/history" && request.method === "GET";
     const isChatRequest = url.pathname === "/chat" && request.method === "POST";
     if (!isHistoryRequest && !isChatRequest) return json({ error: "Not found" }, 404);
+
+    const storedPrincipalId = await this.ctx.storage.get("principal-id");
+    const suppliedPrincipalId = request.headers.get("x-principal-id");
+    if (!isValidPrincipalId(storedPrincipalId) || suppliedPrincipalId !== storedPrincipalId) {
+      return json({ error: "Session belongs to a different principal." }, 403);
+    }
 
     const storedCapabilityHash = await this.ctx.storage.get("session-token-hash");
     const suppliedCapability = request.headers.get("x-session-token");
@@ -520,7 +573,7 @@ export class AgentSession extends DurableObject {
   async expireIfNeeded() {
     const lastActivity = await this.ctx.storage.get("last-activity-at");
     if (!isSessionExpired(lastActivity, Date.now())) return false;
-    await this.ctx.storage.delete(["history", "rate-window", "last-activity-at", "session-token-hash"]);
+    await this.ctx.storage.delete(["history", "rate-window", "last-activity-at", "session-token-hash", "principal-id"]);
     return true;
   }
 
@@ -539,10 +592,7 @@ export class AgentSession extends DurableObject {
 
 export default {
   async fetch(request, env) {
-    let response;
-    try {
-      response = await (async () => {
-        const url = new URL(request.url);
+    const url = new URL(request.url);
     if (url.pathname === "/healthz" && request.method === "GET") {
       return json({ ok: true, service: "master-brain-cloud-agent", version: VERSION, model: MODEL, mode: "read-only" });
     }
@@ -552,7 +602,8 @@ export default {
         headers: {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
-          ...SECURITY_HEADERS,
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer",
           "content-security-policy": "default-src 'none'; connect-src 'self'; style-src 'nonce-" + nonce + "'; script-src 'nonce-" + nonce + "'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
         }
       });
@@ -561,25 +612,25 @@ export default {
     const isCreateSession = url.pathname === "/api/sessions" && request.method === "POST";
     const match = /^\/api\/sessions\/([0-9a-f-]{36})\/(chat|history)$/i.exec(url.pathname);
     if (!isCreateSession && !match) return json({ error: "Not found" }, 404);
-    if (!isAuthorized(request.headers.get("authorization"), env.AGENT_AUTH_TOKEN)) {
-      const clientKey = rateLimitClientKey(request.headers.get("cf-connecting-ip"));
-      if (!clientKey) {
-        return json({ error: "The authentication rate limiter or client identity is unavailable." }, 503);
+    const principal = await resolvePrincipal(request, env);
+    if (!principal.ok) {
+      if (principal.status === 401) {
+        let authFailureAllowed;
+        try {
+          authFailureAllowed = await consumeRateLimit(
+            env.AGENT_RATE_LIMITER,
+            "auth-failure:" + rateLimitClientKey(request.headers.get("cf-connecting-ip"))
+          );
+        } catch {
+          return json({ error: "The authentication rate limiter is unavailable." }, 503);
+        }
+        if (!authFailureAllowed) {
+          return json({ error: "Authentication attempt rate limit reached." }, 429, { "retry-after": "60" });
+        }
       }
-      let authFailureAllowed;
-      try {
-        authFailureAllowed = await consumeRateLimit(
-          env.AGENT_RATE_LIMITER,
-          "master-brain-cloud-agent-auth-failure:" + clientKey
-        );
-      } catch {
-        return json({ error: "The authentication rate limiter is unavailable." }, 503);
-      }
-      if (!authFailureAllowed) {
-        return json({ error: "Authentication attempt rate limit reached." }, 429, { "retry-after": "60" });
-      }
-      return json({ error: "Unauthorized" }, 401, { "www-authenticate": "Bearer" });
+      return json({ error: principal.error }, principal.status, principal.status === 401 ? { "www-authenticate": "Bearer" } : {});
     }
+    const principalId = principal.principalId;
     const sessionId = match?.[1];
     if (sessionId && !isSessionId(sessionId)) return json({ error: "Invalid session identifier." }, 400);
     if (match) {
@@ -589,14 +640,18 @@ export default {
       }
     }
 
-    let rateAllowed;
+    let principalRate;
     try {
-      rateAllowed = await consumeRateLimit(env.AGENT_RATE_LIMITER, "master-brain-cloud-agent");
+      principalRate = await consumePrincipalRequestLimit(env, principalId);
     } catch {
-      return json({ error: "The global rate limiter is unavailable." }, 503);
+      return json({ error: "The strict request limiter is unavailable." }, 503);
     }
-    if (!rateAllowed) {
-      return json({ error: "Global request rate limit reached. Retry in one minute." }, 429, { "retry-after": "60" });
+    if (!principalRate.allowed) {
+      return json(
+        { error: "Principal or aggregate request rate limit reached." },
+        429,
+        { "retry-after": principalRate.retryAfter }
+      );
     }
 
     if (isCreateSession) {
@@ -610,7 +665,7 @@ export default {
         initialized = await stub.fetch(new Request("https://agent-session.internal/initialize", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token_hash: tokenHash })
+          body: JSON.stringify({ token_hash: tokenHash, principal_id: principalId })
         }));
       } catch {
         return json({ error: "Session initialization failed." }, 503);
@@ -619,13 +674,11 @@ export default {
       return json({ session_id: newSessionId, session_token: sessionCapability }, 201);
     }
 
-        const id = env.AGENT_SESSIONS.idFromName(sessionId.toLowerCase());
-        const stub = env.AGENT_SESSIONS.get(id);
-        return stub.fetch(new Request("https://agent-session.internal/" + match[2], request));
-      })();
-    } catch {
-      response = json({ error: "Internal server error" }, 500);
-    }
-    return applySecurityHeaders(request, response);
+    const id = env.AGENT_SESSIONS.idFromName(sessionId.toLowerCase());
+    const stub = env.AGENT_SESSIONS.get(id);
+    const forwarded = new Request("https://agent-session.internal/" + match[2], request);
+    const forwardedHeaders = new Headers(forwarded.headers);
+    forwardedHeaders.set("x-principal-id", principalId);
+    return stub.fetch(new Request(forwarded, { headers: forwardedHeaders }));
   }
 };

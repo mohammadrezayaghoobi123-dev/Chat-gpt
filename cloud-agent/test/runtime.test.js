@@ -7,7 +7,7 @@ const BASE = "https://agent-runtime.test";
 const AUTH = "test-only-cloud-agent-token-0123456789abcdef0123456789";
 const testEnv = {
   AGENT_AUTH_TOKEN: AUTH,
-  AGENT_SESSIONS: env.AGENT_SESSIONS,
+  AGENT_SESSIONS: env.AGENT_SESSIONS,\n  AGENT_BUDGET: env.AGENT_BUDGET,
   AGENT_RATE_LIMITER: {
     limit: async () => ({ success: true })
   }

@@ -293,6 +293,26 @@ test("model usage is settled against the reserved Neuron estimate", async () => 
   assert.equal(settlement.actual_neurons, 10);
 });
 
+test("successful inference with zero-reported token usage still incurs a nonzero minimum charge", async () => {
+  let settlement;
+  const budget = makeBudgetBinding({
+    onSettle: body => { settlement = body; }
+  });
+  const agent = await makeAgent({
+    budget,
+    ai: {
+      run: async () => ({
+        usage: { prompt_tokens: 0, completion_tokens: 0 },
+        choices: [{ message: { role: "assistant", content: "zero usage metadata" } }]
+      })
+    }
+  });
+  const response = await agent.fetch(chatRequest("zero usage accounting"));
+  assert.equal(response.status, 200);
+  assert.equal(settlement.success, true);
+  assert.equal(settlement.actual_neurons, 1);
+});
+
 test("model failure settles the full reservation conservatively", async () => {
   let settlement;
   const budget = makeBudgetBinding({ onSettle: body => { settlement = body; } });

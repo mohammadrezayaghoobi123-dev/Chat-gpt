@@ -44,9 +44,27 @@ npm run check
 1. Bind Workers AI as `AI`.
 2. Bind the SQLite Durable Object class `AgentSession` as `AGENT_SESSIONS`.
 3. Bind the global SQLite Durable Object class `AgentBudget` as `AGENT_BUDGET`.
-4. Add `AGENT_AUTH_TOKEN` as a Cloudflare Worker **secret**, not a plain-text variable.
-5. Keep the worker private behind bearer authentication. Do not add public unauthenticated chat.
-6. Do not deploy this worker to an existing Production or Staging service. It has its own Worker name: `master-brain-cloud-agent`.
+4. Add `AGENT_AUTH_TOKEN` as a Cloudflare Worker **secret**, not a plain-text variable. This is the owner credential and maps to the `owner` principal.
+5. Optionally add `AGENT_USER_KEYS` as a Cloudflare Worker **secret** to enable additional principals. Its value is a JSON object mapping principal IDs to lowercase SHA-256 hex digests of their bearer tokens:
+   ```json
+   {
+     "engineering": "<64-character-lowercase-sha256-hex>",
+     "reviewer_1": "<64-character-lowercase-sha256-hex>"
+   }
+   ```
+   Principal IDs must match `[a-z0-9][a-z0-9_-]{0,31}`; `owner` is reserved. The registry accepts at most 100 entries and rejects malformed hashes or duplicate hashes. If `AGENT_USER_KEYS` is absent or empty, only the owner credential is enabled. A malformed registry fails closed with HTTP 503; it does not silently fall back to owner-only mode.
+6. Keep the worker private behind bearer authentication. Do not add public unauthenticated chat.
+7. Do not deploy this worker to an existing Production or Staging service. It has its own Worker name: `master-brain-cloud-agent`.
+
+### Additional-principal credential lifecycle
+
+- Generate a unique, cryptographically random 32-byte token for each principal. The accepted token representation is 43 base64url characters (no padding). Do not use human-created passwords, reuse tokens, or use a GitHub PAT as an agent token.
+- Compute SHA-256 over the exact token string encoded as UTF-8; store only the resulting 64-character lowercase hexadecimal digest in `AGENT_USER_KEYS`. Never put raw tokens in the registry, source control, CI variables, tickets, logs, or screenshots.
+- Keep each raw token in an approved password manager and deliver it to its intended user through a separate secure channel. Cloudflare stores the registry as a Worker secret; do not add `AGENT_USER_KEYS` as a plain-text Wrangler variable.
+- To rotate one principal, generate a new token and replace that principal's digest in the complete registry secret. The old token stops authenticating after the updated secret is active. Existing sessions remain bound to the same principal ID and can be used with the new token.
+- To revoke one principal, remove its entry from the registry and update the secret. Subsequent API requests using the revoked token fail authentication; its stored sessions remain inaccessible to that token and are removed by normal session expiry.
+- To update the registry, use the Cloudflare dashboard's secret editor or run `npx wrangler secret put AGENT_USER_KEYS` from this Worker directory and paste the complete JSON value at the interactive prompt. Never pass the secret value as a command-line argument.
+- Keep `AGENT_AUTH_TOKEN` restricted to the service owner/operator. Additional principals are isolated by principal ID, but this MVP does not provide a full organization identity provider, SSO, per-user administrative roles, or audit-grade user attribution.
 
 ## API
 
@@ -73,7 +91,7 @@ The browser console keeps the session capability in page memory only. The Durabl
 
 ## Verification status
 
-The current capability-isolation and daily-budget changes passed GitHub Actions on Node.js 22: 44/44 Node unit tests, 15/15 Cloudflare Workers runtime tests using the Workers Vitest integration, syntax checks, and Wrangler configuration dry-run. The runtime suite exercises real local `workerd`/Miniflare Durable Objects, SQLite-backed session and budget storage, cross-session isolation, budget reservation/settlement, concurrent cap enforcement, expiry, and alarm cleanup. The test harness deliberately omits the Workers AI binding and mocks the rate limiter, so it does not invoke billable model inference or connect to production resources.
+At PR head `8d7b98acfa0bacc98de25c7bd081f75306d60b9d`, GitHub Actions Cloud Agent CI run `41356757810` completed on Node.js 22 with **56/56 Node unit tests passing**, **27/27 Cloudflare Workers runtime tests passing**, syntax checks passing, `npm audit` reporting **0 vulnerabilities**, and Wrangler `4.155.0` configuration dry-run succeeding. The runtime suite exercises real local `workerd`/Miniflare Durable Objects, SQLite-backed session and budget storage, cross-session isolation, budget reservation/settlement, concurrent cap enforcement, expiry, and alarm cleanup. The test harness deliberately omits the Workers AI binding and mocks the rate limiter, so it does not invoke billable model inference or connect to production resources. These counts apply to the cited run and commit; verify the latest PR-head run before release.
 
 The production Wrangler compatibility date is `2026-10-31`; the bundled test runtime currently supports through `2026-10-30`, so `wrangler.test.toml` uses that date. This one-day compatibility gap must be revalidated when the Workers Vitest plugin/runtime is upgraded. Local `workerd` tests improve confidence but do not replace a hosted Cloudflare canary test.
 

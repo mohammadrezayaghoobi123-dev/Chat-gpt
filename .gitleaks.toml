@@ -1,9 +1,11 @@
 title = "Project Gitleaks configuration"
+minVersion = "8.30.1"
+
 [extend]
 useDefault = true
 
 [[allowlists]]
-description = "Known synthetic curl bearer value in rate-limit probe; scoped to its exact historical commit and line."
+description = "Synthetic curl bearer probe fixture, restricted to its exact historical commit, file, and value."
 targetRules = ["curl-auth-header"]
 condition = "AND"
 commits = ["7984973353e49b218a5621ed9257ccea0cf1fff7"]
@@ -12,28 +14,38 @@ regexTarget = "line"
 regexes = ['''wrong-probe-token''']
 
 [[allowlists]]
-description = "Known synthetic idempotency fixture in connector unit test; scoped to its exact historical commit and line."
+description = "Synthetic idempotency test values, restricted to exact literals in one historical test file and commit."
 targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["af1d557bd1de6b38856e931272130774130caca4"]
 paths = ['''^cloud-engineering-connector/test/worker\.test\.js$''']
 regexTarget = "line"
-regexes = ['''idempotency_key''']
+regexes = [
+  '''idempotency_key\s*:\s*["']worker-test-key-["']''',
+  '''idempotency_key\s*:\s*["']case-normalization-key-0001["']''',
+  '''idempotency_key\s*:\s*["']worker-recovery-0001["']''',
+  '''idempotency_key\s*:\s*["']branch-recovery-422-key-001["']''',
+  '''idempotency_key\s*:\s*["']fixed-commit-date-test-0001["']''',
+  '''idempotency_key\s*:\s*["']unknown-commit-replay-0001["']''',
+  '''idempotency_key\s*:\s*["']unknown-tree-replay-0001["']''',
+  '''idempotency_key\s*:\s*["']unknown-treewritten-replay-01["']''',
+  '''idempotency_key\s*:\s*["']missing-lease-generation-0001["']'''
+]
 
 [[allowlists]]
-description = "AWS example credential used as a negative-test fixture; scoped to its exact historical commit and line."
+description = "Official AWS example credential in a negative test, restricted to its exact historical commit, file, and value."
 targetRules = ["aws-access-token"]
 condition = "AND"
 commits = ["2707fe59768b3a98d2598cdd3d43f9d5e57510c4"]
 paths = ['''^tests/test_audit_policy\.py$''']
 regexTarget = "line"
-regexes = ['''AKIA[A-Z0-9]{16}''']
+regexes = ['''AKIAIOSFODNN7EXAMPLE''']
 
 [[allowlists]]
-description = "Synthetic API-key-shaped input used to test audit payload rejection; scoped to its exact historical commit and line."
+description = "Synthetic API-key-shaped negative-test value, restricted to its exact historical commit, file, and value."
 targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["2707fe59768b3a98d2598cdd3d43f9d5e57510c4"]
 paths = ['''^tests/test_audit_policy\.py$''']
 regexTarget = "line"
-regexes = ['''api_key''']
+regexes = ['''sk-live-1234567890abcdef''']

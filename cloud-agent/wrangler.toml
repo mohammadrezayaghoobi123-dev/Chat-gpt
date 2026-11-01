@@ -14,3 +14,11 @@ class_name = "AgentSession"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["AgentSession"]
+
+[[ratelimits]]
+name = "AGENT_RATE_LIMITER"
+namespace_id = "931120261101"
+
+[ratelimits.simple]
+limit = 12
+period = 60

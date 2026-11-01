@@ -5,12 +5,12 @@ export const MAX_TOOL_ROUNDS = 3;
 export const MAX_TOOL_CALLS = 4;
 
 const BLOCKED_PATHS = [
-  /(^|\\/)(?:\\.git|\\.github|\\.ssh|\\.aws|\\.azure|\\.kube|\\.docker)(?:\\/|$)/i,
-  /(^|\\/)(?:\\.env[^/]*|\\.dev\\.vars(?:\\.[^/]*)?)(?:\\/|$)/i,
-  /(^|\\/)(?:secrets?|credentials?)(?:[._-][^/]*)?(?:\\/|$)/i,
-  /(^|\\/)(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|known_hosts|authorized_keys)$/i,
-  /\\.(?:pem|key|p12|p8|pfx|tfstate|tfvars)$/i,
-  /\\.tfvars\\.json$/i
+  /(^|\/)(?:\.git|\.github|\.ssh|\.aws|\.azure|\.kube|\.docker)(?:\/|$)/i,
+  /(^|\/)(?:\.env[^/]*|\.dev\.vars(?:\.[^/]*)?)(?:\/|$)/i,
+  /(^|\/)(?:secrets?|credentials?)(?:[._-][^/]*)?(?:\/|$)/i,
+  /(^|\/)(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|known_hosts|authorized_keys)$/i,
+  /\.(?:pem|key|p12|p8|pfx|tfstate|tfvars)$/i,
+  /\.tfvars\.json$/i
 ];
 
 export function isSessionId(value) {
@@ -26,7 +26,7 @@ export function isSafeRef(value) {
 
 export function isSafeRepoPath(path) {
   if (typeof path !== "string" || path.length < 1 || path.length > 240) return false;
-  if (path.startsWith("/") || path.includes("\\\\") || /[\\u0000-\\u001f\\u007f\\u200b-\\u200f\\u2060\\ufeff]/.test(path)) return false;
+  if (path.startsWith("/") || path.includes("\\") || /[\u0000-\u001f\u007f\u200b-\u200f\u2060\ufeff]/.test(path)) return false;
   if (path.split("/").some(part => !part || part === "." || part === ".." || /[ .]$/.test(part))) return false;
   return !BLOCKED_PATHS.some(pattern => pattern.test(path));
 }
@@ -115,7 +115,7 @@ export function extractAssistantText(message) {
     return message.content
       .filter(part => part && part.type === "text" && typeof part.text === "string")
       .map(part => part.text)
-      .join("\\n")
+      .join("\n")
       .slice(0, MAX_MESSAGE_CHARS);
   }
   return "";

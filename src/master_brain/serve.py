@@ -171,8 +171,9 @@ def preflight(data_dir: str | os.PathLike[str]) -> list[str]:
     if os.name != "nt" and data.stat().st_mode & 0o077:
         raise StartupRefused("the data directory has permissions that let other users in; run: chmod 700 " + str(data))
     _verify_log(data / "audit.jsonl", "mission audit log", require_anchor=True)
-    accounts = AccountStore(data / "accounts.sqlite", full_verify_interval_seconds=FULL_VERIFY_SECONDS)
-    _verify_log(accounts.security_log.path, "security log")
+    accounts = AccountStore(data / "accounts.sqlite", full_verify_interval_seconds=FULL_VERIFY_SECONDS,
+                            require_anchor=True)
+    _verify_log(accounts.security_log.path, "security log", require_anchor=True)
     totals = accounts.counts()
     warnings: list[str] = []
     if totals["accounts"] == 0:
@@ -250,7 +251,8 @@ def build(config: ServeConfig, *, pubmed_fetcher: Any = None) -> Built:
         verifier = load_trust_store(config.approval_keys)
     else:
         warnings.append("no --approval-keys: no approval can be recorded")
-    accounts = AccountStore(data / "accounts.sqlite", full_verify_interval_seconds=FULL_VERIFY_SECONDS)
+    accounts = AccountStore(data / "accounts.sqlite", full_verify_interval_seconds=FULL_VERIFY_SECONDS,
+                            require_anchor=True)
     warnings.extend(approver_readiness_warnings(accounts, verifier))
     execution = None
     tasks: list[TaskDefinition] = []

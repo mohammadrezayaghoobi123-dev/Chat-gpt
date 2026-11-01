@@ -179,7 +179,7 @@ function estimateReservedNeurons(messages) {
 
 function actualNeuronsFromUsage(raw) {
   const completion = getCompletion(raw);
-  const usage = raw?.usage || completion?.usage;
+  const usage = raw?.usage ?? completion?.usage;
   if (!usage ||
       !Number.isSafeInteger(usage.prompt_tokens) || usage.prompt_tokens < 0 ||
       !Number.isSafeInteger(usage.completion_tokens) || usage.completion_tokens < 0) {

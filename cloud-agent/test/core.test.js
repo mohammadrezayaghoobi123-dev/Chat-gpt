@@ -13,7 +13,8 @@ import {
   isSessionExpired,
   SESSION_TTL_MS,
   parseToolArguments,
-  readTextBounded
+  readTextBounded,
+  recordSessionActivity
 } from "../src/core.js";
 
 test("accepts UUID session identifiers and rejects path-like identifiers", () => {
@@ -183,4 +184,24 @@ test("session history expires after seven inactive days and when no timestamp ex
   assert.equal(isSessionExpired(now - SESSION_TTL_MS + 1, now), false);
   assert.equal(isSessionExpired(now - SESSION_TTL_MS, now), true);
   assert.equal(isSessionExpired(undefined, now), true);
+});
+
+test("accepted session activity refreshes the expiry timestamp before body processing", () => {
+  const now = 2_000_000_000_000;
+  assert.deepEqual(recordSessionActivity([], now), {
+    allowed: true,
+    activeRequests: [now],
+    lastActivity: now
+  });
+});
+
+test("session rate window discards expired entries and rejects the ninth request", () => {
+  const now = 2_000_000_000_000;
+  const sevenRecent = Array.from({ length: 7 }, (_, index) => now - index * 1_000);
+  const allowed = recordSessionActivity([...sevenRecent, now - 60_001], now);
+  assert.equal(allowed.allowed, true);
+  assert.equal(allowed.activeRequests.length, 8);
+  const blocked = recordSessionActivity(allowed.activeRequests, now + 1);
+  assert.equal(blocked.allowed, false);
+  assert.equal(blocked.activeRequests.length, 8);
 });

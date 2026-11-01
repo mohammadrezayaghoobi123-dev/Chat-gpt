@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker.js";
 
-const SECRET = "mcp-secret-value";
+const SECRET = "0123456789abcdef0123456789abcdef";
 const GH = "ghp_FAKE_TOKEN_FOR_TEST_0123456789";
 const post = (body, auth) => new Request("https://example.test/mcp", {
   method: "POST",

@@ -122,7 +122,7 @@ test("global rate limiter fails closed and rejects before creating a session", a
   assert.equal(denied.status, 429);
   assert.equal(denied.headers.get("retry-after"), "60");
   env.AGENT_RATE_LIMITER = { limit: async () => { throw new Error("binding unavailable"); } };
-  const unavailable = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST", headers: { authorization: "Bearer " + TOKEN } }), env);
+  const unavailable = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST", headers: { authorization: "Bearer " + TOKEN, "x-session-token": "s".repeat(43) } }), env);
   assert.equal(unavailable.status, 503);
   assert.equal(doCalls, 0);
 });
@@ -160,7 +160,7 @@ test("Durable Object chat persists bounded history and schedules expiry", async 
 test("malformed and oversized chat requests are rejected before model invocation but still count toward rate limits", async () => {
   let modelCalls = 0;
   const { agent, storage } = await makeAgent({ ai: { run: async () => { modelCalls += 1; return {}; } } });
-  const malformed = await agent.fetch(new Request("https://agent-session.internal/chat", { method: "POST", body: "{" }));
+  const malformed = await agent.fetch(new Request("https://agent-session.internal/chat", { method: "POST", headers: { "x-session-token": "s".repeat(43) }, body: "{" }));
   assert.equal(malformed.status, 400);
   const oversized = await agent.fetch(new Request("https://agent-session.internal/chat", {
     method: "POST",
@@ -196,9 +196,9 @@ test("alarm idempotently removes expired session state", async () => {
     "rate-window": [stale],
     "last-activity-at": stale
   });
-  const { agent } = makeAgent({ storage });
+  const { agent } = await makeAgent({ storage });
   await agent.alarm();
   assert.equal(storage.values.has("history"), false);
   assert.equal(storage.values.has("rate-window"), false);
-  assert.equal(storage.values.has("last-activity-at"), false);
+  assert.equal(storage.values.has("last-activity-at"), false);\n  assert.equal(storage.values.has("session-token-hash"), false);
 });

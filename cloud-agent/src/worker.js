@@ -532,6 +532,18 @@ export default {
     const match = /^\/api\/sessions\/([0-9a-f-]{36})\/(chat|history)$/i.exec(url.pathname);
     if (!isCreateSession && !match) return json({ error: "Not found" }, 404);
     if (!isAuthorized(request.headers.get("authorization"), env.AGENT_AUTH_TOKEN)) {
+      let authFailureAllowed;
+      try {
+        authFailureAllowed = await consumeRateLimit(
+          env.AGENT_RATE_LIMITER,
+          "master-brain-cloud-agent-auth-failure"
+        );
+      } catch {
+        return json({ error: "The authentication rate limiter is unavailable." }, 503);
+      }
+      if (!authFailureAllowed) {
+        return json({ error: "Authentication attempt rate limit reached." }, 429, { "retry-after": "60" });
+      }
       return json({ error: "Unauthorized" }, 401, { "www-authenticate": "Bearer" });
     }
     const sessionId = match?.[1];

@@ -151,3 +151,16 @@ test("serial executor continues after a failed request", async () => {
   await assert.rejects(execute(async () => { throw new Error("expected failure"); }), /expected failure/);
   assert.equal(await execute(async () => "next request"), "next request");
 });
+
+test("serial executor rejects excess queued work instead of growing without bound", async () => {
+  const execute = createSerialExecutor(1);
+  let releaseFirst;
+  const first = execute(() => new Promise(resolve => { releaseFirst = resolve; }));
+  await Promise.resolve();
+  await assert.rejects(
+    execute(async () => "must not run"),
+    error => error?.code === "SESSION_QUEUE_FULL"
+  );
+  releaseFirst("first");
+  assert.equal(await first, "first");
+});

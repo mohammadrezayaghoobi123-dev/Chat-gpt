@@ -11,7 +11,8 @@ import {
   isSafeRef,
   isSafeRepoPath,
   isSessionId,
-  parseToolArguments
+  parseToolArguments,
+  readTextBounded
 } from "./core.js";
 
 const VERSION = "0.1.0";
@@ -84,8 +85,7 @@ async function githubJson(path) {
     signal: AbortSignal.timeout(8_000)
   });
   if (!response.ok) throw new Error("GitHub read failed with HTTP " + response.status);
-  const text = await response.text();
-  if (text.length > 200_000) throw new Error("GitHub response exceeded the configured limit.");
+  const text = await readTextBounded(response.body, response.headers.get("content-length"), 200_000);
   return JSON.parse(text);
 }
 
@@ -99,8 +99,7 @@ async function readRawFile(path, ref) {
     signal: AbortSignal.timeout(8_000)
   });
   if (!response.ok) throw new Error("File read failed with HTTP " + response.status);
-  const text = await response.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_FILE_BYTES) throw new Error("File exceeds the 50 KB read limit.");
+  const text = await readTextBounded(response.body, response.headers.get("content-length"), MAX_FILE_BYTES);
   return { repository: OWNER + "/" + REPO, ref, path, content: text };
 }
 
@@ -160,7 +159,7 @@ function renderConsole(nonce) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Master Brain Cloud</title>
-<style>
+<style nonce="${nonce}">
 :root{color-scheme:dark;font-family:system-ui,sans-serif;background:#10151d;color:#e8edf4}
 body{max-width:850px;margin:0 auto;padding:24px}
 h1{font-size:1.5rem}p{color:#aeb9c8}.panel{background:#18212d;border:1px solid #334155;border-radius:12px;padding:16px;margin:14px 0}
@@ -237,8 +236,7 @@ export class AgentSession extends DurableObject {
 
     let body;
     try {
-      const text = await request.text();
-      if (new TextEncoder().encode(text).byteLength > 12_000) return json({ error: "Request body too large." }, 413);
+      const text = await readTextBounded(request.body, request.headers.get("content-length"), 12_000);
       body = JSON.parse(text);
     } catch {
       return json({ error: "Invalid JSON request." }, 400);
@@ -261,7 +259,7 @@ export class AgentSession extends DurableObject {
         const raw = await this.env.AI.run(MODEL, {
           messages,
           tools: TOOL_DEFINITIONS,
-          max_tokens: 1_024,
+          max_completion_tokens: 1_024,
           temperature: 0
         });
         const completion = getCompletion(raw);
@@ -322,7 +320,7 @@ export default {
           "cache-control": "no-store",
           "x-content-type-options": "nosniff",
           "referrer-policy": "no-referrer",
-          "content-security-policy": "default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-" + nonce + "'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+          "content-security-policy": "default-src 'none'; connect-src 'self'; style-src 'nonce-" + nonce + "'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
         }
       });
     }

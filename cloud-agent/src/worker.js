@@ -7,6 +7,7 @@ import {
   MAX_TOOL_ROUNDS,
   boundedHistory,
   buildGitHubContentsApiUrl,
+  decodeGitHubBase64Text,
   extractAssistantText,
   isAuthorized,
   isSafeRef,
@@ -98,24 +99,7 @@ async function readRawFile(path, ref) {
   if (payload?.type !== "file" || payload.encoding !== "base64" || typeof payload.content !== "string") {
     throw new Error("GitHub did not return a regular base64-encoded file.");
   }
-  const encoded = payload.content.replace(/\\s/g, "");
-  if (encoded.length > Math.ceil(MAX_FILE_BYTES / 3) * 4 + 8) {
-    throw new Error("File exceeds the 50 KB read limit.");
-  }
-  let binary;
-  try {
-    binary = atob(encoded);
-  } catch {
-    throw new Error("GitHub returned invalid base64 file content.");
-  }
-  if (binary.length > MAX_FILE_BYTES) throw new Error("File exceeds the 50 KB read limit.");
-  const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
-  let content;
-  try {
-    content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    throw new Error("File is not valid UTF-8 text.");
-  }
+  const content = decodeGitHubBase64Text(payload.content, MAX_FILE_BYTES);
   return { repository: OWNER + "/" + REPO, ref, path, content };
 }
 

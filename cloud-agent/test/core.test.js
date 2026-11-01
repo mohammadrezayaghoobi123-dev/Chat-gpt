@@ -15,7 +15,7 @@ import {
   parseToolArguments,
   readTextBounded,
   recordSessionActivity,
-  validateToolCall
+  validateToolCalls
 } from "../src/core.js";
 
 test("accepts UUID session identifiers and rejects path-like identifiers", () => {
@@ -85,6 +85,7 @@ test("extracts only user-facing text from model message content", () => {
 
 test("reads a stream within its byte limit", async () => {
   assert.equal(await readTextBounded(new Response("hello").body, null, 5), "hello");
+  await assert.rejects(readTextBounded(new Response(Uint8Array.from([0xc3, 0x28])).body, null, 2), /valid UTF-8/);
 });
 
 test("rejects a declared oversized body before reading it", async () => {
@@ -222,7 +223,9 @@ test("validates model tool-call envelopes before execution", () => {
   };
   assert.deepEqual(validateToolCall(valid), valid);
   assert.throws(() => validateToolCall({ ...valid, id: "bad id" }), /identifier/);
-  assert.throws(() => validateToolCall({ ...valid, type: "other" }), /Malformed/);
-  assert.throws(() => validateToolCall({ ...valid, function: { ...valid.function, name: "run_shell" } }), /Unknown/);
-  assert.throws(() => validateToolCall({ ...valid, function: { ...valid.function, arguments: "x".repeat(4097) } }), /oversized/);
+  assert.throws(() => validateToolCalls([{ ...valid, type: "other" }], 1), /Malformed/);
+  assert.throws(() => validateToolCalls([{ ...valid, function: { ...valid.function, name: "run_shell" } }], 1), /Unknown/);
+  assert.throws(() => validateToolCalls([{ ...valid, function: { ...valid.function, arguments: "x".repeat(4097) } }], 1), /oversized/);
+  assert.throws(() => validateToolCalls([valid, valid], 2), /Duplicate/);
+  assert.throws(() => validateToolCalls([valid], 0), /excessive/);
 });

@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker.js";
 
-const SECRET = "mcp-secret-value";
+const SECRET = "mcp-secret-value-with-at-least-32-characters";
 const GH = "ghp_FAKE_TOKEN_FOR_TEST_0123456789";
 const post = (body, auth) => new Request("https://example.test/mcp", {
   method: "POST",
@@ -33,6 +33,15 @@ test("MCP_AUTH_TOKEN absent: 503 for any request body, never 400, no GitHub call
     assert.equal(withBearer.status, 503);
     assert.equal(calls.length, 0);
   });
+});
+
+test("MCP_AUTH_TOKEN shorter than 32 characters is a server misconfiguration", async () => {
+ await withFetch(() => ghError(200, "x"), async (calls) => {
+  const r = await worker.fetch(call("project_inspect", { owner: "o", repo: "r" }, "Bearer short"), { MCP_AUTH_TOKEN: "short", PUBLIC_READ_ONLY: "true", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+  assert.equal(r.status, 503);
+  assert.equal((await r.json()).error, "server_misconfigured");
+  assert.equal(calls.length, 0);
+ });
 });
 
 test("MCP_AUTH_TOKEN invalid or missing bearer: 401, no GitHub call, secret not echoed", async () => {

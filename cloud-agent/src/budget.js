@@ -32,16 +32,34 @@ function newBucket() {
 }
 
 function validBucket(bucket) {
-  return bucket && typeof bucket === "object" &&
-    Number.isSafeInteger(bucket.used) && bucket.used >= 0 &&
-    Number.isSafeInteger(bucket.reserved) && bucket.reserved >= 0 &&
-    bucket.reservations && typeof bucket.reservations === "object" &&
-    bucket.settled && typeof bucket.settled === "object";
+  if (!bucket || typeof bucket !== "object" ||
+      !Number.isSafeInteger(bucket.used) || bucket.used < 0 ||
+      !Number.isSafeInteger(bucket.reserved) || bucket.reserved < 0 ||
+      !bucket.reservations || typeof bucket.reservations !== "object" ||
+      !bucket.settled || typeof bucket.settled !== "object") return false;
+
+  const reservations = Object.entries(bucket.reservations);
+  const reservationsValid = reservations.every(([requestId, reservation]) =>
+    validRequestId(requestId) &&
+    reservation && typeof reservation === "object" &&
+    Number.isSafeInteger(reservation.neurons) &&
+    reservation.neurons >= 1 && reservation.neurons <= DAILY_NEURON_BUDGET &&
+    typeof reservation.day === "string" && /^\\d{4}-\\d{2}-\\d{2}$/.test(reservation.day) &&
+    Number.isSafeInteger(reservation.created_at) && reservation.created_at >= 0
+  );
+  const settledValid = Object.entries(bucket.settled).every(([requestId, actual]) =>
+    validRequestId(requestId) &&
+    Number.isSafeInteger(actual) && actual >= 0 && actual <= MAX_SETTLEMENT_NEURONS
+  );
+  const reservationTotal = reservations.reduce((total, [, reservation]) => total + reservation.neurons, 0);
+  return reservationsValid && settledValid && reservationTotal === bucket.reserved;
 }
 
 function validLedger(ledger) {
   if (!ledger || typeof ledger !== "object" || !ledger.days || typeof ledger.days !== "object") return false;
-  return Object.values(ledger.days).every(validBucket);
+  return Object.entries(ledger.days).every(([day, bucket]) =>
+    /^\\d{4}-\\d{2}-\\d{2}$/.test(day) && validBucket(bucket)
+  );
 }
 
 export class AgentBudget extends DurableObject {

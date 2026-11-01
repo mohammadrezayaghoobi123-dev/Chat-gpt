@@ -5,6 +5,7 @@ on:
     branches:
       - feature/independent-cloud-agent
       - 'hardening/**'
+      - 'security/**'
     paths:
       - "cloud-agent/**"
       - ".github/workflows/cloud-agent-ci.yml"

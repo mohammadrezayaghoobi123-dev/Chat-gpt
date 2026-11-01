@@ -29,9 +29,9 @@ export const MAX_TOOL_CALLS = 4;
 const BLOCKED_PATHS = [
   /(^|\/)(?:\.git|\.github|\.ssh|\.aws|\.azure|\.kube|\.docker)(?:\/|$)/i,
   /(^|\/)(?:\.env[^/]*|\.dev\.vars(?:\.[^/]*)?)(?:\/|$)/i,
-  /(^|\/)[^/]*(?:secret|credential|token|private[_-]?key)[^/]*(?:\/|$)/i,
+  /(^|\/)[^/]*(?:secret|credential|token|private[_-]?key|service[-_]?account|firebase-adminsdk|kubeconfig|git-credentials|\.npmrc|\.pypirc|\.netrc)[^/]*(?:\/|$)/i,
   /(^|\/)(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|known_hosts|authorized_keys)$/i,
-  /\.(?:pem|key|p12|p8|pfx|tfstate|tfvars)$/i,
+  /\.(?:pem|key|p12|p8|pfx|crt|cer|jks|keystore|mobileprovision|ovpn|tfstate|tfvars)$/i,
   /\.tfvars\.json$/i
 ];
 
@@ -174,6 +174,25 @@ export function boundedHistory(history) {
     .filter(item => item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string")
     .map(item => ({ role: item.role, content: item.content.slice(0, MAX_MESSAGE_CHARS) }))
     .slice(-MAX_HISTORY_MESSAGES);
+}
+
+export function validateToolCall(call) {
+  if (!call || typeof call !== "object" || call.type !== "function") {
+    throw new TypeError("Malformed model tool call.");
+  }
+  const id = call.id;
+  const name = call.function?.name;
+  const args = call.function?.arguments;
+  if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) {
+    throw new TypeError("Malformed model tool-call identifier.");
+  }
+  if (!["project_inspect", "read_project_file", "engineering_standards"].includes(name)) {
+    throw new TypeError("Unknown model tool call.");
+  }
+  if (typeof args !== "string" || args.length > 4_096) {
+    throw new TypeError("Malformed or oversized model tool arguments.");
+  }
+  return { id, type: "function", function: { name, arguments: args } };
 }
 
 export function parseToolArguments(raw, allowedKeys) {

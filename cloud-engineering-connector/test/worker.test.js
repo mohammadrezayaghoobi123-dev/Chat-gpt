@@ -93,7 +93,7 @@ test("MCP returns 413 even if cancelling an oversized request stream rejects",as
   pull(controller){if(offset>=bytes.length){controller.close();return}const end=Math.min(offset+64_000,bytes.length);controller.enqueue(bytes.slice(offset,end));offset=end},
   cancel(){return Promise.reject(new Error("simulated stream cancellation failure"))}
  });
- const request=new Request("https://example.test/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream"},body:stream,duplex:"half"});
+ const request=new Request("https://example.test/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream","cf-connecting-ip":"203.0.113.10"},body:stream,duplex:"half"});
  const r=await worker.fetch(request,env);
  assert.equal(r.status,413);
  assert.deepEqual(await r.json(),{error:"payload_too_large"});

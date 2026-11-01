@@ -406,13 +406,14 @@ export class AgentSession extends DurableObject {
     if (url.pathname === "/initialize" && request.method === "POST") {
       let initialization;
       try {
-        const text = await readTextBounded(request.body, request.headers.get("content-length"), 256);
+        const text = await readTextBounded(request.body, request.headers.get("content-length"), 512);
         initialization = JSON.parse(text);
       } catch {
         return json({ error: "Invalid session initialization." }, 400);
       }
       if (!initialization || typeof initialization.token_hash !== "string" ||
-          !/^[0-9a-f]{64}$/.test(initialization.token_hash)) {
+          !/^[0-9a-f]{64}$/.test(initialization.token_hash) ||
+          !isValidPrincipalId(initialization.principal_id)) {
         return json({ error: "Invalid session initialization." }, 400);
       }
       if (await this.ctx.storage.get("session-token-hash")) {
@@ -430,6 +431,12 @@ export class AgentSession extends DurableObject {
     const isHistoryRequest = url.pathname === "/history" && request.method === "GET";
     const isChatRequest = url.pathname === "/chat" && request.method === "POST";
     if (!isHistoryRequest && !isChatRequest) return json({ error: "Not found" }, 404);
+
+    const storedPrincipalId = await this.ctx.storage.get("principal-id");
+    const suppliedPrincipalId = request.headers.get("x-principal-id");
+    if (!isValidPrincipalId(storedPrincipalId) || suppliedPrincipalId !== storedPrincipalId) {
+      return json({ error: "Session belongs to a different principal." }, 403);
+    }
 
     const storedCapabilityHash = await this.ctx.storage.get("session-token-hash");
     const suppliedCapability = request.headers.get("x-session-token");
@@ -554,7 +561,7 @@ export class AgentSession extends DurableObject {
   async expireIfNeeded() {
     const lastActivity = await this.ctx.storage.get("last-activity-at");
     if (!isSessionExpired(lastActivity, Date.now())) return false;
-    await this.ctx.storage.delete(["history", "rate-window", "last-activity-at", "session-token-hash"]);
+    await this.ctx.storage.delete(["history", "rate-window", "last-activity-at", "session-token-hash", "principal-id"]);
     return true;
   }
 

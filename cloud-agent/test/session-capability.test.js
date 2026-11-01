@@ -208,7 +208,7 @@ test("wrong session capability is rejected for chat before model invocation", as
   };
   const response = await agent.fetch(new Request("https://agent-session.internal/chat", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-session-token": "x".repeat(43) },
+    headers: { "content-type": "application/json", "x-session-token": "x".repeat(43), "x-principal-id": "owner" },
     body: JSON.stringify({ message: "unauthorized prompt" })
   }));
   assert.equal(response.status, 401);
@@ -233,7 +233,7 @@ test("valid session capability permits chat and history persists only after auth
   const { agent, storage } = await makeInitializedAgent();
   const response = await agent.fetch(new Request("https://agent-session.internal/chat", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-session-token": SESSION_TOKEN },
+    headers: { "content-type": "application/json", "x-session-token": SESSION_TOKEN, "x-principal-id": "owner" },
     body: JSON.stringify({ message: "run authorized chat" })
   }));
   assert.equal(response.status, 200);
@@ -247,7 +247,7 @@ test("expired sessions delete the verifier and reject further access", async () 
     "last-activity-at": stale
   });
   const response = await agent.fetch(new Request("https://agent-session.internal/history", {
-    headers: { "x-session-token": SESSION_TOKEN }
+    headers: { "x-session-token": SESSION_TOKEN, "x-principal-id": "owner" }
   }));
   assert.equal(response.status, 410);
   assert.equal(storage.values.has("session-token-hash"), false);

@@ -155,9 +155,9 @@ test("API rejects missing bearer auth after consuming the isolated auth-failure 
     AGENT_RATE_LIMITER: { limit: async ({ key }) => { limiterKeys.push(key); return { success: true }; } },
     AGENT_SESSIONS: { idFromName: () => "id", get: () => ({ fetch: async () => { doCalls += 1; return new Response(); } }) }
   });
-  const response = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST" }), env);
+  const response = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST", headers: { "cf-connecting-ip": "203.0.113.10" } }), env);
   assert.equal(response.status, 401);
-  assert.deepEqual(limiterKeys, ["master-brain-cloud-agent-auth-failure"]);
+  assert.deepEqual(limiterKeys, ["master-brain-cloud-agent-auth-failure:203.0.113.10"]);
   assert.equal(doCalls, 0);
 });
 
@@ -166,13 +166,13 @@ test("invalid bearer auth is rate-limited independently and returns 429 after qu
   const env = publicEnv({
     AGENT_RATE_LIMITER: { limit: async ({ key }) => {
       calls += 1;
-      assert.equal(key, "master-brain-cloud-agent-auth-failure");
+      assert.equal(key, "master-brain-cloud-agent-auth-failure:203.0.113.10");
       return { success: false };
     } }
   });
   const response = await worker.fetch(new Request("https://agent.example/api/sessions", {
     method: "POST",
-    headers: { authorization: "Bearer invalid-token" }
+    headers: { authorization: "Bearer invalid-token", "cf-connecting-ip": "203.0.113.10" }
   }), env);
   assert.equal(response.status, 429);
   assert.equal(response.headers.get("retry-after"), "60");
@@ -344,4 +344,40 @@ test("alarm idempotently removes expired session state", async () => {
   assert.equal(storage.values.has("rate-window"), false);
   assert.equal(storage.values.has("last-activity-at"), false);
   assert.equal(storage.values.has("session-token-hash"), false);
+});
+
+
+test("authentication failure quota is isolated by Cloudflare client IP", async () => {
+  const limiterKeys = [];
+  const env = publicEnv({
+    AGENT_RATE_LIMITER: { limit: async ({ key }) => { limiterKeys.push(key); return { success: true }; } }
+  });
+  for (const ip of ["203.0.113.10", "203.0.113.11"]) {
+    const response = await worker.fetch(new Request("https://agent.example/api/sessions", {
+      method: "POST",
+      headers: { "cf-connecting-ip": ip }
+    }), env);
+    assert.equal(response.status, 401);
+  }
+  assert.deepEqual(limiterKeys, [
+    "master-brain-cloud-agent-auth-failure:203.0.113.10",
+    "master-brain-cloud-agent-auth-failure:203.0.113.11"
+  ]);
+});
+
+test("authentication failure limiter rejects missing or malformed Cloudflare client identity", async () => {
+  let limiterCalls = 0;
+  const env = publicEnv({
+    AGENT_RATE_LIMITER: { limit: async () => { limiterCalls += 1; return { success: true }; } }
+  });
+  for (const ip of [null, "not-an-ip", "203.0.113.999"]) {
+    const headers = new Headers();
+    if (ip !== null) headers.set("cf-connecting-ip", ip);
+    const response = await worker.fetch(new Request("https://agent.example/api/sessions", {
+      method: "POST",
+      headers
+    }), env);
+    assert.equal(response.status, 503);
+  }
+  assert.equal(limiterCalls, 0);
 });

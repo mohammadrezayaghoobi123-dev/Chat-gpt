@@ -48,7 +48,7 @@
 - [x] Add tests proving a denied authenticated request returns 429 with Retry-After and does not execute MCP methods.
 - [x] Add tests proving limiter outage or malformed client identity fails closed with 503.
 - [x] Run the focused test and verify expected failure before production changes.
-- [x] Apply minimal change and run the full connector test suite (141/141).
+- [x] Apply minimal change and run the full connector test suite (150/150 on the latest verified Connector CI run).
 
 ### Task 2: Authorization and Server-Side Input Boundary
 
@@ -56,11 +56,11 @@
 - Review/modify: `cloud-engineering-connector/worker.js`
 - Review/modify: `cloud-engineering-connector/test/worker.test.js`
 
-- [ ] Build an explicit tool authorization matrix for authenticated and PUBLIC_READ_ONLY callers.
-- [ ] Test write-tool denial under every unauthenticated/public configuration.
-- [ ] Test unknown tool names, extra properties, malformed JSON-RPC params, repository identifiers, branch names, file paths, file sizes, and file counts.
-- [ ] Fix only demonstrated gaps; retain server-side allowlists and fail-closed behavior.
-- [ ] Run all connector tests.
+- [x] Build an explicit tool authorization matrix for authenticated and PUBLIC_READ_ONLY callers.
+- [x] Test write-tool denial under unauthenticated, public-read-only, invalid-bearer, short-token, and missing-GitHub-credential configurations.
+- [x] Test unknown tool names, extra properties, malformed JSON-RPC params, repository identifiers, branch names, file paths, file sizes, and file counts.
+- [x] Fix only demonstrated gaps; retain server-side allowlists and fail-closed behavior. No additional Task 2 production defect was reproduced; new boundary tests pass.
+- [x] Run all connector tests (150/150).
 
 ### Task 3: Cloud Agent Session and Budget Authorization
 
@@ -69,10 +69,10 @@
 - Review/modify: `cloud-agent/test/*.test.js`, `cloud-agent/wrangler*.toml`
 
 - [x] Verify per-session capability isolation and constant-time verifier comparison.
-- [ ] Verify session expiry, ownership boundaries, and that no capability or token is logged or returned from history.
+- [x] Verify session expiry, cross-session ownership boundaries, and capability/history secrecy. Expiry removes history, rate state, timestamp, and verifier; history returns only role/content; no console/logger calls exist in Agent worker/core/budget source.
 - [x] Verify daily budget reservations fail closed and cannot be bypassed through concurrent sessions.
 - [x] Add regression tests for confirmed auth-failure rate-limit gap before code changes.
-- [x] Run Node and Workers Vitest/workerd suites (47/47 Node; 15/15 runtime).
+- [x] Run Node and Workers Vitest/workerd suites (51/51 Node; 15/15 runtime).
 
 ### Task 4: Browser, Transport, and Operational Security
 
@@ -82,15 +82,29 @@
 
 - [x] Audit CORS, CSP/security headers, HTML escaping, DOM sinks, CSRF exposure, cookies, debug routes, and upload handlers; HTTPS-only CORS and restrictive headers are now enforced.
 - [x] Audit direct database/SQL usage; the inspected services use Durable Object storage and GitHub APIs, with no direct SQL query surface.
-- [ ] Scan current tree and all reachable history for credential patterns with a dedicated secret scanner; never expose values.
-- [x] Run npm audit at high severity in both CI workflows; no high-severity advisories reported. Committed lockfiles remain outstanding.
-- [x] Review GitHub Actions permissions and trigger scope; pin connector actions to verified full SHAs (Cloud Agent actions were already pinned).
+- [ ] Scan current tree and all reachable history for credential patterns with a dedicated secret scanner; never expose values. (Still open; PR #99 evidence requires independent revalidation.)
+- [x] Commit package-lock.json for both packages; CI uses npm ci and npm audit --audit-level=moderate. Latest runs reported 0 vulnerabilities in both packages. Vitest upgraded to 4.1.12 to resolve two moderate @vitest/mocker advisories.
+- [x] Review GitHub Actions permissions and trigger scope; CI uses contents:read, full-SHA-pinned actions, and push triggers for security/**. Non-blocking Node 20 deprecation warnings remain for the v4 action SHAs.
 - [x] Record non-applicable features: password hashing, cookie sessions, multipart uploads, and direct SQL are not present in the inspected services.
 
 ### Task 5: Independent Verification and Report
 
 - [x] Re-run all relevant tests from fresh GitHub Actions runs.
 - [x] Review the complete changed-file list and PR patches against the base.
-- [x] Confirm `main` and deployed Workers remain unchanged.
+- [x] Confirm `main` SHA is unchanged and no deployment/secret/binding operation was issued. Hosted Worker state was not re-read in this code-only execution and remains a separate evidence domain.
 - [x] Record hosted Cloudflare canary gaps separately; no production canary was run.
 - [x] Keep the PR Draft; live secret migration, rotation, and deployment remain separately gated.
+
+
+## Execution Record — 2026-11-01
+
+- Isolated branch: `security/project-security-hardening`; PR #101 remains Draft.
+- Base: `hardening/daily-neuron-budget` at `c0f3be179a62985aa9abf67dec8e10b39ba72518`; merge-base verified; no commits behind base.
+- Latest code/workflow head at this record: `1e09f351ec6b157b7b3abbab823d57bd1dac2512`.
+- TDD evidence for the authentication and rate-limit defects: regression tests failed on the pre-fix implementation, then passed after the minimum fixes. The session ownership/history tests are characterization coverage of existing safeguards; no production change was required for those checks.
+- Latest Connector push CI: run `41320408073`; 150/150 tests, moderate-level npm audit with 0 vulnerabilities, syntax checks, and Production/Staging Wrangler dry-runs passed.
+- Latest Cloud Agent push CI: run `41320404952`; 51/51 Node tests, 15/15 Vitest/workerd tests, moderate-level npm audit with 0 vulnerabilities, syntax checks, and Wrangler dry-run passed.
+- Dependency graph is now committed in both package lockfiles. A one-shot lockfile-generation workflow committed the lockfiles and removed itself; it is absent from the final tree.
+- `main` remains at `f2cae91de818385ec48daafc43c621b9e2cc0675` and is still unprotected (`protected:false)); this P0 repository control remains unresolved.
+- No live Worker deployment, route/binding/secret change, credential rotation, or billing change was performed. Live configuration, hosted canary, and secret-type verification remain outstanding.
+- Remaining high-priority work: full reachable-history secret scan, live Cloudflare binding-type review, branch protection/required checks, and hosted staging canary after separate approval.

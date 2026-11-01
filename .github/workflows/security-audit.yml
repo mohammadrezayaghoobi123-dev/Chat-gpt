@@ -41,6 +41,20 @@ jobs:
       - name: Validate shell syntax
         run: bash -n .devcontainer/*.sh
 
+      - name: Validate Dev Container least-privilege configuration
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          config = json.loads(Path(".devcontainer/devcontainer.json").read_text())
+          assert config.get("privileged") is not True, "Dev Container must not run privileged"
+          env = config.get("containerEnv", {})
+          assert env.get("TS_USERSPACE") == "true", "Tailscale must use userspace networking"
+          installer = Path(".devcontainer/install-openclaw.sh").read_text()
+          assert "--tun=userspace-networking" in installer, "Tailscale daemon must use userspace networking"
+          print("Dev Container least-privilege configuration verified")
+          PY
+
   dependency-audit:
     name: npm audit (${{ matrix.directory }})
     runs-on: ubuntu-latest

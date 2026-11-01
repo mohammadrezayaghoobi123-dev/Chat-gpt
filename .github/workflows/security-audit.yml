@@ -32,6 +32,15 @@ jobs:
           GITLEAKS_ENABLE_COMMENTS: "false"
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
 
+  shell-script-validation:
+    name: Validate Dev Container shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate shell syntax
+        run: bash -n .devcontainer/*.sh
+
   dependency-audit:
     name: npm audit (${{ matrix.directory }})
     runs-on: ubuntu-latest

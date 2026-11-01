@@ -97,6 +97,23 @@ function json(data, status = 200, headers = {}) {
   });
 }
 
+function applySecurityHeaders(request, response) {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+    if (!headers.has(name)) headers.set(name, value);
+  }
+  if (new URL(request.url).protocol === "https:") {
+    headers.set("strict-transport-security", "max-age=31536000");
+  } else {
+    headers.delete("strict-transport-security");
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
 async function githubJson(pathOrUrl) {
   const url = pathOrUrl.startsWith("https://api.github.com/")
     ? pathOrUrl
@@ -522,7 +539,10 @@ export class AgentSession extends DurableObject {
 
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
+    let response;
+    try {
+      response = await (async () => {
+        const url = new URL(request.url);
     if (url.pathname === "/healthz" && request.method === "GET") {
       return json({ ok: true, service: "master-brain-cloud-agent", version: VERSION, model: MODEL, mode: "read-only" });
     }
@@ -599,8 +619,13 @@ export default {
       return json({ session_id: newSessionId, session_token: sessionCapability }, 201);
     }
 
-    const id = env.AGENT_SESSIONS.idFromName(sessionId.toLowerCase());
-    const stub = env.AGENT_SESSIONS.get(id);
-    return stub.fetch(new Request("https://agent-session.internal/" + match[2], request));
+        const id = env.AGENT_SESSIONS.idFromName(sessionId.toLowerCase());
+        const stub = env.AGENT_SESSIONS.get(id);
+        return stub.fetch(new Request("https://agent-session.internal/" + match[2], request));
+      })();
+    } catch {
+      response = json({ error: "Internal server error" }, 500);
+    }
+    return applySecurityHeaders(request, response);
   }
 };

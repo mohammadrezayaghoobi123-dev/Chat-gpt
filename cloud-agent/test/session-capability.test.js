@@ -147,7 +147,7 @@ test("session initialization is one-time and persists only a verifier", async ()
   const duplicate = await agent.fetch(new Request("https://agent-session.internal/initialize", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ token_hash: "b".repeat(64) })
+    body: JSON.stringify({ token_hash: "b".repeat(64), principal_id: "owner" })
   }));
   assert.equal(duplicate.status, 409);
   assert.equal(storage.values.get("session-token-hash"), tokenHash);

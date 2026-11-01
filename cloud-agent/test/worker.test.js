@@ -100,7 +100,7 @@ test("API rejects missing bearer auth before rate limiting or Durable Object acc
     AGENT_RATE_LIMITER: { limit: async () => { limiterCalls += 1; return { success: true }; } },
     AGENT_SESSIONS: { idFromName: () => "id", get: () => ({ fetch: async () => { doCalls += 1; return new Response(); } }) }
   });
-  const response = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST", headers: { authorization: "Bearer " + TOKEN } }), env);
+  const response = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST" }), env);
   assert.equal(response.status, 401);
   assert.equal(limiterCalls, 0);
   assert.equal(doCalls, 0);

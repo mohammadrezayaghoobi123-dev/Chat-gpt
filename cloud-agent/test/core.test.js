@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   boundedHistory,
   decodeGitHubBase64Text,
+  createSerialExecutor,
   buildGitHubContentsApiUrl,
   extractAssistantText,
   isAuthorized,
@@ -109,4 +110,44 @@ test("decodes bounded UTF-8 GitHub base64 content and rejects malformed or overs
   assert.equal(decodeGitHubBase64Text(encoded.slice(0, 4) + "\n" + encoded.slice(4), 4), "café");
   assert.throws(() => decodeGitHubBase64Text(encoded, 3), /File exceeds/);
   assert.throws(() => decodeGitHubBase64Text("not base64!", 100), /invalid base64/i);
+});
+
+test("serial executor preserves per-session request order across awaited work", async () => {
+  const execute = createSerialExecutor();
+  const events = [];
+  let releaseFirst;
+  let active = 0;
+  let maxActive = 0;
+
+  const first = execute(async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    events.push("first:start");
+    await new Promise(resolve => { releaseFirst = resolve; });
+    events.push("first:end");
+    active -= 1;
+    return "first";
+  });
+
+  const second = execute(async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    events.push("second:start");
+    active -= 1;
+    events.push("second:end");
+    return "second";
+  });
+
+  await Promise.resolve();
+  assert.deepEqual(events, ["first:start"]);
+  releaseFirst();
+  assert.deepEqual(await Promise.all([first, second]), ["first", "second"]);
+  assert.deepEqual(events, ["first:start", "first:end", "second:start", "second:end"]);
+  assert.equal(maxActive, 1);
+});
+
+test("serial executor continues after a failed request", async () => {
+  const execute = createSerialExecutor();
+  await assert.rejects(execute(async () => { throw new Error("expected failure"); }), /expected failure/);
+  assert.equal(await execute(async () => "next request"), "next request");
 });

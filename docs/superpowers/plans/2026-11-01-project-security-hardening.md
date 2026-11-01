@@ -100,13 +100,13 @@
 
 - Isolated branch: `security/project-security-hardening`; PR #101 remains Draft.
 - Base: `hardening/daily-neuron-budget` at `c0f3be179a62985aa9abf67dec8e10b39ba72518`; merge-base verified; no commits behind base.
-- Latest code/workflow head at this record: `1e09f351ec6b157b7b3abbab823d57bd1dac2512`.
+- Latest branch head at this record: `3cb8641a66fe47316bac698ff4718760c37e3042`. The repository owner subsequently consolidated the secret-scan workflow; that commit was preserved.
 - TDD evidence for the authentication and rate-limit defects: regression tests failed on the pre-fix implementation, then passed after the minimum fixes. The session ownership/history tests are characterization coverage of existing safeguards; no production change was required for those checks.
-- Latest Connector push CI: run `41320408073`; 150/150 tests, moderate-level npm audit with 0 vulnerabilities, syntax checks, and Production/Staging Wrangler dry-runs passed.
-- Latest Cloud Agent push CI: run `41320404952`; 51/51 Node tests, 15/15 Vitest/workerd tests, moderate-level npm audit with 0 vulnerabilities, syntax checks, and Wrangler dry-run passed.
+- Latest Connector CI: run `41321145655`; 150/150 tests, moderate-level npm audit with 0 vulnerabilities, syntax checks, and Production/Staging Wrangler dry-runs passed.
+- Latest Cloud Agent CI: run `41321145654`; 51/51 Node tests, 15/15 Vitest/workerd tests, moderate-level npm audit with 0 vulnerabilities, syntax checks, and Wrangler dry-run passed.
 - Dependency graph is now committed in both package lockfiles. A one-shot lockfile-generation workflow committed the lockfiles and removed itself; it is absent from the final tree.
 - `main` remains at `f2cae91de818385ec48daafc43c621b9e2cc0675` and is still unprotected (`protected:false)); this P0 repository control remains unresolved.
-- No live Worker deployment, route/binding/secret change, credential rotation, or billing change was performed. Live configuration, hosted canary, and secret-type verification remain outstanding.
+- No live Worker deployment, route/binding/secret change, credential rotation, or billing change was performed. Read-only binding metadata was reviewed; Production `GITHUB_TOKEN` is `plain_text` and account 2FA enforcement is disabled. Hosted canary remains outstanding.
 - Remaining high-priority work: protect `main` and require checks; remediate the Production `GITHUB_TOKEN` plain-text binding through separately approved revocation/rotation and Secret binding; enable Cloudflare account 2FA; validate a hosted staging canary after separate approval. Billing plan remains unverified.
 
 
@@ -123,6 +123,6 @@
 ### Secret Scan Evidence — Current Branch
 
 - The Gitleaks workflow scans the PR change range and all fetched Git refs with `fetch-depth: 0` and `--log-opts=--all`.
-- Run `41320949124` on the current security branch: 1,490 commits and approximately 5.26 MB scanned; zero findings.
+- Latest scan run `41321141065` on branch head `3cb8641a`: 1,491 commits and approximately 5.27 MB scanned; zero findings.
 - Historical suppressions were narrowed from broad field-name/pattern allowlists to exact synthetic fixture values, exact historical commits, and exact file paths. The AWS-shaped test value was verified as a sequential alphabetic placeholder before its exact-value allowlist was retained.
 - The repository has one full-history secret-scan workflow in the final tree; the duplicate workflow was removed/consolidated by a subsequent repository-owner commit and that commit was preserved.

@@ -5,13 +5,17 @@ on:
     paths:
       - "cloud-engineering-connector/**"
       - ".github/workflows/connector-ci.yml"
+      - ".github/workflows/cloud-engineering-connector.yml"
   push:
     branches:
       - "feature/cloud-engineering-connector"
+      - "release/production"
       - "assistant/**"
+      - "security/**"
     paths:
       - "cloud-engineering-connector/**"
       - ".github/workflows/connector-ci.yml"
+      - ".github/workflows/cloud-engineering-connector.yml"
 
 permissions:
   contents: read
@@ -28,13 +32,16 @@ jobs:
         working-directory: cloud-engineering-connector
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
+          package-manager-cache: false
       - name: Install dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Audit npm dependency advisories
+        run: npm audit --audit-level=moderate
       - name: Run tests
         run: npm test
       - name: Check JavaScript syntax

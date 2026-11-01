@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 const coreSource = await readFile(new URL("../src/core.js", import.meta.url), "utf8");
@@ -41,7 +42,11 @@ function makeStorage(initial = {}) {
   };
 }
 
-function makeAgent({ storage = makeStorage(), ai = { run: async () => ({ choices: [{ message: { role: "assistant", content: "verified test response" } }] }) } } = {}) {
+async function makeAgent({ storage, ai = { run: async () => ({ choices: [{ message: { role: "assistant", content: "verified test response" } }] }) } = {}) {
+  const token = "s".repeat(43);
+  const digest = await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  const tokenHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+  storage ||= makeStorage({ "session-token-hash": tokenHash });
   const ctx = { storage };
   const env = { AI: ai };
   return { agent: new AgentSession(ctx, env), storage, env };
@@ -50,13 +55,13 @@ function makeAgent({ storage = makeStorage(), ai = { run: async () => ({ choices
 function chatRequest(message = "inspect this project") {
   return new Request("https://agent-session.internal/chat", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-session-token": "s".repeat(43) },
     body: JSON.stringify({ message })
   });
 }
 
 function historyRequest() {
-  return new Request("https://agent-session.internal/history", { method: "GET" });
+  return new Request("https://agent-session.internal/history", { method: "GET", headers: { "x-session-token": "s".repeat(43) } });
 }
 
 function publicEnv(overrides = {}) {
@@ -112,7 +117,7 @@ test("global rate limiter fails closed and rejects before creating a session", a
     AGENT_RATE_LIMITER: { limit: async () => ({ success: false }) },
     AGENT_SESSIONS: { idFromName: () => "id", get: () => ({ fetch: async () => { doCalls += 1; return new Response(); } }) }
   });
-  const denied = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST", headers: { authorization: "Bearer " + TOKEN } }), env);
+  const denied = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST", headers: { authorization: "Bearer " + TOKEN, "x-session-token": "s".repeat(43) } }), env);
   assert.equal(denied.status, 429);
   assert.equal(denied.headers.get("retry-after"), "60");
   env.AGENT_RATE_LIMITER = { limit: async () => { throw new Error("binding unavailable"); } };
@@ -138,7 +143,7 @@ test("authenticated routing canonicalizes UUID case before Durable Object lookup
 });
 
 test("Durable Object chat persists bounded history and schedules expiry", async () => {
-  const { agent, storage } = makeAgent();
+  const { agent, storage } = await makeAgent();
   const response = await agent.fetch(chatRequest());
   assert.equal(response.status, 200);
   const body = await response.json();
@@ -153,7 +158,7 @@ test("Durable Object chat persists bounded history and schedules expiry", async 
 
 test("malformed and oversized chat requests are rejected before model invocation but still count toward rate limits", async () => {
   let modelCalls = 0;
-  const { agent, storage } = makeAgent({ ai: { run: async () => { modelCalls += 1; return {}; } } });
+  const { agent, storage } = await makeAgent({ ai: { run: async () => { modelCalls += 1; return {}; } } });
   const malformed = await agent.fetch(new Request("https://agent-session.internal/chat", { method: "POST", body: "{" }));
   assert.equal(malformed.status, 400);
   const oversized = await agent.fetch(new Request("https://agent-session.internal/chat", {
@@ -173,7 +178,7 @@ test("history endpoint is rate-limited and expires stale stored history", async 
     "rate-window": [stale],
     "last-activity-at": stale
   });
-  const { agent } = makeAgent({ storage });
+  const { agent } = await makeAgent({ storage });
   const response = await agent.fetch(historyRequest());
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { messages: [] });

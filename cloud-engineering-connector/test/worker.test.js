@@ -5,6 +5,27 @@ const env={MCP_AUTH_TOKEN:"test-secret",MCP_RATE_LIMITER:{limit:async()=>({succe
 const req=(path,options={})=>{const headers=new Headers(options.headers);if(path==="/mcp"&&!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
 const rpc=(method,params={},id=1)=>req("/mcp",{method:"POST",headers:{authorization:"Bearer test-secret","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})});
 test("health reports cloud execution without laptop dependency",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers")});
+test("JSON API responses carry restrictive browser security headers",async()=>{
+ const response=await worker.fetch(req("/healthz"),{});
+ assert.equal(response.headers.get("x-content-type-options"),"nosniff");
+ assert.equal(response.headers.get("x-frame-options"),"DENY");
+ assert.equal(response.headers.get("referrer-policy"),"no-referrer");
+ assert.equal(response.headers.get("content-security-policy"),"default-src 'none'; frame-ancestors 'none'");
+ assert.equal(response.headers.get("permissions-policy"),"camera=(), microphone=(), geolocation=()");
+ assert.equal(response.headers.get("cross-origin-resource-policy"),"same-origin");
+});
+test("CORS preflight responses also carry restrictive browser security headers",async()=>{
+ const response=await worker.fetch(req("/mcp",{method:"OPTIONS",headers:{
+  origin:"https://client.example",
+  "access-control-request-method":"POST",
+  "access-control-request-headers":"authorization,content-type"
+ }}),{MCP_ALLOWED_ORIGINS:"https://client.example"});
+ assert.equal(response.status,204);
+ assert.equal(response.headers.get("x-content-type-options"),"nosniff");
+ assert.equal(response.headers.get("x-frame-options"),"DENY");
+ assert.equal(response.headers.get("content-security-policy"),"default-src 'none'; frame-ancestors 'none'");
+ assert.equal(response.headers.get("permissions-policy"),"camera=(), microphone=(), geolocation=()");
+});
 test("MCP fails closed by default when authentication is not configured",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",body:"{}"}),{});assert.equal(r.status,503)});
 test("public read-only mode fails closed when rate limiter binding is absent",async()=>{const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true"});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"rate_limiter_unavailable"})});
 test("public read-only mode fails closed when client IP is unavailable",async()=>{const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");headers.delete("cf-connecting-ip");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"client_identity_unavailable"})});

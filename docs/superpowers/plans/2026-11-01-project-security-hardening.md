@@ -153,3 +153,25 @@
 - PR #97 contains potentially useful non-overlapping additions (.github/dependabot.yml, .gitignore, and .devcontainer permission/log hardening). These should be evaluated for selective porting; do not merge PR #97 wholesale or merge both Draft PRs as-is.
 - Review limitation: Connector constantTimeEqual avoids early exit on differing content but loops to max(left.length, right.length), so execution remains length-dependent. Do not claim a strict constant-time guarantee. This is recorded for follow-up assessment; no timing benchmark or exploitability test has been performed.
 - main remains unchanged at f2cae91de818385ec48daafc43c621b9e2cc0675 and unprotected. No merge, deployment, live secret mutation, or credential rotation was performed.
+
+### Execution Record — Selective Repository Hygiene Carry-Forward and Reverification — 2026-11-01
+
+- Selectively carried forward the two non-overlapping repository-hygiene controls identified in Draft PR #97 onto the canonical hardening branch:
+  - Added root `.gitignore` entries for Node/Workers build artifacts, local environment files, Cloudflare vars, OpenClaw runtime state, logs, private-key material, and infrastructure state.
+  - Added `.github/dependabot.yml` for weekly grouped npm updates in both Worker packages and weekly GitHub Actions updates.
+- Did not copy PR #97's duplicate `security-audit.yml`, because this branch already has the canonical full-history Gitleaks workflow and deterministic `npm ci`/moderate-audit checks. Did not alter legacy Dev Container scripts in this pass.
+- Current branch head after the two additions: `7eb202b97487a3424787ba17aa689a5ad8585cfa`.
+- CI was rerun against this branch head:
+  - Connector CI run `41323734196`: 152/152 tests passed; 0 failed; `npm audit --audit-level=moderate` reported 0 vulnerabilities; syntax checks and Production/Staging Wrangler dry-runs passed.
+  - Cloud Agent CI run `41323734211`: 52/52 Node tests passed; 0 failed; 15/15 Cloudflare Workers runtime tests passed; npm audit reported 0 vulnerabilities; syntax checks and Wrangler dry-run passed.
+  - Full-history Gitleaks run `41323734229`: PR diff scan covered 28 commits / approximately 73.75 KB with no leaks; all fetched refs covered 1,507 commits / approximately 5.28 MB with no leaks.
+- Read-only GitHub verification: `main` remains at `f2cae91de818385ec48daafc43c621b9e2cc0675`; branch metadata reports `protected:false`. Repository rulesets endpoint returned an empty list. The separate branch-protection endpoint returned 403 to the connected integration, so detailed required-check settings could not be inspected.
+- Read-only Cloudflare verification:
+  - Production `chat-gpt111` still exposes the `GITHUB_TOKEN` binding as `plain_text`; the value was not read or logged.
+  - Staging `chat-gpt111-staging` still has no `GITHUB_TOKEN` binding.
+  - Production deployment version 31 (`6bdf25fa-a044-458b-a54d-93b3169911ac`) is 100% deployed, source `dash`, annotation `Add variable: GITHUB_TOKEN`, and has no source commit SHA annotation. Provenance to a tested commit is therefore unproven.
+  - Staging deployment version 7 (`2caf6cae-f955-40c1-a612-841ced20b7e6`) points to commit `86f9e0fc72e0795a7fbe11a485d196ea19c02df0` / PR #85, not this hardening branch.
+  - No live Worker mutation, deployment, secret read, credential rotation, billing change, or route change was performed.
+- Draft PR state: #97, #96, and #101 remain open and unmerged. PR #96 contains a separate per-user identity design (`AGENT_USER_KEYS`, principal-bound sessions, 12/minute per-principal and 60/minute aggregate limits) but is not included in this hardening branch. The current Cloud Agent implementation remains owner/shared-token authenticated; multi-user tester rollout requires a separately reviewed integration of PR #96 and owner provisioning. No such provisioning was performed.
+- Timing caveat remains: Connector `constantTimeEqual` and Agent `constantTimeTextEqual` avoid content-based early exit but have length-dependent work. They must not be described as a strict runtime constant-time guarantee; no timing benchmark has been performed.
+- The Production `GITHUB_TOKEN` plain-text binding remains a P0 release blocker. The last-known Cloudflare account 2FA enforcement state is disabled; it was not rechecked in this read-only pass.

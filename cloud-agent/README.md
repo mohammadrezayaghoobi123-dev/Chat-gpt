@@ -48,8 +48,11 @@ npm run check
 
 - `GET /healthz`: public liveness response; contains no private data.
 - `GET /`: browser console. The bearer token is held in page memory only.
-- `POST /api/sessions/{uuid}/chat`: authenticated user prompt.
-- `GET /api/sessions/{uuid}/history`: authenticated bounded session history.
+- `POST /api/sessions`: bearer-authenticated session creation. Returns a UUID and a one-time 256-bit session capability.
+- `POST /api/sessions/{uuid}/chat`: requires both the bearer token and the session's `x-session-token` capability.
+- `GET /api/sessions/{uuid}/history`: requires both the bearer token and the session's `x-session-token` capability.
+
+The browser console keeps the session capability in page memory only. The Durable Object stores only its SHA-256 verifier, compares verifiers in constant time, and deletes the verifier when the session expires. A capability is a bearer credential: anyone who obtains it can access that session.
 
 ## Security boundaries
 
@@ -60,7 +63,13 @@ npm run check
 - No arbitrary shell, subprocess, package installation, or code execution exists.
 - Tool calls are schema-checked and capped; file paths and response sizes are bounded.
 - Session history excludes credentials and is capped.
+- Session capabilities are random, per-session, one-time returned values; only their SHA-256 verifiers are persisted.
+- Per-session capabilities isolate sessions, but do not establish independent user identities. `AGENT_AUTH_TOKEN` remains a shared service credential; do not treat this MVP as a multi-tenant identity system.
 - A successful model response is not evidence that tests were run or code was verified.
+
+## Verification status
+
+The current capability-isolation change passed the GitHub Actions Node.js 22 checks: 38/38 unit tests, syntax checks, and Wrangler configuration dry-run. These tests use a Node Durable Object stub; they do not establish production Cloudflare Durable Object, SQLite, alarm, concurrency, or Workers AI behavior. A Cloudflare Workers runtime integration suite remains a release gate.
 
 ## Release status
 

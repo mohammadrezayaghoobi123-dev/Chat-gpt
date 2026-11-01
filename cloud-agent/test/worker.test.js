@@ -112,11 +112,11 @@ test("global rate limiter fails closed and rejects before creating a session", a
     AGENT_RATE_LIMITER: { limit: async () => ({ success: false }) },
     AGENT_SESSIONS: { idFromName: () => "id", get: () => ({ fetch: async () => { doCalls += 1; return new Response(); } }) }
   });
-  const denied = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST" }), env);
+  const denied = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST", headers: { authorization: "Bearer " + TOKEN } }), env);
   assert.equal(denied.status, 429);
   assert.equal(denied.headers.get("retry-after"), "60");
   env.AGENT_RATE_LIMITER = { limit: async () => { throw new Error("binding unavailable"); } };
-  const unavailable = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST" }), env);
+  const unavailable = await worker.fetch(new Request("https://agent.example/api/sessions/" + SESSION + "/chat", { method: "POST", headers: { authorization: "Bearer " + TOKEN } }), env);
   assert.equal(unavailable.status, 503);
   assert.equal(doCalls, 0);
 });

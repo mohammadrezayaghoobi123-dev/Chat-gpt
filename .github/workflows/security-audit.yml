@@ -33,7 +33,15 @@ jobs:
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
 
       - name: Scan every fetched Git ref and commit
-        run: /tmp/gitleaks-8.30.1/gitleaks git --redact --exit-code 2 --log-opts="--all" .
+        shell: bash
+        run: |
+          set +e
+          /tmp/gitleaks-8.30.1/gitleaks git --redact --exit-code 2 --report-format json --report-path "$RUNNER_TEMP/gitleaks-full-history.json" --log-opts="--all" .
+          scan_status=$?
+          if [ -f "$RUNNER_TEMP/gitleaks-full-history.json" ]; then
+            jq -r '.[] | [.Description, .File, (.StartLine|tostring), (.EndLine|tostring), .Commit, .RuleID, .Author, .Date] | @tsv' "$RUNNER_TEMP/gitleaks-full-history.json"
+          fi
+          exit "$scan_status"
 
   shell-script-validation:
     name: Validate Dev Container shell scripts

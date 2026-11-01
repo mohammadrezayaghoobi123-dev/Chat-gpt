@@ -62,7 +62,7 @@ npm run check
 - Compute SHA-256 over the exact token string encoded as UTF-8; store only the resulting 64-character lowercase hexadecimal digest in `AGENT_USER_KEYS`. Never put raw tokens in the registry, source control, CI variables, tickets, logs, or screenshots.
 - Keep each raw token in an approved password manager and deliver it to its intended user through a separate secure channel. Cloudflare stores the registry as a Worker secret; do not add `AGENT_USER_KEYS` as a plain-text Wrangler variable.
 - To rotate one principal, generate a new token and replace that principal's digest in the complete registry secret. The old token stops authenticating after the updated secret is active. Existing sessions remain bound to the same principal ID and can be used with the new token.
-- To revoke one principal, remove its entry from the registry and update the secret. Subsequent API requests using the revoked token fail authentication; its stored sessions remain inaccessible to that token and are removed by normal session expiry.
+- To revoke one principal, remove its entry from the registry and update the secret. Subsequent API requests using the revoked token fail authentication. Existing Durable Object sessions become inaccessible but are not synchronously deleted; they are erased by the normal inactivity-expiry lifecycle (seven days since last activity). **Never reassign a revoked principal ID to a different person or identity.** A session is bound to the principal ID, so reusing that ID before all prior sessions expire could make a still-valid old session capability usable again by the newly assigned identity. Issue a new, never-before-used principal ID for each new identity.
 - To update the registry, use the Cloudflare dashboard's secret editor or run `npx wrangler secret put AGENT_USER_KEYS` from this Worker directory and paste the complete JSON value at the interactive prompt. Never pass the secret value as a command-line argument.
 - Keep `AGENT_AUTH_TOKEN` restricted to the service owner/operator. Additional principals are isolated by principal ID, but this MVP does not provide a full organization identity provider, SSO, per-user administrative roles, or audit-grade user attribution.
 
@@ -86,7 +86,7 @@ The browser console keeps the session capability in page memory only. The Durabl
 - Tool calls are schema-checked and capped; file paths and response sizes are bounded.
 - Session history excludes credentials and is capped.
 - Session capabilities are random, per-session, one-time returned values; only their SHA-256 verifiers are persisted.
-- Per-session capabilities isolate sessions, but do not establish independent user identities. `AGENT_AUTH_TOKEN` remains a shared service credential; do not treat this MVP as a multi-tenant identity system.
+- `AGENT_AUTH_TOKEN` identifies the service owner (`owner`). When `AGENT_USER_KEYS` is configured, each additional principal authenticates with its own bearer token and is isolated by principal ID. This is application-level identity separation, not a complete enterprise identity system: there is no SSO, user self-service, per-user administration, or audit-grade identity proof.
 - A successful model response is not evidence that tests were run or code was verified.
 
 ## Verification status

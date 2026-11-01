@@ -18,7 +18,8 @@ import {
   isSessionExpired,
   parseToolArguments,
   readTextBounded,
-  recordSessionActivity
+  recordSessionActivity,
+  validateToolCall
 } from "./core.js";
 
 const VERSION = "0.1.0";
@@ -292,27 +293,27 @@ export class AgentSession extends DurableObject {
         const message = completion?.choices?.[0]?.message;
         if (!message) throw new Error("Model returned no completion message.");
 
-        const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-        if (calls.length === 0) {
+        const rawCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+        if (rawCalls.length === 0) {
           finalText = extractAssistantText(message);
           break;
         }
-
-        messages.push(message);
+        if (rawCalls.length > MAX_TOOL_CALLS - toolCallsUsed) {
+          throw new Error("Tool-call budget exceeded.");
+        }
+        const calls = rawCalls.map(validateToolCall);
+        messages.push({ ...message, tool_calls: calls });
         for (const call of calls) {
           toolCallsUsed += 1;
-          if (toolCallsUsed > MAX_TOOL_CALLS) throw new Error("Tool-call budget exceeded.");
-          const name = call?.function?.name;
-          const args = call?.function?.arguments;
           let output;
           try {
-            output = await executeTool(name, args);
+            output = await executeTool(call.function.name, call.function.arguments);
           } catch (error) {
             output = { error: error instanceof Error ? error.message : "Tool failed." };
           }
           messages.push({
             role: "tool",
-            tool_call_id: String(call.id || "tool-" + toolCallsUsed),
+            tool_call_id: call.id,
             content: JSON.stringify(output).slice(0, 60_000)
           });
         }

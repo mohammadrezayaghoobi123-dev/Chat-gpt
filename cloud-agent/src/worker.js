@@ -238,7 +238,10 @@ export class AgentSession extends DurableObject {
     try {
       const text = await readTextBounded(request.body, request.headers.get("content-length"), 12_000);
       body = JSON.parse(text);
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.message === "Body exceeds configured limit.") {
+        return json({ error: "Request body too large." }, 413);
+      }
       return json({ error: "Invalid JSON request." }, 400);
     }
     if (!body || typeof body.message !== "string" || !body.message.trim() || body.message.length > MAX_MESSAGE_CHARS) {
@@ -320,7 +323,7 @@ export default {
           "cache-control": "no-store",
           "x-content-type-options": "nosniff",
           "referrer-policy": "no-referrer",
-          "content-security-policy": "default-src 'none'; connect-src 'self'; style-src 'nonce-" + nonce + "'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+          "content-security-policy": "default-src 'none'; connect-src 'self'; style-src 'nonce-" + nonce + "'; script-src 'nonce-" + nonce + "'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
         }
       });
     }

@@ -17,7 +17,8 @@ import {
   isSessionId,
   isSessionExpired,
   parseToolArguments,
-  readTextBounded
+  readTextBounded,
+  recordSessionActivity
 } from "./core.js";
 
 const VERSION = "0.1.0";
@@ -246,12 +247,15 @@ export class AgentSession extends DurableObject {
     if (url.pathname !== "/chat" || request.method !== "POST") return json({ error: "Not found" }, 404);
     await this.expireIfNeeded();
 
-    const recentRequests = (await this.ctx.storage.get("rate-window")) || [];
-    const now = Date.now();
-    const activeRequests = recentRequests.filter(timestamp => Number.isFinite(timestamp) && now - timestamp < 60_000);
-    if (activeRequests.length >= 8) return json({ error: "Session rate limit reached. Wait one minute and retry." }, 429);
-    activeRequests.push(now);
-    await this.ctx.storage.put("rate-window", activeRequests);
+    const activity = recordSessionActivity(await this.ctx.storage.get("rate-window"), Date.now());
+    if (!activity.allowed) {
+      return json({ error: "Session rate limit reached. Wait one minute and retry." }, 429);
+    }
+    await this.ctx.storage.put({
+      "rate-window": activity.activeRequests,
+      "last-activity-at": activity.lastActivity
+    });
+    await this.ctx.storage.setAlarm(activity.lastActivity + SESSION_TTL_MS);
 
     let body;
     try {

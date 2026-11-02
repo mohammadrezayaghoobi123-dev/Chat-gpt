@@ -310,3 +310,33 @@ The Cloudflare API confirmed the following binding names and types. Secret value
 5. No Worker code deployment, traffic change, PR merge, or `main` update was performed during this audit.
 
 **Updated disposition: Staging configuration preflight — PASS for the newly added token and existing required bindings; Staging release — BLOCKED pending independent PR approval and GitHub Actions environment controls; Production — NO-GO.**
+
+## 13. Least-privilege release workflow hardening — 2026-11-02 20:02 UTC
+
+**Current candidate SHA:** `1d03e3e4825a00b57fc4a247e7b319f480d9ef68`  
+**PR:** #129, Draft / open; base remains `integration/unify-main-and-integrated-2026-11-02`.
+
+### Security correction and regression coverage
+
+- Removed `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from job-level environments in both Staging and Production release workflows.
+- Removed both Cloudflare credentials from the immutable SHA-validation step. That step now validates only the release branch suffix against `GITHUB_SHA` and receives no Cloudflare deployment credential.
+- Cloudflare credentials are scoped only to the named operational steps: Staging preflight, deploy, post-deploy confirmation, rollback; Production preflight, deploy, Durable Object namespace verification, post-deploy confirmation, rollback.
+- Regression tests enforce: no job-level credential exposure, no credential exposure in SHA validation, and exact allowlisted step names and credential-pair counts.
+- Valid red test evidence: connector CI run `41515105550` on the prior test commit failed exactly the two Staging/Production validation-step assertions because the credentials were still present in the SHA-validation step. The failure was the intended security regression, not an infrastructure error.
+- Green evidence on current candidate `1d03e3e4825a00b57fc4a247e7b319f480d9ef68`: Cloud Engineering Connector CI run `41515317148` completed successfully. Logs show **200 Node tests passed, 0 failed**, **41 Durable Object tests passed**, `npm audit` passed, and JavaScript syntax/Wrangler configuration checks passed.
+- Full-history Gitleaks run `41515317052` on the current candidate completed successfully.
+- Master Brain MVP tests run `41515317302` on the current candidate were still in progress at this snapshot; do not treat them as passed until the final job conclusion is recorded.
+
+### Cross-workflow verification context
+
+- The preceding candidate `c13acf8e729aa2a408fb61704acf2c4f5b1a91aa` completed Cloud Engineering Connector CI, Python tests, Master Brain MVP tests, Master Brain MCP CI, Cloud Agent CI, browser/accessibility checks, full-history Gitleaks, and informational static checks successfully. That preceding candidate did not include the latest allowlist-test refinement and workflow validation-step cleanup; therefore it is supporting regression context, not a substitute for current-head verification.
+- Static checks remain informational and are not a release gate. Existing Ruff/Mypy diagnostics are quality debt and must not be described as a clean static-analysis result.
+
+### Repository governance and live deployment
+
+- The repository Rulesets API returned an empty list. The branch-protection endpoint for `main` returned HTTP 403 `Resource not accessible by integration`; therefore this session cannot independently assert the complete classic branch-protection state. Required review/status enforcement remains unverified.
+- The GitHub Actions Environments endpoint is not available through the connected GitHub integration in this session; environment reviewer/secret configuration remains unverified.
+- No PR review has been submitted; PR #129 remains Draft. No release workflow or post-deploy Staging smoke has run for the current candidate.
+- Cloudflare binding facts and active version IDs remain as recorded in Section 12. Production still has invalid `PUBLIC_READ_ONLY` binding type and missing `WRITE_CONTROL`; no Worker setting, deployment, traffic, merge, or `main` update was performed.
+
+**Disposition:** application CI for the connector and full-history secret scan are green on the current candidate; Master Brain MVP current-head result is pending. Staging release remains blocked pending independent approval and environment controls; Production remains NO-GO.

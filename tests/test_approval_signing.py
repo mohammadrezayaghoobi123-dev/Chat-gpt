@@ -1,6 +1,4 @@
 """SAFE-002: authenticated approver via signed, event-bound approvals (red-first)."""
-import hashlib
-import hmac
 import os
 import tempfile
 import unittest
@@ -13,7 +11,7 @@ from master_brain.approval_signing import (
 )
 from master_brain.integrations import IntegrationRequirement, IntegrationKind
 from master_brain.mission_approval import (
-    action_digest, approval_signing_message, evaluate_approved_execution_gate,
+    approval_signing_message, evaluate_approved_execution_gate,
     record_mission_approval,
 )
 from master_brain.mission_contract import MissionContract, MissionRiskTier

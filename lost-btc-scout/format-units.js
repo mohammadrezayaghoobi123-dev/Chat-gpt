@@ -15,6 +15,6 @@ export function formatUnits(rawValue, decimals = 18, maxFractionDigits = 8) {
     ? ""
     : remainder.toString().padStart(decimals, "0").slice(0, maxFractionDigits).replace(/0+$/, "");
   const wholeText = new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 0 }).format(whole);
-  const fractionText = fraction ? "." + fraction.replace(/[0-9]/g, digit => "۰۱۲۳۴۵۶۷۸۹"[Number(digit)]) : "";
+  const fractionText = fraction ? "٫" + fraction.replace(/[0-9]/g, digit => "۰۱۲۳۴۵۶۷۸۹"[Number(digit)]) : "";
   return (negative ? "−" : "") + wholeText + fractionText;
 }

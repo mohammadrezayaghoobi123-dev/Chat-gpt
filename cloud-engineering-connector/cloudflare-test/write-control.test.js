@@ -16,6 +16,12 @@ const request = (keyHash, requestHash) => ({
 });
 
 describe("WriteControl atomic admission and idempotency contract", () => {
+  it("provides a lightweight SQLite-backed readiness ping", async () => {
+    const stub = stubFor("write-control-readiness-ping");
+    const result = await stub.ping();
+    expect(result).toEqual({ ok: true, schemaVersion: 1 });
+  });
+
   it("migrates a legacy SQLite operations table in place and preserves existing records", async () => {
     const stub = stubFor("legacy-schema-migration");
     const keyHash = "a".repeat(64);

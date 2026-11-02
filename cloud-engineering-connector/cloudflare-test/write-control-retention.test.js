@@ -322,4 +322,35 @@ describe("WriteControl terminal operation retention", () => {
     }
   });
 
+
+  it("rejects oversized PR URL metadata before it can inflate the retained ledger", async () => {
+    const stub = stubFor("retention-pr-url-bound");
+    const keyHash = "f".repeat(64);
+    await runInDurableObject(stub, async (instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO write_operations
+          (key_hash, request_hash, status, phase, created_at, updated_at)
+         VALUES (?, ?, 'IN_PROGRESS', 'PR_DISPATCHED', ?, ?)`,
+        keyHash, "e".repeat(64), NOW, NOW,
+      );
+      const oversizedUrl = "https://github.com/" + "a".repeat(250) + "/" + "b".repeat(250) + "/pull/1";
+      expect(() => instance.transitionOperation({
+        keyHash,
+        leaseGeneration: 1,
+        expectedPhase: "PR_DISPATCHED",
+        nextPhase: "PR_CREATED",
+        status: "SUCCEEDED",
+        metadata: {
+          branchName: "assistant/mcp-" + keyHash,
+          commitSha: "1".repeat(40),
+          prNumber: 1,
+          prUrl: oversizedUrl,
+        },
+      })).toThrow(/pull URL must match the PR number/);
+      expect(state.storage.sql.exec(
+        "SELECT status, phase FROM write_operations WHERE key_hash = ?", keyHash,
+      ).one()).toMatchObject({ status: "IN_PROGRESS", phase: "PR_DISPATCHED" });
+    });
+  });
+
 });

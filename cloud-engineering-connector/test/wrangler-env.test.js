@@ -28,7 +28,11 @@ test("Staging and Production Rate Limiting namespaces are distinct positive inte
 test("Wrangler preserves existing dashboard variables and encrypted secrets", () => {
   assert.match(config, /^keep_vars\s*=\s*true$/m);
   assert.doesNotMatch(config, /^\[vars\]/m);
-  assert.doesNotMatch(staging, /^\[env\.staging\.vars\]/m);
+  assert.match(staging, /^\[env\.staging\.vars\]/m);
+  assert.match(staging, /^ALLOW_GITHUB_TOKEN_READ_FALLBACK\s*=\s*"true"$/m);
+  assert.doesNotMatch(staging, /^(?:GITHUB_TOKEN|GITHUB_READONLY_TOKEN|MCP_AUTH_TOKEN|MCP_ALLOWED_ORIGINS)\s*=/m);
+  const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
+  assert.doesNotMatch(production, /ALLOW_GITHUB_TOKEN_READ_FALLBACK/);
   assert.doesNotMatch(config, /^SERVICE_MODE\s*=/m);
 });
 

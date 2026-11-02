@@ -11,6 +11,11 @@ const PHASES = [
   "PR_CREATED",
 ];
 const STATUSES = new Set(["IN_PROGRESS", "SUCCEEDED", "FAILED", "UNKNOWN"]);
+const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+// 1,000 unresolved rows bound the quarantine ledger while leaving substantial headroom
+// below the 1 GiB per-object SQLite ceiling, even with bounded operation metadata.
+const UNRESOLVED_OPERATION_LIMIT = 1_000;
+const SQLITE_STORAGE_LIMIT_BYTES = 1_073_741_824;
 const TERMINAL_OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const METADATA_FIELDS = new Set([
   "branchName",
@@ -123,6 +128,44 @@ export class WriteControl extends DurableObject {
     return this.readOperation(keyHash);
   }
 
+  getStorageStats() {
+    const sql = this.ctx.storage.sql;
+    const statusRows = sql.exec(
+      "SELECT status, COUNT(*) AS count FROM write_operations GROUP BY status",
+    ).toArray();
+    const countFor = (status) => Number(statusRows.find((row) => row.status === status)?.count ?? 0);
+    const unknownCount = countFor("UNKNOWN");
+    const inProgressCount = countFor("IN_PROGRESS");
+    const succeededCount = countFor("SUCCEEDED");
+    const failedCount = countFor("FAILED");
+    const unresolvedCount = unknownCount + inProgressCount;
+    const oldestUnresolvedUpdatedAt = sql.exec(
+      "SELECT MIN(updated_at) AS oldest FROM write_operations WHERE status IN ('UNKNOWN','IN_PROGRESS')",
+    ).one().oldest;
+    const sqlitePageCount = Number(sql.exec("PRAGMA page_count").one().page_count);
+    const sqlitePageSize = Number(sql.exec("PRAGMA page_size").one().page_size);
+    const sqliteFreelistPages = Number(sql.exec("PRAGMA freelist_count").one().freelist_count);
+    const sqliteAllocatedBytes = sqlitePageCount * sqlitePageSize;
+    const sqliteFreeBytes = sqliteFreelistPages * sqlitePageSize;
+    return {
+      unknownCount,
+      inProgressCount,
+      terminalCount: succeededCount + failedCount,
+      unresolvedCount,
+      unresolvedLimit: UNRESOLVED_OPERATION_LIMIT,
+      unresolvedRemaining: Math.max(0, UNRESOLVED_OPERATION_LIMIT - unresolvedCount),
+      oldestUnresolvedUpdatedAt: oldestUnresolvedUpdatedAt ?? null,
+      retentionMs: TERMINAL_RETENTION_MS,
+      sqlitePageCount,
+      sqlitePageSize,
+      sqliteFreelistPages,
+      sqliteAllocatedBytes,
+      sqliteFreeBytes,
+      sqliteUsedBytes: Math.max(0, sqliteAllocatedBytes - sqliteFreeBytes),
+      sqliteStorageLimitBytes: SQLITE_STORAGE_LIMIT_BYTES,
+    };
+  }
+
   admitWrite(input) {
     if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
     const { keyHash, requestHash, windowMs, limit } = input;
@@ -138,21 +181,30 @@ export class WriteControl extends DurableObject {
     }
 
     return this.ctx.storage.transactionSync(() => {
-      // Preserve idempotency while terminal outcomes are retained. Only terminal rows
-      // strictly older than the retention boundary are eligible; unresolved work is
-      // never pruned because its external side-effect outcome may still be ambiguous.
+      // Prune before idempotency lookup so an expired terminal tombstone no longer
+      // promises replay beyond the documented retention window. Active/ambiguous
+      // operations are deliberately excluded from this deletion predicate.
       this.ctx.storage.sql.exec(
-        `DELETE FROM write_operations
-         WHERE status IN ('SUCCEEDED', 'FAILED') AND updated_at < ?`,
-        now - TERMINAL_OPERATION_RETENTION_MS,
+        "DELETE FROM write_operations WHERE status IN ('SUCCEEDED','FAILED') AND updated_at < ?",
+        now - TERMINAL_RETENTION_MS,
       );
 
       const existing = this.readOperation(keyHash);
       if (existing) {
+        const storageStats = this.getStorageStats();
         if (existing.requestHash !== requestHash) {
-          return { admitted: false, reason: "IDEMPOTENCY_CONFLICT" };
+          return { admitted: false, reason: "IDEMPOTENCY_CONFLICT", storageStats };
         }
-        return { admitted: true, replay: true, operation: existing };
+        return { admitted: true, replay: true, operation: existing, storageStats };
+      }
+
+      const storageStats = this.getStorageStats();
+      if (storageStats.unresolvedCount >= UNRESOLVED_OPERATION_LIMIT) {
+        return {
+          admitted: false,
+          reason: "UNKNOWN_BACKLOG_FULL",
+          storageStats,
+        };
       }
 
       const cutoff = now - windowMs;
@@ -176,6 +228,7 @@ export class WriteControl extends DurableObject {
           admitted: false,
           reason: "RATE_LIMITED",
           retryAfterSeconds,
+          storageStats,
         };
       }
 
@@ -197,6 +250,7 @@ export class WriteControl extends DurableObject {
         admitted: true,
         replay: false,
         operation: this.readOperation(keyHash),
+        storageStats: this.getStorageStats(),
       };
     });
   }

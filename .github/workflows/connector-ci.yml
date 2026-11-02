@@ -72,6 +72,7 @@ jobs:
           assert.equal(healthBody.execution, 'cloudflare-workers');
           assert.equal(healthBody.laptop_dependency, false);
           assert.equal(healthBody.durable_objects, "ok", "healthz must execute a live SQLite Durable Object probe");
+          assert.equal(healthBody.mcp, "ok", "healthz must execute an authenticated MCP tools/list self-check");
           for (const [header, expected] of [
             ['x-content-type-options', 'nosniff'],
             ['x-frame-options', 'DENY'],
@@ -127,6 +128,7 @@ jobs:
               'POST /mcp rejects invalid bearer token with HTTP 401',
               'MCP rejects missing bearer credentials with HTTP 401',
               'healthz performs a live Durable Object SQLite schema probe',
+              'healthz validates configured bearer authentication through MCP tools/list',
             ],
             credentialMaterialLogged: false,
           }, null, 2));

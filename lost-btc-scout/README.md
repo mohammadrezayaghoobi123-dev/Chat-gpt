@@ -20,3 +20,11 @@ GitHub Pages may host this as a static site if Pages is enabled and configured f
 ## Data sources
 - Bitcoin: https://mempool.space/docs/api
 - EVM: public JSON-RPC endpoints configured in `multichain.html`
+
+
+## Multichain hardening and regression tests
+
+- EVM native balances are formatted directly from integer wei using `BigInt`; no conversion through IEEE-754 `Number` is used, preventing silent precision loss for large balances.
+- Public RPC requests have a 12-second timeout and a 5-second client-side scan cooldown.
+- The exact-unit formatter is covered by Node's built-in test runner. Run `npm test` from this directory.
+- The browser still relies on public RPC availability and does not provide exhaustive transaction or token indexing.

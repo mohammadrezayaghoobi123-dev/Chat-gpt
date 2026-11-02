@@ -79,10 +79,10 @@ async function projectInspect(args,env){const base=repoPath(args.owner,args.repo
 async function readProjectFile(args,env){const base=repoPath(args.owner,args.repo);validatePath(args.path);const ref=args.ref?"?ref="+encodeURIComponent(args.ref):"";const file=await github(env,base+"/contents/"+args.path.split("/").map(encodeURIComponent).join("/") + ref,{maxResponseBytes:150_000});if(Array.isArray(file)||file.type!=="file"||typeof file.content!=="string")throw new Error("Path is not a readable text file.");if(!Number.isSafeInteger(file.size)||file.size<0)throw new Error("File size metadata is invalid; refusing to read the file.");if(file.size>MAX_READ_FILE_BYTES)throw new Error("File exceeds the maximum readable size of "+MAX_READ_FILE_BYTES+" bytes.");const content=decodeBase64Utf8(file.content);const actualBytes=new TextEncoder().encode(content).byteLength;if(actualBytes>MAX_READ_FILE_BYTES)throw new Error("Decoded file exceeds the maximum readable size of "+MAX_READ_FILE_BYTES+" bytes.");if(actualBytes!==file.size)throw new Error("File size metadata does not match decoded content; refusing to return potentially inconsistent data.");return{repository:args.owner+"/"+args.repo,path:file.path,ref:args.ref||"default branch",size:actualBytes,content}}
 function redactEvidenceSnippet(value){
  return value.slice(0,240)
-  .replace(/\\bgh[pousr]_[A-Za-z0-9_]{20,}\\b/g,"[REDACTED]")
-  .replace(/\\bAKIA[0-9A-Z]{16}\\b/g,"[REDACTED]")
-  .replace(/(authorization\\s*[:=]\\s*["']?Bearer\\s+)[^"'\\s,;]+/gi,"$1[REDACTED]")
-  .replace(/((?:token|secret|password|api[_-]?key|client[_-]?secret)\\s*[:=]\\s*["']?)[^"'\\s,;]+/gi,"$1[REDACTED]");
+  .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g,"[REDACTED]")
+  .replace(/\bAKIA[0-9A-Z]{16}\b/g,"[REDACTED]")
+  .replace(/(authorization\s*[:=]\s*["']?Bearer\s+)[^"'\s,;]+/gi,"$1[REDACTED]")
+  .replace(/((?:token|secret|password|api[_-]?key|client[_-]?secret)\s*[:=]\s*["']?)[^"'\s,;]+/gi,"$1[REDACTED]");
 }
 function fetchCallHasAbortSignal(line,openIndex){
  let depth=1;let quote="";let escaped=false;let code="";

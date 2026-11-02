@@ -25,7 +25,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any
 
-from master_brain.audit_store import AuditPreconditionError, AuditStore
+from master_brain.audit_store import AuditPreconditionError, AuditStore, _NowType
 from master_brain.mission_approval import (
     APPROVAL_EVENT_TYPE,
     _contract_integrity_error,
@@ -118,7 +118,7 @@ def _contract_from_snapshot(snapshot: Any) -> MissionContract:
 
 def register_mission_contract(
     store: AuditStore, contract: MissionContract, *,
-    event_id: str, recorded_at: str, actor: str,
+    event_id: str, recorded_at: str | _NowType, actor: str,
 ) -> RegisteredContract:
     """Persist ``contract`` once per mission_id (atomic; idempotent for the same digest).
 
@@ -269,7 +269,7 @@ class ReconciliationRejected(MissionLifecycleError):
 
 def record_dispatch_reconciliation(
     store: AuditStore, mission_id: str, attempt_id: str, resolution: str, evidence_ref: str,
-    *, event_id: str, recorded_at: str, actor: str,
+    *, event_id: str, recorded_at: str | _NowType, actor: str,
 ) -> None:
     """Resolve an unresolved attempt with an evidence reference (atomic).
 

@@ -109,3 +109,8 @@ The read-only `architecture_analyze` tool scans 1–8 explicitly selected reposi
 ## Claude MCP protocol compatibility
 
 The Streamable HTTP endpoint supports MCP protocol versions `2025-03-26`, `2025-06-18`, and `2025-11-25` for legacy initialize/notification negotiation, plus the connector's separately tested modern `2026-07-28` discovery path. This is protocol-surface compatibility only; hosted Claude connection and authentication still require a real client acceptance test.
+
+
+## Staging promotion gate
+
+A candidate version must pass the exact-commit CI suite, npm advisory audit, JavaScript syntax checks, and Wrangler dry-runs before upload. The uploaded Cloudflare version is inspected for its inherited secrets and exact Durable Object / rate-limit bindings before any Staging deployment. After deployment, run authenticated MCP tool discovery and a real read-only GitHub repository call, then verify architecture findings against known fixtures. Production is not eligible until those checks, independent review, account MFA, token rotation, and rollback evidence are complete.

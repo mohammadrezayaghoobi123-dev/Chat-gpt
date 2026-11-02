@@ -39,5 +39,12 @@ for (const workflow of workflows) {
       /CLOUDFLARE_API_TOKEN|CLOUDFLARE_ACCOUNT_ID/,
       "Cloudflare deployment credentials must be scoped to the individual steps that need them, not every test/install step",
     );
+    const validationStepMatch = source.match(/      - name: Validate immutable release branch[\\s\\S]*?(?=      - name:)/);
+    assert.ok(validationStepMatch, "immutable release validation step must be identifiable");
+    assert.doesNotMatch(
+      validationStepMatch[0],
+      /CLOUDFLARE_API_TOKEN|CLOUDFLARE_ACCOUNT_ID/,
+      "immutable SHA validation must not receive Cloudflare deployment credentials",
+    );
   });
 }

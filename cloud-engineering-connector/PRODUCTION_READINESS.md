@@ -98,7 +98,16 @@ After the Staging secrets are configured:
 
 Do not treat a passing `/healthz` as proof that MCP, GitHub, or the Durable Object is ready.
 
-## 6. Production release gates
+## 6. Pull-request merge topology
+
+The currently open PRs form overlapping implementation lines. Do not merge every open PR independently:
+
+- **PR #121** is the consolidated Durable Object write-control line. It supersedes the standalone write-control PR #116 and its retention child PR #120. Keep #116/#120 as audit references; do not merge them separately.
+- **PR #127** is the architecture-analyzer + secure-console candidate layered on top of PR #121. It supersedes the separate console PR #118, analyzer PR #119, and older analyzer-on-retention PR #126. Keep those as audit references; do not merge them separately.
+- Approved topological order after independent review: merge #127 into the #121 head branch; then merge the updated #121 into `integration/security-hardening-stack`; then open a final integration PR from `integration/security-hardening-stack` to `main`. Do not skip the final diff review or merge directly to Production.
+- The current #127 branch compares as 34 commits ahead and 0 behind its current base branch. The #121 line compares as 79 commits ahead and 0 behind `integration/security-hardening-stack`; the security-hardening stack itself is 37 commits ahead and 0 behind `main`. `main` remains unchanged.
+
+## 7. Production release gates
 
 Production remains blocked until all of the following are true:
 
@@ -114,7 +123,7 @@ Production remains blocked until all of the following are true:
 - A rollback target and operator are recorded before rollout.
 - Monitoring, alerting, backup/restore, incident ownership and credential-rotation procedures are documented and tested.
 
-## 7. Production rollout and rollback
+## 8. Production rollout and rollback
 
 Use a controlled rollout only after explicit release approval:
 1. Create an immutable Worker version and verify its metadata and bindings.
@@ -126,7 +135,7 @@ Use a controlled rollout only after explicit release approval:
 
 The Durable Object terminal-operation retention policy is 30 days. Unresolved UNKNOWN/IN_PROGRESS operations must not be deleted to clear backlog; resolve or reconcile them through the documented state machine.
 
-## 8. Current external blockers
+## 9. Current external blockers
 
 - Staging was rolled back to its last known-good version 27; PR #127 is not deployed. Production remains on its older Worker version and has no `WRITE_CONTROL` Durable Object binding yet.
 - Staging and Production currently do not list a `GITHUB_READONLY_TOKEN` secret.

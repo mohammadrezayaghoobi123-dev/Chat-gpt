@@ -105,6 +105,7 @@ jobs:
           NODE
 
       - name: Deploy candidate to Staging
+        id: deploy
         run: npx wrangler deploy --env staging
 
       - name: Run live Staging acceptance
@@ -128,7 +129,7 @@ jobs:
           NODE
 
       - name: Roll back Staging if post-deploy acceptance fails
-        if: failure() && steps.preflight.outputs.previous_version_id != ''
+        if: failure() && steps.deploy.outcome == 'success' && steps.preflight.outputs.previous_version_id != ''
         shell: bash
         run: |
           node --input-type=module <<'NODE'
@@ -148,8 +149,11 @@ jobs:
           });
           const body = await response.json();
           if (!response.ok || !body.success) throw new Error("Automatic rollback failed; manual rollback is required.");
-          const health = await fetch(new URL("/healthz", process.env.STAGING_MCP_URL), { signal: AbortSignal.timeout(15000) });
-          if (!health.ok) throw new Error("Rollback was requested but Staging liveness did not recover.");
+          const [health, readiness] = await Promise.all([
+            fetch(new URL("/healthz", process.env.STAGING_MCP_URL), { signal: AbortSignal.timeout(15000) }),
+            fetch(new URL("/readyz", process.env.STAGING_MCP_URL), { signal: AbortSignal.timeout(15000) }),
+          ]);
+          if (!health.ok || !readiness.ok) throw new Error("Rollback was requested but Staging liveness/readiness did not recover.");
           console.log("Staging traffic restored to the captured immutable rollback version.");
           NODE
         env:

@@ -111,18 +111,37 @@ test("both credentials valid: request is forwarded with the bearer", async () =>
   });
 });
 
+const healthEnv = () => ({
+  MCP_AUTH_TOKEN: SECRET,
+  GITHUB_TOKEN: GH,
+  MCP_RATE_LIMITER: { limit: async () => ({ success: true }) },
+  WRITE_CONTROL: {
+    idFromName: (name) => name,
+    get: () => ({
+      healthCheck: async () => ({ ok: true }),
+      getAdmissionStats: async () => ({
+        unknownCount: 0,
+        inProgressCount: 0,
+        unresolvedCount: 0,
+        retentionMs: 30 * 24 * 60 * 60 * 1000,
+      }),
+    }),
+  },
+});
+
 test("healthz never returns secret values", async () => {
-  const r = await worker.fetch(new Request("https://example.test/healthz"), { MCP_AUTH_TOKEN: SECRET, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
-  const text = await r.text();
+  const response = await worker.fetch(new Request("https://example.test/healthz", {
+    headers: { "cf-connecting-ip": "203.0.113.10" },
+  }), healthEnv());
+  const text = await response.text();
+  assert.equal(response.status, 200);
   assert.ok(!text.includes(SECRET) && !text.includes(GH));
 });
 
-
 test("health endpoint never reveals credential configuration booleans", async () => {
-  const response = await worker.fetch(new Request("https://example.test/healthz"), {
-    MCP_AUTH_TOKEN: SECRET,
-    GITHUB_TOKEN: GH
-  });
+  const response = await worker.fetch(new Request("https://example.test/healthz", {
+    headers: { "cf-connecting-ip": "203.0.113.10" },
+  }), healthEnv());
   const body = await response.json();
   assert.equal(response.status, 200);
   assert.equal(Object.hasOwn(body, "github_configured"), false);

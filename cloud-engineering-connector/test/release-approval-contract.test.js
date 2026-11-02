@@ -6,10 +6,23 @@ const workflows = [
   {
     name: "Staging",
     path: new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url),
+    allowedCredentialSteps: [
+      "Preflight Staging bindings and capture rollback target",
+      "Deploy candidate to Staging",
+      "Confirm deployed version and write release evidence",
+      "Roll back Staging if post-deploy acceptance fails",
+    ],
   },
   {
     name: "Production",
     path: new URL("../../.github/workflows/connector-production-release.yml", import.meta.url),
+    allowedCredentialSteps: [
+      "Preflight Production credentials, namespace isolation, and rollback target",
+      "Deploy candidate to Production",
+      "Verify Production Durable Object namespace isolation",
+      "Confirm deployed version and write release evidence",
+      "Roll back Production if post-deploy acceptance fails",
+    ],
   },
 ];
 
@@ -50,5 +63,19 @@ for (const workflow of workflows) {
       /CLOUDFLARE_API_TOKEN|CLOUDFLARE_ACCOUNT_ID/,
       "immutable SHA validation must not receive Cloudflare deployment credentials",
     );
+    const lines = source.split("\n");
+    const credentialLines = lines.map((line, index) => ({ line, index })).filter(
+      ({ line }) => line.includes("CLOUDFLARE_API_TOKEN:") || line.includes("CLOUDFLARE_ACCOUNT_ID:"),
+    );
+    const credentialSteps = credentialLines.map(({ index }) => {
+      for (let cursor = index; cursor >= 0; cursor -= 1) {
+        if (lines[cursor].startsWith("      - name: ")) return lines[cursor].slice("      - name: ".length);
+      }
+      return "";
+    });
+    assert.equal(credentialSteps.length, workflow.allowedCredentialSteps.length * 2, "each authorized step must receive exactly the token and account ID");
+    for (const stepName of credentialSteps) {
+      assert.ok(workflow.allowedCredentialSteps.includes(stepName), `Cloudflare credentials must not be exposed to step: ${stepName}`);
+    }
   });
 }

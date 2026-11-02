@@ -676,7 +676,7 @@ def _file_sha(path: str) -> str:
 
 def _outputs_manifest(out_dir: str) -> tuple[str, str]:
     """(manifest digest, problem). Symlinks and special files are a problem, not followed."""
-    entries = []
+    entries: list[list[str]] = []
     for root, dirs, files in os.walk(out_dir, followlinks=False):
         for name in sorted(dirs + files):
             full = os.path.join(root, name)
@@ -873,7 +873,7 @@ def _watchdog_violation(pgrp: int, work: str, memory_bytes: int, check_disk: boo
 
 
 def _tree_digest(work: str, subdirs: tuple[str, ...]) -> str:
-    entries = []
+    entries: list[list[str]] = []
     for sub in subdirs:
         for root, _, files in os.walk(os.path.join(work, sub)):
             for name in sorted(files):

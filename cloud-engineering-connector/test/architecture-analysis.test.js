@@ -6,7 +6,7 @@ const MCP_TOKEN = "unit-test-token-".padEnd(32, "x");
 const request = (name, argumentsValue) => new Request("https://example.test/mcp", {
   method: "POST",
   headers: {
-    authorization: "Bearer test-secret-0123456789abcdef012345",
+    authorization: "Bearer " + MCP_TOKEN,
     "content-type": "application/json",
     accept: "application/json, text/event-stream",
     "cf-connecting-ip": "203.0.113.10",

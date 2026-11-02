@@ -569,3 +569,48 @@ Changes subsequently applied on the working branch include:
 - No Worker deployment, traffic shift, merge, secret access, account security change, or `main` update occurred.
 
 **Disposition:** Connector unit tests on prior exact candidate — PASS; live Staging `healthz` — PASS; live Staging `readyz` — FAIL (404); final-head CI — NOT YET VERIFIED; Staging release — BLOCKED; Production — NO-GO.
+
+
+## 21. Blocking quality gate and exact-head CI closure — 2026-11-03
+
+**Verified application/workflow candidate:** `dd1cc36838893af466e0ae2b47508602435aa0d6`  
+**PR:** #129, Draft / open; base `integration/unify-main-and-integrated-2026-11-02`.
+
+### Exact-head CI — all eight workflow families PASS
+
+| Workflow | Run | Verified result |
+|---|---:|---|
+| Cloud Engineering Connector CI | `41526456955` | **206/206 tests passed**, 0 failed; npm audit 0 vulnerabilities; JS syntax and Wrangler dry-runs passed |
+| Python tests | `41526456943` | **1,411 passed**, 3 skipped, 4 warnings, 1,050 subtests passed |
+| Master Brain MVP tests | `41526457130` | **1,414 passed**, 3 skipped; offline demo passed |
+| Kernel enforcement | included in `41526457130` | Dedicated privileged suite **8/8 passed**, no skips; cgroup, tmpfs and seccomp enforcement exercised |
+| Master Brain MCP CI | `41526457342` | PASS |
+| Cloud Agent CI | `41526457211` | PASS |
+| Real-browser / Accessibility | `41526457138` | PASS |
+| Full-history Secret Scan | `41526457243` | PASS |
+| Static checks | `41526457084` | PASS; Ruff E9/F **0 findings**, Mypy **0 diagnostics** |
+
+### Static analysis promoted to a blocking quality gate
+
+- Replaced the former informational-only workflow with blocking Ruff E9/F and non-strict Mypy commands; removed `|| true` suppression.
+- Added a 10-minute job timeout.
+- The new blocking Static Checks workflow passed on the exact candidate above with zero Ruff and Mypy findings.
+- The earlier cleanup mistakes (including the missing `ProviderVerificationResult` import and local-variable type collisions) were corrected and verified by the zero-finding run.
+
+### Corrected live-smoke lifecycle
+
+- The previous pre-deployment PR smoke probed the currently deployed Staging Worker before candidate rollout and failed on `/readyz=404`; `/healthz=200`. This remains an actual live Staging drift finding, not a code-test failure.
+- The Connector CI smoke job is now restricted to the explicit post-deploy acceptance branch. A regression test asserts that it cannot run on ordinary PR events.
+- The Staging release workflow still runs `test/staging-smoke.mjs` after deploying the exact independently approved candidate. Thus live acceptance remains mandatory at the correct lifecycle point; the test was not weakened.
+- On the exact candidate, Connector CI reports the pre-deploy smoke as skipped by design, while the unit/test/configuration job passed. No candidate deployment has occurred, so candidate-specific live acceptance remains unproven.
+
+### External release gates remain
+
+- **Staging:** blocked pending account-level MFA enforcement and independent approval of the exact PR candidate; then a controlled Staging deployment and successful post-deploy smoke are required.
+- **Production:** NO-GO. Production Worker observability is absent; `PUBLIC_READ_ONLY` is currently `secret_text` rather than `plain_text=true`; `WRITE_CONTROL` must be created/verified by the checked-in migration and separated from Staging. Account-level MFA enforcement is currently false.
+- The sole accepted Cloudflare account member previously inspected had 2FA disabled. The account owner must enroll a personal 2FA method and secure recovery codes before enabling account-wide enforcement; enabling enforcement before enrollment risks lockout.
+- PR #129 remains Draft with zero independent reviews. The integration cannot approve its own PR. GitHub branch-protection/ruleset enforcement remains unverified because the connected integration lacks permission to read classic branch protection.
+- Independent live sessions in Claude and ChatGPT are not yet proven. Candidate-specific Staging MCP handshake and tools/call acceptance must pass first.
+- No Worker deployment, traffic shift, secret read, Cloudflare account security change, merge, or `main` update occurred.
+
+**Disposition:** all eight CI workflow families PASS on `dd1cc368...`; Ruff/Mypy blocking gate PASS with zero findings; pre-deploy Staging smoke correctly skipped; live candidate Staging acceptance NOT YET RUN; Staging release BLOCKED pending owner MFA and independent PR approval; Production NO-GO.

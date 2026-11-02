@@ -45,6 +45,22 @@ async function getJson(fetchImpl, url, token) {
   return body;
 }
 
+async function getJsonCollection(fetchImpl, url, token) {
+  const parsed = new URL(url);
+  parsed.searchParams.set("per_page", "100");
+  const collection = [];
+  for (let page = 1; page <= 100; page += 1) {
+    parsed.searchParams.set("page", String(page));
+    const items = await getJson(fetchImpl, parsed.toString(), token);
+    if (!Array.isArray(items)) {
+      throw new Error("GitHub returned an invalid paginated collection.");
+    }
+    collection.push(...items);
+    if (items.length < 100) return collection;
+  }
+  throw new Error("GitHub release-approval pagination exceeded 100 pages; refusing to approve an incomplete review history.");
+}
+
 function latestReviewsByUser(reviews) {
   const latest = new Map();
   for (const review of reviews) {
@@ -68,9 +84,9 @@ export async function verifyReleaseApproval({
 }) {
   validateInput({ repository, candidateSha, releaseEnvironment, token, fetchImpl });
   const repoPath = repository.split("/").map(encodeURIComponent).join("/");
-  const associated = await getJson(
+  const associated = await getJsonCollection(
     fetchImpl,
-    API_ROOT + "/repos/" + repoPath + "/commits/" + candidateSha + "/pulls?per_page=100",
+    API_ROOT + "/repos/" + repoPath + "/commits/" + candidateSha + "/pulls",
     token,
   );
   if (!Array.isArray(associated)) throw new Error("GitHub returned an invalid associated-PR list.");
@@ -96,9 +112,9 @@ export async function verifyReleaseApproval({
   }
 
   const reviewCommitSha = pull.head.sha;
-  const reviews = await getJson(
+  const reviews = await getJsonCollection(
     fetchImpl,
-    API_ROOT + "/repos/" + repoPath + "/pulls/" + pull.number + "/reviews?per_page=100",
+    API_ROOT + "/repos/" + repoPath + "/pulls/" + pull.number + "/reviews",
     token,
   );
   if (!Array.isArray(reviews)) throw new Error("GitHub returned an invalid PR review list.");

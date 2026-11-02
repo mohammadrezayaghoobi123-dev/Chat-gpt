@@ -353,4 +353,22 @@ describe("WriteControl terminal operation retention", () => {
     });
   });
 
+
+  it("keeps full logical-payload scans off the admission hot path", async () => {
+    const stub = stubFor("retention-admission-fast-path");
+    await runInDurableObject(stub, async (instance) => {
+      instance.getStorageStats = () => {
+        throw new Error("full storage scan must not run during admission");
+      };
+      const result = instance.admitWrite({
+        keyHash: "b".repeat(64), requestHash: "c".repeat(64),
+        windowMs: 60_000, limit: 5,
+      });
+      expect(result).toMatchObject({
+        admitted: true,
+        replay: false,
+        storageStats: { unresolvedCount: 1, unresolvedLimit: UNRESOLVED_LIMIT },
+      });
+    });
+  });
 });

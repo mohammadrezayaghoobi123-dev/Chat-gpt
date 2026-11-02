@@ -23,7 +23,8 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 ### Latest exact-head CI evidence — 2026-11-02
 
 - Integrated release candidate PR: [#129](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/129), branch `assistant/unified-product-release-candidate-2026-11-02`.
-- Exact current candidate SHA: `746c482b1e5aa6d2ab2648a8b7a96eb39981f251`.
+- Last application-code SHA with a fully green CI matrix: `746c482b1e5aa6d2ab2648a8b7a96eb39981f251`.
+- The current PR head `514995f92eec1c814fcb82de380ca11a827bfeac` is a documentation-only runbook reconciliation commit; CI was triggered again for this exact documentation head. No application code changed after the green code SHA above.
 - Current `main` head: `f2cae91de818385ec48daafc43c621b9e2cc0675`; the candidate compares as 939 commits ahead and 0 behind. No commit was pushed to `main`.
 - Connector CI: PASS; 184 Node tests and 41 Durable Object tests passed; npm audit reported 0 vulnerabilities; Wrangler configuration checks passed.
 - Cloud Agent CI: PASS.
@@ -140,7 +141,7 @@ The active integrated candidate is PR #129, branch `assistant/unified-product-re
 
 - PR #129 contains the unified Master Brain/Python/CTP history and the Cloud Engineering Connector / Cloud Agent feature history through a real merge commit. The merge topology preserves both parent histories; do not squash or rewrite it.
 - PR #127 is a feature-history/audit reference incorporated into PR #129; do not merge it separately to `main`.
-- The exact current candidate SHA is `746c482b1e5aa6d2ab2648a8b7a96eb39981f251`.
+- The last code-changing candidate SHA is `746c482b1e5aa6d2ab2648a8b7a96eb39981f251`; the current documentation-only PR head is `514995f92eec1c814fcb82de380ca11a827bfeac`.
 - Current `main` remains `f2cae91de818385ec48daafc43c621b9e2cc0675`; GitHub compare reports the candidate as 939 commits ahead and 0 behind.
 - PR #129 is Draft, mergeable, and has zero submitted reviews at the latest check.
 - Keep all changes on the candidate branch. Do not merge to `main`, close superseded audit PRs, or rewrite history until independent review, governance controls, and release gates are satisfied.

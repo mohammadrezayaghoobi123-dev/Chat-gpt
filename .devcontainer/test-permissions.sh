@@ -7,7 +7,7 @@ trap 'rm -rf "$tmp_dir"' EXIT
 log_file="$tmp_dir/tailscaled.log"
 printf 'synthetic diagnostic\n' > "$log_file"
 chmod 644 "$log_file"
-TAILSCALE_LOG_PATH="$log_file" secure_tailscale_log
+secure_tailscale_log "$log_file"
 mode="$(stat -c '%a' "$log_file")"
 if [[ "$mode" != "600" ]]; then
   printf 'expected existing Tailscale log mode 600, got %s\n' "$mode" >&2

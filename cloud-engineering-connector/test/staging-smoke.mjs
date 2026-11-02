@@ -91,6 +91,21 @@ assert.equal(initialized.response.status, 200);
 assert.equal(initialized.body.result.protocolVersion, "2025-11-25");
 console.log("PASS: MCP initialize");
 
+// Claude compatibility probe: MCP legacy protocol 2025-06-18.
+const claudeInitialized = await rpc("initialize", {
+  protocolVersion: "2025-06-18",
+  capabilities: {},
+  clientInfo: { name: "claude-compatibility-probe", version: "1.0.0" },
+}, 99008);
+assert.equal(claudeInitialized.response.status, 200);
+assert.equal(claudeInitialized.body.result.protocolVersion, "2025-06-18");
+const claudeListed = await rpc("tools/list", {}, 99009, null, {
+  "MCP-Protocol-Version": "2025-06-18",
+});
+assert.equal(claudeListed.response.status, 200);
+assert.ok(claudeListed.body.result.tools.some((tool) => tool.name === "architecture_analyze"));
+console.log("PASS: Claude MCP 2025-06-18 initialize and tools/list");
+
 const notificationResponse = await fetch(new URL("/mcp", base), {
   method: "POST",
   headers: {
@@ -186,6 +201,7 @@ console.log(JSON.stringify({
     "root console, nonce CSP, no-store, and no credential/config disclosure",
     "same-origin CORS accepted; unlisted cross-origin rejected",
     "MCP initialize 2025-11-25 and initialized notification",
+    "Claude-compatible MCP 2025-06-18 initialize and tools/list",
     "anonymous tools/list exposes exactly five read-only tools",
     "live public GitHub project_inspect and read_project_file",
     "live architecture_analyze against a repository file",

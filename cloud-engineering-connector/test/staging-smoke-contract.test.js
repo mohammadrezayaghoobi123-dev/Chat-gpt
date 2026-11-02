@@ -43,3 +43,14 @@ test("candidate identity rejects a branch/SHA mismatch and invalid release envir
     /RELEASE_ENV/,
   );
 });
+
+const releaseWorkflow = readFileSync(
+  new URL("../../.github/workflows/connector-ci.yml", import.meta.url),
+  "utf8",
+);
+
+test("post-deploy smoke separates liveness from Durable Object readiness", () => {
+  assert.match(releaseWorkflow, /new URL\(["']\/readyz["'], base\)/);
+  assert.match(releaseWorkflow, /readinessBody\.durable_objects/);
+  assert.doesNotMatch(releaseWorkflow, /healthBody\.durable_objects/);
+});

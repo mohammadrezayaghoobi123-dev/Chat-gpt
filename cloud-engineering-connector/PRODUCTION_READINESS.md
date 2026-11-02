@@ -114,7 +114,7 @@ Production remains blocked until all of the following are true:
 - A rollback target and operator are recorded before rollout.
 - Monitoring, alerting, backup/restore, incident ownership and credential-rotation procedures are documented and tested.
 
-## 6. Production rollout and rollback
+## 7. Production rollout and rollback
 
 Use a controlled rollout only after explicit release approval:
 1. Create an immutable Worker version and verify its metadata and bindings.
@@ -126,7 +126,7 @@ Use a controlled rollout only after explicit release approval:
 
 The Durable Object terminal-operation retention policy is 30 days. Unresolved UNKNOWN/IN_PROGRESS operations must not be deleted to clear backlog; resolve or reconcile them through the documented state machine.
 
-## 7. Current external blockers
+## 8. Current external blockers
 
 - Staging was rolled back to its last known-good version 27; PR #127 is not deployed. Production remains on its older Worker version and has no `WRITE_CONTROL` Durable Object binding yet.
 - Staging and Production currently do not list a `GITHUB_READONLY_TOKEN` secret.

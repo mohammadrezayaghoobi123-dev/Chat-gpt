@@ -5,7 +5,7 @@ import worker from "../worker.js";
 const request = (name, argumentsValue) => new Request("https://example.test/mcp", {
   method: "POST",
   headers: {
-    authorization: "Bearer test-secret",
+    authorization: "Bearer test-secret-0123456789abcdef012345",
     "content-type": "application/json",
     accept: "application/json, text/event-stream",
     "cf-connecting-ip": "203.0.113.10",
@@ -192,7 +192,7 @@ test("architecture_analyze redacts credential-like values from evidence snippets
     const analysis = JSON.parse(body.result.content[0].text);
     const snippet = analysis.findings[0].evidence[0].snippet;
     assert.doesNotMatch(snippet, new RegExp(secret));
-    assert.match(snippet, /\\[REDACTED\\]/);
+    assert.match(snippet, /\[REDACTED\]/);
   } finally {
     globalThis.fetch = originalFetch;
   }

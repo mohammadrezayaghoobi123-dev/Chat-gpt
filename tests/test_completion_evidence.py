@@ -214,7 +214,7 @@ class RegisteredCompletionEvidenceTests(CompletionEvidenceTests):
     """Adversarial tests for the trusted-registry entry point."""
 
     def _registry(self, *, enabled=True, provider_id="provider-x", evidence_type="provider_operation_receipt", version="1"):
-                from master_brain.verifier_registry import ConfiguredVerifierRegistry, VerifierDescriptor
+        from master_brain.verifier_registry import ConfiguredVerifierRegistry, VerifierDescriptor
 
         return ConfiguredVerifierRegistry([VerifierDescriptor(
             verifier_id="provider-x-receipt-verifier",
@@ -512,6 +512,7 @@ class AdditionalAdversarialCompletionEvidenceTests(CompletionEvidenceTests):
             self.validate(verifier=lambda item: 1)
 
     def test_receipt_observed_before_dispatch_boundary_never_reaches_verifier(self):
+        from dataclasses import replace
 
         called = []
         stale = replace(self.evidence, observed_at="2026-10-12T00:00:01Z")

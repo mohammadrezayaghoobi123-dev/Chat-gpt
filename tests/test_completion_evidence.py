@@ -6,6 +6,7 @@ from pathlib import Path
 from master_brain.completion_evidence import (
     CompletionEvidence,
     EvidenceValidationError,
+    ProviderVerificationResult,
     validate_completion_evidence,
 )
 from master_brain.execution_registry import (

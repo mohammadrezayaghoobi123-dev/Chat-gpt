@@ -49,10 +49,17 @@ test("Production and Staging enable persisted custom logs without invocation log
   }
 });
 
-test("Production and Staging both declare the SQLite WriteControl binding and migration", () => {
+test("Production and Staging declare the SQLite WriteControl binding through declarative exports", () => {
   const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
   assert.match(production, /\[\[durable_objects\.bindings\]\][\s\S]*?name\s*=\s*"WRITE_CONTROL"[\s\S]*?class_name\s*=\s*"WriteControl"/);
-  assert.match(production, /\[\[migrations\]\][\s\S]*?new_sqlite_classes\s*=\s*\["WriteControl"\]/);
+  assert.match(production, /\[exports\.WriteControl\][\s\S]*?type\s*=\s*"durable-object"[\s\S]*?storage\s*=\s*"sqlite"/);
   assert.match(staging, /\[\[env\.staging\.durable_objects\.bindings\]\][\s\S]*?name\s*=\s*"WRITE_CONTROL"[\s\S]*?class_name\s*=\s*"WriteControl"/);
-  assert.match(staging, /\[\[env\.staging\.migrations\]\][\s\S]*?new_sqlite_classes\s*=\s*\["WriteControl"\]/);
+  assert.match(staging, /\[env\.staging\.exports\.WriteControl\][\s\S]*?type\s*=\s*"durable-object"[\s\S]*?storage\s*=\s*"sqlite"/);
+  assert.doesNotMatch(config, /^\[\[migrations\]\]/m);
+  assert.doesNotMatch(staging, /^\[\[env\.staging\.migrations\]\]/m);
+});
+
+test("Worker entrypoint exports the WriteControl class referenced by Wrangler", () => {
+  const entry = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  assert.match(entry, /export \{ WriteControl \} from/);
 });

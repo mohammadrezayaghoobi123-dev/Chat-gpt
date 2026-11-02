@@ -372,4 +372,41 @@ describe("WriteControl terminal operation retention", () => {
       });
     });
   });
+ 
+  it("keeps per-admission telemetry limited to unresolved indexed rows", async () => {
+    const stub = stubFor("retention-admission-stats-bounded");
+    await runInDurableObject(stub, async (instance, state) => {
+      const sql = state.storage.sql;
+      for (let i = 0; i < 128; i++) {
+        insertOperation(sql, {
+          keyHash: (i + 100).toString(16).padStart(64, "0"),
+          requestHash: (i + 300).toString(16).padStart(64, "0"),
+          status: i % 2 === 0 ? "SUCCEEDED" : "FAILED",
+          phase: i % 2 === 0 ? "PR_CREATED" : "RESERVED",
+          updatedAt: NOW - i,
+        });
+      }
+      insertOperation(sql, {
+        keyHash: "1".repeat(64), requestHash: "2".repeat(64),
+        status: "UNKNOWN", phase: "PR_DISPATCHED", updatedAt: NOW,
+      });
+      insertOperation(sql, {
+        keyHash: "3".repeat(64), requestHash: "4".repeat(64),
+        status: "IN_PROGRESS", phase: "COMMIT_DISPATCHED", updatedAt: NOW,
+      });
+
+      const stats = instance.getAdmissionStats();
+      expect(stats).toMatchObject({
+        unknownCount: 1,
+        inProgressCount: 1,
+        unresolvedCount: 2,
+        unresolvedLimit: UNRESOLVED_LIMIT,
+        unresolvedRemaining: UNRESOLVED_LIMIT - 2,
+      });
+      expect(stats).not.toHaveProperty("terminalCount");
+      expect(stats).not.toHaveProperty("operationCount");
+      expect(stats).not.toHaveProperty("admissionCount");
+    });
+  });
+
 });

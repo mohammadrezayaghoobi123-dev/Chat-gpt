@@ -275,3 +275,38 @@ The eight PR-triggered workflow runs associated with this exact SHA were complet
 No candidate deployment or live account acceptance is evidenced by these workflow runs. The Cloudflare blockers, GitHub governance requirements, independent review, Staging acceptance, and real Claude/ChatGPT account acceptance documented above remain mandatory. This runbook update does not authorize deployment, merge, or Production traffic changes.
 
 **Decision: NO-GO.**
+
+
+## 12. Live Cloudflare binding re-audit after GitHub read-only token setup — 2026-11-02 19:22 UTC
+
+This section supersedes only the stale token-presence statements in Sections 8–11; it does not erase the historical snapshots above.
+
+### Read-only API evidence
+
+The Cloudflare API confirmed the following binding names and types. Secret values were not read:
+
+| Binding | Staging `chat-gpt111-staging` | Production `chat-gpt111` |
+|---|---|---|
+| `GITHUB_READONLY_TOKEN` | `secret_text` present | `secret_text` present |
+| `GITHUB_TOKEN` | `secret_text` present | `secret_text` present |
+| `MCP_AUTH_TOKEN` | `secret_text` present | `secret_text` present |
+| `MCP_ALLOWED_ORIGINS` | `secret_text` present | `secret_text` present |
+| `MCP_RATE_LIMITER` | namespace `78294164` | namespace `78294163` |
+| `PUBLIC_READ_ONLY` | plain-text `true` | `secret_text` — invalid type for release preflight |
+| `WRITE_CONTROL` | Durable Object namespace `1d0f4257b609483eba4fc5fdb39ed781` | missing |
+
+### Active deployment identity
+
+- Staging: 100% traffic on version 32, ID `2a3283f0-f443-4d51-885c-e30e4ff7434a`; version metadata identifies source `dash` and annotation `Add secret: GITHUB_READONLY_TOKEN`.
+- Production: 100% traffic on version 34, ID `c6d24ebd-4ce9-425d-9b22-fc8d1d7b1362`; version metadata identifies source `dash` and annotation `Add secret: GITHUB_READONLY_TOKEN`.
+- These are Dashboard-generated versions for binding changes, not a deployment of the immutable PR #129 code candidate. The candidate SHA remains `5e723a93c2a8c1587326dd4cf05ed85e954b9c87`; it has not passed the Staging release workflow or live acceptance.
+
+### Current decision and next gates
+
+1. The missing `GITHUB_READONLY_TOKEN` binding blocker is cleared on both Workers.
+2. Staging's binding preflight is now structurally satisfied for the token, read-only flag, rate limiter and Durable Object namespace. Release still cannot proceed because PR #129 remains Draft and has no independent approval, and the GitHub Actions Staging environment credentials/reviewer controls have not been verified.
+3. Production remains NO-GO: `PUBLIC_READ_ONLY` must be changed to a plain-text `true` variable; Production `WRITE_CONTROL` must be created by the reviewed migration and then verified as isolated from Staging.
+4. Do not substitute `GITHUB_TOKEN` for `GITHUB_READONLY_TOKEN`; do not expose either secret value.
+5. No Worker code deployment, traffic change, PR merge, or `main` update was performed during this audit.
+
+**Updated disposition: Staging configuration preflight — PASS for the newly added token and existing required bindings; Staging release — BLOCKED pending independent PR approval and GitHub Actions environment controls; Production — NO-GO.**

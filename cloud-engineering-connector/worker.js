@@ -191,7 +191,7 @@ async function createChangePr(args,env) {
  let stub;
  try {
   stub=binding.get(binding.idFromName("create-change-pr-global"));
-  if(!stub||typeof stub.admitWrite!=="function"||typeof stub.transitionOperation!=="function"||typeof stub.markOperationStatus!=="function"||typeof stub.markStaleOperationsUnknown!=="function"||typeof stub.reconcilePrCreated!=="function"||typeof stub.getOperation!=="function") throw new Error("Durable Object RPC binding is incomplete.");
+  if(!stub||typeof stub.admitWrite!=="function"||typeof stub.transitionOperation!=="function"||typeof stub.markOperationStatus!=="function"||typeof stub.markStaleOperationsUnknown!=="function"||typeof stub.getStorageStats!=="function"||typeof stub.reconcilePrCreated!=="function"||typeof stub.getOperation!=="function") throw new Error("Durable Object RPC binding is incomplete.");
  } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
 
  const {idempotency_key,...requestData}=args;
@@ -207,8 +207,15 @@ async function createChangePr(args,env) {
   admission=await stub.admitWrite({keyHash,requestHash,now,windowMs:60_000,limit:5});
  } catch { throw new ToolError("WRITE_CONTROL_UNAVAILABLE"); }
  if(!admission||typeof admission.admitted!=="boolean") throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+ if(admission.storageStats) console.log(JSON.stringify({event:"write_control_storage",...admission.storageStats}));
  if(admission.reason==="RATE_LIMITED") throw new ToolError("WRITE_RATE_LIMITED",{retry_after_seconds:admission.retryAfterSeconds});
  if(admission.reason==="IDEMPOTENCY_CONFLICT") throw new ToolError("IDEMPOTENCY_CONFLICT");
+ if(admission.reason==="UNKNOWN_BACKLOG_FULL") throw new ToolError("WRITE_UNKNOWN_BACKLOG_FULL",{
+  unresolved_count:admission.storageStats?.unresolvedCount??null,
+  unresolved_limit:admission.storageStats?.unresolvedLimit??null,
+  oldest_unresolved_updated_at:admission.storageStats?.oldestUnresolvedUpdatedAt??null,
+  message:"New writes are paused because unresolved Durable Object operations reached the safety limit. Reconcile quarantined operations before retrying."
+ });
  if(!admission.admitted) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
  let leaseGeneration=admission.operation?.leaseGeneration;
  if(!Number.isSafeInteger(leaseGeneration)||leaseGeneration<1) throw new ToolError("WRITE_CONTROL_UNAVAILABLE");

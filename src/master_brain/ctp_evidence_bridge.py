@@ -84,13 +84,13 @@ def review_ctp_evidence(
             orphan_evidence.update(test.evidence_ids)
             continue
         for evidence_id in test.evidence_ids:
-            evidence_record = evidence_by_id.get(evidence_id)
-            if evidence_record is None:
+            matched_evidence = evidence_by_id.get(evidence_id)
+            if matched_evidence is None:
                 missing_evidence.add(evidence_id)
                 continue
-            if evidence_record.claim_id not in case_claim_ids:
+            if matched_evidence.claim_id not in case_claim_ids:
                 structural.append(
-                    f"evidence {evidence_id} refers to claim {evidence_record.claim_id} outside CTP case"
+                    f"evidence {evidence_id} refers to claim {matched_evidence.claim_id} outside CTP case"
                 )
                 orphan_evidence.add(evidence_id)
                 continue

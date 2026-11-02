@@ -1,0 +1,48 @@
+name: Dev Container Security
+
+on:
+  pull_request:
+    paths:
+      - ".devcontainer/**"
+      - ".github/workflows/devcontainer-security.yml"
+  push:
+    branches:
+      - "security/**"
+      - "integration/**"
+    paths:
+      - ".devcontainer/**"
+      - ".github/workflows/devcontainer-security.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: devcontainer-security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  least-privilege:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate Dev Container privilege and Tailscale userspace mode
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(Path(".devcontainer/devcontainer.json").read_text())
+          assert config.get("privileged") is not True, "Dev Container must not run privileged"
+          env = config.get("containerEnv", {})
+          assert env.get("TS_USERSPACE") == "true", "Tailscale must use userspace networking"
+          assert env.get("TS_SOCKET") == "/tmp/tailscaled.sock", "Unexpected Tailscale socket"
+          installer = Path(".devcontainer/install-openclaw.sh").read_text()
+          assert "--tun=userspace-networking" in installer, "Tailscale daemon must use userspace networking"
+          print("PASS: unprivileged Dev Container and Tailscale userspace configuration")
+          PY
+      - name: Validate Dev Container shell scripts
+        run: bash -n .devcontainer/*.sh

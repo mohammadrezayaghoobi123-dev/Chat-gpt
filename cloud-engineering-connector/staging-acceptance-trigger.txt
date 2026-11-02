@@ -1,0 +1,3 @@
+Issue #117 post-deployment acceptance trigger.
+This file intentionally exists only to trigger the protected Staging smoke workflow on the deployed candidate.
+No credentials or secret material are stored here.

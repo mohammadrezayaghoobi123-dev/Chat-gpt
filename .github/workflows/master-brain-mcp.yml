@@ -14,6 +14,10 @@ on:
       - "master-brain-mcp/**"
       - ".github/workflows/master-brain-mcp.yml"
 
+concurrency:
+  group: master-brain-mcp-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest

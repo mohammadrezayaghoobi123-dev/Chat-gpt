@@ -15,6 +15,10 @@ on:
       - master-brain/integrated
   workflow_dispatch:
 
+concurrency:
+  group: master-brain-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

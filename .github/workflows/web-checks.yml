@@ -23,6 +23,10 @@ on:
       - tools/a11y_check.py
   workflow_dispatch:
 
+concurrency:
+  group: web-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

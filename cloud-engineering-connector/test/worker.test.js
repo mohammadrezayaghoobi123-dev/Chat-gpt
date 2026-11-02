@@ -513,7 +513,7 @@ test("public read-only repository inspection uses the server token and global qu
   assert.equal(result.repository,"mohammadrezayaghoobi123-dev/Chat-gpt");
   assert.equal(result.file_count_returned,1);
   assert.equal(requests.length,3);
-  assert.deepEqual(requests.map(request=>request.authorization),[null,null,null]);
+  assert.deepEqual(requests.map(request=>request.authorization),["Bearer server-token","Bearer server-token","Bearer server-token"]);
  }finally{globalThis.fetch=originalFetch}
 });
 

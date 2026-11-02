@@ -464,3 +464,45 @@ Duplicate same-SHA runs were observed for Python and Master Brain MVP; one compl
 - Static-analysis cleanup is in progress; exact-head Static workflow result is pending.
 
 **Disposition:** Connector and Wrangler configuration tests — PASS on `8677c2e7...`; Production release gate order — corrected in code; live Production configuration — unchanged and not yet verified after deployment; account MFA — blocked pending member enrollment; independent review and client acceptance — pending.
+
+
+## 18. Static-analysis remediation and account-MFA release gate — 2026-11-03
+
+**Current PR head at audit:** a6b27fafd650aa48188ff50d4c05037837690221  
+**PR:** #129, Draft / open; base remains integration/unify-main-and-integrated-2026-11-02.
+
+### Static-analysis corrections applied
+
+The informational static run 41521003624 on the earlier pre-remediation candidate exposed 6 Ruff findings and 50 Mypy diagnostics. The findings were enumerated from the actual job log, not inferred.
+
+Changes subsequently applied on the working branch include:
+- CTP loop-variable type collisions fixed with domain-specific variable names.
+- Evidence-record optional lookup variable separated from the non-optional loop variable.
+- Audit timestamp sentinel narrowing and Windows lock calls made explicit for the type checker.
+- External approval-signature metadata validated before use; optional receipt fields narrowed before payload insertion.
+- Password record parsing now keeps encoded strings separate from parsed integer parameters.
+- Optional account/CTP dependencies and session credentials are explicitly guarded in HTTP handlers.
+- CTP output manifests have concrete list element types; PubMed pacing and CLI docstring optionality are typed.
+- Signal-handler callback signature and bytes-vs-text host formatting are explicit.
+- Ruff regressions from the earlier import cleanup (indentation, missing test-local imports, and missing test State import) were corrected.
+
+**Verification limitation:** the static run 41522532761 for the subsequent candidate 8714a997... remained queued with no runner steps. The latest PR head a6b27f... has no returned current-head workflow run in the connected GitHub integration. Therefore the static corrections above are applied but not yet CI-verified. Do not treat the 6 Ruff / 50 Mypy baseline as proven zero on the current head.
+
+### Account MFA release gate
+
+- Read-only Cloudflare account inspection reports settings.enforce_twofactor=false.
+- The account has one accepted member; that member's two_factor_authentication_enabled=false.
+- No account security setting was changed. Enabling account-wide enforcement while the member has not enabled MFA could lock the account out.
+- Added regression tests to exercise both Staging and Production preflight scripts with enforce_twofactor=false.
+- Both release preflights now require account.settings.enforce_twofactor === true before deployment. The preflight fails closed if the account settings endpoint is unavailable or the enforcement flag is false.
+- The new MFA regression tests and workflow changes are not yet CI-verified because no current-head workflow run is available.
+
+### Deployment and live-acceptance boundaries
+
+- Staging bindings and persistent observability remain correctly configured in read-only inspection.
+- Production currently still reports PUBLIC_READ_ONLY as secret_text, no WRITE_CONTROL binding, and no Worker observability object. The Production workflow intentionally applies the checked-in Wrangler variables/observability configuration and Durable Object migration during the approved deployment, then verifies the resulting binding/settings and rolls back to the captured immutable version on post-deploy failure.
+- No Worker setting, secret, account security setting, deployment, traffic, or main branch was changed.
+- Direct Staging probes from the connected execution environment returned an egress-policy denial before reaching the Worker. This is not a Worker HTTP response and cannot be interpreted as an endpoint failure.
+- PR #129 remains Draft with zero independent reviews. GitHub branch-protection/ruleset enforcement remains unverified by the connected integration.
+
+**Disposition:** code/type/lint remediation — applied, exact-head verification pending; MFA — owner action required before release; Staging — blocked pending account MFA, independent review and approved deployment; Production — NO-GO pending account MFA, merge/approval and successful post-deploy acceptance.

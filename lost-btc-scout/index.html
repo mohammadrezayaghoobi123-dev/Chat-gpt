@@ -39,13 +39,14 @@ async function scan(){
   const sent=(chain.spent_txo_sum||0)+(mem.spent_txo_sum||0);
   const balance=received-sent;
   const txCount=(chain.tx_count||0)+(mem.tx_count||0);
-  let last=null;
-  if(txCount>0){
-   const tr=await fetch(base+'/txs',{headers:{'Accept':'application/json'}});
-   if(tr.ok){const txs=await tr.json();if(Array.isArray(txs)&&txs.length){const first=txs[0];if(first.status&&first.status.block_time)last=first.status.block_time;}}
-  }
-  const utxoRes=await fetch(base+'/utxo',{headers:{'Accept':'application/json'}});
-  let utxos=[];if(utxoRes.ok){const x=await utxoRes.json();if(Array.isArray(x))utxos=x;}
+  const [txResponse,utxoRes]=await Promise.all([
+   txCount>0?fetchWithTimeout(base+'/txs',{headers:{'Accept':'application/json'}}):Promise.resolve(null),
+   fetchWithTimeout(base+'/utxo',{headers:{'Accept':'application/json'}})
+  ]);
+  const txs=txResponse?.ok?await txResponse.json():[];
+  const utxoData=utxoRes.ok?await utxoRes.json():[];
+  const utxos=Array.isArray(utxoData)?utxoData:[];
+  const last=Array.isArray(txs)&&txs.length&&txs[0].status?.block_time?txs[0].status.block_time:null;
   const ageDays=last?Math.floor((Date.now()/1000-last)/86400):null;
   $('metrics').innerHTML=metric('موجودی فعلی',fmt(balance/1e8)+' BTC')+metric('تعداد تراکنش',fmt(txCount))+metric('آخرین فعالیت تأییدشده',dateFmt(last))+metric('UTXO خرج‌نشده',fmt(utxos.length));
   let msg=txCount===0?'برای این آدرس سابقهٔ تراکنش تأییدشده در پاسخ API دیده نشد.':(last?'از آخرین تراکنش تأییدشده حدود '+fmt(ageDays)+' روز گذشته است.':'زمان آخرین تراکنش از دادهٔ فعلی قابل تعیین نبود.');
@@ -54,8 +55,7 @@ async function scan(){
   const tbody=$('txrows');tbody.innerHTML='';
   if(txCount===0){tbody.innerHTML='<tr><td colspan="3">تراکنش تأییدشده‌ای گزارش نشده است.</td></tr>'}
   else{
-   const rr=await fetch(base+'/txs',{headers:{'Accept':'application/json'}});
-   if(rr.ok){const txs=await rr.json();txs.slice(0,5).forEach(t=>{const row=document.createElement('tr');const id=document.createElement('td');const link=document.createElement('a');link.href='https://mempool.space/tx/'+t.txid;link.target='_blank';link.rel='noopener noreferrer';link.textContent=t.txid.slice(0,12)+'…';id.append(link);const dt=document.createElement('td');dt.textContent=dateFmt(t.status?.block_time);const st=document.createElement('td');st.textContent=t.status?.confirmed?'تأییدشده':'تأییدنشده';row.append(id,dt,st);tbody.append(row)})}
+   if(Array.isArray(txs)){txs.slice(0,5).forEach(t=>{const row=document.createElement('tr');const id=document.createElement('td');const link=document.createElement('a');link.href='https://mempool.space/tx/'+t.txid;link.target='_blank';link.rel='noopener noreferrer';link.textContent=t.txid.slice(0,12)+'…';id.append(link);const dt=document.createElement('td');dt.textContent=dateFmt(t.status?.block_time);const st=document.createElement('td');st.textContent=t.status?.confirmed?'تأییدشده':'تأییدنشده';row.append(id,dt,st);tbody.append(row)})}
   }
   $('explorer').innerHTML='مشاهدهٔ مستقل: <a href="https://mempool.space/address/'+encodeURIComponent(a)+'" target="_blank" rel="noopener noreferrer">باز کردن آدرس در mempool.space</a>';
   $('results').classList.remove('hidden');$('status').textContent='بررسی تمام شد. نتایج فقط بازتاب داده‌های عمومی دریافتی‌اند.';

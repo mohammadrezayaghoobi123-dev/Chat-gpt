@@ -227,3 +227,27 @@ The Cloudflare API returned the binding names and types only. No secret values w
 10. Production monitoring, alerting, backup/restore and incident response have not been demonstrated.
 
 **Release decision:** NO-GO. The exact candidate is CI-green, but live Staging acceptance, independent review, governance, and Production configuration are not complete.
+
+## 10. Latest integrated Candidate verification — 2026-11-02
+
+**Exact candidate SHA:** `0d32dabfa94250027a07dbf50f0b8785d079dfe0`  
+**PR:** #129, base `integration/unify-main-and-integrated-2026-11-02`; Draft; mergeable; no independent reviews.
+
+### Exact-head automated evidence
+- Cloud Engineering Connector: **198 Node tests passed, 0 failed**; **41 Durable Object tests passed**; `npm audit` reported **0 vulnerabilities**; syntax and Wrangler configuration checks passed.
+- Python/CTP: **1411 passed, 3 skipped, 4 collection warnings, 1050 subtests passed**.
+- Master Brain MVP: **1414 passed, 3 skipped**; dedicated privileged kernel-enforcement suite **8/8 passed**; offline demo passed.
+- Master Brain MCP CI, Cloud Agent CI, browser/accessibility checks, static informational workflow and full-history Gitleaks passed.
+- All check-runs for this SHA completed with no failures. `post-deploy-staging-smoke` is intentionally skipped because this exact candidate has not been deployed; this is not live Staging acceptance.
+- One duplicate Master Brain workflow attempt encountered a transient incomplete Python package download. The failed job was retried and completed successfully; a separate same-SHA run also passed.
+- New security regression coverage paginates both associated PRs and PR review history. A `CHANGES_REQUESTED` review on page 2 blocks release approval; the test passed.
+
+### History integrity
+- Candidate is **956 commits ahead, 0 behind** `main`; observed `main` head remains `f2cae91de818385ec48daafc43c621b9e2cc0675`.
+- Candidate is **203 ahead, 0 behind** the unified integration base and **786 ahead, 0 behind** the connector feature branch.
+- No direct change to `main`, no squash and no history rewrite.
+
+### Live release status
+The Cloudflare audit remains unchanged: both Workers lack `GITHUB_READONLY_TOKEN`; Production `PUBLIC_READ_ONLY` remains a secret-text binding; Production has no `WRITE_CONTROL` binding; account MFA enforcement is disabled; Staging remains on the rollback version, not this candidate. GitHub `main` protection/rulesets are absent and PR #129 has no independent review. No Worker setting, secret, traffic, deployment, or `main` branch was modified.
+
+**Decision:** CI is green for the exact candidate, but release remains **NO-GO** until the infrastructure, governance, independent review, Staging, and real Claude/ChatGPT acceptance gates above are satisfied.

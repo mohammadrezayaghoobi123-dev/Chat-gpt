@@ -78,9 +78,9 @@ test("engineering standards require evidence and prohibit false verification cla
 
 test("unauthenticated public read-only calls never forward GitHub credentials",async()=>{
  const originalFetch=globalThis.fetch;
- const authorizationHeaders=[];
+ const authorizationHeaders=[];const userAgentHeaders=[];
  globalThis.fetch=async(input,init={})=>{
-  authorizationHeaders.push(new Headers(init.headers).get("authorization"));
+  const headers=new Headers(init.headers);authorizationHeaders.push(headers.get("authorization"));userAgentHeaders.push(headers.get("user-agent"));
   const url=String(input);
   if(url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt",private:false,default_branch:"main"}),{status:200,headers:{"content-type":"application/json"}});
   if(url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt/commits/main"))return new Response(JSON.stringify({sha:"abc123",commit:{tree:{sha:"tree123"},message:"test",committer:{date:"2026-01-01T00:00:00Z"}}}),{status:200,headers:{"content-type":"application/json"}});
@@ -94,6 +94,7 @@ test("unauthenticated public read-only calls never forward GitHub credentials",a
   assert.equal(body.result.content[0].type,"text");
   assert.equal(authorizationHeaders.length,3);
   assert.deepEqual(authorizationHeaders,[null,null,null]);
+  assert.deepEqual(userAgentHeaders,["cloud-engineering-connector/0.1.0","cloud-engineering-connector/0.1.0","cloud-engineering-connector/0.1.0"]);
  }finally{globalThis.fetch=originalFetch}
 });
 

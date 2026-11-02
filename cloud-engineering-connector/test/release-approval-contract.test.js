@@ -38,7 +38,7 @@ for (const workflow of workflows) {
       : "";
     assert.ok(jobEnvironment, "job-level environment block must be identifiable");
     assert.doesNotMatch(
-      jobEnvironment[1],
+      jobEnvironment,
       /CLOUDFLARE_API_TOKEN|CLOUDFLARE_ACCOUNT_ID/,
       "Cloudflare deployment credentials must be scoped to the individual steps that need them, not every test/install step",
     );

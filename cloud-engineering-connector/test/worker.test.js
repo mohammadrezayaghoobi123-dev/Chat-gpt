@@ -57,7 +57,7 @@ test("authenticated MCP requests consume a separate authenticated rate-limit nam
 test("authenticated MCP requests are rejected when their rate limit is exceeded",async()=>{let calls=0;const r=await worker.fetch(rpc("tools/list"),{...env,MCP_RATE_LIMITER:{limit:async(input)=>{calls++;assert.equal(input.key,"authenticated-mcp:203.0.113.10");return{success:false}}}});assert.equal(r.status,429);assert.equal(r.headers.get("retry-after"),"60");assert.equal(calls,1);assert.deepEqual(await r.json(),{error:"rate_limited"})});
 test("authenticated MCP requests fail closed when the rate limiter is unavailable",async()=>{const r=await worker.fetch(rpc("tools/list"),{MCP_AUTH_TOKEN:env.MCP_AUTH_TOKEN});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"rate_limiter_unavailable"})});
 test("authenticated MCP requests fail closed when Cloudflare client identity is missing",async()=>{const request=rpc("tools/list");const headers=new Headers(request.headers);headers.delete("cf-connecting-ip");const r=await worker.fetch(new Request(request,{headers}),{...env,MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"client_identity_unavailable"})});
-test("public read-only mode must be explicitly enabled",async()=>{const r=await worker.fetch(rpc("initialize",{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"test",version:"1"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,200);const b=await r.json();assert.equal(b.result.serverInfo.name,"cloud-engineering-connector")});
+test("public read-only mode must be explicitly enabled",async()=>{const r=await worker.fetch(rpc("initialize",{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"test",version:"1"}},1,null),{PUBLIC_READ_ONLY:"true",GITHUB_TOKEN:"server-token",MCP_RATE_LIMITER:{limit:async({key})=>{limiterKeys.push(key);return{success:true}}}});assert.equal(r.status,200);const b=await r.json();assert.equal(b.result.serverInfo.name,"cloud-engineering-connector")});
 test("public read-only tools list contains only explicit allowlisted tools",async()=>{const r=await worker.fetch(rpc("tools/list",{},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});const b=await r.json();assert.deepEqual(b.result.tools.map(tool=>tool.name),["project_inspect","read_project_file","engineering_standards","architecture_review","architecture_analyze"])});
 test("public read-only mode denies tools not on the allowlist by default",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"future_write_tool",arguments:{}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/not in the unauthenticated PUBLIC_READ_ONLY allowlist/)});
 test("public mode never permits write tools without MCP_AUTH_TOKEN",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})},GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/not in the unauthenticated PUBLIC_READ_ONLY allowlist/)});
@@ -495,7 +495,7 @@ test("create_change_pr schema advertises and enforces string length constraints 
 
 test("public read-only repository inspection uses the server token and global quota",async()=>{
  const originalFetch=globalThis.fetch;
- const requests=[];
+ const requests=[];const limiterKeys=[];
  globalThis.fetch=async(input,init={})=>{
   const url=String(input);
   requests.push({url,authorization:new Headers(init.headers).get("authorization")});
@@ -514,6 +514,8 @@ test("public read-only repository inspection uses the server token and global qu
   assert.equal(result.file_count_returned,1);
   assert.equal(requests.length,3);
   assert.deepEqual(requests.map(request=>request.authorization),["Bearer server-token","Bearer server-token","Bearer server-token"]);
+  assert.equal(limiterKeys.filter((key)=>key==="github-api-global").length,3);
+  assert.doesNotMatch(JSON.stringify(body),/server-token/);
  }finally{globalThis.fetch=originalFetch}
 });
 

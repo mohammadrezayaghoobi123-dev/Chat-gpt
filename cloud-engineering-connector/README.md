@@ -76,3 +76,10 @@ Cloudflare Workers has a free tier subject to current quotas and account eligibi
 4. Expand repository support only with per-repository authorization and negative tests.
 5. Add isolated cloud test execution only after defining resource limits, network policy, dependency caching, and secret isolation.
 6. Add source retrieval with citations and persistent project memory after privacy, retention, and tenant isolation are designed.
+
+
+## Evidence-grounded architecture analysis
+
+`architecture_analyze` performs bounded deterministic heuristics over explicitly selected repository files (1–8 files, each subject to the existing 100 KB read limit). It currently reports same-line fetch calls without a visible AbortSignal and dynamic-code primitives (`eval` / `new Function`), with exact file/line evidence, severity, rationale, and a verification result of `not_run`.
+
+This is not semantic analysis, taint analysis, proof of exploitability, or test execution. Multiline wrappers and indirect cancellation may produce false positives/negatives. Findings are capped at 100. Evidence snippets are bounded and redact common credential patterns before returning. Human validation is required.

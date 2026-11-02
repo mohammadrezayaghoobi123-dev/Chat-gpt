@@ -50,7 +50,7 @@ test("CORS preflight responses also carry restrictive browser security headers",
 });
 test("MCP fails closed by default when authentication is not configured",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",body:"{}"}),{});assert.equal(r.status,503)});
 test("public read-only mode fails closed when rate limiter binding is absent",async()=>{const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true"});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"rate_limiter_unavailable"})});
-test("public read-only mode fails closed when client IP is unavailable",async()=>{const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");headers.delete("cf-connecting-ip");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true",MCP_AUTH_TOKEN:"server-secret-0123456789abcdef012345",READ_ONLY_GITHUB:true,GITHUB_TOKEN:"server-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"client_identity_unavailable"})});
+test("public read-only mode fails closed when client IP is unavailable",async()=>{const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");headers.delete("cf-connecting-ip");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true",MCP_AUTH_TOKEN:"server-secret-0123456789abcdef012345012345",READ_ONLY_GITHUB:true,GITHUB_READONLY_TOKEN:"read-only-server-token",GITHUB_TOKEN:"write-server-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"client_identity_unavailable"})});
 test("public read-only mode fails closed when rate limiter throws",async()=>{const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>{throw new Error("backend unavailable")}}});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"rate_limiter_unavailable"})});
 test("public read-only mode fails closed when rate limiter returns malformed result",async()=>{for(const result of [null,{}, {success:"false"}]){const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>result}});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"rate_limiter_unavailable"})}});
 test("public read-only mode rate limits by Cloudflare client IP",async()=>{let key;const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async(input)=>{key=input.key;return{success:false}}}});assert.equal(key,"public-mcp:203.0.113.10");assert.equal(r.status,429);assert.equal(r.headers.get("retry-after"),"60");assert.deepEqual(await r.json(),{error:"rate_limited"})});
@@ -90,7 +90,7 @@ test("anonymous public read-only calls use server GitHub credentials only for gl
   throw new Error("Unexpected mocked GitHub URL: "+url);
  };
  try{
-  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async({key})=>{limiterKeys.push(key);return{success:true}}},GITHUB_READONLY_TOKEN:"read-only-token",GITHUB_TOKEN:"write-token"});
+  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1),{PUBLIC_READ_ONLY:"true",READ_ONLY_GITHUB:true,MCP_RATE_LIMITER:{limit:async({key})=>{limiterKeys.push(key);return{success:true}}},GITHUB_READONLY_TOKEN:"read-only-token",GITHUB_TOKEN:"write-token"});
   assert.equal(response.status,200);
   const body=await response.json();
   assert.equal(body.result.content[0].type,"text");
@@ -516,7 +516,7 @@ test("public read-only repository inspection uses the server token and global qu
   throw new Error("Unexpected mocked GitHub URL: "+url);
  };
  try{
-  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_AUTH_TOKEN:"server-secret-0123456789abcdef012345",READ_ONLY_GITHUB:true,GITHUB_READONLY_TOKEN:"server-token",GITHUB_TOKEN:"write-token",MCP_RATE_LIMITER:{limit:async(input)=>{limiterKeys.push(input.key);return{success:true}}}});
+  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_AUTH_TOKEN:"server-secret-0123456789abcdef012345012345",READ_ONLY_GITHUB:true,GITHUB_READONLY_TOKEN:"server-token",GITHUB_TOKEN:"write-token",MCP_RATE_LIMITER:{limit:async(input)=>{limiterKeys.push(input.key);return{success:true}}}});
   assert.equal(response.status,200);
   const body=await response.json();
   assert.equal(body.result.isError,undefined);
@@ -524,7 +524,7 @@ test("public read-only repository inspection uses the server token and global qu
   assert.equal(result.repository,"mohammadrezayaghoobi123-dev/Chat-gpt");
   assert.equal(result.file_count_returned,1);
   assert.equal(requests.length,3);
-  assert.deepEqual(requests.map(request=>request.authorization),["Bearer server-token","Bearer server-token","Bearer server-token"]);assert.ok(requests.every(request=>request.userAgent==="cloud-engineering-connector/0.1.0"));
+  assert.deepEqual(requests.map(request=>request.authorization),["Bearer read-only-server-token","Bearer read-only-server-token","Bearer read-only-server-token"]);assert.ok(requests.every(request=>request.userAgent==="cloud-engineering-connector/0.1.0"));
   assert.equal(limiterKeys.filter((key)=>key==="github-api-global").length,3);
   assert.doesNotMatch(JSON.stringify(body),/server-token/);
  }finally{globalThis.fetch=originalFetch}

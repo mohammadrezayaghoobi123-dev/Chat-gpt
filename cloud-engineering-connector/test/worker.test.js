@@ -906,6 +906,19 @@ test("overlong configured MCP bearer tokens fail closed before authentication",a
 });
 
 
+test("known idempotent replay remains available when the unresolved backlog is saturated", async () => {
+ const binding=createWriteControlBinding();
+ const stub=binding.get("create-change-pr-global");
+ const input={keyHash:"a".repeat(64),requestHash:"b".repeat(64),now:1,windowMs:60_000,limit:5};
+ const first=await stub.admitWrite(input);
+ assert.equal(first.admitted,true);
+ binding.__test.setBacklogFull(true);
+ const replay=await stub.admitWrite(input);
+ assert.equal(replay.admitted,true);
+ assert.equal(replay.replay,true);
+ assert.equal(replay.operation.keyHash,input.keyHash);
+});
+
 test("unresolved operation backlog fails closed before any GitHub write", async () => {
  const writeControl=createWriteControlBinding();
  writeControl.__test.setBacklogFull(true);

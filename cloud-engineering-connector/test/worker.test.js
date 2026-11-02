@@ -134,7 +134,7 @@ test("global GitHub API quota fails closed before any upstream request",async()=
  const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called after global quota denial")};
  try{
   const limiter={limit:async({key})=>({success:key!=="github-api-global"})};
-  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1),{PUBLIC_READ_ONLY:"true",GITHUB_TOKEN:"server-token",MCP_RATE_LIMITER:limiter});
+  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1),{PUBLIC_READ_ONLY:"true",GITHUB_READONLY_TOKEN:"server-token",MCP_RATE_LIMITER:limiter});
   const body=await response.json();
   assert.equal(body.result.isError,true);
   assert.match(body.result.content[0].text,/GitHub API global rate limit exceeded/);

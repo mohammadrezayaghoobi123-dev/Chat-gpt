@@ -96,6 +96,21 @@ At documentation PR head `e6499cd7421d4a514f5ecb0a8d36d3e12cc7e3fa`, GitHub Acti
 
 The production Wrangler compatibility date is `2026-10-31`; the bundled test runtime currently supports through `2026-10-30`, so `wrangler.test.toml` uses that date. This one-day compatibility gap must be revalidated when the Workers Vitest plugin/runtime is upgraded. Local `workerd` tests improve confidence but do not replace a hosted Cloudflare canary test.
 
+## Hosted Cloudflare deployment checkpoint
+
+The Cloud Agent is now deployed as a Worker separate from the Connector:
+
+- Worker: `master-brain-cloud-agent`
+- Active deployment: `585b364e-637c-4111-aa1c-b6b88947aa08`
+- Active version: `dd437731-db10-42c8-8f90-78b720704279` (100% traffic)
+- Cloudflare deployment annotation: source commit `347f74f27a76f97aa3792da98d362fe773a5962e`
+- Bindings confirmed: Workers AI `AI`, SQLite Durable Objects `AgentSession` and `AgentBudget`, and the 12/minute authentication-failure rate limiter.
+- `AGENT_AUTH_TOKEN` is present as a Cloudflare `secret_text` binding. Its value is intentionally not exposed in source, logs, or this documentation. The account owner must rotate it to an owner-controlled token stored in their password manager before operational handoff.
+- Live public `GET /healthz`: HTTP 200 with the expected service/model metadata.
+- Live invalid-bearer `POST /api/sessions`: HTTP 401 with `WWW-Authenticate: Bearer`.
+
+The valid-bearer session creation, authenticated chat, and end-to-end Workers AI invocation through this Worker remain unverified because the generated owner credential cannot be handed to the operator through this chat as a secure secret-delivery channel. A separate account-level Workers AI API request to `@cf/zai-org/glm-4.7-flash` returned API success and reported 0.9506 Neurons; this is not a substitute for testing the Worker's `AI` binding. Do not mark the hosted acceptance gate complete until a valid owner-controlled credential is installed and the authenticated chat path returns a model response.
+
 ## Release status
 
-This branch is a development candidate only. No Worker has been uploaded or deployed by this change. Production, existing Staging, `main`, existing Worker secrets, and existing routes must remain untouched until separately reviewed and explicitly approved.
+This branch remains a development candidate; the separate Cloud Agent Worker deployment above is an isolated Staging candidate, not Production. The Connector Production Worker, Connector Staging Worker, `main`, and their secrets/routes were not changed by the Cloud Agent deployment.

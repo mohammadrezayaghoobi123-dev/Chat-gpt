@@ -16,7 +16,6 @@ const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 // below the 1 GiB per-object SQLite ceiling, even with bounded operation metadata.
 const UNRESOLVED_OPERATION_LIMIT = 1_000;
 const SQLITE_STORAGE_LIMIT_BYTES = 1_073_741_824;
-const TERMINAL_OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const METADATA_FIELDS = new Set([
   "branchName",
   "commitSha",
@@ -40,7 +39,7 @@ function assertHash(value, field) {
   }
 }
 function isPullRequestUrl(url,number) {
-  if(typeof url!=="string"||url.length>2048)return false;
+  if(typeof url!=="string"||url.length>512)return false;
   try{
     const parsed=new URL(url);
     if(parsed.protocol!=="https:"||parsed.hostname!=="github.com"||parsed.port!==""||
@@ -128,15 +127,37 @@ export class WriteControl extends DurableObject {
     return this.readOperation(keyHash);
   }
 
-  getAdmissionStats() {
-    const statusRows = this.ctx.storage.sql.exec(
-      "SELECT status, COUNT(*) AS count FROM write_operations GROUP BY status",
-    ).toArray();
+  // This is a logical payload estimate, not physical SQLite allocation. The
+  // Workers SQLite API does not expose page/WAL allocation metrics to this DO.
+  getStorageStats() {
+    const sql = this.ctx.storage.sql;
+    const statusRows = sql.exec(`
+      SELECT status, COUNT(*) AS count, COALESCE(SUM(
+        length(key_hash) + length(request_hash) + length(status) + length(phase) +
+        32 + COALESCE(length(branch_name), 0) + COALESCE(length(commit_sha), 0) +
+        COALESCE(length(pr_url), 0) + COALESCE(length(error_code), 0) +
+        COALESCE(length(git_metadata), 0)
+      ), 0) AS logical_bytes
+      FROM write_operations
+      GROUP BY status
+    `).toArray();
     const countFor = (status) => Number(statusRows.find((row) => row.status === status)?.count ?? 0);
     const unknownCount = countFor("UNKNOWN");
     const inProgressCount = countFor("IN_PROGRESS");
     const succeededCount = countFor("SUCCEEDED");
     const failedCount = countFor("FAILED");
+    const operationCount = statusRows.reduce((total, row) => total + Number(row.count), 0);
+    const operationLogicalBytes = statusRows.reduce((total, row) => total + Number(row.logical_bytes), 0);
+    const oldestUnresolvedUpdatedAt = sql.exec(
+      "SELECT MIN(updated_at) AS oldest FROM write_operations WHERE status IN ('UNKNOWN','IN_PROGRESS')",
+    ).one().oldest;
+    const admissionStats = sql.exec(`
+      SELECT COUNT(*) AS count, COALESCE(SUM(length(key_hash) + 8), 0) AS logical_bytes
+      FROM write_admissions
+    `).one();
+    const admissionCount = Number(admissionStats.count);
+    const admissionLogicalBytes = Number(admissionStats.logical_bytes);
+    const logicalPayloadBytes = operationLogicalBytes + admissionLogicalBytes;
     const unresolvedCount = unknownCount + inProgressCount;
     return {
       unknownCount,
@@ -145,53 +166,9 @@ export class WriteControl extends DurableObject {
       unresolvedCount,
       unresolvedLimit: UNRESOLVED_OPERATION_LIMIT,
       unresolvedRemaining: Math.max(0, UNRESOLVED_OPERATION_LIMIT - unresolvedCount),
-    };
-  }
-
-  // This is a logical payload estimate, not physical SQLite allocation. The
-  // Workers SQLite API does not expose page/WAL allocation metrics to this DO.
-  getStorageStats() {
-    const sql = this.ctx.storage.sql;
-    const operations = sql.exec(
-      "SELECT key_hash, request_hash, status, phase, branch_name, commit_sha, pr_url, error_code, git_metadata FROM write_operations",
-    ).toArray();
-    const admissions = sql.exec(
-      "SELECT key_hash, admitted_at FROM write_admissions",
-    ).toArray();
-    const counts = { UNKNOWN: 0, IN_PROGRESS: 0, SUCCEEDED: 0, FAILED: 0 };
-    const byteLength = (value) => new TextEncoder().encode(String(value ?? "")).length;
-    let operationLogicalBytes = 0;
-    let oldestUnresolvedUpdatedAt = null;
-    for (const row of operations) {
-      counts[row.status] = (counts[row.status] ?? 0) + 1;
-      operationLogicalBytes += byteLength(row.key_hash) + byteLength(row.request_hash) +
-        byteLength(row.status) + byteLength(row.phase) + 32 +
-        byteLength(row.branch_name) + byteLength(row.commit_sha) +
-        byteLength(row.pr_url) + byteLength(row.error_code) +
-        byteLength(row.git_metadata);
-      if (row.status === "UNKNOWN" || row.status === "IN_PROGRESS") {
-        const updatedAt = Number(row.updated_at);
-        oldestUnresolvedUpdatedAt = oldestUnresolvedUpdatedAt === null
-          ? updatedAt
-          : Math.min(oldestUnresolvedUpdatedAt, updatedAt);
-      }
-    }
-    const admissionLogicalBytes = admissions.reduce(
-      (total, row) => total + byteLength(row.key_hash) + 8,
-      0,
-    );
-    const logicalPayloadBytes = operationLogicalBytes + admissionLogicalBytes;
-    const unresolvedCount = counts.UNKNOWN + counts.IN_PROGRESS;
-    return {
-      unknownCount: counts.UNKNOWN,
-      inProgressCount: counts.IN_PROGRESS,
-      terminalCount: counts.SUCCEEDED + counts.FAILED,
-      unresolvedCount,
-      unresolvedLimit: UNRESOLVED_OPERATION_LIMIT,
-      unresolvedRemaining: Math.max(0, UNRESOLVED_OPERATION_LIMIT - unresolvedCount),
-      oldestUnresolvedUpdatedAt,
-      operationCount: operations.length,
-      admissionCount: admissions.length,
+      oldestUnresolvedUpdatedAt: oldestUnresolvedUpdatedAt ?? null,
+      operationCount,
+      admissionCount,
       operationLogicalBytes,
       admissionLogicalBytes,
       logicalPayloadBytes,
@@ -228,7 +205,7 @@ export class WriteControl extends DurableObject {
 
       const existing = this.readOperation(keyHash);
       if (existing) {
-        const storageStats = this.getAdmissionStats();
+        const storageStats = this.getStorageStats();
         if (existing.requestHash !== requestHash) {
           return { admitted: false, reason: "IDEMPOTENCY_CONFLICT", storageStats };
         }
@@ -362,7 +339,7 @@ export class WriteControl extends DurableObject {
     if (prNumber !== null && (!Number.isSafeInteger(prNumber) || prNumber < 1)) {
       throw new TypeError("prNumber must be a positive integer.");
     }
-    if (prUrl !== null && (typeof prUrl !== "string" || prUrl.length > 2048 || !isPullRequestUrl(prUrl,prNumber))) {
+    if (prUrl !== null && (typeof prUrl !== "string" || prUrl.length > 512 || !isPullRequestUrl(prUrl,prNumber))) {
       throw new TypeError("pull URL must match the PR number.");
     }
     if (errorCode !== null && (typeof errorCode !== "string" || !/^[A-Z0-9_]{1,64}$/.test(errorCode))) {
@@ -590,7 +567,7 @@ export class WriteControl extends DurableObject {
     if (branchName !== "assistant/mcp-" + keyHash) throw new TypeError("branchName does not match the deterministic operation identity.");
     if (typeof commitSha !== "string" || !/^[a-f0-9]{40}$/.test(commitSha)) throw new TypeError("commitSha must be a Git SHA.");
     if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new TypeError("prNumber must be a positive integer.");
-    if (typeof prUrl !== "string" || prUrl.length > 2048 || !isPullRequestUrl(prUrl,prNumber)) {
+    if (typeof prUrl !== "string" || prUrl.length > 512 || !isPullRequestUrl(prUrl,prNumber)) {
       throw new TypeError("prUrl must be the canonical GitHub URL for prNumber.");
     }
     return this.ctx.storage.transactionSync(() => {

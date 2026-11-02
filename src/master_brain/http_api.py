@@ -276,6 +276,8 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
 
         # ---------------------------------------------------------------- routes
         def _login(self, correlation_id: str) -> None:
+            if accounts is None:
+                raise ServiceError(ErrorCode.UNAVAILABLE)
             address = self.client_address[0]
             blocked = gate.address_blocked_for(address)
             if blocked > 0:
@@ -313,6 +315,8 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
             self._send(201, view.to_dict(), correlation_id, {"Set-Cookie": self._cookie(token, max_age)})
 
         def _session_info(self, identity, _match, correlation_id: str) -> None:
+            if accounts is None:
+                raise ServiceError(ErrorCode.UNAVAILABLE)
             expires = accounts.session_expiry(self._credential_value)
             if expires is None:  # authenticated by a static token: there is no session to describe
                 raise ServiceError(ErrorCode.NOT_FOUND)
@@ -321,18 +325,24 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
             self._send(200, view.to_dict(), correlation_id)
 
         def _admin_accounts(self, identity, _match, correlation_id: str) -> None:
+            if accounts is None:
+                raise ServiceError(ErrorCode.UNAVAILABLE)
             if not identity.is_operator:
                 raise ServiceError(ErrorCode.FORBIDDEN)
             rows, truncated = accounts.list_accounts(MAX_ADMIN_ACCOUNTS)
             self._send(200, {"api_version": API_VERSION, "accounts": rows, "truncated": truncated}, correlation_id)
 
         def _admin_events(self, identity, _match, correlation_id: str) -> None:
+            if accounts is None:
+                raise ServiceError(ErrorCode.UNAVAILABLE)
             if not identity.is_operator:
                 raise ServiceError(ErrorCode.FORBIDDEN)
             events, truncated = accounts.security_log.recent(MAX_ADMIN_EVENTS)
             self._send(200, {"api_version": API_VERSION, "events": events, "truncated": truncated}, correlation_id)
 
         def _logout(self, identity, _match, correlation_id: str) -> None:
+            if accounts is None:
+                raise ServiceError(ErrorCode.UNAVAILABLE)
             accounts.revoke_session(self._credential_value)  # the user's intent to sign out never waits on the log
             accounts.security_log.best_effort(LOGOUT, actor=identity.subject,
                                               subject_ref=attempted_subject_ref(identity.subject),
@@ -395,28 +405,40 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
                        correlation_id)
 
         def _ctp_tests(self, identity, _match, correlation_id: str) -> None:
+            if ctp is None:
+                raise ServiceError(ErrorCode.UNAVAILABLE)
             self._send(200, {"api_version": API_VERSION, "tests": ctp.list_tests(identity)}, correlation_id)
 
         def _ctp_request(self, identity, _match, correlation_id: str) -> None:
+            if ctp is None:
+                raise ServiceError(ErrorCode.UNAVAILABLE)
             request = self._json_request(RunRequest, correlation_id)
             if request is not None:
                 self._send(201, ctp.request_run(identity, request), correlation_id)
 
         def _ctp_get(self, identity, match, correlation_id: str) -> None:
+            if ctp is None:
+                raise ServiceError(ErrorCode.UNAVAILABLE)
             self._send(200, ctp.get_run(identity, match.group(1)), correlation_id)
 
         def _ctp_challenge(self, identity, match, correlation_id: str) -> None:
+            if ctp is None:
+                raise ServiceError(ErrorCode.UNAVAILABLE)
             request = self._json_request(RunChallengeRequest, correlation_id)
             if request is not None:
                 self._send(201, ctp.request_approval_challenge(identity, match.group(1), request), correlation_id)
 
         def _ctp_approve(self, identity, match, correlation_id: str) -> None:
+            if ctp is None:
+                raise ServiceError(ErrorCode.UNAVAILABLE)
             request = self._json_request(RunApprovalRequest, correlation_id)
             if request is not None:
                 view, created = ctp.submit_approval(identity, match.group(1), request)
                 self._send(201 if created else 200, view, correlation_id)
 
         def _ctp_execute(self, identity, match, correlation_id: str) -> None:
+            if ctp is None:
+                raise ServiceError(ErrorCode.UNAVAILABLE)
             request = self._json_request(RunExecuteRequest, correlation_id)
             if request is not None:
                 self._send(201, ctp.execute(identity, match.group(1), request), correlation_id)

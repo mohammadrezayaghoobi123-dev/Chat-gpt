@@ -335,7 +335,9 @@ def _main(argv: list[str] | None = None) -> int:
     for warning in built.warnings:
         print(f"warning: {warning}", file=sys.stderr, flush=True)
     host, port = built.server.server_address[:2]
-    stop: Callable[[], Any] = lambda *_a: threading.Thread(target=built.stop, daemon=True).start()
+    def stop(_signum: int, _frame: Any) -> None:
+        threading.Thread(target=built.stop, daemon=True).start()
+
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     print(f"listening on http://{host}:{port}/app/", flush=True)

@@ -130,6 +130,31 @@ export class WriteControl extends DurableObject {
   // Logical payload estimates use SQL aggregates to avoid loading the full ledger
   // into Worker memory on every admission. Physical SQLite/WAL allocation is not
   // exposed by the Workers SQL API and must be monitored separately in Cloudflare.
+  getAdmissionStats() {
+    const sql = this.ctx.storage.sql;
+    const statusRows = sql.exec(
+      "SELECT status, COUNT(*) AS count FROM write_operations GROUP BY status",
+    ).toArray();
+    const countFor = (status) => Number(statusRows.find((row) => row.status === status)?.count ?? 0);
+    const unknownCount = countFor("UNKNOWN");
+    const inProgressCount = countFor("IN_PROGRESS");
+    const succeededCount = countFor("SUCCEEDED");
+    const failedCount = countFor("FAILED");
+    const unresolvedCount = unknownCount + inProgressCount;
+    const oldestUnresolvedUpdatedAt = sql.exec(
+      "SELECT MIN(updated_at) AS oldest FROM write_operations WHERE status IN ('UNKNOWN','IN_PROGRESS')",
+    ).one().oldest;
+    const operationCount = Number(sql.exec("SELECT COUNT(*) AS count FROM write_operations").one().count);
+    const admissionCount = Number(sql.exec("SELECT COUNT(*) AS count FROM write_admissions").one().count);
+    return {
+      unknownCount, inProgressCount, terminalCount: succeededCount + failedCount,
+      unresolvedCount, unresolvedLimit: UNRESOLVED_OPERATION_LIMIT,
+      unresolvedRemaining: Math.max(0, UNRESOLVED_OPERATION_LIMIT - unresolvedCount),
+      oldestUnresolvedUpdatedAt: oldestUnresolvedUpdatedAt ?? null,
+      operationCount, admissionCount,
+    };
+  }
+
   getStorageStats() {
     const sql = this.ctx.storage.sql;
     const statusRows = sql.exec(`
@@ -202,14 +227,14 @@ export class WriteControl extends DurableObject {
 
       const existing = this.readOperation(keyHash);
       if (existing) {
-        const storageStats = this.getStorageStats();
+        const storageStats = this.getAdmissionStats();
         if (existing.requestHash !== requestHash) {
           return { admitted: false, reason: "IDEMPOTENCY_CONFLICT", storageStats };
         }
         return { admitted: true, replay: true, operation: existing, storageStats };
       }
 
-      const storageStats = this.getStorageStats();
+      const storageStats = this.getAdmissionStats();
       if (storageStats.unresolvedCount >= UNRESOLVED_OPERATION_LIMIT) {
         return {
           admitted: false,
@@ -261,7 +286,7 @@ export class WriteControl extends DurableObject {
         admitted: true,
         replay: false,
         operation: this.readOperation(keyHash),
-        storageStats: this.getStorageStats(),
+        storageStats: this.getAdmissionStats(),
       };
     });
   }

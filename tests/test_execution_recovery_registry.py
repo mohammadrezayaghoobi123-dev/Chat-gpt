@@ -167,7 +167,6 @@ class RecoveryCandidateTests(unittest.TestCase):
     def test_transition_rejects_boolean_expected_version(self):
         running = self.reserve("boolean-version", "2026-10-12T00:00:00Z")
         running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
-        from master_brain.execution_registry import InvalidTransition
 
         with self.assertRaisesRegex(ValueError, "expected_version must be a non-negative integer"):
             self.registry.transition(
@@ -918,7 +917,6 @@ class RecoveryCandidateTests(unittest.TestCase):
 
     def test_reservation_retries_transient_sqlite_writer_lock(self):
         """A transient writer lock clears within the bounded retry window."""
-        import time
 
         registry = SQLiteExecutionRegistry(
             str(Path(self.tmp.name) / "transient-lock.sqlite3"), timeout=0.01

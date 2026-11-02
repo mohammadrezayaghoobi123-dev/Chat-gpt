@@ -83,3 +83,8 @@ Cloudflare Workers has a free tier subject to current quotas and account eligibi
 `architecture_analyze` performs bounded deterministic heuristics over explicitly selected repository files (1–8 files, each subject to the existing 100 KB read limit). It currently reports same-line fetch calls without a visible AbortSignal and dynamic-code primitives (`eval` / `new Function`), with exact file/line evidence, severity, rationale, and a verification result of `not_run`.
 
 This is not semantic analysis, taint analysis, proof of exploitability, or test execution. Multiline wrappers and indirect cancellation may produce false positives/negatives. Findings are capped at 100. Evidence snippets are bounded and redact common credential patterns before returning. Human validation is required.
+
+
+### Manual Preview acceptance
+
+`npm run test:preview` is an opt-in, read-only HTTPS smoke test. It requires `RUN_PREVIEW_SMOKE=1`, `PREVIEW_URL`, and a 40-character `ANALYSIS_REF`; optionally set `EXPECTED_WORKER_BLOB` to pin the local Worker source. It checks health, MCP initialization, the exact public read-only tool allowlist, analyzer evidence, and denial of the write tool. It does not deploy a Preview or require a bearer secret. It has not been run against a live Preview in this PR.

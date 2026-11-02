@@ -409,4 +409,24 @@ describe("WriteControl terminal operation retention", () => {
     });
   });
 
+ 
+  it("performs a real SQLite write/read/delete probe without retaining a ledger row", async () => {
+    const stub = stubFor("retention-live-sqlite-write-probe");
+    const keyHash = "d".repeat(64);
+    const requestHash = "e".repeat(64);
+    await runInDurableObject(stub, async (instance, state) => {
+      const before = Number(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM write_operations",
+      ).one().count);
+      expect(instance.healthCheck({ keyHash, requestHash })).toEqual({ ok: true });
+      const after = Number(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM write_operations",
+      ).one().count);
+      expect(after).toBe(before);
+      expect(state.storage.sql.exec(
+        "SELECT key_hash FROM write_operations WHERE key_hash = ?", keyHash,
+      ).toArray()).toHaveLength(0);
+    });
+  });
+
 });

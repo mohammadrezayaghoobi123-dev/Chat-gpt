@@ -103,6 +103,22 @@ test("anonymous public read-only calls use server GitHub credentials only for gl
  }finally{globalThis.fetch=originalFetch}
 });
 
+test("anonymous read-only file access fails closed when the repository is private",async()=>{
+ const originalFetch=globalThis.fetch;const calls=[];
+ globalThis.fetch=async(input,init={})=>{
+  calls.push({url:String(input),method:init.method||"GET"});
+  return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt",private:true}),{status:200,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"README.md"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})},GITHUB_TOKEN:"server-token"});
+  const body=await response.json();
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/repository to be public; access denied/);
+  assert.equal(calls.length,1);
+  assert.match(calls[0].url,/\/repos\/mohammadrezayaghoobi123-dev\/Chat-gpt$/);
+  assert.equal(calls[0].method,"GET");
+ }finally{globalThis.fetch=originalFetch}
+});
 test("global GitHub API quota fails closed before any upstream request",async()=>{
  const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called after global quota denial")};
  try{

@@ -31,7 +31,11 @@ for (const workflow of workflows) {
 for (const workflow of workflows) {
   test(workflow.name + " release does not expose Cloudflare credentials to the entire job", () => {
     const source = readFileSync(workflow.path, "utf8");
-    const jobEnvironment = source.match(/^    env:\\s*\\n((?:^      .*\\n)*)/m);
+    const jobEnvironmentStart = source.indexOf("    env:\\n");
+    const stepsStart = source.indexOf("\\n    steps:", jobEnvironmentStart);
+    const jobEnvironment = jobEnvironmentStart >= 0 && stepsStart > jobEnvironmentStart
+      ? source.slice(jobEnvironmentStart, stepsStart)
+      : "";
     assert.ok(jobEnvironment, "job-level environment block must be identifiable");
     assert.doesNotMatch(
       jobEnvironment[1],

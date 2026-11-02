@@ -104,3 +104,8 @@ The configured 1 GiB planning ceiling is deliberately conservative for the Worke
 ## Evidence-grounded architecture analysis
 
 The read-only `architecture_analyze` tool scans 1–8 explicitly selected repository files using bounded deterministic heuristics. It reports line-level observations for fetch calls without a visible AbortSignal and dynamic code execution primitives, with redacted snippets, bounded findings, rationale, and remediation guidance. Every finding is marked `not_run`; this is not semantic/taint analysis, proof of exploitability, or test execution. Human validation remains required.
+
+
+## Claude MCP protocol compatibility
+
+The Streamable HTTP endpoint supports MCP protocol versions `2025-03-26`, `2025-06-18`, and `2025-11-25` for legacy initialize/notification negotiation, plus the connector's separately tested modern `2026-07-28` discovery path. This is protocol-surface compatibility only; hosted Claude connection and authentication still require a real client acceptance test.

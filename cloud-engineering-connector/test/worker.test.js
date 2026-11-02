@@ -89,17 +89,17 @@ test("anonymous public read-only calls use server GitHub credentials only for gl
   throw new Error("Unexpected mocked GitHub URL: "+url);
  };
  try{
-  const response=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async({key})=>{limiterKeys.push(key);return{success:true}}},GITHUB_TOKEN:"must-not-leak"});
+  const response=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async({key})=>{limiterKeys.push(key);return{success:true}}},GITHUB_READONLY_TOKEN:"read-only-token",GITHUB_TOKEN:"write-token"});
   assert.equal(response.status,200);
   const body=await response.json();
   assert.equal(body.result.content[0].type,"text");
   assert.equal(authorizationHeaders.length,3);
-  assert.deepEqual(authorizationHeaders,["Bearer must-not-leak","Bearer must-not-leak","Bearer must-not-leak"]);
+  assert.deepEqual(authorizationHeaders,["Bearer read-only-token","Bearer read-only-token","Bearer read-only-token"]);
   assert.deepEqual(userAgentHeaders,["cloud-engineering-connector/0.1.0","cloud-engineering-connector/0.1.0","cloud-engineering-connector/0.1.0"]);
    assert.deepEqual(methods,["GET","GET","GET"]);
    assert.equal(limiterKeys.filter((key)=>key==="github-api-global").length,3);
-   assert.doesNotMatch(JSON.stringify(body),/must-not-leak/);
-  assert.doesNotMatch(JSON.stringify(body),/must-not-leak/);
+   assert.doesNotMatch(JSON.stringify(body),/read-only-token|write-token/);
+  assert.doesNotMatch(JSON.stringify(body),/read-only-token|write-token/);
  }finally{globalThis.fetch=originalFetch}
 });
 

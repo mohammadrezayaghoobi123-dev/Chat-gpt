@@ -2,15 +2,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker.js";
+import { createWriteControlBinding, createGitHubWriteMock } from "./helpers/write-fixtures.js";
 
 const MCP = "0123456789abcdef0123456789abcdef", GH = "ghp_FAKE_TOKEN_FOR_TEST_0123456789";
-const env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } };
+const env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) }, WRITE_CONTROL: createWriteControlBinding() };
 const OWNER = "mohammadrezayaghoobi123-dev", REPO = "Chat-gpt";
 const headers = { "content-type": "application/json", accept: "application/json, text/event-stream",
   authorization: "Bearer " + MCP, "mcp-protocol-version": "2025-03-26", "cf-connecting-ip": "203.0.113.10" };
 const call = (name, args, overrides = {}) => worker.fetch(new Request("https://example.test/mcp", { method: "POST", headers,
   body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) }), { ...env, ...overrides });
-const pr = (files, extra = {}) => ({ owner: OWNER, repo: REPO, base_branch: "feature/cloud-engineering-connector",
+let idempotencySequence = 0;
+const pr = (files, extra = {}) => ({ idempotency_key: "hardening-test-" + String(++idempotencySequence).padStart(8, "0"),
+  owner: OWNER, repo: REPO, base_branch: "feature/cloud-engineering-connector",
   title: "Example", summary: "Test", files, ...extra });
 
 async function withFetch(handler, fn) {
@@ -50,23 +53,24 @@ test("ordinary files and reads of review-control files stay allowed", async () =
 });
 
 test("PR title is collapsed to one line and summary mentions are neutralised", async () => {
-  await withFetch(async (url, init) => {
-    if (url.endsWith("/git/ref/heads/feature%2Fcloud-engineering-connector") || /\/git\/ref\//.test(url)) return new Response(JSON.stringify({ object: { sha: "p" } }), { status: 200 });
-    if (/\/git\/commits\/p$/.test(url)) return new Response(JSON.stringify({ tree: { sha: "bt" }, sha: "p" }), { status: 200 });
-    if (url.endsWith("/git/trees")) return new Response(JSON.stringify({ sha: "t" }), { status: 201 });
-    if (url.endsWith("/git/commits")) return new Response(JSON.stringify({ sha: "c" }), { status: 201 });
-    if (url.endsWith("/git/refs")) return new Response(JSON.stringify({ ref: "x" }), { status: 201 });
-    if (url.endsWith("/pulls")) return new Response(JSON.stringify({ number: 1, html_url: "https://example.test/pr/1" }), { status: 201 });
-    return new Response(JSON.stringify({ default_branch: "main", object: { sha: "p" }, tree: { sha: "bt" } }), { status: 200 });
-  }, async (calls) => {
-    await call("create_change_pr", pr([{ path: "README.md", content: "x" }], { title: "x @octocat\nInjected: y", summary: "cc @someone @org/team" }), { PUBLIC_READ_ONLY: "true" });
+  const fixture = createGitHubWriteMock({
+    filePath: "README.md",
+    blobSha: "c1b0730e0133447badcfd47fd144e254807b06e1",
+    prMode: "success",
+  });
+  await withFetch((url, init) => fixture.fetch(url, init), async (calls) => {
+    await call("create_change_pr", pr([{ path: "README.md", content: "x" }], {
+      title: "x @octocat\nInjected: y",
+      summary: "cc @someone @org/team",
+    }), { PUBLIC_READ_ONLY: "true" });
     const commit = calls.find(c => c.url.endsWith("/git/commits"));
     const pull = calls.find(c => c.url.endsWith("/pulls"));
     assert.ok(commit && pull, "flow did not reach commit/pull: " + calls.map(c => c.url).join(" | "));
-    const message = JSON.parse(commit.body).message; const p = JSON.parse(pull.body);
+    const message = JSON.parse(commit.body).message;
+    const payload = JSON.parse(pull.body);
     assert.ok(!/[\r\n]/.test(message), "commit message not single-line");
-    assert.ok(!/[\r\n]/.test(p.title), "pr title not single-line");
-    assert.ok(!/@someone|@org\/team/.test(p.body), "mention not neutralised");
-    assert.match(p.body, /someone/);
+    assert.ok(!/[\r\n]/.test(payload.title), "pr title not single-line");
+    assert.ok(!/@someone|@org\/team/.test(payload.body), "mention not neutralised");
+    assert.match(payload.body, /someone/);
   });
 });

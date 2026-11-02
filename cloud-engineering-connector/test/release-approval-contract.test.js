@@ -89,7 +89,7 @@ function extractPreflightScript(source, stepName) {
   assert.ok(start >= 0, "preflight step must exist: " + stepName);
   const next = source.indexOf("\n      - name: ", start + 1);
   const step = source.slice(start, next >= 0 ? next : undefined);
-  const runMarker = "          run: |\n";
+  const runMarker = "        run: |\n";
   const runStart = step.indexOf(runMarker);
   assert.ok(runStart >= 0, "preflight run block must exist: " + stepName);
   const lines = step.slice(runStart + runMarker.length).split("\n");

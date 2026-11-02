@@ -104,6 +104,8 @@ Production remains blocked until all of the following are true:
 
 - PR #121 and PR #127 have independent review and approved merge order.
 - Required status checks are enforced on `main` and release branches; direct pushes are restricted.
+- **Live governance audit (2026-11-02):** GitHub reports `main.protected=false` and the repository rulesets endpoint returns an empty list. Required checks, approval rules, and force-push/deletion restrictions are therefore not enforced by a repository ruleset. The linked GitHub integration cannot write repository administration settings; the owner must configure a `main` branch ruleset in GitHub Settings before release.
+- PR #121 and PR #127 have no independent submitted reviews as of the latest review-list check. Both remain Draft; self-review by the implementation author is not a substitute for an independent approval.
 - Cloudflare account MFA enforcement is enabled and verified. The last account-level read showed `enforce_twofactor=false`.
 - Staging acceptance above passes on the exact candidate version.
 - Claude account acceptance passes using the actual Claude account and its configured custom connector.

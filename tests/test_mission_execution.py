@@ -10,7 +10,7 @@ from master_brain.integrations import (
     IntegrationDescriptor, IntegrationHealth, IntegrationKind,
     IntegrationMaturity, IntegrationRequirement,
 )
-from master_brain.execution_registry import SQLiteExecutionRegistry
+from master_brain.execution_registry import SQLiteExecutionRegistry, State
 from master_brain.mission_approval import record_mission_approval
 from tests.approval_expiry_helper import soon
 from tests.mission_registration_helper import register_contract

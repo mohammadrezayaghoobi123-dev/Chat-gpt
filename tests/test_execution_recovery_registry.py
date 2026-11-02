@@ -176,7 +176,6 @@ class RecoveryCandidateTests(unittest.TestCase):
         self.assertEqual(self.registry.get(running.key), running)
 
     def test_succeeded_is_blocked_without_verified_evidence_from_uncertain_states(self):
-        from master_brain.execution_registry import InvalidTransition
 
         running = self.reserve("blocked-running", "2026-10-12T00:00:00Z")
         running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")

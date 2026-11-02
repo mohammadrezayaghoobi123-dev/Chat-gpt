@@ -68,7 +68,7 @@ jobs:
             exit 1
           fi
 
-      - name: Verify existing SQLite Durable Object namespace before lifecycle transition
+      - name: Verify existing SQLite Durable Object namespace before Staging redeploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |

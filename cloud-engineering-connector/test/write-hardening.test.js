@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker.js";
 import { createWriteControlBinding } from "./helpers/write-control-mocks.js";
-import { createWriteControlBinding, createGitHubWriteMock } from "./helpers/write-fixtures.js";
+import { createWriteControlBinding, createGitHubWriteMock } from "./helpers/write-control-mocks.js";
 
 const MCP = "0123456789abcdef0123456789abcdef", GH = "ghp_FAKE_TOKEN_FOR_TEST_0123456789";
 const env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) }, WRITE_CONTROL: createWriteControlBinding() };

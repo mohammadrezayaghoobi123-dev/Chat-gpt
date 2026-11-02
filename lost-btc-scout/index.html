@@ -19,16 +19,16 @@
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const fmt=n=>new Intl.NumberFormat('fa-IR',{maximumFractionDigits:8}).format(n);
+const fmt=n=>new Intl.NumberFormat('fa-IR',{maximumFractionDigits:8}).format(n);\nlet lastScanAt=0;const SCAN_COOLDOWN_MS=5000;\nasync function fetchWithTimeout(url,options={},timeoutMs=12000){const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),timeoutMs);try{return await fetch(url,{...options,signal:controller.signal})}finally{clearTimeout(timer)}}
 const dateFmt=t=>t?new Date(t*1000).toLocaleString('fa-IR'):'نامشخص';
 function validAddress(a){return /^(bc1[ac-hj-np-z02-9]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/.test(a)}
 function metric(label,value){return '<div class="metric"><div class="label">'+label+'</div><div class="value">'+value+'</div></div>'}
 async function scan(){
  const a=$('address').value.trim(); if(!validAddress(a)){ $('status').innerHTML='<span class="error">آدرس از نظر قالب معتبر نیست. فقط آدرس عمومی بیت‌کوین را وارد کن.</span>';return}
- $('scan').disabled=true;$('results').classList.add('hidden');$('status').textContent='در حال دریافت داده‌های عمومی…';
+ const now=Date.now();if(now-lastScanAt<SCAN_COOLDOWN_MS){$('status').textContent='برای جلوگیری از فشار روی سرویس عمومی، چند ثانیه صبر کن.';return}lastScanAt=now;\n $('scan').disabled=true;$('results').classList.add('hidden');$('status').textContent='در حال دریافت داده‌های عمومی…';
  try{
   const base='https://mempool.space/api/address/'+encodeURIComponent(a);
-  const res=await fetch(base,{headers:{'Accept':'application/json'}});
+  const res=await fetchWithTimeout(base,{headers:{'Accept':'application/json'}});
   if(!res.ok)throw new Error(res.status===429?'محدودیت موقت درخواست؛ کمی بعد دوباره تلاش کن.':'سرویس داده پاسخ معتبر نداد (HTTP '+res.status+').');
   const d=await res.json();
   const chain=d.chain_stats||{}, mem=d.mempool_stats||{};

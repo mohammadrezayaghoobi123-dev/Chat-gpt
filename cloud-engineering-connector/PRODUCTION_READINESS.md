@@ -66,6 +66,14 @@ Required GitHub Actions configuration: environment `staging` must contain secret
 
 To release a reviewed candidate, create a branch from the exact approved 40-character SHA using the naming convention `integration/staging-release-<SHA>`. Do not reuse an old release branch or change its commit after the release run begins.
 
+### Latest guarded release attempt
+
+- Candidate: `8fcb434af5def0b5d41529aaeb2f6bcd37fd8e13`
+- Release branch: `integration/staging-release-8fcb434af5def0b5d41529aaeb2f6bcd37fd8e13`
+- GitHub Actions run: [41464809638](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41464809638)
+- Result: **blocked before deployment**. The workflow's first credential guard reported that the GitHub Actions `staging` environment is missing `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. All deployment, smoke, and rollback steps were skipped. No Cloudflare Worker version was changed by this attempt.
+- Next action: add those two values to the GitHub Actions environment `staging`, then rerun the failed job for this immutable branch. Cloudflare Worker preflight will independently require `GITHUB_READONLY_TOKEN` and the other expected bindings before it allows deployment.
+
 ## 5. Staging acceptance sequence
 
 After the Staging secrets are configured:

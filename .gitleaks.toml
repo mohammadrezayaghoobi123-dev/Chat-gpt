@@ -76,3 +76,16 @@ commits = ["ffa7b132922370296651499b60bd95212c39f69b"]
 paths = ['''^cloud-engineering-connector/test/worker\.test\.js$''']
 regexTarget = "line"
 regexes = ['''const\s+token\s*=\s*["']0123456789abcdef0123456789abcdef["']''']
+
+
+[[allowlists]]
+description = "Synthetic MCP bearer value used only in historical architecture-analysis tests; restricted to the exact test literal, file, and commits."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = [
+  "6f01511c90782f7db45ae0b8da72cc8ed3aaab74",
+  "85b9f2a4e524e45fae701a7237935d868ac15bbf"
+]
+paths = ['''^cloud-engineering-connector/test/architecture-analysis\\.test\\.js$''']
+regexTarget = "line"
+regexes = ['''MCP_AUTH_TOKEN\\s*:\\s*["']test-secret-0123456789abcdef012345["']''']

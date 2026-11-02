@@ -130,6 +130,35 @@ export class WriteControl extends DurableObject {
   // Logical payload estimates use SQL aggregates to avoid loading the full ledger
   // into Worker memory on every admission. Physical SQLite/WAL allocation is not
   // exposed by the Workers SQL API and must be monitored separately in Cloudflare.
+  // Exercise the Durable Object's persistent SQLite write path without retaining
+  // a synthetic operation or consuming the real five-per-minute admission quota.
+  healthCheck(input) {
+    if (!input || typeof input !== "object") throw new TypeError("input must be an object.");
+    const { keyHash, requestHash } = input;
+    assertHash(keyHash, "keyHash");
+    assertHash(requestHash, "requestHash");
+    const now = Date.now();
+    return this.ctx.storage.transactionSync(() => {
+      const existing = this.readOperation(keyHash);
+      if (existing) throw new Error("health probe identity collision");
+      const sql = this.ctx.storage.sql;
+      sql.exec(
+        `INSERT INTO write_operations
+          (key_hash, request_hash, status, phase, created_at, updated_at)
+         VALUES (?, ?, 'IN_PROGRESS', 'RESERVED', ?, ?)`,
+        keyHash, requestHash, now, now,
+      );
+      const row = sql.exec(
+        "SELECT status, phase, request_hash FROM write_operations WHERE key_hash = ?",
+        keyHash,
+      ).one();
+      sql.exec("DELETE FROM write_operations WHERE key_hash = ?", keyHash);
+      return {
+        ok: row.status === "IN_PROGRESS" && row.phase === "RESERVED" && row.request_hash === requestHash,
+      };
+    });
+  }
+
   // Admission telemetry is deliberately bounded to unresolved rows. The composite
   // (status, updated_at) index limits this query to the capped UNKNOWN/IN_PROGRESS
   // backlog instead of scanning the retained terminal ledger on every write.

@@ -352,3 +352,31 @@ Read-only Cloudflare API recheck of both Worker settings was performed. Secret v
 - Production's hard configuration blocker from this recheck is `PUBLIC_READ_ONLY` type/value. No binding, secret, Worker deployment, traffic, or account setting was changed.
 
 **Corrected disposition:** Staging binding configuration preflight is structurally satisfied, but Staging release remains blocked by independent PR approval and unverified GitHub Actions environment controls. Production remains NO-GO until `PUBLIC_READ_ONLY` is changed to a non-secret `plain_text` value `true`, and the first Production Durable Object migration plus post-deploy isolation verification are proven.
+
+## 15. Exact-head integrated CI closure — 2026-11-02 20:07 UTC
+
+**Exact verified candidate SHA:** `0000c55af28eec81247647e726b559c448385664` (the current PR head at this audit).
+
+At least one PR-triggered run for every workflow below completed with conclusion `success` on this exact SHA:
+
+- Cloud Engineering Connector CI (`41515819702`): **200 Node tests passed, 0 failed; 41 Durable Object tests passed; npm audit found 0 vulnerabilities; syntax and Wrangler configuration checks passed**.
+- Python tests (`41515810136`): **1411 passed, 3 skipped, 4 warnings; 1050 subtests passed**.
+- Master Brain MVP tests (`41515810384`): **1414 tests passed with 3 skipped**; kernel-enforcement suite **8/8 passed**; offline demo completed successfully.
+- Web client checks / real browser / accessibility (`41515819406`): passed.
+- Master Brain MCP CI (`41515819613`): passed.
+- Cloud Agent CI (`41515819358`): passed.
+- Full History Secret Scan / Gitleaks (`41515819691`): passed.
+- Static checks workflow (`41515819633`): workflow completed successfully, but it is informational only and its commands intentionally tolerate findings. The log reports **37 Ruff E9/F findings and 50 Mypy diagnostics**. This remains a material quality-debt item; the green workflow status must not be misrepresented as clean static analysis.
+
+Duplicate same-SHA runs were observed for Python and Master Brain MVP; one completed successfully for each. The remaining duplicate attempts were still in progress at the time of the audit and do not invalidate the completed successful runs.
+
+### Updated disposition
+
+- Automated CI on the exact current candidate: **PASS** for all eight workflow families listed above.
+- Release-workflow least-privilege regression: **PASS** on the exact candidate; Cloudflare credentials are absent from job-level env and immutable-SHA validation, and are constrained to allowlisted operational steps.
+- Live Staging deployment and live MCP acceptance: **NOT RUN** for this candidate; the Staging smoke job is intentionally skipped until approval/deployment gates are satisfied.
+- GitHub independent review and environment controls: **NOT SATISFIED / NOT VERIFIED**. PR #129 remains Draft with zero reviews. Rulesets API returned an empty list; classic branch-protection read was denied to this integration.
+- Production: **NO-GO** because `PUBLIC_READ_ONLY` remains a secret binding instead of plain-text `true`. First Production deployment must also prove the Durable Object migration and post-deploy namespace isolation check.
+- Static-analysis debt: **OPEN** (37 Ruff findings, 50 Mypy diagnostics).
+
+**No merge, deployment, Worker setting mutation, traffic change, or `main` update occurred.**

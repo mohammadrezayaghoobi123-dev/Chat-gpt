@@ -415,11 +415,11 @@ def evaluate_approved_execution_gate(
         expires_at_value = receipt.expires_at
         if expires_at_value is not None:
             expected_payload["expires_at"] = expires_at_value
-        for field, value in (("signature", receipt.signature),
-                             ("signing_key_id", receipt.signing_key_id),
-                             ("signature_alg", receipt.signature_alg)):
-            if value is not None:
-                expected_payload[field] = value
+        for signature_field, signature_value in (("signature", receipt.signature),
+                                                  ("signing_key_id", receipt.signing_key_id),
+                                                  ("signature_alg", receipt.signature_alg)):
+            if signature_value is not None:
+                expected_payload[signature_field] = signature_value
         if event.event_type != APPROVAL_EVENT_TYPE:
             reasons.append("receipt does not reference a mission approval event")
         if event.subject_ref != f"mission:{contract.mission_id}":

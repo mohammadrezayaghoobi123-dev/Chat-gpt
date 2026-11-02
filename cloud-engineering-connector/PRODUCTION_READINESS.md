@@ -9,7 +9,7 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 
 | Gate | Latest evidence | Status |
 |---|---|---|
-| Node test suite | 179 passed, 0 failed | PASS |
+| Node test suite | 182 passed, 0 failed | PASS |
 | Vitest Durable Object suite | 41 passed, 0 failed | PASS |
 | npm dependency audit | 0 reported vulnerabilities | PASS |
 | JavaScript syntax and Wrangler configuration checks | CI job passed | PASS |
@@ -19,6 +19,14 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 | GitHub live read-only integration | Current Staging candidate hit GitHub unauthenticated rate limit; dedicated token not configured | BLOCKED |
 | Claude account acceptance | Must be executed in the user's Claude account | BLOCKED |
 | Production deployment | Not performed | BLOCKED |
+
+### Latest exact-head CI evidence — 2026-11-02
+
+- Reviewed PR #127 head: `8f639cdcfabd428719a0f6726b3a20b4fe5b2943`.
+- Cloud Engineering Connector PR CI run [41468500062](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41468500062): success. Node suite: **182 passed, 0 failed**; Cloudflare Workers/SQLite Durable Object suite: **41 passed, 0 failed**; `npm audit --audit-level=moderate`: **0 vulnerabilities**; syntax checks and Production/Staging Wrangler dry-runs completed successfully.
+- Full History Secret Scan run [41468500013](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41468500013): success on the PR diff and fetched refs.
+- The CI `post-deploy-staging-smoke` job was **skipped** because this PR head is not deployed to Staging. This is not live acceptance.
+- Removed unsupported top-level and `env.staging.tags` fields from `wrangler.toml`; added a regression assertion. The exact-head Wrangler dry-runs completed without the prior `tags` configuration warnings.
 
 PR: [#127](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/127)  
 Base: `integration/durable-write-control-release` (consolidated write-control line)  
@@ -74,6 +82,20 @@ To release a reviewed candidate, create a branch from the exact approved 40-char
 - Result: **blocked before deployment**. The workflow's first credential guard reported that the GitHub Actions `staging` environment is missing `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. All deployment, smoke, and rollback steps were skipped. No Cloudflare Worker version was changed by this attempt.
 - Next action: add those two values to the GitHub Actions environment `staging`. The PR head has advanced since this failed attempt, so do not rerun this older branch. After the latest exact PR #127 head passes CI, create a new release branch named `integration/staging-release-<current-full-SHA>`. Cloudflare Worker preflight will independently require `GITHUB_READONLY_TOKEN` and the other expected bindings before it allows deployment.
 
+## 4A. Live Staging observation — rolled-back version only
+
+The currently active Staging deployment was inspected without changing Worker code, traffic, secrets, routes, or bindings:
+
+- Worker: `chat-gpt111-staging`; active version: `b2ee9cb2-b52c-4c6e-9446-38405d257cc3` at 100%; deployment ID: `df3a13c1-df48-4736-8682-0503abebd8d1`.
+- `GET /healthz`: HTTP 200; response reported `status=ok`, Cloudflare Workers execution, `laptop_dependency=false`, `durable_objects=ok`, and `mcp=ok`.
+- `GET /readyz`: HTTP 404 `not_found`. This is the rolled-back version, not the PR #127 candidate; it does not implement the candidate's readiness route.
+- Read-only `POST /mcp` `tools/list`: HTTP 200; exactly five tools were advertised: `project_inspect`, `read_project_file`, `engineering_standards`, `architecture_review`, and `architecture_analyze`.
+- Live `project_inspect` against the public GitHub repository returned a JSON-RPC tool error caused by GitHub's unauthenticated API rate limit (HTTP 403 upstream). This is direct evidence that public GitHub reads are not operationally reliable without the dedicated read-only credential.
+- Live `read_project_file` for `cloud-engineering-connector/README.md` returned successfully. One successful read does not override the rate-limit failure on repository inspection.
+- Worker settings inspection confirmed that Staging currently has `GITHUB_TOKEN`, `MCP_AUTH_TOKEN`, and `MCP_ALLOWED_ORIGINS` secret bindings, but **does not have `GITHUB_READONLY_TOKEN`**. `PUBLIC_READ_ONLY=true`, the Staging rate-limit namespace, and the Staging `WRITE_CONTROL` namespace are present.
+
+This is a live smoke of the rolled-back Staging version only. It is not acceptance of PR #127, does not validate its `/readyz` route, and does not authorize promotion. The release workflow must fail preflight until `GITHUB_READONLY_TOKEN` is installed on Staging.
+
 ## 5. Staging acceptance sequence
 
 After the Staging secrets are configured:
@@ -98,7 +120,24 @@ After the Staging secrets are configured:
 
 Do not treat a passing `/healthz` as proof that MCP, GitHub, or the Durable Object is ready.
 
-## 6. Production release gates
+## 6. Superproject integration topology
+
+Two distinct lines must be combined before the final merge:
+
+- PR #113, branch `integration/unify-main-and-integrated-2026-11-02`, contains the Python/CTP, Master Brain MCP, evidence-protocol, and production Worker history. It is 753 commits ahead of `main`.
+- PR #103, branch `integration/security-hardening-stack`, contains the Cloud Agent and newer connector security/CI line. It is 37 commits ahead of `main` and does not contain the Python/CTP tree.
+- These branches diverged from `main`. **Do not merge the security branch alone to `main`.**
+
+Feature chain:
+- PR #121 consolidates write-control/retention and supersedes #116/#120.
+- PR #127 adds the architecture analyzer and secure console on top of #121 and supersedes #118/#119/#126.
+- Keep superseded PRs as audit references; do not merge them independently.
+
+The single-line candidate must be built on the PR #113 tree with a merge commit whose first parent is the PR #113 head and second parent is the PR #127 head. Preserve all Python/CTP/Master Brain-only paths; apply the reviewed PR #127 versions to overlapping Cloud Agent, connector, CI, and security paths. The exact bearer-token regression test is retained in the newer connector suite.
+
+After full combined CI and full-history Gitleaks pass on that exact merge head, obtain independent review of the complete diff and merge **only PR #113** to `main`. Do not merge #103/#121/#127 separately to `main`.
+
+## 7. Production release gates
 
 Production remains blocked until all of the following are true:
 
@@ -114,7 +153,7 @@ Production remains blocked until all of the following are true:
 - A rollback target and operator are recorded before rollout.
 - Monitoring, alerting, backup/restore, incident ownership and credential-rotation procedures are documented and tested.
 
-## 7. Production rollout and rollback
+## 8. Production rollout and rollback
 
 Use a controlled rollout only after explicit release approval:
 1. Create an immutable Worker version and verify its metadata and bindings.
@@ -126,7 +165,7 @@ Use a controlled rollout only after explicit release approval:
 
 The Durable Object terminal-operation retention policy is 30 days. Unresolved UNKNOWN/IN_PROGRESS operations must not be deleted to clear backlog; resolve or reconcile them through the documented state machine.
 
-## 8. Current external blockers
+## 9. Current external blockers
 
 - Staging was rolled back to its last known-good version 27; PR #127 is not deployed. Production remains on its older Worker version and has no `WRITE_CONTROL` Durable Object binding yet.
 - Staging and Production currently do not list a `GITHUB_READONLY_TOKEN` secret.

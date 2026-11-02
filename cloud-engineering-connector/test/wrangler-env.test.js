@@ -25,6 +25,11 @@ test("Staging and Production Rate Limiting namespaces are distinct positive inte
   assert.notEqual(stagingId, productionId);
 });
 
+test("Wrangler configuration omits unsupported top-level and environment tags", () => {
+  assert.doesNotMatch(config, /^tags\s*=/m);
+  assert.doesNotMatch(staging, /^tags\s*=/m);
+});
+
 test("Wrangler preserves existing dashboard variables and encrypted secrets", () => {
   assert.match(config, /^keep_vars\s*=\s*true$/m);
   assert.doesNotMatch(config, /^\[vars\]/m);

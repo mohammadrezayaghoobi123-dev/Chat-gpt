@@ -64,7 +64,7 @@ test("architecture_analyze rejects protected paths before reading repository con
       owner: "mohammadrezayaghoobi123-dev",
       repo: "Chat-gpt",
       paths: [".env"],
-    }), { MCP_AUTH_TOKEN: "test-secret-0123456789abcdef012345" });
+    }), { MCP_AUTH_TOKEN: "test-secret-0123456789abcdef012345", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     assert.equal(body.result.isError, true);
     assert.match(body.result.content[0].text, /unsafe or protected/);
@@ -84,7 +84,7 @@ test("architecture_analyze rejects duplicate paths before any repository reads",
       owner: "mohammadrezayaghoobi123-dev",
       repo: "Chat-gpt",
       paths: ["src/worker.js", "src/worker.js"],
-    }), { MCP_AUTH_TOKEN: "test-secret-0123456789abcdef012345" });
+    }), { MCP_AUTH_TOKEN: "test-secret-0123456789abcdef012345", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     assert.equal(body.result.isError, true);
     assert.match(body.result.content[0].text, /Duplicate analysis path/);
@@ -103,7 +103,7 @@ test("architecture_analyze enforces the eight-file limit before repository reads
       owner: "mohammadrezayaghoobi123-dev",
       repo: "Chat-gpt",
       paths: Array.from({ length: 9 }, (_, index) => "src/file-" + index + ".js"),
-    }), { MCP_AUTH_TOKEN: "test-secret-0123456789abcdef012345" });
+    }), { MCP_AUTH_TOKEN: "test-secret-0123456789abcdef012345", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     assert.equal(body.result.isError, true);
     assert.match(body.error || body.result?.content?.[0]?.text || "", /too many items|between 1 and 8/);
@@ -129,7 +129,7 @@ test("architecture_analyze bounds finding volume and reports truncation", async 
       owner: "mohammadrezayaghoobi123-dev",
       repo: "Chat-gpt",
       paths: ["src/noisy.js"],
-    }), { MCP_AUTH_TOKEN: "test-secret-0123456789abcdef012345" });
+    }), { MCP_AUTH_TOKEN: "test-secret-0123456789abcdef012345", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     const analysis = JSON.parse(body.result.content[0].text);
     assert.equal(analysis.findings.length, 100);
@@ -160,7 +160,7 @@ test("architecture_analyze scopes AbortSignal evidence to each fetch invocation"
       owner: "mohammadrezayaghoobi123-dev",
       repo: "Chat-gpt",
       paths: ["src/calls.js"],
-    }), { MCP_AUTH_TOKEN: "test-secret-0123456789abcdef012345" });
+    }), { MCP_AUTH_TOKEN: "test-secret-0123456789abcdef012345", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     const analysis = JSON.parse(body.result.content[0].text);
     assert.deepEqual(

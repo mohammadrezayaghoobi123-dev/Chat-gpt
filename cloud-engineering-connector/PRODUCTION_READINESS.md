@@ -13,6 +13,7 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 | Vitest Durable Object suite | 41 passed, 0 failed | PASS |
 | npm dependency audit | 0 reported vulnerabilities | PASS |
 | JavaScript syntax and Wrangler configuration checks | CI job passed | PASS |
+| Python static analysis baseline | Informational workflow: 37 Ruff F/E findings and 50 Mypy diagnostics; workflow intentionally uses `|| true` | FINDINGS — not clean |
 | Gitleaks | PR diff and fetched refs scan passed | PASS |
 | MCP transport / Claude protocol | Unit and Staging-era smoke coverage includes 2025-06-18 and modern discovery | PARTIAL |
 | Live Staging smoke for this PR head | Skipped; this candidate is not deployed | BLOCKED |
@@ -32,7 +33,8 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 - Master Brain MVP: PASS; 1414 tests passed, 3 skipped. Dedicated privileged kernel enforcement: **8/8 passed**, including seccomp, process-flood, aggregate-memory-flood, disk-flood/ENOSPC and kernel-limit recording.
 - Python tests: PASS; **1411 passed, 3 skipped, 4 collection warnings, 1050 subtests passed**.
 - Browser/accessibility checks: PASS.
-- Static checks and full-history Gitleaks: PASS.
+- Full-history Gitleaks: PASS.
+- Static analysis is **not clean**: the informational workflow reported 37 Ruff F/E findings and 50 Mypy diagnostics. It uses `|| true`, so a green workflow means the analyzers completed, not that the code passed lint/type checks. Treat this as tracked quality debt; do not report Static Clean.
 - All checks on the exact candidate are complete and successful except `post-deploy-staging-smoke`, intentionally skipped because this candidate is not deployed. CI green is not live Staging acceptance.
 - The latest code change is test-only: the process-flood test now asserts the runner's fail-closed cgroup-event result rather than assuming the killed child flushed buffered stdout.
 

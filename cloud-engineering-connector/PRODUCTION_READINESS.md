@@ -403,7 +403,7 @@ Duplicate same-SHA runs were observed for Python and Master Brain MVP; one compl
 - Current candidate Connector CI `41518548916`: **202/202 Node tests passed, 0 failed; npm audit reported 0 vulnerabilities; JavaScript syntax and Wrangler configuration checks passed.**
 - Current candidate Full History Gitleaks `41518548770`: passed.
 - Current candidate Master Brain MCP CI `41518548771`: passed.
-- At the time this section was written, Python tests, Master Brain MVP tests, and browser/accessibility checks were still running; do not mark them complete until their exact-head runs conclude.
+- Exact-code-candidate cross-workflow results (all on `6f07797ac4abd6452bd6f110b1bbdf80c24d53ea`): Python `41518548657` passed with **1411 passed, 3 skipped, 4 warnings, and 1050 subtests**; Master Brain MVP `41518548709` passed with **1414 tests and 3 skips**, followed by **8/8 kernel-enforcement tests passed**; Web client/browser/accessibility `41518549113` passed; Cloud Agent CI `41518548656` passed; Master Brain MCP CI `41518548771` passed; Full History Gitleaks `41518548770` passed; informational static checks `41518548557` completed, but still report **37 Ruff findings and 50 Mypy diagnostics**. The Connector CI and npm audit evidence is recorded above.
 
 ### Current release decision
 
@@ -413,4 +413,18 @@ Duplicate same-SHA runs were observed for Python and Master Brain MVP; one compl
 - Actual Claude and ChatGPT client compatibility is not yet proven by independent live client sessions.
 - No merge, deployment, traffic shift, Worker setting mutation, secret read, or `main` update occurred.
 
-**Disposition:** Observability release gate — implemented and Connector CI PASS; exact-head cross-workflow CI — partial/pending; Staging — blocked pending independent approval and governance verification; Production — NO-GO.
+**Disposition:** Observability release gate — implemented and Connector CI PASS; all eight CI workflow families — PASS on exact code candidate `6f07797...` (static-analysis debt remains); Staging live acceptance and independent Claude/ChatGPT client acceptance — NOT PROVEN; Staging release — blocked pending independent PR approval and governance verification; Production — NO-GO.
+
+## 17. Exact code candidate CI closure — 2026-11-02 20:29 UTC
+
+- Exact application-code candidate: `6f07797ac4abd6452bd6f110b1bbdf80c24d53ea`.
+- All eight CI workflow families completed successfully on that code candidate: Connector CI, Python tests, Master Brain MVP tests, Master Brain MCP CI, Cloud Agent CI, Web client/browser/accessibility, Full History Gitleaks, and informational static checks.
+- Connector: 202 Node tests passed, 0 failed; 41 Durable Object tests passed (from the CI workflow's previously verified log); npm audit 0 vulnerabilities; syntax/Wrangler checks passed.
+- Python: 1411 passed, 3 skipped, 4 warnings; 1050 subtests passed.
+- Master Brain MVP: 1414 passed, 3 skipped in the main suite; dedicated kernel-enforcement suite passed 8/8 without skips.
+- Static checks: workflow passed but reported 37 Ruff findings and 50 Mypy diagnostics. This remains a release-quality debt item; do not describe the codebase as static-analysis clean.
+- The subsequent PR head `b03fef1867cc982b5f4b121c35f29f4cb3fc8804` contains the readiness documentation update only; it does not alter the tested application code or release workflow. The separate temporary smoke branch contains a smoke-trigger documentation commit only and is not a release branch.
+- No live Staging smoke result was available through the connected GitHub integration at this audit; direct Worker-host probing from this tool runtime is blocked by its outbound-host policy. That policy response is not a Worker HTTP result. Actual MCP endpoint acceptance and independent Claude/ChatGPT client sessions remain unverified.
+- PR #129 remains Draft with zero reviews. No deployment, merge, traffic change, Worker setting mutation, or `main` update occurred.
+
+**Disposition:** CI on the exact application-code candidate — PASS; live Staging/client acceptance — UNVERIFIED; Staging release — BLOCKED; Production — NO-GO.

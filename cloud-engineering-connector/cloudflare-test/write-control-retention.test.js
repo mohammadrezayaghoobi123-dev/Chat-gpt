@@ -167,7 +167,7 @@ describe("WriteControl terminal operation retention", () => {
             updatedAt: NOW - RETENTION_MS * 2,
           });
         }
-        const result = instance.admitWrite({
+        const result = await instance.admitWrite({
           keyHash: "f".repeat(64), requestHash: "e".repeat(64),
           windowMs: 60_000, limit: 5,
         });
@@ -229,7 +229,7 @@ describe("WriteControl terminal operation retention", () => {
     try {
       const stub = stubFor("retention-storage-observability");
       await runInDurableObject(stub, async (instance) => {
-        const result = instance.admitWrite({
+        const result = await instance.admitWrite({
           keyHash: "c".repeat(64), requestHash: "d".repeat(64),
           windowMs: 60_000, limit: 5,
         });

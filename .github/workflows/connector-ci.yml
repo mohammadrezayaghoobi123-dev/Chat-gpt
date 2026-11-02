@@ -50,7 +50,7 @@ jobs:
         run: npm run check
 
   post-deploy-staging-smoke:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/staging-postdeploy-acceptance-')
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/staging-postdeploy-acceptance-')) || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'integration/staging-postdeploy-acceptance-'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:

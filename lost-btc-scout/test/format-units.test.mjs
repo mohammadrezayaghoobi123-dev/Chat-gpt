@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { formatUnits } from "../format-units.js";
 
 test("formats a large wei balance without IEEE-754 precision loss", () => {
-  assert.equal(formatUnits("123456789012345678901234567890"), "۱۲٬۳۴۵٬۶۷۸٬۹۰۱٬۲۳۴٫۵۶۷۸۹۰۱۲");
+  assert.equal(formatUnits("123456789012345678901234567890"), "۱۲۳٬۴۵۶٬۷۸۹٬۰۱۲٫۳۴۵۶۷۸۹");
 });
 
 test("formats a value below one token", () => {

@@ -1,8 +1,10 @@
+import { resolveCandidateRef } from "./candidate-ref.js";
 import assert from "node:assert/strict";
 
 const base = process.env.STAGING_MCP_URL;
 assert.ok(base?.startsWith("https://"), "STAGING_MCP_URL must use HTTPS");
 const origin = new URL(base).origin;
+const { candidateBranch, candidateSha } = resolveCandidateRef(process.env);
 const timeout = () => ({ signal: AbortSignal.timeout(30_000) });
 
 const health = await fetch(new URL("/healthz", base), timeout());
@@ -192,7 +194,7 @@ const inspected = await rpc("tools/call", {
   arguments: {
     owner: "mohammadrezayaghoobi123-dev",
     repo: "Chat-gpt",
-    branch: "integration/security-hardening-stack",
+    branch: candidateBranch,
   },
 }, 99003);
 assert.equal(inspected.response.status, 200);
@@ -208,7 +210,7 @@ const fileRead = await rpc("tools/call", {
     owner: "mohammadrezayaghoobi123-dev",
     repo: "Chat-gpt",
     path: "cloud-engineering-connector/README.md",
-    ref: "integration/security-hardening-stack",
+    ref: candidateSha,
   },
 }, 99004);
 assert.equal(fileRead.response.status, 200);
@@ -223,7 +225,7 @@ const analysis = await rpc("tools/call", {
   arguments: {
     owner: "mohammadrezayaghoobi123-dev",
     repo: "Chat-gpt",
-    ref: "integration/security-hardening-stack",
+    ref: candidateSha,
     paths: ["cloud-engineering-connector/README.md"],
   },
 }, 99005);

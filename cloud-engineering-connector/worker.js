@@ -562,5 +562,4 @@ function applySecurityHeaders(request,response){
  if(!headers.has("cache-control"))headers.set("cache-control","no-store");
  return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
 }
-export { WriteControl } from "./write-control.js";
 export default{async fetch(request,env){let response;try{response=await handleRequest(request,env)}catch{response=json({error:"internal_error"},500)}return applySecurityHeaders(request,applyCors(request,env,response))}};

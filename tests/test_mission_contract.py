@@ -2,7 +2,7 @@ import unittest
 
 from master_brain.archipelago import plan_mission
 from master_brain.core import RiskTier, Task
-from master_brain.meta_intelligence import Mission, ReviewLevel, plan_coordination
+from master_brain.meta_intelligence import Mission, plan_coordination
 from master_brain.mission_contract import (
     MissionContract,
     MissionReviewLevel,

@@ -3,7 +3,6 @@ import unittest
 import tempfile
 from pathlib import Path
 
-from master_brain.completion_evidence import ProviderVerificationResult
 from master_brain.completion_evidence import (
     CompletionEvidence,
     EvidenceValidationError,
@@ -514,7 +513,6 @@ class AdditionalAdversarialCompletionEvidenceTests(CompletionEvidenceTests):
             self.validate(verifier=lambda item: 1)
 
     def test_receipt_observed_before_dispatch_boundary_never_reaches_verifier(self):
-        from dataclasses import replace
 
         called = []
         stale = replace(self.evidence, observed_at="2026-10-12T00:00:01Z")

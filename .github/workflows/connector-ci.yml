@@ -83,7 +83,7 @@ jobs:
           assert.equal(getMcp.status, 405, 'GET /mcp must be rejected');
           assert.match(getMcp.headers.get('allow') ?? '', /POST/);
 
-          const readOnlyList = await fetch(new URL('/mcp', base), {
+          const unauthenticatedMcp = await fetch(new URL('/mcp', base), {
             method: 'POST',
             headers: {
               'content-type': 'application/json',
@@ -92,13 +92,9 @@ jobs:
             body: JSON.stringify({ jsonrpc: '2.0', id: 99000, method: 'tools/list', params: {} }),
             signal: AbortSignal.timeout(15000),
           });
-          assert.equal(readOnlyList.status, 200, 'public read-only MCP tools/list must succeed');
-          const readOnlyPayload = await readOnlyList.json();
-          const toolNames = (readOnlyPayload.result?.tools ?? []).map(tool => tool.name);
-          for (const name of ['project_inspect', 'read_project_file', 'engineering_standards', 'architecture_review']) {
-            assert.ok(toolNames.includes(name), 'approved read-only MCP tool must be available: ' + name);
-          }
-          assert.ok(!toolNames.includes('create_change_pr'), 'write tool must remain hidden in public read-only mode');
+          assert.equal(unauthenticatedMcp.status, 401, 'MCP must reject missing bearer credentials');
+          assert.equal(unauthenticatedMcp.headers.get('www-authenticate'), 'Bearer');
+          assert.equal((await unauthenticatedMcp.json()).error, 'unauthorized');
 
           const rpc = {
             jsonrpc: '2.0',
@@ -129,7 +125,7 @@ jobs:
               'security response headers',
               'GET /mcp rejected with HTTP 405',
               'POST /mcp rejects invalid bearer token with HTTP 401',
-              'public read-only MCP tools/list exposes only approved read tools',
+              'MCP rejects missing bearer credentials with HTTP 401',
               'healthz performs a live Durable Object SQLite schema probe',
             ],
             credentialMaterialLogged: false,

@@ -177,3 +177,40 @@ test("Invalid release identity and missing token fail closed", async () => {
     /RELEASE_GITHUB_TOKEN/,
   );
 });
+
+
+test("release approval paginates associated PRs and all reviews before accepting", async () => {
+  const decoys = Array.from({ length: 100 }, (_, index) => ({
+    ...stagingPull({ number: index + 1, head: { sha: headSha }, base: { ref: "unrelated" } }),
+  }));
+  const firstReviewPage = Array.from({ length: 100 }, (_, index) =>
+    approval(sha, index === 99 ? reviewer : "commenter-" + index,
+      index === 99 ? "APPROVED" : "COMMENTED",
+      "2026-11-02T12:" + String(index).padStart(2, "0") + ":00Z"),
+  );
+  const requestedUrls = [];
+  const fetchImpl = async (url, options) => {
+    const parsed = new URL(String(url));
+    requestedUrls.push(parsed.pathname + parsed.search);
+    if (parsed.pathname.endsWith("/commits/" + sha + "/pulls")) {
+      if (parsed.searchParams.get("page") === "1") return response(decoys);
+      if (parsed.searchParams.get("page") === "2") return response([stagingPull()]);
+      return response([]);
+    }
+    if (parsed.pathname.endsWith("/pulls/129/reviews")) {
+      if (parsed.searchParams.get("page") === "1") return response(firstReviewPage);
+      if (parsed.searchParams.get("page") === "2") {
+        return response([approval(sha, reviewer, "CHANGES_REQUESTED", "2026-11-02T13:00:00Z")]);
+      }
+      return response([]);
+    }
+    return response({ message: "not found" }, 404);
+  };
+
+  await assert.rejects(
+    verifyReleaseApproval({ ...input({}), fetchImpl }),
+    /outstanding change request/,
+  );
+  assert.ok(requestedUrls.some(url => url.includes("/commits/" + sha + "/pulls?page=2")));
+  assert.ok(requestedUrls.some(url => url.includes("/pulls/129/reviews?page=2")));
+});

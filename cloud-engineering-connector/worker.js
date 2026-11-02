@@ -228,6 +228,7 @@ async function verifyCreatedPullRequest(env,base,owner,repo,created,branchName,b
  return current;
 }
 async function createChangePr(args,env) {
+ if(env.READ_ONLY_GITHUB===true) throw new Error("PUBLIC_READ_ONLY mode cannot create GitHub pull requests.");
  if(args.base_branch!==ALLOWED_BASE_BRANCH) throw new Error("Base branch is not allowed.");
  const base=repoPath(args.owner,args.repo);
  if(!Array.isArray(args.files)||args.files.length<1||args.files.length>MAX_FILES) throw new Error("Provide between 1 and "+MAX_FILES+" files.");

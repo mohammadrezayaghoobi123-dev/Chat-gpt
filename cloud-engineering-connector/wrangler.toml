@@ -27,9 +27,9 @@ period = 60
 name = "WRITE_CONTROL"
 class_name = "WriteControl"
 
-[exports.WriteControl]
-type = "durable-object"
-storage = "sqlite"
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WriteControl"]
 
 [env.staging]
 
@@ -56,6 +56,6 @@ period = 60
 name = "WRITE_CONTROL"
 class_name = "WriteControl"
 
-[env.staging.exports.WriteControl]
-type = "durable-object"
-storage = "sqlite"
+[[env.staging.migrations]]
+tag = "v1"
+new_sqlite_classes = ["WriteControl"]

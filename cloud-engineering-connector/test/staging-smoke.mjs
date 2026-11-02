@@ -177,6 +177,11 @@ assert.deepEqual(toolNames, [
   "architecture_analyze",
 ]);
 assert.ok(!toolNames.includes("create_change_pr"), "write tool must never be advertised anonymously");
+for (const tool of listed.body.result.tools) {
+  assert.equal(typeof tool.annotations?.title, "string", `${tool.name} must have a title annotation`);
+  assert.equal(tool.annotations?.readOnlyHint, true, `${tool.name} must advertise read-only behavior`);
+  assert.equal(tool.annotations?.destructiveHint, false, `${tool.name} must not be destructive`);
+}
 console.log("PASS: anonymous read-only tool discovery");
 
 const inspected = await rpc("tools/call", {

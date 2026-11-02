@@ -91,6 +91,51 @@ assert.equal(initialized.response.status, 200);
 assert.equal(initialized.body.result.protocolVersion, "2025-11-25");
 console.log("PASS: MCP initialize");
 
+const claudeLegacy = await rpc("initialize", {
+  protocolVersion: "2025-06-18",
+  capabilities: {},
+  clientInfo: { name: "claude-remote-connector", version: "1.0.0" },
+}, 99011);
+assert.equal(claudeLegacy.response.status, 200);
+assert.equal(claudeLegacy.body.result.protocolVersion, "2025-06-18");
+const claudeTools = await rpc("tools/list", {}, 99012, null, { "MCP-Protocol-Version": "2025-06-18" });
+assert.equal(claudeTools.response.status, 200);
+assert.ok(claudeTools.body.result.tools.some((tool) => tool.name === "architecture_analyze"));
+console.log("PASS: Claude-supported 2025-06-18 legacy handshake and discovery");
+
+async function modernRpc(method, params = {}, id = 99100, name = null) {
+  const meta = {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientCapabilities": {},
+    "io.modelcontextprotocol/clientInfo": { name: "modern-acceptance", version: "1.0.0" },
+  };
+  const headers = {
+    origin,
+    "content-type": "application/json",
+    accept: "application/json, text/event-stream",
+    "MCP-Protocol-Version": "2026-07-28",
+    "Mcp-Method": method,
+  };
+  if (name !== null) headers["Mcp-Name"] = name;
+  const response = await fetch(new URL("/mcp", base), {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ jsonrpc: "2.0", id, method, params: { ...params, _meta: meta } }),
+    ...timeout(),
+  });
+  return { response, body: await response.json() };
+}
+const discovery = await modernRpc("server/discover", {}, 99101);
+assert.equal(discovery.response.status, 200);
+assert.ok(discovery.body.result.supportedVersions.includes("2026-07-28"));
+const modernTools = await modernRpc("tools/list", {}, 99102);
+assert.equal(modernTools.response.status, 200);
+assert.ok(modernTools.body.result.tools.some((tool) => tool.name === "architecture_analyze"));
+const modernStandards = await modernRpc("tools/call", { name: "engineering_standards", arguments: {} }, 99103, "engineering_standards");
+assert.equal(modernStandards.response.status, 200);
+assert.equal(modernStandards.body.result.content[0].type, "text");
+console.log("PASS: modern 2026-07-28 discovery, tool list, and tool call");
+
 // Claude compatibility probe: MCP legacy protocol 2025-06-18.
 const claudeInitialized = await rpc("initialize", {
   protocolVersion: "2025-06-18",

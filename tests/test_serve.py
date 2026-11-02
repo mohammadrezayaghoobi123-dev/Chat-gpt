@@ -49,7 +49,6 @@ class TrustStoreFile(Dirs):
         return load_trust_store(keyfile(self.path, keys))
 
     def test_valid_keys_load(self):
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         from master_brain.approval_signing_ed25519 import Ed25519Signer
         signer = Ed25519Signer.generate("k-boss")
         store = self.load([good_key(public=signer.public_key_bytes().hex())])
@@ -407,7 +406,6 @@ class StopRace(unittest.TestCase):
         self.assertEqual(server.calls, [])
 
     def test_stop_while_the_loop_runs_in_another_thread(self):
-        import http.server
         built = build(ServeConfig(Path(tempfile.mkdtemp()) / "d", port=0))
         self.addCleanup(built.server.server_close)
         t = threading.Thread(target=built.run, daemon=True)

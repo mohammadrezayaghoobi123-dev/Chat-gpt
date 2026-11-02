@@ -1,0 +1,100 @@
+import { env } from "cloudflare:workers";
+import { runInDurableObject } from "cloudflare:test";
+import { describe, expect, it, vi } from "vitest";
+
+const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const NOW = 1_800_000_000_000;
+
+function stubFor(name) {
+  return env.WRITE_CONTROL.get(env.WRITE_CONTROL.idFromName(name));
+}
+
+function insertOperation(sql, { keyHash, requestHash, status, phase, updatedAt }) {
+  sql.exec(
+    `INSERT INTO write_operations
+      (key_hash, request_hash, status, phase, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    keyHash, requestHash, status, phase, updatedAt, updatedAt,
+  );
+}
+
+describe("WriteControl terminal operation retention", () => {
+  it("prunes only terminal records strictly older than 30 days in the admission transaction", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    try {
+      const stub = stubFor("retention-expired-terminal");
+      const expiredSuccess = "a".repeat(64);
+      const expiredFailure = "b".repeat(64);
+      const boundarySuccess = "c".repeat(64);
+      const unknown = "d".repeat(64);
+      const active = "e".repeat(64);
+
+      await runInDurableObject(stub, async (instance, state) => {
+        const sql = state.storage.sql;
+        insertOperation(sql, {
+          keyHash: expiredSuccess, requestHash: "1".repeat(64),
+          status: "SUCCEEDED", phase: "PR_CREATED", updatedAt: NOW - RETENTION_MS - 1,
+        });
+        insertOperation(sql, {
+          keyHash: expiredFailure, requestHash: "2".repeat(64),
+          status: "FAILED", phase: "RESERVED", updatedAt: NOW - RETENTION_MS - 1,
+        });
+        insertOperation(sql, {
+          keyHash: boundarySuccess, requestHash: "3".repeat(64),
+          status: "SUCCEEDED", phase: "PR_CREATED", updatedAt: NOW - RETENTION_MS,
+        });
+        insertOperation(sql, {
+          keyHash: unknown, requestHash: "4".repeat(64),
+          status: "UNKNOWN", phase: "PR_DISPATCHED", updatedAt: NOW - RETENTION_MS - 1,
+        });
+        insertOperation(sql, {
+          keyHash: active, requestHash: "5".repeat(64),
+          status: "IN_PROGRESS", phase: "COMMIT_DISPATCHED", updatedAt: NOW - RETENTION_MS - 1,
+        });
+
+        const result = await instance.admitWrite({
+          keyHash: "f".repeat(64), requestHash: "6".repeat(64),
+          windowMs: 60_000, limit: 5,
+        });
+        expect(result).toMatchObject({ admitted: true, replay: false });
+
+        const rows = sql.exec(
+          "SELECT key_hash, status FROM write_operations ORDER BY key_hash",
+        ).toArray();
+        const byKey = new Map(rows.map((row) => [row.key_hash, row.status]));
+        expect(byKey.has(expiredSuccess)).toBe(false);
+        expect(byKey.has(expiredFailure)).toBe(false);
+        expect(byKey.get(boundarySuccess)).toBe("SUCCEEDED");
+        expect(byKey.get(unknown)).toBe("UNKNOWN");
+        expect(byKey.get(active)).toBe("IN_PROGRESS");
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps same-key terminal replay stable through the full 30-day retention window", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    try {
+      const stub = stubFor("retention-replay-window");
+      const keyHash = "7".repeat(64);
+      const requestHash = "8".repeat(64);
+      await runInDurableObject(stub, async (instance, state) => {
+        insertOperation(state.storage.sql, {
+          keyHash, requestHash, status: "SUCCEEDED", phase: "PR_CREATED",
+          updatedAt: NOW - RETENTION_MS,
+        });
+        await expect(instance.admitWrite({
+          keyHash, requestHash, windowMs: 60_000, limit: 5,
+        })).resolves.toMatchObject({
+          admitted: true, replay: true,
+          operation: { status: "SUCCEEDED", phase: "PR_CREATED" },
+        });
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

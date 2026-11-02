@@ -14,11 +14,16 @@ A cloud-hosted MCP connector for rigorous software engineering: repository inspe
 
 ## MCP tools
 
+The current Worker defines six tools:
+
 - `project_inspect`: repository metadata, latest branch commit, and a capped file listing.
 - `read_project_file`: read a text file at a ref.
-- `architecture_review`: review rubric for requirements, architecture, correctness, security, operations, testing, and evidence.
 - `engineering_standards`: mandatory operating rules and a quality gate for evidence, testing, safety, and reporting.
-- `create_change_pr`: create a new `assistant/*` branch and draft PR; never merge.
+- `architecture_review`: structured review rubric for requirements, architecture, correctness, security, operations, testing, and evidence.
+- `architecture_analyze`: bounded, deterministic source triage with file/line-grounded findings; findings are explicitly marked `not_run`.
+- `create_change_pr`: authenticated write-capable operation that creates a new `assistant/*` branch and draft PR; it never writes to `main` or merges.
+
+Anonymous public-read-only mode advertises only the first five read-only tools. `create_change_pr` is available only on an authenticated request and remains subject to the Durable Object write-admission controls.
 
 The model using this connector must perform substantive reasoning, inspect relevant files, consult primary sources where necessary, and run/inspect CI. Tool output alone is not proof that code is correct. The connector also validates tool-call arguments against the schema subset currently used by its tool definitions (object/array/string/numeric/boolean/null types, required fields, nested properties, additional-properties rejection, and array item bounds). This is not a full JSON Schema 2020-12 validator; do not add unsupported schema keywords without extending the validator and its negative tests.
 
@@ -43,13 +48,15 @@ npm run check
 
 The repository source and a live Worker deployment are separate states. A GitHub commit does not prove that a Cloudflare Worker is running that commit. The current deployment is managed separately in Cloudflare; verify its active version and bindings before claiming a release is live.
 
-1. Use the intended cloud-only branch and project root `cloud-engineering-connector`.
-2. Set `MCP_AUTH_TOKEN` and `GITHUB_TOKEN` as Worker secrets. Never paste secrets into chat or commit them.
-3. Keep authentication required; do not disable it to work around client incompatibility.
-4. Configure exact browser origins only after identifying and verifying the intended client origins.
-5. Verify `GET /healthz`, then perform authenticated protocol and tool-level smoke tests against the actual deployed endpoint.
-6. Test read-only inspection and draft-PR generation on a disposable branch/repository before using the connector for consequential changes.
-7. Record the deployed version ID, tested request/response pairs, CI commit SHA, and rollback target. Do not deploy untested or mismatched commits.
+1. Use the intended immutable release branch and project root `cloud-engineering-connector`. The Staging workflow accepts only `integration/staging-release-<40-character-candidate-SHA>`; Production accepts only `integration/production-release-<40-character-candidate-SHA>`.
+2. Configure these secrets independently on each Worker: `GITHUB_READONLY_TOKEN` (fine-grained, repository-scoped, Metadata and Contents read-only), `GITHUB_TOKEN` (separate credential for draft-PR writes), `MCP_AUTH_TOKEN` (high-entropy bearer secret), and `MCP_ALLOWED_ORIGINS` (only verified browser origins). Never paste secrets into chat or commit them.
+3. Set `PUBLIC_READ_ONLY=true` as a **plain-text Worker variable** on both environments. The Production release preflight rejects a secret-text binding because the feature flag must be independently verifiable.
+4. Preserve separate `MCP_RATE_LIMITER` and `WRITE_CONTROL` namespaces for Staging and Production. Wrangler declares the SQLite-backed Durable Object migration; verify the deployed namespace after release.
+5. Configure GitHub Actions environments `staging` and `production` with `CLOUDFLARE_API_TOKEN` (secret) and `CLOUDFLARE_ACCOUNT_ID` (variable). Production must also have a required human approval gate.
+6. Keep the connector's anonymous surface read-only. Do not disable authentication for write operations or broaden the tool allowlist to work around client incompatibility.
+7. Deploy only the exact reviewed SHA. The release workflow runs dependency audit, full connector tests, dry-run/config checks, binding preflight, deployment, live acceptance, and automatic rollback on failed post-deploy acceptance.
+8. Verify `GET /healthz` and `GET /readyz` separately, then run the candidate-pinned MCP smoke suite. Liveness alone is not readiness or product acceptance.
+9. Record the deployed immutable Worker version ID, deployment ID, tested request/response pairs, exact CI commit SHA, rollback target, and operator approval. Never deploy an untested or mismatched commit.
 
 ## Cost and availability
 
@@ -93,7 +100,7 @@ The Worker is deployed as `chat-gpt111` (Production) and `chat-gpt111-staging` (
 
 `keep_vars = true` is intentional: the controlled Staging deployment must preserve existing dashboard-managed plain-text variables. Existing encrypted secrets are not deleted by Wrangler deployments. Do not upload, copy, rotate, or print secret values as part of environment parity work. Secret presence and binding names may be audited; values and equality must not be inferred from metadata.
 
-The current live environments contain historical dashboard bindings that differ in type: `PUBLIC_READ_ONLY` and `SERVICE_MODE` are secret bindings in Production but plain-text bindings in Staging. `SERVICE_MODE` is not read by the current Worker code. These bindings are intentionally preserved rather than converted without reviewing their hidden values. `PUBLIC_READ_ONLY` behavior must be verified through the authenticated/unauthenticated Staging smoke tests; no Production secret is changed.
+The live audit found that Staging has `PUBLIC_READ_ONLY=true` as a plain-text binding, while Production still has `PUBLIC_READ_ONLY` as a secret-text binding. The hardened Production release workflow deliberately blocks deployment until Production is changed to a plain-text variable with the exact value `true`. `SERVICE_MODE` is not read by the current Worker code and is not a release prerequisite. Do not convert or overwrite unrelated dashboard-managed values.
 
 The next Wrangler deployment will enable Workers Logs for both environments with custom log persistence, query-string redaction, and invocation logs disabled. This is intended to capture explicit storage telemetry without persisting the full invocation request/response log. Live settings currently report observability as unset; confirm the new setting after Staging deployment. Cloudflare Workers Logs retention is limited; use it as deployment evidence, not as a durable audit archive.
 

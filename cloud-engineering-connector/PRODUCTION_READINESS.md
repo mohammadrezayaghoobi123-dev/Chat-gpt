@@ -82,6 +82,20 @@ To release a reviewed candidate, create a branch from the exact approved 40-char
 - Result: **blocked before deployment**. The workflow's first credential guard reported that the GitHub Actions `staging` environment is missing `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. All deployment, smoke, and rollback steps were skipped. No Cloudflare Worker version was changed by this attempt.
 - Next action: add those two values to the GitHub Actions environment `staging`. The PR head has advanced since this failed attempt, so do not rerun this older branch. After the latest exact PR #127 head passes CI, create a new release branch named `integration/staging-release-<current-full-SHA>`. Cloudflare Worker preflight will independently require `GITHUB_READONLY_TOKEN` and the other expected bindings before it allows deployment.
 
+## 4A. Live Staging observation — rolled-back version only
+
+The currently active Staging deployment was inspected without changing Worker code, traffic, secrets, routes, or bindings:
+
+- Worker: `chat-gpt111-staging`; active version: `b2ee9cb2-b52c-4c6e-9446-38405d257cc3` at 100%; deployment ID: `df3a13c1-df48-4736-8682-0503abebd8d1`.
+- `GET /healthz`: HTTP 200; response reported `status=ok`, Cloudflare Workers execution, `laptop_dependency=false`, `durable_objects=ok`, and `mcp=ok`.
+- `GET /readyz`: HTTP 404 `not_found`. This is the rolled-back version, not the PR #127 candidate; it does not implement the candidate's readiness route.
+- Read-only `POST /mcp` `tools/list`: HTTP 200; exactly five tools were advertised: `project_inspect`, `read_project_file`, `engineering_standards`, `architecture_review`, and `architecture_analyze`.
+- Live `project_inspect` against the public GitHub repository returned a JSON-RPC tool error caused by GitHub's unauthenticated API rate limit (HTTP 403 upstream). This is direct evidence that public GitHub reads are not operationally reliable without the dedicated read-only credential.
+- Live `read_project_file` for `cloud-engineering-connector/README.md` returned successfully. One successful read does not override the rate-limit failure on repository inspection.
+- Worker settings inspection confirmed that Staging currently has `GITHUB_TOKEN`, `MCP_AUTH_TOKEN`, and `MCP_ALLOWED_ORIGINS` secret bindings, but **does not have `GITHUB_READONLY_TOKEN`**. `PUBLIC_READ_ONLY=true`, the Staging rate-limit namespace, and the Staging `WRITE_CONTROL` namespace are present.
+
+This is a live smoke of the rolled-back Staging version only. It is not acceptance of PR #127, does not validate its `/readyz` route, and does not authorize promotion. The release workflow must fail preflight until `GITHUB_READONLY_TOKEN` is installed on Staging.
+
 ## 5. Staging acceptance sequence
 
 After the Staging secrets are configured:

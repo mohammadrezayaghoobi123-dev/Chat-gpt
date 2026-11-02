@@ -834,6 +834,7 @@ class KernelEnforcement(unittest.TestCase):
 
     def test_the_record_states_which_kernel_limits_were_in_force(self):
         raw = R._run_raw(spec("pass"))
+        self.assertEqual(raw["outcome"], "pass", raw["stderr"][-300:])
         env = R._environment(spec("pass"))
         self.assertIn("kernel_limits", env)
         self.assertEqual(set(env["kernel_limits"]), {"cgroup", "work_tmpfs", "seccomp"})

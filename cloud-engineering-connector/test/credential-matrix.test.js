@@ -9,7 +9,7 @@ const SECRET = "mcp-secret-value";
 const GH = "ghp_FAKE_TOKEN_FOR_TEST_0123456789";
 const post = (body, auth) => new Request("https://example.test/mcp", {
   method: "POST",
-  headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...(auth ? { authorization: auth } : {}) },
+  headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "cf-connecting-ip": "203.0.113.10", ...(auth ? { authorization: auth } : {}) },
   body: JSON.stringify(body),
 });
 const call = (name, args = {}, auth = "Bearer " + SECRET) =>
@@ -38,7 +38,7 @@ test("MCP_AUTH_TOKEN absent: 503 for any request body, never 400, no GitHub call
 test("MCP_AUTH_TOKEN invalid or missing bearer: 401, no GitHub call, secret not echoed", async () => {
   await withFetch(() => ghError(200, "x"), async (calls) => {
     for (const auth of [null, "Bearer wrong", "bearer " + SECRET, SECRET, "Bearer "]) {
-      const r = await worker.fetch(call("project_inspect", { owner: "o", repo: "r" }, auth), { MCP_AUTH_TOKEN: SECRET, GITHUB_TOKEN: GH });
+      const r = await worker.fetch(call("project_inspect", { owner: "o", repo: "r" }, auth), { MCP_AUTH_TOKEN: SECRET, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
       assert.equal(r.status, 401, String(auth));
       assert.ok(!(await r.text()).includes(SECRET));
     }

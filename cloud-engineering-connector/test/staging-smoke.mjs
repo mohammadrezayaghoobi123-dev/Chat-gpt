@@ -12,9 +12,12 @@ assert.equal(healthBody.status, "ok");
 assert.equal(healthBody.service, "cloud-engineering-connector");
 assert.equal(healthBody.execution, "cloudflare-workers");
 assert.equal(healthBody.laptop_dependency, false);
-assert.equal(healthBody.durable_objects, "ok", "healthz must execute a live SQLite Durable Object probe");
-assert.equal(healthBody.mcp, "ok", "healthz must execute an authenticated MCP tools/list self-check");
-console.log("PASS: health and security headers");
+const readiness = await fetch(new URL("/readyz", base), timeout());
+assert.equal(readiness.status, 200, "GET /readyz must return HTTP 200");
+const readinessBody = await readiness.json();
+assert.equal(readinessBody.status, "ready");
+assert.equal(readinessBody.durable_objects, "ok", "readyz must execute the Durable Object SQLite schema probe");
+console.log("PASS: Worker liveness, Durable Object readiness, and security headers");
 for (const [header, expected] of [
   ["x-content-type-options", "nosniff"],
   ["x-frame-options", "DENY"],

@@ -212,7 +212,6 @@ class TamperDetection(CacheCase):
         self.add(s, 2)
         s.read_all()
         anchor = Path(str(self.path) + ".head")
-        good = anchor.read_text()
         self.add(self.store(None), 1, start=2)  # a legitimate append by another writer
         anchor.write_text(json.dumps({"count": 3, "head_hash": "e" * 64}))
         with self.assertRaises(AuditStoreError):

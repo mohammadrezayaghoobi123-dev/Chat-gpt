@@ -14,7 +14,7 @@ import json
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping
 
-from master_brain.audit_store import NOW, AuditPreconditionError, AuditStore
+from master_brain.audit_store import NOW, AuditPreconditionError, AuditStore, _NowType
 from master_brain.dispatch import DispatchResult, DispatchStatus, IntegrationAdapter, dispatch_once
 from master_brain.integrations import IntegrationDescriptor, IntegrationRequirement
 from master_brain.mission_lifecycle import (
@@ -53,7 +53,10 @@ MAX_INTEGRATION_RISK_BY_TIER = {
 
 
 def _requirement_exceeds_contract_risk(contract: Any, requirement: Any) -> str | None:
-    ceiling = MAX_INTEGRATION_RISK_BY_TIER.get(getattr(contract, "risk_tier", None))
+    risk_tier = getattr(contract, "risk_tier", None)
+    if not isinstance(risk_tier, MissionRiskTier):
+        return "unknown_contract_risk_tier"
+    ceiling = MAX_INTEGRATION_RISK_BY_TIER.get(risk_tier)
     if ceiling is None:
         return "unknown_contract_risk_tier"
     requested = getattr(requirement, "max_risk_level", None)
@@ -185,9 +188,9 @@ def execute_mission_once(
     payload: Mapping[str, Any],
     *,
     event_id_prefix: str,
-    recorded_at: str,
+    recorded_at: str | _NowType,
     actor: str,
-    before_dispatch: Callable[[], None] | None = None,
+    before_dispatch: Callable[[], Any] | None = None,
     attempt_id: str | None = None,
     dispatch_timeout_seconds: float | None = None,
     approval_verifier: ApprovalVerifier | None = None,
@@ -231,10 +234,12 @@ def execute_mission_once(
     # An approval bound to one concrete action is single-use: it is consumed
     # atomically (under the audit store lock) by the first dispatch-started event
     # that references it. Contract-only approvals remain reusable.
-    consumes_approval = (
-        isinstance(receipt, MissionApprovalReceipt) and receipt.action_digest is not None
-    )
-    approval_event_id = receipt.event_id if consumes_approval else None
+    if isinstance(receipt, MissionApprovalReceipt) and receipt.action_digest is not None:
+        consumes_approval = True
+        approval_event_id = receipt.event_id
+    else:
+        consumes_approval = False
+        approval_event_id = None
 
     cost, cost_reason = _attempt_cost(integration)
     if cost_reason:
@@ -363,7 +368,7 @@ def execute_mission_idempotently(
     *,
     idempotency_key: str,
     event_id_prefix: str,
-    recorded_at: str,
+    recorded_at: str | _NowType,
     actor: str,
     dispatch_timeout_seconds: float | None = None,
     approval_verifier: ApprovalVerifier | None = None,

@@ -260,6 +260,25 @@ describe("WriteControl terminal operation retention", () => {
   });
 
 
+  it("counts UTF-8 bytes rather than Unicode characters in logical storage estimates", async () => {
+    const stub = stubFor("retention-storage-utf8-byte-count");
+    const gitMetadata = JSON.stringify({ commitMessage: "🧪" });
+    await runInDurableObject(stub, async (instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO write_operations
+          (key_hash, request_hash, status, phase, created_at, updated_at, git_metadata)
+         VALUES (?, ?, 'SUCCEEDED', 'PR_CREATED', ?, ?, ?)`,
+        "a".repeat(64), "b".repeat(64), NOW, NOW, gitMetadata,
+      );
+      const stats = instance.getStorageStats();
+      const expectedBytes = 64 + 64 + "SUCCEEDED".length + "PR_CREATED".length + 32
+        + new TextEncoder().encode(gitMetadata).byteLength;
+      expect(stats.operationLogicalBytes).toBe(expectedBytes);
+      expect(stats.admissionLogicalBytes).toBe(0);
+    });
+  });
+
+
   it("counts stale IN_PROGRESS rows toward the unresolved safety ceiling", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(NOW);

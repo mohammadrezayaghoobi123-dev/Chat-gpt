@@ -223,7 +223,7 @@ describe("WriteControl terminal operation retention", () => {
     }
   });
 
-  it("reports SQLite allocation and operation-state counts after admission", async () => {
+  it("reports logical payload estimates and operation-state counts after admission", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(NOW);
     try {
@@ -233,7 +233,9 @@ describe("WriteControl terminal operation retention", () => {
           keyHash: "c".repeat(64), requestHash: "d".repeat(64),
           windowMs: 60_000, limit: 5,
         });
-        expect(result.storageStats).toEqual(expect.objectContaining({
+        const stats = instance.getStorageStats();
+        expect(result.storageStats).toEqual(expect.objectContaining({ unknownCount: 0, inProgressCount: 1, unresolvedCount: 1 }));
+        expect(stats).toEqual(expect.objectContaining({
           unknownCount: 0,
           inProgressCount: 1,
           terminalCount: 0,
@@ -247,6 +249,8 @@ describe("WriteControl terminal operation retention", () => {
           logicalPayloadBytes: expect.any(Number),
           logicalPayloadUtilization: expect.any(Number),
           storageLimitBytes: 1_073_741_824,
+          physicalStorageBytes: null,
+          storageMeasurement: "logical_payload_estimate_not_physical_sqlite_allocation",
         }));
       });
     } finally {

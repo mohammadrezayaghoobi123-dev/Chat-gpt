@@ -59,12 +59,18 @@ test("GITHUB_TOKEN absent: read is sent unauthenticated and a GitHub 404 is expl
         const b = await r.json();
         assert.ok(b.result?.isError, JSON.stringify({status:r.status,body:b,tool,statusCode:status}));
         const text = b.result.content[0].text;
-        assert.match(text, /GITHUB_TOKEN/);
         assert.match(text, new RegExp("GitHub API " + status));
+        if (status === 403) {
+          assert.match(text, /unauthenticated public request was rejected/i);
+          assert.doesNotMatch(text, /GITHUB_TOKEN is not configured/);
+        } else {
+          assert.match(text, /GITHUB_TOKEN is not configured/);
+        }
         assert.doesNotMatch(text, new RegExp(SECRET));
       }
       assert.ok(calls.length >= 1);
-      for (const c of calls) assert.equal(c[1].headers.authorization, undefined);
+    assert.equal(calls[0][1].headers["user-agent"], "cloud-engineering-connector/0.1.0");
+      for (const c of calls) { assert.equal(c[1].headers.authorization, undefined); assert.equal(c[1].headers["user-agent"], "cloud-engineering-connector/0.1.0"); }
     });
   }
 });
@@ -98,6 +104,7 @@ test("GITHUB_TOKEN invalid: GitHub's 401 surfaces as an error without leaking ei
     assert.ok(!text.includes(GH) && !text.includes(SECRET));
     assert.equal(calls.length, 1);
     assert.equal(calls[0][1].headers.authorization, "Bearer " + GH); // sent only to GitHub
+    assert.equal(calls[0][1].headers["user-agent"], "cloud-engineering-connector/0.1.0");
   });
 });
 

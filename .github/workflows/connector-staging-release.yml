@@ -101,6 +101,15 @@ jobs:
           assert.ok(bindings.get("WRITE_CONTROL")?.namespace_id, "Staging WRITE_CONTROL namespace is required");
           assert.ok(bindings.get("MCP_RATE_LIMITER")?.namespace_id, "Staging MCP_RATE_LIMITER namespace is required");
 
+          const observability = settings.observability;
+          assert.equal(observability?.enabled, true, "Staging Worker observability must be enabled");
+          assert.equal(observability?.redact_query_string, true, "Staging observability must redact query strings");
+          assert.equal(observability?.head_sampling_rate, 1, "Staging observability must sample 100% of custom logs");
+          assert.equal(observability?.logs?.enabled, true, "Staging persistent Worker logs must be enabled");
+          assert.equal(observability?.logs?.persist, true, "Staging Worker logs must be persisted");
+          assert.equal(observability?.logs?.head_sampling_rate, 1, "Staging persistent logs must sample 100%");
+          assert.equal(observability?.logs?.invocation_logs, false, "Staging invocation logs must remain disabled to reduce sensitive-data exposure");
+
           const active = deploymentData.deployments?.[0];
           const previous = active?.versions?.find((version) => version.percentage === 100) || active?.versions?.[0];
           assert.ok(previous?.version_id, "Could not identify the current 100% Staging version for rollback");

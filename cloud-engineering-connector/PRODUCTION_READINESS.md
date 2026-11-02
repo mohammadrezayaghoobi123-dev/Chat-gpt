@@ -9,7 +9,7 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 
 | Gate | Latest evidence | Status |
 |---|---|---|
-| Node test suite | 184 passed, 0 failed | PASS |
+| Node test suite | 196 passed, 0 failed | PASS |
 | Vitest Durable Object suite | 41 passed, 0 failed | PASS |
 | npm dependency audit | 0 reported vulnerabilities | PASS |
 | JavaScript syntax and Wrangler configuration checks | CI job passed | PASS |
@@ -24,10 +24,10 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 ### Latest exact-head CI evidence — 2026-11-02
 
 - Integrated release candidate PR: [#129](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/129), branch `assistant/unified-product-release-candidate-2026-11-02`.
-- Last application-code SHA with a fully green CI matrix: `746c482b1e5aa6d2ab2648a8b7a96eb39981f251`.
-- The current PR head `514995f92eec1c814fcb82de380ca11a827bfeac` is a documentation-only runbook reconciliation commit; CI was triggered again for this exact documentation head. No application code changed after the green code SHA above.
+- Exact application-code SHA with a fully green CI matrix: `b23eec24e5f2df74e778451d89da4096c75c2dfe`.
+- The release-approval guard is included in this SHA. A subsequent runbook-only update will trigger Connector CI again; no Worker deployment is part of this documentation change.
 - Current `main` head: `f2cae91de818385ec48daafc43c621b9e2cc0675`; the candidate compares as 939 commits ahead and 0 behind. No commit was pushed to `main`.
-- Connector CI: PASS; 184 Node tests and 41 Durable Object tests passed; npm audit reported 0 vulnerabilities; Wrangler configuration checks passed.
+- Connector CI: PASS; **196 Node tests and 41 Durable Object tests** passed; npm audit reported 0 vulnerabilities; Wrangler configuration checks passed.
 - Cloud Agent CI: PASS.
 - Master Brain MCP CI: PASS.
 - Master Brain MVP: PASS; 1414 tests passed, 3 skipped. Dedicated privileged kernel enforcement: **8/8 passed**, including seccomp, process-flood, aggregate-memory-flood, disk-flood/ENOSPC and kernel-limit recording.
@@ -36,7 +36,8 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 - Full-history Gitleaks: PASS.
 - Static analysis is **not clean**: the informational workflow reported 37 Ruff F/E findings and 50 Mypy diagnostics. It uses `|| true`, so a green workflow means the analyzers completed, not that the code passed lint/type checks. Treat this as tracked quality debt; do not report Static Clean.
 - All checks on the exact candidate are complete and successful except `post-deploy-staging-smoke`, intentionally skipped because this candidate is not deployed. CI green is not live Staging acceptance.
-- The latest code change is test-only: the process-flood test now asserts the runner's fail-closed cgroup-event result rather than assuming the killed child flushed buffered stdout.
+- The process-flood regression test asserts the runner's fail-closed cgroup-event result rather than assuming the killed child flushed buffered stdout.
+- Release governance is enforced in both release workflows: Staging requires an open, non-draft PR whose head SHA is exactly the release SHA and whose base is the approved integration branch; Production requires a merged PR to `main` whose merge commit equals the release SHA. Both require an independent APPROVED review on the PR head, reject self-approval and stale approvals, and block an outstanding `CHANGES_REQUESTED` review. The read-only GitHub token is injected only into the approval step.
 
 PR: [#129](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/129)  
 Base: `integration/unify-main-and-integrated-2026-11-02`  
@@ -77,9 +78,9 @@ Keep `GITHUB_TOKEN` separate for the authenticated draft-PR operation. Review an
 
 ## 4. Controlled Staging deployment
 
-The repository includes `.github/workflows/connector-staging-release.yml`. It is intentionally triggered only by a push to a branch named `integration/staging-release-<full-40-character-commit-sha>`. The branch suffix must equal the pushed commit SHA, so the deployed candidate is immutable. The job uses the protected GitHub Actions `staging` environment, runs the full test/audit/Wrangler dry-run gates, verifies the required Cloudflare Worker secret binding names without reading values, captures the active immutable version ID, deploys only `chat-gpt111-staging`, and executes `test/staging-smoke.mjs`. The smoke script validates that `GITHUB_REF_NAME` is exactly `integration/staging-release-${GITHUB_SHA}` and pins GitHub file/architecture reads to that immutable commit. If live acceptance fails after deployment, it attempts to restore the captured 100% version through the Cloudflare deployment API and checks Staging liveness.
+The repository includes `.github/workflows/connector-staging-release.yml`. It is intentionally triggered only by a push to a branch named `integration/staging-release-<full-40-character-commit-sha>`. The branch suffix must equal the pushed commit SHA, so the deployed candidate is immutable. The job uses the GitHub Actions `staging` environment, runs the immutable-SHA and independent-review guard before dependency installation, then runs the full test/audit/Wrangler dry-run gates, verifies the required Cloudflare Worker secret binding names without reading values, captures the active immutable version ID, deploys only `chat-gpt111-staging`, and executes `test/staging-smoke.mjs`. The review guard requires an open, non-draft PR whose exact head SHA is the release SHA, base is `integration/unify-main-and-integrated-2026-11-02`, and latest independent review is APPROVED on that exact head. Self-approval, stale approval, or an outstanding change request blocks deployment. `RELEASE_GITHUB_TOKEN` has only `pull-requests: read` and is injected only into the approval step. The smoke script validates that `GITHUB_REF_NAME` is exactly `integration/staging-release-${GITHUB_SHA}` and pins GitHub file/architecture reads to that immutable commit. If live acceptance fails after deployment, it attempts to restore the captured 100% version through the Cloudflare deployment API and checks Staging liveness.
 
-Required GitHub Actions configuration: environment `staging` must contain secret `CLOUDFLARE_API_TOKEN` with Workers Scripts Read/Edit permissions and variable `CLOUDFLARE_ACCOUNT_ID`. Configure required reviewers for the environment if available. The Cloudflare Worker must already contain the Worker secrets listed above; the workflow checks only binding names/types and never retrieves secret values. A missing `GITHUB_READONLY_TOKEN` fails preflight before deployment.
+Required GitHub Actions configuration: environment `staging` must contain secret `CLOUDFLARE_API_TOKEN` with Workers Scripts Read/Edit permissions and variable `CLOUDFLARE_ACCOUNT_ID`. Configure required reviewers for the environment. The repository's independent PR-review guard is mandatory even if environment protection is unavailable. The Cloudflare Worker must already contain the Worker secrets listed above; the workflow checks only binding names/types and never retrieves secret values. A missing `GITHUB_READONLY_TOKEN` fails preflight before deployment.
 
 To release a reviewed candidate, create a branch from the exact approved 40-character SHA using the naming convention `integration/staging-release-<SHA>`. Do not reuse an old release branch or change its commit after the release run begins.
 
@@ -144,16 +145,16 @@ The active integrated candidate is PR #129, branch `assistant/unified-product-re
 - PR #129 contains the unified Master Brain/Python/CTP history and the Cloud Engineering Connector / Cloud Agent feature history through a real merge commit. The merge topology preserves both parent histories; do not squash or rewrite it.
 - PR #127 is a feature-history/audit reference incorporated into PR #129; do not merge it separately to `main`.
 - The last code-changing candidate SHA is `746c482b1e5aa6d2ab2648a8b7a96eb39981f251`; the current documentation-only PR head is `514995f92eec1c814fcb82de380ca11a827bfeac`.
-- Current `main` remains `f2cae91de818385ec48daafc43c621b9e2cc0675`; GitHub compare reports the candidate as 939 commits ahead and 0 behind.
-- PR #129 is Draft, mergeable, and has zero submitted reviews at the latest check.
+- Current `main` remains `f2cae91de818385ec48daafc43c621b9e2cc0675`; GitHub compare reports the candidate as 945 commits ahead and 0 behind.
+- PR #129 is Draft, mergeable, and has zero submitted reviews at the latest check. The new Staging release guard will reject it until it is marked ready and an independent reviewer approves the exact current head.
 - Keep all changes on the candidate branch. Do not merge to `main`, close superseded audit PRs, or rewrite history until independent review, governance controls, and release gates are satisfied.
 ## 7. Production release gates
 
 Production remains **NO-GO** until every mandatory item has current evidence:
 
-- PR #129 receives an independent approval from a reviewer other than the PR author. It is currently Draft with zero submitted reviews.
+- PR #129 receives an independent approval from a reviewer other than the PR author. It is currently Draft with zero submitted reviews. The Staging workflow enforces this on the exact PR head; the Production workflow additionally requires a merged PR to `main` with an exact merge-commit match.
 - GitHub governance is enforced: a `main` ruleset must require PR reviews and the relevant status checks, prohibit force pushes and deletion, and restrict direct pushes. The last live governance audit reported `main.protected=false` and an empty repository rulesets list. No merge is allowed until this is corrected and verified.
-- GitHub Actions `staging` and `production` environments contain the correct Cloudflare API token secret and account ID variable. Production must require a human approval gate.
+- GitHub Actions `staging` and `production` environments contain the correct Cloudflare API token secret and account ID variable. Both environments must require human approval; the independent PR-review guard is enforced in code.
 - Cloudflare account MFA enforcement is enabled and independently verified. The last account-level read reported `enforce_twofactor=false`; re-check before release.
 - Both Workers have `GITHUB_READONLY_TOKEN` as a secret binding; Production also has separate write credential and valid auth/origin secrets.
 - Production `PUBLIC_READ_ONLY` is a plain-text Worker variable with exact value `true`, not a secret binding.
@@ -182,7 +183,7 @@ The Durable Object terminal-operation retention policy is 30 days. Unresolved UN
 2. Both Cloudflare Workers lack `GITHUB_READONLY_TOKEN`; Staging preflight will block.
 3. Production `PUBLIC_READ_ONLY` is currently a secret-text binding, not a verifiable plain-text `true`.
 4. Production has no `WRITE_CONTROL` binding/namespace; the Production migration has not been applied.
-5. The latest active Staging deployment is the rollback version, not PR #129. Its last verified `/readyz` response was HTTP 404 and its old MCP tool annotations were null.
+5. The latest active Staging deployment is the rollback version, not PR #129. The new release guard also prevents a Draft or unapproved PR from being deployed. Its last verified `/readyz` response was HTTP 404 and its old MCP tool annotations were null.
 6. No independent PR #129 review exists; PR #129 remains Draft.
 7. GitHub `main` protection/ruleset was previously observed absent. Required review/status enforcement must be established before merge.
 8. Cloudflare account MFA enforcement was previously observed disabled; re-check and enable.

@@ -47,4 +47,7 @@ jobs:
               path, line, col, rest = l.split(":", 3)
               print(f"::warning file={path},line={line},col={col}::{rest.strip()[:300]}")
           print(f"::notice::mypy errors: {len(hits)}")
+          print("----- BEGIN MYPY DIAGNOSTICS -----")
+          print("\\n".join(hits))
+          print("----- END MYPY DIAGNOSTICS -----")
           PY

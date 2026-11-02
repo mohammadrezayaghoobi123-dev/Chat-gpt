@@ -32,6 +32,11 @@ test("Wrangler preserves existing dashboard variables and encrypted secrets", ()
   assert.doesNotMatch(config, /^SERVICE_MODE\s*=/m);
 });
 
+test("Wrangler config contains no unsupported tags fields", () => {
+  assert.doesNotMatch(config, /^tags\\s*=/m);
+  assert.doesNotMatch(staging, /^tags\\s*=/m);
+});
+
 test("Production and Staging enable persisted custom logs without invocation logs", () => {
   for (const section of [
     config.slice(0, stagingStart >= 0 ? stagingStart : config.length),

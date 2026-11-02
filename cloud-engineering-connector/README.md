@@ -76,3 +76,50 @@ Cloudflare Workers has a free tier subject to current quotas and account eligibi
 4. Expand repository support only with per-repository authorization and negative tests.
 5. Add isolated cloud test execution only after defining resource limits, network policy, dependency caching, and secret isolation.
 6. Add source retrieval with citations and persistent project memory after privacy, retention, and tenant isolation are designed.
+
+
+## Durable write control (draft integration)
+
+The only write-capable tool, `create_change_pr`, uses a SQLite-backed Durable Object to serialize write admission across the shared GitHub credential. It enforces five distinct operations per rolling 60-second window and requires a client-generated idempotency key. Replays with the same key and request fingerprint return the recorded operation; a different request under the same key is rejected.
+
+The operation journal records phase transitions and lease generations. Ambiguous immutable Git Tree/Commit requests are replayed only with the exact persisted payload and read-back verification. Mutable branch and PR creation outcomes are reconciled through read-only checks; uncertain outcomes remain quarantined as `UNKNOWN`. No exactly-once guarantee across GitHub and SQLite is claimed.
+
+Terminal operation records and idempotency tombstones are retained for 30 days from their last state transition. Admission atomically prunes only SUCCEEDED/FAILED rows strictly older than 30 days; a row exactly at the 30-day boundary remains replayable. IN_PROGRESS and UNKNOWN rows are never TTL-pruned because external side-effect outcomes may remain ambiguous. The idempotency guarantee is therefore bounded to the 30-day terminal-retention window; after expiry, reuse of an old key may be treated as a new operation. At the fixed five-admissions-per-minute ceiling, this bounds the terminal journal to approximately 216,000 records per environment under sustained maximum throughput. The unresolved ledger is capped at 1,000 combined UNKNOWN and IN_PROGRESS rows; once saturated, new writes fail closed with an actionable reconciliation error, while a known idempotent replay remains available. No UNKNOWN or IN_PROGRESS row is TTL-deleted. Each admission emits a structured `write_control_storage` log with status counts, oldest unresolved timestamp, operation/admission row counts, and SQL-aggregated logical payload estimates. The aggregate queries avoid loading the full ledger into Worker memory on the hot admission path. The estimate excludes SQLite indexes, page overhead, internal metadata, WAL/page allocation, and Cloudflare billing/accounting details; it is a growth indicator, not a physical quota measurement. Physical Durable Object storage usage must be monitored independently in Cloudflare. Operators must alert on unresolved backlog and logical-payload growth, and independently monitor Cloudflare's actual Durable Object storage usage and maintain a backup/compaction plan. The Wrangler source declares separate Durable Object bindings and SQLite migrations for Production and Staging. The currently deployed versions have not yet applied the WRITE_CONTROL binding or migration; a Staging deployment and live verification are required. Wrangler dry-runs do not deploy these migrations.
+
+
+## Cloudflare environment parity and secret preservation
+
+The Worker is deployed as `chat-gpt111` (Production) and `chat-gpt111-staging` (Staging). The Wrangler source configuration defines the same compatibility date, 60 requests/minute rate-limit policy, Durable Object class/binding name, SQLite migration, and persisted custom-log policy for both environments. Their rate-limit namespace IDs and Durable Object namespaces are intentionally separate so test traffic and state cannot affect Production. The currently active Cloudflare versions have drift: the Staging compatibility date is older, and neither deployed version currently exposes the WRITE_CONTROL binding or its migration.
+
+`keep_vars = true` is intentional: the controlled Staging deployment must preserve existing dashboard-managed plain-text variables. Existing encrypted secrets are not deleted by Wrangler deployments. Do not upload, copy, rotate, or print secret values as part of environment parity work. Secret presence and binding names may be audited; values and equality must not be inferred from metadata.
+
+The current live environments contain historical dashboard bindings that differ in type: `PUBLIC_READ_ONLY` and `SERVICE_MODE` are secret bindings in Production but plain-text bindings in Staging. `SERVICE_MODE` is not read by the current Worker code. These bindings are intentionally preserved rather than converted without reviewing their hidden values. `PUBLIC_READ_ONLY` behavior must be verified through the authenticated/unauthenticated Staging smoke tests; no Production secret is changed.
+
+The next Wrangler deployment will enable Workers Logs for both environments with custom log persistence, query-string redaction, and invocation logs disabled. This is intended to capture explicit storage telemetry without persisting the full invocation request/response log. Live settings currently report observability as unset; confirm the new setting after Staging deployment. Cloudflare Workers Logs retention is limited; use it as deployment evidence, not as a durable audit archive.
+
+
+The configured 1 GiB planning ceiling is deliberately conservative for the Workers Free per-object SQLite limit; Cloudflare documents 1 GiB per SQLite-backed Durable Object on Free and 10 GiB on Paid. The runtime does not infer the account plan. Keep the lower ceiling until the account tier and actual namespace usage are verified in Cloudflare.
+
+
+Health probes: `GET /healthz` is a liveness endpoint and stays independent of credentials and Durable Object availability. `GET /readyz` performs a lightweight `WRITE_CONTROL.ping()` probe and returns 503 until the Durable Object binding/schema is available. The readiness probe does not scan the full operation ledger.
+
+
+## Architecture analysis tool
+
+The read-only `architecture_analyze` tool accepts 1–8 explicit repository paths and applies bounded deterministic checks for unbounded `fetch` calls and dynamic code execution primitives. Findings include exact file/line evidence, redacted snippets, rationale, and remediation guidance. Results are capped at 100 findings. Every finding is marked `not_run`: this is a triage aid, not semantic analysis, taint analysis, exploitability proof, or a substitute for tests and human review.
+
+## Secure MCP console and client compatibility
+
+`GET /` serves a same-origin engineering console with a nonce-based Content Security Policy, no browser storage, and no embedded credentials. `/healthz` is liveness only; `/readyz` performs a lightweight Durable Object `ping()` and returns 503 until the storage binding/schema is ready. MCP protocol discovery remains a separate authenticated or explicitly public-read-only request.
+
+Every advertised tool carries a title and explicit `readOnlyHint` and `destructiveHint`. The public read-only allowlist includes `project_inspect`, `read_project_file`, `engineering_standards`, `architecture_review`, and `architecture_analyze`. `create_change_pr` is never advertised anonymously.
+
+Claude Free supports one custom remote connector. Add the HTTPS endpoint in **Customize → Connectors → Add custom connector**. For a public-read-only Staging endpoint, no client bearer token is needed; the Worker authenticates its GitHub read calls using its server-side read-only token. Actual Claude-account acceptance still requires connecting the endpoint in the user's Claude account and executing a read-only repository inspection.
+
+## Least-privilege GitHub credentials
+
+- `GITHUB_READONLY_TOKEN`: required for anonymous public read-only repository access. Use a fine-grained PAT restricted to `mohammadrezayaghoobi123-dev/Chat-gpt` with **Metadata: Read-only** and **Contents: Read-only** only. This token is used only when `READ_ONLY_GITHUB=true`; upstream methods other than GET are rejected.
+- `GITHUB_TOKEN`: separate credential reserved for authenticated draft-PR creation. Grant only the repository permissions needed for Contents and Pull requests. It is explicitly removed from the environment used by anonymous public read-only calls.
+- `MCP_AUTH_TOKEN`: high-entropy bearer credential for authenticated MCP operations. Keep it in Cloudflare Worker secrets and in the Claude connector's encrypted fixed-header field only when authenticated tools are required.
+
+Missing `GITHUB_READONLY_TOKEN` fails closed before a GitHub API request. The Worker does not fall back to an unauthenticated shared-egress quota or the write-capable `GITHUB_TOKEN`. Never paste any credential into chat, source files, tests, logs, or PR descriptions.

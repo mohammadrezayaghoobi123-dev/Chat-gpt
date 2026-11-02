@@ -1,0 +1,34 @@
+# Node / Workers build artifacts
+node_modules/
+.npm/
+.wrangler/
+dist/
+coverage/
+
+# Local environment and Cloudflare credentials
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+*.log
+
+# Local OpenClaw state (never commit runtime credentials or memory)
+.openclaw/
+.openclaw-*/
+
+# Private key material and infrastructure state
+*.pem
+*.key
+*.p12
+*.pfx
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/*.local.json

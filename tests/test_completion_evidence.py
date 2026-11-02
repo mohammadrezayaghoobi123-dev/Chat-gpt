@@ -214,8 +214,7 @@ class RegisteredCompletionEvidenceTests(CompletionEvidenceTests):
     """Adversarial tests for the trusted-registry entry point."""
 
     def _registry(self, *, enabled=True, provider_id="provider-x", evidence_type="provider_operation_receipt", version="1"):
-        from master_brain.completion_evidence import ProviderVerificationResult
-        from master_brain.verifier_registry import ConfiguredVerifierRegistry, VerifierDescriptor
+                from master_brain.verifier_registry import ConfiguredVerifierRegistry, VerifierDescriptor
 
         return ConfiguredVerifierRegistry([VerifierDescriptor(
             verifier_id="provider-x-receipt-verifier",
@@ -521,7 +520,6 @@ class AdditionalAdversarialCompletionEvidenceTests(CompletionEvidenceTests):
         self.assertEqual(called, [])
 
     def test_invalid_provider_decision_is_rejected_without_mutating_execution_record(self):
-        from dataclasses import replace
 
         before = self.execution
         for decision in (None, False, 0, 1, "verified", {"verified": True}):

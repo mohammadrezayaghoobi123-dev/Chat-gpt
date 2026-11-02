@@ -45,8 +45,7 @@ class AdminView(unittest.TestCase):
         self.assertIs(rows["user:boss"]["disabled"], False)
         self.assertEqual(set(rows["user:boss"]), {"subject", "roles", "disabled", "created_at"})
         self.assertEqual([r["subject"] for r in body["accounts"]], sorted(rows))
-        import re
-        for r in rows.values():
+                for r in rows.values():
             self.assertRegex(r["created_at"], r"^\d{4}-\d\d-\d\dT")
         text = json.dumps(body)
         for secret in ("password_record", "scrypt", PW, "token_hash"):

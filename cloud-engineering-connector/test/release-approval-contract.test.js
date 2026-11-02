@@ -99,7 +99,7 @@ function extractPreflightScript(source, stepName) {
   return lines.slice(heredocStart + 1, heredocEnd).map((line) => line.replace(/^ {10}/, "")).join("\n");
 }
 
-function runPreflightWithMissingObservability(source, stepName, production) {
+function runPreflightWithMissingObservability(source, stepName, production, expectFailure = true, legacyPublicReadOnlySecret = false) {
   const script = extractPreflightScript(source, stepName);
   const stagingSettings = {
     bindings: [
@@ -119,7 +119,7 @@ function runPreflightWithMissingObservability(source, stepName, production) {
       { name: "GITHUB_TOKEN", type: "secret_text" },
       { name: "MCP_AUTH_TOKEN", type: "secret_text" },
       { name: "MCP_ALLOWED_ORIGINS", type: "secret_text" },
-      { name: "PUBLIC_READ_ONLY", type: "plain_text", text: "true" },
+      { name: "PUBLIC_READ_ONLY", type: legacyPublicReadOnlySecret ? "secret_text" : "plain_text", text: "true" },
       { name: "MCP_RATE_LIMITER", type: "ratelimit", namespace_id: "production-rate" },
       { name: "WRITE_CONTROL", type: "durable_object_namespace", namespace_id: "production-write" },
     ],
@@ -149,16 +149,20 @@ function runPreflightWithMissingObservability(source, stepName, production) {
         GITHUB_OUTPUT: output,
       },
     });
-    assert.notEqual(
-      result.status,
-      0,
-      (production ? "Production" : "Staging") + " preflight must reject missing observability configuration",
-    );
-    assert.match(
-      result.stderr + result.stdout,
-      /observability|persistent logs|invocation logs|redact_query_string/i,
-      "preflight must explain the observability gate that blocked release",
-    );
+    if (expectFailure) {
+      assert.notEqual(
+        result.status,
+        0,
+        (production ? "Production" : "Staging") + " verification must reject missing observability configuration",
+      );
+      assert.match(
+        result.stderr + result.stdout,
+        /observability|persistent logs|invocation logs|redact_query_string/i,
+        "verification must explain the observability gate that blocked release",
+      );
+    } else {
+      assert.equal(result.status, 0, "Production preflight must allow deployment to remediate legacy dashboard settings; post-deploy verification enforces the final state: " + result.stderr + result.stdout);
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -172,4 +176,15 @@ test("Staging release preflight blocks when secure persistent observability is a
 test("Production post-deploy verification blocks when secure persistent observability is absent", () => {
   const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
   runPreflightWithMissingObservability(source, "Verify Production Durable Object namespace isolation", true);
+});
+
+test("Production preflight permits migration from legacy dashboard settings before post-deploy verification", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
+  runPreflightWithMissingObservability(
+    source,
+    "Preflight Production credentials, namespace isolation, and rollback target",
+    true,
+    false,
+    true,
+  );
 });

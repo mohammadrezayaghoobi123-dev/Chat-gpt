@@ -15,7 +15,7 @@ import json
 from typing import Any
 
 from master_brain.approval_signing import (
-    ApprovalSigner, ApprovalVerifier, SIGNATURE_FIELDS, attach_external_signature,
+    ApprovalSigner, ApprovalVerifier, attach_external_signature,
     build_signing_message, sign_approval_payload, verify_approval_event,
 )
 from master_brain.audit_store import NOW, AuditStore, AuditStoreError

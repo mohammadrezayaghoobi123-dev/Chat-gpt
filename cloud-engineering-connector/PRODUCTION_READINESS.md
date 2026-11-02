@@ -109,9 +109,22 @@ The Cloudflare API was read directly on 2026-11-02. This inspection did not chan
 
 The rate-limit namespaces are distinct. The Staging Durable Object namespace exists and is attached to the Staging Worker. No Production `WRITE_CONTROL` namespace appears in the current Worker settings or account namespace inventory. Production preflight must therefore continue to block until its migration creates the namespace and post-deploy verification confirms isolation.
 
-The most recent runtime observation remains tied to the same active Staging deployment/version above: `GET /healthz` returned HTTP 200, `GET /readyz` returned HTTP 404, and legacy `tools/list` returned five read-only tools with missing `annotations`. The old Worker negotiated MCP `2025-06-18` and `2025-11-25`, but this does not establish acceptance of the PR #129 candidate or a real Claude-account connection. A fresh runtime probe could not be completed during this audit because the browser execution service rejected new jobs at its concurrency limit; no runtime success is claimed for the current candidate.
+Fresh live runtime probes were completed on 2026-11-02 against the active deployments above; these are rollback versions, not the PR #129 candidate.
 
-A previous unauthenticated `project_inspect` call returned a GitHub API rate-limit error (HTTP 403). This is consistent with the missing dedicated read-only token. A successful isolated file read does not establish reliable GitHub integration.
+**Staging runtime**
+- `GET /healthz`: HTTP 200; reports `status=ok`, Cloudflare Workers execution, `laptop_dependency=false`, Durable Objects and MCP status.
+- `GET /readyz`: HTTP 404 (`not_found`).
+- MCP `initialize`: HTTP 200 for both protocol versions `2025-06-18` and `2025-11-25`.
+- MCP `tools/list`: HTTP 200, five tools; every tool has `annotations=null`. The anonymous tool list correctly omits authenticated `create_change_pr`.
+- Unauthenticated `project_inspect`: JSON-RPC HTTP 200 with `isError=true`; underlying GitHub API returned HTTP 403 rate limit exceeded. This is consistent with the missing dedicated read-only token.
+
+**Production runtime**
+- `GET /healthz`: HTTP 200, but the legacy response exposes `github_configured=true` and `auth_configured=true` booleans. This is a configuration-presence disclosure (not secret-value disclosure) and differs from the candidate's tested health response, which does not disclose credential configuration.
+- `GET /readyz`: HTTP 404 (`not_found`).
+- MCP `initialize` and `tools/list` without a bearer token: HTTP 401 `unauthorized`. A probe using the Worker hostname as the Origin returned HTTP 403 `forbidden_origin`; the actual Claude/ChatGPT client origins must be validated against the configured allowlist.
+- No valid bearer token was used or retrieved, and no authenticated Production tool call was attempted.
+
+These probes establish protocol reachability of legacy Workers only. They do not establish readiness, GitHub integration, annotation compliance, current-candidate deployment, or actual Claude-account acceptance. A successful `initialize` or `tools/list` alone is not end-to-end acceptance.
 
 **Conclusion:** Staging is a rollback version, not the candidate. Production has a non-verifiable public-read-only flag and no write-control namespace. Both Workers lack the dedicated GitHub read-only credential. No deployment or promotion is authorized.
 ## 5. Staging acceptance sequence

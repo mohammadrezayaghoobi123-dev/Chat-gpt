@@ -7,12 +7,12 @@ export function createWriteControlBinding() {
     async ping() { events.push({ type: "ping" }); return { ok: true, schemaVersion: 1 }; },
     async getAdmissionStats() { events.push({ type: "get-admission-stats" }); const stats = storageStats(); return { unknownCount: stats.unknownCount, inProgressCount: 0, unresolvedCount: stats.unresolvedCount, retentionMs: stats.retentionMs }; },
     async admitWrite(input) {
-      if (backlogFull) return { admitted: false, reason: "UNKNOWN_BACKLOG_FULL", storageStats: storageStats() };
       const current = operations.get(input.keyHash);
       if (current) {
         if (current.requestHash !== input.requestHash) return { admitted: false, reason: "IDEMPOTENCY_CONFLICT" };
         return { admitted: true, replay: true, operation: { ...current, gitMetadata: { ...current.gitMetadata } }, storageStats: storageStats() };
       }
+      if (backlogFull) return { admitted: false, reason: "UNKNOWN_BACKLOG_FULL", storageStats: storageStats() };
       const operation = {
         keyHash: input.keyHash, requestHash: input.requestHash, status: "IN_PROGRESS",
         phase: "RESERVED", leaseGeneration: 1, createdAt: input.now, updatedAt: input.now,

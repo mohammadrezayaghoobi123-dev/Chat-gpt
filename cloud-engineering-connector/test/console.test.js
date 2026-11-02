@@ -12,6 +12,7 @@ function mcpRequest(origin, token = "console-test-token-0123456789abcdef") {
       authorization: "Bearer " + token,
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
+      "cf-connecting-ip": "203.0.113.10",
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
@@ -75,7 +76,7 @@ test("public read-only mode remains usable when a server bearer secret is config
     },
     body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
   }), {
-    MCP_AUTH_TOKEN: "server-secret-not-sent",
+    MCP_AUTH_TOKEN: "server-secret-not-sent-0123456789abcdef",
     PUBLIC_READ_ONLY: "true",
     MCP_RATE_LIMITER: { limit: async () => ({ success: true }) },
   });
@@ -101,7 +102,7 @@ test("public read-only mode still rate limits anonymous same-origin console call
     },
     body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} }),
   }), {
-    MCP_AUTH_TOKEN: "server-secret-not-sent",
+    MCP_AUTH_TOKEN: "server-secret-not-sent-0123456789abcdef",
     PUBLIC_READ_ONLY: "true",
     MCP_RATE_LIMITER: { limit: async (input) => { key = input.key; return { success: false }; } },
   });

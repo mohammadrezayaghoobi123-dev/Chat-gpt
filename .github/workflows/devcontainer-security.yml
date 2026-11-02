@@ -55,5 +55,7 @@ jobs:
           assert "chmod 600 /tmp/openclaw/gateway-codespace.log" in startup
           print("PASS: unprivileged Dev Container, Tailscale userspace, and private state/log permissions")
           PY
+      - name: Test private Tailscale log permissions
+        run: bash .devcontainer/test-permissions.sh
       - name: Validate Dev Container shell scripts
         run: bash -n .devcontainer/*.sh

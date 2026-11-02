@@ -49,8 +49,7 @@ async function scan(){
    $('assessment').textContent='این API تاریخچهٔ کامل را در این مرحله بررسی نمی‌کند؛ تعداد تراکنش و موجودی به‌تنهایی وضعیت مالکیت را مشخص نمی‌کنند.';
   }else{
    const [bal,nonce,block]=await Promise.all([rpc(n.rpc,'eth_getBalance',[a,'latest']),rpc(n.rpc,'eth_getTransactionCount',[a,'latest']),rpc(n.rpc,'eth_blockNumber',[])]);
-   const value=Number(BigInt(bal))/1e18;
-   $('metrics').innerHTML=metric('موجودی بومی',fmt(value)+' '+n.symbol)+metric('تراکنش‌های ارسال‌شده (nonce)',fmt(parseInt(nonce,16)))+metric('آخرین شمارهٔ بلاک',fmt(parseInt(block,16)))+metric('شبکه',n.name);
+   $('metrics').innerHTML=metric('موجودی بومی',formatUnits(BigInt(bal).toString(),18)+' '+n.symbol)+metric('تراکنش‌های ارسال‌شده (nonce)',fmt(parseInt(nonce,16)))+metric('آخرین شمارهٔ بلاک',fmt(parseInt(block,16)))+metric('شبکه',n.name);
    $('assessment').textContent='Nonce تعداد تراکنش‌های ارسال‌شده از آدرس را نشان می‌دهد، نه تمام فعالیت‌ها یا توکن‌ها. موجودی بومی صفر به معنی نبود توکن یا NFT نیست.';
   }
   $('explorer').innerHTML='بررسی مستقل در کاوشگر شبکه: <a target="_blank" rel="noopener noreferrer" href="'+n.explorer+encodeURIComponent(a)+'">باز کردن آدرس در '+n.name+'</a>';

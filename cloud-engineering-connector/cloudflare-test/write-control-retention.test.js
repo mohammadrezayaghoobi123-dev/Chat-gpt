@@ -124,4 +124,130 @@ describe("WriteControl terminal operation retention", () => {
       vi.useRealTimers();
     }
   });
+
+  it("expires an old terminal idempotency tombstone before looking up the same key", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    try {
+      const stub = stubFor("retention-expired-idempotency-key");
+      const keyHash = "9".repeat(64);
+      const requestHash = "a".repeat(64);
+      await runInDurableObject(stub, async (instance, state) => {
+        insertOperation(state.storage.sql, {
+          keyHash, requestHash, status: "FAILED", phase: "RESERVED",
+          updatedAt: NOW - RETENTION_MS - 1,
+        });
+        const result = instance.admitWrite({
+          keyHash, requestHash, windowMs: 60_000, limit: 5,
+        });
+        expect(result).toMatchObject({
+          admitted: true, replay: false,
+          operation: { status: "IN_PROGRESS", phase: "RESERVED" },
+        });
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed at the unresolved-operation ceiling and exposes storage counters", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    try {
+      const stub = stubFor("retention-unknown-backlog-cap");
+      await runInDurableObject(stub, async (instance, state) => {
+        const sql = state.storage.sql;
+        for (let i = 0; i < 1_000; i++) {
+          const keyHash = i.toString(16).padStart(64, "0");
+          insertOperation(sql, {
+            keyHash,
+            requestHash: (i + 2_000).toString(16).padStart(64, "0"),
+            status: "UNKNOWN",
+            phase: "PR_DISPATCHED",
+            updatedAt: NOW - RETENTION_MS * 2,
+          });
+        }
+        const result = instance.admitWrite({
+          keyHash: "f".repeat(64), requestHash: "e".repeat(64),
+          windowMs: 60_000, limit: 5,
+        });
+        expect(result).toMatchObject({
+          admitted: false,
+          reason: "UNKNOWN_BACKLOG_FULL",
+          storageStats: {
+            unknownCount: 1_000,
+            unresolvedCount: 1_000,
+            unresolvedLimit: 1_000,
+            unresolvedRemaining: 0,
+          },
+        });
+        expect(sql.exec("SELECT COUNT(*) AS count FROM write_operations").one().count).toBe(1_000);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows a known idempotent replay even when the unresolved backlog is saturated", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    try {
+      const stub = stubFor("retention-unknown-backlog-replay");
+      const replayKey = "a".repeat(64);
+      const replayHash = "b".repeat(64);
+      await runInDurableObject(stub, async (instance, state) => {
+        const sql = state.storage.sql;
+        insertOperation(sql, {
+          keyHash: replayKey, requestHash: replayHash, status: "UNKNOWN",
+          phase: "PR_DISPATCHED", updatedAt: NOW - RETENTION_MS * 2,
+        });
+        for (let i = 1; i < 1_000; i++) {
+          insertOperation(sql, {
+            keyHash: i.toString(16).padStart(64, "0"),
+            requestHash: (i + 2_000).toString(16).padStart(64, "0"),
+            status: "UNKNOWN", phase: "PR_DISPATCHED",
+            updatedAt: NOW - RETENTION_MS * 2,
+          });
+        }
+        const replay = instance.admitWrite({
+          keyHash: replayKey, requestHash: replayHash,
+          windowMs: 60_000, limit: 5,
+        });
+        expect(replay).toMatchObject({
+          admitted: true, replay: true,
+          operation: { status: "UNKNOWN", phase: "PR_DISPATCHED" },
+        });
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports SQLite allocation and operation-state counts after admission", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    try {
+      const stub = stubFor("retention-storage-observability");
+      await runInDurableObject(stub, async (instance) => {
+        const result = instance.admitWrite({
+          keyHash: "c".repeat(64), requestHash: "d".repeat(64),
+          windowMs: 60_000, limit: 5,
+        });
+        expect(result.storageStats).toEqual(expect.objectContaining({
+          unknownCount: 0,
+          inProgressCount: 1,
+          terminalCount: 0,
+          unresolvedCount: 1,
+          unresolvedLimit: 1_000,
+          unresolvedRemaining: 999,
+          sqlitePageCount: expect.any(Number),
+          sqlitePageSize: expect.any(Number),
+          sqliteAllocatedBytes: expect.any(Number),
+        }));
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 });

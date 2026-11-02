@@ -2,9 +2,19 @@ name = "chat-gpt111"
 main = "index.js"
 compatibility_date = "2026-10-23"
 workers_dev = true
+keep_vars = true
+tags = ["cf:service=chat-gpt111"]
 
-[vars]
-SERVICE_MODE = "cloud"
+[observability]
+enabled = true
+head_sampling_rate = 1
+redact_query_string = true
+
+[observability.logs]
+enabled = true
+invocation_logs = false
+head_sampling_rate = 1
+persist = true
 
 [[ratelimits]]
 name = "MCP_RATE_LIMITER"
@@ -22,8 +32,19 @@ class_name = "WriteControl"
 tag = "v1"
 new_sqlite_classes = ["WriteControl"]
 
-[env.staging.vars]
-SERVICE_MODE = "cloud"
+[env.staging]
+tags = ["cf:service=chat-gpt111-staging"]
+
+[env.staging.observability]
+enabled = true
+head_sampling_rate = 1
+redact_query_string = true
+
+[env.staging.observability.logs]
+enabled = true
+invocation_logs = false
+head_sampling_rate = 1
+persist = true
 
 [[env.staging.ratelimits]]
 name = "MCP_RATE_LIMITER"

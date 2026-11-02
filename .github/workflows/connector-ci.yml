@@ -50,8 +50,11 @@ jobs:
       - name: Check JavaScript syntax and Wrangler configurations
         run: npm run check
 
+# This job is an explicit live post-deploy acceptance trigger. PR CI must not probe the
+# previously deployed Worker before the candidate rollout; the Staging release workflow
+# runs its own live smoke immediately after deploying the exact approved candidate.
   post-deploy-staging-smoke:
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/staging-postdeploy-acceptance-')) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/staging-postdeploy-acceptance-')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:

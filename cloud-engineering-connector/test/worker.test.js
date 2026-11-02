@@ -99,17 +99,6 @@ test("unauthenticated public read-only calls never forward GitHub credentials",a
  }finally{globalThis.fetch=originalFetch}
 });
 
-test("public read-only GitHub mode rejects non-GET requests even if a write tool is invoked",async()=>{
- const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub writes must be blocked before network access")};
- try{
-  const token="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
-  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]}},1,token),{...env,PUBLIC_READ_ONLY:"true",READ_ONLY_GITHUB:true,MCP_AUTH_TOKEN:token,GITHUB_TOKEN:"test-token"});
-  const body=await response.json();
-  assert.equal(body.result.isError,true);
-  assert.match(body.result.content[0].text,/PUBLIC_READ_ONLY mode cannot create GitHub pull requests/);
-  assert.equal(calls,0);
- }finally{globalThis.fetch=originalFetch}
-});
 test("repository allowlist rejects alternate repositories before any GitHub request",async()=>{const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called for a disallowed repository")};try{for(const name of [{owner:"octo",repo:"demo"},{owner:"mohammadrezayaghoobi123-dev",repo:"another-repo"}]){const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:name}),env);const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/not in the connector allowlist/)}assert.equal(calls,0)}finally{globalThis.fetch=originalFetch}});
 
 

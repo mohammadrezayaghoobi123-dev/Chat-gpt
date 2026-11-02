@@ -130,6 +130,11 @@ export class WriteControl extends DurableObject {
   // Logical payload estimates use SQL aggregates to avoid loading the full ledger
   // into Worker memory on every admission. Physical SQLite/WAL allocation is not
   // exposed by the Workers SQL API and must be monitored separately in Cloudflare.
+  ping() {
+    const result = this.ctx.storage.sql.exec("SELECT 1 AS ok").one();
+    return { ok: Number(result.ok) === 1, schemaVersion: 1 };
+  }
+
   getAdmissionStats() {
     const sql = this.ctx.storage.sql;
     const statusRows = sql.exec(

@@ -10,7 +10,7 @@ from master_brain.integrations import (
     IntegrationDescriptor, IntegrationHealth, IntegrationKind,
     IntegrationMaturity, IntegrationRequirement,
 )
-from master_brain.execution_registry import SQLiteExecutionRegistry, State
+from master_brain.execution_registry import SQLiteExecutionRegistry
 from master_brain.mission_approval import record_mission_approval
 from tests.approval_expiry_helper import soon
 from tests.mission_registration_helper import register_contract
@@ -1127,7 +1127,6 @@ class PayloadSnapshotTests(PipelineFixture):
         self.assertEqual(flip.reads, 1)  # exactly one read pass: snapshot, then reuse
 
     def test_idempotent_path_also_dispatches_the_approved_value(self):
-        import tempfile as _t
         from pathlib import Path as _P
         registry = SQLiteExecutionRegistry(str(_P(self.tmp.name) / "snap.sqlite3"))
         receipt = self._bound_receipt({"amount": 10})

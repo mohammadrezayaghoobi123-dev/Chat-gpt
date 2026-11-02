@@ -101,6 +101,10 @@ export function createGitHubWriteMock({
   let pullRequest;
   const repositoryPath = "/repos/mohammadrezayaghoobi123-dev/Chat-gpt";
   const baseBranch = "feature/cloud-engineering-connector";
+  const baseSha = "1111111111111111111111111111111111111111";
+  const baseTreeSha = "2222222222222222222222222222222222222222";
+  const treeSha = "3333333333333333333333333333333333333333";
+  const commitSha = "4444444444444444444444444444444444444444";
   const response = (body, status = 200) =>
     new Response(body === null ? null : JSON.stringify(body), { status });
 
@@ -113,28 +117,28 @@ export function createGitHubWriteMock({
       return response({ full_name: "mohammadrezayaghoobi123-dev/Chat-gpt" });
     }
     if (method === "GET" && url.pathname === repositoryPath + "/git/ref/heads/" + baseBranch) {
-      return response({ ref: "refs/heads/" + baseBranch, object: { sha: "base-sha" } });
+      return response({ ref: "refs/heads/" + baseBranch, object: { sha: baseSha } });
     }
-    if (method === "GET" && url.pathname === repositoryPath + "/git/commits/base-sha") {
-      return response({ sha: "base-sha", tree: { sha: "base-tree" } });
+    if (method === "GET" && url.pathname === repositoryPath + "/git/commits/" + baseSha) {
+      return response({ sha: baseSha, tree: { sha: baseTreeSha } });
     }
     if (method === "POST" && url.pathname === repositoryPath + "/git/trees") {
-      return response({ sha: "new-tree" }, 201);
+      return response({ sha: treeSha }, 201);
     }
-    if (method === "GET" && url.pathname === repositoryPath + "/git/trees/new-tree") {
+    if (method === "GET" && url.pathname === repositoryPath + "/git/trees/" + treeSha) {
       return response({
-        sha: "new-tree",
+        sha: treeSha,
         truncated: false,
         tree: [{ path: filePath, type: "blob", mode: "100644", sha: blobSha }],
       });
     }
     if (method === "POST" && url.pathname === repositoryPath + "/git/commits") {
       commitPayload = JSON.parse(init.body);
-      return response({ sha: "new-commit" }, 201);
+      return response({ sha: commitSha }, 201);
     }
-    if (method === "GET" && url.pathname === repositoryPath + "/git/commits/new-commit") {
+    if (method === "GET" && url.pathname === repositoryPath + "/git/commits/" + commitSha) {
       return response({
-        sha: "new-commit",
+        sha: commitSha,
         message: commitPayload.message,
         tree: { sha: commitPayload.tree },
         parents: commitPayload.parents.map((sha) => ({ sha })),
@@ -151,7 +155,7 @@ export function createGitHubWriteMock({
         url.pathname === repositoryPath + "/git/ref/heads/" + branchName) {
       return response({
         ref: "refs/heads/" + branchName,
-        object: { sha: "new-commit" },
+        object: { sha: commitSha },
       });
     }
     if (method === "POST" && url.pathname === repositoryPath + "/pulls") {
@@ -167,7 +171,7 @@ export function createGitHubWriteMock({
         html_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/1",
         draft: true,
         state: "open",
-        head: { ref: branchName, sha: "new-commit" },
+        head: { ref: branchName, sha: commitSha },
         base: { ref: baseBranch },
         body: pullBody.body,
       };

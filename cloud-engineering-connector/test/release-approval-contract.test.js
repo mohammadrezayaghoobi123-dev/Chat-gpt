@@ -26,3 +26,17 @@ for (const workflow of workflows) {
     assert.match(source, /RELEASE_ENV:\s*(staging|production)/, "release environment must be explicit");
   });
 }
+
+
+for (const workflow of workflows) {
+  test(workflow.name + " release does not expose Cloudflare credentials to the entire job", () => {
+    const source = readFileSync(workflow.path, "utf8");
+    const jobEnvironment = source.match(/^    env:\\s*\\n((?:^      .*\\n)*)/m);
+    assert.ok(jobEnvironment, "job-level environment block must be identifiable");
+    assert.doesNotMatch(
+      jobEnvironment[1],
+      /CLOUDFLARE_API_TOKEN|CLOUDFLARE_ACCOUNT_ID/,
+      "Cloudflare deployment credentials must be scoped to the individual steps that need them, not every test/install step",
+    );
+  });
+}

@@ -240,9 +240,13 @@ describe("WriteControl terminal operation retention", () => {
           unresolvedCount: 1,
           unresolvedLimit: 1_000,
           unresolvedRemaining: 999,
-          sqlitePageCount: expect.any(Number),
-          sqlitePageSize: expect.any(Number),
-          sqliteAllocatedBytes: expect.any(Number),
+          operationCount: 1,
+          admissionCount: 1,
+          operationLogicalBytes: expect.any(Number),
+          admissionLogicalBytes: expect.any(Number),
+          logicalPayloadBytes: expect.any(Number),
+          logicalPayloadUtilization: expect.any(Number),
+          storageLimitBytes: 1_073_741_824,
         }));
       });
     } finally {

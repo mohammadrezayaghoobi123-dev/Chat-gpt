@@ -506,7 +506,7 @@ test("public read-only repository inspection uses the server token and global qu
   throw new Error("Unexpected mocked GitHub URL: "+url);
  };
  try{
-  const response=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_AUTH_TOKEN:"server-secret-0123456789abcdef",READ_ONLY_GITHUB:true,GITHUB_TOKEN:"server-token",MCP_RATE_LIMITER:{limit:async(input)=>{limiterKeys.push(input.key);return{success:true}}}});
+  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_AUTH_TOKEN:"server-secret-0123456789abcdef",READ_ONLY_GITHUB:true,GITHUB_TOKEN:"server-token",MCP_RATE_LIMITER:{limit:async(input)=>{limiterKeys.push(input.key);return{success:true}}}});
   assert.equal(response.status,200);
   const body=await response.json();
   assert.equal(body.result.isError,undefined);

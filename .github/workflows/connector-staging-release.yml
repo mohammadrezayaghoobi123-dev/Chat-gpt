@@ -89,8 +89,20 @@ jobs:
             assert.equal(response.ok && body.success, true, `Cloudflare API preflight failed: HTTP ${response.status}`);
             return body.result;
           }
+          async function accountSecuritySettings() {
+            const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}`, {
+              headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+              signal: AbortSignal.timeout(15000),
+            });
+            const body = await response.json();
+            assert.equal(response.ok && body.success, true, `Cloudflare account security preflight failed: HTTP ${response.status}`);
+            return body.result?.settings || {};
+          }
 
-          const [settings, deploymentData] = await Promise.all([api("/settings"), api("/deployments?per_page=1&page=1")]);
+          const [settings, deploymentData, accountSecurity] = await Promise.all([
+            api("/settings"), api("/deployments?per_page=1&page=1"), accountSecuritySettings(),
+          ]);
+          assert.equal(accountSecurity.enforce_twofactor, true, "Cloudflare account-level MFA enforcement must be enabled before Staging release");
           const bindings = new Map((settings.bindings || []).map((binding) => [binding.name, binding]));
           const requiredSecrets = ["GITHUB_READONLY_TOKEN", "GITHUB_TOKEN", "MCP_AUTH_TOKEN", "MCP_ALLOWED_ORIGINS"];
           const missing = requiredSecrets.filter((name) => bindings.get(name)?.type !== "secret_text");

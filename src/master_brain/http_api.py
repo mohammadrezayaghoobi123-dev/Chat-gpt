@@ -317,7 +317,10 @@ def make_server(service: MissionService, authenticator: Authenticator, host: str
         def _session_info(self, identity, _match, correlation_id: str) -> None:
             if accounts is None:
                 raise ServiceError(ErrorCode.UNAVAILABLE)
-            expires = accounts.session_expiry(self._credential_value)
+            credential_value = self._credential_value
+            if credential_value is None:
+                raise ServiceError(ErrorCode.NOT_FOUND)
+            expires = accounts.session_expiry(credential_value)
             if expires is None:  # authenticated by a static token: there is no session to describe
                 raise ServiceError(ErrorCode.NOT_FOUND)
             view = SessionView(identity.subject, tuple(identity.roles), expires.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),

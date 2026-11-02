@@ -126,11 +126,13 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
     observability: null,
   };
   const deploymentData = { deployments: [{ versions: [{ version_id: "previous-version", percentage: 100 }] }] };
+  const accountData = { settings: { enforce_twofactor: true } };
   const prelude = [
     "globalThis.fetch = async (input) => {",
     "  const url = String(input);",
     "  let result;",
-    "  if (url.includes('/chat-gpt111-staging/settings')) result = " + JSON.stringify(stagingSettings) + ";",
+    "  if (url.endsWith('/accounts/test-account')) result = " + JSON.stringify(accountData) + ";",
+    "  else if (url.includes('/chat-gpt111-staging/settings')) result = " + JSON.stringify(stagingSettings) + ";",
     "  else if (url.includes('/chat-gpt111/settings')) result = " + JSON.stringify(productionSettings) + ";",
     "  else if (url.includes('/deployments?')) result = " + JSON.stringify(deploymentData) + ";",
     "  else throw new Error('Unexpected Cloudflare API request: ' + url);",

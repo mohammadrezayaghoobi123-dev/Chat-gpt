@@ -293,7 +293,7 @@ async function resolvePrincipal(request, env) {
 
   const authorization = request.headers.get("authorization");
   if (isAuthorized(authorization, env.AGENT_AUTH_TOKEN)) {
-    return { ok: true, principalId: "owner" };
+    return { ok: true, principalId: "owner", principalAuthHash: await hashSessionCapability(env.AGENT_AUTH_TOKEN) };
   }
 
   const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(authorization || "");
@@ -304,7 +304,7 @@ async function resolvePrincipal(request, env) {
     if (constantTimeHexEqual(tokenHash, expectedHash)) principalId = candidate;
   }
   return principalId
-    ? { ok: true, principalId }
+    ? { ok: true, principalId, principalAuthHash: tokenHash }
     : { ok: false, status: 401, error: "Unauthorized" };
 }
 
@@ -424,7 +424,9 @@ export class AgentSession extends DurableObject {
       }
       if (!initialization || typeof initialization.token_hash !== "string" ||
           !/^[0-9a-f]{64}$/.test(initialization.token_hash) ||
-          !isValidPrincipalId(initialization.principal_id)) {
+          !isValidPrincipalId(initialization.principal_id) ||
+          typeof initialization.principal_auth_hash !== "string" ||
+          !/^[0-9a-f]{64}$/.test(initialization.principal_auth_hash)) {
         return json({ error: "Invalid session initialization." }, 400);
       }
       if (await this.ctx.storage.get("session-token-hash")) {
@@ -434,6 +436,7 @@ export class AgentSession extends DurableObject {
       await this.ctx.storage.put({
         "session-token-hash": initialization.token_hash,
         "principal-id": initialization.principal_id,
+        "principal-auth-hash": initialization.principal_auth_hash,
         "last-activity-at": initializedAt
       });
       await this.ctx.storage.setAlarm(initializedAt + SESSION_TTL_MS);
@@ -451,6 +454,11 @@ export class AgentSession extends DurableObject {
     }
     if (suppliedPrincipalId !== storedPrincipalId) {
       return json({ error: "Session belongs to a different principal." }, 403);
+    }
+    const storedPrincipalAuthHash = await this.ctx.storage.get("principal-auth-hash");
+    const suppliedPrincipalAuthHash = request.headers.get("x-principal-auth-hash");
+    if (!constantTimeHexEqual(suppliedPrincipalAuthHash, storedPrincipalAuthHash)) {
+      return json({ error: "Session credential has changed; create a new session." }, 403);
     }
 
     const storedCapabilityHash = await this.ctx.storage.get("session-token-hash");
@@ -576,7 +584,7 @@ export class AgentSession extends DurableObject {
   async expireIfNeeded() {
     const lastActivity = await this.ctx.storage.get("last-activity-at");
     if (!isSessionExpired(lastActivity, Date.now())) return false;
-    await this.ctx.storage.delete(["history", "rate-window", "last-activity-at", "session-token-hash", "principal-id"]);
+    await this.ctx.storage.delete(["history", "rate-window", "last-activity-at", "session-token-hash", "principal-id", "principal-auth-hash"]);
     return true;
   }
 
@@ -684,7 +692,7 @@ async function handleFetch(request, env) {
         initialized = await stub.fetch(new Request("https://agent-session.internal/initialize", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token_hash: tokenHash, principal_id: principalId })
+          body: JSON.stringify({ token_hash: tokenHash, principal_id: principalId, principal_auth_hash: principal.principalAuthHash })
         }));
       } catch {
         return json({ error: "Session initialization failed." }, 503);
@@ -698,6 +706,7 @@ async function handleFetch(request, env) {
     const forwarded = new Request("https://agent-session.internal/" + match[2], request);
     const forwardedHeaders = new Headers(forwarded.headers);
     forwardedHeaders.set("x-principal-id", principalId);
+    forwardedHeaders.set("x-principal-auth-hash", principal.principalAuthHash);
     return stub.fetch(new Request(forwarded, { headers: forwardedHeaders }));
 }
 

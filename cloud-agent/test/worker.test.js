@@ -22,6 +22,7 @@ const { default: worker, AgentSession } = await import(workerUrl);
 
 const TOKEN = "t".repeat(48);
 const SESSION = "550e8400-e29b-41d4-a716-446655440000";
+const PRINCIPAL_AUTH_HASH = Array.from(new Uint8Array(await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(TOKEN))), byte => byte.toString(16).padStart(2, "0")).join("");
 
 function makeStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -76,6 +77,7 @@ async function makeAgent({ storage, ai = { run: async () => ({ choices: [{ messa
   storage ||= makeStorage({ "last-activity-at": Date.now() });
   if (!(await storage.get("session-token-hash"))) await storage.put("session-token-hash", tokenHash);
   if (!(await storage.get("principal-id"))) await storage.put("principal-id", "owner");
+  if (!(await storage.get("principal-auth-hash"))) await storage.put("principal-auth-hash", PRINCIPAL_AUTH_HASH);
   const ctx = { storage };
   const env = { AI: ai, AGENT_BUDGET: budget || makeBudgetBinding() };
   return { agent: new AgentSession(ctx, env), storage, env };
@@ -84,13 +86,13 @@ async function makeAgent({ storage, ai = { run: async () => ({ choices: [{ messa
 function chatRequest(message = "inspect this project") {
   return new Request("https://agent-session.internal/chat", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-session-token": "s".repeat(43), "x-principal-id": "owner" },
+    headers: { "content-type": "application/json", "x-session-token": "s".repeat(43), "x-principal-id": "owner", "x-principal-auth-hash": PRINCIPAL_AUTH_HASH },
     body: JSON.stringify({ message })
   });
 }
 
 function historyRequest() {
-  return new Request("https://agent-session.internal/history", { method: "GET", headers: { "x-session-token": "s".repeat(43), "x-principal-id": "owner" } });
+  return new Request("https://agent-session.internal/history", { method: "GET", headers: { "x-session-token": "s".repeat(43), "x-principal-id": "owner", "x-principal-auth-hash": PRINCIPAL_AUTH_HASH } });
 }
 
 function publicEnv(overrides = {}) {
@@ -248,11 +250,11 @@ test("Durable Object chat persists bounded history and schedules expiry", async 
 test("malformed and oversized chat requests are rejected before model invocation but still count toward rate limits", async () => {
   let modelCalls = 0;
   const { agent, storage } = await makeAgent({ ai: { run: async () => { modelCalls += 1; return {}; } } });
-  const malformed = await agent.fetch(new Request("https://agent-session.internal/chat", { method: "POST", headers: { "x-session-token": "s".repeat(43), "x-principal-id": "owner" }, body: "{" }));
+  const malformed = await agent.fetch(new Request("https://agent-session.internal/chat", { method: "POST", headers: { "x-session-token": "s".repeat(43), "x-principal-id": "owner", "x-principal-auth-hash": PRINCIPAL_AUTH_HASH }, body: "{" }));
   assert.equal(malformed.status, 400);
   const oversized = await agent.fetch(new Request("https://agent-session.internal/chat", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-session-token": "s".repeat(43), "x-principal-id": "owner" },
+    headers: { "content-type": "application/json", "x-session-token": "s".repeat(43), "x-principal-id": "owner", "x-principal-auth-hash": PRINCIPAL_AUTH_HASH },
     body: "x".repeat(12_001)
   }));
   assert.equal(oversized.status, 413);

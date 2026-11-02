@@ -7,6 +7,7 @@ const BASE = "https://agent-principal.test";
 const AUTH = "owner-token-for-runtime-tests-0123456789abcdef";
 const USER_A_TOKEN = "A".repeat(43);
 const USER_B_TOKEN = "B".repeat(43);
+const USER_A_ROTATED_TOKEN = "C".repeat(43);
 
 async function sha256Hex(value) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -48,6 +49,7 @@ describe("Cloudflare Workers runtime: principal identity and session ownership",
     const session = await createSession(USER_A_TOKEN);
     await runInDurableObject(sessionStub(session.session_id), async (_instance, state) => {
       expect(await state.storage.get("principal-id")).toBe("tester-a");
+      expect(await state.storage.get("principal-auth-hash")).toBe(await sha256Hex(USER_A_TOKEN));
     });
   });
 
@@ -57,6 +59,21 @@ describe("Cloudflare Workers runtime: principal identity and session ownership",
       "/api/sessions/" + session.session_id + "/history",
       USER_B_TOKEN,
       testEnv,
+      { headers: { "x-session-token": session.session_token } }
+    );
+    expect(response.status).toBe(403);
+  });
+
+  it("rejects an old session after a principal ID is reassigned to a rotated credential", async () => {
+    const session = await createSession(USER_A_TOKEN);
+    const rotatedRegistry = JSON.stringify({
+      "tester-a": await sha256Hex(USER_A_ROTATED_TOKEN),
+      "tester-b": await sha256Hex(USER_B_TOKEN)
+    });
+    const response = await fetchWorker(
+      "/api/sessions/" + session.session_id + "/history",
+      USER_A_ROTATED_TOKEN,
+      { ...testEnv, AGENT_USER_KEYS: rotatedRegistry },
       { headers: { "x-session-token": session.session_token } }
     );
     expect(response.status).toBe(403);
@@ -77,6 +94,7 @@ describe("Cloudflare Workers runtime: principal identity and session ownership",
     const session = await createSession(AUTH);
     await runInDurableObject(sessionStub(session.session_id), async (_instance, state) => {
       expect(await state.storage.get("principal-id")).toBe("owner");
+      expect(await state.storage.get("principal-auth-hash")).toBe(await sha256Hex(AUTH));
     });
   });
 

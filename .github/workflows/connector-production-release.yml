@@ -108,15 +108,6 @@ jobs:
           assert.equal(publicReadOnly?.type, "plain_text", "Production PUBLIC_READ_ONLY must be a verifiable non-secret feature flag");
           assert.equal(publicReadOnly.text, "true", "PUBLIC_READ_ONLY must be explicitly true for anonymous read-only Claude access");
 
-          const observability = productionSettings.observability;
-          assert.equal(observability?.enabled, true, "Production Worker observability must be enabled");
-          assert.equal(observability?.redact_query_string, true, "Production observability must redact query strings");
-          assert.equal(observability?.head_sampling_rate, 1, "Production observability must sample 100% of custom logs");
-          assert.equal(observability?.logs?.enabled, true, "Production persistent Worker logs must be enabled");
-          assert.equal(observability?.logs?.persist, true, "Production Worker logs must be persisted");
-          assert.equal(observability?.logs?.head_sampling_rate, 1, "Production persistent logs must sample 100%");
-          assert.equal(observability?.logs?.invocation_logs, false, "Production invocation logs must remain disabled to reduce sensitive-data exposure");
-
           const productionLimiter = productionBindings.get("MCP_RATE_LIMITER");
           const stagingLimiter = stagingBindings.get("MCP_RATE_LIMITER");
           assert.ok(productionLimiter?.namespace_id && stagingLimiter?.namespace_id, "Both Production and Staging MCP_RATE_LIMITER namespaces are required");
@@ -161,13 +152,23 @@ jobs:
             });
             const body = await response.json();
             assert.equal(response.ok && body.success, true, `Could not inspect ${script} settings`);
-            return new Map((body.result.bindings || []).map((binding) => [binding.name, binding]));
+            return body.result;
           }
-          const [production, staging] = await Promise.all([settings("chat-gpt111"), settings("chat-gpt111-staging")]);
+          const [productionSettings, stagingSettings] = await Promise.all([settings("chat-gpt111"), settings("chat-gpt111-staging")]);
+          const production = new Map((productionSettings.bindings || []).map((binding) => [binding.name, binding]));
+          const staging = new Map((stagingSettings.bindings || []).map((binding) => [binding.name, binding]));
+          const observability = productionSettings.observability;
+          assert.equal(observability?.enabled, true, "Production Worker observability must be enabled after deployment");
+          assert.equal(observability?.redact_query_string, true, "Production observability must redact query strings");
+          assert.equal(observability?.head_sampling_rate, 1, "Production observability must sample 100% of custom logs");
+          assert.equal(observability?.logs?.enabled, true, "Production persistent Worker logs must be enabled");
+          assert.equal(observability?.logs?.persist, true, "Production Worker logs must be persisted");
+          assert.equal(observability?.logs?.head_sampling_rate, 1, "Production persistent logs must sample 100%");
+          assert.equal(observability?.logs?.invocation_logs, false, "Production invocation logs must remain disabled to reduce sensitive-data exposure");
           assert.ok(production.get("WRITE_CONTROL")?.namespace_id, "Production migration did not create WRITE_CONTROL");
           assert.notEqual(production.get("WRITE_CONTROL").namespace_id, staging.get("WRITE_CONTROL")?.namespace_id, "Production and Staging Durable Object namespaces must differ");
           assert.notEqual(production.get("MCP_RATE_LIMITER")?.namespace_id, staging.get("MCP_RATE_LIMITER")?.namespace_id, "Production and Staging rate-limit namespaces must differ");
-          console.log("Production and Staging state namespaces are isolated.");
+          console.log("Production observability and Staging/Production state namespace isolation are verified.");
           NODE
 
       - name: Run live Production acceptance

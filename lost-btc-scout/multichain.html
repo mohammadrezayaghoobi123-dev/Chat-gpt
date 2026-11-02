@@ -29,17 +29,17 @@ const networks={
  base:{name:'Base',symbol:'ETH',rpc:'https://base-rpc.publicnode.com',explorer:'https://basescan.org/address/',kind:'evm'},
  avax:{name:'Avalanche C-Chain',symbol:'AVAX',rpc:'https://avalanche-c-chain-rpc.publicnode.com',explorer:'https://snowtrace.io/address/',kind:'evm'}
 };
-const fmt=n=>new Intl.NumberFormat('fa-IR',{maximumFractionDigits:8}).format(n);
+const fmt=n=>new Intl.NumberFormat('fa-IR',{maximumFractionDigits:8}).format(n);\nlet lastScanAt=0;\nconst SCAN_COOLDOWN_MS=5000;\nasync function fetchWithTimeout(url,options={},timeoutMs=12000){const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),timeoutMs);try{return await fetch(url,{...options,signal:controller.signal})}finally{clearTimeout(timer)}}
 function metric(label,value){return '<div class="metric"><div class="label">'+label+'</div><div class="value">'+value+'</div></div>'}
 function rpc(url,method,params){return fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})}).then(async r=>{if(!r.ok)throw Error('RPC HTTP '+r.status);const j=await r.json();if(j.error)throw Error(j.error.message||'RPC error');return j.result})}
 async function scan(){
  const key=$('network').value,n=networks[key],a=$('address').value.trim();
  if(n.kind==='evm'&&!/^0x[a-fA-F0-9]{40}$/.test(a)){$('status').innerHTML='<span class="error">آدرس EVM باید با 0x شروع شود و ۴۰ رقم هگزادسیمال داشته باشد.</span>';return}
  if(n.kind==='btc'&&!/^(bc1[ac-hj-np-z02-9]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/.test(a)){$('status').innerHTML='<span class="error">قالب آدرس بیت‌کوین معتبر نیست.</span>';return}
- $('scan').disabled=true;$('results').classList.add('hidden');$('status').textContent='در حال دریافت اطلاعات عمومی از شبکه…';
+ const now=Date.now();if(now-lastScanAt<SCAN_COOLDOWN_MS){$('status').textContent='برای جلوگیری از فشار روی RPC عمومی، چند ثانیه صبر کن.';return}lastScanAt=now;\n $('scan').disabled=true;$('results').classList.add('hidden');$('status').textContent='در حال دریافت اطلاعات عمومی از شبکه…';
  try{
   if(n.kind==='btc'){
-   const base='https://mempool.space/api/address/'+encodeURIComponent(a),r=await fetch(base);if(!r.ok)throw Error('API بیت‌کوین پاسخ نداد: HTTP '+r.status);
+   const base='https://mempool.space/api/address/'+encodeURIComponent(a),r=await fetchWithTimeout(base);if(!r.ok)throw Error('API بیت‌کوین پاسخ نداد: HTTP '+r.status);
    const d=await r.json(),c=d.chain_stats||{},m=d.mempool_stats||{},balance=((c.funded_txo_sum||0)+(m.funded_txo_sum||0)-(c.spent_txo_sum||0)-(m.spent_txo_sum||0))/1e8,tx=(c.tx_count||0)+(m.tx_count||0);
    $('metrics').innerHTML=metric('موجودی فعلی',fmt(balance)+' BTC')+metric('تعداد تراکنش',fmt(tx))+metric('شبکه',n.name)+metric('نوع داده','موجودی + شمارنده');
    $('assessment').textContent='این API تاریخچهٔ کامل را در این مرحله بررسی نمی‌کند؛ تعداد تراکنش و موجودی به‌تنهایی وضعیت مالکیت را مشخص نمی‌کنند.';

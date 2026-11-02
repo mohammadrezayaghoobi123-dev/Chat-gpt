@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
-const base = process.env.STAGING_MCP_URL;
-assert.ok(base?.startsWith("https://"), "STAGING_MCP_URL must use HTTPS");
+const base = process.env.MCP_BASE_URL || process.env.STAGING_MCP_URL;
+assert.ok(base?.startsWith("https://"), "MCP_BASE_URL or STAGING_MCP_URL must use HTTPS");
 const origin = new URL(base).origin;
 const timeout = () => ({ signal: AbortSignal.timeout(30_000) });
 

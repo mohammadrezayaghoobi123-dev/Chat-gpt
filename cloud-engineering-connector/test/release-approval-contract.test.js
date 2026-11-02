@@ -168,6 +168,77 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
   }
 }
 
+
+function runPreflightWithMfaDisabled(source, stepName, production) {
+  const script = extractPreflightScript(source, stepName);
+  const observability = {
+    enabled: true,
+    head_sampling_rate: 1,
+    redact_query_string: true,
+    logs: { enabled: true, persist: true, head_sampling_rate: 1, invocation_logs: false },
+  };
+  const stagingSettings = {
+    bindings: [
+      { name: "GITHUB_READONLY_TOKEN", type: "secret_text" },
+      { name: "GITHUB_TOKEN", type: "secret_text" },
+      { name: "MCP_AUTH_TOKEN", type: "secret_text" },
+      { name: "MCP_ALLOWED_ORIGINS", type: "secret_text" },
+      { name: "PUBLIC_READ_ONLY", type: "plain_text", text: "true" },
+      { name: "MCP_RATE_LIMITER", type: "ratelimit", namespace_id: "staging-rate" },
+      { name: "WRITE_CONTROL", type: "durable_object_namespace", namespace_id: "staging-write" },
+    ],
+    observability,
+  };
+  const productionSettings = {
+    bindings: [
+      { name: "GITHUB_READONLY_TOKEN", type: "secret_text" },
+      { name: "GITHUB_TOKEN", type: "secret_text" },
+      { name: "MCP_AUTH_TOKEN", type: "secret_text" },
+      { name: "MCP_ALLOWED_ORIGINS", type: "secret_text" },
+      { name: "PUBLIC_READ_ONLY", type: "plain_text", text: "true" },
+      { name: "MCP_RATE_LIMITER", type: "ratelimit", namespace_id: "production-rate" },
+      { name: "WRITE_CONTROL", type: "durable_object_namespace", namespace_id: "production-write" },
+    ],
+    observability,
+  };
+  const deploymentData = { deployments: [{ versions: [{ version_id: "previous-version", percentage: 100 }] }] };
+  const accountData = { settings: { enforce_twofactor: false } };
+  const prelude = [
+    "globalThis.fetch = async (input) => {",
+    "  const url = String(input);",
+    "  let result;",
+    "  if (url.endsWith('/accounts/test-account')) result = " + JSON.stringify(accountData) + ";",
+    "  else if (url.includes('/chat-gpt111-staging/settings')) result = " + JSON.stringify(stagingSettings) + ";",
+    "  else if (url.includes('/chat-gpt111/settings')) result = " + JSON.stringify(productionSettings) + ";",
+    "  else if (url.includes('/deployments?')) result = " + JSON.stringify(deploymentData) + ";",
+    "  else throw new Error('Unexpected Cloudflare API request: ' + url);",
+    "  return new Response(JSON.stringify({ success: true, result }), { status: 200, headers: { 'content-type': 'application/json' } });",
+    "};",
+  ].join("\\n");
+  const directory = mkdtempSync(join(tmpdir(), "release-preflight-mfa-"));
+  const output = join(directory, "github-output");
+  try {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", prelude + "\\n" + script], {
+      encoding: "utf8",
+      env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: "test-account", CLOUDFLARE_API_TOKEN: "test-token", GITHUB_OUTPUT: output },
+    });
+    assert.notEqual(result.status, 0, (production ? "Production" : "Staging") + " release must reject disabled account-level MFA");
+    assert.match(result.stderr + result.stdout, /MFA|two-factor|two.factor/i, "preflight must identify the account MFA gate");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test("Staging release preflight blocks when account-level MFA enforcement is disabled", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  runPreflightWithMfaDisabled(source, "Preflight Staging bindings and capture rollback target", false);
+});
+
+test("Production release preflight blocks when account-level MFA enforcement is disabled", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
+  runPreflightWithMfaDisabled(source, "Preflight Production credentials, namespace isolation, and rollback target", true);
+});
+
 test("Staging release preflight blocks when secure persistent observability is absent", () => {
   const source = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
   runPreflightWithMissingObservability(source, "Preflight Staging bindings and capture rollback target", false);

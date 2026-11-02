@@ -14,7 +14,7 @@ import json
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping
 
-from master_brain.audit_store import NOW, AuditPreconditionError, AuditStore, AuditStoreError
+from master_brain.audit_store import NOW, AuditPreconditionError, AuditStore
 from master_brain.dispatch import DispatchResult, DispatchStatus, IntegrationAdapter, dispatch_once
 from master_brain.integrations import IntegrationDescriptor, IntegrationRequirement
 from master_brain.mission_lifecycle import (

@@ -128,7 +128,7 @@ const inspected = await rpc("tools/call", {
   },
 }, 99003);
 assert.equal(inspected.response.status, 200);
-assert.equal(inspected.body.result.isError, undefined);
+assert.equal(inspected.body.result.isError, undefined, inspected.body.result.content?.[0]?.text || JSON.stringify(inspected.body));
 const project = JSON.parse(inspected.body.result.content[0].text);
 assert.equal(project.repository, "mohammadrezayaghoobi123-dev/Chat-gpt");
 assert.equal(project.visibility, "public");
@@ -144,7 +144,7 @@ const fileRead = await rpc("tools/call", {
   },
 }, 99004);
 assert.equal(fileRead.response.status, 200);
-assert.equal(fileRead.body.result.isError, undefined);
+assert.equal(fileRead.body.result.isError, undefined, fileRead.body.result.content?.[0]?.text || JSON.stringify(fileRead.body));
 const file = JSON.parse(fileRead.body.result.content[0].text);
 assert.equal(file.path, "cloud-engineering-connector/README.md");
 assert.ok(file.content.length > 0);
@@ -160,7 +160,7 @@ const analysis = await rpc("tools/call", {
   },
 }, 99005);
 assert.equal(analysis.response.status, 200);
-assert.equal(analysis.body.result.isError, undefined);
+assert.equal(analysis.body.result.isError, undefined, analysis.body.result.content?.[0]?.text || JSON.stringify(analysis.body));
 const report = JSON.parse(analysis.body.result.content[0].text);
 assert.equal(report.status, "analysis_completed");
 assert.equal(report.evidence[0].path, "cloud-engineering-connector/README.md");

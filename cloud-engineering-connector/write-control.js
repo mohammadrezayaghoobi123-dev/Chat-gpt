@@ -142,11 +142,26 @@ export class WriteControl extends DurableObject {
     const oldestUnresolvedUpdatedAt = sql.exec(
       "SELECT MIN(updated_at) AS oldest FROM write_operations WHERE status IN ('UNKNOWN','IN_PROGRESS')",
     ).one().oldest;
-    const sqlitePageCount = Number(sql.exec("PRAGMA page_count").one().page_count);
-    const sqlitePageSize = Number(sql.exec("PRAGMA page_size").one().page_size);
-    const sqliteFreelistPages = Number(sql.exec("PRAGMA freelist_count").one().freelist_count);
-    const sqliteAllocatedBytes = sqlitePageCount * sqlitePageSize;
-    const sqliteFreeBytes = sqliteFreelistPages * sqlitePageSize;
+    const operationBytes = Number(sql.exec(`
+      SELECT COALESCE(SUM(
+        length(key_hash) + length(request_hash) + length(status) + length(phase) +
+        32 + COALESCE(length(branch_name), 0) + COALESCE(length(commit_sha), 0) +
+        COALESCE(length(pr_url), 0) + COALESCE(length(error_code), 0) +
+        COALESCE(length(git_metadata), 0)
+      ), 0) AS bytes
+      FROM write_operations
+    `).one().bytes);
+    const admissionBytes = Number(sql.exec(`
+      SELECT COALESCE(SUM(length(key_hash) + 8), 0) AS bytes
+      FROM write_admissions
+    `).one().bytes);
+    const operationCount = Number(sql.exec(
+      "SELECT COUNT(*) AS count FROM write_operations",
+    ).one().count);
+    const admissionCount = Number(sql.exec(
+      "SELECT COUNT(*) AS count FROM write_admissions",
+    ).one().count);
+    const logicalPayloadBytes = operationBytes + admissionBytes;
     return {
       unknownCount,
       inProgressCount,
@@ -155,14 +170,14 @@ export class WriteControl extends DurableObject {
       unresolvedLimit: UNRESOLVED_OPERATION_LIMIT,
       unresolvedRemaining: Math.max(0, UNRESOLVED_OPERATION_LIMIT - unresolvedCount),
       oldestUnresolvedUpdatedAt: oldestUnresolvedUpdatedAt ?? null,
+      operationCount,
+      admissionCount,
+      operationLogicalBytes: operationBytes,
+      admissionLogicalBytes: admissionBytes,
+      logicalPayloadBytes,
+      logicalPayloadUtilization: logicalPayloadBytes / SQLITE_STORAGE_LIMIT_BYTES,
+      storageLimitBytes: SQLITE_STORAGE_LIMIT_BYTES,
       retentionMs: TERMINAL_RETENTION_MS,
-      sqlitePageCount,
-      sqlitePageSize,
-      sqliteFreelistPages,
-      sqliteAllocatedBytes,
-      sqliteFreeBytes,
-      sqliteUsedBytes: Math.max(0, sqliteAllocatedBytes - sqliteFreeBytes),
-      sqliteStorageLimitBytes: SQLITE_STORAGE_LIMIT_BYTES,
     };
   }
 

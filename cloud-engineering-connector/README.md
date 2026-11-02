@@ -137,3 +137,8 @@ Claude compatibility is not established by protocol tests alone. Acceptance stil
 ## MCP tool safety metadata
 
 Every advertised tool carries a human-readable `title`, explicit `readOnlyHint`, and explicit `destructiveHint`. The five public read-only tools are annotated as read-only and non-destructive; `create_change_pr` is not read-only, is not destructive, and is never advertised in anonymous public-read-only mode. The Staging acceptance script verifies these annotations against the deployed endpoint, not only the local tool registry.
+
+
+## GitHub API access in public read-only mode
+
+Public MCP callers do not provide GitHub credentials. The Worker uses its server-side `GITHUB_TOKEN` binding for repository reads when configured, while `READ_ONLY_GITHUB` enforces GET-only upstream access and the MCP allowlist blocks write tools. GitHub API calls are globally rate-limited independently of per-client MCP rate limits. Without a configured server token, public GitHub reads fall back to GitHub's unauthenticated quota and may be rejected under shared-egress load; this is an operational configuration failure, not an MCP transport failure.

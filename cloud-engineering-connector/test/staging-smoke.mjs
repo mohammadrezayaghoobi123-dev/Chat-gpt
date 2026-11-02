@@ -260,3 +260,5 @@ console.log(JSON.stringify({
   ],
   credentialMaterialLogged: false,
 }, null, 2));
+
+// Acceptance refresh: verify the current 100% Staging deployment after the dedicated read-only token hardening.

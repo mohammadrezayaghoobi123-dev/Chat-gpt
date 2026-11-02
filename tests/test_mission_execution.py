@@ -178,7 +178,7 @@ class MissionExecutionPipelineTests(PipelineFixture):
 
 class ExecutionRegistryTests(unittest.TestCase):
     def setUp(self):
-        from master_brain.execution_registry import SQLiteExecutionRegistry, State
+        from master_brain.execution_registry import SQLiteExecutionRegistry
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.db_path = str(Path(self.tmp.name) / "executions.sqlite3")
@@ -239,7 +239,7 @@ class ExecutionRegistryTests(unittest.TestCase):
         self.assertEqual(self.registry.get("shared-key").state.value, "PENDING")
 
     def test_invalid_timeout_is_rejected(self):
-        from master_brain.execution_registry import SQLiteExecutionRegistry, State
+        from master_brain.execution_registry import SQLiteExecutionRegistry
         for value in (-1, float("inf"), float("nan"), True):
             with self.subTest(timeout=value):
                 with self.assertRaises(ValueError):
@@ -330,7 +330,7 @@ class ExecutionRegistryTests(unittest.TestCase):
 
 class IdempotentMissionExecutionTests(unittest.TestCase):
     def setUp(self):
-        from master_brain.execution_registry import SQLiteExecutionRegistry, State
+        from master_brain.execution_registry import SQLiteExecutionRegistry
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
@@ -898,7 +898,7 @@ class ContractRiskCeilingTests(unittest.TestCase):
     EXPECTED_CEILING = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 
     def run_case(self, tier, requested, idempotent=False):
-        from master_brain.execution_registry import SQLiteExecutionRegistry, State
+        from master_brain.execution_registry import SQLiteExecutionRegistry
         from master_brain.mission_approval import action_digest
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -1151,7 +1151,7 @@ class ApprovalExpiryPipelineTests(unittest.TestCase):
 
     def setUp(self):
         from datetime import datetime, timedelta, timezone
-        from master_brain.execution_registry import SQLiteExecutionRegistry, State
+        from master_brain.execution_registry import SQLiteExecutionRegistry
         from master_brain.mission_approval import action_digest
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

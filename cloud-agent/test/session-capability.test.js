@@ -22,6 +22,7 @@ const { default: worker, AgentSession } = await import(workerUrl);
 const TOKEN = "t".repeat(48);
 const SESSION = "550e8400-e29b-41d4-a716-446655440000";
 const SESSION_TOKEN = "s".repeat(43);
+const PRINCIPAL_AUTH_HASH = Array.from(new Uint8Array(await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(TOKEN))), byte => byte.toString(16).padStart(2, "0")).join("");
 
 function makeStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -100,7 +101,7 @@ async function makeInitializedAgent(token = SESSION_TOKEN, initial = {}) {
   const initialized = await agent.fetch(new Request("https://agent-session.internal/initialize", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ token_hash: tokenHash, principal_id: "owner" })
+    body: JSON.stringify({ token_hash: tokenHash, principal_id: "owner", principal_auth_hash: PRINCIPAL_AUTH_HASH })
   }));
   assert.equal(initialized.status, 201);
   if (Object.hasOwn(initial, "last-activity-at")) {
@@ -123,6 +124,7 @@ test("authenticated session creation returns a random capability and stores only
   assert.equal(new URL(forwarded.url).pathname, "/initialize");
   const init = await forwarded.json();
   assert.match(init.token_hash, /^[0-9a-f]{64}$/);
+  assert.equal(init.principal_auth_hash, PRINCIPAL_AUTH_HASH);
   assert.equal(Object.hasOwn(init, "session_token"), false);
   assert.notEqual(init.token_hash, body.session_token);
 });
@@ -144,7 +146,7 @@ test("session initialization is one-time and persists only a verifier", async ()
   const duplicate = await agent.fetch(new Request("https://agent-session.internal/initialize", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ token_hash: "b".repeat(64), principal_id: "owner" })
+    body: JSON.stringify({ token_hash: "b".repeat(64), principal_id: "owner", principal_auth_hash: PRINCIPAL_AUTH_HASH })
   }));
   assert.equal(duplicate.status, 409);
   assert.equal(storage.values.get("session-token-hash"), tokenHash);
@@ -189,7 +191,7 @@ test("wrong session capability is rejected before history or rate state is acces
     history: [{ role: "assistant", content: "private history" }]
   });
   const response = await agent.fetch(new Request("https://agent-session.internal/history", {
-    headers: { "x-principal-id": "owner", "x-session-token": "x".repeat(43) }
+    headers: { "x-principal-id": "owner", "x-principal-auth-hash": PRINCIPAL_AUTH_HASH, "x-session-token": "x".repeat(43) }
   }));
   assert.equal(response.status, 401);
   assert.equal(storage.values.get("history")[0].content, "private history");
@@ -205,7 +207,7 @@ test("wrong session capability is rejected for chat before model invocation", as
   };
   const response = await agent.fetch(new Request("https://agent-session.internal/chat", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-session-token": "x".repeat(43), "x-principal-id": "owner" },
+    headers: { "content-type": "application/json", "x-session-token": "x".repeat(43), "x-principal-id": "owner", "x-principal-auth-hash": PRINCIPAL_AUTH_HASH },
     body: JSON.stringify({ message: "unauthorized prompt" })
   }));
   assert.equal(response.status, 401);
@@ -221,7 +223,7 @@ test("a session capability cannot cross Durable Object session ownership boundar
     history: [{ role: "assistant", content: "session B private history" }]
   });
   const response = await second.agent.fetch(new Request("https://agent-session.internal/history", {
-    headers: { "x-principal-id": "owner", "x-session-token": firstCapability }
+    headers: { "x-principal-id": "owner", "x-principal-auth-hash": PRINCIPAL_AUTH_HASH, "x-session-token": firstCapability }
   }));
   assert.equal(response.status, 401);
   assert.deepEqual(second.storage.values.get("history"), [
@@ -236,7 +238,7 @@ test("valid session capability permits access to that session's history", async 
     history: [{ role: "assistant", content: "private history" }]
   });
   const response = await agent.fetch(new Request("https://agent-session.internal/history", {
-    headers: { "x-principal-id": "owner", "x-session-token": SESSION_TOKEN }
+    headers: { "x-principal-id": "owner", "x-principal-auth-hash": PRINCIPAL_AUTH_HASH, "x-session-token": SESSION_TOKEN }
   }));
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -252,7 +254,7 @@ test("history projects only user-facing role and content and never returns store
     { role: "tool", content: "tool output", session_token: SESSION_TOKEN }
   ]);
   const response = await agent.fetch(new Request("https://agent-session.internal/history", {
-    headers: { "x-principal-id": "owner", "x-session-token": SESSION_TOKEN }
+    headers: { "x-principal-id": "owner", "x-principal-auth-hash": PRINCIPAL_AUTH_HASH, "x-session-token": SESSION_TOKEN }
   }));
   assert.equal(response.status, 200);
   const body = await response.json();
@@ -271,7 +273,7 @@ test("valid session capability permits chat and history persists only after auth
   const { agent, storage } = await makeInitializedAgent();
   const response = await agent.fetch(new Request("https://agent-session.internal/chat", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-session-token": SESSION_TOKEN, "x-principal-id": "owner" },
+    headers: { "content-type": "application/json", "x-session-token": SESSION_TOKEN, "x-principal-id": "owner", "x-principal-auth-hash": PRINCIPAL_AUTH_HASH },
     body: JSON.stringify({ message: "run authorized chat" })
   }));
   assert.equal(response.status, 200);
@@ -287,7 +289,7 @@ test("expired sessions delete history, rate state, and verifier before rejecting
     "last-activity-at": stale
   });
   const response = await agent.fetch(new Request("https://agent-session.internal/history", {
-    headers: { "x-principal-id": "owner", "x-session-token": SESSION_TOKEN }
+    headers: { "x-principal-id": "owner", "x-principal-auth-hash": PRINCIPAL_AUTH_HASH, "x-session-token": SESSION_TOKEN }
   }));
   assert.equal(response.status, 410);
   assert.equal(storage.values.has("history"), false);
@@ -295,7 +297,7 @@ test("expired sessions delete history, rate state, and verifier before rejecting
   assert.equal(storage.values.has("last-activity-at"), false);
   assert.equal(storage.values.has("session-token-hash"), false);
   const secondAttempt = await agent.fetch(new Request("https://agent-session.internal/history", {
-    headers: { "x-principal-id": "owner", "x-session-token": SESSION_TOKEN }
+    headers: { "x-principal-id": "owner", "x-principal-auth-hash": PRINCIPAL_AUTH_HASH, "x-session-token": SESSION_TOKEN }
   }));
   assert.equal(secondAttempt.status, 401);
 });

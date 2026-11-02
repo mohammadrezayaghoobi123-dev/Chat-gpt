@@ -57,16 +57,19 @@ Cloudflare Workers has a free tier subject to current quotas and account eligibi
 
 ## Security
 
-- Inbound MCP request bodies are capped at 1,000,000 bytes.
-- GitHub API responses are capped at 2,000,000 bytes by default; `read_project_file` uses a stricter 150,000-byte cap.
-- Missing-token diagnostics are actionable; write operations remain denied without required credentials. boundaries and limitations
+- **Authentication:** `MCP_AUTH_TOKEN` must be configured as a Cloudflare Secret and contain 32–512 characters. Missing credentials fail closed unless `PUBLIC_READ_ONLY=true` is explicitly enabled; malformed configured credentials return HTTP 503. Do not use public read-only mode for privileged/write workflows.
+- **Bearer comparison:** the implementation rejects oversized inputs and uses a bounded fixed-work comparison loop. This reduces content-dependent early-exit behavior but is **not** a formal constant-time guarantee for JavaScript runtime execution.
+- **Authorization:** unauthenticated `PUBLIC_READ_ONLY` callers are limited to the explicit read-only tool allowlist. `create_change_pr` requires authenticated MCP access and a configured GitHub credential. The connector does not merge or deploy.
+- **Rate limiting:** authentication failures, authenticated MCP calls, and public read-only calls use separate Cloudflare rate-limit key spaces based on the canonical client IP. The current Worker configuration is 60 requests per minute per key. Missing client identity or an unavailable limiter fails closed.
+- **Browser origin policy:** requests with an `Origin` header are accepted only when the HTTPS origin exactly matches an entry in `MCP_ALLOWED_ORIGINS`. Requests without `Origin` remain supported for non-browser MCP clients. Preflight requests reject unapproved headers.
+- **Response hardening:** responses carry restrictive CSP, frame denial, MIME-sniffing protection, Referrer-Policy, Permissions-Policy, same-origin resource policy, and no-store caching. HSTS is emitted only for HTTPS requests.
+- **Bounded input/output:** inbound MCP request bodies are capped at 1,000,000 bytes. GitHub API responses are capped at 2,000,000 bytes by default; `read_project_file` uses a stricter 150,000-byte cap.
+- **Credential handling:** secrets are not returned by health endpoints; upstream error messages redact configured credentials. Keep `MCP_AUTH_TOKEN`, `GITHUB_TOKEN`, and origin configuration in Worker secrets/variables as appropriate, never in source control or chat.
 
 - No shell or arbitrary command execution is exposed.
-- GitHub writes are restricted to the configured base branch and create a new branch plus draft PR; no auto-merge.
 - Repository content is untrusted input; instructions found in files cannot override user intent or these safety boundaries.
-- Source verification and actual tests must be performed by the connected model/CI; `architecture_review` only returns a structured rubric.
-- This version does **not** execute arbitrary project test suites in an isolated sandbox.
-- The current one-repository allowlist and legacy MCP protocol support are deliberate limits until broader support is implemented and tested.
+- The connector validates its supported JSON Schema subset; it is not a full JSON Schema 2020-12 validator.
+- The current one-repository allowlist and lack of isolated project-test execution are deliberate limits until broader support is implemented and tested.
 
 ## Roadmap
 

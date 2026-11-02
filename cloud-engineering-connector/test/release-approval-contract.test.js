@@ -261,3 +261,19 @@ test("Production preflight permits migration from legacy dashboard settings befo
     true,
   );
 });
+
+
+test("live Staging smoke is post-deploy only and PR CI does not probe the previous Worker version", () => {
+  const connectorCi = readFileSync(new URL("../../.github/workflows/connector-ci.yml", import.meta.url), "utf8");
+  const smokeJobStart = connectorCi.indexOf("  post-deploy-staging-smoke:");
+  assert.ok(smokeJobStart >= 0, "explicit Staging smoke job must exist");
+  const smokeJob = connectorCi.slice(smokeJobStart);
+  assert.match(
+    smokeJob,
+    /if: github\.event_name == 'push' && startsWith\(github\.ref, 'refs\/heads\/integration\/staging-postdeploy-acceptance-'\)/,
+    "live smoke must run only on the explicit post-deploy acceptance branch",
+  );
+  assert.doesNotMatch(smokeJob, /github\.event_name == 'pull_request'/);
+  const stagingRelease = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  assert.match(stagingRelease, /- name: Run live Staging acceptance/, "the release workflow must smoke the exact deployed candidate");
+});

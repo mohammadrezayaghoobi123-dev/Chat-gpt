@@ -30,10 +30,10 @@ test("Wrangler configuration omits unsupported top-level and environment tags", 
   assert.doesNotMatch(staging, /^tags\s*=/m);
 });
 
-test("Wrangler preserves existing dashboard variables and encrypted secrets", () => {
-  assert.match(config, /^keep_vars\s*=\s*true$/m);
-  assert.doesNotMatch(config, /^\[vars\]/m);
-  assert.doesNotMatch(staging, /^\[env\.staging\.vars\]/m);
+test("Read-only flags are declarative for Production and Staging; dashboard vars are reconciled", () => {
+  assert.match(config, /^keep_vars\s*=\s*false$/m);
+  assert.match(config, /^\[vars\]\s*\nPUBLIC_READ_ONLY\s*=\s*"true"$/m);
+  assert.match(staging, /^\[env\.staging\.vars\]\s*\nPUBLIC_READ_ONLY\s*=\s*"true"$/m);
   assert.doesNotMatch(config, /^SERVICE_MODE\s*=/m);
 });
 

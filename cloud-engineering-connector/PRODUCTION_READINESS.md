@@ -26,7 +26,7 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 - Integrated release candidate PR: [#129](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/129), branch `assistant/unified-product-release-candidate-2026-11-02`.
 - Exact application-code SHA with a fully green CI matrix: `b23eec24e5f2df74e778451d89da4096c75c2dfe`.
 - The release-approval guard is included in this SHA. A subsequent runbook-only update will trigger Connector CI again; no Worker deployment is part of this documentation change.
-- Current `main` head: `f2cae91de818385ec48daafc43c621b9e2cc0675`; the candidate compares as 939 commits ahead and 0 behind. No commit was pushed to `main`.
+- Current `main` head: `f2cae91de818385ec48daafc43c621b9e2cc0675`; the candidate compares as 945 commits ahead and 0 behind. No commit was pushed to `main`.
 - Connector CI: PASS; **196 Node tests and 41 Durable Object tests** passed; npm audit reported 0 vulnerabilities; Wrangler configuration checks passed.
 - Cloud Agent CI: PASS.
 - Master Brain MCP CI: PASS.
@@ -86,7 +86,7 @@ To release a reviewed candidate, create a branch from the exact approved 40-char
 
 ### Current release state — 2026-11-02
 
-- Current release candidate: `746c482b1e5aa6d2ab2648a8b7a96eb39981f251` (PR #129, Draft).
+- Current application-code candidate: `b23eec24e5f2df74e778451d89da4096c75c2dfe` (PR #129, Draft).
 - No release branch has been created for this SHA and no candidate deployment has been performed.
 - The latest previous guarded Staging attempt failed before deployment because the GitHub Actions `staging` environment lacked `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Do not reuse that older release branch.
 - Current Cloudflare settings independently show that Staging still lacks `GITHUB_READONLY_TOKEN`; its workflow preflight will block before deployment.
@@ -144,7 +144,7 @@ The active integrated candidate is PR #129, branch `assistant/unified-product-re
 
 - PR #129 contains the unified Master Brain/Python/CTP history and the Cloud Engineering Connector / Cloud Agent feature history through a real merge commit. The merge topology preserves both parent histories; do not squash or rewrite it.
 - PR #127 is a feature-history/audit reference incorporated into PR #129; do not merge it separately to `main`.
-- The last code-changing candidate SHA is `746c482b1e5aa6d2ab2648a8b7a96eb39981f251`; the current documentation-only PR head is `514995f92eec1c814fcb82de380ca11a827bfeac`.
+- The current application-code candidate SHA is `b23eec24e5f2df74e778451d89da4096c75c2dfe`; the runbook-only commit is `9264780df3cfd2f82f9c0d953d75b1f3617d7c04`.
 - Current `main` remains `f2cae91de818385ec48daafc43c621b9e2cc0675`; GitHub compare reports the candidate as 945 commits ahead and 0 behind.
 - PR #129 is Draft, mergeable, and has zero submitted reviews at the latest check. The new Staging release guard will reject it until it is marked ready and an independent reviewer approves the exact current head.
 - Keep all changes on the candidate branch. Do not merge to `main`, close superseded audit PRs, or rewrite history until independent review, governance controls, and release gates are satisfied.
@@ -153,6 +153,7 @@ The active integrated candidate is PR #129, branch `assistant/unified-product-re
 Production remains **NO-GO** until every mandatory item has current evidence:
 
 - PR #129 receives an independent approval from a reviewer other than the PR author. It is currently Draft with zero submitted reviews. The Staging workflow enforces this on the exact PR head; the Production workflow additionally requires a merged PR to `main` with an exact merge-commit match.
+- The Production release workflow requires the release SHA to be the exact merge commit of a merged PR to `main`; it verifies an independent APPROVED review on that PR's exact head commit and blocks any outstanding change request. Its read-only GitHub token is scoped only to the approval step.
 - GitHub governance is enforced: a `main` ruleset must require PR reviews and the relevant status checks, prohibit force pushes and deletion, and restrict direct pushes. The last live governance audit reported `main.protected=false` and an empty repository rulesets list. No merge is allowed until this is corrected and verified.
 - GitHub Actions `staging` and `production` environments contain the correct Cloudflare API token secret and account ID variable. Both environments must require human approval; the independent PR-review guard is enforced in code.
 - Cloudflare account MFA enforcement is enabled and independently verified. The last account-level read reported `enforce_twofactor=false`; re-check before release.

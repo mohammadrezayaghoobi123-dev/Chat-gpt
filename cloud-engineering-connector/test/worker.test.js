@@ -104,6 +104,16 @@ test("anonymous public read-only calls use server GitHub credentials only for gl
  }finally{globalThis.fetch=originalFetch}
 });
 
+test("anonymous read-only GitHub access never falls back to the write token",async()=>{
+ const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called without a read-only token")};
+ try{
+  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1),{PUBLIC_READ_ONLY:"true",GITHUB_TOKEN:"write-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});
+  const body=await response.json();
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/GITHUB_READONLY_TOKEN/);
+  assert.equal(calls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
 test("anonymous read-only file access fails closed when the repository is private",async()=>{
  const originalFetch=globalThis.fetch;const calls=[];
  globalThis.fetch=async(input,init={})=>{
@@ -111,7 +121,7 @@ test("anonymous read-only file access fails closed when the repository is privat
   return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt",private:true}),{status:200,headers:{"content-type":"application/json"}});
  };
  try{
-  const response=await worker.fetch(anonymousRpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"README.md"}},1),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})},GITHUB_TOKEN:"server-token"});
+  const response=await worker.fetch(anonymousRpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"README.md"}},1),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})},GITHUB_READONLY_TOKEN:"read-only-token"});
   const body=await response.json();
   assert.equal(body.result.isError,true);
   assert.match(body.result.content[0].text,/repository to be public; access denied/);
@@ -506,7 +516,7 @@ test("public read-only repository inspection uses the server token and global qu
   throw new Error("Unexpected mocked GitHub URL: "+url);
  };
  try{
-  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_AUTH_TOKEN:"server-secret-0123456789abcdef",READ_ONLY_GITHUB:true,GITHUB_TOKEN:"server-token",MCP_RATE_LIMITER:{limit:async(input)=>{limiterKeys.push(input.key);return{success:true}}}});
+  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_AUTH_TOKEN:"server-secret-0123456789abcdef",READ_ONLY_GITHUB:true,GITHUB_READONLY_TOKEN:"server-token",GITHUB_TOKEN:"write-token",MCP_RATE_LIMITER:{limit:async(input)=>{limiterKeys.push(input.key);return{success:true}}}});
   assert.equal(response.status,200);
   const body=await response.json();
   assert.equal(body.result.isError,undefined);

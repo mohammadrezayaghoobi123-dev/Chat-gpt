@@ -1,42 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker.js";
+import { createWriteControlBinding, createGitHubWriteMock } from "./helpers/write-control-mocks.js";
 import { createWriteControlBinding, createGitHubWriteMock } from "./helpers/write-fixtures.js";
-function createWriteControlMock() {
- const operations=new Map();
- const stub={
-  async admitWrite(input) {
-   const current=operations.get(input.keyHash);
-   if(current)return current.requestHash===input.requestHash?{admitted:true,replay:true,operation:{...current}}:{admitted:false,reason:"IDEMPOTENCY_CONFLICT"};
-   const operation={keyHash:input.keyHash,requestHash:input.requestHash,status:"IN_PROGRESS",phase:"RESERVED",leaseGeneration:1,createdAt:input.now,updatedAt:input.now,gitMetadata:{}};
-   operations.set(input.keyHash,operation);
-   return {admitted:true,replay:false,operation:{...operation}};
-  },
-  async transitionOperation(input) {
-   const op=operations.get(input.keyHash);
-   if(!op||op.status!=="IN_PROGRESS"||op.phase!==input.expectedPhase||op.leaseGeneration!==input.leaseGeneration)return{updated:false,reason:"PHASE_CONFLICT",operation:op?{...op}:null};
-   op.phase=input.nextPhase;op.status=input.status??"IN_PROGRESS";op.updatedAt=input.now??Date.now();
-   if(input.metadata){for(const [key,value] of Object.entries(input.metadata)){if(key==="baseTreeSha"||key==="parentSha"||key==="treeSha")op.gitMetadata[key]=value;else op[key[0].toLowerCase()+key.slice(1)]=value;}}
-   return{updated:true,operation:{...op,gitMetadata:{...op.gitMetadata}}};
-  },
-  async markOperationStatus(input) {
-   const op=operations.get(input.keyHash);
-   if(!op||op.status!=="IN_PROGRESS"||op.leaseGeneration!==input.leaseGeneration)return{updated:false,reason:"STATUS_CONFLICT",operation:op?{...op}:null};
-   op.status=input.status;op.updatedAt=input.now??Date.now();op.leaseGeneration++;
-   return{updated:true,operation:{...op,gitMetadata:{...op.gitMetadata}}};
-  },
-  async markStaleOperationsUnknown(){return 0;},
-  async getOperation(keyHash){const op=operations.get(keyHash);return op?{...op,gitMetadata:{...op.gitMetadata}}:null;},
-  async reconcilePrCreated(input){const op=operations.get(input.keyHash);if(!op||op.status!=="UNKNOWN"||op.phase!=="PR_DISPATCHED")return{updated:false,operation:op?{...op}:null};Object.assign(op,{status:"SUCCEEDED",phase:"PR_CREATED",prNumber:input.prNumber,prUrl:input.prUrl,updatedAt:input.now??Date.now(),leaseGeneration:op.leaseGeneration+1});return{updated:true,operation:{...op}};},
-  async reopenReserved(input){const op=operations.get(input.keyHash);if(!op||op.status!=="UNKNOWN"||op.phase!=="RESERVED"||op.leaseGeneration!==input.leaseGeneration)return{updated:false};op.status="IN_PROGRESS";op.leaseGeneration++;op.updatedAt=Date.now();return{updated:true,operation:{...op}};},
-  async reconcileTreeWritten(){return{updated:false};},
-  async reconcileCommitWritten(){return{updated:false};},
-  async reconcileBranchWritten(){return{updated:false};}
- };
- return {idFromName:name=>name,get:()=>stub};
-}
 let idempotencyCounter=0;
-const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlMock()};
+const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding()};
 const req=(path,options={})=>{const headers=new Headers(options.headers);if(path==="/mcp"&&!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
 const rpc=(method,params={},id=1)=>{if(method==="tools/call"&&params.name==="create_change_pr"&&params.arguments&&!params.arguments.idempotency_key)params={...params,arguments:{...params.arguments,idempotency_key:"worker-test-idempotency-key-"+String(++idempotencyCounter).padStart(8,"0")}};return req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})})};
 test("health reports cloud execution without laptop dependency",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers")});

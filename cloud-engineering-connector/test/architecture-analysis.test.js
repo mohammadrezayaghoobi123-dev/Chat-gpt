@@ -25,7 +25,7 @@ test("architecture_analyze returns source-grounded findings with exact line evid
   const originalFetch = globalThis.fetch;
   const files = new Map([
     ["package.json", '{"scripts":{"test":"node --test"}}'],
-    ["src/worker.js", 'export async function run(request) {\\n  return fetch(request.url);\\n}\\n'],
+    ["src/worker.js", 'export async function run(request) {\n  return fetch(request.url);\n}\n'],
   ]);
   globalThis.fetch = async (url) => {
     const path = decodeURIComponent(new URL(url).pathname.split("/contents/")[1] || "");
@@ -36,7 +36,10 @@ test("architecture_analyze returns source-grounded findings with exact line evid
   };
   try {
     const response = await worker.fetch(request("architecture_analyze", {
-      owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt", ref: "main", paths: ["package.json", "src/worker.js"],
+      owner: "mohammadrezayaghoobi123-dev",
+      repo: "Chat-gpt",
+      ref: "main",
+      paths: ["package.json", "src/worker.js"],
     }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     assert.ok(body.result, body.error?.message || "MCP tool call did not return a result.");
@@ -49,97 +52,156 @@ test("architecture_analyze returns source-grounded findings with exact line evid
     const finding = analysis.findings.find((item) => item.rule_id === "UNBOUNDED_FETCH");
     assert.equal(finding.evidence[0].line_start, 2);
     assert.equal(finding.verification.result, "not_run");
-  } finally { globalThis.fetch = originalFetch; }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
-test("architecture_analyze rejects protected paths before repository reads", async () => {
-  let calls = 0; const originalFetch = globalThis.fetch;
+test("architecture_analyze rejects protected paths before reading repository content", async () => {
+  let calls = 0;
+  const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => { calls += 1; throw new Error("must not fetch"); };
   try {
-    const response = await worker.fetch(request("architecture_analyze", { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt", paths: [".env"] }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    const response = await worker.fetch(request("architecture_analyze", {
+      owner: "mohammadrezayaghoobi123-dev",
+      repo: "Chat-gpt",
+      paths: [".env"],
+    }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     assert.ok(body.result, body.error?.message || "MCP tool call did not return a result.");
     assert.equal(body.result.isError, true);
     assert.match(body.result.content[0].text, /unsafe or protected/);
     assert.equal(calls, 0);
-  } finally { globalThis.fetch = originalFetch; }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
-test("architecture_analyze rejects duplicate paths before repository reads", async () => {
-  let calls = 0; const originalFetch = globalThis.fetch;
+
+test("architecture_analyze rejects duplicate paths before any repository reads", async () => {
+  let calls = 0;
+  const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => { calls += 1; throw new Error("must not fetch"); };
   try {
-    const response = await worker.fetch(request("architecture_analyze", { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt", paths: ["src/worker.js", "src/worker.js"] }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    const response = await worker.fetch(request("architecture_analyze", {
+      owner: "mohammadrezayaghoobi123-dev",
+      repo: "Chat-gpt",
+      paths: ["src/worker.js", "src/worker.js"],
+    }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     assert.ok(body.result, body.error?.message || "MCP tool call did not return a result.");
     assert.equal(body.result.isError, true);
     assert.match(body.result.content[0].text, /Duplicate analysis path/);
     assert.equal(calls, 0);
-  } finally { globalThis.fetch = originalFetch; }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("architecture_analyze enforces the eight-file limit before repository reads", async () => {
-  let calls = 0; const originalFetch = globalThis.fetch;
+  let calls = 0;
+  const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => { calls += 1; throw new Error("must not fetch"); };
   try {
-    const response = await worker.fetch(request("architecture_analyze", { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt", paths: Array.from({ length: 9 }, (_, index) => "src/file-" + index + ".js") }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    const response = await worker.fetch(request("architecture_analyze", {
+      owner: "mohammadrezayaghoobi123-dev",
+      repo: "Chat-gpt",
+      paths: Array.from({ length: 9 }, (_, index) => "src/file-" + index + ".js"),
+    }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     assert.ok(body.result, body.error?.message || "MCP tool call did not return a result.");
     assert.equal(body.result.isError, true);
     assert.match(body.error || body.result?.content?.[0]?.text || "", /too many items|between 1 and 8/);
     assert.equal(calls, 0);
-  } finally { globalThis.fetch = originalFetch; }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
+
 
 test("architecture_analyze bounds finding volume and reports truncation", async () => {
   const originalFetch = globalThis.fetch;
-  const source = Array.from({ length: 125 }, (_, index) => "fetch('/resource/" + index + "');").join("\\n");
+  const source = Array.from({ length: 125 }, (_, index) => "fetch('/resource/" + index + "');").join("\n");
   globalThis.fetch = async (url) => {
     const path = decodeURIComponent(new URL(url).pathname.split("/contents/")[1] || "");
     const content = path === "src/noisy.js" ? source : null;
-    return content === null ? new Response(JSON.stringify({ message: "Not Found" }), { status: 404 }) : new Response(githubFile(path, content), { status: 200, headers: { "content-type": "application/json" } });
+    return content === null
+      ? new Response(JSON.stringify({ message: "Not Found" }), { status: 404 })
+      : new Response(githubFile(path, content), { status: 200, headers: { "content-type": "application/json" } });
   };
   try {
-    const response = await worker.fetch(request("architecture_analyze", { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt", paths: ["src/noisy.js"] }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    const response = await worker.fetch(request("architecture_analyze", {
+      owner: "mohammadrezayaghoobi123-dev",
+      repo: "Chat-gpt",
+      paths: ["src/noisy.js"],
+    }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
-    assert.ok(body.result, body.error?.message || "MCP tool call did not return a result."); const analysis = JSON.parse(body.result.content[0].text);
+    assert.ok(body.result, body.error?.message || "MCP tool call did not return a result.");
+    const analysis = JSON.parse(body.result.content[0].text);
     assert.equal(analysis.findings.length, 100);
     assert.equal(analysis.summary.findings_returned, 100);
     assert.equal(analysis.summary.findings_total, null);
     assert.equal(analysis.findings_truncated, true);
-  } finally { globalThis.fetch = originalFetch; }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
+
 
 test("architecture_analyze scopes AbortSignal evidence to each fetch invocation", async () => {
   const originalFetch = globalThis.fetch;
-  const source = ["const unrelated = { signal: controller.signal }; fetch(url);", "fetch(url, { signal: controller.signal });", "eval(userInput);"].join("\\n");
+  const source = [
+    "const unrelated = { signal: controller.signal }; fetch(url);",
+    "fetch(url, { signal: controller.signal });",
+    "eval(userInput);",
+  ].join("\n");
   globalThis.fetch = async (url) => {
     const path = decodeURIComponent(new URL(url).pathname.split("/contents/")[1] || "");
-    return path === "src/calls.js" ? new Response(githubFile(path, source), { status: 200, headers: { "content-type": "application/json" } }) : new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+    return path === "src/calls.js"
+      ? new Response(githubFile(path, source), { status: 200, headers: { "content-type": "application/json" } })
+      : new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
   };
   try {
-    const response = await worker.fetch(request("architecture_analyze", { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt", paths: ["src/calls.js"] }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    const response = await worker.fetch(request("architecture_analyze", {
+      owner: "mohammadrezayaghoobi123-dev",
+      repo: "Chat-gpt",
+      paths: ["src/calls.js"],
+    }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
-    assert.ok(body.result, body.error?.message || "MCP tool call did not return a result."); const analysis = JSON.parse(body.result.content[0].text);
-    assert.deepEqual(analysis.findings.map((finding) => [finding.rule_id, finding.evidence[0].line_start]), [["UNBOUNDED_FETCH", 1], ["DYNAMIC_CODE_EXECUTION", 3]]);
+    assert.ok(body.result, body.error?.message || "MCP tool call did not return a result.");
+    const analysis = JSON.parse(body.result.content[0].text);
+    assert.deepEqual(
+      analysis.findings.map((finding) => [finding.rule_id, finding.evidence[0].line_start]),
+      [["UNBOUNDED_FETCH", 1], ["DYNAMIC_CODE_EXECUTION", 3]],
+    );
     assert.equal(analysis.findings[1].severity, "high");
     assert.equal(analysis.findings[1].verification.result, "not_run");
-  } finally { globalThis.fetch = originalFetch; }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("architecture_analyze redacts credential-like values from evidence snippets", async () => {
-  const originalFetch = globalThis.fetch; const secret = "ghp_" + "A".repeat(30);
+  const originalFetch = globalThis.fetch;
+  const secret = "ghp_" + "A".repeat(30);
   const source = 'const token = "' + secret + '"; fetch("/private");';
   globalThis.fetch = async (url) => {
     const path = decodeURIComponent(new URL(url).pathname.split("/contents/")[1] || "");
-    return path === "src/leaky.js" ? new Response(githubFile(path, source), { status: 200, headers: { "content-type": "application/json" } }) : new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+    return path === "src/leaky.js"
+      ? new Response(githubFile(path, source), { status: 200, headers: { "content-type": "application/json" } })
+      : new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
   };
   try {
-    const response = await worker.fetch(request("architecture_analyze", { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt", paths: ["src/leaky.js"] }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    const response = await worker.fetch(request("architecture_analyze", {
+      owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt", paths: ["src/leaky.js"]
+    }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
-    assert.ok(body.result, body.error?.message || "MCP tool call did not return a result."); const analysis = JSON.parse(body.result.content[0].text);
+    assert.ok(body.result, body.error?.message || "MCP tool call did not return a result.");
+    const analysis = JSON.parse(body.result.content[0].text);
     const snippet = analysis.findings[0].evidence[0].snippet;
     assert.doesNotMatch(snippet, new RegExp(secret));
-    assert.match(snippet, /\\[REDACTED\\]/);
-  } finally { globalThis.fetch = originalFetch; }
+    assert.match(snippet, /\[REDACTED\]/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

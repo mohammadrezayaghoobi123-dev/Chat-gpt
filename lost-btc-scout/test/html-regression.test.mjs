@@ -4,8 +4,8 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
 for (const file of ["index.html", "multichain.html"]) {
-  test(\`inline JavaScript parses in \${file}\`, () => {
-    const html = readFileSync(new URL(\`../\${file}\`, import.meta.url), "utf8");
+  test("inline JavaScript parses in " + file, () => {
+    const html = readFileSync(new URL("../" + file, import.meta.url), "utf8");
     const scripts = [...html.matchAll(/<script(?:\s+type="module")?>([\s\S]*?)<\/script>/gi)]
       .map(match => match[1])
       .filter(source => source.trim());

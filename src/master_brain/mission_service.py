@@ -449,8 +449,13 @@ class MissionService:
         try:
             if not self._approvers.is_approver(identity.subject):
                 raise ServiceError(ErrorCode.FORBIDDEN)
-            ids = [e.subject_ref.split(":", 1)[1] for e in self._store.read_all()
-                   if e.event_type == CONTRACT_REGISTERED_EVENT_TYPE]
+            ids = [
+                e.subject_ref.split(":", 1)[1]
+                for e in self._store.read_all()
+                if e.event_type == CONTRACT_REGISTERED_EVENT_TYPE
+                and isinstance(e.subject_ref, str)
+                and e.subject_ref.startswith("mission:")
+            ]
             pending: list[MissionView] = []
             for mission_id in reversed(ids):
                 if len(pending) >= MAX_PENDING_APPROVALS:

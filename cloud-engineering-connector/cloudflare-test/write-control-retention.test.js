@@ -250,4 +250,68 @@ describe("WriteControl terminal operation retention", () => {
     }
   });
 
+
+  it("counts stale IN_PROGRESS rows toward the unresolved safety ceiling", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    try {
+      const stub = stubFor("retention-counts-in-progress");
+      await runInDurableObject(stub, async (instance, state) => {
+        for (let i = 0; i < 999; i++) {
+          insertOperation(state.storage.sql, {
+            keyHash: i.toString(16).padStart(64, "0"),
+            requestHash: (i + 3_000).toString(16).padStart(64, "0"),
+            status: "UNKNOWN", phase: "PR_DISPATCHED",
+            updatedAt: NOW - RETENTION_MS * 2,
+          });
+        }
+        insertOperation(state.storage.sql, {
+          keyHash: "e".repeat(64), requestHash: "f".repeat(64),
+          status: "IN_PROGRESS", phase: "COMMIT_DISPATCHED",
+          updatedAt: NOW - RETENTION_MS * 2,
+        });
+        const result = instance.admitWrite({
+          keyHash: "a".repeat(64), requestHash: "b".repeat(64),
+          windowMs: 60_000, limit: 5,
+        });
+        expect(result).toMatchObject({
+          admitted: false,
+          reason: "UNKNOWN_BACKLOG_FULL",
+          storageStats: { unknownCount: 999, inProgressCount: 1, unresolvedCount: 1_000 },
+        });
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("serializes terminal pruning and concurrent admissions within the five-per-minute quota", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    try {
+      const stub = stubFor("retention-concurrent-admission");
+      await runInDurableObject(stub, async (_instance, state) => {
+        for (let i = 0; i < 5; i++) {
+          insertOperation(state.storage.sql, {
+            keyHash: (i + 10).toString(16).padStart(64, "0"),
+            requestHash: (i + 20).toString(16).padStart(64, "0"),
+            status: "SUCCEEDED", phase: "PR_CREATED",
+            updatedAt: NOW - RETENTION_MS - 1,
+          });
+        }
+      });
+      const results = await Promise.all(Array.from({ length: 10 }, (_, i) => stub.admitWrite({
+        keyHash: (i + 100).toString(16).padStart(64, "0"),
+        requestHash: (i + 200).toString(16).padStart(64, "0"),
+        windowMs: 60_000, limit: 5,
+      })));
+      expect(results.filter((result) => result.admitted && !result.replay)).toHaveLength(5);
+      expect(results.filter((result) => result.reason === "RATE_LIMITED")).toHaveLength(5);
+      const stats = await stub.getStorageStats();
+      expect(stats).toMatchObject({ terminalCount: 0, inProgressCount: 5, unresolvedCount: 5 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 });

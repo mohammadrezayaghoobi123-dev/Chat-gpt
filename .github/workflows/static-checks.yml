@@ -48,6 +48,7 @@ jobs:
               print(f"::warning file={path},line={line},col={col}::{rest.strip()[:300]}")
           print(f"::notice::mypy errors: {len(hits)}")
           print("----- BEGIN MYPY DIAGNOSTICS -----")
-          print("\\n".join(hits))
+          for diagnostic in hits:
+              print(f"MYPY_DIAGNOSTIC {diagnostic}")
           print("----- END MYPY DIAGNOSTICS -----")
           PY

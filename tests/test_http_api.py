@@ -425,7 +425,6 @@ class RawProtocol(HttpBase):
         def boom(*_a, **_k):
             raise RuntimeError("secret internal detail")
         self.app.server.RequestHandlerClass  # server is live
-        import master_brain.http_api as api
         orig = MissionService.get_mission
         MissionService.get_mission = boom
         self.addCleanup(setattr, MissionService, "get_mission", orig)

@@ -9,7 +9,7 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 
 | Gate | Latest evidence | Status |
 |---|---|---|
-| Node test suite | 180 passed, 0 failed | PASS |
+| Node test suite | 181 passed, 0 failed | PASS |
 | Vitest Durable Object suite | 41 passed, 0 failed | PASS |
 | npm dependency audit | 0 reported vulnerabilities | PASS |
 | JavaScript syntax and Wrangler configuration checks | CI job passed | PASS |
@@ -19,6 +19,14 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 | GitHub live read-only integration | Current Staging candidate hit GitHub unauthenticated rate limit; dedicated token not configured | BLOCKED |
 | Claude account acceptance | Must be executed in the user's Claude account | BLOCKED |
 | Production deployment | Not performed | BLOCKED |
+
+### Latest exact-head CI evidence — 2026-11-02
+
+- Reviewed branch head: `92d23c149df535ad1e7086124ac3dade38d4628a`.
+- Cloud Engineering Connector CI run [41466512660](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41466512660): success. Node suite: **181 passed, 0 failed**; Cloudflare Workers/SQLite Durable Object suite: **41 passed, 0 failed**; `npm audit --audit-level=moderate`: **0 vulnerabilities**; syntax checks and Production/Staging Wrangler dry-runs completed successfully.
+- Full History Secret Scan run [41466512862](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41466512862): success on the PR diff and fetched refs.
+- The CI `post-deploy-staging-smoke` job was **skipped**. These results are source/CI evidence only and do not establish live Staging acceptance.
+- Wrangler 4.155.0 emitted configuration warnings that top-level `tags` and `env.staging.tags` are unexpected fields. Dry-run succeeded, but these warnings remain a configuration-hygiene item to resolve before the next release candidate.
 
 PR: [#127](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/127)  
 Base: `integration/durable-write-control-release` (consolidated write-control line)  

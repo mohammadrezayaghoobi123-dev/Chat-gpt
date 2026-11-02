@@ -207,6 +207,8 @@ class RecoveryCandidateTests(unittest.TestCase):
     def test_unverified_failure_transition_is_blocked_after_dispatch_boundary(self):
         from master_brain.execution_registry import InvalidTransition
 
+        from master_brain.execution_registry import InvalidTransition
+
         running = self.reserve("no-false-failure-running", "2026-10-12T00:00:00Z")
         running = self.transition(running, State.RUNNING, "2026-10-12T00:00:01Z")
         unknown = self.reserve("no-false-failure-reconciliation", "2026-10-12T00:00:02Z")

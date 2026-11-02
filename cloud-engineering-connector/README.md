@@ -99,3 +99,6 @@ The next Wrangler deployment will enable Workers Logs for both environments with
 
 
 The configured 1 GiB planning ceiling is deliberately conservative for the Workers Free per-object SQLite limit; Cloudflare documents 1 GiB per SQLite-backed Durable Object on Free and 10 GiB on Paid. The runtime does not infer the account plan. Keep the lower ceiling until the account tier and actual namespace usage are verified in Cloudflare.
+
+
+Health probes: `GET /healthz` is a liveness endpoint and stays independent of credentials and Durable Object availability. `GET /readyz` performs a lightweight `WRITE_CONTROL.ping()` probe and returns 503 until the Durable Object binding/schema is available. The readiness probe does not scan the full operation ledger.

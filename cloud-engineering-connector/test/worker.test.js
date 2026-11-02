@@ -885,3 +885,20 @@ test("overlong configured MCP bearer tokens fail closed before authentication",a
  assert.deepEqual(await response.json(),{error:"server_misconfigured",message:"MCP_AUTH_TOKEN must be at most 512 characters."});
  assert.equal(limiterCalls,0);
 });
+
+
+test("unresolved operation backlog fails closed before any GitHub write", async () => {
+ const writeControl=createWriteControlBinding();
+ writeControl.__test.setBacklogFull(true);
+ const fixture=createGitHubWriteMock({filePath:"docs/proposal.txt",blobSha:"d".repeat(40)});
+ const originalFetch=globalThis.fetch;globalThis.fetch=fixture.fetch;
+ try {
+  const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Backlog saturation probe",summary:"Verify fail-closed behavior",files:[{path:"docs/proposal.txt",content:"proposal"}]};
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,WRITE_CONTROL:writeControl,GITHUB_TOKEN:"test-token"});
+  const body=await response.json();
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/WRITE_UNKNOWN_BACKLOG_FULL/);
+  assert.match(body.result.content[0].text,/Reconcile quarantined operations/);
+  assert.equal(fixture.calls.length,0,"no GitHub side effect may start while the unresolved ledger is saturated");
+ } finally { globalThis.fetch=originalFetch; }
+});

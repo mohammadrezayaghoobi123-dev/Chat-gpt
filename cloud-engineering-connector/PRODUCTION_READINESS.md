@@ -25,7 +25,7 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 
 - Integrated release candidate PR: [#129](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/129), branch `assistant/unified-product-release-candidate-2026-11-02`.
 - Exact application-code SHA with a fully green CI matrix: `b23eec24e5f2df74e778451d89da4096c75c2dfe`.
-- The release-approval guard is included in this SHA. A subsequent runbook-only update will trigger Connector CI again; no Worker deployment is part of this documentation change.
+- The release-approval guard is included in this SHA. Runbook updates are documentation-only and do not change Worker traffic, secrets, or deployments.
 - Current `main` head: `f2cae91de818385ec48daafc43c621b9e2cc0675`; the candidate compares as 945 commits ahead and 0 behind. No commit was pushed to `main`.
 - Connector CI: PASS; **196 Node tests and 41 Durable Object tests** passed; npm audit reported 0 vulnerabilities; Wrangler configuration checks passed.
 - Cloud Agent CI: PASS.
@@ -116,12 +116,13 @@ Fresh live runtime probes were completed on 2026-11-02 against the active deploy
 - `GET /readyz`: HTTP 404 (`not_found`).
 - MCP `initialize`: HTTP 200 for both protocol versions `2025-06-18` and `2025-11-25`.
 - MCP `tools/list`: HTTP 200, five tools; every tool has `annotations=null`. The anonymous tool list correctly omits authenticated `create_change_pr`.
+- With both intended client Origins (`https://claude.ai` and `https://chatgpt.com`), Staging `initialize` and `tools/list` return HTTP 200. The same tools list still has five tools with null annotations. `https://chat.openai.com` is rejected with HTTP 403 `forbidden_origin`.
 - Unauthenticated `project_inspect`: JSON-RPC HTTP 200 with `isError=true`; underlying GitHub API returned HTTP 403 rate limit exceeded. This is consistent with the missing dedicated read-only token.
 
 **Production runtime**
 - `GET /healthz`: HTTP 200, but the legacy response exposes `github_configured=true` and `auth_configured=true` booleans. This is a configuration-presence disclosure (not secret-value disclosure) and differs from the candidate's tested health response, which does not disclose credential configuration.
 - `GET /readyz`: HTTP 404 (`not_found`).
-- MCP `initialize` and `tools/list` without a bearer token: HTTP 401 `unauthorized`. A probe using the Worker hostname as the Origin returned HTTP 403 `forbidden_origin`; the actual Claude/ChatGPT client origins must be validated against the configured allowlist.
+- MCP `initialize` and `tools/list` without a bearer token: HTTP 401 `unauthorized`. `https://claude.ai` and `https://chatgpt.com` pass the origin gate and reach HTTP 401 authentication; the Worker hostname and `https://chat.openai.com` return HTTP 403 `forbidden_origin`. This verifies the intended client Origins are allowlisted, but not authenticated acceptance.
 - No valid bearer token was used or retrieved, and no authenticated Production tool call was attempted.
 
 These probes establish protocol reachability of legacy Workers only. They do not establish readiness, GitHub integration, annotation compliance, current-candidate deployment, or actual Claude-account acceptance. A successful `initialize` or `tools/list` alone is not end-to-end acceptance.
@@ -157,7 +158,7 @@ The active integrated candidate is PR #129, branch `assistant/unified-product-re
 
 - PR #129 contains the unified Master Brain/Python/CTP history and the Cloud Engineering Connector / Cloud Agent feature history through a real merge commit. The merge topology preserves both parent histories; do not squash or rewrite it.
 - PR #127 is a feature-history/audit reference incorporated into PR #129; do not merge it separately to `main`.
-- The current application-code candidate SHA is `b23eec24e5f2df74e778451d89da4096c75c2dfe`; the runbook-only commit is `9264780df3cfd2f82f9c0d953d75b1f3617d7c04`.
+- The current application-code candidate SHA is `b23eec24e5f2df74e778451d89da4096c75c2dfe`; the current runbook revision is documentation-only and does not change application code.
 - Current `main` remains `f2cae91de818385ec48daafc43c621b9e2cc0675`; GitHub compare reports the candidate as 945 commits ahead and 0 behind.
 - PR #129 is Draft, mergeable, and has zero submitted reviews at the latest check. The new Staging release guard will reject it until it is marked ready and an independent reviewer approves the exact current head.
 - Keep all changes on the candidate branch. Do not merge to `main`, close superseded audit PRs, or rewrite history until independent review, governance controls, and release gates are satisfied.

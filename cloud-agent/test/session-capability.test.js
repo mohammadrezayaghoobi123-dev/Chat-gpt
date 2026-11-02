@@ -139,9 +139,10 @@ test("session creation fails closed when Durable Object initialization fails", a
   assert.equal(Object.hasOwn(body, "session_token"), false);
 });
 
-test("session initialization is one-time and persists only a verifier", async () => {
+test("session initialization is one-time and persists only one-way verifiers", async () => {
   const { agent, storage, tokenHash } = await makeInitializedAgent();
   assert.equal(storage.values.get("session-token-hash"), tokenHash);
+  assert.equal(storage.values.get("principal-auth-hash"), PRINCIPAL_AUTH_HASH);
   assert.equal(storage.values.has("session_token"), false);
   const duplicate = await agent.fetch(new Request("https://agent-session.internal/initialize", {
     method: "POST",
@@ -296,6 +297,7 @@ test("expired sessions delete history, rate state, and verifier before rejecting
   assert.equal(storage.values.has("rate-window"), false);
   assert.equal(storage.values.has("last-activity-at"), false);
   assert.equal(storage.values.has("session-token-hash"), false);
+  assert.equal(storage.values.has("principal-auth-hash"), false);
   const secondAttempt = await agent.fetch(new Request("https://agent-session.internal/history", {
     headers: { "x-principal-id": "owner", "x-principal-auth-hash": PRINCIPAL_AUTH_HASH, "x-session-token": SESSION_TOKEN }
   }));

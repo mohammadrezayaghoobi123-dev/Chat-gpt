@@ -408,11 +408,13 @@ def evaluate_approved_execution_gate(
             "scope": "exact_contract_digest",
             "identity_verified_by_this_module": False,
         }
-        if receipt.action_digest is not None:
+        action_digest_value = receipt.action_digest
+        if action_digest_value is not None:
             expected_payload["scope"] = "exact_contract_digest_and_action"
-            expected_payload["action_digest"] = receipt.action_digest
-        if receipt.expires_at is not None:
-            expected_payload["expires_at"] = receipt.expires_at
+            expected_payload["action_digest"] = action_digest_value
+        expires_at_value = receipt.expires_at
+        if expires_at_value is not None:
+            expected_payload["expires_at"] = expires_at_value
         for field, value in (("signature", receipt.signature),
                              ("signing_key_id", receipt.signing_key_id),
                              ("signature_alg", receipt.signature_alg)):

@@ -16,6 +16,8 @@ if command -v tailscaled >/dev/null 2>&1 && [ "${CODESPACES:-false}" = "true" ];
   sudo chmod 700 /var/lib/tailscale
   if [ -f /tmp/tailscaled.state ] && [ ! -f /var/lib/tailscale/tailscaled.state ]; then
     sudo cp -p /tmp/tailscaled.state /var/lib/tailscale/tailscaled.state
+  fi
+  if [ -f /var/lib/tailscale/tailscaled.state ]; then
     sudo chmod 600 /var/lib/tailscale/tailscaled.state
   fi
   if ! pgrep -x tailscaled >/dev/null 2>&1; then

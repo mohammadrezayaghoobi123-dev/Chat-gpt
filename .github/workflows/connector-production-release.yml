@@ -24,8 +24,6 @@ jobs:
       run:
         working-directory: cloud-engineering-connector
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       PRODUCTION_MCP_URL: https://chat-gpt111.mohammadrezayaghoobi123.workers.dev
       RELEASE_ENV: production
 
@@ -37,6 +35,9 @@ jobs:
 
       - name: Validate immutable release branch and credentials
         shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           expected="${GITHUB_REF_NAME#integration/production-release-}"
@@ -75,6 +76,9 @@ jobs:
       - name: Preflight Production credentials, namespace isolation, and rollback target
         id: preflight
         shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           node --input-type=module <<'NODE'
           import assert from "node:assert/strict";
@@ -134,9 +138,15 @@ jobs:
       - name: Deploy candidate to Production
         id: deploy
         run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Verify Production Durable Object namespace isolation
         shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           node --input-type=module <<'NODE'
           import assert from "node:assert/strict";
@@ -164,6 +174,9 @@ jobs:
       - name: Confirm deployed version and write release evidence
         if: success()
         shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           node --input-type=module <<'NODE'
           const account = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -205,4 +218,6 @@ jobs:
           console.log("Production traffic restored to the captured immutable rollback version.");
           NODE
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           PREVIOUS_VERSION_ID: ${{ steps.preflight.outputs.previous_version_id }}

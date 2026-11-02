@@ -114,3 +114,10 @@ The Streamable HTTP endpoint supports MCP protocol versions `2025-03-26`, `2025-
 ## Staging promotion gate
 
 A candidate version must pass the exact-commit CI suite, npm advisory audit, JavaScript syntax checks, and Wrangler dry-runs before upload. The uploaded Cloudflare version is inspected for its inherited secrets and exact Durable Object / rate-limit bindings before any Staging deployment. After deployment, run authenticated MCP tool discovery and a real read-only GitHub repository call, then verify architecture findings against known fixtures. Production is not eligible until those checks, independent review, account MFA, token rotation, and rollback evidence are complete.
+
+
+## Read-only browser console
+
+The root path serves a same-origin console suitable for a mobile browser. It uses a per-response cryptographic nonce for its inline script, restrictive CSP, \`no-store\`, same-origin-only API calls, and in-memory bearer-token handling (no localStorage/sessionStorage). Disconnect clears the token. The UI exposes only five read-only tools, including bounded \`architecture_analyze\`; write-capable tools are not rendered.
+
+When \`PUBLIC_READ_ONLY=true\`, requests with no Authorization header may use the explicit read-only allowlist even when the server bearer secret is configured. A supplied invalid bearer token is still rejected. Anonymous requests are rate-limited and GitHub credentials are stripped before tool execution, so only public repository data is available. The Worker remains the security boundary.

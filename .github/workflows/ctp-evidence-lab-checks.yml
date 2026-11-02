@@ -1,0 +1,30 @@
+name: CTP Evidence Lab Checks
+
+on:
+  pull_request:
+    paths:
+      - "public-demos/ctp-evidence-lab/**"
+      - ".github/workflows/ctp-evidence-lab-checks.yml"
+  push:
+    branches:
+      - "feature/ctp-evidence-demo-current-main"
+    paths:
+      - "public-demos/ctp-evidence-lab/**"
+      - ".github/workflows/ctp-evidence-lab-checks.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+      - name: Test local-only behavior and HTML escaping
+        working-directory: public-demos/ctp-evidence-lab
+        run: npm test

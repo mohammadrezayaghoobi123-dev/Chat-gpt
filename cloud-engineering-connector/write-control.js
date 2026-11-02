@@ -192,7 +192,7 @@ export class WriteControl extends DurableObject {
         length(key_hash) + length(request_hash) + length(status) + length(phase) +
         32 + COALESCE(length(branch_name), 0) + COALESCE(length(commit_sha), 0) +
         COALESCE(length(pr_url), 0) + COALESCE(length(error_code), 0) +
-        COALESCE(length(git_metadata), 0)
+        COALESCE(length(CAST(git_metadata AS BLOB)), 0)
       ), 0) AS logical_bytes
       FROM write_operations
       GROUP BY status

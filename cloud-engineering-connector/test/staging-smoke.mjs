@@ -250,7 +250,8 @@ console.log(JSON.stringify({
   result: "PASS",
   staging: new URL(base).host,
   checks: [
-    "healthz, SQLite Durable Object probe, and authenticated MCP registry self-check",
+    "healthz liveness and readyz Durable Object readiness",
+    "MCP initialization, tool discovery, and initialized notification",
     "root console, nonce CSP, no-store, and no credential/config disclosure",
     "same-origin CORS accepted; unlisted cross-origin rejected",
     "MCP initialize 2025-11-25 and initialized notification",

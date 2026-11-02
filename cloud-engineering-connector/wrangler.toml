@@ -33,6 +33,9 @@ storage = "sqlite"
 
 [env.staging]
 
+[env.staging.vars]
+ALLOW_GITHUB_TOKEN_READ_FALLBACK = "true"
+
 [env.staging.observability]
 enabled = true
 head_sampling_rate = 1

@@ -132,3 +132,8 @@ For the Staging acceptance environment, use `https://chat-gpt111-staging.mohamma
 For a future authenticated deployment, Claude's custom connector supports fixed request headers. Configure `Authorization: Bearer <MCP_AUTH_TOKEN>` only through Claude's encrypted connector credential UI and only after the production credential is rotated. Never place the token in this repository, a prompt, a test fixture, or a public URL.
 
 Claude compatibility is not established by protocol tests alone. Acceptance still requires adding the connector in the actual Claude account, confirming the five read-only tools appear, and executing a read-only repository inspection. Free accounts are limited to one custom connector, so do not consume that slot with a temporary connector if it is already in use.
+
+
+## MCP tool safety metadata
+
+Every advertised tool carries a human-readable `title`, explicit `readOnlyHint`, and explicit `destructiveHint`. The five public read-only tools are annotated as read-only and non-destructive; `create_change_pr` is not read-only, is not destructive, and is never advertised in anonymous public-read-only mode. The Staging acceptance script verifies these annotations against the deployed endpoint, not only the local tool registry.

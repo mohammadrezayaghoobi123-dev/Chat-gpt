@@ -1,0 +1,201 @@
+name: Connector Production Release
+
+on:
+  push:
+    branches:
+      - "integration/production-release-*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: connector-production-release
+  cancel-in-progress: false
+
+jobs:
+  release-production:
+    name: Deploy exact candidate to Production and verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment:
+      name: production
+    defaults:
+      run:
+        working-directory: cloud-engineering-connector
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      PRODUCTION_MCP_URL: https://chat-gpt111.mohammadrezayaghoobi123.workers.dev
+
+    steps:
+      - name: Checkout immutable candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate immutable release branch and credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${GITHUB_REF_NAME#integration/production-release-}"
+          if [[ ! "$expected" =~ ^[0-9a-f]{40}$ ]] || [[ "$expected" != "$GITHUB_SHA" ]]; then
+            echo "::error::Release branch suffix must equal the exact 40-character candidate commit SHA."
+            exit 1
+          fi
+          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" || -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
+            echo "::error::Configure the protected production environment with CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID."
+            exit 1
+          fi
+          echo "Candidate SHA validated: $GITHUB_SHA"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=moderate
+
+      - name: Run complete test and configuration gates
+        run: |
+          npm test
+          npm run check
+
+      - name: Preflight Production credentials, namespace isolation, and rollback target
+        id: preflight
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { appendFileSync } from "node:fs";
+
+          const account = process.env.CLOUDFLARE_ACCOUNT_ID;
+          const token = process.env.CLOUDFLARE_API_TOKEN;
+          const root = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts`;
+          async function api(script, path) {
+            const response = await fetch(`${root}/${script}${path}`, {
+              headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+              signal: AbortSignal.timeout(15000),
+            });
+            const body = await response.json();
+            assert.equal(response.ok && body.success, true, `Cloudflare API preflight failed: HTTP ${response.status}`);
+            return body.result;
+          }
+
+          const [productionSettings, stagingSettings, deploymentData] = await Promise.all([
+            api("chat-gpt111", "/settings"),
+            api("chat-gpt111-staging", "/settings"),
+            api("chat-gpt111", "/deployments?per_page=1&page=1"),
+          ]);
+          const productionBindings = new Map((productionSettings.bindings || []).map((binding) => [binding.name, binding]));
+          const stagingBindings = new Map((stagingSettings.bindings || []).map((binding) => [binding.name, binding]));
+
+          const requiredSecrets = ["GITHUB_READONLY_TOKEN", "GITHUB_TOKEN", "MCP_AUTH_TOKEN", "MCP_ALLOWED_ORIGINS"];
+          const missing = requiredSecrets.filter((name) => productionBindings.get(name)?.type !== "secret_text");
+          if (missing.length) {
+            throw new Error("Production deployment blocked; missing Worker secret binding(s): " + missing.join(", ") + ". Add them in Cloudflare Workers > chat-gpt111 > Settings > Variables and Secrets. Secret values are never read.");
+          }
+
+          const publicReadOnly = productionBindings.get("PUBLIC_READ_ONLY");
+          assert.ok(publicReadOnly && ["plain_text", "secret_text"].includes(publicReadOnly.type), "Production PUBLIC_READ_ONLY binding must be configured");
+          if (publicReadOnly.type === "plain_text") assert.equal(publicReadOnly.text, "true", "PUBLIC_READ_ONLY must be true for anonymous read-only Claude access");
+
+          const productionLimiter = productionBindings.get("MCP_RATE_LIMITER");
+          const stagingLimiter = stagingBindings.get("MCP_RATE_LIMITER");
+          assert.ok(productionLimiter?.namespace_id && stagingLimiter?.namespace_id, "Both Production and Staging MCP_RATE_LIMITER namespaces are required");
+          assert.notEqual(productionLimiter.namespace_id, stagingLimiter.namespace_id, "Production and Staging rate-limit namespaces must be isolated");
+
+          const existingProductionWriteControl = productionBindings.get("WRITE_CONTROL");
+          const stagingWriteControl = stagingBindings.get("WRITE_CONTROL");
+          assert.ok(stagingWriteControl?.namespace_id, "Staging WRITE_CONTROL namespace is required");
+          if (existingProductionWriteControl) {
+            assert.equal(existingProductionWriteControl.type, "durable_object_namespace");
+            assert.notEqual(existingProductionWriteControl.namespace_id, stagingWriteControl.namespace_id, "Production and Staging Durable Object namespaces must be isolated");
+          }
+          // First Production deployment creates WRITE_CONTROL through the checked-in SQLite migration.
+          const active = deploymentData.deployments?.[0];
+          const previous = active?.versions?.find((version) => version.percentage === 100) || active?.versions?.[0];
+          assert.ok(previous?.version_id, "Could not identify the current 100% Production version for rollback");
+          appendFileSync(process.env.GITHUB_OUTPUT, `previous_version_id=${previous.version_id}\n`);
+          console.log("Production preflight passed; isolated namespace checks passed; immutable rollback target captured.");
+          NODE
+
+      - name: Deploy candidate to Production
+        id: deploy
+        run: npx wrangler deploy
+
+      - name: Verify Production Durable Object namespace isolation
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          const account = process.env.CLOUDFLARE_ACCOUNT_ID;
+          const token = process.env.CLOUDFLARE_API_TOKEN;
+          async function settings(script) {
+            const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/${script}/settings`, {
+              headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+              signal: AbortSignal.timeout(15000),
+            });
+            const body = await response.json();
+            assert.equal(response.ok && body.success, true, `Could not inspect ${script} settings`);
+            return new Map((body.result.bindings || []).map((binding) => [binding.name, binding]));
+          }
+          const [production, staging] = await Promise.all([settings("chat-gpt111"), settings("chat-gpt111-staging")]);
+          assert.ok(production.get("WRITE_CONTROL")?.namespace_id, "Production migration did not create WRITE_CONTROL");
+          assert.notEqual(production.get("WRITE_CONTROL").namespace_id, staging.get("WRITE_CONTROL")?.namespace_id, "Production and Staging Durable Object namespaces must differ");
+          assert.notEqual(production.get("MCP_RATE_LIMITER")?.namespace_id, staging.get("MCP_RATE_LIMITER")?.namespace_id, "Production and Staging rate-limit namespaces must differ");
+          console.log("Production and Staging state namespaces are isolated.");
+          NODE
+
+      - name: Run live Production acceptance
+        run: node test/production-smoke.mjs
+
+      - name: Confirm deployed version and write release evidence
+        if: success()
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          const account = process.env.CLOUDFLARE_ACCOUNT_ID;
+          const token = process.env.CLOUDFLARE_API_TOKEN;
+          const url = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/chat-gpt111/deployments?per_page=1&page=1`;
+          const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+          const body = await response.json();
+          if (!response.ok || !body.success) throw new Error("Could not verify final Production deployment.");
+          const active = body.result.deployments?.[0];
+          const version = active?.versions?.find((item) => item.percentage === 100);
+          if (!version?.version_id) throw new Error("Production does not have one active 100% version.");
+          console.log(`Production deployment verified. Candidate=${process.env.GITHUB_SHA}; Version=${version.version_id}; Deployment=${active.id}`);
+          NODE
+
+      - name: Roll back Production if post-deploy acceptance fails
+        if: failure() && steps.deploy.outcome == 'success' && steps.preflight.outputs.previous_version_id != ''
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          const account = process.env.CLOUDFLARE_ACCOUNT_ID;
+          const token = process.env.CLOUDFLARE_API_TOKEN;
+          const previous = process.env.PREVIOUS_VERSION_ID;
+          const url = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/chat-gpt111/deployments`;
+          const response = await fetch(url, {
+            method: "POST",
+            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+            body: JSON.stringify({
+              strategy: "percentage",
+              versions: [{ version_id: previous, percentage: 100 }],
+              annotations: { "workers/message": `Automatic Production rollback after failed acceptance for ${process.env.GITHUB_SHA}` },
+            }),
+            signal: AbortSignal.timeout(30000),
+          });
+          const body = await response.json();
+          if (!response.ok || !body.success) throw new Error("Automatic Production rollback failed; manual rollback is required.");
+          // The pre-release Production Worker may predate /readyz and the Durable Object migration.
+          const health = await fetch(new URL("/healthz", process.env.PRODUCTION_MCP_URL), { signal: AbortSignal.timeout(15000) });
+          if (!health.ok) throw new Error("Rollback was requested but Production liveness did not recover.");
+          console.log("Production traffic restored to the captured immutable rollback version.");
+          NODE
+        env:
+          PREVIOUS_VERSION_ID: ${{ steps.preflight.outputs.previous_version_id }}

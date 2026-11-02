@@ -76,7 +76,7 @@ test("unknown RPC methods return method-not-found",async()=>{const r=await worke
 
 test("engineering standards require evidence and prohibit false verification claims",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"engineering_standards",arguments:{}}),env);const b=await r.json();const result=JSON.parse(b.result.content[0].text);assert.ok(result.mandatory_behavior.some(x=>x.includes("Never claim tests")));assert.ok(result.required_report.includes("Unverified items"));assert.match(result.quality_gate,/not proof of correctness/)});
 
-test("unauthenticated public read-only calls use scoped GitHub credentials only for GET requests",async()=>{
+test("unauthenticated public read-only calls never forward GitHub credentials",async()=>{
  const originalFetch=globalThis.fetch;
  const authorizationHeaders=[];const userAgentHeaders=[];
  globalThis.fetch=async(input,init={})=>{
@@ -93,7 +93,7 @@ test("unauthenticated public read-only calls use scoped GitHub credentials only 
   const body=await response.json();
   assert.equal(body.result.content[0].type,"text");
   assert.equal(authorizationHeaders.length,3);
-  assert.deepEqual(authorizationHeaders,["Bearer must-not-leak","Bearer must-not-leak","Bearer must-not-leak"]);
+  assert.deepEqual(authorizationHeaders,[null,null,null]);
   assert.deepEqual(userAgentHeaders,["cloud-engineering-connector/0.1.0","cloud-engineering-connector/0.1.0","cloud-engineering-connector/0.1.0"]);
   assert.doesNotMatch(JSON.stringify(body),/must-not-leak/);
  }finally{globalThis.fetch=originalFetch}
@@ -106,7 +106,7 @@ test("public read-only GitHub mode rejects non-GET requests even if a write tool
   const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]}},1,token),{...env,PUBLIC_READ_ONLY:"true",READ_ONLY_GITHUB:true,MCP_AUTH_TOKEN:token,GITHUB_TOKEN:"test-token"});
   const body=await response.json();
   assert.equal(body.result.isError,true);
-  assert.match(body.result.content[0].text,/PUBLIC_READ_ONLY requests are restricted to GitHub GET operations/);
+  assert.match(body.result.content[0].text,/PUBLIC_READ_ONLY mode cannot create GitHub pull requests/);
   assert.equal(calls,0);
  }finally{globalThis.fetch=originalFetch}
 });

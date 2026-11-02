@@ -123,16 +123,37 @@ The root path serves a same-origin console suitable for a mobile browser. It use
 When `PUBLIC_READ_ONLY=true`, requests with no Authorization header may use the explicit read-only allowlist even when the server bearer secret is configured. A supplied invalid bearer token is still rejected. Anonymous requests are rate-limited. Repository reads use only the separate GITHUB_READONLY_TOKEN for the exact configured repository allowlist; the write-capable GITHUB_TOKEN is never forwarded to anonymous tool execution. READ_ONLY_GITHUB rejects every upstream method except GET. The Worker remains the security boundary.
 
 
-## Claude remote connector setup
+## Remote MCP client availability
 
-Claude Free supports one custom remote connector. Add the Worker endpoint under **Customize → Connectors → Add custom connector**. The endpoint must be publicly reachable over HTTPS because Claude connects from Anthropic's cloud, not from the user's device.
+The Worker endpoint is a standard remote MCP service, but **client-plan eligibility is separate from protocol compatibility**. A successful MCP handshake does not mean every ChatGPT or Claude plan can register a custom connector.
 
-The Staging acceptance endpoint is `https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev/mcp`. Its currently deployed version passed the live read-only MCP/GitHub smoke suite. The next candidate adds a separate repository-scoped GITHUB_READONLY_TOKEN and global GitHub API quota; do not promote that candidate until the new secret is installed in the Staging Worker. In the target design, anonymous calls use only that read-only token for GET requests to the exact repository allowlist; the write-capable GITHUB_TOKEN remains reserved for authenticated draft-PR creation. Do not configure a shared write credential in Claude for Staging acceptance.
+### Claude
 
-For a future authenticated deployment, Claude's custom connector supports fixed request headers. Configure `Authorization: Bearer <MCP_AUTH_TOKEN>` only through Claude's encrypted connector credential UI and only after the production credential is rotated. Never place the token in this repository, a prompt, a test fixture, or a public URL.
+Anthropic's current remote custom connector documentation lists **Pro, Max, Team, and Enterprise**. Claude Free cannot add a custom remote MCP connector.
 
-Claude compatibility is not established by protocol tests alone. Acceptance still requires adding the connector in the actual Claude account, confirming the five read-only tools appear, and executing a read-only repository inspection. Free accounts are limited to one custom connector, so do not consume that slot with a temporary connector if it is already in use.
+- Add a custom remote connector from Claude web: **Settings → Connectors → Add custom connector**.
+- Claude iOS/Android can use remote connectors that were already added through the web account.
+- Claude Desktop local extensions are available more broadly, but they require a local machine and do not meet this project's cloud-only/mobile requirement.
 
+Official references:
+- https://support.anthropic.com/en/articles/11175166-about-custom-integrations-using-remote-mcp
+- https://support.anthropic.com/en/articles/11503834-building-custom-integrations-via-remote-mcp-servers
+
+### ChatGPT
+
+OpenAI's current custom MCP connection documentation lists **Business and Enterprise/Edu** for full custom MCP connections. Pro can connect custom MCP servers for read/fetch access in developer mode, but full write/modify MCP support is limited to Business and Enterprise/Edu. **ChatGPT Free cannot create custom remote MCP connections**, and custom MCP connections are currently web-only, not mobile.
+
+Official references:
+- https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt
+- https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt
+
+### Current project acceptance status
+
+The live Staging endpoint is `https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev/mcp`. Protocol probes for Claude-compatible `2025-06-18` and modern MCP `2026-07-28` have passed against the previously deployed Staging version. These are protocol-level tests only; they do not bypass plan restrictions or substitute for registration in a real Claude/ChatGPT account.
+
+For the current Free-plan setup, use the secure browser console as the interim iPhone access path, or another MCP client that supports remote Streamable HTTP and bearer authentication. Do not describe the current Free accounts as having direct custom-MCP integration. Do not configure a shared write credential in a client until the authenticated write path has passed its own acceptance gate.
+
+For eligible paid plans, configure `Authorization: Bearer <MCP_AUTH_TOKEN>` only through the client's secure credential UI. Never place the token in this repository, a prompt, a test fixture, or a public URL.
 
 ## MCP tool safety metadata
 

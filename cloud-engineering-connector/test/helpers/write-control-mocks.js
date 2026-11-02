@@ -4,13 +4,15 @@ export function createWriteControlBinding() {
   let backlogFull = false;
   const storageStats = () => ({ unknownCount: backlogFull ? 1000 : 0, inProgressCount: 0, terminalCount: 0, unresolvedCount: backlogFull ? 1000 : 0, unresolvedLimit: 1000, unresolvedRemaining: backlogFull ? 0 : 1000, oldestUnresolvedUpdatedAt: null, operationCount: operations.size, admissionCount: operations.size, operationLogicalBytes: 4096, admissionLogicalBytes: 256, logicalPayloadBytes: 4352, logicalPayloadUtilization: 4352 / 1073741824, storageLimitBytes: 1073741824, retentionMs: 2592000000 });
   const stub = {
+    async ping() { events.push({ type: "ping" }); return { ok: true, schemaVersion: 1 }; },
+    async getAdmissionStats() { events.push({ type: "get-admission-stats" }); const stats = storageStats(); return { unknownCount: stats.unknownCount, inProgressCount: 0, unresolvedCount: stats.unresolvedCount, retentionMs: stats.retentionMs }; },
     async admitWrite(input) {
-      if (backlogFull) return { admitted: false, reason: "UNKNOWN_BACKLOG_FULL", storageStats: storageStats() };
       const current = operations.get(input.keyHash);
       if (current) {
         if (current.requestHash !== input.requestHash) return { admitted: false, reason: "IDEMPOTENCY_CONFLICT" };
         return { admitted: true, replay: true, operation: { ...current, gitMetadata: { ...current.gitMetadata } }, storageStats: storageStats() };
       }
+      if (backlogFull) return { admitted: false, reason: "UNKNOWN_BACKLOG_FULL", storageStats: storageStats() };
       const operation = {
         keyHash: input.keyHash, requestHash: input.requestHash, status: "IN_PROGRESS",
         phase: "RESERVED", leaseGeneration: 1, createdAt: input.now, updatedAt: input.now,

@@ -121,6 +121,7 @@ function runPreflightWithMissingObservability(source, stepName, production) {
       { name: "MCP_ALLOWED_ORIGINS", type: "secret_text" },
       { name: "PUBLIC_READ_ONLY", type: "plain_text", text: "true" },
       { name: "MCP_RATE_LIMITER", type: "ratelimit", namespace_id: "production-rate" },
+      { name: "WRITE_CONTROL", type: "durable_object_namespace", namespace_id: "production-write" },
     ],
     observability: null,
   };
@@ -168,7 +169,7 @@ test("Staging release preflight blocks when secure persistent observability is a
   runPreflightWithMissingObservability(source, "Preflight Staging bindings and capture rollback target", false);
 });
 
-test("Production release preflight blocks when secure persistent observability is absent", () => {
+test("Production post-deploy verification blocks when secure persistent observability is absent", () => {
   const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
-  runPreflightWithMissingObservability(source, "Preflight Production credentials, namespace isolation, and rollback target", true);
+  runPreflightWithMissingObservability(source, "Verify Production Durable Object namespace isolation", true);
 });

@@ -42,7 +42,18 @@ jobs:
           assert env.get("TS_SOCKET") == "/tmp/tailscaled.sock", "Unexpected Tailscale socket"
           installer = Path(".devcontainer/install-openclaw.sh").read_text()
           assert "--tun=userspace-networking" in installer, "Tailscale daemon must use userspace networking"
-          print("PASS: unprivileged Dev Container and Tailscale userspace configuration")
+          for name in ("install-openclaw.sh", "keep-openclaw-alive.sh", "start-openclaw-gateway.sh"):
+              script = Path(".devcontainer", name).read_text()
+              assert "umask 077" in script, f"{name} must create private files by default"
+          assert "sudo chmod 700 /var/lib/tailscale" in installer
+          assert "sudo chmod 600 /var/lib/tailscale/tailscaled.state" in installer
+          watchdog = Path(".devcontainer/keep-openclaw-alive.sh").read_text()
+          startup = Path(".devcontainer/start-openclaw-gateway.sh").read_text()
+          assert "chmod 700 /tmp/openclaw" in watchdog
+          assert "chmod 600 /tmp/openclaw/watchdog.log" in watchdog
+          assert "chmod 700 /tmp/openclaw" in startup
+          assert "chmod 600 /tmp/openclaw/gateway-codespace.log" in startup
+          print("PASS: unprivileged Dev Container, Tailscale userspace, and private state/log permissions")
           PY
       - name: Validate Dev Container shell scripts
         run: bash -n .devcontainer/*.sh

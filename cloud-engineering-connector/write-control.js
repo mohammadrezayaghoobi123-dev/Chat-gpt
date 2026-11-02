@@ -209,7 +209,7 @@ export class WriteControl extends DurableObject {
         return { admitted: true, replay: true, operation: existing, storageStats };
       }
 
-      const storageStats = this.getAdmissionStats();
+      const storageStats = this.getStorageStats();
       if (storageStats.unresolvedCount >= UNRESOLVED_OPERATION_LIMIT) {
         return {
           admitted: false,
@@ -261,7 +261,7 @@ export class WriteControl extends DurableObject {
         admitted: true,
         replay: false,
         operation: this.readOperation(keyHash),
-        storageStats: this.getAdmissionStats(),
+        storageStats: this.getStorageStats(),
       };
     });
   }

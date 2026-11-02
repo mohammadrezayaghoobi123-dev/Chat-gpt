@@ -56,6 +56,18 @@ jobs:
             exit 1
           fi
 
+      - name: Require dedicated read-only GitHub credential in Staging
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          secrets_json="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/chat-gpt111-staging/secrets")"
+          if ! printf '%s' "$secrets_json" | jq -e '.success == true and any(.result[]; .name == "GITHUB_READONLY_TOKEN" and .type == "secret_text")' >/dev/null; then
+            echo "::error::Staging is missing GITHUB_READONLY_TOKEN. Add a fine-grained GitHub token limited to this repository with Contents: Read-only, then retry. No deployment was attempted."
+            exit 1
+          fi
+
       - name: Deploy Staging only
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

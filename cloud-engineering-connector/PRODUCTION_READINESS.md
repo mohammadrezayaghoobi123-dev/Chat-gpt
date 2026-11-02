@@ -58,7 +58,15 @@ Create `GITHUB_READONLY_TOKEN` in GitHub **Settings → Developer settings → P
 
 Keep `GITHUB_TOKEN` separate for the authenticated draft-PR operation. Review and rotate it if its current permissions or provenance are unknown.
 
-## 4. Staging acceptance sequence
+## 4. Controlled Staging deployment
+
+The repository includes `.github/workflows/connector-staging-release.yml`. It is intentionally triggered only by a push to a branch named `integration/staging-release-<full-40-character-commit-sha>`. The branch suffix must equal the pushed commit SHA, so the deployed candidate is immutable. The job uses the protected GitHub Actions `staging` environment, runs the full test/audit/Wrangler dry-run gates, verifies the required Cloudflare Worker secret binding names without reading values, captures the active immutable version ID, deploys only `chat-gpt111-staging`, and executes `test/staging-smoke.mjs`. If live acceptance fails after deployment, it attempts to restore the captured 100% version through the Cloudflare deployment API and checks Staging liveness.
+
+Required GitHub Actions configuration: environment `staging` must contain secret `CLOUDFLARE_API_TOKEN` with Workers Scripts Read/Edit permissions and variable `CLOUDFLARE_ACCOUNT_ID`. Configure required reviewers for the environment if available. The Cloudflare Worker must already contain the Worker secrets listed above; the workflow checks only binding names/types and never retrieves secret values. A missing `GITHUB_READONLY_TOKEN` fails preflight before deployment.
+
+To release a reviewed candidate, create a branch from the exact approved 40-character SHA using the naming convention `integration/staging-release-<SHA>`. Do not reuse an old release branch or change its commit after the release run begins.
+
+## 5. Staging acceptance sequence
 
 After the Staging secrets are configured:
 
@@ -82,7 +90,7 @@ After the Staging secrets are configured:
 
 Do not treat a passing `/healthz` as proof that MCP, GitHub, or the Durable Object is ready.
 
-## 5. Production release gates
+## 6. Production release gates
 
 Production remains blocked until all of the following are true:
 

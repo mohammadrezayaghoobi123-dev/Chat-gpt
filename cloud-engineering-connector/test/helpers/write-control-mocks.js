@@ -52,6 +52,7 @@ export function createWriteControlBinding() {
       return { updated: true, operation: { ...op, gitMetadata: { ...op.gitMetadata } } };
     },
     async markStaleOperationsUnknown() { return 0; },
+    async getAdmissionStats() { const stats = storageStats(); return { unknownCount: stats.unknownCount, inProgressCount: stats.inProgressCount, unresolvedCount: stats.unresolvedCount, unresolvedLimit: stats.unresolvedLimit, unresolvedRemaining: stats.unresolvedRemaining, oldestUnresolvedUpdatedAt: stats.oldestUnresolvedUpdatedAt }; },
     async getStorageStats() { return storageStats(); },
     async getOperation(keyHash) {
       const op = operations.get(keyHash);

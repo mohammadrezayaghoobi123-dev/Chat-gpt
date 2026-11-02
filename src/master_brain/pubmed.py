@@ -158,7 +158,7 @@ class _Spacer:
     def __init__(self, interval: float = MIN_INTERVAL_SECONDS, clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], None] = time.sleep) -> None:
         self._interval, self._clock, self._sleep = interval, clock, sleep
-        self._next = None
+        self._next: float | None = None
         self._lock = threading.Lock()
 
     def wait(self) -> None:
@@ -273,7 +273,7 @@ def main(argv: list[str] | None = None, *, fetcher: Fetcher | None = None, out: 
 
     Performs one real, unapproved, read-only request and prints the parsed result; it touches no data dir.
     """
-    parser = argparse.ArgumentParser(prog="python -m master_brain.pubmed", description=main.__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(prog="python -m master_brain.pubmed", description=(main.__doc__ or "").split("\n\n")[0])
     parser.add_argument("query")
     parser.add_argument("--max", type=int, default=3, dest="max_results")
     parser.add_argument("--abstracts", action="store_true", help="also fetch titles/abstracts (efetch)")

@@ -3,11 +3,30 @@ import assert from "node:assert/strict";
 import worker from "../worker.js";
 import { createWriteControlBinding, createGitHubWriteMock } from "./helpers/write-control-mocks.js";
 let idempotencyCounter=0;
-const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding()};
-const req=(path,options={})=>{const headers=new Headers(options.headers);if(path==="/mcp"&&!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
+const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_READONLY_TOKEN:"read-only-test-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding()};
+const req=(path,options={})=>{const headers=new Headers(options.headers);if(!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
 const rpc=(method,params={},id=1)=>{if(method==="tools/call"&&params.name==="create_change_pr"&&params.arguments&&!params.arguments.idempotency_key)params={...params,arguments:{...params.arguments,idempotency_key:"worker-test-idempotency-key-"+String(++idempotencyCounter).padStart(8,"0")}};return req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})})};
-test("health reports cloud execution and a live Durable Object SQLite probe",async()=>{const r=await worker.fetch(req("/healthz"),env);assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers");assert.equal(b.durable_objects,"ok")});
-test("health fails closed when the Durable Object binding is unavailable",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,503);const b=await r.json();assert.equal(b.status,"degraded");assert.equal(b.durable_objects,"unavailable")});
+const anonymousRpc=(method,params={},id=1)=>{const request=rpc(method,params,id);const headers=new Headers(request.headers);headers.delete("authorization");return new Request(request,{headers})};
+test("health reports cloud execution and a live Durable Object SQLite probe",async()=>{const r=await worker.fetch(req("/healthz"),env);assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers");assert.equal(b.durable_objects,"ok");assert.equal(b.mcp,"ok");assert.equal(env.WRITE_CONTROL.__test.events.some(event=>event.type==="ping"),true)});
+test("health rate limits SQLite probes by client IP before touching Durable Objects",async()=>{
+ const binding=createWriteControlBinding();
+ let key;
+ const response=await worker.fetch(req("/healthz"),{...env,WRITE_CONTROL:binding,MCP_RATE_LIMITER:{limit:async(input)=>{key=input.key;return{success:false}}}});
+ assert.equal(key,"healthz:203.0.113.10");
+ assert.equal(response.status,429);
+ assert.equal(response.headers.get("retry-after"),"60");
+ assert.equal(binding.__test.events.some(event=>event.type==="ping"),false);
+});
+test("health fails closed when its rate limiter is unavailable",async()=>{
+ const binding=createWriteControlBinding();
+ const {MCP_RATE_LIMITER,...withoutLimiter}=env;
+ const response=await worker.fetch(req("/healthz"),{...withoutLimiter,WRITE_CONTROL:binding});
+ assert.equal(response.status,503);
+ assert.deepEqual(await response.json(),{error:"rate_limiter_unavailable"});
+ assert.equal(binding.__test.events.some(event=>event.type==="ping"),false);
+});
+test("health fails closed when the Durable Object binding is unavailable",async()=>{const r=await worker.fetch(req("/healthz"),{MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,503);const b=await r.json();assert.equal(b.status,"degraded");assert.equal(b.durable_objects,"unavailable")});
+test("health fails closed when MCP authentication is not configured",async()=>{const {MCP_AUTH_TOKEN,...envWithoutToken}=env;const r=await worker.fetch(req("/healthz"),envWithoutToken);assert.equal(r.status,503);const b=await r.json();assert.equal(b.status,"degraded");assert.equal(b.mcp,"unavailable")});
 test("JSON API responses carry restrictive browser security headers",async()=>{
  const response=await worker.fetch(req("/healthz"),env);
  assert.equal(response.headers.get("x-content-type-options"),"nosniff");
@@ -31,7 +50,7 @@ test("CORS preflight responses also carry restrictive browser security headers",
 });
 test("MCP fails closed by default when authentication is not configured",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",body:"{}"}),{});assert.equal(r.status,503)});
 test("public read-only mode fails closed when rate limiter binding is absent",async()=>{const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true"});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"rate_limiter_unavailable"})});
-test("public read-only mode fails closed when client IP is unavailable",async()=>{const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");headers.delete("cf-connecting-ip");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"client_identity_unavailable"})});
+test("public read-only mode fails closed when client IP is unavailable",async()=>{const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");headers.delete("cf-connecting-ip");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true",MCP_AUTH_TOKEN:"server-secret-0123456789abcdef-012345012345012345",READ_ONLY_GITHUB:true,GITHUB_READONLY_TOKEN:"read-only-server-token",GITHUB_TOKEN:"write-server-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"client_identity_unavailable"})});
 test("public read-only mode fails closed when rate limiter throws",async()=>{const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>{throw new Error("backend unavailable")}}});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"rate_limiter_unavailable"})});
 test("public read-only mode fails closed when rate limiter returns malformed result",async()=>{for(const result of [null,{}, {success:"false"}]){const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>result}});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"rate_limiter_unavailable"})}});
 test("public read-only mode rate limits by Cloudflare client IP",async()=>{let key;const request=rpc("tools/list",{},1);const headers=new Headers(request.headers);headers.delete("authorization");const r=await worker.fetch(new Request(request,{headers}),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async(input)=>{key=input.key;return{success:false}}}});assert.equal(key,"public-mcp:203.0.113.10");assert.equal(r.status,429);assert.equal(r.headers.get("retry-after"),"60");assert.deepEqual(await r.json(),{error:"rate_limited"})});
@@ -39,13 +58,14 @@ test("authenticated MCP requests consume a separate authenticated rate-limit nam
 test("authenticated MCP requests are rejected when their rate limit is exceeded",async()=>{let calls=0;const r=await worker.fetch(rpc("tools/list"),{...env,MCP_RATE_LIMITER:{limit:async(input)=>{calls++;assert.equal(input.key,"authenticated-mcp:203.0.113.10");return{success:false}}}});assert.equal(r.status,429);assert.equal(r.headers.get("retry-after"),"60");assert.equal(calls,1);assert.deepEqual(await r.json(),{error:"rate_limited"})});
 test("authenticated MCP requests fail closed when the rate limiter is unavailable",async()=>{const r=await worker.fetch(rpc("tools/list"),{MCP_AUTH_TOKEN:env.MCP_AUTH_TOKEN});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"rate_limiter_unavailable"})});
 test("authenticated MCP requests fail closed when Cloudflare client identity is missing",async()=>{const request=rpc("tools/list");const headers=new Headers(request.headers);headers.delete("cf-connecting-ip");const r=await worker.fetch(new Request(request,{headers}),{...env,MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:"client_identity_unavailable"})});
-test("public read-only mode must be explicitly enabled",async()=>{const r=await worker.fetch(rpc("initialize",{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"test",version:"1"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,200);const b=await r.json();assert.equal(b.result.serverInfo.name,"cloud-engineering-connector")});
-test("public read-only tools list contains only explicit allowlisted tools",async()=>{const r=await worker.fetch(rpc("tools/list",{},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});const b=await r.json();assert.deepEqual(b.result.tools.map(tool=>tool.name),["project_inspect","read_project_file","engineering_standards","architecture_review"])});
-test("public read-only mode denies tools not on the allowlist by default",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"future_write_tool",arguments:{}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/not in the unauthenticated PUBLIC_READ_ONLY allowlist/)});
-test("public mode never permits write tools without MCP_AUTH_TOKEN",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})},GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/not in the unauthenticated PUBLIC_READ_ONLY allowlist/)});
+test("public read-only mode must be explicitly enabled",async()=>{const r=await worker.fetch(anonymousRpc("initialize",{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"test",version:"1"}},1),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,200);const b=await r.json();assert.equal(b.result.serverInfo.name,"cloud-engineering-connector")});
+test("public read-only tools list contains only explicit allowlisted tools",async()=>{const r=await worker.fetch(anonymousRpc("tools/list",{},1),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});const b=await r.json();assert.deepEqual(b.result.tools.map(tool=>tool.name),["project_inspect","read_project_file","engineering_standards","architecture_review","architecture_analyze"])});
+test("public read-only mode denies tools not on the allowlist by default",async()=>{const r=await worker.fetch(anonymousRpc("tools/call",{name:"future_write_tool",arguments:{}},1),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/not in the unauthenticated PUBLIC_READ_ONLY allowlist/)});
+test("public mode never permits write tools without MCP_AUTH_TOKEN",async()=>{const r=await worker.fetch(anonymousRpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]}},1),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})},GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/not in the unauthenticated PUBLIC_READ_ONLY allowlist/)});
 test("MCP rejects missing bearer token",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{"content-type":"application/json","cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize"})}),{...env,MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,401)});
 test("initialize advertises connector identity and tools capability",async()=>{const r=await worker.fetch(rpc("initialize",{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"test",version:"1"}}),env);const b=await r.json();assert.equal(b.result.serverInfo.name,"cloud-engineering-connector");assert.ok(b.result.capabilities.tools)});
-test("tools/list exposes all five declared tools",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();assert.deepEqual(b.result.tools.map(t=>t.name),["project_inspect","read_project_file","engineering_standards","architecture_review","create_change_pr"])});
+test("tools/list exposes all six declared tools",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();assert.deepEqual(b.result.tools.map(t=>t.name),["project_inspect","read_project_file","engineering_standards","architecture_review","architecture_analyze","create_change_pr"])});
+test("every MCP tool declares a title and explicit read-only/destructive safety hints",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();for(const tool of b.result.tools){assert.equal(typeof tool.annotations?.title,"string",tool.name);assert.ok(tool.annotations.title.length>0,tool.name);assert.equal(typeof tool.annotations.readOnlyHint,"boolean",tool.name);assert.equal(typeof tool.annotations.destructiveHint,"boolean",tool.name)}assert.equal(b.result.tools.find(t=>t.name==="architecture_analyze").annotations.readOnlyHint,true);assert.equal(b.result.tools.find(t=>t.name==="create_change_pr").annotations.readOnlyHint,false)});
 test("tools/list schema requires base_branch for create_change_pr",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();const tool=b.result.tools.find(t=>t.name==="create_change_pr");assert.ok(tool,"create_change_pr must be listed");assert.ok(Array.isArray(tool.inputSchema.required));assert.ok(tool.inputSchema.required.includes("base_branch"));assert.ok(Object.hasOwn(tool.inputSchema.properties,"base_branch"));assert.ok(tool.inputSchema.required.includes("idempotency_key"));assert.match(tool.inputSchema.properties.idempotency_key.pattern,/Base64URL|A-Za-z0-9/);assert.equal(tool.inputSchema.additionalProperties,false)});
 test("architecture review labels its output unverified",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"architecture_review",arguments:{project_goal:"Example",proposed_change:"Add cache"}}),env);const b=await r.json();const result=JSON.parse(b.result.content[0].text);assert.equal(result.status,"review_framework_generated_not_independently_verified");assert.ok(result.mandatory_output_sections.includes("Verification status"))});
 test("write tool fails closed without GitHub token",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]}}),env);const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/GITHUB_TOKEN/)});
@@ -58,11 +78,11 @@ test("unknown RPC methods return method-not-found",async()=>{const r=await worke
 
 test("engineering standards require evidence and prohibit false verification claims",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"engineering_standards",arguments:{}}),env);const b=await r.json();const result=JSON.parse(b.result.content[0].text);assert.ok(result.mandatory_behavior.some(x=>x.includes("Never claim tests")));assert.ok(result.required_report.includes("Unverified items"));assert.match(result.quality_gate,/not proof of correctness/)});
 
-test("unauthenticated public read-only calls never forward GitHub credentials",async()=>{
+test("anonymous public read-only calls use server GitHub credentials only for globally rate-limited GETs",async()=>{
  const originalFetch=globalThis.fetch;
- const authorizationHeaders=[];
+ const authorizationHeaders=[];const userAgentHeaders=[];const methods=[];const limiterKeys=[];
  globalThis.fetch=async(input,init={})=>{
-  authorizationHeaders.push(new Headers(init.headers).get("authorization"));
+  const headers=new Headers(init.headers);authorizationHeaders.push(headers.get("authorization"));userAgentHeaders.push(headers.get("user-agent"));methods.push(init.method||"GET");
   const url=String(input);
   if(url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt",private:false,default_branch:"main"}),{status:200,headers:{"content-type":"application/json"}});
   if(url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt/commits/main"))return new Response(JSON.stringify({sha:"abc123",commit:{tree:{sha:"tree123"},message:"test",committer:{date:"2026-01-01T00:00:00Z"}}}),{status:200,headers:{"content-type":"application/json"}});
@@ -70,15 +90,57 @@ test("unauthenticated public read-only calls never forward GitHub credentials",a
   throw new Error("Unexpected mocked GitHub URL: "+url);
  };
  try{
-  const response=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})},GITHUB_TOKEN:"must-not-leak"});
+  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1),{PUBLIC_READ_ONLY:"true",READ_ONLY_GITHUB:true,MCP_RATE_LIMITER:{limit:async({key})=>{limiterKeys.push(key);return{success:true}}},GITHUB_READONLY_TOKEN:"read-only-token",GITHUB_TOKEN:"write-token"});
   assert.equal(response.status,200);
   const body=await response.json();
   assert.equal(body.result.content[0].type,"text");
   assert.equal(authorizationHeaders.length,3);
-  assert.deepEqual(authorizationHeaders,[null,null,null]);
+  assert.deepEqual(authorizationHeaders,["Bearer read-only-token","Bearer read-only-token","Bearer read-only-token"]);
+  assert.deepEqual(userAgentHeaders,["cloud-engineering-connector/0.1.0","cloud-engineering-connector/0.1.0","cloud-engineering-connector/0.1.0"]);
+   assert.deepEqual(methods,["GET","GET","GET"]);
+   assert.equal(limiterKeys.filter((key)=>key==="github-api-global").length,3);
+   assert.doesNotMatch(JSON.stringify(body),/read-only-token|write-token/);
+  assert.doesNotMatch(JSON.stringify(body),/read-only-token|write-token/);
  }finally{globalThis.fetch=originalFetch}
 });
 
+test("anonymous read-only GitHub access never falls back to the write token",async()=>{
+ const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called without a read-only token")};
+ try{
+  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1),{PUBLIC_READ_ONLY:"true",GITHUB_TOKEN:"write-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});
+  const body=await response.json();
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/GITHUB_READONLY_TOKEN/);
+  assert.equal(calls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
+test("anonymous read-only file access fails closed when the repository is private",async()=>{
+ const originalFetch=globalThis.fetch;const calls=[];
+ globalThis.fetch=async(input,init={})=>{
+  calls.push({url:String(input),method:init.method||"GET"});
+  return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt",private:true}),{status:200,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const response=await worker.fetch(anonymousRpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"README.md"}},1),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})},GITHUB_READONLY_TOKEN:"read-only-token"});
+  const body=await response.json();
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/repository to be public; access denied/);
+  assert.equal(calls.length,1);
+  assert.match(calls[0].url,/\/repos\/mohammadrezayaghoobi123-dev\/Chat-gpt$/);
+  assert.equal(calls[0].method,"GET");
+ }finally{globalThis.fetch=originalFetch}
+});
+test("global GitHub API quota fails closed before any upstream request",async()=>{
+ const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called after global quota denial")};
+ try{
+  const limiter={limit:async({key})=>({success:key!=="github-api-global"})};
+  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1),{PUBLIC_READ_ONLY:"true",GITHUB_READONLY_TOKEN:"server-token",MCP_RATE_LIMITER:limiter});
+  const body=await response.json();
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/GitHub API global rate limit exceeded/);
+  assert.equal(calls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
 test("repository allowlist rejects alternate repositories before any GitHub request",async()=>{const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called for a disallowed repository")};try{for(const name of [{owner:"octo",repo:"demo"},{owner:"mohammadrezayaghoobi123-dev",repo:"another-repo"}]){const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:name}),env);const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/not in the connector allowlist/)}assert.equal(calls,0)}finally{globalThis.fetch=originalFetch}});
 
 
@@ -263,7 +325,7 @@ test("read_project_file streams and rejects oversized GitHub API responses befor
 });
 
 
-test("notifications reject unsupported protocol-version headers instead of acknowledging them",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":"2024-11-05"},body:JSON.stringify({jsonrpc:"2.0",method:"notifications/initialized"})}),env);assert.equal(r.status,400);const body=await r.json();assert.equal(body.error,"unsupported_protocol_version");assert.equal(body.requested,"2024-11-05");assert.equal(Object.hasOwn(body,"jsonrpc"),false);assert.equal(Object.hasOwn(body,"id"),false)});
+test("notifications reject unsupported protocol-version headers instead of acknowledging them",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":"2024-11-05"},body:JSON.stringify({jsonrpc:"2.0",method:"notifications/initialized"})}),env);assert.equal(r.status,400);const body=await r.json();assert.equal(body.error,"unsupported_protocol_version");assert.equal(body.requested,"2024-11-05");assert.deepEqual(body.supported,["2026-07-28","2025-11-25","2025-06-18","2025-03-26"]);assert.equal(Object.hasOwn(body,"jsonrpc"),false);assert.equal(Object.hasOwn(body,"id"),false)});
 
 test("modern notification claims, including malformed protocol versions, are rejected without a JSON-RPC id",async()=>{for(const protocolVersion of [null,7,"2026-07-28"]){const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",method:"notifications/initialized",params:{_meta:{"io.modelcontextprotocol/protocolVersion":protocolVersion}}})}),env);assert.equal(r.status,400,String(protocolVersion));const body=await r.json();assert.equal(body.error,"unsupported_notification");assert.equal(Object.hasOwn(body,"jsonrpc"),false);assert.equal(Object.hasOwn(body,"id"),false)}});
 
@@ -338,7 +400,7 @@ function modernRequest(method,params={},id=1,overrides={}){const bodyParams={...
 test("modern Streamable HTTP rejects client-to-server notifications; legacy notification POSTs remain acknowledged",async()=>{for(const headers of [{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":"2026-07-28"},{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream"}]){const r=await worker.fetch(req("/mcp",{method:"POST",headers,body:JSON.stringify({jsonrpc:"2.0",method:"notifications/cancelled",params:{}})}),env);if(headers["MCP-Protocol-Version"]==="2026-07-28"){assert.equal(r.status,400);const body=await r.json();assert.equal(body.error,"unsupported_notification");assert.equal(Object.hasOwn(body,"jsonrpc"),false);assert.equal(Object.hasOwn(body,"id"),false)}else{assert.equal(r.status,202);assert.equal(await r.text(),"")}}for(const metaVersion of ["2026-07-28",null,7]){const request=req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":"2025-11-25"},body:JSON.stringify({jsonrpc:"2.0",method:"notifications/cancelled",params:{_meta:{"io.modelcontextprotocol/protocolVersion":metaVersion}}})});const response=await worker.fetch(request,env);assert.equal(response.status,400);const body=await response.json();assert.equal(body.error,"unsupported_notification");assert.equal(Object.hasOwn(body,"jsonrpc"),false);assert.equal(Object.hasOwn(body,"id"),false)}const unsupportedLegacy=req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":"2024-11-05"},body:JSON.stringify({jsonrpc:"2.0",method:"notifications/initialized"})});const legacyError=await worker.fetch(unsupportedLegacy,env);assert.equal(legacyError.status,400);assert.equal((await legacyError.json()).error,"unsupported_protocol_version")});
 test("modern subscriptions/listen streams an empty acknowledged filter and stays open until cancelled",async()=>{const request=modernRequest("subscriptions/listen",{notifications:{toolsListChanged:true,resourceSubscriptions:["file:///not-served"]}},"listen-1");const r=await worker.fetch(request,env);assert.equal(r.status,200);assert.match(r.headers.get("content-type"),/text\/event-stream/i);const reader=r.body.getReader();try{const first=await reader.read();assert.equal(first.done,false);const frame=new TextDecoder().decode(first.value);assert.match(frame,/^data: /);const ack=JSON.parse(frame.slice(6).trim());assert.equal(ack.method,"notifications/subscriptions/acknowledged");assert.deepEqual(ack.params.notifications,{});assert.equal(ack.params._meta["io.modelcontextprotocol/subscriptionId"],"listen-1");assert.deepEqual(ack.params._meta["io.modelcontextprotocol/serverInfo"],{name:"cloud-engineering-connector",version:"0.1.0"})}finally{await reader.cancel()}});
 test("modern subscriptions/listen requires and validates its filter with invalid-params",async()=>{const missing=await worker.fetch(modernRequest("subscriptions/listen",{},79),env);assert.equal(missing.status,200);assert.equal((await missing.json()).error.code,-32602);for(const notifications of ["bad",{toolsListChanged:"yes"},{resourceSubscriptions:["ok",7]},{resourceSubscriptions:["not a URI with spaces"]},{resourceSubscriptions:["/relative"]},{resourceSubscriptions:[""]}]){const r=await worker.fetch(modernRequest("subscriptions/listen",{notifications},80),env);assert.equal(r.status,200,JSON.stringify(notifications));assert.equal((await r.json()).error.code,-32602)}});
-test("modern MCP server/discover advertises the implemented modern era",async()=>{const r=await worker.fetch(modernRequest("server/discover",{},"discover-1"),env);assert.equal(r.status,200);const b=await r.json();assert.equal(b.result.resultType,"complete");assert.deepEqual(b.result.supportedVersions,["2026-07-28","2025-11-25","2025-03-26"]);assert.equal(b.result._meta["io.modelcontextprotocol/serverInfo"].name,"cloud-engineering-connector")});
+test("modern MCP server/discover advertises the implemented modern era",async()=>{const r=await worker.fetch(modernRequest("server/discover",{},"discover-1"),env);assert.equal(r.status,200);const b=await r.json();assert.equal(b.result.resultType,"complete");assert.deepEqual(b.result.supportedVersions,["2026-07-28","2025-11-25","2025-06-18","2025-03-26"]);assert.equal(b.result._meta["io.modelcontextprotocol/serverInfo"].name,"cloud-engineering-connector")});
 test("modern MCP tools/list requires metadata and returns bounded private cache policy",async()=>{const r=await worker.fetch(modernRequest("tools/list",{},2),env);assert.equal(r.status,200);const b=await r.json();assert.equal(b.result.resultType,"complete");assert.ok(Array.isArray(b.result.tools));assert.equal(b.result.cacheScope,"private");assert.equal(b.result.ttlMs,60000);assert.equal(b.result._meta["io.modelcontextprotocol/serverInfo"].name,"cloud-engineering-connector");assert.ok(b.result._meta["io.modelcontextprotocol/serverInfo"].version)});
 test("modern MCP tools/call validates routing headers against the JSON-RPC body",async()=>{const r=await worker.fetch(modernRequest("tools/call",{name:"engineering_standards",arguments:{}},3),env);assert.equal(r.status,200);const b=await r.json();assert.equal(b.result.content[0].type,"text");assert.equal(b.result.resultType,"complete");assert.equal(b.result.ttlMs,0);assert.equal(b.result.cacheScope,"private");assert.equal(b.result._meta["io.modelcontextprotocol/serverInfo"].name,"cloud-engineering-connector");const mismatch=await worker.fetch(modernRequest("tools/call",{name:"engineering_standards",arguments:{}},4,{"Mcp-Name":"project_inspect"}),env);assert.equal(mismatch.status,400);assert.equal((await mismatch.json()).error.code,-32020)});
 test("unimplemented task methods return method-not-found without requiring unsupported Mcp-Name routing",async()=>{for(const method of ["tasks/get","tasks/update","tasks/cancel"]){const request=modernRequest(method,{taskId:"task-123"},91,{"Mcp-Name":undefined});const r=await worker.fetch(request,env);assert.equal(r.status,404,method);assert.equal((await r.json()).error.code,-32601,method)}});
@@ -346,9 +408,21 @@ test("modern MCP rejects a missing method header",async()=>{const headers={autho
 test("modern MCP rejects unsupported versions with a machine-readable supported list",async()=>{const request=modernRequest("ping",{},6,{"MCP-Protocol-Version":"2025-11-25"});const body=JSON.parse(await request.text());body.params._meta["io.modelcontextprotocol/protocolVersion"]="2025-11-25";const r=await worker.fetch(req("/mcp",{method:"POST",headers:request.headers,body:JSON.stringify(body)}),env);assert.equal(r.status,400);const error=(await r.json()).error;assert.equal(error.code,-32022);assert.deepEqual(error.data.supported,["2026-07-28"])});
 test("legacy initialize negotiates the current 2025-11-25 version when requested",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:61,method:"initialize",params:{protocolVersion:"2025-11-25",capabilities:{},clientInfo:{name:"legacy-test",version:"1.0"}}})}),env);assert.equal(r.status,200);assert.equal((await r.json()).result.protocolVersion,"2025-11-25")});
 test("legacy initialize preserves compatibility with 2025-03-26 clients",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:62,method:"initialize",params:{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"legacy-test",version:"1.0"}}})}),env);assert.equal(r.status,200);assert.equal((await r.json()).result.protocolVersion,"2025-03-26")});
+test("legacy initialize negotiates the Claude-supported 2025-06-18 version",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:621,method:"initialize",params:{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"claude-compatible-test",version:"1.0"}}})}),env);assert.equal(r.status,200);assert.equal((await r.json()).result.protocolVersion,"2025-06-18")});
 test("legacy MCP rejects null and fractional request IDs",async()=>{for(const id of [null,1.5,-0.5,9007199254740992]){const r=await worker.fetch(rpc("ping",{},id),env);assert.equal(r.status,400,"id="+JSON.stringify(id));const body=await r.json();assert.equal(body.error.code,-32600,"id="+JSON.stringify(id));assert.match(body.error.message,/id must be a string or safe integer/)}});
 
-test("legacy protocol-version header accepts both supported legacy versions and reports the full support set",async()=>{for(const version of ["2025-11-25","2025-03-26"]){const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":version},body:JSON.stringify({jsonrpc:"2.0",id:63,method:"ping"})}),env);assert.equal(r.status,200,version);assert.deepEqual((await r.json()).result,{})}const bad=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":"2024-11-05"},body:JSON.stringify({jsonrpc:"2.0",id:64,method:"ping"})}),env);assert.equal(bad.status,400);assert.deepEqual((await bad.json()).error.data.supported,["2025-11-25","2025-03-26"])});
+test("legacy protocol-version header accepts all Claude-supported versions and reports the full support set",async()=>{
+ for(const version of ["2025-11-25","2025-06-18","2025-03-26"]){
+  const response=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":version},body:JSON.stringify({jsonrpc:"2.0",id:63,method:"ping"})}),env);
+  assert.equal(response.status,200,version);
+  assert.deepEqual((await response.json()).result,{});
+ }
+ const bad=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":"2024-11-05"},body:JSON.stringify({jsonrpc:"2.0",id:64,method:"ping"})}),env);
+ assert.equal(bad.status,400);
+ assert.deepEqual((await bad.json()).error.data.supported,["2025-11-25","2025-06-18","2025-03-26"]);
+ const notification=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":"2025-06-18"},body:JSON.stringify({jsonrpc:"2.0",method:"notifications/initialized"})}),env);
+ assert.equal(notification.status,202);
+});
 test("modern MCP requires clientCapabilities and treats clientInfo as optional",async()=>{const missing=req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":"2026-07-28","Mcp-Method":"tools/list"},body:JSON.stringify({jsonrpc:"2.0",id:70,method:"tools/list",params:{_meta:{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"spec-example","version":"1.0"}}}})});const rejected=await worker.fetch(missing,env);assert.equal(rejected.status,400);assert.equal((await rejected.json()).error.code,-32602);const valid=req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":"2026-07-28","Mcp-Method":"tools/list"},body:JSON.stringify({jsonrpc:"2.0",id:72,method:"tools/list",params:{_meta:{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}})});const accepted=await worker.fetch(valid,env);assert.equal(accepted.status,200);assert.ok(Array.isArray((await accepted.json()).result.tools))});
 test("modern MCP rejects malformed clientCapabilities envelopes",async()=>{for(const capabilities of [null,[],"invalid",false]){const request=req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":"2026-07-28","Mcp-Method":"tools/list"},body:JSON.stringify({jsonrpc:"2.0",id:73,method:"tools/list",params:{_meta:{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":capabilities}}})});const r=await worker.fetch(request,env);assert.equal(r.status,400,JSON.stringify(capabilities));assert.equal((await r.json()).error.code,-32602)}});
 
@@ -430,19 +504,19 @@ test("create_change_pr schema advertises and enforces string length constraints 
 });
 
 
-test("public read-only repository inspection succeeds without a GitHub token",async()=>{
+test("public read-only repository inspection uses the server token and global quota",async()=>{
  const originalFetch=globalThis.fetch;
- const requests=[];
+ const requests=[];const limiterKeys=[];
  globalThis.fetch=async(input,init={})=>{
   const url=String(input);
-  requests.push({url,authorization:new Headers(init.headers).get("authorization")});
+  const headers=new Headers(init.headers);requests.push({url,authorization:headers.get("authorization"),userAgent:headers.get("user-agent")});
   if(url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt",private:false,default_branch:"main"}),{status:200,headers:{"content-type":"application/json"}});
   if(url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt/commits/main"))return new Response(JSON.stringify({sha:"abc123",commit:{tree:{sha:"tree123"},message:"test",committer:{date:"2026-01-01T00:00:00Z"}}}),{status:200,headers:{"content-type":"application/json"}});
   if(url.includes("/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/trees/tree123?recursive=1"))return new Response(JSON.stringify({tree:[{type:"blob",path:"README.md",size:42}],truncated:false}),{status:200,headers:{"content-type":"application/json"}});
   throw new Error("Unexpected mocked GitHub URL: "+url);
  };
  try{
-  const response=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});
+  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_AUTH_TOKEN:"server-secret-0123456789abcdef-012345012345012345",READ_ONLY_GITHUB:true,GITHUB_READONLY_TOKEN:"read-only-server-token",GITHUB_TOKEN:"write-token",MCP_RATE_LIMITER:{limit:async(input)=>{limiterKeys.push(input.key);return{success:true}}}});
   assert.equal(response.status,200);
   const body=await response.json();
   assert.equal(body.result.isError,undefined);
@@ -450,7 +524,9 @@ test("public read-only repository inspection succeeds without a GitHub token",as
   assert.equal(result.repository,"mohammadrezayaghoobi123-dev/Chat-gpt");
   assert.equal(result.file_count_returned,1);
   assert.equal(requests.length,3);
-  assert.deepEqual(requests.map(request=>request.authorization),[null,null,null]);
+  assert.deepEqual(requests.map(request=>request.authorization),["Bearer read-only-server-token","Bearer read-only-server-token","Bearer read-only-server-token"]);assert.ok(requests.every(request=>request.userAgent==="cloud-engineering-connector/0.1.0"));
+  assert.equal(limiterKeys.filter((key)=>key==="github-api-global").length,3);
+  assert.doesNotMatch(JSON.stringify(body),/server-token/);
  }finally{globalThis.fetch=originalFetch}
 });
 
@@ -887,6 +963,19 @@ test("overlong configured MCP bearer tokens fail closed before authentication",a
  assert.equal(limiterCalls,0);
 });
 
+
+test("known idempotent replay remains available when the unresolved backlog is saturated", async () => {
+ const binding=createWriteControlBinding();
+ const stub=binding.get("create-change-pr-global");
+ const input={keyHash:"a".repeat(64),requestHash:"b".repeat(64),now:1,windowMs:60_000,limit:5};
+ const first=await stub.admitWrite(input);
+ assert.equal(first.admitted,true);
+ binding.__test.setBacklogFull(true);
+ const replay=await stub.admitWrite(input);
+ assert.equal(replay.admitted,true);
+ assert.equal(replay.replay,true);
+ assert.equal(replay.operation.keyHash,input.keyHash);
+});
 
 test("unresolved operation backlog fails closed before any GitHub write", async () => {
  const writeControl=createWriteControlBinding();

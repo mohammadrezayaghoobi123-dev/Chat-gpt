@@ -77,11 +77,11 @@ test("unknown RPC methods return method-not-found",async()=>{const r=await worke
 
 test("engineering standards require evidence and prohibit false verification claims",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"engineering_standards",arguments:{}}),env);const b=await r.json();const result=JSON.parse(b.result.content[0].text);assert.ok(result.mandatory_behavior.some(x=>x.includes("Never claim tests")));assert.ok(result.required_report.includes("Unverified items"));assert.match(result.quality_gate,/not proof of correctness/)});
 
-test("unauthenticated public read-only calls never forward GitHub credentials",async()=>{
+test("anonymous public read-only calls use server GitHub credentials only for globally rate-limited GETs",async()=>{
  const originalFetch=globalThis.fetch;
- const authorizationHeaders=[];const userAgentHeaders=[];
+ const authorizationHeaders=[];const userAgentHeaders=[];const methods=[];const limiterKeys=[];
  globalThis.fetch=async(input,init={})=>{
-  const headers=new Headers(init.headers);authorizationHeaders.push(headers.get("authorization"));userAgentHeaders.push(headers.get("user-agent"));
+  const headers=new Headers(init.headers);authorizationHeaders.push(headers.get("authorization"));userAgentHeaders.push(headers.get("user-agent"));methods.push(init.method||"GET");
   const url=String(input);
   if(url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt",private:false,default_branch:"main"}),{status:200,headers:{"content-type":"application/json"}});
   if(url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt/commits/main"))return new Response(JSON.stringify({sha:"abc123",commit:{tree:{sha:"tree123"},message:"test",committer:{date:"2026-01-01T00:00:00Z"}}}),{status:200,headers:{"content-type":"application/json"}});
@@ -89,17 +89,31 @@ test("unauthenticated public read-only calls never forward GitHub credentials",a
   throw new Error("Unexpected mocked GitHub URL: "+url);
  };
  try{
-  const response=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})},GITHUB_TOKEN:"must-not-leak"});
+  const response=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async({key})=>{limiterKeys.push(key);return{success:true}}},GITHUB_TOKEN:"must-not-leak"});
   assert.equal(response.status,200);
   const body=await response.json();
   assert.equal(body.result.content[0].type,"text");
   assert.equal(authorizationHeaders.length,3);
-  assert.deepEqual(authorizationHeaders,[null,null,null]);
+  assert.deepEqual(authorizationHeaders,["Bearer must-not-leak","Bearer must-not-leak","Bearer must-not-leak"]);
   assert.deepEqual(userAgentHeaders,["cloud-engineering-connector/0.1.0","cloud-engineering-connector/0.1.0","cloud-engineering-connector/0.1.0"]);
+   assert.deepEqual(methods,["GET","GET","GET"]);
+   assert.equal(limiterKeys.filter((key)=>key==="github-api-global").length,3);
+   assert.doesNotMatch(JSON.stringify(body),/must-not-leak/);
   assert.doesNotMatch(JSON.stringify(body),/must-not-leak/);
  }finally{globalThis.fetch=originalFetch}
 });
 
+test("global GitHub API quota fails closed before any upstream request",async()=>{
+ const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called after global quota denial")};
+ try{
+  const limiter={limit:async({key})=>({success:key!=="github-api-global"})};
+  const response=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",GITHUB_TOKEN:"server-token",MCP_RATE_LIMITER:limiter});
+  const body=await response.json();
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/GitHub API global rate limit exceeded/);
+  assert.equal(calls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
 test("repository allowlist rejects alternate repositories before any GitHub request",async()=>{const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called for a disallowed repository")};try{for(const name of [{owner:"octo",repo:"demo"},{owner:"mohammadrezayaghoobi123-dev",repo:"another-repo"}]){const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:name}),env);const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/not in the connector allowlist/)}assert.equal(calls,0)}finally{globalThis.fetch=originalFetch}});
 
 

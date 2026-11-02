@@ -141,4 +141,9 @@ Every advertised tool carries a human-readable `title`, explicit `readOnlyHint`,
 
 ## GitHub API access in public read-only mode
 
-Public MCP callers do not provide GitHub credentials. The Worker uses its server-side `GITHUB_TOKEN` binding for repository reads when configured, while `READ_ONLY_GITHUB` enforces GET-only upstream access and the MCP allowlist blocks write tools. GitHub API calls are globally rate-limited independently of per-client MCP rate limits. Without a configured server token, public GitHub reads fall back to GitHub's unauthenticated quota and may be rejected under shared-egress load; this is an operational configuration failure, not an MCP transport failure.
+Public MCP callers do not provide GitHub credentials. The Worker requires the server-side `GITHUB_READONLY_TOKEN` binding for anonymous repository reads; this must be a fine-grained GitHub token scoped to this repository with **Metadata: read** and **Contents: read** only. The token is never forwarded to the browser or MCP response. `READ_ONLY_GITHUB` rejects every upstream method except GET, and the public tool allowlist excludes `create_change_pr`. The separate `GITHUB_TOKEN` is reserved for authenticated draft-PR creation and must not be used for public reads. GitHub API calls are globally rate-limited independently of per-client MCP rate limits. Missing read-only credentials fail closed before any upstream request rather than falling back to the unauthenticated shared-egress quota.
+
+
+### Required Cloudflare Staging secret
+
+Before promoting the dedicated-token build to Staging, add a Worker secret named `GITHUB_READONLY_TOKEN` to `chat-gpt111-staging`. Create a fine-grained PAT restricted to `mohammadrezayaghoobi123-dev/Chat-gpt` with repository permissions **Metadata: Read-only** and **Contents: Read-only** only. Do not grant Contents write, Pull requests, Actions, Administration, or organization permissions. Add the secret value directly in the Cloudflare dashboard; never paste it into chat, GitHub source, Actions logs, or a test fixture. Keep `GITHUB_TOKEN` separate for the authenticated draft-PR workflow.

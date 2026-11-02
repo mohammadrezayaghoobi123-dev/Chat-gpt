@@ -76,3 +76,13 @@ commits = ["ffa7b132922370296651499b60bd95212c39f69b"]
 paths = ['''^cloud-engineering-connector/test/worker\.test\.js$''']
 regexTarget = "line"
 regexes = ['''const\s+token\s*=\s*["']0123456789abcdef0123456789abcdef["']''']
+
+
+[[allowlists]]
+description = "Synthetic analyzer test bearer fixture, restricted to its exact historical commits, test file, and value."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["85b9f2a4e524e45fae701a7237935d868ac15bbf", "6f01511c90782f7db45ae0b8da72cc8ed3aaab74"]
+paths = ['''^cloud-engineering-connector/test/architecture-analysis\.test\.js$''']
+regexTarget = "line"
+regexes = ['''test-secret-0123456789abcdef012345''']

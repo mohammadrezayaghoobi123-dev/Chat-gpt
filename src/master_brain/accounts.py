@@ -85,10 +85,10 @@ def _encode_record(password: str) -> str:
 
 def _verify_record(password: str, record: str) -> bool:
     try:
-        scheme, n, r, p, salt_hex, digest_hex = record.split("$")
+        scheme, n_text, r_text, p_text, salt_hex, digest_hex = record.split("$")
         if scheme != "scrypt":
             return False
-        n, r, p = int(n), int(r), int(p)
+        n, r, p = int(n_text), int(r_text), int(p_text)
         if not (2 ** 10 <= n <= 2 ** 20 and 1 <= r <= 16 and 1 <= p <= 4):
             return False
         expected = bytes.fromhex(digest_hex)

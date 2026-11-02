@@ -428,3 +428,39 @@ Duplicate same-SHA runs were observed for Python and Master Brain MVP; one compl
 - PR #129 remains Draft with zero reviews. No deployment, merge, traffic change, Worker setting mutation, or `main` update occurred.
 
 **Disposition:** CI on the exact application-code candidate — PASS; live Staging/client acceptance — UNVERIFIED; Staging release — BLOCKED; Production — NO-GO.
+
+
+## 18. Production release deadlock correction and account MFA audit — 2026-11-02 20:55 UTC
+
+**Candidate code/config SHA:** `8677c2e7b5fb06c4d3974b737fa6554f67e8065d` (the subsequent documentation update is non-runtime).
+
+### Release gate sequencing correction
+
+- Re-audit found the Production release preflight required live Production observability before deploy, while `wrangler.toml` is the intended source of truth that applies observability during deployment. That ordering created a circular release blocker.
+- Moved Production observability verification into the post-deploy verification step, before live Production acceptance. Production preflight continues to enforce secrets, explicit read-only safety constraints, namespace separation and rollback target checks.
+- Production post-deploy verification now reads the actual Worker settings and asserts observability enabled, query-string redaction, 100% custom/persistent log sampling, persistent logs enabled, invocation logs disabled, and Production/Staging Durable Object and rate-limit namespace isolation.
+- Regression test now executes the actual post-deploy script against a controlled missing-observability response and requires it to fail closed.
+- `wrangler.toml` is now declarative for `PUBLIC_READ_ONLY="true"` in both Production and Staging. `keep_vars=false` makes non-secret variables reconcile from checked-in configuration rather than preserving the stale dashboard variable type; secrets remain separately managed and are never placed in source control. Production post-deploy verification checks that the deployed binding is `plain_text` and exactly `true`.
+- This does not change the live Worker. No deployment has been performed; the existing Production secret binding and absent observability remain live-state blockers until an approved deployment and its post-deploy checks complete.
+
+### Exact-head Connector evidence
+
+- Connector CI on candidate `8677c2e7...`: **202/202 tests passed, 0 failed**.
+- `npm audit --audit-level=moderate`: **0 vulnerabilities**.
+- `node --check` checks passed and Wrangler dry-runs completed for both default Production and `--env staging`.
+- Full cross-workflow CI on this exact candidate is still pending at this audit point; do not reuse older SHA results as if they were current-head evidence.
+
+### Account MFA enforcement safety
+
+- Read-only Cloudflare Account Details confirms `settings.enforce_twofactor=false`.
+- Read-only accepted-member listing returned one accepted member, with `two_factor_authentication_enabled=false`.
+- Enabling account-wide enforcement now could lock out that member until they enroll; therefore no API mutation was made. The account owner must first enable and verify at least one personal 2FA method (preferably authenticator plus a security key) and save recovery codes. Only after enrollment should account-wide enforcement be enabled and verified. Cloudflare's account-update API supports `settings.enforce_twofactor=true`, but this is an account-wide security-policy change and is intentionally not executed while the sole accepted member is unenrolled.
+
+### Remaining external gates
+
+- PR #129 still requires an independent human approval; this integration cannot manufacture an approval.
+- GitHub Rulesets API returned no rulesets. Classic `main` branch-protection read returned HTTP 403 to the connected integration, so required review/status protections remain unverified and cannot be claimed enabled.
+- Live Staging acceptance and independent Claude/ChatGPT client sessions remain unverified. No Production deployment or client sign-off occurred.
+- Static-analysis cleanup is in progress; exact-head Static workflow result is pending.
+
+**Disposition:** Connector and Wrangler configuration tests — PASS on `8677c2e7...`; Production release gate order — corrected in code; live Production configuration — unchanged and not yet verified after deployment; account MFA — blocked pending member enrollment; independent review and client acceptance — pending.

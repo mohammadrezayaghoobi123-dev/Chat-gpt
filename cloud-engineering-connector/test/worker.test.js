@@ -24,7 +24,7 @@ test("health fails closed when its rate limiter is unavailable",async()=>{
  assert.deepEqual(await response.json(),{error:"rate_limiter_unavailable"});
  assert.equal(binding.__test.events.some(event=>event.type==="health-check"),false);
 });
-test("health fails closed when the Durable Object binding is unavailable",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,503);const b=await r.json();assert.equal(b.status,"degraded");assert.equal(b.durable_objects,"unavailable")});
+test("health fails closed when the Durable Object binding is unavailable",async()=>{const r=await worker.fetch(req("/healthz"),{MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,503);const b=await r.json();assert.equal(b.status,"degraded");assert.equal(b.durable_objects,"unavailable")});
 test("health fails closed when MCP authentication is not configured",async()=>{const {MCP_AUTH_TOKEN,...envWithoutToken}=env;const r=await worker.fetch(req("/healthz"),envWithoutToken);assert.equal(r.status,503);const b=await r.json();assert.equal(b.status,"degraded");assert.equal(b.mcp,"unavailable")});
 test("JSON API responses carry restrictive browser security headers",async()=>{
  const response=await worker.fetch(req("/healthz"),env);

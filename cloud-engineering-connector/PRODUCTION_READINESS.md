@@ -192,6 +192,27 @@ Use a controlled rollout only after explicit release approval:
 
 The Durable Object terminal-operation retention policy is 30 days. Unresolved UNKNOWN/IN_PROGRESS operations must not be deleted to clear backlog; resolve or reconcile them through the documented state machine.
 
+## 8.1 Live Cloudflare state audit — 2026-11-02 20:12 UTC+03:30
+
+The following is a direct read-only observation of the currently deployed Workers and Cloudflare deployment metadata. It is not a test of the PR #129 candidate; the candidate is not deployed.
+
+| Observation | Staging | Production |
+|---|---|---|
+| Worker | `chat-gpt111-staging` | `chat-gpt111` |
+| Current 100% version | `b2ee9cb2-b52c-4c6e-9446-38405d257cc3` | `a07fbd3b-e44f-494e-a327-403a62661e05` |
+| `GET /healthz` | HTTP 200 | HTTP 200 |
+| `GET /readyz` | HTTP 404 | HTTP 404 |
+| `GITHUB_READONLY_TOKEN` | Missing | Missing |
+| `PUBLIC_READ_ONLY` | Plain-text `true` | Secret-text binding |
+| `MCP_RATE_LIMITER` | Namespace `78294164` | Namespace `78294163` |
+| `WRITE_CONTROL` | Namespace `1d0f4257b609483eba4fc5fdb39ed781` | Missing |
+
+Staging's active deployment annotation explicitly identifies the current 100% version as a controlled rollback while the dedicated read-only GitHub token is absent. Production's active deployment is a dashboard deployment dated 2026-11-01; it is not the PR #129 candidate.
+
+The HTTP 200 `/healthz` response is liveness only. The current live Workers return 404 for `/readyz`, so readiness is not established. The candidate source contains a `/readyz` probe that checks the Durable Object binding and schema version; this behavior must be validated after deploying that exact candidate to Staging.
+
+The Cloudflare API returned the binding names and types only. No secret values were read. The GitHub integration returned HTTP 403 for `GET /branches/main/protection` (`Resource not accessible by integration`); current branch-protection state therefore remains unverified by this session and must not be treated as enabled.
+
 ## 9. Current external blockers
 
 1. GitHub Actions Staging environment is missing `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` (last recorded guarded release attempt failed before deployment).

@@ -125,17 +125,17 @@ function runPreflightWithMissingObservability(source, stepName, production) {
     observability: null,
   };
   const deploymentData = { deployments: [{ versions: [{ version_id: "previous-version", percentage: 100 }] }] };
-  const prelude = \`
-    globalThis.fetch = async (input) => {
-      const url = String(input);
-      let result;
-      if (url.includes("/chat-gpt111-staging/settings")) result = \${JSON.stringify(stagingSettings)};
-      else if (url.includes("/chat-gpt111/settings")) result = \${JSON.stringify(productionSettings)};
-      else if (url.includes("/deployments?")) result = \${JSON.stringify(deploymentData)};
-      else throw new Error("Unexpected Cloudflare API request: " + url);
-      return new Response(JSON.stringify({ success: true, result }), { status: 200, headers: { "content-type": "application/json" } });
-    };
-  \`;
+  const prelude = [
+    "globalThis.fetch = async (input) => {",
+    "  const url = String(input);",
+    "  let result;",
+    "  if (url.includes('/chat-gpt111-staging/settings')) result = " + JSON.stringify(stagingSettings) + ";",
+    "  else if (url.includes('/chat-gpt111/settings')) result = " + JSON.stringify(productionSettings) + ";",
+    "  else if (url.includes('/deployments?')) result = " + JSON.stringify(deploymentData) + ";",
+    "  else throw new Error('Unexpected Cloudflare API request: ' + url);",
+    "  return new Response(JSON.stringify({ success: true, result }), { status: 200, headers: { 'content-type': 'application/json' } });",
+    "};",
+  ].join("\n");
   const directory = mkdtempSync(join(tmpdir(), "release-preflight-observability-"));
   const output = join(directory, "github-output");
   try {
@@ -151,7 +151,7 @@ function runPreflightWithMissingObservability(source, stepName, production) {
     assert.notEqual(
       result.status,
       0,
-      \`\${production ? "Production" : "Staging"} preflight must reject missing observability configuration\`,
+      (production ? "Production" : "Staging") + " preflight must reject missing observability configuration",
     );
     assert.match(
       result.stderr + result.stdout,

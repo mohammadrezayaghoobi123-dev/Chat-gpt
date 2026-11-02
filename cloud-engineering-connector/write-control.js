@@ -128,9 +128,8 @@ export class WriteControl extends DurableObject {
     return this.readOperation(keyHash);
   }
 
-  getStorageStats() {
-    const sql = this.ctx.storage.sql;
-    const statusRows = sql.exec(
+  getAdmissionStats() {
+    const statusRows = this.ctx.storage.sql.exec(
       "SELECT status, COUNT(*) AS count FROM write_operations GROUP BY status",
     ).toArray();
     const countFor = (status) => Number(statusRows.find((row) => row.status === status)?.count ?? 0);
@@ -139,29 +138,6 @@ export class WriteControl extends DurableObject {
     const succeededCount = countFor("SUCCEEDED");
     const failedCount = countFor("FAILED");
     const unresolvedCount = unknownCount + inProgressCount;
-    const oldestUnresolvedUpdatedAt = sql.exec(
-      "SELECT MIN(updated_at) AS oldest FROM write_operations WHERE status IN ('UNKNOWN','IN_PROGRESS')",
-    ).one().oldest;
-    const operationBytes = Number(sql.exec(`
-      SELECT COALESCE(SUM(
-        length(key_hash) + length(request_hash) + length(status) + length(phase) +
-        32 + COALESCE(length(branch_name), 0) + COALESCE(length(commit_sha), 0) +
-        COALESCE(length(pr_url), 0) + COALESCE(length(error_code), 0) +
-        COALESCE(length(git_metadata), 0)
-      ), 0) AS bytes
-      FROM write_operations
-    `).one().bytes);
-    const admissionBytes = Number(sql.exec(`
-      SELECT COALESCE(SUM(length(key_hash) + 8), 0) AS bytes
-      FROM write_admissions
-    `).one().bytes);
-    const operationCount = Number(sql.exec(
-      "SELECT COUNT(*) AS count FROM write_operations",
-    ).one().count);
-    const admissionCount = Number(sql.exec(
-      "SELECT COUNT(*) AS count FROM write_admissions",
-    ).one().count);
-    const logicalPayloadBytes = operationBytes + admissionBytes;
     return {
       unknownCount,
       inProgressCount,
@@ -169,14 +145,60 @@ export class WriteControl extends DurableObject {
       unresolvedCount,
       unresolvedLimit: UNRESOLVED_OPERATION_LIMIT,
       unresolvedRemaining: Math.max(0, UNRESOLVED_OPERATION_LIMIT - unresolvedCount),
-      oldestUnresolvedUpdatedAt: oldestUnresolvedUpdatedAt ?? null,
-      operationCount,
-      admissionCount,
-      operationLogicalBytes: operationBytes,
-      admissionLogicalBytes: admissionBytes,
+    };
+  }
+
+  // This is a logical payload estimate, not physical SQLite allocation. The
+  // Workers SQLite API does not expose page/WAL allocation metrics to this DO.
+  getStorageStats() {
+    const sql = this.ctx.storage.sql;
+    const operations = sql.exec(
+      "SELECT key_hash, request_hash, status, phase, branch_name, commit_sha, pr_url, error_code, git_metadata FROM write_operations",
+    ).toArray();
+    const admissions = sql.exec(
+      "SELECT key_hash, admitted_at FROM write_admissions",
+    ).toArray();
+    const counts = { UNKNOWN: 0, IN_PROGRESS: 0, SUCCEEDED: 0, FAILED: 0 };
+    const byteLength = (value) => new TextEncoder().encode(String(value ?? "")).length;
+    let operationLogicalBytes = 0;
+    let oldestUnresolvedUpdatedAt = null;
+    for (const row of operations) {
+      counts[row.status] = (counts[row.status] ?? 0) + 1;
+      operationLogicalBytes += byteLength(row.key_hash) + byteLength(row.request_hash) +
+        byteLength(row.status) + byteLength(row.phase) + 32 +
+        byteLength(row.branch_name) + byteLength(row.commit_sha) +
+        byteLength(row.pr_url) + byteLength(row.error_code) +
+        byteLength(row.git_metadata);
+      if (row.status === "UNKNOWN" || row.status === "IN_PROGRESS") {
+        const updatedAt = Number(row.updated_at);
+        oldestUnresolvedUpdatedAt = oldestUnresolvedUpdatedAt === null
+          ? updatedAt
+          : Math.min(oldestUnresolvedUpdatedAt, updatedAt);
+      }
+    }
+    const admissionLogicalBytes = admissions.reduce(
+      (total, row) => total + byteLength(row.key_hash) + 8,
+      0,
+    );
+    const logicalPayloadBytes = operationLogicalBytes + admissionLogicalBytes;
+    const unresolvedCount = counts.UNKNOWN + counts.IN_PROGRESS;
+    return {
+      unknownCount: counts.UNKNOWN,
+      inProgressCount: counts.IN_PROGRESS,
+      terminalCount: counts.SUCCEEDED + counts.FAILED,
+      unresolvedCount,
+      unresolvedLimit: UNRESOLVED_OPERATION_LIMIT,
+      unresolvedRemaining: Math.max(0, UNRESOLVED_OPERATION_LIMIT - unresolvedCount),
+      oldestUnresolvedUpdatedAt,
+      operationCount: operations.length,
+      admissionCount: admissions.length,
+      operationLogicalBytes,
+      admissionLogicalBytes,
       logicalPayloadBytes,
       logicalPayloadUtilization: logicalPayloadBytes / SQLITE_STORAGE_LIMIT_BYTES,
       storageLimitBytes: SQLITE_STORAGE_LIMIT_BYTES,
+      physicalStorageBytes: null,
+      storageMeasurement: "logical_payload_estimate_not_physical_sqlite_allocation",
       retentionMs: TERMINAL_RETENTION_MS,
     };
   }
@@ -206,7 +228,7 @@ export class WriteControl extends DurableObject {
 
       const existing = this.readOperation(keyHash);
       if (existing) {
-        const storageStats = this.getStorageStats();
+        const storageStats = this.getAdmissionStats();
         if (existing.requestHash !== requestHash) {
           return { admitted: false, reason: "IDEMPOTENCY_CONFLICT", storageStats };
         }

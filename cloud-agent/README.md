@@ -109,7 +109,7 @@ The Cloud Agent is now deployed as a Worker separate from the Connector:
 - Live public `GET /healthz`: HTTP 200 with the expected service/model metadata.
 - Live invalid-bearer `POST /api/sessions`: HTTP 401 with `WWW-Authenticate: Bearer`.
 
-The valid-bearer session creation, authenticated chat, and end-to-end Workers AI invocation through this Worker remain unverified because the generated owner credential cannot be handed to the operator through this chat as a secure secret-delivery channel. A separate account-level Workers AI API request to `@cf/zai-org/glm-4.7-flash` returned API success and reported 0.9506 Neurons; this is not a substitute for testing the Worker's `AI` binding. Do not mark the hosted acceptance gate complete until a valid owner-controlled credential is installed and the authenticated chat path returns a model response.
+The valid-bearer session creation, authenticated chat, and end-to-end Workers AI invocation through this Worker remain unverified because the generated owner credential cannot be handed to the operator through this chat as a secure secret-delivery channel. A separate account-level Workers AI API inference to `@cf/zai-org/glm-4.7-flash` returned the exact response `CLOUD_AGENT_MODEL_OK` with `finish_reason=stop` and reported 6.4017 Neurons. This confirms account-level model availability, not the Worker's `AI` binding path. Do not mark the hosted acceptance gate complete until a valid owner-controlled credential is installed and the authenticated chat path returns a model response.
 
 ## Release status
 

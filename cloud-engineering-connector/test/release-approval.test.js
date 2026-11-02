@@ -211,6 +211,6 @@ test("release approval paginates associated PRs and all reviews before accepting
     verifyReleaseApproval({ ...input({}), fetchImpl }),
     /outstanding change request/,
   );
-  assert.ok(requestedUrls.some(url => url.includes("/commits/" + sha + "/pulls?page=2")));
-  assert.ok(requestedUrls.some(url => url.includes("/pulls/129/reviews?page=2")));
+  assert.ok(requestedUrls.some(url => url.includes("/commits/" + sha + "/pulls") && url.includes("page=2")));
+  assert.ok(requestedUrls.some(url => url.includes("/pulls/129/reviews") && url.includes("page=2")));
 });

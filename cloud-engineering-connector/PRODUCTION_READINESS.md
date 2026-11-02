@@ -414,3 +414,7 @@ Duplicate same-SHA runs were observed for Python and Master Brain MVP; one compl
 - No merge, deployment, traffic shift, Worker setting mutation, secret read, or `main` update occurred.
 
 **Disposition:** Observability release gate — implemented and Connector CI PASS; exact-head cross-workflow CI — partial/pending; Staging — blocked pending independent approval and governance verification; Production — NO-GO.
+
+## Temporary read-only Staging smoke trigger
+
+This branch exists only to execute the `post-deploy-staging-smoke` job against the already-active Staging Worker. It does not deploy code, change Worker settings, shift traffic, or merge into another branch.

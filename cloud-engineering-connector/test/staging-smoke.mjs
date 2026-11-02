@@ -86,10 +86,19 @@ const initialized = await rpc("initialize", {
 assert.equal(initialized.response.status, 200);
 assert.equal(initialized.body.result.protocolVersion, "2025-11-25");
 
-const notification = await rpc("notifications/initialized", {}, null, null, {
-  "MCP-Protocol-Version": "2025-11-25",
+const notificationResponse = await fetch(new URL("/mcp", base), {
+  method: "POST",
+  headers: {
+    origin,
+    "content-type": "application/json",
+    accept: "application/json, text/event-stream",
+    "MCP-Protocol-Version": "2025-11-25",
+  },
+  body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }),
+  ...timeout,
 });
-assert.equal(notification.response.status, 202);
+assert.equal(notificationResponse.status, 202, "a true JSON-RPC notification without an id must be acknowledged with HTTP 202");
+assert.equal(await notificationResponse.text(), "");
 
 const listed = await rpc("tools/list", {}, 99002);
 assert.equal(listed.response.status, 200, "PUBLIC_READ_ONLY must allow unauthenticated read-only discovery");

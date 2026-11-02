@@ -152,6 +152,7 @@ export class WriteControl extends DurableObject {
       unresolvedLimit: UNRESOLVED_OPERATION_LIMIT,
       unresolvedRemaining: Math.max(0, UNRESOLVED_OPERATION_LIMIT - unresolvedCount),
       oldestUnresolvedUpdatedAt: oldestUnresolvedUpdatedAt ?? null,
+      retentionMs: TERMINAL_RETENTION_MS,
     };
   }
 

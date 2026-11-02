@@ -26,6 +26,7 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       STAGING_MCP_URL: https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev
+      RELEASE_ENV: staging
 
     steps:
       - name: Checkout immutable candidate

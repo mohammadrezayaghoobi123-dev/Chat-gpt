@@ -537,3 +537,35 @@ Changes subsequently applied on the working branch include:
 - Production remains NO-GO; Staging candidate deployment remains blocked. `main`, Worker settings, secrets, deployments and traffic remain unchanged.
 
 **Disposition:** live Staging `healthz` — PASS; live Staging `readyz` — FAIL (404); current-head Connector CI after test-mock fix — PENDING; account MFA enrollment — owner action required; independent review — pending; Production — NO-GO.
+
+
+## 20. Latest candidate smoke and verification status — 2026-11-03
+
+**PR head when recorded:** `dd4ce20bcd901582deca70b800b2061066eb8000`  
+**PR:** #129, Draft / open; base `integration/unify-main-and-integrated-2026-11-02`.
+
+### Live Staging result (actual GitHub Actions runner)
+
+- Connector workflow run `41524367737`, job `125548194666`, reached the active Staging Worker.
+- `GET /healthz` returned HTTP 200 and passed the cloud-only service assertions.
+- `GET /readyz` returned **HTTP 404**. The smoke therefore failed before MCP tool discovery and invalid-bearer checks.
+- This is an actual HTTP response from the deployed Worker, unlike earlier egress-policy errors. The currently active Staging version does not yet expose the candidate readiness route / Durable Object probe contract.
+- The test was read-only. No deployment, traffic change, Worker setting mutation, or secret read occurred. Do not weaken the smoke test or label Staging acceptance successful.
+
+### Latest source hygiene work
+
+- Applied a narrowly scoped unused-import / unused-local cleanup across Python core and test files.
+- The exact code candidate before the final import-scope correction was `d4799f8d5517e74329d1451cc00cc0e2af7a773a`; Connector CI main test job passed, but its separate live Staging smoke job failed as recorded above.
+- Static, Python, Master Brain MVP, and browser workflow jobs for that candidate remained queued at the last inspection; Master Brain MCP CI completed successfully. Cloud Agent and Gitleaks also completed successfully.
+- Restored the scoped `InvalidTransition` import in the recovery-registry test after reviewing the Ruff diagnostic. A subsequent deduplication commit was applied; current PR head is `dd4ce20bcd901582deca70b800b2061066eb8000`.
+- No workflow run or combined status was returned for the final PR head at the time of this update. Therefore the most recent import-scope correction and current branch are **not yet CI-verified**. Do not infer green status from the earlier candidate.
+
+### Release gates unchanged
+
+- Staging observability and required secret/namespace bindings are present; active Worker code still fails the `/readyz` smoke.
+- Production remains NO-GO: missing Worker observability; `PUBLIC_READ_ONLY` currently `secret_text` rather than `plain_text=true`; `WRITE_CONTROL` absent before the migration; account MFA enforcement is false.
+- The sole accepted Cloudflare account member previously inspected had 2FA disabled. Account-wide enforcement must not be enabled until that member enrolls MFA and secures recovery codes; otherwise lockout risk remains.
+- PR #129 remains Draft with no independent approval. Branch-protection enforcement is still unverified due integration permission limits.
+- No Worker deployment, traffic shift, merge, secret access, account security change, or `main` update occurred.
+
+**Disposition:** Connector unit tests on prior exact candidate — PASS; live Staging `healthz` — PASS; live Staging `readyz` — FAIL (404); final-head CI — NOT YET VERIFIED; Staging release — BLOCKED; Production — NO-GO.

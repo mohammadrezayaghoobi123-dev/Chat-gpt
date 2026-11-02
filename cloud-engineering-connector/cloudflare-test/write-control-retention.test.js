@@ -3,6 +3,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const UNRESOLVED_LIMIT = 1000;
 const NOW = 1_800_000_000_000;
 
 function stubFor(name) {

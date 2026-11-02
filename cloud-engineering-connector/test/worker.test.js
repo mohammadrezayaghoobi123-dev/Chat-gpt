@@ -7,26 +7,9 @@ const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_READONLY_TOK
 const req=(path,options={})=>{const headers=new Headers(options.headers);if(!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
 const rpc=(method,params={},id=1)=>{if(method==="tools/call"&&params.name==="create_change_pr"&&params.arguments&&!params.arguments.idempotency_key)params={...params,arguments:{...params.arguments,idempotency_key:"worker-test-idempotency-key-"+String(++idempotencyCounter).padStart(8,"0")}};return req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})})};
 const anonymousRpc=(method,params={},id=1)=>{const request=rpc(method,params,id);const headers=new Headers(request.headers);headers.delete("authorization");return new Request(request,{headers})};
-test("health reports cloud execution and a live Durable Object SQLite probe",async()=>{const r=await worker.fetch(req("/healthz"),env);assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers");assert.equal(b.durable_objects,"ok");assert.equal(b.mcp,"ok");assert.equal(env.WRITE_CONTROL.__test.events.some(event=>event.type==="ping"),true)});
-test("health rate limits SQLite probes by client IP before touching Durable Objects",async()=>{
- const binding=createWriteControlBinding();
- let key;
- const response=await worker.fetch(req("/healthz"),{...env,WRITE_CONTROL:binding,MCP_RATE_LIMITER:{limit:async(input)=>{key=input.key;return{success:false}}}});
- assert.equal(key,"healthz:203.0.113.10");
- assert.equal(response.status,429);
- assert.equal(response.headers.get("retry-after"),"60");
- assert.equal(binding.__test.events.some(event=>event.type==="ping"),false);
-});
-test("health fails closed when its rate limiter is unavailable",async()=>{
- const binding=createWriteControlBinding();
- const {MCP_RATE_LIMITER,...withoutLimiter}=env;
- const response=await worker.fetch(req("/healthz"),{...withoutLimiter,WRITE_CONTROL:binding});
- assert.equal(response.status,503);
- assert.deepEqual(await response.json(),{error:"rate_limiter_unavailable"});
- assert.equal(binding.__test.events.some(event=>event.type==="ping"),false);
-});
-test("health fails closed when the Durable Object binding is unavailable",async()=>{const r=await worker.fetch(req("/healthz"),{MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,503);const b=await r.json();assert.equal(b.status,"degraded");assert.equal(b.durable_objects,"unavailable")});
-test("health fails closed when MCP authentication is not configured",async()=>{const {MCP_AUTH_TOKEN,...envWithoutToken}=env;const r=await worker.fetch(req("/healthz"),envWithoutToken);assert.equal(r.status,503);const b=await r.json();assert.equal(b.status,"degraded");assert.equal(b.mcp,"unavailable")});
+test("healthz is a liveness endpoint independent of credentials and Durable Object availability",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.service,"cloud-engineering-connector");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers");assert.equal(Object.hasOwn(b,"durable_objects"),false);assert.equal(Object.hasOwn(b,"mcp"),false)});
+test("readyz reports Durable Object schema readiness using the lightweight ping",async()=>{const r=await worker.fetch(req("/readyz"),env);assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ready");assert.equal(b.durable_objects,"ok");assert.equal(env.WRITE_CONTROL.__test.events.some(event=>event.type==="ping"),true)});
+test("readyz fails closed when the Durable Object binding is unavailable",async()=>{const r=await worker.fetch(req("/readyz"),{});assert.equal(r.status,503);const b=await r.json();assert.equal(b.status,"not_ready");assert.equal(b.durable_objects,"unavailable")});
 test("JSON API responses carry restrictive browser security headers",async()=>{
  const response=await worker.fetch(req("/healthz"),env);
  assert.equal(response.headers.get("x-content-type-options"),"nosniff");

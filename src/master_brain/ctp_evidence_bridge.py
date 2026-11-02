@@ -52,11 +52,11 @@ def review_ctp_evidence(
     evidence_list = tuple(evidence_records)
     evidence_by_id: dict[str, EvidenceRecord] = {}
     duplicate_ids: list[str] = []
-    for item in evidence_list:
-        if item.evidence_id in evidence_by_id:
-            duplicate_ids.append(item.evidence_id)
+    for evidence_record in evidence_list:
+        if evidence_record.evidence_id in evidence_by_id:
+            duplicate_ids.append(evidence_record.evidence_id)
         else:
-            evidence_by_id[item.evidence_id] = item
+            evidence_by_id[evidence_record.evidence_id] = evidence_record
 
     structural = list(case.validate())
     if duplicate_ids:
@@ -84,13 +84,13 @@ def review_ctp_evidence(
             orphan_evidence.update(test.evidence_ids)
             continue
         for evidence_id in test.evidence_ids:
-            item = evidence_by_id.get(evidence_id)
-            if item is None:
+            evidence_record = evidence_by_id.get(evidence_id)
+            if evidence_record is None:
                 missing_evidence.add(evidence_id)
                 continue
-            if item.claim_id not in case_claim_ids:
+            if evidence_record.claim_id not in case_claim_ids:
                 structural.append(
-                    f"evidence {evidence_id} refers to claim {item.claim_id} outside CTP case"
+                    f"evidence {evidence_id} refers to claim {evidence_record.claim_id} outside CTP case"
                 )
                 orphan_evidence.add(evidence_id)
                 continue

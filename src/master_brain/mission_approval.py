@@ -18,7 +18,7 @@ from master_brain.approval_signing import (
     ApprovalSigner, ApprovalVerifier, attach_external_signature,
     build_signing_message, sign_approval_payload, verify_approval_event,
 )
-from master_brain.audit_store import NOW, AuditStore, AuditStoreError
+from master_brain.audit_store import NOW, AuditStore, AuditStoreError, _NowType
 from master_brain.mission_contract import (
     MissionContract,
     MissionReviewLevel,
@@ -227,7 +227,7 @@ def record_mission_approval(
     contract: MissionContract,
     *,
     event_id: str,
-    recorded_at: str,
+    recorded_at: str | _NowType,
     approver_subject: str,
     authentication_method: str,
     action_digest: str | None = None,
@@ -260,6 +260,10 @@ def record_mission_approval(
         # Raises (before anything is written) if the signer is unusable.
         payload = sign_approval_payload(signer, event_id, payload)
     elif signature is not None:
+        if not isinstance(signing_key_id, str) or not signing_key_id.strip():
+            raise ValueError("signing_key_id must be a non-empty string for an external signature")
+        if not isinstance(signature_alg, str) or not signature_alg.strip():
+            raise ValueError("signature_alg must be a non-empty string for an external signature")
         payload = attach_external_signature(payload, signing_key_id, signature_alg, signature)
     event = store.append(
         event_id=event_id,

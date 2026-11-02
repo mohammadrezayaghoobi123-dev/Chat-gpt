@@ -394,3 +394,9 @@ test("create_change_pr schema advertises and enforces string length constraints 
   const longResult=await tooLong.json();assert.equal(longResult.result.isError,true);assert.match(longResult.result.content[0].text,/summary must contain at most 8000 characters/);assert.equal(calls,0);
  }finally{globalThis.fetch=originalFetch}
 });
+
+test("bearer token comparison accepts only the exact token (constant-time path)",async()=>{
+  const mk=(auth)=>worker.fetch(req("/mcp",{method:"POST",headers:{authorization:auth,"content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"ping"})}),env);
+  assert.equal((await mk("Bearer test-secret")).status,200);
+  for(const bad of ["Bearer test-secre","Bearer test-secrets","bearer test-secret","Bearer ","Bearer","test-secret","Bearer TEST-SECRET",""])assert.equal((await mk(bad)).status,401,JSON.stringify(bad));
+});

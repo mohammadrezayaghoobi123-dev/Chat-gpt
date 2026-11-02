@@ -1,0 +1,43 @@
+name: Static checks (informational)
+
+# Read-only and non-blocking: runs ruff (errors + pyflakes rules) and mypy over src/ and reports
+# findings as annotations. It never fails the job, because the project had no lint/type baseline
+# before 2026-10-26; the point is to make the real baseline visible, not to claim it is clean.
+on:
+  push:
+    branches:
+      - master-brain/integrated
+    paths:
+      - .github/workflows/static-checks.yml
+      - src/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -e ".[signing]" ruff==0.6.9 mypy==1.11.2
+      - name: ruff (E9, F = syntax errors and pyflakes)
+        run: |
+          ruff check --select E9,F --output-format=github src tests > ruff.txt || true
+          cat ruff.txt | head -200
+          echo "::notice::ruff findings: $(grep -c '^::error' ruff.txt || true)"
+      - name: mypy (src, non-strict)
+        run: |
+          mypy --ignore-missing-imports --no-error-summary --show-column-numbers src/master_brain > mypy.txt || true
+          python - <<'PY'
+          import re
+          lines = open("mypy.txt", encoding="utf-8").read().splitlines()
+          hits = [l for l in lines if re.match(r".+?:\d+:\d+: error:", l)]
+          for l in hits[:100]:
+              path, line, col, rest = l.split(":", 3)
+              print(f"::warning file={path},line={line},col={col}::{rest.strip()[:300]}")
+          print(f"::notice::mypy errors: {len(hits)}")
+          PY

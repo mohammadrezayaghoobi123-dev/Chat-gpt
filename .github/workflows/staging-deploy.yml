@@ -68,10 +68,34 @@ jobs:
             exit 1
           fi
 
+      - name: Verify existing SQLite Durable Object namespace before lifecycle transition
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          namespaces_json="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/durable_objects/namespaces?per_page=100")"
+          if ! printf '%s' "$namespaces_json" | jq -e --arg id "1d0f4257b609483eba4fc5fdb39ed781" ' .success == true and any(.result[]; .id == $id and .script == "chat-gpt111-staging" and .class == "WriteControl" and .use_sqlite == true)' >/dev/null; then
+            echo "::error::Expected existing Staging SQLite WriteControl namespace was not found. Stop: refusing to risk creating or binding a different namespace."
+            exit 1
+          fi
+
       - name: Deploy Staging only
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npx wrangler deploy --env staging
+
+      - name: Verify Durable Object namespace identity survived deployment
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          namespaces_json="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/durable_objects/namespaces?per_page=100")"
+          if ! printf '%s' "$namespaces_json" | jq -e --arg id "1d0f4257b609483eba4fc5fdb39ed781" ' .success == true and any(.result[]; .id == $id and .script == "chat-gpt111-staging" and .class == "WriteControl" and .use_sqlite == true)' >/dev/null; then
+            echo "::error::Staging Durable Object namespace identity changed after deployment. Stop further promotion and investigate."
+            exit 1
+          fi
 
       - name: Verify deployed Staging MCP, console, protocol, and GitHub read path
         run: node test/staging-smoke.mjs

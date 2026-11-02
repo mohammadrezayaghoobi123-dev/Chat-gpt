@@ -50,11 +50,13 @@ jobs:
         run: npm run check
 
   post-deploy-staging-smoke:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/staging-postdeploy-acceptance-') || github.event_name == 'pull_request' && github.event.pull_request.number == 126
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/staging-postdeploy-acceptance-')
     runs-on: ubuntu-24.04
     timeout-minutes: 7
     env:
       STAGING_MCP_URL: https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify deployed Staging console, MCP protocol, read-only policy, and GitHub integration
         run: node cloud-engineering-connector/test/staging-smoke.mjs

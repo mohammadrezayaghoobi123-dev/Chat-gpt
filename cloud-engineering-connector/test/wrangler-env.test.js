@@ -25,9 +25,23 @@ test("Staging and Production Rate Limiting namespaces are distinct positive inte
   assert.notEqual(stagingId, productionId);
 });
 
-test("Staging explicitly declares non-inherited runtime variables", () => {
-  assert.match(staging, /\[env\.staging\.vars\]/);
-  assert.match(staging, /SERVICE_MODE\s*=\s*"cloud"/);
+test("Wrangler preserves existing dashboard variables and encrypted secrets", () => {
+  assert.match(config, /^keep_vars\s*=\s*true$/m);
+  assert.doesNotMatch(config, /^\[vars\]/m);
+  assert.doesNotMatch(staging, /^\[env\.staging\.vars\]/m);
+  assert.doesNotMatch(config, /^SERVICE_MODE\s*=/m);
+});
+
+test("Production and Staging enable persisted custom logs without invocation logs", () => {
+  for (const section of [
+    config.slice(0, stagingStart >= 0 ? stagingStart : config.length),
+    staging,
+  ]) {
+    assert.match(section, /enabled\s*=\s*true/);
+    assert.match(section, /redact_query_string\s*=\s*true/);
+    assert.match(section, /invocation_logs\s*=\s*false/);
+    assert.match(section, /persist\s*=\s*true/);
+  }
 });
 
 test("Production and Staging both declare the SQLite WriteControl binding and migration", () => {

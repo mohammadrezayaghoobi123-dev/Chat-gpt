@@ -253,11 +253,11 @@ The Cloudflare audit remains unchanged: both Workers lack `GITHUB_READONLY_TOKEN
 **Decision:** CI is green for the exact candidate, but release remains **NO-GO** until the infrastructure, governance, independent review, Staging, and real Claude/ChatGPT acceptance gates above are satisfied.
 
 
-## 11. Latest PR #129 head verification — 2026-11-02
+## 11. Application-code verification snapshot (parent commit) — 2026-11-02
 
-**Exact PR head:** `5423b0e8a53427db2e22f8476eba65679f69e42b`  
+**Verified application-code parent SHA:** `5423b0e8a53427db2e22f8476eba65679f69e42b`  
 **Parent:** `0d32dabfa94250027a07dbf50f0b8785d079dfe0`  
-**Scope of this head:** documentation-only update to this runbook; no Worker or Python source changed.  
+**Scope of this parent:** the parent commit was the previously verified application-code candidate. The current commit following it is a runbook-only documentation update; no Worker or Python source changed.  
 **PR state at verification:** Draft, open, mergeable; zero submitted reviews and zero review threads.
 
 ### Exact-head CI evidence

@@ -76,3 +76,10 @@ Cloudflare Workers has a free tier subject to current quotas and account eligibi
 4. Expand repository support only with per-repository authorization and negative tests.
 5. Add isolated cloud test execution only after defining resource limits, network policy, dependency caching, and secret isolation.
 6. Add source retrieval with citations and persistent project memory after privacy, retention, and tenant isolation are designed.
+
+
+## Read-only browser console
+
+The root path serves a small same-origin console for the four explicitly read-only MCP tools. It uses a per-response cryptographic nonce for its inline script, a restrictive CSP, `no-store`, same-origin-only network calls, and in-memory bearer-token handling (no localStorage/sessionStorage). Disconnect clears the in-page token. The console never displays write-capable tools and does not expose auth/credential configuration flags.
+
+Same-origin HTTPS POST requests are allowed without widening the configured cross-origin allowlist; cross-origin requests remain HTTPS-only and require an exact configured origin. The console is a convenience UI, not an authentication boundary: the Worker still enforces MCP bearer authentication and rate limiting.

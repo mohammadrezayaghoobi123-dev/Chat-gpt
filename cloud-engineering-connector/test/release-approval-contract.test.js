@@ -214,11 +214,11 @@ function runPreflightWithMfaDisabled(source, stepName, production) {
     "  else throw new Error('Unexpected Cloudflare API request: ' + url);",
     "  return new Response(JSON.stringify({ success: true, result }), { status: 200, headers: { 'content-type': 'application/json' } });",
     "};",
-  ].join("\\n");
+  ].join("\n");
   const directory = mkdtempSync(join(tmpdir(), "release-preflight-mfa-"));
   const output = join(directory, "github-output");
   try {
-    const result = spawnSync(process.execPath, ["--input-type=module", "-e", prelude + "\\n" + script], {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", prelude + "\n" + script], {
       encoding: "utf8",
       env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: "test-account", CLOUDFLARE_API_TOKEN: "test-token", GITHUB_OUTPUT: output },
     });

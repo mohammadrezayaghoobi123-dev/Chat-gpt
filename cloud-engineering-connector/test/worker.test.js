@@ -114,6 +114,28 @@ test("anonymous read-only GitHub access never falls back to the write token",asy
   assert.equal(calls,0);
  }finally{globalThis.fetch=originalFetch}
 });
+test("Staging-only GitHub token fallback is opt-in, GET-only, and globally rate-limited",async()=>{
+ const originalFetch=globalThis.fetch;const requests=[];const limiterKeys=[];
+ globalThis.fetch=async(input,init={})=>{
+  const url=String(input);const headers=new Headers(init.headers);
+  requests.push({url,method:init.method||"GET",authorization:headers.get("authorization")});
+  if(url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt"))return new Response(JSON.stringify({full_name:"mohammadrezayaghoobi123-dev/Chat-gpt",private:false,default_branch:"main"}),{status:200,headers:{"content-type":"application/json"}});
+  if(url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt/commits/main"))return new Response(JSON.stringify({sha:"abc123",commit:{tree:{sha:"tree123"},message:"test",committer:{date:"2026-01-01T00:00:00Z"}}}),{status:200,headers:{"content-type":"application/json"}});
+  if(url.includes("/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/trees/tree123?recursive=1"))return new Response(JSON.stringify({tree:[],truncated:false}),{status:200,headers:{"content-type":"application/json"}});
+  throw new Error("Unexpected mocked GitHub URL: "+url);
+ };
+ try{
+  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1),{PUBLIC_READ_ONLY:"true",ALLOW_GITHUB_TOKEN_READ_FALLBACK:"true",GITHUB_TOKEN:"staging-token",MCP_RATE_LIMITER:{limit:async({key})=>{limiterKeys.push(key);return{success:true}}}});
+  const body=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(body.result.isError,undefined);
+  assert.equal(requests.length,3);
+  assert.deepEqual(requests.map(item=>item.method),["GET","GET","GET"]);
+  assert.deepEqual(requests.map(item=>item.authorization),["Bearer staging-token","Bearer staging-token","Bearer staging-token"]);
+  assert.equal(limiterKeys.filter((key)=>key==="github-api-global").length,3);
+  assert.doesNotMatch(JSON.stringify(body),/staging-token/);
+ }finally{globalThis.fetch=originalFetch}
+});
 test("anonymous read-only file access fails closed when the repository is private",async()=>{
  const originalFetch=globalThis.fetch;const calls=[];
  globalThis.fetch=async(input,init={})=>{

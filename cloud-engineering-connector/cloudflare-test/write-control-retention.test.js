@@ -97,4 +97,30 @@ describe("WriteControl terminal operation retention", () => {
       vi.useRealTimers();
     }
   });
+
+  it("treats an expired terminal key as a new admission after the 30-day window", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    try {
+      const stub = stubFor("retention-expired-key-reuse");
+      const keyHash = "9".repeat(64);
+      const requestHash = "a".repeat(64);
+      await runInDurableObject(stub, async (instance, state) => {
+        insertOperation(state.storage.sql, {
+          keyHash, requestHash, status: "SUCCEEDED", phase: "PR_CREATED",
+          updatedAt: NOW - RETENTION_MS - 1,
+        });
+        const result = await instance.admitWrite({
+          keyHash, requestHash, windowMs: 60_000, limit: 5,
+        });
+        expect(result).toMatchObject({
+          admitted: true,
+          replay: false,
+          operation: { status: "IN_PROGRESS", phase: "RESERVED" },
+        });
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

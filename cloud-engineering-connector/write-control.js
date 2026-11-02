@@ -11,6 +11,7 @@ const PHASES = [
   "PR_CREATED",
 ];
 const STATUSES = new Set(["IN_PROGRESS", "SUCCEEDED", "FAILED", "UNKNOWN"]);
+const TERMINAL_OPERATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const METADATA_FIELDS = new Set([
   "branchName",
   "commitSha",
@@ -137,6 +138,15 @@ export class WriteControl extends DurableObject {
     }
 
     return this.ctx.storage.transactionSync(() => {
+      // Preserve idempotency while terminal outcomes are retained. Only terminal rows
+      // strictly older than the retention boundary are eligible; unresolved work is
+      // never pruned because its external side-effect outcome may still be ambiguous.
+      this.ctx.storage.sql.exec(
+        `DELETE FROM write_operations
+         WHERE status IN ('SUCCEEDED', 'FAILED') AND updated_at < ?`,
+        now - TERMINAL_OPERATION_RETENTION_MS,
+      );
+
       const existing = this.readOperation(keyHash);
       if (existing) {
         if (existing.requestHash !== requestHash) {

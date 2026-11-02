@@ -86,9 +86,10 @@ describe("WriteControl terminal operation retention", () => {
           keyHash, requestHash, status: "SUCCEEDED", phase: "PR_CREATED",
           updatedAt: NOW - RETENTION_MS,
         });
-        await expect(instance.admitWrite({
+        const replay = instance.admitWrite({
           keyHash, requestHash, windowMs: 60_000, limit: 5,
-        })).resolves.toMatchObject({
+        });
+        expect(replay).toMatchObject({
           admitted: true, replay: true,
           operation: { status: "SUCCEEDED", phase: "PR_CREATED" },
         });

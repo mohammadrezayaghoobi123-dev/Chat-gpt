@@ -147,3 +147,8 @@ Public MCP callers do not provide GitHub credentials. The Worker requires the se
 ### Required Cloudflare Staging secret
 
 Before promoting the dedicated-token build to Staging, add a Worker secret named `GITHUB_READONLY_TOKEN` to `chat-gpt111-staging`. Create a fine-grained PAT restricted to `mohammadrezayaghoobi123-dev/Chat-gpt` with repository permissions **Metadata: Read-only** and **Contents: Read-only** only. Do not grant Contents write, Pull requests, Actions, Administration, or organization permissions. Add the secret value directly in the Cloudflare dashboard; never paste it into chat, GitHub source, Actions logs, or a test fixture. Keep `GITHUB_TOKEN` separate for the authenticated draft-PR workflow.
+
+
+### Temporary Staging read-token fallback
+
+The `ALLOW_GITHUB_TOKEN_READ_FALLBACK` flag is a **dashboard-managed Staging-only variable**, intentionally not declared in `wrangler.toml`. This preserves the repository's `keep_vars = true` contract and avoids overwriting dashboard-managed variables. If enabled, the Worker still forces GitHub requests to GET-only in anonymous public-read-only mode. Production must never set this flag. Remove it after a dedicated `GITHUB_READONLY_TOKEN` is configured and the live read-only smoke passes.

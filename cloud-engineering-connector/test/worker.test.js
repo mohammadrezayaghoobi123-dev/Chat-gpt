@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import worker from "../worker.js";
 import { createWriteControlBinding, createGitHubWriteMock } from "./helpers/write-control-mocks.js";
 let idempotencyCounter=0;
-const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding()};
+const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_READONLY_TOKEN:"read-only-test-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding()};
 const req=(path,options={})=>{const headers=new Headers(options.headers);if(!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
 const rpc=(method,params={},id=1)=>{if(method==="tools/call"&&params.name==="create_change_pr"&&params.arguments&&!params.arguments.idempotency_key)params={...params,arguments:{...params.arguments,idempotency_key:"worker-test-idempotency-key-"+String(++idempotencyCounter).padStart(8,"0")}};return req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})})};
 const anonymousRpc=(method,params={},id=1)=>{const request=rpc(method,params,id);const headers=new Headers(request.headers);headers.delete("authorization");return new Request(request,{headers})};
@@ -516,7 +516,7 @@ test("public read-only repository inspection uses the server token and global qu
   throw new Error("Unexpected mocked GitHub URL: "+url);
  };
  try{
-  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_AUTH_TOKEN:"server-secret-0123456789abcdef-012345012345012345",READ_ONLY_GITHUB:true,GITHUB_READONLY_TOKEN:"server-token",GITHUB_TOKEN:"write-token",MCP_RATE_LIMITER:{limit:async(input)=>{limiterKeys.push(input.key);return{success:true}}}});
+  const response=await worker.fetch(anonymousRpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}},1,null),{PUBLIC_READ_ONLY:"true",MCP_AUTH_TOKEN:"server-secret-0123456789abcdef-012345012345012345",READ_ONLY_GITHUB:true,GITHUB_READONLY_TOKEN:"read-only-server-token",GITHUB_TOKEN:"write-token",MCP_RATE_LIMITER:{limit:async(input)=>{limiterKeys.push(input.key);return{success:true}}}});
   assert.equal(response.status,200);
   const body=await response.json();
   assert.equal(body.result.isError,undefined);

@@ -33,20 +33,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate immutable release branch and credentials
+      - name: Validate immutable release branch
         shell: bash
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           expected="${GITHUB_REF_NAME#integration/staging-release-}"
           if [[ ! "$expected" =~ ^[0-9a-f]{40}$ ]] || [[ "$expected" != "$GITHUB_SHA" ]]; then
             echo "::error::Release branch suffix must equal the exact 40-character candidate commit SHA."
-            exit 1
-          fi
-          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" || -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
-            echo "::error::Configure staging environment secrets CLOUDFLARE_API_TOKEN and variable CLOUDFLARE_ACCOUNT_ID."
             exit 1
           fi
           echo "Candidate SHA validated: $GITHUB_SHA"

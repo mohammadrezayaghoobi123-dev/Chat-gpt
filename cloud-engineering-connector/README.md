@@ -76,3 +76,12 @@ Cloudflare Workers has a free tier subject to current quotas and account eligibi
 4. Expand repository support only with per-repository authorization and negative tests.
 5. Add isolated cloud test execution only after defining resource limits, network policy, dependency caching, and secret isolation.
 6. Add source retrieval with citations and persistent project memory after privacy, retention, and tenant isolation are designed.
+
+
+## Durable write control (draft integration)
+
+The only write-capable tool, `create_change_pr`, uses a SQLite-backed Durable Object to serialize write admission across the shared GitHub credential. It enforces five distinct operations per rolling 60-second window and requires a client-generated idempotency key. Replays with the same key and request fingerprint return the recorded operation; a different request under the same key is rejected.
+
+The operation journal records phase transitions and lease generations. Ambiguous immutable Git Tree/Commit requests are replayed only with the exact persisted payload and read-back verification. Mutable branch and PR creation outcomes are reconciled through read-only checks; uncertain outcomes remain quarantined as `UNKNOWN`. No exactly-once guarantee across GitHub and SQLite is claimed.
+
+The ledger intentionally retains idempotency tombstones and operation records indefinitely in this initial implementation. This prevents replay after deletion but creates unbounded storage growth; retention/compaction requires a separate reviewed design. Production and Staging have separate Durable Object bindings and SQLite migrations. Wrangler dry-runs do not deploy these migrations.

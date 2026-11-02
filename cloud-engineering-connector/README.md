@@ -121,3 +121,14 @@ A candidate version must pass the exact-commit CI suite, npm advisory audit, Jav
 The root path serves a same-origin console suitable for a mobile browser. It uses a per-response cryptographic nonce for its inline script, restrictive CSP, \`no-store\`, same-origin-only API calls, and in-memory bearer-token handling (no localStorage/sessionStorage). Disconnect clears the token. The UI exposes only five read-only tools, including bounded \`architecture_analyze\`; write-capable tools are not rendered.
 
 When \`PUBLIC_READ_ONLY=true\`, requests with no Authorization header may use the explicit read-only allowlist even when the server bearer secret is configured. A supplied invalid bearer token is still rejected. Anonymous requests are rate-limited and GitHub credentials are stripped before tool execution, so only public repository data is available. The Worker remains the security boundary.
+
+
+## Claude remote connector setup
+
+Claude Free supports one custom remote connector. Add the Worker endpoint under **Customize → Connectors → Add custom connector**. The endpoint must be publicly reachable over HTTPS because Claude connects from Anthropic's cloud, not from the user's device.
+
+For the Staging acceptance environment, use `https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev/mcp`. Staging is explicitly configured with `PUBLIC_READ_ONLY=true`; it advertises only the five read-only tools, rate-limits anonymous requests, strips the server GitHub credential from anonymous execution, and denies a supplied invalid bearer token. Do not configure a shared write credential in Claude for the Staging acceptance test.
+
+For a future authenticated deployment, Claude's custom connector supports fixed request headers. Configure `Authorization: Bearer <MCP_AUTH_TOKEN>` only through Claude's encrypted connector credential UI and only after the production credential is rotated. Never place the token in this repository, a prompt, a test fixture, or a public URL.
+
+Claude compatibility is not established by protocol tests alone. Acceptance still requires adding the connector in the actual Claude account, confirming the five read-only tools appear, and executing a read-only repository inspection. Free accounts are limited to one custom connector, so do not consume that slot with a temporary connector if it is already in use.

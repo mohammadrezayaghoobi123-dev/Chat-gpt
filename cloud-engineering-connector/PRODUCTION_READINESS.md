@@ -9,7 +9,7 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 
 | Gate | Latest evidence | Status |
 |---|---|---|
-| Node test suite | 179 passed, 0 failed | PASS |
+| Node test suite | 180 passed, 0 failed | PASS |
 | Vitest Durable Object suite | 41 passed, 0 failed | PASS |
 | npm dependency audit | 0 reported vulnerabilities | PASS |
 | JavaScript syntax and Wrangler configuration checks | CI job passed | PASS |

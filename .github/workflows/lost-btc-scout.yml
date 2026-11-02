@@ -1,0 +1,33 @@
+name: Lost BTC Scout
+
+on:
+  pull_request:
+    paths:
+      - "lost-btc-scout/**"
+      - ".github/workflows/lost-btc-scout.yml"
+  push:
+    branches:
+      - "feature/lost-btc-scout"
+    paths:
+      - "lost-btc-scout/**"
+      - ".github/workflows/lost-btc-scout.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run exact-unit regression tests
+        working-directory: lost-btc-scout
+        run: npm test
+      - name: Check formatter syntax
+        working-directory: lost-btc-scout
+        run: npm run check

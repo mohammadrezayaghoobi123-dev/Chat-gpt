@@ -17,8 +17,12 @@ for (const workflow of workflows) {
   test(`${workflow.name} release refuses to deploy an unapproved candidate`, () => {
     const source = readFileSync(workflow.path, "utf8");
     assert.match(source, /pull-requests:\s*read/, "release workflow must have read-only PR review access");
-    assert.match(source, /RELEASE_GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/, "workflow must use its scoped GitHub token");
     assert.match(source, /node scripts\/verify-release-approval\.mjs/, "approval guard must run before deployment");
+    assert.equal((source.match(/RELEASE_GITHUB_TOKEN:/g) || []).length, 1, "token must be injected only once");
+    const guardPosition = source.indexOf("node scripts/verify-release-approval.mjs");
+    const tokenPosition = source.indexOf("RELEASE_GITHUB_TOKEN:");
+    const deployPosition = source.indexOf("npx wrangler deploy");
+    assert.ok(tokenPosition > guardPosition && guardPosition < deployPosition, "read-only GitHub token must be scoped to the approval step before deploy");
     assert.match(source, /RELEASE_ENV:\s*(staging|production)/, "release environment must be explicit");
   });
 }

@@ -1,0 +1,105 @@
+name: Free Project Monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub scheduled workflows run only from the repository default branch.
+    # This becomes automatic after this workflow is merged into that branch.
+    - cron: "17 6 * * *"
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  checks: read
+
+concurrency:
+  group: free-project-monitor
+  cancel-in-progress: true
+
+jobs:
+  monitor:
+    name: Read-only PR and CI monitor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Inspect project PRs and write report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_EVENT: ${{ github.event_name }}
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          const [owner, repo] = process.env.GH_REPOSITORY.split("/");
+          const token = process.env.GH_TOKEN;
+          const ids = [103, 104, 105, 110, 111, 112, 129];
+          const headers = {
+            accept: "application/vnd.github+json",
+            authorization: `Bearer ${token}`,
+            "x-github-api-version": "2022-11-28",
+          };
+          async function get(path) {
+            const response = await fetch(`https://api.github.com/repos/${owner}/${repo}${path}`, {
+              headers,
+              signal: AbortSignal.timeout(20000),
+            });
+            if (!response.ok) {
+              const body = await response.text();
+              throw new Error(`GitHub API ${response.status} for ${path}: ${body.slice(0, 300)}`);
+            }
+            return response.json();
+          }
+          const rows = await Promise.all(ids.map(async (number) => {
+            const [pr, reviews, comments] = await Promise.all([
+              get(`/pulls/${number}`),
+              get(`/pulls/${number}/reviews?per_page=100`),
+              get(`/issues/${number}/comments?per_page=100`),
+            ]);
+            const claude = [...reviews, ...comments]
+              .filter(x => /claude/i.test(x.user?.login ?? ""))
+              .sort((a, b) => Date.parse(b.submitted_at ?? b.updated_at ?? b.created_at ?? 0)
+                - Date.parse(a.submitted_at ?? a.updated_at ?? a.created_at ?? 0))[0];
+            const head = pr.head.sha;
+            const checks = await get(`/commits/${head}/check-runs?per_page=100`);
+            const counts = checks.check_runs.reduce((acc, run) => {
+              const key = run.conclusion ?? run.status;
+              acc[key] = (acc[key] ?? 0) + 1;
+              return acc;
+            }, {});
+            return {
+              number, title: pr.title, state: pr.state, draft: pr.draft,
+              merged: pr.merged, base: pr.base.ref, head: pr.head.ref,
+              sha: head, updated: pr.updated_at,
+              reviews: reviews.length, claude,
+              checks: checks.total_count, checkCounts: counts,
+              url: pr.html_url,
+            };
+          }));
+          const lines = [
+            "# Master Brain — GitHub project monitor",
+            "",
+            `- Trigger: **${process.env.GH_EVENT}**`,
+            `- Repository: **${owner}/${repo}**`,
+            `- Timestamp (UTC): ${new Date().toISOString()}`,
+            "- Mode: read-only; no PR, branch, secret, or deployment mutations.",
+            "",
+            "| PR | State | Draft | Base ← Head | Head SHA | Checks | Reviews | Latest Claude activity |",
+            "|---:|---|---:|---|---|---|---:|---|",
+          ];
+          for (const p of rows) {
+            const checkText = Object.entries(p.checkCounts).map(([k,v]) => `${k}: ${v}`).join(", ") || "none";
+            const claudeText = p.claude
+              ? `${p.claude.user.login} · ${p.claude.submitted_at ?? p.claude.updated_at ?? p.claude.created_at}`
+              : "none found";
+            lines.push(`| [#${p.number}](${p.url}) | ${p.merged ? "merged" : p.state} | ${p.draft} | ${p.base} ← ${p.head} | \`${p.sha.slice(0,12)}\` | ${p.checks} (${checkText}) | ${p.reviews} | ${claudeText} |`);
+          }
+          lines.push("", "## Attention rules", "",
+            "- Treat any failed, cancelled, or pending required check as not green; inspect the individual run before release decisions.",
+            "- A Claude comment is activity evidence, not approval. Review state and exact reviewed commit must be checked separately.",
+            "- This report does not infer production readiness or authorize merge/deployment.",
+            "");
+          await import("node:fs").then(({ appendFileSync }) =>
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n")));
+          console.log(`Monitored ${rows.length} PRs. No credentials or write operations used.`);
+          NODE

@@ -506,3 +506,34 @@ Changes subsequently applied on the working branch include:
 - PR #129 remains Draft with zero independent reviews. GitHub branch-protection/ruleset enforcement remains unverified by the connected integration.
 
 **Disposition:** code/type/lint remediation — applied, exact-head verification pending; MFA — owner action required before release; Staging — blocked pending account MFA, independent review and approved deployment; Production — NO-GO pending account MFA, merge/approval and successful post-deploy acceptance.
+
+
+## 19. Live Staging smoke result and current-head test-fixture correction — 2026-11-03
+
+**PR head before this evidence update:** `a036c86f540f5e9e5065f46dc41027710c899597`.  
+**Test-fixture correction commit:** `6770a8dd57c3e644ddc511d9b1b21ac6e317c354`.
+
+### Actual live Staging smoke
+
+- Same-repository PR CI now runs the read-only live Staging smoke without deploying or changing Worker traffic.
+- Run `41523975746`, job `125546843052`, reached the actual Staging Worker at `chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev`.
+- `GET /healthz` returned HTTP 200 and passed the cloud-only service metadata assertions.
+- `GET /readyz` returned **HTTP 404**, so the smoke correctly failed before proceeding to the MCP tools/list and invalid-bearer checks.
+- This proves the currently active Staging Worker is not yet the candidate with the readiness/Durable Object probe contract. Do not describe live Staging acceptance as passed. Do not weaken the smoke test to accept 404.
+- No Worker deployment or traffic change was performed.
+
+### Connector test failure and correction
+
+- Connector CI on PR head `a036c86...`, run `41523975746`, failed tests 38 and 40.
+- Both failures came from the newly added account-MFA preflight checks: the observability/migration test harness did not mock the additional `GET /accounts/{account_id}` request. The failure log identifies the unexpected request URL and stack; it is a test-fixture defect, not evidence of a live Cloudflare failure.
+- Added a controlled mock account response with `enforce_twofactor=true` to the preflight tests in commit `6770a8dd...`. The separate MFA regression tests continue to mock `false` and require the preflight to block.
+- The corrected tests have not yet completed CI on the new head; do not mark this correction green until the exact-head run finishes.
+
+### Account-wide MFA gate and release status
+
+- Both Staging and Production release preflights now fail closed unless Cloudflare account-level `enforce_twofactor=true`.
+- Read-only account inspection found one accepted member and `two_factor_authentication_enabled=false`; enabling account enforcement before enrollment risks lockout. The member must enroll MFA and store recovery codes first.
+- PR #129 remains Draft with zero independent reviews. This integration cannot approve its own PR or bypass release controls.
+- Production remains NO-GO; Staging candidate deployment remains blocked. `main`, Worker settings, secrets, deployments and traffic remain unchanged.
+
+**Disposition:** live Staging `healthz` — PASS; live Staging `readyz` — FAIL (404); current-head Connector CI after test-mock fix — PENDING; account MFA enrollment — owner action required; independent review — pending; Production — NO-GO.

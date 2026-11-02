@@ -51,7 +51,7 @@ jobs:
           startup = Path(".devcontainer/start-openclaw-gateway.sh").read_text()
           assert "chmod 700 /tmp/openclaw" in watchdog
           assert "chmod 600 /tmp/openclaw/watchdog.log" in watchdog
-          assert "chmod 700 /tmp/openclaw" in startup
+          assert "chmod 700 /var/tmp/openclaw-compile-cache /tmp/openclaw" in startup
           assert "chmod 600 /tmp/openclaw/gateway-codespace.log" in startup
           print("PASS: unprivileged Dev Container, Tailscale userspace, and private state/log permissions")
           PY

@@ -380,3 +380,37 @@ Duplicate same-SHA runs were observed for Python and Master Brain MVP; one compl
 - Static-analysis debt: **OPEN** (37 Ruff findings, 50 Mypy diagnostics).
 
 **No merge, deployment, Worker setting mutation, traffic change, or `main` update occurred.**
+
+
+## 16. Fail-closed Worker observability release gate — 2026-11-02 20:23 UTC
+
+**Current PR candidate SHA:** `6f07797ac4abd6452bd6f110b1bbdf80c24d53ea`  
+**PR:** #129, Draft / open; base remains `integration/unify-main-and-integrated-2026-11-02`.
+
+### Verified live configuration (read-only)
+
+- Staging `chat-gpt111-staging`: `observability.enabled=true`, `head_sampling_rate=1`, `redact_query_string=true`, persistent logs enabled, persistent log sampling rate 1, and invocation logs disabled.
+- Production `chat-gpt111`: the Worker settings response contains no `observability` object; `logpush=false`. This remains a verified production observability gap.
+- Cloudflare account `enforce_twofactor=false`; account-level MFA enforcement remains disabled.
+- No Worker setting, binding, secret, account security control, deployment, or traffic was changed.
+
+### Regression evidence and implementation
+
+- The test harness executes the actual Node preflight script extracted from each release workflow and supplies controlled Cloudflare API responses with `observability: null`.
+- Valid red on prior test candidate `4c487871f59d9701c413a7f01641f9795c4d9973`: Connector CI `41517524646` completed with 200/202 tests passing and two failures. Both failures were the new Staging/Production assertions: the preflight scripts returned exit status 0 despite missing observability. This demonstrated a genuine fail-open release gate.
+- Corrected both release workflows. Before capturing rollback target or allowing deploy to proceed, each now asserts: observability enabled; query-string redaction enabled; top-level custom-log sampling rate 100%; persistent logs enabled and persisted; persistent-log sampling rate 100%; invocation logs disabled.
+- The checks match the observed secure Staging settings and reject the current missing Production observability object.
+- Current candidate Connector CI `41518548916`: **202/202 Node tests passed, 0 failed; npm audit reported 0 vulnerabilities; JavaScript syntax and Wrangler configuration checks passed.**
+- Current candidate Full History Gitleaks `41518548770`: passed.
+- Current candidate Master Brain MCP CI `41518548771`: passed.
+- At the time this section was written, Python tests, Master Brain MVP tests, and browser/accessibility checks were still running; do not mark them complete until their exact-head runs conclude.
+
+### Current release decision
+
+- **Staging:** configuration supports the new observability gate, but no candidate deployment or live MCP acceptance has occurred. PR #129 remains Draft with no independent approval; GitHub Actions environment reviewer/secret controls and branch-protection enforcement remain unverified.
+- **Production:** NO-GO. Observability is missing; `PUBLIC_READ_ONLY` remains a `secret_text` binding instead of plain-text `true`; first deployment must verify the Durable Object migration and namespace isolation. Cloudflare account MFA enforcement is also disabled.
+- Static-analysis debt remains open (the last recorded run reported 37 Ruff E9/F findings and 50 Mypy diagnostics; static workflow is informational and is not a clean-analysis guarantee).
+- Actual Claude and ChatGPT client compatibility is not yet proven by independent live client sessions.
+- No merge, deployment, traffic shift, Worker setting mutation, secret read, or `main` update occurred.
+
+**Disposition:** Observability release gate — implemented and Connector CI PASS; exact-head cross-workflow CI — partial/pending; Staging — blocked pending independent approval and governance verification; Production — NO-GO.

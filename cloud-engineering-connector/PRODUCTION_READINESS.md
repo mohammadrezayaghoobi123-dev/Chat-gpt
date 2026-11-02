@@ -98,14 +98,22 @@ After the Staging secrets are configured:
 
 Do not treat a passing `/healthz` as proof that MCP, GitHub, or the Durable Object is ready.
 
-## 6. Pull-request merge topology
+## 6. Superproject integration topology
 
-The currently open PRs form overlapping implementation lines. Do not merge every open PR independently:
+Two distinct lines must be combined before the final merge:
 
-- **PR #121** is the consolidated Durable Object write-control line. It supersedes the standalone write-control PR #116 and its retention child PR #120. Keep #116/#120 as audit references; do not merge them separately.
-- **PR #127** is the architecture-analyzer + secure-console candidate layered on top of PR #121. It supersedes the separate console PR #118, analyzer PR #119, and older analyzer-on-retention PR #126. Keep those as audit references; do not merge them separately.
-- Approved topological order after independent review: merge #127 into the #121 head branch; then merge the updated #121 into `integration/security-hardening-stack`; then open a final integration PR from `integration/security-hardening-stack` to `main`. Do not skip the final diff review or merge directly to Production.
-- The current #127 branch compares as 34 commits ahead and 0 behind its current base branch. The #121 line compares as 79 commits ahead and 0 behind `integration/security-hardening-stack`; the security-hardening stack itself is 37 commits ahead and 0 behind `main`. `main` remains unchanged.
+- PR #113, branch `integration/unify-main-and-integrated-2026-11-02`, contains the Python/CTP, Master Brain MCP, evidence-protocol, and production Worker history. It is 753 commits ahead of `main`.
+- PR #103, branch `integration/security-hardening-stack`, contains the Cloud Agent and newer connector security/CI line. It is 37 commits ahead of `main` and does not contain the Python/CTP tree.
+- These branches diverged from `main`. **Do not merge the security branch alone to `main`.**
+
+Feature chain:
+- PR #121 consolidates write-control/retention and supersedes #116/#120.
+- PR #127 adds the architecture analyzer and secure console on top of #121 and supersedes #118/#119/#126.
+- Keep superseded PRs as audit references; do not merge them independently.
+
+The single-line candidate must be built on the PR #113 tree with a merge commit whose first parent is the PR #113 head and second parent is the PR #127 head. Preserve all Python/CTP/Master Brain-only paths; apply the reviewed PR #127 versions to overlapping Cloud Agent, connector, CI, and security paths. The exact bearer-token regression test is retained in the newer connector suite.
+
+After full combined CI and full-history Gitleaks pass on that exact merge head, obtain independent review of the complete diff and merge **only PR #113** to `main`. Do not merge #103/#121/#127 separately to `main`.
 
 ## 7. Production release gates
 

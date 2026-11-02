@@ -99,3 +99,8 @@ Workers Logs are enabled on Staging with custom log persistence, query-string re
 
 
 The configured 1 GiB planning ceiling is deliberately conservative for the Workers Free per-object SQLite limit; Cloudflare documents 1 GiB per SQLite-backed Durable Object on Free and 10 GiB on Paid. The runtime does not infer the account plan. Keep the lower ceiling until the account tier and actual namespace usage are verified in Cloudflare.
+
+
+## Evidence-grounded architecture analysis
+
+The read-only `architecture_analyze` tool scans 1–8 explicitly selected repository files using bounded deterministic heuristics. It reports line-level observations for fetch calls without a visible AbortSignal and dynamic code execution primitives, with redacted snippets, bounded findings, rationale, and remediation guidance. Every finding is marked `not_run`; this is not semantic/taint analysis, proof of exploitability, or test execution. Human validation remains required.

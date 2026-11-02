@@ -29,7 +29,7 @@ import threading
 from dataclasses import dataclass, field
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from master_brain.accounts import AccountStore, SessionAuthenticator
 from master_brain.approvers import AccountApprovers

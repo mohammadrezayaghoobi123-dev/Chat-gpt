@@ -66,10 +66,12 @@ async function rpc(method, params = {}, id = 99001, token = null, extraHeaders =
     ...extraHeaders,
   };
   if (token !== null) headers.authorization = "Bearer " + token;
+  const message = { jsonrpc: "2.0", method, params };
+  if (id !== null) message.id = id;
   const response = await fetch(new URL("/mcp", base), {
     method: "POST",
     headers,
-    body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+    body: JSON.stringify(message),
     ...timeout,
   });
   const body = response.status === 202 ? null : await response.json();
@@ -84,7 +86,7 @@ const initialized = await rpc("initialize", {
 assert.equal(initialized.response.status, 200);
 assert.equal(initialized.body.result.protocolVersion, "2025-11-25");
 
-const notification = await rpc("notifications/initialized", {}, undefined, null, {
+const notification = await rpc("notifications/initialized", {}, null, null, {
   "MCP-Protocol-Version": "2025-11-25",
 });
 assert.equal(notification.response.status, 202);

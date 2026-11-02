@@ -31,8 +31,8 @@ for (const workflow of workflows) {
 for (const workflow of workflows) {
   test(workflow.name + " release does not expose Cloudflare credentials to the entire job", () => {
     const source = readFileSync(workflow.path, "utf8");
-    const jobEnvironmentStart = source.indexOf("    env:\\n");
-    const stepsStart = source.indexOf("\\n    steps:", jobEnvironmentStart);
+    const jobEnvironmentStart = source.indexOf("    env:");
+    const stepsStart = source.indexOf("    steps:", jobEnvironmentStart);
     const jobEnvironment = jobEnvironmentStart >= 0 && stepsStart > jobEnvironmentStart
       ? source.slice(jobEnvironmentStart, stepsStart)
       : "";

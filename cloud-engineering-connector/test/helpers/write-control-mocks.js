@@ -1,12 +1,15 @@
 export function createWriteControlBinding() {
   const operations = new Map();
   const events = [];
+  let backlogFull = false;
+  const storageStats = () => ({ unknownCount: backlogFull ? 1000 : 0, inProgressCount: 0, terminalCount: 0, unresolvedCount: backlogFull ? 1000 : 0, unresolvedLimit: 1000, unresolvedRemaining: backlogFull ? 0 : 1000, oldestUnresolvedUpdatedAt: null, retentionMs: 2592000000, sqlitePageCount: 1, sqlitePageSize: 4096, sqliteFreelistPages: 0, sqliteAllocatedBytes: 4096, sqliteFreeBytes: 0, sqliteUsedBytes: 4096, sqliteStorageLimitBytes: 1073741824 });
   const stub = {
     async admitWrite(input) {
+      if (backlogFull) return { admitted: false, reason: "UNKNOWN_BACKLOG_FULL", storageStats: storageStats() };
       const current = operations.get(input.keyHash);
       if (current) {
         if (current.requestHash !== input.requestHash) return { admitted: false, reason: "IDEMPOTENCY_CONFLICT" };
-        return { admitted: true, replay: true, operation: { ...current, gitMetadata: { ...current.gitMetadata } } };
+        return { admitted: true, replay: true, operation: { ...current, gitMetadata: { ...current.gitMetadata } }, storageStats: storageStats() };
       }
       const operation = {
         keyHash: input.keyHash, requestHash: input.requestHash, status: "IN_PROGRESS",
@@ -15,7 +18,7 @@ export function createWriteControlBinding() {
       };
       operations.set(input.keyHash, operation);
       events.push({ type: "admit", keyHash: input.keyHash });
-      return { admitted: true, replay: false, operation: { ...operation, gitMetadata: {} } };
+      return { admitted: true, replay: false, operation: { ...operation, gitMetadata: {} }, storageStats: storageStats() };
     },
     async transitionOperation(input) {
       const op = operations.get(input.keyHash);
@@ -49,6 +52,7 @@ export function createWriteControlBinding() {
       return { updated: true, operation: { ...op, gitMetadata: { ...op.gitMetadata } } };
     },
     async markStaleOperationsUnknown() { return 0; },
+    async getStorageStats() { return storageStats(); },
     async getOperation(keyHash) {
       const op = operations.get(keyHash);
       return op ? { ...op, gitMetadata: { ...op.gitMetadata } } : null;
@@ -70,7 +74,7 @@ export function createWriteControlBinding() {
     async reconcileCommitWritten() { return { updated: false }; },
     async reconcileBranchWritten() { return { updated: false }; }
   };
-  return { idFromName: name => name, get: () => stub, __test: { events, operations } };
+  return { idFromName: name => name, get: () => stub, __test: { events, operations, setBacklogFull(value) { backlogFull = Boolean(value); } } };
 }
 
 export function createGitHubWriteMock({ filePath, blobSha, prMode = "success" }) {

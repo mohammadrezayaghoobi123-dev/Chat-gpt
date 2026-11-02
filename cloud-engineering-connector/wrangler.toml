@@ -14,7 +14,7 @@ namespace_id = "78294163"
 limit = 60
 period = 60
 
-[env.staging.vars]
+[[durable_objects.bindings]]\nname = "WRITE_CONTROL"\nclass_name = "WriteControl"\n\n[[migrations]]\ntag = "v1"\nnew_sqlite_classes = ["WriteControl"]\n\n[env.staging.vars]
 SERVICE_MODE = "cloud"
 
 [[env.staging.ratelimits]]

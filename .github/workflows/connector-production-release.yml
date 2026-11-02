@@ -101,8 +101,8 @@ jobs:
           }
 
           const publicReadOnly = productionBindings.get("PUBLIC_READ_ONLY");
-          assert.ok(publicReadOnly && ["plain_text", "secret_text"].includes(publicReadOnly.type), "Production PUBLIC_READ_ONLY binding must be configured");
-          if (publicReadOnly.type === "plain_text") assert.equal(publicReadOnly.text, "true", "PUBLIC_READ_ONLY must be true for anonymous read-only Claude access");
+          assert.equal(publicReadOnly?.type, "plain_text", "Production PUBLIC_READ_ONLY must be a verifiable non-secret feature flag");
+          assert.equal(publicReadOnly.text, "true", "PUBLIC_READ_ONLY must be explicitly true for anonymous read-only Claude access");
 
           const productionLimiter = productionBindings.get("MCP_RATE_LIMITER");
           const stagingLimiter = stagingBindings.get("MCP_RATE_LIMITER");

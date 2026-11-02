@@ -9,7 +9,7 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 
 | Gate | Latest evidence | Status |
 |---|---|---|
-| Node test suite | 182 passed, 0 failed | PASS |
+| Node test suite | 184 passed, 0 failed | PASS |
 | Vitest Durable Object suite | 41 passed, 0 failed | PASS |
 | npm dependency audit | 0 reported vulnerabilities | PASS |
 | JavaScript syntax and Wrangler configuration checks | CI job passed | PASS |
@@ -22,11 +22,13 @@ This document is the release gate for the Cloud Engineering Connector. A green u
 
 ### Latest exact-head CI evidence — 2026-11-02
 
-- Reviewed PR #127 head: `8f639cdcfabd428719a0f6726b3a20b4fe5b2943`.
-- Cloud Engineering Connector PR CI run [41468500062](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41468500062): success. Node suite: **182 passed, 0 failed**; Cloudflare Workers/SQLite Durable Object suite: **41 passed, 0 failed**; `npm audit --audit-level=moderate`: **0 vulnerabilities**; syntax checks and Production/Staging Wrangler dry-runs completed successfully.
-- Full History Secret Scan run [41468500013](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41468500013): success on the PR diff and fetched refs.
+- Reviewed PR #127 head: `f3d50d9a32f7c5d1f8847d351e3ebe9c6d6a376c`.
+- Cloud Engineering Connector PR CI run [41469740201](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41469740201): success. Node suite: **184 passed, 0 failed**; Cloudflare Workers/SQLite Durable Object suite: **41 passed, 0 failed**; `npm audit --audit-level=moderate`: **0 vulnerabilities**; syntax checks and Production/Staging Wrangler dry-runs completed successfully.
+- Full History Secret Scan run [41469740313](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41469740313): success on the PR diff and fetched refs.
+- TDD evidence: the new immutable-candidate smoke contract test failed as expected on intermediate commit `23c863b1117f94860f353c055fdf0d96803cf857` because the Staging smoke used a hard-coded branch. The fix adds `resolveCandidateRef`, requires `RELEASE_ENV`, and verifies that `GITHUB_REF_NAME` exactly matches `GITHUB_SHA`. Repository inspection now uses the release branch; file reads and architecture analysis use the exact commit SHA.
 - The CI `post-deploy-staging-smoke` job was **skipped** because this PR head is not deployed to Staging. This is not live acceptance.
-- Removed unsupported top-level and `env.staging.tags` fields from `wrangler.toml`; added a regression assertion. The exact-head Wrangler dry-runs completed without the prior `tags` configuration warnings.
+- Removed unsupported top-level and `env.staging.tags` fields from `wrangler.toml`; the regression assertion and exact-head Wrangler dry-runs pass without the prior warnings.
+
 
 PR: [#127](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/127)  
 Base: `integration/durable-write-control-release` (consolidated write-control line)  
@@ -53,7 +55,7 @@ The Worker strips `GITHUB_TOKEN` from anonymous read-only execution and requires
 
 ### Production Worker: `chat-gpt111`
 
-Before promotion, configure the same secret names with Production-specific values and separate Production-only Durable Object and rate-limit namespaces. Never reuse Staging namespace IDs for Production.
+Before promotion, configure the same secret names with Production-specific values and separate Production-only Durable Object and rate-limit namespaces. Never reuse Staging namespace IDs for Production. The non-secret `PUBLIC_READ_ONLY` flag must be configured as a verifiable plain-text value `true`; the Production release preflight rejects a secret-text binding because its value cannot be safely verified without reading secret material.
 
 ## 3. GitHub token creation
 
@@ -68,7 +70,7 @@ Keep `GITHUB_TOKEN` separate for the authenticated draft-PR operation. Review an
 
 ## 4. Controlled Staging deployment
 
-The repository includes `.github/workflows/connector-staging-release.yml`. It is intentionally triggered only by a push to a branch named `integration/staging-release-<full-40-character-commit-sha>`. The branch suffix must equal the pushed commit SHA, so the deployed candidate is immutable. The job uses the protected GitHub Actions `staging` environment, runs the full test/audit/Wrangler dry-run gates, verifies the required Cloudflare Worker secret binding names without reading values, captures the active immutable version ID, deploys only `chat-gpt111-staging`, and executes `test/staging-smoke.mjs`. If live acceptance fails after deployment, it attempts to restore the captured 100% version through the Cloudflare deployment API and checks Staging liveness.
+The repository includes `.github/workflows/connector-staging-release.yml`. It is intentionally triggered only by a push to a branch named `integration/staging-release-<full-40-character-commit-sha>`. The branch suffix must equal the pushed commit SHA, so the deployed candidate is immutable. The job uses the protected GitHub Actions `staging` environment, runs the full test/audit/Wrangler dry-run gates, verifies the required Cloudflare Worker secret binding names without reading values, captures the active immutable version ID, deploys only `chat-gpt111-staging`, and executes `test/staging-smoke.mjs`. The smoke script validates that `GITHUB_REF_NAME` is exactly `integration/staging-release-${GITHUB_SHA}` and pins GitHub file/architecture reads to that immutable commit. If live acceptance fails after deployment, it attempts to restore the captured 100% version through the Cloudflare deployment API and checks Staging liveness.
 
 Required GitHub Actions configuration: environment `staging` must contain secret `CLOUDFLARE_API_TOKEN` with Workers Scripts Read/Edit permissions and variable `CLOUDFLARE_ACCOUNT_ID`. Configure required reviewers for the environment if available. The Cloudflare Worker must already contain the Worker secrets listed above; the workflow checks only binding names/types and never retrieves secret values. A missing `GITHUB_READONLY_TOKEN` fails preflight before deployment.
 
@@ -80,7 +82,7 @@ To release a reviewed candidate, create a branch from the exact approved 40-char
 - Release branch: `integration/staging-release-8fcb434af5def0b5d41529aaeb2f6bcd37fd8e13`
 - GitHub Actions run: [41464809638](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41464809638)
 - Result: **blocked before deployment**. The workflow's first credential guard reported that the GitHub Actions `staging` environment is missing `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. All deployment, smoke, and rollback steps were skipped. No Cloudflare Worker version was changed by this attempt.
-- Next action: add those two values to the GitHub Actions environment `staging`. The PR head has advanced since this failed attempt, so do not rerun this older branch. After the latest exact PR #127 head passes CI, create a new release branch named `integration/staging-release-<current-full-SHA>`. Cloudflare Worker preflight will independently require `GITHUB_READONLY_TOKEN` and the other expected bindings before it allows deployment.
+- Next action: add those two values to the GitHub Actions environment `staging`. The PR head has advanced since this failed attempt, so do not rerun this older branch. The current exact PR #127 head is `f3d50d9a32f7c5d1f8847d351e3ebe9c6d6a376c` and its source CI is green. Do not create a release branch until the GitHub Actions `staging` environment contains `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and the Staging Worker contains the required `GITHUB_READONLY_TOKEN`. Then create a new branch named `integration/staging-release-<current-full-SHA>`. Cloudflare Worker preflight will independently verify the required bindings before deployment.
 
 ## 4A. Live Staging observation — rolled-back version only
 

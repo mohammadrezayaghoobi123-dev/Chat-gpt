@@ -110,6 +110,7 @@ The Durable Object terminal-operation retention policy is 30 days. Unresolved UN
 
 ## 7. Current external blockers
 
+- Staging was rolled back to its last known-good version 27; PR #127 is not deployed. Production remains on its older Worker version and has no `WRITE_CONTROL` Durable Object binding yet.
 - Staging and Production currently do not list a `GITHUB_READONLY_TOKEN` secret.
 - Cloudflare account MFA enforcement was observed disabled.
 - GitHub branch-protection endpoint access is unavailable to the connected GitHub integration; the repository rulesets query returned an empty list. A repository administrator must verify required reviews and status checks in GitHub settings.

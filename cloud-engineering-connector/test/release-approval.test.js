@@ -186,7 +186,7 @@ test("release approval paginates associated PRs and all reviews before accepting
   const firstReviewPage = Array.from({ length: 100 }, (_, index) =>
     approval(sha, index === 99 ? reviewer : "commenter-" + index,
       index === 99 ? "APPROVED" : "COMMENTED",
-      "2026-11-02T12:" + String(index).padStart(2, "0") + ":00Z"),
+      "2026-11-02T12:00:00Z"),
   );
   const requestedUrls = [];
   const fetchImpl = async (url, options) => {

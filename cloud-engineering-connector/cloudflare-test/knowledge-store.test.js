@@ -29,10 +29,10 @@ describe("Option C Brain Store", () => {
       name: "API v2", properties: { tier: "critical" }, expectedVersion: 1, now: 200,
     });
     expect(updated).toMatchObject({ name: "API v2", version: 2, createdAt: 100, updatedAt: 200 });
-    await expect(store.upsertEntity({
+    await expect(Promise.resolve().then(() => store.upsertEntity({
       tenantId: "tenant-a", entityId: "service-api", entityType: "service",
       name: "stale overwrite", properties: {}, expectedVersion: 1, now: 300,
-    })).rejects.toMatchObject({ code: "KNOWLEDGE_VERSION_CONFLICT" });
+    }))).rejects.toMatchObject({ code: "KNOWLEDGE_VERSION_CONFLICT" });
     await store.upsertEntity({
       tenantId: "tenant-b", entityId: "service-api", entityType: "service",
       name: "Other tenant API", properties: {}, expectedVersion: 0, now: 101,
@@ -46,10 +46,10 @@ describe("Option C Brain Store", () => {
     const store = storeFor("knowledge-relationships-tags");
     await store.upsertEntity({ tenantId: "tenant-a", entityId: "source", entityType: "service", name: "Source", expectedVersion: 0 });
     await store.upsertEntity({ tenantId: "tenant-b", entityId: "target", entityType: "service", name: "Target", expectedVersion: 0 });
-    await expect(store.createRelationship({
+    await expect(Promise.resolve().then(() => store.createRelationship({
       tenantId: "tenant-a", relationshipId: "rel-cross", sourceEntityId: "source",
       targetEntityId: "target", relationType: "depends_on",
-    })).rejects.toThrow();
+    }))).rejects.toThrow();
     await store.upsertEntity({ tenantId: "tenant-a", entityId: "target", entityType: "service", name: "Target A", expectedVersion: 0 });
     await expect(store.createRelationship({
       tenantId: "tenant-a", relationshipId: "rel-1", sourceEntityId: "source",
@@ -69,7 +69,7 @@ describe("Option C Brain Store", () => {
       path: "decisions/adr-001.md", commitSha: "1".repeat(40), contentSha256: "a".repeat(64),
     };
     await store.putDocumentRef({ ...ref, now: 100 });
-    await expect(store.putDocumentRef({ ...ref, contentSha256: "b".repeat(64), now: 200 }))
+    await expect(Promise.resolve().then(() => store.putDocumentRef({ ...ref, contentSha256: "b".repeat(64), now: 200 })))
       .rejects.toMatchObject({ code: "KNOWLEDGE_DOCUMENT_IMMUTABLE" });
     await store.setDocumentSyncState({
       tenantId: "tenant-a", documentId: "adr-001", status: "synced",
@@ -90,7 +90,7 @@ describe("Option C Brain Store", () => {
     const first = await store.enqueueOutbox(input);
     const replay = await store.enqueueOutbox(input);
     expect(replay.eventId).toBe(first.eventId);
-    await expect(store.enqueueOutbox({ ...input, payload: { repository: "owner/other", path: "x.md" } }))
+    await expect(Promise.resolve().then(() => store.enqueueOutbox({ ...input, payload: { repository: "owner/other", path: "x.md" } })))
       .rejects.toMatchObject({ code: "KNOWLEDGE_IDEMPOTENCY_CONFLICT" });
     const claimed = await store.claimOutbox({ now: 101, leaseMs: 1000 });
     expect(claimed).toMatchObject({ eventId: "evt-001", status: "processing", attempts: 1 });

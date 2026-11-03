@@ -14,6 +14,9 @@ on:
       - "master-brain-mcp/**"
       - ".github/workflows/master-brain-mcp.yml"
 
+permissions:
+  contents: read
+
 concurrency:
   group: master-brain-mcp-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true

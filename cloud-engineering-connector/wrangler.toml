@@ -4,6 +4,9 @@ compatibility_date = "2026-10-23"
 workers_dev = true
 keep_vars = false
 
+[triggers]
+crons = ["*/5 * * * *"]
+
 [vars]
 PUBLIC_READ_ONLY = "true"
 
@@ -43,6 +46,9 @@ tag = "v2"
 new_sqlite_classes = ["KnowledgeStore"]
 
 [env.staging]
+
+[env.staging.triggers]
+crons = ["*/5 * * * *"]
 
 [env.staging.vars]
 PUBLIC_READ_ONLY = "true"

@@ -40,7 +40,7 @@ test("architecture_analyze returns source-grounded findings with exact line evid
       repo: "Chat-gpt",
       ref: "main",
       paths: ["package.json", "src/worker.js"],
-    }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    }), { MCP_AUTH_TOKEN: MCP_TOKEN, GITHUB_READONLY_TOKEN: "read-only-test-token", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     assert.ok(body.result, body.error?.message || "MCP tool call did not return a result.");
     assert.equal(response.status, 200);
@@ -66,7 +66,7 @@ test("architecture_analyze rejects protected paths before reading repository con
       owner: "mohammadrezayaghoobi123-dev",
       repo: "Chat-gpt",
       paths: [".env"],
-    }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    }), { MCP_AUTH_TOKEN: MCP_TOKEN, GITHUB_READONLY_TOKEN: "read-only-test-token", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     assert.ok(body.result, body.error?.message || "MCP tool call did not return a result.");
     assert.equal(body.result.isError, true);
@@ -87,7 +87,7 @@ test("architecture_analyze rejects duplicate paths before any repository reads",
       owner: "mohammadrezayaghoobi123-dev",
       repo: "Chat-gpt",
       paths: ["src/worker.js", "src/worker.js"],
-    }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    }), { MCP_AUTH_TOKEN: MCP_TOKEN, GITHUB_READONLY_TOKEN: "read-only-test-token", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     assert.ok(body.result, body.error?.message || "MCP tool call did not return a result.");
     assert.equal(body.result.isError, true);
@@ -107,7 +107,7 @@ test("architecture_analyze enforces the eight-file limit before repository reads
       owner: "mohammadrezayaghoobi123-dev",
       repo: "Chat-gpt",
       paths: Array.from({ length: 9 }, (_, index) => "src/file-" + index + ".js"),
-    }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    }), { MCP_AUTH_TOKEN: MCP_TOKEN, GITHUB_READONLY_TOKEN: "read-only-test-token", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     assert.ok(body.result, body.error?.message || "MCP tool call did not return a result.");
     assert.equal(body.result.isError, true);
@@ -134,7 +134,7 @@ test("architecture_analyze bounds finding volume and reports truncation", async 
       owner: "mohammadrezayaghoobi123-dev",
       repo: "Chat-gpt",
       paths: ["src/noisy.js"],
-    }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    }), { MCP_AUTH_TOKEN: MCP_TOKEN, GITHUB_READONLY_TOKEN: "read-only-test-token", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     assert.ok(body.result, body.error?.message || "MCP tool call did not return a result.");
     const analysis = JSON.parse(body.result.content[0].text);
@@ -166,7 +166,7 @@ test("architecture_analyze scopes AbortSignal evidence to each fetch invocation"
       owner: "mohammadrezayaghoobi123-dev",
       repo: "Chat-gpt",
       paths: ["src/calls.js"],
-    }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    }), { MCP_AUTH_TOKEN: MCP_TOKEN, GITHUB_READONLY_TOKEN: "read-only-test-token", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     assert.ok(body.result, body.error?.message || "MCP tool call did not return a result.");
     const analysis = JSON.parse(body.result.content[0].text);
@@ -194,7 +194,7 @@ test("architecture_analyze redacts credential-like values from evidence snippets
   try {
     const response = await worker.fetch(request("architecture_analyze", {
       owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt", paths: ["src/leaky.js"]
-    }), { MCP_AUTH_TOKEN: MCP_TOKEN, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+    }), { MCP_AUTH_TOKEN: MCP_TOKEN, GITHUB_READONLY_TOKEN: "read-only-test-token", MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const body = await response.json();
     assert.ok(body.result, body.error?.message || "MCP tool call did not return a result.");
     const analysis = JSON.parse(body.result.content[0].text);

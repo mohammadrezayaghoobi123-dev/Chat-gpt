@@ -15,6 +15,14 @@ try {
       ", review_commit=" +
       result.reviewCommitSha,
   );
+  if (result.releaseEnvironment === "production") {
+    console.log(
+      "Successful exact-SHA Staging acceptance verified: run #" +
+        result.stagingRunId +
+        ", url=" +
+        result.stagingRunUrl,
+    );
+  }
 } catch (error) {
   console.error("Release approval gate blocked deployment: " + (error instanceof Error ? error.message : "unknown error"));
   process.exitCode = 1;

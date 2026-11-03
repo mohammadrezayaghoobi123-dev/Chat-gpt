@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "environment": "staging",
+  "createdAt": "2026-11-03T14:48:30Z",
+  "sourceIntegrationCommit": "8830dfe8908bf1e44a86e592946fb84eacb51756",
+  "candidateType": "exact-sha-review-gated",
+  "approvalPolicy": "An authorized reviewer other than the PR author must approve this exact PR head commit.",
+  "deploymentPolicy": "The Staging release workflow may be triggered only after independent approval. Production promotion remains blocked until Staging acceptance, a merged PR to main, and main branch protection are verified.",
+  "changeScope": "Release-candidate marker only; no application code or runtime configuration changes."
+}

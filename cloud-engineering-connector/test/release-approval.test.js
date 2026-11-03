@@ -40,6 +40,25 @@ function fakeFetch(pulls, reviews, onRequest = () => {}) {
     onRequest(String(url), options);
     if (String(url).includes("/commits/")) return response(pulls);
     if (String(url).includes("/reviews?")) return response(reviews);
+    if (String(url).endsWith("/actions/workflows/connector-staging-release.yml")) {
+      return response({ id: 77 });
+    }
+    if (String(url).includes("/actions/workflows/77/runs?")) {
+      const stagingBranch = "integration/staging-release-" + headSha;
+      return response({
+        workflow_runs: [{
+          id: 9001,
+          workflow_id: 77,
+          event: "push",
+          status: "completed",
+          conclusion: "success",
+          head_sha: headSha,
+          head_branch: stagingBranch,
+          created_at: date,
+          html_url: "https://github.com/" + repo + "/actions/runs/9001",
+        }],
+      });
+    }
     return response({ message: "not found" }, 404);
   };
 }

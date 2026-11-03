@@ -808,6 +808,117 @@ async function handleRequest(request,env){const url=new URL(request.url);if(requ
 
 function applyCors(request,env,response){if(new URL(request.url).pathname!=="/mcp")return response;const origin=request.headers.get("origin");if(!origin||!originAllowed(request,env))return response;const headers=new Headers(response.headers);headers.set("access-control-allow-origin",origin);headers.set("access-control-expose-headers","MCP-Protocol-Version");const vary=headers.get("vary");if(!vary)headers.set("vary","Origin");else if(!vary.split(",").some(value=>value.trim().toLowerCase()==="origin"))headers.set("vary",vary+", Origin");return new Response(response.body,{status:response.status,statusText:response.statusText,headers})}
 
+export async function processKnowledgeOutbox(env,options={}){
+ const tenantId="owner";
+ const maxEvents=options.maxEvents===undefined?5:options.maxEvents;
+ if(!Number.isSafeInteger(maxEvents)||maxEvents<1||maxEvents>20)throw new TypeError("maxEvents must be between 1 and 20.");
+ const binding=env?.KNOWLEDGE_STORE;
+ if(!binding||typeof binding.idFromName!=="function"||typeof binding.get!=="function")return{processed:0,completed:0,deferred:0,failed:0,reason:"knowledge_store_unavailable"};
+ const stub=binding.get(binding.idFromName("tenant:"+tenantId));
+ if(!stub||typeof stub.claimOutbox!=="function")return{processed:0,completed:0,deferred:0,failed:0,reason:"outbox_unavailable"};
+ const readEnv={...env,READ_ONLY_GITHUB:true};
+ const base=repoPath("mohammadrezayaghoobi123-dev","Chat-gpt");
+ const totals={processed:0,completed:0,deferred:0,failed:0};
+ for(let index=0;index<maxEvents;index++){
+  const now=Date.now();
+  let event;
+  try{event=await stub.claimOutbox({tenantId,now,leaseMs:120000})}
+  catch{return{...totals,reason:"outbox_claim_failed"}}
+  if(!event)break;
+  totals.processed++;
+  const leaseGeneration=event.leaseGeneration;
+  const fail=async(error,maxAttempts=8)=>{
+   try{await stub.failOutbox({tenantId,eventId:event.eventId,leaseGeneration,error,now:Date.now(),maxAttempts});totals.failed++}
+   catch{totals.failed++}
+  };
+  const complete=async()=>{
+   await stub.completeOutbox({tenantId,eventId:event.eventId,leaseGeneration,now:Date.now()});
+   totals.completed++;
+  };
+  try{
+   if(event.eventType!=="vault.document.proposed"){
+    await fail("Unsupported Knowledge Store outbox event type.",1);
+    continue;
+   }
+   const proposalId=event.payload?.proposalId;
+   if(typeof proposalId!=="string"){
+    await fail("Vault proposal event is missing its proposal ID.",1);
+    continue;
+   }
+   const proposal=await stub.getVaultProposal({tenantId,proposalId});
+   if(!proposal||proposal.pullRequestNumber!==event.payload?.pullRequestNumber){
+    await fail("Vault proposal record is missing or does not match its outbox event.",1);
+    continue;
+   }
+   const pr=await github(readEnv,base+"/pulls/"+proposal.pullRequestNumber,{maxResponseBytes:100_000});
+   if(pr?.merged===true){
+    const mergeSha=pr.merge_commit_sha;
+    if(typeof mergeSha!=="string"||!/^[a-f0-9]{40}$/.test(mergeSha)){
+     await stub.updateVaultProposal({tenantId,proposalId,status:"conflict",now:Date.now()});
+     await fail("Merged Vault pull request has no valid merge commit SHA.",1);
+     continue;
+    }
+    const contentPath=base+"/contents/"+proposal.path.split("/").map(encodeURIComponent).join("/")+"?ref="+encodeURIComponent(mergeSha);
+    const file=await github(readEnv,contentPath,{maxResponseBytes:150_000});
+    if(!file||file.type!=="file"||file.encoding!=="base64"||file.path!==proposal.path||
+       typeof file.sha!=="string"||!/^[a-f0-9]{40}$/.test(file.sha)||
+       !Number.isSafeInteger(file.size)||file.size<0||file.size>MAX_READ_FILE_BYTES||typeof file.content!=="string"){
+     await stub.updateVaultProposal({tenantId,proposalId,status:"conflict",now:Date.now()});
+     await fail("Merged Vault document failed file identity or size verification.",1);
+     continue;
+    }
+    const content=decodeBase64Utf8(file.content);
+    const sizeBytes=new TextEncoder().encode(content).byteLength;
+    const contentSha256=await sha256Hex(content);
+    if(sizeBytes!==file.size||contentSha256!==proposal.proposedContentSha256){
+     await stub.updateVaultProposal({tenantId,proposalId,status:"conflict",now:Date.now()});
+     await fail("Merged Vault document digest does not match the approved proposal.",1);
+     continue;
+    }
+    await stub.putDocumentRef({
+     tenantId,documentId:proposal.documentId,repository:proposal.repository,path:proposal.path,
+     commitSha:mergeSha,contentSha256
+    });
+    await stub.indexDocumentSnapshot({
+     tenantId,documentId:proposal.documentId,commitSha:mergeSha,contentSha256,
+     text:content,title:proposal.path.split("/").pop()
+    });
+    await stub.setDocumentSyncState({
+     tenantId,documentId:proposal.documentId,status:"synced",
+     lastSeenCommit:mergeSha,lastSyncedCommit:mergeSha
+    });
+    await stub.updateVaultProposal({
+     tenantId,proposalId,status:"merged",mergeCommitSha:mergeSha,mergedBlobSha:file.sha,now:Date.now()
+    });
+    await complete();
+    continue;
+   }
+   if(pr?.state==="closed"){
+    await stub.updateVaultProposal({tenantId,proposalId,status:"closed",now:Date.now()});
+    await complete();
+    continue;
+   }
+   if(pr?.state==="open"){
+    await stub.deferOutbox({
+     tenantId,eventId:event.eventId,leaseGeneration,now:Date.now(),retryAfterMs:300_000
+    });
+    totals.deferred++;
+    continue;
+   }
+   await fail("GitHub pull request state is unavailable or unsupported.");
+  }catch{
+   await fail("Vault proposal reconciliation failed; retry is scheduled.");
+  }
+ }
+ return totals;
+}
+
+async function handleScheduled(controller,env,ctx){
+ const task=processKnowledgeOutbox(env).catch(()=>null);
+ if(ctx&&typeof ctx.waitUntil==="function")ctx.waitUntil(task);
+ else await task;
+}
+
 function applySecurityHeaders(request,response){
  const headers=new Headers(response.headers);
  for(const [name,value] of Object.entries(SECURITY_HEADERS))if(!headers.has(name))headers.set(name,value);
@@ -816,4 +927,4 @@ function applySecurityHeaders(request,response){
  if(!headers.has("cache-control"))headers.set("cache-control","no-store");
  return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
 }
-export default{async fetch(request,env){let response;try{response=await handleRequest(request,env)}catch{response=json({error:"internal_error"},500)}return applySecurityHeaders(request,applyCors(request,env,response))}};
+export default{async fetch(request,env){let response;try{response=await handleRequest(request,env)}catch{response=json({error:"internal_error"},500)}return applySecurityHeaders(request,applyCors(request,env,response))},scheduled:handleScheduled};

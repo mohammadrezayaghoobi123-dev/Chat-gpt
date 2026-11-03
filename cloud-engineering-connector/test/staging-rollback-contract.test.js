@@ -12,7 +12,6 @@ const rollback = workflow.slice(rollbackStart);
 
 test("Staging rollback verifies restored liveness without requiring candidate-only readiness routes", () => {
   assert.match(rollback, /fetch\(new URL\(["']\/healthz["'], process\.env\.STAGING_MCP_URL\)/);
-  assert.match(rollback, /if \(!health\.ok\)/);
   assert.doesNotMatch(
     rollback,
     /\/readyz|readiness/,

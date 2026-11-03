@@ -1317,15 +1317,24 @@ test("scheduled outbox dead-letters a merged PR when canonical content digest di
  }finally{globalThis.fetch=originalFetch}
 });
 
-test("Cloudflare scheduled handler attaches Knowledge Store reconciliation to waitUntil",async()=>{
+test("Cloudflare scheduled handler attaches reconciliation to waitUntil and emits a structured summary",async()=>{
  let pending;
+ const logs=[];
+ const originalLog=console.log;
  const stub={claimOutbox:async()=>null};
  const binding={idFromName:name=>name,get:()=>stub};
- await worker.scheduled({cron:"*/5 * * * *"},{...env,KNOWLEDGE_STORE:binding},{
-  waitUntil(promise){pending=promise}
- });
- assert.ok(pending instanceof Promise);
- await pending;
+ try{
+  console.log=(...args)=>logs.push(args.join(" "));
+  await worker.scheduled({cron:"*/5 * * * *"},{...env,KNOWLEDGE_STORE:binding},{
+   waitUntil(promise){pending=promise}
+  });
+  assert.ok(pending instanceof Promise);
+  await pending;
+ }finally{console.log=originalLog}
+ const event=logs.map(line=>{try{return JSON.parse(line)}catch{return null}}).find(value=>value?.event==="knowledge_outbox_reconciliation");
+ assert.deepEqual({
+  processed:event?.processed,completed:event?.completed,deferred:event?.deferred,failed:event?.failed
+ },{processed:0,completed:0,deferred:0,failed:0});
 });
 
 test("authenticated architecture analysis attaches tenant-scoped Vault evidence with immutable source references",async()=>{

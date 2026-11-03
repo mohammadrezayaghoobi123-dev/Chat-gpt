@@ -1400,7 +1400,9 @@ test("anonymous architecture analysis never queries private Knowledge Store cont
 
 test("Vault proposal compares the expected blob at the immutable main commit used as the proposal parent",async()=>{
  const path="knowledge/tenants/owner/architecture-race-test.md";
- const fixture=createGitHubWriteMock({filePath:path,blobSha:"e".repeat(40),baseBranch:"main"});
+ const proposalContent="# Race-safe proposal\\n";
+ const proposalBlobSha=createHash("sha1").update("blob "+Buffer.byteLength(proposalContent)+"\\0"+proposalContent).digest("hex");
+ const fixture=createGitHubWriteMock({filePath:path,blobSha:proposalBlobSha,baseBranch:"main"});
  const originalFetch=globalThis.fetch;
  globalThis.fetch=fixture.fetch;
  knowledgeStore.calls.length=0;

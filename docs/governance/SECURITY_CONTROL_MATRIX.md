@@ -12,3 +12,8 @@
 | Branch protection / rulesets / CODEOWNERS | BLOCKED_EXTERNAL_CONTROL | DEF-0001 |
 | MFA | CLAIMED by other session (Cloudflare enforce_twofactor=true, 2026-11-03); GitHub MFA not verified | NOT_VERIFIED here |
 | Dependency vulnerabilities / lockfile | CI `npm audit` success per #116 evidence; not rerun here | NOT_VERIFIED here |
+
+## Supply-chain checks run 2026-11-03 (offline, evidence-bound to unify 3f956da)
+- Connector `package-lock.json`: 161 entries, 0 missing `integrity`, 0 non-registry `resolved` URLs → PASS (lockfile integrity).
+- Python core `pyproject.toml`: `dependencies = []` (zero runtime deps); optional `cryptography>=42`, `langfuse>=4.7.0,<5` → low exposure; `pip-audit` not installable here → vulnerability scan NOT_VERIFIED locally (CI `npm audit` success only for the connector).
+- Action pinning: release workflows SHA-pinned; CI workflows tag-pinned → DEF-0013. `master-brain-mcp` lockfile missing → DEF-0014.

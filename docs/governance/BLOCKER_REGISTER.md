@@ -7,3 +7,4 @@
 | BLK-004 | Shell has no npm/internet; Cloudflare mutation prohibited | `ENOTFOUND registry.npmjs.org` | DO tests/Staging acceptance not reproducible by this session | Infra | Rely on CI exact-head; owner-triggered Staging run | OPEN | Node/Python local tests |
 | BLK-005 | Desktop Commander devices offline | list_devices | No Codespace access | Owner | Resume Codespace | OPEN | Cloud-only work |
 | BLK-006 | Production deploy needs separate owner permission | Directive §Production | No release | Owner | Explicit written permission | OPEN | — |
+| BLK-007 | Session only has access to the project repo; npm/PyPI not reachable | `add_repo` required for other repos; `pip-audit` not found | Cannot pin action SHAs, generate lockfile, run vuln audits | Next session with Codespace | Do DEF-0013/0014 and audits from Codespace | OPEN | docs, code |

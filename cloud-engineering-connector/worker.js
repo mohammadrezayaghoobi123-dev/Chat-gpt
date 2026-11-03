@@ -838,12 +838,12 @@ export async function processKnowledgeOutbox(env,options={}){
  const maxEvents=options.maxEvents===undefined?5:options.maxEvents;
  if(!Number.isSafeInteger(maxEvents)||maxEvents<1||maxEvents>20)throw new TypeError("maxEvents must be between 1 and 20.");
  const binding=env?.KNOWLEDGE_STORE;
- if(!binding||typeof binding.idFromName!=="function"||typeof binding.get!=="function")return{processed:0,completed:0,deferred:0,failed:0,reason:"knowledge_store_unavailable"};
+ if(!binding||typeof binding.idFromName!=="function"||typeof binding.get!=="function")return{processed:0,completed:0,deferred:0,failed:0,deadLetter:0,reason:"knowledge_store_unavailable"};
  const stub=binding.get(binding.idFromName("tenant:"+tenantId));
- if(!stub||typeof stub.claimOutbox!=="function")return{processed:0,completed:0,deferred:0,failed:0,reason:"outbox_unavailable"};
+ if(!stub||typeof stub.claimOutbox!=="function")return{processed:0,completed:0,deferred:0,failed:0,deadLetter:0,reason:"outbox_unavailable"};
  const readEnv={...env,READ_ONLY_GITHUB:true};
  const base=repoPath("mohammadrezayaghoobi123-dev","Chat-gpt");
- const totals={processed:0,completed:0,deferred:0,failed:0};
+ const totals={processed:0,completed:0,deferred:0,failed:0,deadLetter:0};
  for(let index=0;index<maxEvents;index++){
   const now=Date.now();
   let event;
@@ -853,7 +853,7 @@ export async function processKnowledgeOutbox(env,options={}){
   totals.processed++;
   const leaseGeneration=event.leaseGeneration;
   const fail=async(error,maxAttempts=8)=>{
-   try{await stub.failOutbox({tenantId,eventId:event.eventId,leaseGeneration,error,now:Date.now(),maxAttempts});totals.failed++}
+   try{const failedEvent=await stub.failOutbox({tenantId,eventId:event.eventId,leaseGeneration,error,now:Date.now(),maxAttempts});totals.failed++;if(failedEvent?.status==="dead_letter")totals.deadLetter++}
    catch{totals.failed++}
   };
   const complete=async()=>{
@@ -950,7 +950,14 @@ export async function processKnowledgeOutbox(env,options={}){
 }
 
 async function handleScheduled(controller,env,ctx){
- const task=processKnowledgeOutbox(env).catch(()=>null);
+ const task=processKnowledgeOutbox(env).then(result=>{
+  console.log(JSON.stringify({event:"knowledge_outbox_reconciliation",observed_at:new Date().toISOString(),...result}));
+  return result;
+ }).catch(error=>{
+  const code=typeof error?.code==="string"&&/^[A-Z0-9_]{1,64}$/.test(error.code)?error.code:"UNEXPECTED";
+  console.error(JSON.stringify({event:"knowledge_outbox_reconciliation_failed",observed_at:new Date().toISOString(),code}));
+  return null;
+ });
  if(ctx&&typeof ctx.waitUntil==="function")ctx.waitUntil(task);
  else await task;
 }

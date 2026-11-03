@@ -1267,3 +1267,14 @@ test("scheduled outbox dead-letters a merged PR when canonical content digest di
   assert.equal(fixture.calls.some(call=>call.method==="indexDocumentSnapshot"),false);
  }finally{globalThis.fetch=originalFetch}
 });
+
+test("Cloudflare scheduled handler attaches Knowledge Store reconciliation to waitUntil",async()=>{
+ let pending;
+ const stub={claimOutbox:async()=>null};
+ const binding={idFromName:name=>name,get:()=>stub};
+ await worker.scheduled({cron:"*/5 * * * *"},{...env,KNOWLEDGE_STORE:binding},{
+  waitUntil(promise){pending=promise}
+ });
+ assert.ok(pending instanceof Promise);
+ await pending;
+});

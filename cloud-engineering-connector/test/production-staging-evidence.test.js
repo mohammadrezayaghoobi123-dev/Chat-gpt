@@ -105,6 +105,17 @@ test("Production rejects Staging evidence from a different release branch or eve
   }
 });
 
+test("Production rejects a newer failed Staging attempt even when an older attempt succeeded", async () => {
+  const olderSuccess = successfulStagingRun({ created_at: "2026-11-03T18:10:00Z" });
+  const newerFailure = successfulStagingRun({
+    id: 9002,
+    conclusion: "failure",
+    created_at: "2026-11-03T18:20:00Z",
+  });
+  const { fetchImpl } = productionFetch({ runs: [olderSuccess, newerFailure] });
+  await assert.rejects(verifyReleaseApproval({ ...input({}), fetchImpl }), /no successful Staging release evidence/);
+});
+
 test("Production rejects failed, cancelled, queued, and in-progress Staging runs", async () => {
   for (const run of [
     successfulStagingRun({ conclusion: "failure" }),

@@ -346,11 +346,11 @@ test("Production post-deploy verification accepts isolated KnowledgeStore namesp
 
 test("Production release has read-only Actions permission for exact-SHA Staging evidence lookup", () => {
   const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
-  const permissions = source.match(/^permissions:\\n([\\s\\S]*?)(?=^\\S)/m)?.[1] ?? "";
-  assert.match(permissions, /^  actions:\\s*read\\s*$/m,
+  const permissions = source.match(/^permissions:\n([\s\\S]*?)(?=^\\S)/m)?.[1] ?? "";
+  assert.match(permissions, /^  actions:\s*read\s*$/m,
     "Production verifier calls the GitHub Actions workflow and run-history APIs and therefore requires actions: read");
-  assert.match(permissions, /^  pull-requests:\\s*read\\s*$/m,
+  assert.match(permissions, /^  pull-requests:\s*read\s*$/m,
     "Production verifier must retain read-only PR review access");
-  assert.doesNotMatch(permissions, /^  actions:\\s*write\\s*$/m,
+  assert.doesNotMatch(permissions, /^  actions:\s*write\s*$/m,
     "release verification must not receive Actions write permission");
 });

@@ -951,11 +951,15 @@ export async function processKnowledgeOutbox(env,options={}){
 
 async function handleScheduled(controller,env,ctx){
  const task=processKnowledgeOutbox(env).then(result=>{
-  console.log(JSON.stringify({event:"knowledge_outbox_reconciliation",observed_at:new Date().toISOString(),...result}));
+  const summary={observed_at:new Date().toISOString(),...result};
+  console.log(JSON.stringify({event:"knowledge_outbox_reconciliation",...summary}));
+  if(result&&(result.failed>0||result.deadLetter>0||result.reason)){
+   console.error(JSON.stringify({event:"knowledge_outbox_reconciliation_alert",severity:"error",...summary}));
+  }
   return result;
  }).catch(error=>{
   const code=typeof error?.code==="string"&&/^[A-Z0-9_]{1,64}$/.test(error.code)?error.code:"UNEXPECTED";
-  console.error(JSON.stringify({event:"knowledge_outbox_reconciliation_failed",observed_at:new Date().toISOString(),code}));
+  console.error(JSON.stringify({event:"knowledge_outbox_reconciliation_failed",severity:"error",observed_at:new Date().toISOString(),code}));
   return null;
  });
  if(ctx&&typeof ctx.waitUntil==="function")ctx.waitUntil(task);

@@ -98,7 +98,7 @@ test("Vault proposal rejects stale expected blob SHA before any GitHub write",as
  },async calls=>{
   const out=await text(await call("knowledge_document_propose",{
    path,content:"# New revision\n",title:"Update architecture",summary:"Propose an update.",
-   expectedBlobSha:"a".repeat(40),idempotencyKey:"vault-proposal-stale-0001"
+   expectedBlobSha:"a".repeat(40),proposalId:"vault-proposal-stale-0001"
   },{KNOWLEDGE_STORE:knowledgeBindingForTests(outboxCalls),GITHUB_READONLY_TOKEN:"read-only-test-token"}));
   assert.equal(out.error,"KNOWLEDGE_VAULT_CONFLICT");
   assert.equal(calls.some(item=>item.method==="POST"),false);
@@ -118,7 +118,7 @@ test("Vault proposal creates only a draft PR against main after expected SHA mat
  },async calls=>{
   const out=await text(await call("knowledge_document_propose",{
    path,content:"# Updated architecture\n",title:"Update architecture",summary:"Propose a reviewed architecture update.",
-   expectedBlobSha:currentSha,idempotencyKey:"vault-proposal-success-0001"
+   expectedBlobSha:currentSha,proposalId:"vault-proposal-success-0001"
   },{KNOWLEDGE_STORE:knowledgeBindingForTests(outboxCalls),GITHUB_READONLY_TOKEN:"read-only-test-token"}));
   assert.equal(out.status,"draft_pull_request_created");
   assert.equal(out.pull_request.number,987);
@@ -143,7 +143,7 @@ test("Vault proposal cannot target a different tenant's document path",async()=>
  const outboxCalls=[];
  const out=await withFetch(async()=>{throw new Error("must not call GitHub")},async calls=>text(await call("knowledge_document_propose",{
   path:"knowledge/tenants/other/architecture.md",content:"x",title:"No",summary:"No",
-  expectedBlobSha:"ABSENT",idempotencyKey:"vault-proposal-path-0001"
+  expectedBlobSha:"ABSENT",proposalId:"vault-proposal-path-0001"
  },{KNOWLEDGE_STORE:knowledgeBindingForTests(outboxCalls),GITHUB_READONLY_TOKEN:"read-only-test-token"})));
  assert.equal(out.error,"KNOWLEDGE_VAULT_PATH_FORBIDDEN");
  assert.equal(outboxCalls.length,0);

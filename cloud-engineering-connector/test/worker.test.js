@@ -1127,7 +1127,7 @@ test("knowledge_document_sync rejects another tenant path before GitHub or Brain
  const originalFetch=globalThis.fetch;let fetchCalls=0;
  globalThis.fetch=async()=>{fetchCalls++;throw new Error("GitHub must not be called for a cross-tenant path")};
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"knowledge_document_sync",arguments:{path:"knowledge/tenants/victim/secret.md"}},18),{
+  const r=await worker.fetch(rpc("tools/call",{name:"knowledge_document_sync",arguments:{path:"knowledge/tenants/victim/architecture.md"}},18),{
    ...env,GITHUB_READONLY_TOKEN:"read-only-token"
   });
   const body=await r.json();

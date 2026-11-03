@@ -1,6 +1,7 @@
 // Hardening for create_change_pr inputs (found by independent review, reproduced). fetch() is a declared stub.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import worker from "../worker.js";
 import { createWriteControlBinding, createGitHubWriteMock } from "./helpers/write-control-mocks.js";
 
@@ -22,6 +23,7 @@ async function withFetch(handler, fn) {
   try { return await fn(calls); } finally { globalThis.fetch = original; }
 }
 const text = async (r) => JSON.parse((await r.json()).result.content[0].text);
+const gitBlobSha = content => createHash("sha1").update(`blob ${Buffer.byteLength(content)}\\0${content}`).digest("hex");
 
 test("write path denylist covers env variants, key material, tfstate dirs and review-control files", async () => {
   const bad = [".env-prod", ".env_local", "a/.env.production", ".dev.vars", ".dev.vars.production", "config/.dev.vars.local", "prod.auto.tfvars.json", "terraform.tfstate.d/x", "x/.terraform/y",
@@ -107,7 +109,8 @@ test("Vault proposal creates only a draft PR against main after expected SHA mat
  const path="knowledge/tenants/owner/architecture.md";
  const currentSha="b".repeat(40);
  const outboxCalls=[];
- const fixture=createGitHubWriteMock({filePath:path,blobSha:"c".repeat(40),baseBranch:"main"});
+ const proposalContent="# Updated architecture\\n";
+ const fixture=createGitHubWriteMock({filePath:path,blobSha:gitBlobSha(proposalContent),baseBranch:"main"});
  await withFetch((url,init)=>{
   const parsed=new URL(url);
   if(parsed.pathname.endsWith("/contents/"+path))return vaultFileResponse(path,currentSha);

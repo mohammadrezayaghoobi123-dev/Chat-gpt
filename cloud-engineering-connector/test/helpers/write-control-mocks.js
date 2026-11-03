@@ -79,7 +79,7 @@ export function createWriteControlBinding() {
   return { idFromName: name => name, get: () => stub, __test: { events, operations, setBacklogFull(value) { backlogFull = Boolean(value); } } };
 }
 
-export function createGitHubWriteMock({ filePath, blobSha, prMode = "success" }) {
+export function createGitHubWriteMock({ filePath, blobSha, prMode = "success", baseBranch = "feature/cloud-engineering-connector" }) {
   const calls = [];
   const parentSha = "a".repeat(40);
   const baseTreeSha = "b".repeat(40);
@@ -103,7 +103,7 @@ export function createGitHubWriteMock({ filePath, blobSha, prMode = "success" })
     if (path.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt")) {
       return json({ full_name: "mohammadrezayaghoobi123-dev/Chat-gpt", default_branch: "main" });
     }
-    if (path.endsWith("/git/ref/heads/feature/cloud-engineering-connector")) {
+    if (path.endsWith("/git/ref/heads/" + baseBranch)) {
       return json({ ref: "refs/heads/feature/cloud-engineering-connector", object: { sha: parentSha } });
     }
     if (path.endsWith("/git/commits/" + parentSha)) {

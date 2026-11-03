@@ -1199,7 +1199,7 @@ function makeVaultOutboxFixture(proposalOverrides={}){
   claimOutbox:async()=>{if(claimed)return null;claimed=true;return event},
   getVaultProposal:async()=>proposal,
   deferOutbox:async input=>{calls.push({method:"deferOutbox",input});return input},
-  failOutbox:async input=>{calls.push({method:"failOutbox",input});return input},
+  failOutbox:async input=>{calls.push({method:"failOutbox",input});return{...event,status:input.maxAttempts===1?"dead_letter":"retry"}},
   completeOutbox:async input=>{calls.push({method:"completeOutbox",input});return input},
   putDocumentRef:async input=>{calls.push({method:"putDocumentRef",input});return input},
   indexDocumentSnapshot:async input=>{calls.push({method:"indexDocumentSnapshot",input});return input},
@@ -1218,7 +1218,7 @@ test("scheduled outbox defers an open Vault PR without consuming failure retries
  };
  try{
   const result=await processKnowledgeOutbox({...env,KNOWLEDGE_STORE:fixture.binding,GITHUB_READONLY_TOKEN:"read-only-test-token"});
-  assert.deepEqual(result,{processed:1,completed:0,deferred:1,failed:0});
+  assert.deepEqual(result,{processed:1,completed:0,deferred:1,failed:0,deadLetter:0});
   const deferred=fixture.calls.find(call=>call.method==="deferOutbox");
   assert.equal(deferred.input.retryAfterMs,300000);
   assert.equal(fixture.calls.some(call=>call.method==="completeOutbox"),false);
@@ -1245,7 +1245,7 @@ test("scheduled outbox verifies merged Vault content and promotes the exact revi
  };
  try{
   const result=await processKnowledgeOutbox({...env,KNOWLEDGE_STORE:fixture.binding,GITHUB_READONLY_TOKEN:"read-only-test-token"});
-  assert.deepEqual(result,{processed:1,completed:1,deferred:0,failed:0});
+  assert.deepEqual(result,{processed:1,completed:1,deferred:0,failed:0,deadLetter:0});
   assert.equal(fixture.calls.some(call=>call.method==="putDocumentRef"&&call.input.commitSha===fixture.commitSha),true);
   assert.equal(fixture.calls.some(call=>call.method==="indexDocumentSnapshot"&&call.input.contentSha256===fixture.contentSha256),true);
   assert.equal(fixture.calls.some(call=>call.method==="setDocumentSyncState"&&call.input.status==="synced"),true);
@@ -1283,6 +1283,7 @@ test("scheduled outbox refuses to index a merged PR whose repository or branch i
    const result=await processKnowledgeOutbox({...env,KNOWLEDGE_STORE:fixture.binding,GITHUB_READONLY_TOKEN:"read-only-test-token"});
    assert.equal(result.completed,0,scenario.name);
    assert.equal(result.failed,1,scenario.name);
+   assert.equal(result.deadLetter,1,scenario.name);
    const conflict=fixture.calls.find(call=>call.method==="updateVaultProposal");
    assert.equal(conflict?.input.status,"conflict",scenario.name);
    assert.equal(fixture.calls.some(call=>call.method==="putDocumentRef"),false,scenario.name);
@@ -1308,7 +1309,7 @@ test("scheduled outbox dead-letters a merged PR when canonical content digest di
  };
  try{
   const result=await processKnowledgeOutbox({...env,KNOWLEDGE_STORE:fixture.binding,GITHUB_READONLY_TOKEN:"read-only-test-token"});
-  assert.deepEqual(result,{processed:1,completed:0,deferred:0,failed:1});
+  assert.deepEqual(result,{processed:1,completed:0,deferred:0,failed:1,deadLetter:1});
   const conflict=fixture.calls.find(call=>call.method==="updateVaultProposal");
   assert.equal(conflict.input.status,"conflict");
   const failed=fixture.calls.find(call=>call.method==="failOutbox");

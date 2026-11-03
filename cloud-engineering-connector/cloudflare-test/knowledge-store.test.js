@@ -94,10 +94,10 @@ describe("Option C Brain Store", () => {
       .rejects.toMatchObject({ code: "KNOWLEDGE_IDEMPOTENCY_CONFLICT" });
     const claimed = await store.claimOutbox({ now: 101, leaseMs: 1000 });
     expect(claimed).toMatchObject({ eventId: "evt-001", status: "processing", attempts: 1 });
-    await store.failOutbox({ eventId: "evt-001", error: "temporary GitHub 503", now: 102, maxAttempts: 2 });
+    await store.failOutbox({ eventId: "evt-001", leaseGeneration: claimed.leaseGeneration, error: "temporary GitHub 503", now: 102, maxAttempts: 2 });
     const retry = await store.claimOutbox({ now: 100_000, leaseMs: 1000 });
     expect(retry).toMatchObject({ eventId: "evt-001", status: "processing", attempts: 2 });
-    await store.failOutbox({ eventId: "evt-001", error: "permanent failure", now: 100_001, maxAttempts: 2 });
+    await store.failOutbox({ eventId: "evt-001", leaseGeneration: retry.leaseGeneration, error: "permanent failure", now: 100_001, maxAttempts: 2 });
     await expect(store.getOutboxEvent({ tenantId: "tenant-a", eventId: "evt-001" }))
       .resolves.toMatchObject({ status: "dead_letter", attempts: 2 });
   });
@@ -106,7 +106,7 @@ describe("Option C Brain Store", () => {
     const store = storeFor("knowledge-derived-index");
     await store.upsertEntity({
       tenantId: "tenant-a", entityId: "entity-fts", entityType: "service",
-      name: "Payment gateway", properties: { owner: "platform" }, expectedVersion: 0,
+      name: "Payment gateway", properties: { owner: "platform", description: "payment settlement" }, expectedVersion: 0,
     });
     const body = "The payment gateway processes card authorization and settlement.";
     const contentSha256 = await sha256(body);

@@ -36,7 +36,9 @@ The Knowledge Engine may initially be a module in the Gateway Worker. This is a 
 - Brain Store queries, entity keys, relationship foreign keys, tags, document references, sync state, outbox records, and FTS searches are tenant-scoped.
 - Cross-tenant reads, joins, references, updates, and index results must fail closed.
 - Anonymous public-read-only MCP mode must not expose Knowledge Store tools or records.
-- The currently deployed Connector uses one `MCP_AUTH_TOKEN`; until a principal registry is integrated, that credential maps only to the owner tenant. Multi-principal tenant access is not claimed by the K1 storage foundation.
+- The current K2 branch implementation maps a successfully authenticated `MCP_AUTH_TOKEN` request to the fixed owner principal `owner`, and derives the Brain Store Durable Object ID as `tenant:owner`. The MCP schemas contain no `tenantId` field; the Worker injects the server-derived tenant ID only on the internal RPC boundary.
+- All `knowledge_*` tools are excluded from the anonymous `PUBLIC_READ_ONLY` allowlist. The readiness endpoint verifies both WriteControl schema v1 and Brain Store schema v2.
+- Additional tenant principals and credential rotation/revocation are not enabled. Multi-principal access must not be claimed until a hashed principal registry and end-to-end cross-tenant tests are implemented.
 
 The separate Cloud Agent already has a hashed principal-key registry pattern. Reuse is a candidate implementation direction, not a claim that Connector identity integration is already present.
 
@@ -99,7 +101,8 @@ The K1 slice implements the durable ledger primitives. It does not yet implement
 
 ## 7. Derived retrieval contract
 
-- FTS5 indexes entities and verified GitHub document snapshots.
+- The current K2 search tool indexes and searches structured Brain Store entities only.
+- GitHub document snapshot indexing is implemented at the Brain Store primitive level but remains unavailable through MCP until the GitHub Vault adapter and sync dispatcher are delivered in K3–K4.
 - Every query is constrained by the trusted tenant context before results are returned.
 - Search terms are tokenized and quoted before being passed to FTS5; raw user input is never concatenated into SQL.
 - Index source snapshots include the source commit SHA and content digest.
@@ -125,7 +128,7 @@ The K1 slice implements the durable ledger primitives. It does not yet implement
 
 ## 9. Implementation phases
 
-### K1 — Brain Store foundation
+### K1 — Brain Store foundation — implemented in PR #140; CI verification in progress
 - SQLite schema, tenant-scoped entity/relationship/tag data.
 - Optimistic entity versioning.
 - Immutable GitHub revision references.
@@ -133,12 +136,12 @@ The K1 slice implements the durable ledger primitives. It does not yet implement
 - FTS5 derived index source and deterministic rebuild.
 - Cloudflare Vitest coverage for schema, persistence, constraints, retry/dead-letter, digest verification, and search isolation.
 
-### K2 — Authenticated Knowledge Engine boundary
-- Resolve principal from the authenticated credential; map principal to tenant.
-- Reject tenant identifiers in MCP arguments.
-- Add authenticated-only MCP tools for entity, relationship, tag, and document metadata operations.
+### K2 — Authenticated Knowledge Engine boundary — owner-only first slice implemented in PR #140
+- Authenticated bearer credential maps to the owner principal; no caller-supplied tenant identifier is accepted.
+- Add authenticated-only MCP tools for entity, relationship, tag, entity search, document references, and sync status.
 - Keep Knowledge tools off the anonymous public-read-only allowlist.
-- Add MCP-level tenant-isolation tests.
+- Readiness checks both WriteControl and Brain Store Durable Object schemas.
+- Multi-principal credential registry and customer tenant onboarding remain future work; current behavior is owner-only.
 
 ### K3 — GitHub Vault adapter
 - Fixed repository allowlist and bounded content reads.

@@ -552,20 +552,22 @@ export class KnowledgeStore extends DurableObject {
   }
 
   completeOutbox(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
     const eventId = identifier(input?.eventId, "eventId");
     const leaseGeneration = input?.leaseGeneration;
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw new TypeError("leaseGeneration must be a positive safe integer.");
     const now = timestamp(input?.now);
     const result = this.ctx.storage.sql.exec(
       "UPDATE knowledge_outbox SET status='completed', lease_until=NULL, last_error=NULL, updated_at=? " +
-      "WHERE event_id=? AND status='processing' AND lease_generation=?",
-      now, eventId, leaseGeneration
+      "WHERE tenant_id=? AND event_id=? AND status='processing' AND lease_generation=?",
+      now, tenantId, eventId, leaseGeneration
     );
     if (result.rowsWritten !== 1) throw fail("KNOWLEDGE_OUTBOX_LEASE_CONFLICT", "Outbox lease is stale or the event is not processing.");
-    return this.ctx.storage.sql.exec("SELECT * FROM knowledge_outbox WHERE event_id = ?", eventId).one();
+    return this.getOutboxEvent({ tenantId, eventId });
   }
 
   failOutbox(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
     const eventId = identifier(input?.eventId, "eventId");
     const leaseGeneration = input?.leaseGeneration;
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw new TypeError("leaseGeneration must be a positive safe integer.");
@@ -574,18 +576,18 @@ export class KnowledgeStore extends DurableObject {
     const error = requiredString(input?.error, "error", 500);
     const now = timestamp(input?.now);
     const row = this.ctx.storage.sql.exec(
-      "SELECT attempts FROM knowledge_outbox WHERE event_id=? AND status='processing' AND lease_generation=?",
-      eventId, leaseGeneration
+      "SELECT attempts FROM knowledge_outbox WHERE tenant_id=? AND event_id=? AND status='processing' AND lease_generation=?",
+      tenantId, eventId, leaseGeneration
     ).toArray()[0];
     if (!row) throw fail("KNOWLEDGE_OUTBOX_LEASE_CONFLICT", "Outbox lease is stale or the event is not processing.");
     const dead = row.attempts >= maxAttempts;
     const delay = Math.min(2 ** Math.max(0, row.attempts - 1) * 1000, 3_600_000);
     this.ctx.storage.sql.exec(
       "UPDATE knowledge_outbox SET status=?, next_attempt_at=?, lease_until=NULL, last_error=?, updated_at=? " +
-      "WHERE event_id=? AND status='processing' AND lease_generation=?",
-      dead ? "dead_letter" : "retry", now + delay, error, now, eventId, leaseGeneration
+      "WHERE tenant_id=? AND event_id=? AND status='processing' AND lease_generation=?",
+      dead ? "dead_letter" : "retry", now + delay, error, now, tenantId, eventId, leaseGeneration
     );
-    return this.getOutboxEventById({ eventId });
+    return this.getOutboxEvent({ tenantId, eventId });
   }
 
   getOutboxEvent(input) {
@@ -594,14 +596,6 @@ export class KnowledgeStore extends DurableObject {
     return outboxRecord(this.ctx.storage.sql.exec(
       "SELECT * FROM knowledge_outbox WHERE tenant_id=? AND event_id=?",
       tenantId, eventId
-    ).toArray()[0]);
-  }
-
-  getOutboxEventById(input) {
-    const eventId = identifier(input?.eventId, "eventId");
-    return outboxRecord(this.ctx.storage.sql.exec(
-      "SELECT * FROM knowledge_outbox WHERE event_id=?",
-      eventId
     ).toArray()[0]);
   }
 }

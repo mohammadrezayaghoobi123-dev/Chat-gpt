@@ -57,7 +57,7 @@ jobs:
 
       - name: Validate MCP smoke credential
         env:
-          MCP_AUTH_TOKEN: \${{ secrets.MCP_AUTH_TOKEN }}
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
         run: |
           node --input-type=module <<'NODE'
           const token = process.env.MCP_AUTH_TOKEN;
@@ -151,8 +151,8 @@ jobs:
       - name: Verify Staging KnowledgeStore binding and scheduled reconciliation
         shell: bash
         env:
-          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: \${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           node --input-type=module <<'NODE'
           import assert from "node:assert/strict";
@@ -183,7 +183,7 @@ jobs:
       - name: Run live Staging acceptance
         run: node test/staging-smoke.mjs
         env:
-          MCP_AUTH_TOKEN: \${{ secrets.MCP_AUTH_TOKEN }}
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
 
       - name: Confirm deployed version and write release evidence
         if: success()

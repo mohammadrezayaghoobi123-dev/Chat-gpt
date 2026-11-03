@@ -51,7 +51,7 @@ describe("KnowledgeStore tenant-scoped data integrity", () => {
       targetEntityId: "missing", relationType: "depends_on", now: 101,
     }))).rejects.toThrow();
     await store.upsertEntity({ tenantId: "tenant-b", entityId: "target", entityType: "service", name: "Other tenant", now: 100 });
-    await expect(store.createRelationship({
+    await expect(Promise.resolve().then(() => store.createRelationship({
       tenantId: "tenant-a", relationshipId: "rel-2", sourceEntityId: "source",
       targetEntityId: "target", relationType: "depends_on", now: 102,
     }))).rejects.toThrow();

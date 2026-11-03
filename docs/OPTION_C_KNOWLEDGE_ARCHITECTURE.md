@@ -37,8 +37,9 @@ The Knowledge Engine may initially be a module in the Gateway Worker. This is a 
 - Cross-tenant reads, joins, references, updates, and index results must fail closed.
 - Anonymous public-read-only MCP mode must not expose Knowledge Store tools or records.
 - The current K2 branch implementation maps a successfully authenticated `MCP_AUTH_TOKEN` request to the fixed owner principal `owner`, and derives the Brain Store Durable Object ID as `tenant:owner`. The MCP schemas contain no `tenantId` field; the Worker injects the server-derived tenant ID only on the internal RPC boundary.
-- All `knowledge_*` tools are excluded from the anonymous `PUBLIC_READ_ONLY` allowlist. The readiness endpoint verifies both WriteControl schema v1 and Brain Store schema v2.
+- All `knowledge_*` tools are excluded from the anonymous `PUBLIC_READ_ONLY` allowlist. The readiness endpoint verifies both WriteControl schema v1 and Brain Store schema v3.
 - Brain Store mutation tools consume a separate `knowledge-write:` rate-limit bucket after schema validation and before any Durable Object write.
+- All GitHub read operations (`project_inspect`, `read_project_file`, `architecture_analyze`, Vault sync, and reconciliation) use `GITHUB_READONLY_TOKEN` with GET-only enforcement. `GITHUB_TOKEN` is reserved for the reviewable draft-PR write path.
 - Additional tenant principals and credential rotation/revocation are not enabled. Multi-principal access must not be claimed until a hashed principal registry and end-to-end cross-tenant tests are implemented.
 
 The separate Cloud Agent already has a hashed principal-key registry pattern. Reuse is a candidate implementation direction, not a claim that Connector identity integration is already present.

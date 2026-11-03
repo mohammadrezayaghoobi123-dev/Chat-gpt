@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker from "../worker.js";
+import { createHash } from "node:crypto";
+import worker, { processKnowledgeOutbox } from "../worker.js";
 import { createWriteControlBinding, createGitHubWriteMock } from "./helpers/write-control-mocks.js";
 let idempotencyCounter=0;
 function createKnowledgeStoreBinding(){
@@ -1164,4 +1165,105 @@ test("authenticated Vault proposal status is scoped to the owner principal",asyn
  assert.equal(result.proposalId,"proposal-00000001");
  const call=knowledgeStore.calls.find(item=>item.method==="getVaultProposal");
  assert.equal(call.input.tenantId,"owner");
+});
+
+function makeVaultOutboxFixture(proposalOverrides={}){
+ const content="# Approved architecture\\n";
+ const commitSha=createHash("sha1").update("merge-commit").digest("hex");
+ const blobSha=createHash("sha1").update("blob-content").digest("hex");
+ const contentSha256=createHash("sha256").update(content).digest("hex");
+ const proposal={
+  tenantId:"owner",proposalId:"proposal-00000001",documentId:"doc_123",
+  repository:"mohammadrezayaghoobi123-dev/Chat-gpt",
+  path:"knowledge/tenants/owner/architecture.md",expectedBlobSha:"ABSENT",
+  proposedContentSha256:contentSha256,pullRequestNumber:987,
+  pullRequestUrl:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/987",
+  branch:"assistant/mcp-vault-proposal-01",commitSha:"c".repeat(40),status:"proposed",
+  ...proposalOverrides
+ };
+ const event={tenantId:"owner",eventId:"event-vault-0001",leaseGeneration:1,eventType:"vault.document.proposed",payload:{proposalId:proposal.proposalId,pullRequestNumber:proposal.pullRequestNumber}};
+ const calls=[];
+ let claimed=false;
+ const stub={
+  claimOutbox:async()=>{if(claimed)return null;claimed=true;return event},
+  getVaultProposal:async()=>proposal,
+  deferOutbox:async input=>{calls.push({method:"deferOutbox",input});return input},
+  failOutbox:async input=>{calls.push({method:"failOutbox",input});return input},
+  completeOutbox:async input=>{calls.push({method:"completeOutbox",input});return input},
+  putDocumentRef:async input=>{calls.push({method:"putDocumentRef",input});return input},
+  indexDocumentSnapshot:async input=>{calls.push({method:"indexDocumentSnapshot",input});return input},
+  setDocumentSyncState:async input=>{calls.push({method:"setDocumentSyncState",input});return input},
+  updateVaultProposal:async input=>{calls.push({method:"updateVaultProposal",input});return{...proposal,...input}}
+ };
+ return{content,commitSha,blobSha,contentSha256,proposal,event,calls,binding:{idFromName:name=>name,get:()=>stub}};
+}
+test("scheduled outbox defers an open Vault PR without consuming failure retries",async()=>{
+ const fixture=makeVaultOutboxFixture();
+ const originalFetch=globalThis.fetch;
+ const auth=[];
+ globalThis.fetch=async(url,options={})=>{
+  auth.push(options.headers?.authorization);
+  return new Response(JSON.stringify({state:"open",merged:false}),{status:200,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const result=await processKnowledgeOutbox({...env,KNOWLEDGE_STORE:fixture.binding,GITHUB_READONLY_TOKEN:"read-only-test-token"});
+  assert.deepEqual(result,{processed:1,completed:0,deferred:1,failed:0});
+  const deferred=fixture.calls.find(call=>call.method==="deferOutbox");
+  assert.equal(deferred.input.retryAfterMs,300000);
+  assert.equal(fixture.calls.some(call=>call.method==="completeOutbox"),false);
+  assert.deepEqual(auth,["Bearer read-only-test-token"]);
+ }finally{globalThis.fetch=originalFetch}
+});
+test("scheduled outbox verifies merged Vault content and promotes the exact revision into Brain Store",async()=>{
+ const fixture=makeVaultOutboxFixture();
+ const originalFetch=globalThis.fetch;
+ const auth=[];
+ globalThis.fetch=async(url,options={})=>{
+  const parsed=new URL(url);auth.push(options.headers?.authorization);
+  if(parsed.pathname.endsWith("/pulls/987")){
+   return new Response(JSON.stringify({state:"closed",merged:true,merge_commit_sha:fixture.commitSha}),{status:200,headers:{"content-type":"application/json"}});
+  }
+  if(parsed.pathname.endsWith("/contents/"+fixture.proposal.path)){
+   return new Response(JSON.stringify({
+    type:"file",encoding:"base64",path:fixture.proposal.path,sha:fixture.blobSha,
+    size:new TextEncoder().encode(fixture.content).byteLength,
+    content:Buffer.from(fixture.content,"utf8").toString("base64")
+   }),{status:200,headers:{"content-type":"application/json"}});
+  }
+  return new Response(JSON.stringify({message:"not found"}),{status:404,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const result=await processKnowledgeOutbox({...env,KNOWLEDGE_STORE:fixture.binding,GITHUB_READONLY_TOKEN:"read-only-test-token"});
+  assert.deepEqual(result,{processed:1,completed:1,deferred:0,failed:0});
+  assert.equal(fixture.calls.some(call=>call.method==="putDocumentRef"&&call.input.commitSha===fixture.commitSha),true);
+  assert.equal(fixture.calls.some(call=>call.method==="indexDocumentSnapshot"&&call.input.contentSha256===fixture.contentSha256),true);
+  assert.equal(fixture.calls.some(call=>call.method==="setDocumentSyncState"&&call.input.status==="synced"),true);
+  assert.equal(fixture.calls.some(call=>call.method==="updateVaultProposal"&&call.input.status==="merged"),true);
+  assert.equal(fixture.calls.some(call=>call.method==="completeOutbox"),true);
+  assert.ok(auth.every(value=>value==="Bearer read-only-test-token"));
+ }finally{globalThis.fetch=originalFetch}
+});
+test("scheduled outbox dead-letters a merged PR when canonical content digest differs from the approved proposal",async()=>{
+ const fixture=makeVaultOutboxFixture({proposedContentSha256:"d".repeat(64)});
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=async(url,options={})=>{
+  const parsed=new URL(url);
+  if(parsed.pathname.endsWith("/pulls/987")){
+   return new Response(JSON.stringify({state:"closed",merged:true,merge_commit_sha:fixture.commitSha}),{status:200,headers:{"content-type":"application/json"}});
+  }
+  return new Response(JSON.stringify({
+   type:"file",encoding:"base64",path:fixture.proposal.path,sha:fixture.blobSha,
+   size:new TextEncoder().encode(fixture.content).byteLength,
+   content:Buffer.from(fixture.content,"utf8").toString("base64")
+  }),{status:200,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const result=await processKnowledgeOutbox({...env,KNOWLEDGE_STORE:fixture.binding,GITHUB_READONLY_TOKEN:"read-only-test-token"});
+  assert.deepEqual(result,{processed:1,completed:0,deferred:0,failed:1});
+  const conflict=fixture.calls.find(call=>call.method==="updateVaultProposal");
+  assert.equal(conflict.input.status,"conflict");
+  const failed=fixture.calls.find(call=>call.method==="failOutbox");
+  assert.equal(failed.input.maxAttempts,1);
+  assert.equal(fixture.calls.some(call=>call.method==="indexDocumentSnapshot"),false);
+ }finally{globalThis.fetch=originalFetch}
 });

@@ -91,11 +91,10 @@ async function verifyStagingReleaseEvidence({ fetchImpl, repoPath, reviewedHeadS
     run?.head_branch === stagingBranch &&
     run?.event === "push"
   );
-  matchingRuns.sort((left, right) => {
-    const leftTime = Date.parse(left.created_at || "");
-    const rightTime = Date.parse(right.created_at || "");
-    return rightTime - leftTime;
-  });
+  if (matchingRuns.some(run => !Number.isFinite(Date.parse(run.created_at || "")))) {
+    throw new Error("GitHub returned Staging workflow evidence with an invalid creation timestamp.");
+  }
+  matchingRuns.sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
   const latestRun = matchingRuns[0];
   const latestCreatedAt = Date.parse(latestRun?.created_at || "");
   if (

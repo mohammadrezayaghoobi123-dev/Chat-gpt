@@ -89,3 +89,12 @@ commits = [
 paths = ['''^cloud-engineering-connector/test/architecture-analysis\.test\.js$''']
 regexTarget = "line"
 regexes = ['''MCP_AUTH_TOKEN\s*:\s*["']test-secret-0123456789abcdef012345["']''']
+
+[[allowlists]]
+description = "Deterministic non-secret Vault proposal IDs in a historical test commit; exact commit, file, and literal only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["651dabe22b062a224f911e42ddbe043dcdec5c12"]
+paths = ['''^cloud-engineering-connector/test/write-hardening\.test\.js$''']
+regexTarget = "line"
+regexes = ['''idempotencyKey\s*:\s*["']vault-proposal-(?:stale|success)-0001["']''']

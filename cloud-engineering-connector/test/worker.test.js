@@ -3,12 +3,32 @@ import assert from "node:assert/strict";
 import worker from "../worker.js";
 import { createWriteControlBinding, createGitHubWriteMock } from "./helpers/write-control-mocks.js";
 let idempotencyCounter=0;
-const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_READONLY_TOKEN:"read-only-test-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding()};
+function createKnowledgeStoreBinding(){
+ const calls=[];
+ const stub={
+  ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:2}},
+  getEntity:async input=>{calls.push({method:"getEntity",input});return{...input,entityType:"service",name:"API",properties:{},version:1}},
+  upsertEntity:async input=>{calls.push({method:"upsertEntity",input});return input},
+  createRelationship:async input=>{calls.push({method:"createRelationship",input});return input},
+  putTag:async input=>{calls.push({method:"putTag",input});return{tagId:input.tagId,label:input.label}},
+  attachTag:async input=>{calls.push({method:"attachTag",input});return input},
+  listEntityTags:async input=>{calls.push({method:"listEntityTags",input});return[]},
+  search:async input=>{calls.push({method:"search",input});return[]},
+  listDocumentRefs:async input=>{calls.push({method:"listDocumentRefs",input});return[]},
+  getDocumentSyncState:async input=>{calls.push({method:"getDocumentSyncState",input});return null}
+ };
+ return{calls,binding:{
+  idFromName(name){calls.push({method:"idFromName",name});return name},
+  get(id){calls.push({method:"get",id});return stub}
+ }};
+}
+const knowledgeStore=createKnowledgeStoreBinding();
+const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_READONLY_TOKEN:"read-only-test-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding(),KNOWLEDGE_STORE:knowledgeStore.binding};
 const req=(path,options={})=>{const headers=new Headers(options.headers);if(!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
 const rpc=(method,params={},id=1)=>{if(method==="tools/call"&&params.name==="create_change_pr"&&params.arguments&&!params.arguments.idempotency_key)params={...params,arguments:{...params.arguments,idempotency_key:"worker-test-idempotency-key-"+String(++idempotencyCounter).padStart(8,"0")}};return req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})})};
 const anonymousRpc=(method,params={},id=1)=>{const request=rpc(method,params,id);const headers=new Headers(request.headers);headers.delete("authorization");return new Request(request,{headers})};
 test("healthz is a liveness endpoint independent of credentials and Durable Object availability",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.service,"cloud-engineering-connector");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers");assert.equal(Object.hasOwn(b,"durable_objects"),false);assert.equal(Object.hasOwn(b,"mcp"),false)});
-test("readyz reports Durable Object schema readiness using the lightweight ping",async()=>{const r=await worker.fetch(req("/readyz"),env);assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ready");assert.equal(b.durable_objects,"ok");assert.equal(env.WRITE_CONTROL.__test.events.some(event=>event.type==="ping"),true)});
+test("readyz reports Durable Object schema readiness using the lightweight ping",async()=>{const r=await worker.fetch(req("/readyz"),env);assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ready");assert.equal(b.durable_objects,"ok");assert.equal(env.WRITE_CONTROL.__test.events.some(event=>event.type==="ping"),true);assert.equal(b.knowledge_store,"ok");assert.equal(knowledgeStore.calls.some(call=>call.method==="ping"),true)});
 test("readyz fails closed when the Durable Object binding is unavailable",async()=>{const r=await worker.fetch(req("/readyz"),{MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,503);const b=await r.json();assert.equal(b.status,"not_ready");assert.equal(b.durable_objects,"unavailable")});
 test("JSON API responses carry restrictive browser security headers",async()=>{
  const response=await worker.fetch(req("/healthz"),env);
@@ -981,4 +1001,56 @@ test("unresolved operation backlog fails closed before any GitHub write", async 
   assert.match(body.result.content[0].text,/Reconcile quarantined operations/);
   assert.equal(fixture.calls.length,0,"no GitHub side effect may start while the unresolved ledger is saturated");
  } finally { globalThis.fetch=originalFetch; }
+});
+
+test("authenticated tools/list exposes Option C Brain Store tools",async()=>{
+ const r=await worker.fetch(rpc("tools/list",{},11),env);
+ assert.equal(r.status,200);
+ const body=await r.json();
+ const names=new Set(body.result.tools.map(tool=>tool.name));
+ for(const name of ["knowledge_entity_get","knowledge_entity_upsert","knowledge_relationship_create","knowledge_tag_upsert","knowledge_tag_attach","knowledge_entity_tags","knowledge_search","knowledge_document_refs","knowledge_sync_status"])assert.equal(names.has(name),true,name);
+ const entityUpsert=body.result.tools.find(tool=>tool.name==="knowledge_entity_upsert");
+ assert.equal(entityUpsert.inputSchema.properties.tenantId,undefined);
+ assert.equal(entityUpsert.inputSchema.additionalProperties,false);
+});
+test("anonymous PUBLIC_READ_ONLY tools/list never exposes Brain Store tools",async()=>{
+ const r=await worker.fetch(anonymousRpc("tools/list",{},12),{...env,PUBLIC_READ_ONLY:"true"});
+ assert.equal(r.status,200);
+ const body=await r.json();
+ assert.equal(body.result.tools.some(tool=>tool.name.startsWith("knowledge_")),false);
+});
+test("authenticated knowledge writes derive tenant from the bearer principal, not MCP arguments",async()=>{
+ knowledgeStore.calls.length=0;
+ const r=await worker.fetch(rpc("tools/call",{name:"knowledge_entity_upsert",arguments:{entityId:"api",entityType:"service",name:"API",properties:{tier:"core"},expectedVersion:0}},13),env);
+ assert.equal(r.status,200);
+ const body=await r.json();
+ assert.equal(body.result.isError,undefined);
+ const result=JSON.parse(body.result.content[0].text);
+ assert.equal(result.tenantId,"owner");
+ const call=knowledgeStore.calls.find(item=>item.method==="upsertEntity");
+ assert.equal(call.input.tenantId,"owner");
+ assert.equal(knowledgeStore.calls.some(item=>item.method==="idFromName"&&item.name==="tenant:owner"),true);
+});
+test("caller-supplied tenantId is rejected before Brain Store access",async()=>{
+ knowledgeStore.calls.length=0;
+ const r=await worker.fetch(rpc("tools/call",{name:"knowledge_entity_get",arguments:{entityId:"api",tenantId:"tenant-victim"}},14),env);
+ const body=await r.json();
+ assert.equal(body.result.isError,true);
+ assert.match(body.result.content[0].text,/unsupported property tenantId/);
+ assert.equal(knowledgeStore.calls.length,0);
+});
+test("anonymous PUBLIC_READ_ONLY callers cannot invoke Brain Store tools",async()=>{
+ knowledgeStore.calls.length=0;
+ const r=await worker.fetch(anonymousRpc("tools/call",{name:"knowledge_search",arguments:{query:"credentials"}},15),{...env,PUBLIC_READ_ONLY:"true"});
+ const body=await r.json();
+ assert.equal(body.result.isError,true);
+ assert.match(body.result.content[0].text,/PUBLIC_READ_ONLY allowlist/);
+ assert.equal(knowledgeStore.calls.length,0);
+});
+test("readyz fails closed when the Brain Store binding is missing",async()=>{
+ const r=await worker.fetch(req("/readyz"),{...env,KNOWLEDGE_STORE:undefined});
+ assert.equal(r.status,503);
+ const body=await r.json();
+ assert.equal(body.status,"not_ready");
+ assert.equal(body.knowledge_store,"unavailable");
 });

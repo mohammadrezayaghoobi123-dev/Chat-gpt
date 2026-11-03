@@ -165,7 +165,7 @@ test("create_change_pr rejects disallowed base branches before GitHub calls",asy
  try{for(const base_branch of ["main","valid-but-not-allowed"]){const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch,title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]};const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/Base branch is not allowed/)}assert.equal(calls,0)}finally{globalThis.fetch=originalFetch}
 });
 test("MCP endpoint returns 405 and Allow: POST for GET and DELETE",async()=>{for(const method of ["GET","DELETE","PUT","PATCH"]){const r=await worker.fetch(req("/mcp",{method}),env);assert.equal(r.status,405,method);assert.equal(r.headers.get("allow"),"POST");assert.deepEqual(await r.json(),{error:"method_not_allowed",message:"The MCP endpoint accepts POST requests only."})}const unknown=await worker.fetch(req("/other",{method:"GET"}),env);assert.equal(unknown.status,404)});
-test("GitHub API response limits enforce streamed bytes with absent or lying Content-Length",async()=>{for(const headers of [{"content-type":"application/json"},{"content-type":"application/json","content-length":"1"}]){const originalFetch=globalThis.fetch;let cancelled=false;globalThis.fetch=async()=>new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode(JSON.stringify({message:"x".repeat(2_000_100)})))},cancel(){cancelled=true}}),{status:200,headers});try{const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}}),{...env,GITHUB_TOKEN:"test-token"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/response exceeds the configured byte limit/i);assert.equal(cancelled,true)}finally{globalThis.fetch=originalFetch}}});
+test("GitHub API response limits enforce streamed bytes with absent or lying Content-Length",async()=>{for(const headers of [{"content-type":"application/json"},{"content-type":"application/json","content-length":"1"}]){const originalFetch=globalThis.fetch;let cancelled=false;globalThis.fetch=async()=>new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode(JSON.stringify({message:"x".repeat(2_000_100)})))},cancel(){cancelled=true}}),{status:200,headers});try{const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/response exceeds the configured byte limit/i);assert.equal(cancelled,true)}finally{globalThis.fetch=originalFetch}}});
 
 test("MCP CORS preflight allows only configured origins and required headers",async()=>{const allowedEnv={...env,MCP_ALLOWED_ORIGINS:"https://client.example"};const good=req("/mcp",{method:"OPTIONS",headers:{origin:"https://client.example","access-control-request-method":"POST","access-control-request-headers":"authorization, content-type, accept, MCP-Protocol-Version, Mcp-Method, Mcp-Name"}});const ok=await worker.fetch(good,allowedEnv);assert.equal(ok.status,204);assert.equal(ok.headers.get("access-control-allow-origin"),"https://client.example");assert.match(ok.headers.get("access-control-allow-headers"),/Mcp-Name/i);const badOrigin=await worker.fetch(req("/mcp",{method:"OPTIONS",headers:{origin:"https://evil.example","access-control-request-method":"POST"}}),allowedEnv);assert.equal(badOrigin.status,403);const badHeader=await worker.fetch(req("/mcp",{method:"OPTIONS",headers:{origin:"https://client.example","access-control-request-method":"POST","access-control-request-headers":"x-evil-header"}}),allowedEnv);assert.equal(badHeader.status,400)});
 
@@ -267,7 +267,7 @@ test("GitHub API calls receive a bounded 10-second abort signal",async()=>{
   throw new Error("Unexpected mocked GitHub URL: "+url);
  };
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"} }),{...env,GITHUB_TOKEN:"test-token"});
+  const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"} }),{...env,GITHUB_READONLY_TOKEN:"test-token"});
   assert.equal(r.status,200);assert.equal(calls,3);assert.deepEqual(timeoutValues,[10_000,10_000,10_000]);
  }finally{globalThis.fetch=originalFetch;AbortSignal.timeout=originalTimeout}
 });
@@ -277,7 +277,7 @@ test("read_project_file rejects files above the explicit read limit before decod
  const originalFetch=globalThis.fetch;let calls=0;
  globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({type:"file",path:"docs/large.txt",size:100_001,content:"",encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}})};
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/large.txt"}}),{...env,GITHUB_TOKEN:"test-token"});
+  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/large.txt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});
   const b=await r.json();assert.equal(r.status,200);assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/maximum readable size/);assert.equal(calls,1);
  }finally{globalThis.fetch=originalFetch}
 });
@@ -286,7 +286,7 @@ test("read_project_file rejects mismatched upstream size metadata",async()=>{
  const originalFetch=globalThis.fetch;
  globalThis.fetch=async()=>new Response(JSON.stringify({type:"file",path:"docs/example.txt",size:1,content:"aGVsbG8=",encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}});
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/example.txt"}}),{...env,GITHUB_TOKEN:"test-token"});
+  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/example.txt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});
   const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/size metadata does not match decoded content/);
  }finally{globalThis.fetch=originalFetch}
 });
@@ -295,7 +295,7 @@ test("read_project_file fails closed when upstream size metadata is missing",asy
  const originalFetch=globalThis.fetch;
  globalThis.fetch=async()=>new Response(JSON.stringify({type:"file",path:"docs/example.txt",content:"aGVsbG8=",encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}});
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/example.txt"}}),{...env,GITHUB_TOKEN:"test-token"});
+  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/example.txt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});
   const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/size metadata is invalid/);
  }finally{globalThis.fetch=originalFetch}
 });
@@ -307,7 +307,7 @@ test("read_project_file accepts a file exactly at the configured byte limit",asy
  const encoded=btoa(content);
  globalThis.fetch=async()=>new Response(JSON.stringify({type:"file",path:"docs/boundary.txt",size:100_000,content:encoded,encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}});
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/boundary.txt"}}),{...env,GITHUB_TOKEN:"test-token"});
+  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/boundary.txt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});
   const b=await r.json();assert.equal(b.result.isError,undefined);
   const value=JSON.parse(b.result.content[0].text);assert.equal(value.size,100_000);assert.equal(value.content.length,100_000);
  }finally{globalThis.fetch=originalFetch}
@@ -317,7 +317,7 @@ test("read_project_file rejects invalid UTF-8 content",async()=>{
  const originalFetch=globalThis.fetch;
  globalThis.fetch=async()=>new Response(JSON.stringify({type:"file",path:"docs/invalid.txt",size:1,content:"/w==",encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}});
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/invalid.txt"}}),{...env,GITHUB_TOKEN:"test-token"});
+  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/invalid.txt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});
   const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/encoded data|UTF-8|encoded/i);
  }finally{globalThis.fetch=originalFetch}
 });
@@ -335,7 +335,7 @@ test("read_project_file streams and rejects oversized GitHub API responses befor
   return new Response(stream,{status:200,headers:{"content-type":"application/json"}});
  };
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/oversized.txt"}}),{...env,GITHUB_TOKEN:"test-token"});
+  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/oversized.txt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});
   const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/response exceeds the configured byte limit/i);assert.equal(cancelled,true);
  }finally{globalThis.fetch=originalFetch}
 });

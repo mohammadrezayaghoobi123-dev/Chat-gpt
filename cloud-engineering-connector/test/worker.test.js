@@ -1085,7 +1085,7 @@ test("knowledge_document_sync reads an immutable GitHub Vault revision with the 
   if(parsed.pathname.endsWith("/commits")){
    body=[{sha:commitSha}];
   }else if(parsed.pathname.endsWith("/contents/"+path)){
-   body={type:"file",path,sha:blobSha,size:bytes,content:Buffer.from(content,"utf8").toString("base64")};
+   body={type:"file",encoding:"base64",path,sha:blobSha,size:bytes,content:Buffer.from(content,"utf8").toString("base64")};
   }else{
    return new Response(JSON.stringify({message:"not found"}),{status:404,headers:{"content-type":"application/json"}});
   }

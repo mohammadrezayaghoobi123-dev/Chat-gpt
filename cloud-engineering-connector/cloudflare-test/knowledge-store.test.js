@@ -66,6 +66,11 @@ describe("KnowledgeStore tenant-scoped data integrity", () => {
     };
     await store.putDocumentRef({ ...base, commitSha: "1".repeat(40), now: 100 });
     await store.putDocumentRef({ ...base, commitSha: "2".repeat(40), contentSha256: "b".repeat(64), now: 200 });
+    await expect(Promise.resolve().then(() => store.putDocumentRef({
+      ...base, commitSha: "1".repeat(40), contentSha256: "c".repeat(64), now: 300,
+    }))).rejects.toThrow(/immutable/);
+    await expect(store.putDocumentRef({ ...base, commitSha: "1".repeat(40), now: 400 }))
+      .resolves.toMatchObject({ contentSha256: "a".repeat(64), updatedAt: 100 });
     await expect(store.listDocumentRefs({ tenantId: "tenant-a", documentId: "adr-001" }))
       .resolves.toHaveLength(2);
     await expect(store.listDocumentRefs({ tenantId: "tenant-b", documentId: "adr-001" }))
@@ -88,6 +93,10 @@ describe("KnowledgeStore tenant-scoped data integrity", () => {
       tenantId: "tenant-a", entityId: "bad/id", entityType: "note",
       name: "Bad identifier", properties: {},
     }))).rejects.toThrow(/entityId/);
+    await expect(Promise.resolve().then(() => store.upsertEntity({
+      tenantId: "tenant-a", entityId: "oversized", entityType: "note",
+      name: "Oversized properties", properties: { payload: "x".repeat(32_769) },
+    }))).rejects.toThrow(/32768 bytes/);
   });
 
   it("persists tenant records in the Durable Object SQLite storage", async () => {

@@ -1278,3 +1278,61 @@ test("Cloudflare scheduled handler attaches Knowledge Store reconciliation to wa
  assert.ok(pending instanceof Promise);
  await pending;
 });
+
+test("authenticated architecture analysis attaches tenant-scoped Vault evidence with immutable source references",async()=>{
+ const originalFetch=globalThis.fetch;
+ const path="knowledge/tenants/owner/README.md";
+ const content="## Owner Vault\\nCanonical architecture evidence.\\n";
+ const commitSha=createHash("sha1").update("vault-commit").digest("hex");
+ const blobSha=createHash("sha1").update("vault-blob").digest("hex");
+ const contentSha256=createHash("sha256").update(content).digest("hex");
+ const calls=[];
+ const stub={
+  search:async input=>{calls.push({method:"search",input});return[{recordType:"document",recordId:"doc_123",commitSha,contentSha256,title:"Owner Vault",snippet:"Canonical architecture evidence",score:1}]},
+  listDocumentRefs:async input=>{calls.push({method:"listDocumentRefs",input});return[{repository:"mohammadrezayaghoobi123-dev/Chat-gpt",path,commitSha,contentSha256}]}
+ };
+ const binding={idFromName:name=>name,get:()=>stub};
+ const fetchCalls=[];
+ globalThis.fetch=async(url,options={})=>{
+  const parsed=new URL(url);fetchCalls.push({url:parsed.toString(),authorization:options.headers?.authorization});
+  return new Response(JSON.stringify({type:"file",encoding:"base64",path,sha:blobSha,size:new TextEncoder().encode(content).byteLength,content:Buffer.from(content,"utf8").toString("base64")}),{status:200,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const r=await worker.fetch(rpc("tools/call",{name:"architecture_analyze",arguments:{
+   owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",ref:"main",paths:[path],knowledge_query:"canonical architecture evidence"
+  }},21),{...env,KNOWLEDGE_STORE:binding,GITHUB_TOKEN:"write-token-must-not-be-used",GITHUB_READONLY_TOKEN:"read-only-token"});
+  const body=await r.json();
+  assert.equal(body.result.isError,undefined);
+  const result=JSON.parse(body.result.content[0].text);
+  assert.equal(result.knowledge_context.status,"retrieved");
+  assert.equal(result.knowledge_context.results[0].sourceRef.path,path);
+  assert.equal(result.knowledge_context.results[0].sourceRef.commitSha,commitSha);
+  assert.equal(result.knowledge_context.results[0].content_trust,"untrusted_evidence");
+  assert.equal(calls.find(call=>call.method==="search").input.tenantId,"owner");
+  assert.equal(calls.find(call=>call.method==="listDocumentRefs").input.tenantId,"owner");
+  assert.equal(fetchCalls.length,1);
+  assert.equal(fetchCalls[0].authorization,"Bearer read-only-token");
+ }finally{globalThis.fetch=originalFetch}
+});
+test("anonymous architecture analysis never queries private Knowledge Store context",async()=>{
+ const originalFetch=globalThis.fetch;
+ const path="knowledge/tenants/owner/README.md";
+ const content="## Public-safe file\\n";
+ let searchCalls=0;
+ const binding={idFromName:name=>name,get:()=>({search:async()=>{searchCalls++;return[]},listDocumentRefs:async()=>[]})};
+ globalThis.fetch=async(url,options={})=>{
+  const parsed=new URL(url);
+  if(parsed.pathname==="/repos/mohammadrezayaghoobi123-dev/Chat-gpt")return new Response(JSON.stringify({private:false,full_name:"mohammadrezayaghoobi123-dev/Chat-gpt",default_branch:"main"}),{status:200,headers:{"content-type":"application/json"}});
+  return new Response(JSON.stringify({type:"file",encoding:"base64",path,sha:createHash("sha1").update("public-file").digest("hex"),size:new TextEncoder().encode(content).byteLength,content:Buffer.from(content,"utf8").toString("base64")}),{status:200,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const r=await worker.fetch(anonymousRpc("tools/call",{name:"architecture_analyze",arguments:{
+   owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",ref:"main",paths:[path],knowledge_query:"private architecture"
+  }},22),{PUBLIC_READ_ONLY:"true",KNOWLEDGE_STORE:binding,GITHUB_READONLY_TOKEN:"read-only-token",GITHUB_TOKEN:"write-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});
+  const body=await r.json();
+  assert.equal(body.result.isError,undefined);
+  const result=JSON.parse(body.result.content[0].text);
+  assert.equal(result.knowledge_context.status,"not_available_in_public_read_only_mode");
+  assert.equal(searchCalls,0);
+ }finally{globalThis.fetch=originalFetch}
+});

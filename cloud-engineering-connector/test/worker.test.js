@@ -18,7 +18,9 @@ function createKnowledgeStoreBinding(){
   getDocumentSyncState:async input=>{calls.push({method:"getDocumentSyncState",input});return null},
   putDocumentRef:async input=>{calls.push({method:"putDocumentRef",input});return input},
   indexDocumentSnapshot:async input=>{calls.push({method:"indexDocumentSnapshot",input});return input},
-  setDocumentSyncState:async input=>{calls.push({method:"setDocumentSyncState",input});return input}
+  setDocumentSyncState:async input=>{calls.push({method:"setDocumentSyncState",input});return input},
+  recordVaultProposal:async input=>{calls.push({method:"recordVaultProposal",input});return{...input,status:"proposed"}},
+  getVaultProposal:async input=>{calls.push({method:"getVaultProposal",input});return{...input,status:"proposed",pullRequestNumber:987}}
  };
  return{calls,binding:{
   idFromName(name){calls.push({method:"idFromName",name});return name},
@@ -77,7 +79,7 @@ test("public read-only mode denies tools not on the allowlist by default",async(
 test("public mode never permits write tools without MCP_AUTH_TOKEN",async()=>{const r=await worker.fetch(anonymousRpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]}},1),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})},GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/not in the unauthenticated PUBLIC_READ_ONLY allowlist/)});
 test("MCP rejects missing bearer token",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{"content-type":"application/json","cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize"})}),{...env,MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,401)});
 test("initialize advertises connector identity and tools capability",async()=>{const r=await worker.fetch(rpc("initialize",{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"test",version:"1"}}),env);const b=await r.json();assert.equal(b.result.serverInfo.name,"cloud-engineering-connector");assert.ok(b.result.capabilities.tools)});
-test("tools/list exposes all declared tools",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();assert.deepEqual(b.result.tools.map(t=>t.name),["project_inspect","read_project_file","engineering_standards","architecture_review","architecture_analyze","knowledge_entity_get","knowledge_entity_upsert","knowledge_relationship_create","knowledge_tag_upsert","knowledge_tag_attach","knowledge_entity_tags","knowledge_search","knowledge_document_sync","knowledge_document_propose","knowledge_document_refs","knowledge_sync_status","create_change_pr"])});
+test("tools/list exposes all declared tools",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();assert.deepEqual(b.result.tools.map(t=>t.name),["project_inspect","read_project_file","engineering_standards","architecture_review","architecture_analyze","knowledge_entity_get","knowledge_entity_upsert","knowledge_relationship_create","knowledge_tag_upsert","knowledge_tag_attach","knowledge_entity_tags","knowledge_search","knowledge_document_sync","knowledge_document_propose","knowledge_document_proposal_status","knowledge_document_refs","knowledge_sync_status","create_change_pr"])});
 test("every MCP tool declares a title and explicit read-only/destructive safety hints",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();for(const tool of b.result.tools){assert.equal(typeof tool.annotations?.title,"string",tool.name);assert.ok(tool.annotations.title.length>0,tool.name);assert.equal(typeof tool.annotations.readOnlyHint,"boolean",tool.name);assert.equal(typeof tool.annotations.destructiveHint,"boolean",tool.name)}assert.equal(b.result.tools.find(t=>t.name==="architecture_analyze").annotations.readOnlyHint,true);assert.equal(b.result.tools.find(t=>t.name==="create_change_pr").annotations.readOnlyHint,false)});
 test("tools/list schema requires base_branch for create_change_pr",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();const tool=b.result.tools.find(t=>t.name==="create_change_pr");assert.ok(tool,"create_change_pr must be listed");assert.ok(Array.isArray(tool.inputSchema.required));assert.ok(tool.inputSchema.required.includes("base_branch"));assert.ok(Object.hasOwn(tool.inputSchema.properties,"base_branch"));assert.ok(tool.inputSchema.required.includes("idempotency_key"));assert.match(tool.inputSchema.properties.idempotency_key.pattern,/Base64URL|A-Za-z0-9/);assert.equal(tool.inputSchema.additionalProperties,false)});
 test("architecture review labels its output unverified",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"architecture_review",arguments:{project_goal:"Example",proposed_change:"Add cache"}}),env);const b=await r.json();const result=JSON.parse(b.result.content[0].text);assert.equal(result.status,"review_framework_generated_not_independently_verified");assert.ok(result.mandatory_output_sections.includes("Verification status"))});
@@ -1150,4 +1152,16 @@ test("knowledge_document_sync does not accept caller-selected Git refs or commit
   assert.match(body.result.content[0].text,/unsupported property commitSha/);
   assert.equal(fetchCalls,0);
  }finally{globalThis.fetch=originalFetch}
+});
+
+test("authenticated Vault proposal status is scoped to the owner principal",async()=>{
+ knowledgeStore.calls.length=0;
+ const r=await worker.fetch(rpc("tools/call",{name:"knowledge_document_proposal_status",arguments:{proposalId:"proposal-00000001"}},20),env);
+ const body=await r.json();
+ assert.equal(body.result.isError,undefined);
+ const result=JSON.parse(body.result.content[0].text);
+ assert.equal(result.tenantId,"owner");
+ assert.equal(result.proposalId,"proposal-00000001");
+ const call=knowledgeStore.calls.find(item=>item.method==="getVaultProposal");
+ assert.equal(call.input.tenantId,"owner");
 });

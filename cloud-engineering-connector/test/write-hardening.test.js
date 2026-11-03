@@ -78,7 +78,7 @@ test("PR title is collapsed to one line and summary mentions are neutralised", a
 });
 
 function knowledgeBindingForTests(outboxCalls){
- const stub={enqueueOutbox:async input=>{outboxCalls.push(input);return input}};
+ const stub={recordVaultProposal:async input=>({...input,status:"proposed"}),enqueueOutbox:async input=>{outboxCalls.push(input);return input}};
  return {idFromName:name=>name,get:id=>stub};
 }
 function vaultFileResponse(path,sha){

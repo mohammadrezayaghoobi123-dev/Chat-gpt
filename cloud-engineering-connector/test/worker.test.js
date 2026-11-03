@@ -1137,17 +1137,17 @@ test("knowledge_document_sync rejects another tenant path before GitHub or Brain
   assert.equal(knowledgeStore.calls.length,0);
  }finally{globalThis.fetch=originalFetch}
 });
-test("knowledge_document_sync accepts only exact commit SHAs for historical reads",async()=>{
+test("knowledge_document_sync does not accept caller-selected Git refs or commit SHAs",async()=>{
  knowledgeStore.calls.length=0;
  const originalFetch=globalThis.fetch;let fetchCalls=0;
- globalThis.fetch=async()=>{fetchCalls++;throw new Error("GitHub must not be called for an invalid SHA")};
+ globalThis.fetch=async()=>{fetchCalls++;throw new Error("GitHub must not be called for a caller-selected ref")};
  try{
   const r=await worker.fetch(rpc("tools/call",{name:"knowledge_document_sync",arguments:{path:"knowledge/tenants/owner/architecture.md",commitSha:"main"}},19),{
    ...env,GITHUB_READONLY_TOKEN:"read-only-token"
   });
   const body=await r.json();
   assert.equal(body.result.isError,true);
-  assert.match(body.result.content[0].text,/KNOWLEDGE_VAULT_COMMIT_INVALID/);
+  assert.match(body.result.content[0].text,/unsupported property commitSha/);
   assert.equal(fetchCalls,0);
  }finally{globalThis.fetch=originalFetch}
 });

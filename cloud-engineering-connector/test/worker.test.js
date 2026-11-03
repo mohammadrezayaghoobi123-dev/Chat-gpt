@@ -1396,3 +1396,49 @@ test("anonymous architecture analysis never queries private Knowledge Store cont
  }finally{globalThis.fetch=originalFetch}
 });
 
+
+test("scheduled handler emits an alert-level structured event for dead-lettered Knowledge Store work", async () => {
+  let claimed = false;
+  let pending;
+  const logs = [];
+  const errors = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  const stub = {
+    claimOutbox: async () => {
+      if (claimed) return null;
+      claimed = true;
+      return { eventId: "evt-alert-0001", eventType: "unsupported.test.event", leaseGeneration: 1 };
+    },
+    failOutbox: async () => ({ status: "dead_letter" }),
+  };
+  const binding = { idFromName: name => name, get: () => stub };
+  try {
+    console.log = (...args) => logs.push(args.join(" "));
+    console.error = (...args) => errors.push(args.join(" "));
+    await worker.scheduled({ cron: "*/5 * * * *" }, { ...env, KNOWLEDGE_STORE: binding }, {
+      waitUntil(promise) { pending = promise; },
+    });
+    assert.ok(pending instanceof Promise);
+    await pending;
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+  const alert = errors.map(line => { try { return JSON.parse(line); } catch { return null; } })
+    .find(value => value?.event === "knowledge_outbox_reconciliation_alert");
+  assert.deepEqual({
+    severity: alert?.severity,
+    processed: alert?.processed,
+    completed: alert?.completed,
+    failed: alert?.failed,
+    deadLetter: alert?.deadLetter,
+  }, {
+    severity: "error",
+    processed: 1,
+    completed: 0,
+    failed: 1,
+    deadLetter: 1,
+  });
+  assert.equal(JSON.stringify(alert).includes("evt-alert-0001"), false, "alert logs must not expose event payload identifiers");
+});

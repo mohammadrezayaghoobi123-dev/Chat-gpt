@@ -86,6 +86,18 @@ async function sha256(value) {
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function proposalRecord(row) {
+  if (!row) return null;
+  return {
+    tenantId: row.tenant_id, proposalId: row.proposal_id, documentId: row.document_id,
+    repository: row.repository, path: row.path, expectedBlobSha: row.expected_blob_sha,
+    proposedContentSha256: row.proposed_content_sha256, pullRequestNumber: row.pr_number,
+    pullRequestUrl: row.pr_url, branch: row.branch, commitSha: row.commit_sha,
+    status: row.status, mergeCommitSha: row.merge_commit_sha, mergedBlobSha: row.merged_blob_sha,
+    createdAt: row.created_at, updatedAt: row.updated_at
+  };
+}
+
 function outboxRecord(row) {
   if (!row) return null;
   return {
@@ -183,6 +195,20 @@ export class KnowledgeStore extends DurableObject {
       "ON knowledge_outbox(status, next_attempt_at, created_at)"
     );
     sql.exec(
+      "CREATE TABLE IF NOT EXISTS knowledge_vault_proposals (" +
+      "tenant_id TEXT NOT NULL, proposal_id TEXT NOT NULL, document_id TEXT NOT NULL, " +
+      "repository TEXT NOT NULL, path TEXT NOT NULL, expected_blob_sha TEXT NOT NULL, " +
+      "proposed_content_sha256 TEXT NOT NULL CHECK(length(proposed_content_sha256) = 64), " +
+      "pr_number INTEGER NOT NULL, pr_url TEXT NOT NULL, branch TEXT NOT NULL, commit_sha TEXT NOT NULL CHECK(length(commit_sha) = 40), " +
+      "status TEXT NOT NULL CHECK(status IN ('proposed','merged','closed','conflict','failed')), " +
+      "merge_commit_sha TEXT, merged_blob_sha TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, " +
+      "PRIMARY KEY(tenant_id, proposal_id), UNIQUE(tenant_id, pr_number))"
+    );
+    sql.exec(
+      "CREATE INDEX IF NOT EXISTS knowledge_vault_proposals_pending " +
+      "ON knowledge_vault_proposals(tenant_id, status, created_at)"
+    );
+    sql.exec(
       "CREATE TABLE IF NOT EXISTS knowledge_index_sources (" +
       "index_id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, record_type TEXT NOT NULL, " +
       "record_id TEXT NOT NULL, commit_sha TEXT NOT NULL DEFAULT '', content_sha256 TEXT NOT NULL, " +
@@ -200,6 +226,10 @@ export class KnowledgeStore extends DurableObject {
     );
     sql.exec(
       "INSERT OR IGNORE INTO knowledge_schema_migrations(version, applied_at) VALUES(2, ?)",
+      Date.now()
+    );
+    sql.exec(
+      "INSERT OR IGNORE INTO knowledge_schema_migrations(version, applied_at) VALUES(3, ?)",
       Date.now()
     );
   }
@@ -498,6 +528,101 @@ export class KnowledgeStore extends DurableObject {
       recordType: row.record_type, recordId: row.record_id,
       commitSha: row.commit_sha || null, title: row.title, snippet: row.snippet, score: row.score
     }));
+  }
+
+  recordVaultProposal(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const proposalId = identifier(input?.proposalId, "proposalId");
+    const documentId = identifier(input?.documentId, "documentId");
+    const repository = repoName(input?.repository);
+    const path = documentPath(input?.path);
+    const expectedBlobSha = input?.expectedBlobSha;
+    if (expectedBlobSha !== "ABSENT" && !(typeof expectedBlobSha === "string" && SHA40.test(expectedBlobSha))) {
+      throw new TypeError("expectedBlobSha must be ABSENT or a 40-character Git blob SHA.");
+    }
+    const proposedContentSha256 = requiredString(input?.proposedContentSha256, "proposedContentSha256", 64);
+    if (!SHA256.test(proposedContentSha256)) throw new TypeError("proposedContentSha256 must be a SHA-256 digest.");
+    const pullRequestNumber = input?.pullRequestNumber;
+    if (!Number.isSafeInteger(pullRequestNumber) || pullRequestNumber < 1) throw new TypeError("pullRequestNumber must be a positive safe integer.");
+    const pullRequestUrl = requiredString(input?.pullRequestUrl, "pullRequestUrl", 500);
+    if (pullRequestUrl !== "https://github.com/" + repository + "/pull/" + pullRequestNumber) {
+      throw new TypeError("pullRequestUrl must be the canonical GitHub URL for the proposal.");
+    }
+    const branch = requiredString(input?.branch, "branch", 255);
+    const commitSha = requiredString(input?.commitSha, "commitSha", 40);
+    if (!SHA40.test(commitSha)) throw new TypeError("commitSha must be a 40-character Git SHA.");
+    const now = timestamp(input?.now);
+    const existing = this.ctx.storage.sql.exec(
+      "SELECT * FROM knowledge_vault_proposals WHERE tenant_id=? AND proposal_id=?",
+      tenantId, proposalId
+    ).toArray()[0];
+    if (existing) {
+      const same = existing.document_id === documentId && existing.repository === repository &&
+        existing.path === path && existing.expected_blob_sha === expectedBlobSha &&
+        existing.proposed_content_sha256 === proposedContentSha256 &&
+        existing.pr_number === pullRequestNumber && existing.pr_url === pullRequestUrl &&
+        existing.branch === branch && existing.commit_sha === commitSha;
+      if (!same) throw fail("KNOWLEDGE_PROPOSAL_IDEMPOTENCY_CONFLICT", "Proposal ID is already bound to a different Vault change.");
+      return proposalRecord(existing);
+    }
+    this.ctx.storage.sql.exec(
+      "INSERT INTO knowledge_vault_proposals(tenant_id, proposal_id, document_id, repository, path, expected_blob_sha, proposed_content_sha256, pr_number, pr_url, branch, commit_sha, status, merge_commit_sha, merged_blob_sha, created_at, updated_at) " +
+      "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', NULL, NULL, ?, ?)",
+      tenantId, proposalId, documentId, repository, path, expectedBlobSha, proposedContentSha256,
+      pullRequestNumber, pullRequestUrl, branch, commitSha, now, now
+    );
+    return this.getVaultProposal({ tenantId, proposalId });
+  }
+
+  getVaultProposal(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const proposalId = identifier(input?.proposalId, "proposalId");
+    return proposalRecord(this.ctx.storage.sql.exec(
+      "SELECT * FROM knowledge_vault_proposals WHERE tenant_id=? AND proposal_id=?",
+      tenantId, proposalId
+    ).toArray()[0]);
+  }
+
+  listPendingVaultProposals(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const limit = input?.limit === undefined ? 20 : input.limit;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new TypeError("limit must be between 1 and 50.");
+    return this.ctx.storage.sql.exec(
+      "SELECT * FROM knowledge_vault_proposals WHERE tenant_id=? AND status='proposed' ORDER BY created_at LIMIT ?",
+      tenantId, limit
+    ).toArray().map(proposalRecord);
+  }
+
+  updateVaultProposal(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const proposalId = identifier(input?.proposalId, "proposalId");
+    const status = input?.status;
+    if (!["merged", "closed", "conflict", "failed"].includes(status)) throw new TypeError("status must be a terminal proposal state.");
+    const mergeCommitSha = input?.mergeCommitSha ?? null;
+    const mergedBlobSha = input?.mergedBlobSha ?? null;
+    if (status === "merged" && (!SHA40.test(mergeCommitSha ?? "") || !SHA40.test(mergedBlobSha ?? ""))) {
+      throw new TypeError("merged proposals require mergeCommitSha and mergedBlobSha.");
+    }
+    const now = timestamp(input?.now);
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.ctx.storage.sql.exec(
+        "SELECT * FROM knowledge_vault_proposals WHERE tenant_id=? AND proposal_id=?",
+        tenantId, proposalId
+      ).toArray()[0];
+      if (!current) return null;
+      if (current.status !== "proposed") {
+        if (current.status === status && current.merge_commit_sha === mergeCommitSha && current.merged_blob_sha === mergedBlobSha) {
+          return proposalRecord(current);
+        }
+        throw fail("KNOWLEDGE_PROPOSAL_STATE_CONFLICT", "Vault proposal is already in a terminal state.");
+      }
+      this.ctx.storage.sql.exec(
+        "UPDATE knowledge_vault_proposals SET status=?, merge_commit_sha=?, merged_blob_sha=?, updated_at=? " +
+        "WHERE tenant_id=? AND proposal_id=? AND status='proposed'",
+        status, mergeCommitSha, mergedBlobSha, now, tenantId, proposalId
+      );
+      return this.getVaultProposal({ tenantId, proposalId });
+    });
   }
 
   async enqueueOutbox(input) {

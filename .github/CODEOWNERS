@@ -1,0 +1,6 @@
+# Security-sensitive paths need review from a code owner (effective only once a ruleset requires code-owner review).
+*                                         @mohammadrezayaghoobi123-dev
+/.github/                                 @mohammadrezayaghoobi123-dev
+/.devcontainer/                           @mohammadrezayaghoobi123-dev
+/cloud-engineering-connector/             @mohammadrezayaghoobi123-dev
+/src/master_brain/                        @mohammadrezayaghoobi123-dev

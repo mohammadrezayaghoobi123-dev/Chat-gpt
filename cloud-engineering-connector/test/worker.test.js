@@ -1167,6 +1167,17 @@ test("authenticated Vault proposal status is scoped to the owner principal",asyn
  assert.equal(call.input.tenantId,"owner");
 });
 
+function mergedVaultPullRequest(fixture,overrides={}){
+ const repository="mohammadrezayaghoobi123-dev/Chat-gpt";
+ return {
+  number:fixture.proposal.pullRequestNumber,
+  html_url:fixture.proposal.pullRequestUrl,
+  state:"closed",merged:true,merge_commit_sha:fixture.commitSha,
+  base:{ref:"main",repo:{full_name:repository}},
+  head:{ref:fixture.proposal.branch,sha:fixture.proposal.commitSha,repo:{full_name:repository}},
+  ...overrides
+ };
+}
 function makeVaultOutboxFixture(proposalOverrides={}){
  const content="# Approved architecture\\n";
  const commitSha=createHash("sha1").update("merge-commit").digest("hex");
@@ -1221,7 +1232,7 @@ test("scheduled outbox verifies merged Vault content and promotes the exact revi
  globalThis.fetch=async(url,options={})=>{
   const parsed=new URL(url);auth.push(options.headers?.authorization);
   if(parsed.pathname.endsWith("/pulls/987")){
-   return new Response(JSON.stringify({state:"closed",merged:true,merge_commit_sha:fixture.commitSha}),{status:200,headers:{"content-type":"application/json"}});
+   return new Response(JSON.stringify(mergedVaultPullRequest(fixture)),{status:200,headers:{"content-type":"application/json"}});
   }
   if(parsed.pathname.endsWith("/contents/"+fixture.proposal.path)){
    return new Response(JSON.stringify({
@@ -1243,13 +1254,51 @@ test("scheduled outbox verifies merged Vault content and promotes the exact revi
   assert.ok(auth.every(value=>value==="Bearer read-only-test-token"));
  }finally{globalThis.fetch=originalFetch}
 });
+test("scheduled outbox refuses to index a merged PR whose repository or branch identity differs from the proposal",async()=>{
+ const repository="mohammadrezayaghoobi123-dev/Chat-gpt";
+ const scenarios=[
+  {name:"wrong base branch",override:fixture=>({base:{ref:"integration",repo:{full_name:repository}}})},
+  {name:"wrong head branch",override:fixture=>({head:{ref:"attacker-branch",sha:fixture.proposal.commitSha,repo:{full_name:repository}}})},
+  {name:"changed head commit",override:fixture=>({head:{ref:fixture.proposal.branch,sha:"e".repeat(40),repo:{full_name:repository}}})},
+  {name:"wrong base repository",override:fixture=>({base:{ref:"main",repo:{full_name:"attacker/other"}}})}
+ ];
+ for(const scenario of scenarios){
+  const fixture=makeVaultOutboxFixture();
+  const originalFetch=globalThis.fetch;
+  globalThis.fetch=async(url,options={})=>{
+   const parsed=new URL(url);
+   if(parsed.pathname.endsWith("/pulls/987")){
+    return new Response(JSON.stringify(mergedVaultPullRequest(fixture,scenario.override(fixture))),{status:200,headers:{"content-type":"application/json"}});
+   }
+   if(parsed.pathname.endsWith("/contents/"+fixture.proposal.path)){
+    return new Response(JSON.stringify({
+     type:"file",encoding:"base64",path:fixture.proposal.path,sha:fixture.blobSha,
+     size:new TextEncoder().encode(fixture.content).byteLength,
+     content:Buffer.from(fixture.content,"utf8").toString("base64")
+    }),{status:200,headers:{"content-type":"application/json"}});
+   }
+   return new Response(JSON.stringify({message:"not found"}),{status:404,headers:{"content-type":"application/json"}});
+  };
+  try{
+   const result=await processKnowledgeOutbox({...env,KNOWLEDGE_STORE:fixture.binding,GITHUB_READONLY_TOKEN:"read-only-test-token"});
+   assert.equal(result.completed,0,scenario.name);
+   assert.equal(result.failed,1,scenario.name);
+   const conflict=fixture.calls.find(call=>call.method==="updateVaultProposal");
+   assert.equal(conflict?.input.status,"conflict",scenario.name);
+   assert.equal(fixture.calls.some(call=>call.method==="putDocumentRef"),false,scenario.name);
+   assert.equal(fixture.calls.some(call=>call.method==="indexDocumentSnapshot"),false,scenario.name);
+   assert.equal(fixture.calls.some(call=>call.method==="setDocumentSyncState"),false,scenario.name);
+   assert.equal(fixture.calls.some(call=>call.method==="completeOutbox"),false,scenario.name);
+  }finally{globalThis.fetch=originalFetch}
+ }
+});
 test("scheduled outbox dead-letters a merged PR when canonical content digest differs from the approved proposal",async()=>{
  const fixture=makeVaultOutboxFixture({proposedContentSha256:"d".repeat(64)});
  const originalFetch=globalThis.fetch;
  globalThis.fetch=async(url,options={})=>{
   const parsed=new URL(url);
   if(parsed.pathname.endsWith("/pulls/987")){
-   return new Response(JSON.stringify({state:"closed",merged:true,merge_commit_sha:fixture.commitSha}),{status:200,headers:{"content-type":"application/json"}});
+   return new Response(JSON.stringify(mergedVaultPullRequest(fixture)),{status:200,headers:{"content-type":"application/json"}});
   }
   return new Response(JSON.stringify({
    type:"file",encoding:"base64",path:fixture.proposal.path,sha:fixture.blobSha,

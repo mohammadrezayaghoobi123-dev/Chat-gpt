@@ -104,7 +104,7 @@ export function createGitHubWriteMock({ filePath, blobSha, prMode = "success", b
       return json({ full_name: "mohammadrezayaghoobi123-dev/Chat-gpt", default_branch: "main" });
     }
     if (path.endsWith("/git/ref/heads/" + baseBranch)) {
-      return json({ ref: "refs/heads/feature/cloud-engineering-connector", object: { sha: parentSha } });
+      return json({ ref: "refs/heads/" + baseBranch, object: { sha: parentSha } });
     }
     if (path.endsWith("/git/commits/" + parentSha)) {
       return json({ sha: parentSha, tree: { sha: baseTreeSha } });

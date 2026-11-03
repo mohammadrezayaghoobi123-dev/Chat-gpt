@@ -105,6 +105,32 @@ test("Vault proposal rejects stale expected blob SHA before any GitHub write",as
   assert.equal(outboxCalls.length,0);
  });
 });
+test("Vault expected blob SHA is checked at the exact immutable parent commit selected for the proposal",async()=>{
+ const path="knowledge/tenants/owner/architecture.md";
+ const oldMainBlobSha="b".repeat(40);
+ const parentBlobSha="c".repeat(40);
+ const proposalContent="# New revision\n";
+ const outboxCalls=[];
+ const fixture=createGitHubWriteMock({filePath:path,blobSha:gitBlobSha(proposalContent),baseBranch:"main"});
+ await withFetch((url,init)=>{
+  const parsed=new URL(url);
+  if(parsed.pathname.endsWith("/contents/"+path)){
+   if(parsed.searchParams.get("ref")==="main")return vaultFileResponse(path,oldMainBlobSha);
+   if(parsed.searchParams.get("ref")==="a".repeat(40))return vaultFileResponse(path,parentBlobSha);
+  }
+  return fixture.fetch(url,init);
+ },async calls=>{
+  const out=await text(await call("knowledge_document_propose",{
+   path,content:proposalContent,title:"Update architecture",summary:"Propose an update.",
+   expectedBlobSha:oldMainBlobSha,proposalId:"vault-proposal-race-0001"
+  },{KNOWLEDGE_STORE:knowledgeBindingForTests(outboxCalls),GITHUB_READONLY_TOKEN:"read-only-test-token"}));
+  assert.equal(out.error,"KNOWLEDGE_VAULT_CONFLICT");
+  assert.equal(calls.some(item=>item.method==="POST"),false);
+  assert.equal(outboxCalls.length,0);
+  const read=calls.find(item=>new URL(item.url).pathname.endsWith("/contents/"+path));
+  assert.equal(new URL(read.url).searchParams.get("ref"),"a".repeat(40));
+ });
+});
 test("Vault proposal creates only a draft PR against main after expected SHA matches and records the outbox event",async()=>{
  const path="knowledge/tenants/owner/architecture.md";
  const currentSha="b".repeat(40);

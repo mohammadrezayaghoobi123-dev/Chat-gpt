@@ -738,7 +738,7 @@ async function knowledgeDocumentPropose(args,env,tenantId){
  }
  const documentId="doc_"+(await sha256Hex(path)).slice(0,32);
  const proposedContentSha256=await sha256Hex(args.content);
- const vaultSummary=args.summary.trim()+"\\n\\nVault expected Git blob SHA: "+expectedBlobSha+"\\nProposed content SHA-256: "+proposedContentSha256+"\\nCanonical branch: main. This PR is review-only; no automatic merge is allowed.";
+ const vaultSummary=args.summary.trim()+"\n\nVault expected Git blob SHA: "+expectedBlobSha+"\nProposed content SHA-256: "+proposedContentSha256+"\nCanonical branch: main. This PR is review-only; no automatic merge is allowed.";
  const proposal=await createChangePr({
   owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"main",
   knowledge_vault:true,vault_expected_blob_sha:expectedBlobSha,

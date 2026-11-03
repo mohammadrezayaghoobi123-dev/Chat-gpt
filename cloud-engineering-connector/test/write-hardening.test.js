@@ -23,7 +23,7 @@ async function withFetch(handler, fn) {
   try { return await fn(calls); } finally { globalThis.fetch = original; }
 }
 const text = async (r) => JSON.parse((await r.json()).result.content[0].text);
-const gitBlobSha = content => createHash("sha1").update(`blob ${Buffer.byteLength(content)}\\0${content}`).digest("hex");
+const gitBlobSha = content => createHash("sha1").update(`blob ${Buffer.byteLength(content)}\0${content}`).digest("hex");
 
 test("write path denylist covers env variants, key material, tfstate dirs and review-control files", async () => {
   const bad = [".env-prod", ".env_local", "a/.env.production", ".dev.vars", ".dev.vars.production", "config/.dev.vars.local", "prod.auto.tfvars.json", "terraform.tfstate.d/x", "x/.terraform/y",
@@ -97,7 +97,7 @@ test("Vault proposal rejects stale expected blob SHA before any GitHub write",as
   return fixture.fetch(url,init);
  },async calls=>{
   const out=await text(await call("knowledge_document_propose",{
-   path,content:"# New revision\\n",title:"Update architecture",summary:"Propose an update.",
+   path,content:"# New revision\n",title:"Update architecture",summary:"Propose an update.",
    expectedBlobSha:"a".repeat(40),idempotencyKey:"vault-proposal-stale-0001"
   },{KNOWLEDGE_STORE:knowledgeBindingForTests(outboxCalls),GITHUB_READONLY_TOKEN:"read-only-test-token"}));
   assert.equal(out.error,"KNOWLEDGE_VAULT_CONFLICT");
@@ -109,7 +109,7 @@ test("Vault proposal creates only a draft PR against main after expected SHA mat
  const path="knowledge/tenants/owner/architecture.md";
  const currentSha="b".repeat(40);
  const outboxCalls=[];
- const proposalContent="# Updated architecture\\n";
+ const proposalContent="# Updated architecture\n";
  const fixture=createGitHubWriteMock({filePath:path,blobSha:gitBlobSha(proposalContent),baseBranch:"main"});
  await withFetch((url,init)=>{
   const parsed=new URL(url);
@@ -117,7 +117,7 @@ test("Vault proposal creates only a draft PR against main after expected SHA mat
   return fixture.fetch(url,init);
  },async calls=>{
   const out=await text(await call("knowledge_document_propose",{
-   path,content:"# Updated architecture\\n",title:"Update architecture",summary:"Propose a reviewed architecture update.",
+   path,content:"# Updated architecture\n",title:"Update architecture",summary:"Propose a reviewed architecture update.",
    expectedBlobSha:currentSha,idempotencyKey:"vault-proposal-success-0001"
   },{KNOWLEDGE_STORE:knowledgeBindingForTests(outboxCalls),GITHUB_READONLY_TOKEN:"read-only-test-token"}));
   assert.equal(out.status,"draft_pull_request_created");

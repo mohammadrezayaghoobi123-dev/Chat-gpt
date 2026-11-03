@@ -635,22 +635,27 @@ export class KnowledgeStore extends DurableObject {
     const payloadJson = jsonObject(input?.payload, "payload");
     const now = timestamp(input?.now);
     const fingerprint = await sha256([tenantId, aggregateType, aggregateId, eventType, payloadJson].join("\n"));
-    const existing = this.ctx.storage.sql.exec(
-      "SELECT * FROM knowledge_outbox WHERE tenant_id = ? AND idempotency_key = ?",
-      tenantId, idempotencyKey
-    ).toArray()[0];
-    if (existing) {
-      if (existing.fingerprint !== fingerprint || existing.tenant_id !== tenantId) {
-        throw fail("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "The idempotency key is already bound to a different operation.");
+
+    // The digest is asynchronous, so serialize the idempotency read/insert after it
+    // completes. This prevents concurrent retries from racing on the UNIQUE key.
+    return this.ctx.storage.transactionSync(() => {
+      const existing = this.ctx.storage.sql.exec(
+        "SELECT * FROM knowledge_outbox WHERE tenant_id = ? AND idempotency_key = ?",
+        tenantId, idempotencyKey
+      ).toArray()[0];
+      if (existing) {
+        if (existing.fingerprint !== fingerprint || existing.tenant_id !== tenantId) {
+          throw fail("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "The idempotency key is already bound to a different operation.");
+        }
+        return outboxRecord(existing);
       }
-      return outboxRecord(existing);
-    }
-    this.ctx.storage.sql.exec(
-      "INSERT INTO knowledge_outbox(event_id, tenant_id, idempotency_key, aggregate_type, aggregate_id, event_type, payload_json, fingerprint, status, attempts, next_attempt_at, lease_until, lease_generation, last_error, created_at, updated_at) " +
-      "VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, 0, NULL, ?, ?)",
-      eventId, tenantId, idempotencyKey, aggregateType, aggregateId, eventType, payloadJson, fingerprint, now, now, now
-    );
-    return this.getOutboxEvent({ tenantId, eventId });
+      this.ctx.storage.sql.exec(
+        "INSERT INTO knowledge_outbox(event_id, tenant_id, idempotency_key, aggregate_type, aggregate_id, event_type, payload_json, fingerprint, status, attempts, next_attempt_at, lease_until, lease_generation, last_error, created_at, updated_at) " +
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, 0, NULL, ?, ?)",
+        eventId, tenantId, idempotencyKey, aggregateType, aggregateId, eventType, payloadJson, fingerprint, now, now, now
+      );
+      return this.getOutboxEvent({ tenantId, eventId });
+    });
   }
 
   claimOutbox(input) {

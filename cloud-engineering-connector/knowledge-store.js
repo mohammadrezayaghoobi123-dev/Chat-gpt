@@ -48,6 +48,7 @@ export class KnowledgeStore extends DurableObject {
 
   ensureSchema() {
     const sql = this.ctx.storage.sql;
+    sql.exec("PRAGMA foreign_keys = ON");
     sql.exec(`
       CREATE TABLE IF NOT EXISTS knowledge_entities (
         tenant_id TEXT NOT NULL,

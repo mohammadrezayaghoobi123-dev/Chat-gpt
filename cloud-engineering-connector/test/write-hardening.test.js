@@ -18,7 +18,7 @@ const pr = (files, extra = {}) => ({ idempotency_key: "hardening-test-" + String
 
 async function withFetch(handler, fn) {
   const original = globalThis.fetch; const calls = [];
-  globalThis.fetch = async (url, init = {}) => { calls.push({ url: String(url), body: init.body }); return handler(String(url), init); };
+  globalThis.fetch = async (url, init = {}) => { calls.push({ url: String(url), body: init.body, method: init.method ?? "GET", headers: init.headers }); return handler(String(url), init); };
   try { return await fn(calls); } finally { globalThis.fetch = original; }
 }
 const text = async (r) => JSON.parse((await r.json()).result.content[0].text);
@@ -73,4 +73,75 @@ test("PR title is collapsed to one line and summary mentions are neutralised", a
     assert.ok(!/@someone|@org\/team/.test(payload.body), "mention not neutralised");
     assert.match(payload.body, /someone/);
   });
+});
+
+function knowledgeBindingForTests(outboxCalls){
+ const stub={enqueueOutbox:async input=>{outboxCalls.push(input);return input}};
+ return {idFromName:name=>name,get:id=>stub};
+}
+function vaultFileResponse(path,sha){
+ return new Response(JSON.stringify({type:"file",encoding:"base64",path,sha,size:0,content:""}),{
+  status:200,headers:{"content-type":"application/json"}
+ });
+}
+test("Vault proposal rejects stale expected blob SHA before any GitHub write",async()=>{
+ const path="knowledge/tenants/owner/architecture.md";
+ const currentSha="b".repeat(40);
+ const outboxCalls=[];
+ const fixture=createGitHubWriteMock({filePath:path,blobSha:currentSha,baseBranch:"main"});
+ await withFetch((url,init)=>{
+  const parsed=new URL(url);
+  if(parsed.pathname.endsWith("/contents/"+path))return vaultFileResponse(path,currentSha);
+  return fixture.fetch(url,init);
+ },async calls=>{
+  const out=await text(await call("knowledge_document_propose",{
+   path,content:"# New revision\\n",title:"Update architecture",summary:"Propose an update.",
+   expectedBlobSha:"a".repeat(40),idempotencyKey:"vault-proposal-stale-0001"
+  },{KNOWLEDGE_STORE:knowledgeBindingForTests(outboxCalls),GITHUB_READONLY_TOKEN:"read-only-test-token"}));
+  assert.equal(out.error,"KNOWLEDGE_VAULT_CONFLICT");
+  assert.equal(calls.some(item=>item.method==="POST"),false);
+  assert.equal(outboxCalls.length,0);
+ });
+});
+test("Vault proposal creates only a draft PR against main after expected SHA matches and records the outbox event",async()=>{
+ const path="knowledge/tenants/owner/architecture.md";
+ const currentSha="b".repeat(40);
+ const outboxCalls=[];
+ const fixture=createGitHubWriteMock({filePath:path,blobSha:"c".repeat(40),baseBranch:"main"});
+ await withFetch((url,init)=>{
+  const parsed=new URL(url);
+  if(parsed.pathname.endsWith("/contents/"+path))return vaultFileResponse(path,currentSha);
+  return fixture.fetch(url,init);
+ },async calls=>{
+  const out=await text(await call("knowledge_document_propose",{
+   path,content:"# Updated architecture\\n",title:"Update architecture",summary:"Propose a reviewed architecture update.",
+   expectedBlobSha:currentSha,idempotencyKey:"vault-proposal-success-0001"
+  },{KNOWLEDGE_STORE:knowledgeBindingForTests(outboxCalls),GITHUB_READONLY_TOKEN:"read-only-test-token"}));
+  assert.equal(out.status,"draft_pull_request_created");
+  assert.equal(out.pull_request.number,987);
+  assert.equal(out.pull_request.draft,true);
+  assert.equal(out.base_branch,"main");
+  assert.equal(out.outbox_status,"pending");
+  const read=calls.find(item=>item.url.includes("/contents/knowledge/tenants/owner/architecture.md"));
+  assert.equal(read.headers.authorization,"Bearer read-only-test-token");
+  const pull=calls.find(item=>item.url.endsWith("/pulls")&&item.method==="POST");
+  assert.ok(pull);
+  assert.equal(JSON.parse(pull.body).base,"main");
+  assert.equal(JSON.parse(pull.body).draft,true);
+  assert.equal(outboxCalls.length,1);
+  assert.equal(outboxCalls[0].tenantId,"owner");
+  assert.equal(outboxCalls[0].eventType,"vault.document.proposed");
+  assert.equal(outboxCalls[0].payload.expectedBlobSha,currentSha);
+  assert.equal(outboxCalls[0].payload.pullRequestNumber,987);
+  assert.match(outboxCalls[0].payload.proposedContentSha256,/^[a-f0-9]{64}$/);
+ });
+});
+test("Vault proposal cannot target a different tenant's document path",async()=>{
+ const outboxCalls=[];
+ const out=await withFetch(async()=>{throw new Error("must not call GitHub")},async calls=>text(await call("knowledge_document_propose",{
+  path:"knowledge/tenants/other/architecture.md",content:"x",title:"No",summary:"No",
+  expectedBlobSha:"ABSENT",idempotencyKey:"vault-proposal-path-0001"
+ },{KNOWLEDGE_STORE:knowledgeBindingForTests(outboxCalls),GITHUB_READONLY_TOKEN:"read-only-test-token"})));
+ assert.equal(out.error,"KNOWLEDGE_VAULT_PATH_FORBIDDEN");
+ assert.equal(outboxCalls.length,0);
 });

@@ -291,7 +291,7 @@ for (const workflow of workflows) {
     const smokeName = workflow.name === "Staging" ? "- name: Run live Staging acceptance" : "- name: Run live Production acceptance";
     const smokeStart = source.indexOf(smokeName);
     assert.ok(smokeStart >= 0, "live acceptance step must exist");
-    const smokeEnd = source.indexOf("\\n      - name:", smokeStart + smokeName.length);
+    const smokeEnd = source.indexOf("\n      - name:", smokeStart + smokeName.length);
     const smokeStep = source.slice(smokeStart, smokeEnd >= 0 ? smokeEnd : undefined);
     assert.match(smokeStep, /MCP_AUTH_TOKEN:/, "live acceptance must receive the authenticated owner credential");
   });
@@ -300,21 +300,21 @@ for (const workflow of workflows) {
 test("Staging post-deploy gate verifies the Knowledge Store Durable Object and five-minute Cron schedule", () => {
   const source = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
   const start = source.indexOf("- name: Verify Staging KnowledgeStore binding and scheduled reconciliation");
-  const end = source.indexOf("\\n      - name:", start + 1);
+  const end = source.indexOf("\n      - name:", start + 1);
   assert.ok(start >= 0 && end > start, "Staging Knowledge Store and Cron verification step must exist");
   const step = source.slice(start, end);
   assert.match(step, /KNOWLEDGE_STORE/);
   assert.match(step, /schedules/);
-  assert.match(step, /\\*\\/5 \\* \\* \\* \\*/);
+  assert.ok(step.includes("*/5 * * * *"));
 });
 
 test("Production post-deploy gate verifies Knowledge Store namespace isolation and five-minute Cron schedule", () => {
   const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
   const start = source.indexOf("- name: Verify Production Durable Object namespace isolation");
-  const end = source.indexOf("\\n      - name:", start + 1);
+  const end = source.indexOf("\n      - name:", start + 1);
   assert.ok(start >= 0 && end > start, "Production Durable Object verification step must exist");
   const step = source.slice(start, end);
   assert.match(step, /KNOWLEDGE_STORE/);
   assert.match(step, /schedules/);
-  assert.match(step, /\\*\\/5 \\* \\* \\* \\*/);
+  assert.ok(step.includes("*/5 * * * *"));
 });

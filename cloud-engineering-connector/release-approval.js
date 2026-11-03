@@ -61,6 +61,61 @@ async function getJsonCollection(fetchImpl, url, token) {
   throw new Error("GitHub release-approval pagination exceeded 100 pages; refusing to approve an incomplete review history.");
 }
 
+async function verifyStagingReleaseEvidence({ fetchImpl, repoPath, reviewedHeadSha, token }) {
+  const workflow = await getJson(
+    fetchImpl,
+    API_ROOT + "/repos/" + repoPath + "/actions/workflows/connector-staging-release.yml",
+    token,
+  );
+  if (!Number.isInteger(workflow?.id) || workflow.id < 1) {
+    throw new Error("GitHub did not return a valid Staging release workflow identity.");
+  }
+
+  const stagingBranch = "integration/staging-release-" + reviewedHeadSha;
+  const runsUrl = new URL(
+    API_ROOT + "/repos/" + repoPath + "/actions/workflows/" + workflow.id + "/runs",
+  );
+  runsUrl.searchParams.set("head_sha", reviewedHeadSha);
+  runsUrl.searchParams.set("branch", stagingBranch);
+  runsUrl.searchParams.set("event", "push");
+  runsUrl.searchParams.set("per_page", "100");
+  runsUrl.searchParams.set("page", "1");
+  const runHistory = await getJson(fetchImpl, runsUrl.toString(), token);
+  if (!Array.isArray(runHistory?.workflow_runs)) {
+    throw new Error("GitHub returned invalid Staging workflow run history.");
+  }
+
+  const matchingRuns = runHistory.workflow_runs.filter(run =>
+    run?.workflow_id === workflow.id &&
+    run?.head_sha === reviewedHeadSha &&
+    run?.head_branch === stagingBranch &&
+    run?.event === "push"
+  );
+  matchingRuns.sort((left, right) => {
+    const leftTime = Date.parse(left.created_at || "");
+    const rightTime = Date.parse(right.created_at || "");
+    return rightTime - leftTime;
+  });
+  const latestRun = matchingRuns[0];
+  const latestCreatedAt = Date.parse(latestRun?.created_at || "");
+  if (
+    !latestRun ||
+    !Number.isFinite(latestCreatedAt) ||
+    latestRun.status !== "completed" ||
+    latestRun.conclusion !== "success"
+  ) {
+    throw new Error(
+      "Release blocked: no successful Staging release evidence exists for the exact reviewed PR head SHA and immutable Staging release branch.",
+    );
+  }
+
+  return Object.freeze({
+    stagingRunId: latestRun.id,
+    stagingRunUrl: latestRun.html_url,
+    stagingRunCreatedAt: latestRun.created_at,
+  });
+}
+
 function latestReviewsByUser(reviews) {
   const latest = new Map();
   for (const review of reviews) {
@@ -138,6 +193,10 @@ export async function verifyReleaseApproval({
     throw new Error("Release blocked: no independent approval exists for the exact PR head commit.");
   }
 
+  const stagingEvidence = releaseEnvironment === "production"
+    ? await verifyStagingReleaseEvidence({ fetchImpl, repoPath, reviewedHeadSha: reviewCommitSha, token })
+    : {};
+
   return Object.freeze({
     pullNumber: pull.number,
     pullUrl: pull.html_url,
@@ -145,5 +204,6 @@ export async function verifyReleaseApproval({
     reviewer: approval.user.login,
     reviewCommitSha,
     releaseEnvironment,
+    ...stagingEvidence,
   });
 }

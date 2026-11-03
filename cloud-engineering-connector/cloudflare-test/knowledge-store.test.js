@@ -93,6 +93,13 @@ describe("Option C Brain Store", () => {
       aggregateType: "document", aggregateId: "adr-001", eventType: "vault.document.sync",
       payload: { repository: "owner/knowledge-vault", path: "decisions/adr-001.md" }, now: 100,
     };
+    const concurrentInput = { ...input, eventId: "evt-concurrent", idempotencyKey: "knowledge-sync-concurrent" };
+    const concurrentReplay = await Promise.all([
+      store.enqueueOutbox(concurrentInput),
+      store.enqueueOutbox(concurrentInput),
+    ]);
+    expect(concurrentReplay[0].eventId).toBe("evt-concurrent");
+    expect(concurrentReplay[1].eventId).toBe("evt-concurrent");
     const first = await store.enqueueOutbox(input);
     const replay = await store.enqueueOutbox(input);
     expect(replay.eventId).toBe(first.eventId);

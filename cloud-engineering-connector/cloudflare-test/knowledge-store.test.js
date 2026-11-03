@@ -93,7 +93,7 @@ describe("Option C Brain Store", () => {
       aggregateType: "document", aggregateId: "adr-001", eventType: "vault.document.sync",
       payload: { repository: "owner/knowledge-vault", path: "decisions/adr-001.md" }, now: 100,
     };
-    const concurrentInput = { ...input, eventId: "evt-concurrent", idempotencyKey: "knowledge-sync-concurrent", now: 200 };
+    const concurrentInput = { ...input, eventId: "evt-concurrent", idempotencyKey: "knowledge-sync-concurrent", now: 200_000 };
     const concurrentReplay = await Promise.all([
       store.enqueueOutbox(concurrentInput),
       store.enqueueOutbox(concurrentInput),

@@ -102,8 +102,9 @@ The K1 slice implements the durable ledger primitives. It does not yet implement
 
 ## 7. Derived retrieval contract
 
-- The current K2 search tool indexes and searches structured Brain Store entities only.
-- GitHub document snapshot indexing is implemented at the Brain Store primitive level but remains unavailable through MCP until the GitHub Vault adapter and sync dispatcher are delivered in K3–K4.
+- The K3 read-only sync tool fetches the latest document revision from the allowlisted project repository's `main` branch, restricted to `knowledge/tenants/<authenticated-tenant>/`.
+- It uses `GITHUB_READONLY_TOKEN`, verifies GitHub's base64 encoding, file size, commit SHA, blob SHA, and a computed SHA-256 content digest, then records the immutable revision and updates the derived FTS5 snapshot.
+- The current K2/K3 search tool can therefore search structured Brain Store entities and documents explicitly synchronized through this tool.
 - Every query is constrained by the trusted tenant context before results are returned.
 - Search terms are tokenized and quoted before being passed to FTS5; raw user input is never concatenated into SQL.
 - Index source snapshots include the source commit SHA and content digest.
@@ -144,11 +145,11 @@ The K1 slice implements the durable ledger primitives. It does not yet implement
 - Readiness checks both WriteControl and Brain Store Durable Object schemas.
 - Multi-principal credential registry and customer tenant onboarding remain future work; current behavior is owner-only.
 
-### K3 — GitHub Vault adapter
-- Fixed repository allowlist and bounded content reads.
-- Commit-pinned document retrieval and content hashing.
-- Expected-SHA update semantics and draft PR creation.
-- Immutable revision registration and conflict responses.
+### K3 — GitHub Vault adapter — read path implemented in PR #140; write proposal path remains
+- The owner Vault is rooted in the current allowlisted repository, under `knowledge/tenants/owner/`, with `main` as canonical ref.
+- The read-only sync tool uses `GITHUB_READONLY_TOKEN`, resolves the latest path-specific commit on `main`, fetches that exact commit, verifies content bytes and SHA-256, and indexes only a verified snapshot.
+- Immutable revision registration and per-document sync status are wired to Brain Store.
+- Expected-blob-SHA compare-and-swap, draft PR proposals, and outbox-backed proposal reconciliation remain to be implemented before Vault writes are enabled.
 
 ### K4 — Outbox dispatcher and reconciliation
 - Durable claims, lease fencing, bounded retries, dead-letter inspection.

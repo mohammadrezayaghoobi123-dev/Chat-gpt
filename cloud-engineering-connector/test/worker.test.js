@@ -15,7 +15,10 @@ function createKnowledgeStoreBinding(){
   listEntityTags:async input=>{calls.push({method:"listEntityTags",input});return[]},
   search:async input=>{calls.push({method:"search",input});return[]},
   listDocumentRefs:async input=>{calls.push({method:"listDocumentRefs",input});return[]},
-  getDocumentSyncState:async input=>{calls.push({method:"getDocumentSyncState",input});return null}
+  getDocumentSyncState:async input=>{calls.push({method:"getDocumentSyncState",input});return null},
+  putDocumentRef:async input=>{calls.push({method:"putDocumentRef",input});return input},
+  indexDocumentSnapshot:async input=>{calls.push({method:"indexDocumentSnapshot",input});return input},
+  setDocumentSyncState:async input=>{calls.push({method:"setDocumentSyncState",input});return input}
  };
  return{calls,binding:{
   idFromName(name){calls.push({method:"idFromName",name});return name},
@@ -74,7 +77,7 @@ test("public read-only mode denies tools not on the allowlist by default",async(
 test("public mode never permits write tools without MCP_AUTH_TOKEN",async()=>{const r=await worker.fetch(anonymousRpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]}},1),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})},GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/not in the unauthenticated PUBLIC_READ_ONLY allowlist/)});
 test("MCP rejects missing bearer token",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{"content-type":"application/json","cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize"})}),{...env,MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,401)});
 test("initialize advertises connector identity and tools capability",async()=>{const r=await worker.fetch(rpc("initialize",{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"test",version:"1"}}),env);const b=await r.json();assert.equal(b.result.serverInfo.name,"cloud-engineering-connector");assert.ok(b.result.capabilities.tools)});
-test("tools/list exposes all declared tools",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();assert.deepEqual(b.result.tools.map(t=>t.name),["project_inspect","read_project_file","engineering_standards","architecture_review","architecture_analyze","knowledge_entity_get","knowledge_entity_upsert","knowledge_relationship_create","knowledge_tag_upsert","knowledge_tag_attach","knowledge_entity_tags","knowledge_search","knowledge_document_refs","knowledge_sync_status","create_change_pr"])});
+test("tools/list exposes all declared tools",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();assert.deepEqual(b.result.tools.map(t=>t.name),["project_inspect","read_project_file","engineering_standards","architecture_review","architecture_analyze","knowledge_entity_get","knowledge_entity_upsert","knowledge_relationship_create","knowledge_tag_upsert","knowledge_tag_attach","knowledge_entity_tags","knowledge_search","knowledge_document_sync","knowledge_document_refs","knowledge_sync_status","create_change_pr"])});
 test("every MCP tool declares a title and explicit read-only/destructive safety hints",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();for(const tool of b.result.tools){assert.equal(typeof tool.annotations?.title,"string",tool.name);assert.ok(tool.annotations.title.length>0,tool.name);assert.equal(typeof tool.annotations.readOnlyHint,"boolean",tool.name);assert.equal(typeof tool.annotations.destructiveHint,"boolean",tool.name)}assert.equal(b.result.tools.find(t=>t.name==="architecture_analyze").annotations.readOnlyHint,true);assert.equal(b.result.tools.find(t=>t.name==="create_change_pr").annotations.readOnlyHint,false)});
 test("tools/list schema requires base_branch for create_change_pr",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();const tool=b.result.tools.find(t=>t.name==="create_change_pr");assert.ok(tool,"create_change_pr must be listed");assert.ok(Array.isArray(tool.inputSchema.required));assert.ok(tool.inputSchema.required.includes("base_branch"));assert.ok(Object.hasOwn(tool.inputSchema.properties,"base_branch"));assert.ok(tool.inputSchema.required.includes("idempotency_key"));assert.match(tool.inputSchema.properties.idempotency_key.pattern,/Base64URL|A-Za-z0-9/);assert.equal(tool.inputSchema.additionalProperties,false)});
 test("architecture review labels its output unverified",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"architecture_review",arguments:{project_goal:"Example",proposed_change:"Add cache"}}),env);const b=await r.json();const result=JSON.parse(b.result.content[0].text);assert.equal(result.status,"review_framework_generated_not_independently_verified");assert.ok(result.mandatory_output_sections.includes("Verification status"))});
@@ -1065,4 +1068,86 @@ test("Brain Store mutations consume a dedicated rate-limit bucket before Durable
  assert.equal(r.status,429);
  assert.deepEqual(keys,["authenticated-mcp:203.0.113.10","knowledge-write:203.0.113.10"]);
  assert.equal(knowledgeStore.calls.length,0);
+});
+
+test("knowledge_document_sync reads an immutable GitHub Vault revision with the read-only token and indexes its digest",async()=>{
+ const originalFetch=globalThis.fetch;
+ const calls=[];
+ const path="knowledge/tenants/owner/architecture.md";
+ const content="# Architecture\\nGitHub Vault is canonical.\\n";
+ const commitSha="a".repeat(40);
+ const blobSha="b".repeat(40);
+ const bytes=new TextEncoder().encode(content).byteLength;
+ globalThis.fetch=async(url,options={})=>{
+  const parsed=new URL(url);
+  calls.push({url:parsed.toString(),method:options.method||"GET",authorization:options.headers?.authorization});
+  let body;
+  if(parsed.pathname.endsWith("/commits")){
+   body=[{sha:commitSha}];
+  }else if(parsed.pathname.endsWith("/contents/"+path)){
+   body={type:"file",path,sha:blobSha,size:bytes,content:Buffer.from(content,"utf8").toString("base64")};
+  }else{
+   return new Response(JSON.stringify({message:"not found"}),{status:404,headers:{"content-type":"application/json"}});
+  }
+  return new Response(JSON.stringify(body),{status:200,headers:{"content-type":"application/json"}});
+ };
+ knowledgeStore.calls.length=0;
+ try{
+  const r=await worker.fetch(rpc("tools/call",{name:"knowledge_document_sync",arguments:{path}},17),{
+   ...env,GITHUB_TOKEN:"write-token-must-not-be-used",GITHUB_READONLY_TOKEN:"read-only-token"
+  });
+  assert.equal(r.status,200);
+  const body=await r.json();
+  assert.equal(body.result.isError,undefined);
+  const result=JSON.parse(body.result.content[0].text);
+  assert.equal(result.tenantId,"owner");
+  assert.equal(result.repository,"mohammadrezayaghoobi123-dev/Chat-gpt");
+  assert.equal(result.path,path);
+  assert.equal(result.commitSha,commitSha);
+  assert.equal(result.blobSha,blobSha);
+  assert.equal(result.content,content);
+  assert.equal(result.sourceOfTruth,"GitHub Vault");
+  assert.equal(calls.length,2);
+  assert.ok(calls.every(call=>call.method==="GET"));
+  assert.ok(calls.every(call=>call.authorization==="Bearer read-only-token"));
+  const ref=knowledgeStore.calls.find(call=>call.method==="putDocumentRef");
+  const index=knowledgeStore.calls.find(call=>call.method==="indexDocumentSnapshot");
+  const sync=knowledgeStore.calls.find(call=>call.method==="setDocumentSyncState");
+  assert.equal(ref.input.tenantId,"owner");
+  assert.equal(ref.input.commitSha,commitSha);
+  assert.match(ref.input.contentSha256,/^[a-f0-9]{64}$/);
+  assert.equal(index.input.contentSha256,ref.input.contentSha256);
+  assert.equal(index.input.text,content);
+  assert.equal(sync.input.status,"synced");
+  assert.equal(sync.input.lastSyncedCommit,commitSha);
+ }finally{globalThis.fetch=originalFetch}
+});
+test("knowledge_document_sync rejects another tenant path before GitHub or Brain Store access",async()=>{
+ knowledgeStore.calls.length=0;
+ const originalFetch=globalThis.fetch;let fetchCalls=0;
+ globalThis.fetch=async()=>{fetchCalls++;throw new Error("GitHub must not be called for a cross-tenant path")};
+ try{
+  const r=await worker.fetch(rpc("tools/call",{name:"knowledge_document_sync",arguments:{path:"knowledge/tenants/victim/secret.md"}},18),{
+   ...env,GITHUB_READONLY_TOKEN:"read-only-token"
+  });
+  const body=await r.json();
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/KNOWLEDGE_VAULT_PATH_FORBIDDEN/);
+  assert.equal(fetchCalls,0);
+  assert.equal(knowledgeStore.calls.length,0);
+ }finally{globalThis.fetch=originalFetch}
+});
+test("knowledge_document_sync accepts only exact commit SHAs for historical reads",async()=>{
+ knowledgeStore.calls.length=0;
+ const originalFetch=globalThis.fetch;let fetchCalls=0;
+ globalThis.fetch=async()=>{fetchCalls++;throw new Error("GitHub must not be called for an invalid SHA")};
+ try{
+  const r=await worker.fetch(rpc("tools/call",{name:"knowledge_document_sync",arguments:{path:"knowledge/tenants/owner/architecture.md",commitSha:"main"}},19),{
+   ...env,GITHUB_READONLY_TOKEN:"read-only-token"
+  });
+  const body=await r.json();
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/KNOWLEDGE_VAULT_COMMIT_INVALID/);
+  assert.equal(fetchCalls,0);
+ }finally{globalThis.fetch=originalFetch}
 });

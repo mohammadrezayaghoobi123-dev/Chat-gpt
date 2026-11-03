@@ -1,0 +1,44 @@
+name = "master-brain-cloud-agent"
+main = "src/worker.js"
+compatibility_date = "2026-10-31"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "AGENT_SESSIONS"
+class_name = "AgentSession"
+
+[[durable_objects.bindings]]
+name = "AGENT_BUDGET"
+class_name = "AgentBudget"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AgentSession"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["AgentBudget"]
+
+[[ratelimits]]
+name = "AGENT_RATE_LIMITER"
+namespace_id = "931120261101"
+
+[ratelimits.simple]
+limit = 12
+period = 60
+
+
+[observability]
+enabled = true
+head_sampling_rate = 0.1
+redact_query_string = true
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 0.1
+persist = true
+invocation_logs = false

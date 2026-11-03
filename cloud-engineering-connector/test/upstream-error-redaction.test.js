@@ -26,7 +26,7 @@ async function callWith(env, status, upstreamBody) {
 
 test("a GitHub error message that reflects either secret is redacted", async () => {
   for (const reflected of [GH, MCP, `x ${GH} y ${MCP} z`]) {
-    const { text, error } = await callWith({ MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH }, 401, JSON.stringify({ message: reflected }));
+    const { text, error } = await callWith({ MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: "write-only-test-token", GITHUB_READONLY_TOKEN: GH }, 401, JSON.stringify({ message: reflected }));
     assert.ok(!text.includes(GH) && !text.includes(MCP), "secret echoed: " + reflected);
     assert.match(error, /^GitHub API 401: /);
     assert.match(error, /\[redacted\]/);
@@ -36,25 +36,25 @@ test("a GitHub error message that reflects either secret is redacted", async () 
 test("redaction also covers the missing-GITHUB_TOKEN hint path", async () => {
   const { text, error } = await callWith({ MCP_AUTH_TOKEN: MCP }, 404, JSON.stringify({ message: "Not Found " + MCP }));
   assert.ok(!text.includes(MCP));
-  assert.match(error, /GITHUB_TOKEN is not configured/);
+  assert.match(error, /GITHUB_READONLY_TOKEN/);
 });
 
 test("an oversized upstream message is truncated to a bounded size", async () => {
-  const { error } = await callWith({ MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH }, 500, JSON.stringify({ message: "A".repeat(100_000) }));
+  const { error } = await callWith({ MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: "write-only-test-token", GITHUB_READONLY_TOKEN: GH }, 500, JSON.stringify({ message: "A".repeat(100_000) }));
   assert.ok(error.length < 400, "error length " + error.length);
   assert.match(error, /^GitHub API 500: A+/);
 });
 
 test("a non-string upstream message becomes a generic detail, never [object Object] or nested data", async () => {
-  const { error } = await callWith({ MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH }, 422, JSON.stringify({ message: { nested: GH } }));
+  const { error } = await callWith({ MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: "write-only-test-token", GITHUB_READONLY_TOKEN: GH }, 422, JSON.stringify({ message: { nested: GH } }));
   assert.equal(error, "GitHub API 422: request failed");
 });
 
 test("ordinary short messages are unchanged", async () => {
-  const bad = await callWith({ MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH }, 401, JSON.stringify({ message: "Bad credentials" }));
+  const bad = await callWith({ MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: "write-only-test-token", GITHUB_READONLY_TOKEN: GH }, 401, JSON.stringify({ message: "Bad credentials" }));
   assert.equal(bad.error, "GitHub API 401: Bad credentials");
   const missing = await callWith({ MCP_AUTH_TOKEN: MCP }, 404, JSON.stringify({ message: "Not Found" }));
-  assert.match(missing.error, /^GitHub API 404: Not Found\. GITHUB_TOKEN is not configured/);
+  assert.match(missing.error, /^GitHub API 404: Not Found\. GITHUB_READONLY_TOKEN/);
 });
 
 test("a thrown fetch error is redacted and a null JSON body does not leak internals (D3)", async () => {
@@ -62,7 +62,7 @@ test("a thrown fetch error is redacted and a null JSON body does not leak intern
   const run = async (impl) => { globalThis.fetch = impl; try {
     const r = await worker.fetch(new Request("https://example.test/mcp", { method: "POST", headers,
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "project_inspect", arguments: { owner: OWNER, repo: REPO } } }) }),
-      { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
+      { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: "write-only-test-token", GITHUB_READONLY_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     return await r.text(); } finally { globalThis.fetch = original; } };
   const thrown = await run(async () => { throw new TypeError("fetch failed token=" + GH + " " + MCP); });
   assert.ok(!thrown.includes(GH) && !thrown.includes(MCP), "secret in thrown error");
@@ -75,7 +75,7 @@ test("a thrown fetch error is redacted and a null JSON body does not leak intern
 
 test("a response stream read failure is replaced with a safe generic error", async () => {
   const out = await callWith(
-    { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH },
+    { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: "write-only-test-token", GITHUB_READONLY_TOKEN: GH },
     500,
     new ReadableStream({ start(controller) { controller.error(new Error("stream failed " + GH + " " + MCP)); } })
   );

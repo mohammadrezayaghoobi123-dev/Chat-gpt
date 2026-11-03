@@ -85,12 +85,12 @@ describe("KnowledgeStore tenant-scoped data integrity", () => {
       name: "Bad properties", properties: ["not", "an", "object"],
     })).rejects.toThrow(/properties/);
     await expect(store.upsertEntity({
-      tenantId: "tenant-a", entityId: "bad-entity", entityType: "note",
-      name: "Bad identifier", properties: {}, 
-    })).resolves.toBeDefined();
+      tenantId: "tenant-a", entityId: "bad/id", entityType: "note",
+      name: "Bad identifier", properties: {},
+    })).rejects.toThrow(/entityId/);
   });
 
-  it("preserves all tenant data across a Durable Object restart boundary", async () => {
+  it("persists tenant records in the Durable Object SQLite storage", async () => {
     const store = storeFor("knowledge-persistence");
     await store.upsertEntity({
       tenantId: "tenant-a", entityId: "persistent-1", entityType: "document",

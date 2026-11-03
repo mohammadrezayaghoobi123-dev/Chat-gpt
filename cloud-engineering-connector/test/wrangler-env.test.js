@@ -56,3 +56,13 @@ test("Production and Staging both declare the SQLite WriteControl binding and mi
   assert.match(staging, /\[\[env\.staging\.durable_objects\.bindings\]\][\s\S]*?name\s*=\s*"WRITE_CONTROL"[\s\S]*?class_name\s*=\s*"WriteControl"/);
   assert.match(staging, /\[\[env\.staging\.migrations\]\][\s\S]*?new_sqlite_classes\s*=\s*\["WriteControl"\]/);
 });
+
+const packageJson = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+);
+
+test("check script dry-runs the default Wrangler environment without an empty env selector", () => {
+  assert.match(packageJson.scripts.check, /wrangler deploy --dry-run/);
+  assert.doesNotMatch(packageJson.scripts.check, /wrangler deploy --env=/);
+  assert.match(packageJson.scripts.check, /wrangler deploy --env staging --dry-run/);
+});

@@ -210,3 +210,27 @@ test("Vault proposal IDs cannot be rebound to another change or non-canonical PR
       .toThrow(/canonical GitHub URL/);
   });
 });
+
+test("deferOutbox releases a pending-review lease without consuming retry attempts", async () => {
+  const store = storeFor("outbox-defer");
+  await store.enqueueOutbox({
+    tenantId: "tenant-a", eventId: "vault-event-1", idempotencyKey: "vault-proposal-1",
+    aggregateType: "document", aggregateId: "doc_1", eventType: "vault.document.proposed",
+    payload: { proposalId: "proposal-1" }, now: 1000,
+  });
+  const first = await store.claimOutbox({ tenantId: "tenant-a", now: 1000, leaseMs: 1000 });
+  expect(first.attempts).toBe(1);
+  const deferred = await store.deferOutbox({
+    tenantId: "tenant-a", eventId: "vault-event-1", leaseGeneration: first.leaseGeneration,
+    now: 2000, retryAfterMs: 60_000,
+  });
+  expect(deferred).toMatchObject({ status: "retry", attempts: 0, nextAttemptAt: 62_000, leaseUntil: null });
+  await runInDurableObject(store, async instance => {
+    expect(() => instance.completeOutbox({
+      tenantId: "tenant-a", eventId: "vault-event-1", leaseGeneration: first.leaseGeneration, now: 3000,
+    })).toThrow(/lease is stale/);
+  });
+  const second = await store.claimOutbox({ tenantId: "tenant-a", now: 62_000, leaseMs: 1000 });
+  expect(second.leaseGeneration).toBe(first.leaseGeneration + 1);
+  expect(second.attempts).toBe(1);
+});

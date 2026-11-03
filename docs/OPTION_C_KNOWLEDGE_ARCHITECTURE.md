@@ -153,10 +153,13 @@ The K1 slice implements the durable ledger primitives. It does not yet implement
 - The proposal is recorded in Brain Store outbox with the expected blob SHA, proposed content SHA-256, PR number/URL, branch, and commit. The PR is never merged automatically.
 - Live proposal creation and merge acceptance have not been exercised against GitHub Staging/Production; main branch protection remains a prerequisite for accepting canonical writes.
 
-### K4 — Outbox dispatcher and reconciliation
-- Durable claims, lease fencing, bounded retries, dead-letter inspection.
-- GitHub ambiguous-outcome reconciliation.
-- Per-document sync status and operational metrics.
+### K4 — Outbox dispatcher and reconciliation — implementation in PR #140; CI verification pending
+- Brain Store schema v3 persists Vault proposal lifecycle (proposed, merged, closed, conflict, failed).
+- A five-minute Cloudflare Cron trigger claims owner-tenant outbox events with fenced leases.
+- Open PRs are deferred without consuming failure retries; transient GitHub failures use bounded retry/backoff; terminal integrity failures are dead-lettered.
+- On merge, the dispatcher fetches the exact merge-commit file, verifies the proposed SHA-256, stores the immutable revision, refreshes FTS5, updates sync state, marks the proposal merged, and completes the outbox event.
+- Closed unmerged PRs are recorded as closed; digest mismatches become conflicts and are not indexed.
+- The dispatcher uses the read-only GitHub token and never merges or writes to GitHub.
 
 ### K5 — Retrieval and evidence integration
 - FTS5 search for tenant-scoped entities and Vault documents.

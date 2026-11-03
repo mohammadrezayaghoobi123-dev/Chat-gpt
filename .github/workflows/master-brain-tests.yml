@@ -6,12 +6,18 @@ on:
       - master-brain/integrated-mvp
       - master-brain/proof-protocol-v0
       - master-brain/integrated
+      - "assistant/**"
   pull_request:
     branches:
       - main
+      - integration/unify-main-and-integrated-2026-11-02
       - master-brain/integrated-mvp
       - master-brain/integrated
   workflow_dispatch:
+
+concurrency:
+  group: master-brain-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -41,10 +47,15 @@ jobs:
         shell: bash   # pipefail: the job still fails exactly when the tests fail
         run: python -m unittest discover -s tests -v 2>&1 | tee unittest-out.txt
       - name: Kernel-enforced limits (cgroup + size-limited tmpfs; needs root, so run under sudo)
+        shell: bash
         run: |
+          set -euo pipefail
           sudo -E env "PATH=$PATH" PYTHONPATH=src MB_REQUIRE_CGROUP_TESTS=1 \
             python -m unittest -v tests.test_ctp_runner.SeccompFilter tests.test_ctp_runner.KernelEnforcement 2>&1 | tee kernel-out.txt
-          grep -q "skipped" kernel-out.txt && { echo "::error::kernel-enforcement tests were skipped"; exit 1; } || true
+          if grep -q "skipped" kernel-out.txt; then
+            echo "::error::kernel-enforcement tests were skipped"
+            exit 1
+          fi
       - name: Surface failing tests as annotations (diagnostic only; does not change the result)
         if: failure()
         run: |

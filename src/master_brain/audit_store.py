@@ -289,7 +289,7 @@ class AuditStore:
                 if os.name == "nt":
                     import msvcrt
                     handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)  # no shared mode: exclusive
+                    getattr(msvcrt, "locking")(handle.fileno(), getattr(msvcrt, "LK_LOCK"), 1)  # no shared mode: exclusive
                 else:
                     import fcntl
                     fcntl.flock(handle.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
@@ -396,7 +396,7 @@ class AuditStore:
         precondition: Callable[[tuple[AuditEvent, ...]], str | None] | None = None,
     ) -> AuditEvent:
         history = self._read_all_unlocked()
-        if recorded_at is NOW:
+        if isinstance(recorded_at, _NowType):
             recorded_at = self.now().isoformat().replace("+00:00", "Z")
         if precondition is not None:
             reason = precondition(history)

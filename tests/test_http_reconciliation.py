@@ -1,5 +1,4 @@
 """Gate 2b-3: operator role + reconciliation of unknown outcomes over a REAL server (MISSION-002, SAFE-002)."""
-import json
 import threading
 import unittest
 

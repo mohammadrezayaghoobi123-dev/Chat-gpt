@@ -1,10 +1,9 @@
 """budget_units is enforced on the real path: each attempt is charged estimated_cost_per_call (exactly, in the audit
 log, atomically with the dispatch-started event); an unknown cost is refused (owner decision)."""
 import unittest
-from dataclasses import replace
 
 from master_brain.integrations import (IntegrationDescriptor, IntegrationHealth, IntegrationKind,
-                                       IntegrationMaturity, IntegrationRequirement)
+                                       IntegrationMaturity)
 from master_brain.mission_approval import mission_contract_digest
 from master_brain.mission_contract import MissionContract, MissionRiskTier
 from master_brain.mission_execution import execute_mission_once

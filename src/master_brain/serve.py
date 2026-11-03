@@ -29,7 +29,7 @@ import threading
 from dataclasses import dataclass, field
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from master_brain.accounts import AccountStore, SessionAuthenticator
 from master_brain.approvers import AccountApprovers
@@ -335,10 +335,14 @@ def _main(argv: list[str] | None = None) -> int:
     for warning in built.warnings:
         print(f"warning: {warning}", file=sys.stderr, flush=True)
     host, port = built.server.server_address[:2]
-    stop: Callable[[], Any] = lambda *_a: threading.Thread(target=built.stop, daemon=True).start()
+    host_text = host.decode("ascii") if isinstance(host, bytes) else host
+
+    def stop(_signum: int, _frame: Any) -> None:
+        threading.Thread(target=built.stop, daemon=True).start()
+
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    print(f"listening on http://{host}:{port}/app/", flush=True)
+    print(f"listening on http://{host_text}:{port}/app/", flush=True)
     try:
         built.run()
     finally:

@@ -9,7 +9,7 @@ from master_brain.core import RiskTier, Task
 from master_brain.mission_approval import (
     action_digest, mission_contract_digest, record_mission_approval,
 )
-from master_brain.mission_contract import MissionContract, from_core_task
+from master_brain.mission_contract import from_core_task
 from master_brain.mission_lifecycle import (
     CONTRACT_REGISTERED_EVENT_TYPE,
     MissionContractConflict,

@@ -17,7 +17,6 @@ from master_brain.core import RiskTier, Task, route_task
 from master_brain.meta_intelligence import (
     CoordinationPlan,
     ReviewLevel as MetaReviewLevel,
-    plan_coordination,
 )
 
 
@@ -363,7 +362,7 @@ def from_coordination_plan(
         clarification_questions=plan.clarification_questions,
         stop_conditions=plan.stop_conditions,
         rationale=plan.rationale,
-        traceability=(f"planner=meta_intelligence.plan_coordination",
+        traceability=("planner=meta_intelligence.plan_coordination",
                       f"legacy_planner_version={plan.planner_version}"),
     )
 

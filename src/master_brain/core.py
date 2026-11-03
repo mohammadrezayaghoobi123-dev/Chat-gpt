@@ -4,7 +4,7 @@ No network calls or external side effects occur in this module.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 import math
 import re

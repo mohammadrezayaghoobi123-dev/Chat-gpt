@@ -782,11 +782,12 @@ class KernelEnforcement(unittest.TestCase):
             print(len(kids), err)
             for p in kids: os.kill(p, signal.SIGKILL)
         """, timeout_s=20))
-        n, err = raw["stdout"].decode().split()
-        self.assertEqual(err, "11")                                 # EAGAIN from pids.max
-        self.assertLessEqual(int(n), R.MAX_SANDBOX_PROCESSES + 4)
+        # The runner polls pids.events and kills the sandbox process group as soon
+        # as the kernel records a pids.max hit. The child may therefore be killed
+        # before buffered stdout is flushed; the durable contract is the cgroup
+        # event surfaced by the runner, not a userspace EAGAIN print.
         self.assertEqual(raw["outcome"], "inconclusive")           # K6: a hit limit never passes
-        self.assertIn("resource limit", raw["reason"])
+        self.assertEqual(raw["reason"], "resource limit exceeded: processes")
 
     @needs_cgroup
     def test_aggregate_memory_flood_is_stopped_by_the_kernel(self):
@@ -833,6 +834,7 @@ class KernelEnforcement(unittest.TestCase):
 
     def test_the_record_states_which_kernel_limits_were_in_force(self):
         raw = R._run_raw(spec("pass"))
+        self.assertEqual(raw["outcome"], "pass", raw["stderr"][-300:])
         env = R._environment(spec("pass"))
         self.assertIn("kernel_limits", env)
         self.assertEqual(set(env["kernel_limits"]), {"cgroup", "work_tmpfs", "seccomp"})

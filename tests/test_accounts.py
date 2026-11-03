@@ -11,7 +11,7 @@ from unittest import mock
 
 from master_brain import accounts
 from master_brain.accounts import (
-    ABSOLUTE_LIFETIME, IDLE_TIMEOUT, MAX_SESSIONS_PER_SUBJECT, AccountError, AccountStore, SessionAuthenticator,
+    ABSOLUTE_LIFETIME, MAX_SESSIONS_PER_SUBJECT, AccountError, AccountStore, SessionAuthenticator,
     check_password_policy,
 )
 from master_brain.identity import Identity

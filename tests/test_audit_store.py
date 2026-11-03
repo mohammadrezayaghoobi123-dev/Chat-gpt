@@ -126,7 +126,7 @@ class AuditStoreTests(unittest.TestCase):
         self.assertEqual(len(self.store.read_all()), 4)
 
     def clocked_store(self, now, skew=300.0, name="clocked"):
-        from datetime import datetime, timezone
+        from datetime import datetime
         box = {"now": datetime.fromisoformat(now.replace("Z", "+00:00"))}
         store = AuditStore(Path(self.tempdir.name) / f"{name}.jsonl", strict_event_types=False,
                            clock=lambda: box["now"], max_future_skew_seconds=skew)

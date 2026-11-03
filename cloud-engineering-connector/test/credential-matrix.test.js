@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker.js";
 
-const SECRET = "mcp-secret-value";
+const SECRET = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
 const GH = "ghp_FAKE_TOKEN_FOR_TEST_0123456789";
 const post = (body, auth) => new Request("https://example.test/mcp", {
   method: "POST",
@@ -55,7 +55,7 @@ test("GITHUB_TOKEN absent: read is sent unauthenticated and a GitHub 404 is expl
     await withFetch(() => ghError(status, "Not Found"), async (calls) => {
       for (const tool of ["project_inspect", "read_project_file"]) {
         const args = tool === "read_project_file" ? { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt", path: "README.md" } : { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt" };
-        const r = await worker.fetch(call(tool, args), { MCP_AUTH_TOKEN: SECRET });
+        const r = await worker.fetch(call(tool, args), { MCP_AUTH_TOKEN: SECRET, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
         const b = await r.json();
         assert.ok(b.result?.isError, JSON.stringify({status:r.status,body:b,tool,statusCode:status}));
         const text = b.result.content[0].text;
@@ -71,7 +71,7 @@ test("GITHUB_TOKEN absent: read is sent unauthenticated and a GitHub 404 is expl
 
 test("GITHUB_TOKEN absent: non-auth GitHub errors (e.g. 500) are not mislabelled as a token problem", async () => {
   await withFetch(() => ghError(500, "boom"), async () => {
-    const r = await worker.fetch(call("project_inspect", { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt" }), { MCP_AUTH_TOKEN: SECRET });
+    const r = await worker.fetch(call("project_inspect", { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt" }), { MCP_AUTH_TOKEN: SECRET, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const text = (await r.json()).result.content[0].text;
     assert.match(text, /GitHub API 500/);
     assert.doesNotMatch(text, /GITHUB_TOKEN/);
@@ -80,7 +80,7 @@ test("GITHUB_TOKEN absent: non-auth GitHub errors (e.g. 500) are not mislabelled
 
 test("create_change_pr without GITHUB_TOKEN: fails before any GitHub call", async () => {
   await withFetch(() => ghError(200, "x"), async (calls) => {
-    const r = await worker.fetch(call("create_change_pr", { owner: "o", repo: "r", title: "t", summary: "s", files: [{ path: "docs/a.md", content: "x" }] }), { MCP_AUTH_TOKEN: SECRET });
+    const r = await worker.fetch(call("create_change_pr", { owner: "o", repo: "r", title: "t", summary: "s", files: [{ path: "docs/a.md", content: "x" }] }), { MCP_AUTH_TOKEN: SECRET, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const b = await r.json();
     assert.equal(b.result.isError, true);
     assert.match(b.result.content[0].text, /GITHUB_TOKEN/);
@@ -90,7 +90,7 @@ test("create_change_pr without GITHUB_TOKEN: fails before any GitHub call", asyn
 
 test("GITHUB_TOKEN invalid: GitHub's 401 surfaces as an error without leaking either token", async () => {
   await withFetch(() => ghError(401, "Bad credentials"), async (calls) => {
-    const r = await worker.fetch(call("project_inspect", { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt" }), { MCP_AUTH_TOKEN: SECRET, GITHUB_TOKEN: GH });
+    const r = await worker.fetch(call("project_inspect", { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt" }), { MCP_AUTH_TOKEN: SECRET, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const text = await r.text();
     const b = JSON.parse(text);
     assert.equal(b.result.isError, true);
@@ -104,7 +104,7 @@ test("GITHUB_TOKEN invalid: GitHub's 401 surfaces as an error without leaking ei
 test("both credentials valid: request is forwarded with the bearer", async () => {
   await withFetch((url) => new Response(JSON.stringify(String(url).endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt")
     ? { full_name: "mohammadrezayaghoobi123-dev/Chat-gpt", private: false, default_branch: "feature/cloud-engineering-connector" } : { sha: "abc", commit: { message: "m", tree: { sha: "t" } }, tree: [] }), { status: 200 }), async (calls) => {
-    const r = await worker.fetch(call("project_inspect", { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt" }), { MCP_AUTH_TOKEN: SECRET, GITHUB_TOKEN: GH });
+    const r = await worker.fetch(call("project_inspect", { owner: "mohammadrezayaghoobi123-dev", repo: "Chat-gpt" }), { MCP_AUTH_TOKEN: SECRET, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
     const b = await r.json();
     assert.notEqual(b.result.isError, true);
     assert.ok(calls.length >= 1);
@@ -112,7 +112,79 @@ test("both credentials valid: request is forwarded with the bearer", async () =>
 });
 
 test("healthz never returns secret values", async () => {
-  const r = await worker.fetch(new Request("https://example.test/healthz"), { MCP_AUTH_TOKEN: SECRET, GITHUB_TOKEN: GH });
+  const r = await worker.fetch(new Request("https://example.test/healthz"), { MCP_AUTH_TOKEN: SECRET, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } });
   const text = await r.text();
   assert.ok(!text.includes(SECRET) && !text.includes(GH));
+});
+
+
+test("health endpoint never reveals credential configuration booleans", async () => {
+  const response = await worker.fetch(new Request("https://example.test/healthz"), {
+    MCP_AUTH_TOKEN: SECRET,
+    GITHUB_TOKEN: GH
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(Object.hasOwn(body, "github_configured"), false);
+  assert.equal(Object.hasOwn(body, "auth_configured"), false);
+});
+
+const readyzRequest = () => new Request("https://example.test/readyz", { headers: { "cf-connecting-ip": "203.0.113.20" } });
+const okLimiter = { limit: async () => ({ success: true }) };
+
+test("readyz reports not_ready when the Durable Object binding is absent", async () => {
+  const response = await worker.fetch(readyzRequest(), { MCP_RATE_LIMITER: okLimiter });
+  const body = await response.json();
+  assert.equal(response.status, 503);
+  assert.equal(body.status, "not_ready");
+  assert.equal(body.durable_objects, "unavailable");
+});
+
+test("readyz uses a lightweight Durable Object ping rather than a full storage scan", async () => {
+  const response = await worker.fetch(readyzRequest(), {
+    MCP_RATE_LIMITER: okLimiter,
+    WRITE_CONTROL: {
+      idFromName: name => name,
+      get: () => ({ ping: async () => ({ ok: true, schemaVersion: 1 }) })
+    }
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.status, "ready");
+  assert.equal(body.durable_objects, "ok");
+});
+
+test("readyz is rate limited before it touches the shared write-control Durable Object (DEF-0012)", async () => {
+  let pings = 0;
+  const response = await worker.fetch(readyzRequest(), {
+    MCP_RATE_LIMITER: { limit: async () => ({ success: false }) },
+    WRITE_CONTROL: { idFromName: name => name, get: () => ({ ping: async () => { pings++; return { ok: true, schemaVersion: 1 }; } }) }
+  });
+  assert.equal(response.status, 429);
+  assert.deepEqual(await response.json(), { error: "rate_limited" });
+  assert.equal(pings, 0);
+});
+
+test("readyz fails closed without touching the Durable Object when the limiter is unavailable (DEF-0012)", async () => {
+  let pings = 0;
+  const response = await worker.fetch(readyzRequest(), {
+    WRITE_CONTROL: { idFromName: name => name, get: () => ({ ping: async () => { pings++; return { ok: true, schemaVersion: 1 }; } }) }
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: "rate_limiter_unavailable" });
+  assert.equal(pings, 0);
+});
+
+test("short configured MCP token fails closed before rate limiting or request parsing", async () => {
+  let limiterCalls = 0;
+  const response = await worker.fetch(post({ jsonrpc: "2.0", id: 1, method: "tools/list" }, "Bearer short"), {
+    MCP_AUTH_TOKEN: "short",
+    MCP_RATE_LIMITER: { limit: async () => { limiterCalls++; return { success: true }; } }
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    error: "server_misconfigured",
+    message: "MCP_AUTH_TOKEN must be at least 32 characters."
+  });
+  assert.equal(limiterCalls, 0);
 });

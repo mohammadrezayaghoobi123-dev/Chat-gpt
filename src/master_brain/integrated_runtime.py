@@ -104,17 +104,17 @@ def _build_audit_records(mission: Mission, run: MissionRun) -> tuple[AuditRecord
     }
     for item in all_evidence:
         evidence_id = getattr(item, "evidence_id", None)
-        claim_id = getattr(item, "claim_id", None)
+        evidence_claim_id = getattr(item, "claim_id", None)
         if (
             isinstance(item, Evidence)
             and isinstance(item.source, str) and item.source.strip()
             and isinstance(item.supports, bool)
             and isinstance(evidence_id, str) and evidence_id.strip()
             and evidence_id not in duplicate_evidence_ids
-            and isinstance(claim_id, str) and claim_id.strip()
-            and claim_id in claims_by_id
+            and isinstance(evidence_claim_id, str) and evidence_claim_id.strip()
+            and evidence_claim_id in claims_by_id
         ):
-            evidence_by_claim.setdefault(claim_id, []).append(item)
+            evidence_by_claim.setdefault(evidence_claim_id, []).append(item)
 
     reviewable_claims = tuple(claims_by_id.values())
     all_claim_ids = tuple(claims_by_id.keys())

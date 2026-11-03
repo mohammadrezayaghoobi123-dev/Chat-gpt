@@ -5,10 +5,16 @@ on:
     branches:
       - "feature/**"
       - "master-brain/**"
+      - "assistant/**"
   pull_request:
     branches:
       - "master-brain/integrated-mvp"
+      - "integration/unify-main-and-integrated-2026-11-02"
   workflow_dispatch:
+
+concurrency:
+  group: python-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

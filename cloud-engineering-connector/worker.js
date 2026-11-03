@@ -570,14 +570,25 @@ async function createChangePr(args,env) {
  };
 
  try {
+  const repo=await github(env,base);
+  const baseBranch=args.base_branch;
+  if(!validBranchName(baseBranch)) throw new Error("Invalid base branch.");
+  const baseRef=await github(env,base+"/git/ref/heads/"+encodeURIComponent(baseBranch).replace(/%2F/g,"/"));
+  const parentSha=baseRef?.object?.sha;
+  if(baseRef?.ref!=="refs/heads/"+baseBranch||typeof parentSha!=="string"||!/^[a-f0-9]{40}$/.test(parentSha))throw new ToolError("GIT_BASE_IDENTITY_INVALID");
+  const parentCommit=await github(env,base+"/git/commits/"+parentSha);
+  if(parentCommit?.sha!==parentSha)throw new ToolError("GIT_BASE_IDENTITY_INVALID");
+  if(!Number.isSafeInteger(admission.operation?.createdAt))throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
+  const baseTreeSha=parentCommit.tree?.sha;
+  if(typeof baseTreeSha!=="string"||!/^[a-f0-9]{40}$/.test(baseTreeSha))throw new ToolError("GIT_BASE_IDENTITY_INVALID");
   if(args.knowledge_vault===true){
    const vaultPath=args.files[0].path;
    const readEnv={...env,READ_ONLY_GITHUB:true};
    let current=null;
    try{
-    current=await github(readEnv,base+"/contents/"+vaultPath.split("/").map(encodeURIComponent).join("/")+"?ref=main",{maxResponseBytes:100_000});
+    current=await github(readEnv,base+"/contents/"+vaultPath.split("/").map(encodeURIComponent).join("/")+"?ref="+encodeURIComponent(parentSha),{maxResponseBytes:100_000});
    }catch(error){
-    const status=Number(error?.status??(/^GitHub API (\d{3}):/.exec(error?.message??"")||[])[1]);
+    const status=Number(error?.status??(/^GitHub API (\\d{3}):/.exec(error?.message??"")||[])[1]);
     if(status!==404)throw error;
    }
    if(current!==null&&(current.type!=="file"||current.path!==vaultPath||typeof current.sha!=="string"||!/^[a-f0-9]{40}$/.test(current.sha))){
@@ -594,15 +605,6 @@ async function createChangePr(args,env) {
     throw new ToolError("KNOWLEDGE_VAULT_CONFLICT",{expected_blob_sha:args.vault_expected_blob_sha,actual_blob_sha:actualBlobSha});
    }
   }
-  const repo=await github(env,base);
-  const baseBranch=args.base_branch;
-  if(!validBranchName(baseBranch)) throw new Error("Invalid base branch.");
-  const baseRef=await github(env,base+"/git/ref/heads/"+encodeURIComponent(baseBranch).replace(/%2F/g,"/"));
-  const parentSha=baseRef.object.sha;
-  const parentCommit=await github(env,base+"/git/commits/"+parentSha);
-  if(!Number.isSafeInteger(admission.operation?.createdAt))throw new ToolError("WRITE_CONTROL_UNAVAILABLE");
-  const baseTreeSha=parentCommit.tree?.sha;
-  if(typeof baseTreeSha!=="string"||!/^[a-f0-9]{40}$/.test(baseTreeSha)||typeof parentSha!=="string"||!/^[a-f0-9]{40}$/.test(parentSha))throw new ToolError("GIT_BASE_IDENTITY_INVALID");
   await transition("RESERVED","TREE_DISPATCHED",{baseTreeSha,parentSha});
   // Persist the exact immutable tree inputs before dispatch: an ambiguous response can then be replayed safely.
   sideEffectStarted=true;
@@ -875,6 +877,17 @@ export async function processKnowledgeOutbox(env,options={}){
    }
    const pr=await github(readEnv,base+"/pulls/"+proposal.pullRequestNumber,{maxResponseBytes:100_000});
    if(pr?.merged===true){
+    const expectedRepository=ALLOWED_REPOSITORY.toLowerCase();
+    const prIdentityMatches=pr.number===proposal.pullRequestNumber&&pr.html_url===proposal.pullRequestUrl&&
+     proposal.repository?.toLowerCase()===expectedRepository&&
+     pr.base?.ref==="main"&&pr.base?.repo?.full_name?.toLowerCase()===expectedRepository&&
+     pr.head?.ref===proposal.branch&&pr.head?.sha===proposal.commitSha&&
+     pr.head?.repo?.full_name?.toLowerCase()===expectedRepository;
+    if(!prIdentityMatches){
+     await stub.updateVaultProposal({tenantId,proposalId,status:"conflict",now:Date.now()});
+     await fail("Merged Vault pull request identity does not match the recorded proposal.",1);
+     continue;
+    }
     const mergeSha=pr.merge_commit_sha;
     if(typeof mergeSha!=="string"||!/^[a-f0-9]{40}$/.test(mergeSha)){
      await stub.updateVaultProposal({tenantId,proposalId,status:"conflict",now:Date.now()});

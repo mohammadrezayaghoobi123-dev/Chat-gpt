@@ -1054,3 +1054,15 @@ test("readyz fails closed when the Brain Store binding is missing",async()=>{
  assert.equal(body.status,"not_ready");
  assert.equal(body.knowledge_store,"unavailable");
 });
+
+test("Brain Store mutations consume a dedicated rate-limit bucket before Durable Object writes",async()=>{
+ knowledgeStore.calls.length=0;
+ const keys=[];
+ const r=await worker.fetch(rpc("tools/call",{name:"knowledge_entity_upsert",arguments:{entityId:"limited",entityType:"service",name:"Limited",expectedVersion:0}},16),{
+  ...env,
+  MCP_RATE_LIMITER:{limit:async({key})=>{keys.push(key);return{success:key!=="knowledge-write:203.0.113.10"}}}
+ });
+ assert.equal(r.status,429);
+ assert.deepEqual(keys,["authenticated-mcp:203.0.113.10","knowledge-write:203.0.113.10"]);
+ assert.equal(knowledgeStore.calls.length,0);
+});

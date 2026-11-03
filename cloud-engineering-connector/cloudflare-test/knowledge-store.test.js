@@ -96,6 +96,10 @@ describe("Option C Brain Store", () => {
     const first = await store.enqueueOutbox(input);
     const replay = await store.enqueueOutbox(input);
     expect(replay.eventId).toBe(first.eventId);
+    const reorderedReplay = await store.enqueueOutbox({
+      ...input, payload: { path: "decisions/adr-001.md", repository: "owner/knowledge-vault" },
+    });
+    expect(reorderedReplay.eventId).toBe(first.eventId);
     await runInDurableObject(store, async instance => {
       await expect(instance.enqueueOutbox({ ...input, payload: { repository: "owner/other", path: "x.md" } }))
         .rejects.toMatchObject({ code: "KNOWLEDGE_IDEMPOTENCY_CONFLICT" });

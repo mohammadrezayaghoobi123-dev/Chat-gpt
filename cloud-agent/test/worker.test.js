@@ -439,8 +439,8 @@ test("Cloud Agent adds HSTS to HTTPS JSON and console responses but not HTTP", a
 
 
 test("Cloud Agent observability redacts query strings and disables invocation logs", () => {
-  assert.match(wranglerSource, /\\[observability\\]/);
-  assert.match(wranglerSource, /redact_query_string\\s*=\\s*true/);
-  assert.match(wranglerSource, /invocation_logs\\s*=\\s*false/);
-  assert.match(wranglerSource, /persist\\s*=\\s*true/);
+  assert.ok(wranglerSource.includes("[observability]"));
+  assert.ok(wranglerSource.includes("redact_query_string = true"));
+  assert.ok(wranglerSource.includes("invocation_logs = false"));
+  assert.ok(wranglerSource.includes("persist = true"));
 });

@@ -177,15 +177,15 @@ test("Vault proposals persist idempotently and transition from proposed to merge
   };
   const recorded = await store.recordVaultProposal(input);
   expect(recorded).toMatchObject({ tenantId: "tenant-a", proposalId: "proposal-00000001", status: "proposed" });
-  await expect(store.recordVaultProposal(input)).resolves.toMatchObject({ pullRequestNumber: 987 });
-  await expect(store.listPendingVaultProposals({ tenantId: "tenant-a" })).resolves.toHaveLength(1);
-  await expect(store.getVaultProposal({ tenantId: "tenant-b", proposalId: "proposal-00000001" })).resolves.toBeNull();
+  expect(store.recordVaultProposal(input)).toMatchObject({ pullRequestNumber: 987 });
+  expect(store.listPendingVaultProposals({ tenantId: "tenant-a" })).toHaveLength(1);
+  expect(store.getVaultProposal({ tenantId: "tenant-b", proposalId: "proposal-00000001" })).toBeNull();
   const merged = await store.updateVaultProposal({
     tenantId: "tenant-a", proposalId: "proposal-00000001", status: "merged",
     mergeCommitSha: "c".repeat(40), mergedBlobSha: "d".repeat(40), now: 200,
   });
   expect(merged).toMatchObject({ status: "merged", mergeCommitSha: "c".repeat(40), mergedBlobSha: "d".repeat(40) });
-  await expect(store.listPendingVaultProposals({ tenantId: "tenant-a" })).resolves.toHaveLength(0);
+  expect(store.listPendingVaultProposals({ tenantId: "tenant-a" })).toHaveLength(0);
   await runInDurableObject(store, async instance => {
     expect(() => instance.updateVaultProposal({
       tenantId: "tenant-a", proposalId: "proposal-00000001", status: "closed", now: 300,

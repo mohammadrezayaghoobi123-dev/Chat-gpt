@@ -12,6 +12,7 @@ const workflows = [
     allowedCredentialSteps: [
       "Preflight Staging bindings and capture rollback target",
       "Deploy candidate to Staging",
+      "Verify Staging KnowledgeStore binding and scheduled reconciliation",
       "Confirm deployed version and write release evidence",
       "Roll back Staging if post-deploy acceptance fails",
     ],
@@ -99,7 +100,7 @@ function extractPreflightScript(source, stepName) {
   return lines.slice(heredocStart + 1, heredocEnd).map((line) => line.replace(/^ {10}/, "")).join("\n");
 }
 
-function runPreflightWithMissingObservability(source, stepName, production, expectFailure = true, legacyPublicReadOnlySecret = false) {
+function runPreflightWithMissingObservability(source, stepName, production, expectFailure = true, legacyPublicReadOnlySecret = false, observabilityOverride = null) {
   const script = extractPreflightScript(source, stepName);
   const stagingSettings = {
     bindings: [
@@ -110,8 +111,9 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
       { name: "PUBLIC_READ_ONLY", type: "plain_text", text: "true" },
       { name: "MCP_RATE_LIMITER", type: "ratelimit", namespace_id: "staging-rate" },
       { name: "WRITE_CONTROL", type: "durable_object_namespace", namespace_id: "staging-write" },
+      { name: "KNOWLEDGE_STORE", type: "durable_object_namespace", namespace_id: "staging-knowledge" },
     ],
-    observability: null,
+    observability: observabilityOverride,
   };
   const productionSettings = {
     bindings: [
@@ -122,10 +124,12 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
       { name: "PUBLIC_READ_ONLY", type: legacyPublicReadOnlySecret ? "secret_text" : "plain_text", text: "true" },
       { name: "MCP_RATE_LIMITER", type: "ratelimit", namespace_id: "production-rate" },
       { name: "WRITE_CONTROL", type: "durable_object_namespace", namespace_id: "production-write" },
+      { name: "KNOWLEDGE_STORE", type: "durable_object_namespace", namespace_id: "production-knowledge" },
     ],
-    observability: null,
+    observability: observabilityOverride,
   };
   const deploymentData = { deployments: [{ versions: [{ version_id: "previous-version", percentage: 100 }] }] };
+  const scheduleData = { schedules: [{ cron: "*/5 * * * *" }] };
   const accountData = { settings: { enforce_twofactor: true } };
   const prelude = [
     "globalThis.fetch = async (input) => {",
@@ -134,6 +138,7 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
     "  if (url.endsWith('/accounts/test-account')) result = " + JSON.stringify(accountData) + ";",
     "  else if (url.includes('/chat-gpt111-staging/settings')) result = " + JSON.stringify(stagingSettings) + ";",
     "  else if (url.includes('/chat-gpt111/settings')) result = " + JSON.stringify(productionSettings) + ";",
+    "  else if (url.includes('/schedules')) result = " + JSON.stringify(scheduleData) + ";",
     "  else if (url.includes('/deployments?')) result = " + JSON.stringify(deploymentData) + ";",
     "  else throw new Error('Unexpected Cloudflare API request: ' + url);",
     "  return new Response(JSON.stringify({ success: true, result }), { status: 200, headers: { 'content-type': 'application/json' } });",

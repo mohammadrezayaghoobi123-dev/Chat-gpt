@@ -588,7 +588,7 @@ async function createChangePr(args,env) {
    try{
     current=await github(readEnv,base+"/contents/"+vaultPath.split("/").map(encodeURIComponent).join("/")+"?ref="+encodeURIComponent(parentSha),{maxResponseBytes:100_000});
    }catch(error){
-    const status=Number(error?.status??(/^GitHub API (\\d{3}):/.exec(error?.message??"")||[])[1]);
+    const status=Number(error?.status??(/^GitHub API (\d{3}):/.exec(error?.message??"")||[])[1]);
     if(status!==404)throw error;
    }
    if(current!==null&&(current.type!=="file"||current.path!==vaultPath||typeof current.sha!=="string"||!/^[a-f0-9]{40}$/.test(current.sha))){

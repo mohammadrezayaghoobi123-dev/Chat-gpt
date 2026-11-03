@@ -161,11 +161,12 @@ The K1 slice implements the durable ledger primitives. It does not yet implement
 - Closed unmerged PRs are recorded as closed; digest mismatches become conflicts and are not indexed.
 - The dispatcher uses the read-only GitHub token and never merges or writes to GitHub.
 
-### K5 — Retrieval and evidence integration
-- FTS5 search for tenant-scoped entities and Vault documents.
-- Rebuild from canonical GitHub revisions plus Brain Store entities.
-- Attach commit SHA, content digest, and file/line evidence to retrieved results.
-- Feed only bounded, cited evidence into architecture analysis.
+### K5 — Retrieval and evidence integration — initial integration in PR #140; CI verification pending
+- FTS5 search covers tenant-scoped Brain Store entities and verified Vault document snapshots.
+- `architecture_analyze` accepts an optional knowledge query; authenticated owner requests attach up to five bounded search results and immutable document references (repository, path, commit SHA, content SHA-256).
+- Anonymous PUBLIC_READ_ONLY analysis never queries private Knowledge Store data.
+- Retrieved snippets are explicitly labeled untrusted evidence. Static findings remain heuristic and are not upgraded to verified conclusions by retrieval.
+- Index rebuild remains deterministic from canonical GitHub revisions plus Brain Store entities.
 
 ### K6 — Production acceptance
 - Exact-SHA CI and full-history secret scan.

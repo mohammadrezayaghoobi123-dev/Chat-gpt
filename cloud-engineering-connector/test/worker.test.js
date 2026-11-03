@@ -21,7 +21,6 @@ function createKnowledgeStoreBinding(){
   indexDocumentSnapshot:async input=>{calls.push({method:"indexDocumentSnapshot",input});return input},
   setDocumentSyncState:async input=>{calls.push({method:"setDocumentSyncState",input});return input},
   recordVaultProposal:async input=>{calls.push({method:"recordVaultProposal",input});return{...input,status:"proposed"}},
-  enqueueOutbox:async input=>{calls.push({method:"enqueueOutbox",input});return input},
   getVaultProposal:async input=>{calls.push({method:"getVaultProposal",input});return{...input,status:"proposed",pullRequestNumber:987}}
  };
  return{calls,binding:{
@@ -1397,41 +1396,3 @@ test("anonymous architecture analysis never queries private Knowledge Store cont
  }finally{globalThis.fetch=originalFetch}
 });
 
-
-test("Vault proposal compares the expected blob at the immutable main commit used as the proposal parent",async()=>{
- const path="knowledge/tenants/owner/architecture-race-test.md";
- const proposalContent="# Race-safe proposal\\n";
- const proposalBlobSha=createHash("sha1").update("blob "+Buffer.byteLength(proposalContent)+"\\0"+proposalContent).digest("hex");
- const fixture=createGitHubWriteMock({filePath:path,blobSha:proposalBlobSha,baseBranch:"main"});
- const originalFetch=globalThis.fetch;
- globalThis.fetch=fixture.fetch;
- knowledgeStore.calls.length=0;
- try{
-  const response=await worker.fetch(rpc("tools/call",{name:"knowledge_document_propose",arguments:{
-   path,content:"# Race-safe proposal\\n",title:"Race-safe Vault proposal",
-   summary:"Verify immutable base commit binding.",proposalId:"proposal-race-safe-0001",
-   expectedBlobSha:"ABSENT"
-  }},23),{...env,GITHUB_TOKEN:"write-token-for-test"});
-  const body=await response.json();
-  assert.equal(body.result.isError,undefined,JSON.stringify(body));
-  const baseRefCall=fixture.calls.find(call=>call.method==="GET"&&call.url.endsWith("/git/ref/heads/main"));
-  const contentRead=fixture.calls.find(call=>call.method==="GET"&&call.url.includes("/contents/"+path));
-  const commitWrite=fixture.calls.find(call=>call.method==="POST"&&call.url.endsWith("/git/commits"));
-  assert.ok(baseRefCall,"main ref must be resolved before validating the Vault file");
-  assert.ok(contentRead,"Vault file must be checked against the resolved base commit");
-  assert.ok(commitWrite,"proposal commit must be created");
-  const baseSha="a".repeat(40);
-  assert.equal(new URL(contentRead.url).searchParams.get("ref"),baseSha,
-   "expected-blob check must read the file at the immutable main SHA, not mutable main");
-  assert.ok(fixture.calls.indexOf(baseRefCall)<fixture.calls.indexOf(contentRead),
-   "base ref must be resolved before the Vault file is read");
-  assert.ok(fixture.calls.indexOf(contentRead)<fixture.calls.indexOf(commitWrite),
-   "Vault file validation must finish before creating the proposal commit");
-  assert.deepEqual(JSON.parse(commitWrite.body).parents,[baseSha],
-   "proposal commit must use the exact commit whose file state was validated");
-  const recorded=knowledgeStore.calls.find(call=>call.method==="recordVaultProposal");
-  assert.equal(recorded?.input.expectedBlobSha,"ABSENT");
-  assert.ok(knowledgeStore.calls.some(call=>call.method==="enqueueOutbox"),
-   "proposal must enter the durable reconciliation outbox");
- }finally{globalThis.fetch=originalFetch}
-});

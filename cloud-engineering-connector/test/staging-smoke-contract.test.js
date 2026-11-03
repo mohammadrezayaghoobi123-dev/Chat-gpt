@@ -57,7 +57,7 @@ test("post-deploy smoke separates liveness from Durable Object readiness", () =>
 
 
 test("live acceptance requires an authenticated Knowledge Store probe, not only anonymous discovery", () => {
-  assert.match(smoke, /process\\.env\\.MCP_AUTH_TOKEN/, "release smoke must consume the environment-scoped owner credential");
+  assert.match(smoke, /process\.env\.MCP_AUTH_TOKEN/, "release smoke must consume the environment-scoped owner credential");
   assert.match(smoke, /knowledge_search/, "release smoke must call an authenticated Knowledge Store tool");
   assert.match(smoke, /knowledge_store/, "release smoke must assert Knowledge Store readiness");
 });

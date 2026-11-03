@@ -179,13 +179,20 @@ export class KnowledgeStore extends DurableObject {
     if (!SHA40.test(commitSha)) throw new TypeError("commitSha must be a 40-character lowercase Git SHA.");
     if (!SHA256.test(contentSha256)) throw new TypeError("contentSha256 must be a 64-character lowercase SHA-256 digest.");
     const now = Number.isSafeInteger(input?.now) && input.now > 0 ? input.now : Date.now();
+    const existing = this.ctx.storage.sql.exec(
+      "SELECT repository, path, content_sha256, updated_at FROM knowledge_document_refs WHERE tenant_id = ? AND document_id = ? AND commit_sha = ?",
+      tenantId, documentId, commitSha,
+    ).toArray()[0];
+    if (existing) {
+      if (existing.repository !== repository || existing.path !== path || existing.content_sha256 !== contentSha256) {
+        throw new TypeError("document revision is immutable; the same Git commit cannot be rebound to different content.");
+      }
+      return { tenantId, documentId, repository, path, commitSha, contentSha256, updatedAt: existing.updated_at };
+    }
     this.ctx.storage.sql.exec(`
       INSERT INTO knowledge_document_refs(
         tenant_id, document_id, repository, path, commit_sha, content_sha256, updated_at
       ) VALUES(?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(tenant_id, document_id, commit_sha) DO UPDATE SET
-        repository=excluded.repository, path=excluded.path,
-        content_sha256=excluded.content_sha256, updated_at=excluded.updated_at
     `, tenantId, documentId, repository, path, commitSha, contentSha256, now);
     return { tenantId, documentId, repository, path, commitSha, contentSha256, updatedAt: now };
   }

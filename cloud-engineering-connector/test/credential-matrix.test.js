@@ -129,8 +129,11 @@ test("health endpoint never reveals credential configuration booleans", async ()
   assert.equal(Object.hasOwn(body, "auth_configured"), false);
 });
 
+const readyzRequest = () => new Request("https://example.test/readyz", { headers: { "cf-connecting-ip": "203.0.113.20" } });
+const okLimiter = { limit: async () => ({ success: true }) };
+
 test("readyz reports not_ready when the Durable Object binding is absent", async () => {
-  const response = await worker.fetch(new Request("https://example.test/readyz"), {});
+  const response = await worker.fetch(readyzRequest(), { MCP_RATE_LIMITER: okLimiter });
   const body = await response.json();
   assert.equal(response.status, 503);
   assert.equal(body.status, "not_ready");
@@ -138,7 +141,8 @@ test("readyz reports not_ready when the Durable Object binding is absent", async
 });
 
 test("readyz uses a lightweight Durable Object ping rather than a full storage scan", async () => {
-  const response = await worker.fetch(new Request("https://example.test/readyz"), {
+  const response = await worker.fetch(readyzRequest(), {
+    MCP_RATE_LIMITER: okLimiter,
     WRITE_CONTROL: {
       idFromName: name => name,
       get: () => ({ ping: async () => ({ ok: true, schemaVersion: 1 }) })
@@ -148,6 +152,27 @@ test("readyz uses a lightweight Durable Object ping rather than a full storage s
   assert.equal(response.status, 200);
   assert.equal(body.status, "ready");
   assert.equal(body.durable_objects, "ok");
+});
+
+test("readyz is rate limited before it touches the shared write-control Durable Object (DEF-0012)", async () => {
+  let pings = 0;
+  const response = await worker.fetch(readyzRequest(), {
+    MCP_RATE_LIMITER: { limit: async () => ({ success: false }) },
+    WRITE_CONTROL: { idFromName: name => name, get: () => ({ ping: async () => { pings++; return { ok: true, schemaVersion: 1 }; } }) }
+  });
+  assert.equal(response.status, 429);
+  assert.deepEqual(await response.json(), { error: "rate_limited" });
+  assert.equal(pings, 0);
+});
+
+test("readyz fails closed without touching the Durable Object when the limiter is unavailable (DEF-0012)", async () => {
+  let pings = 0;
+  const response = await worker.fetch(readyzRequest(), {
+    WRITE_CONTROL: { idFromName: name => name, get: () => ({ ping: async () => { pings++; return { ok: true, schemaVersion: 1 }; } }) }
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: "rate_limiter_unavailable" });
+  assert.equal(pings, 0);
 });
 
 test("short configured MCP token fails closed before rate limiting or request parsing", async () => {

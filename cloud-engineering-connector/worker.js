@@ -669,7 +669,7 @@ async function knowledgeDocumentSync(args,env,tenantId){
   if(error instanceof ToolError)throw error;
   throw new ToolError("KNOWLEDGE_VAULT_READ_FAILED");
  }
- if(!file||file.type!=="file"||file.path!==path||typeof file.content!=="string"||
+ if(!file||file.type!=="file"||file.path!==path||file.encoding!=="base64"||typeof file.content!=="string"||
     typeof file.sha!=="string"||!/^[a-f0-9]{40}$/.test(file.sha)||
     !Number.isSafeInteger(file.size)||file.size<0||file.size>MAX_READ_FILE_BYTES){
   throw new ToolError("KNOWLEDGE_VAULT_FILE_INVALID");

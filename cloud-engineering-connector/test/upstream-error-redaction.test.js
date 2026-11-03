@@ -54,7 +54,7 @@ test("ordinary short messages are unchanged", async () => {
   const bad = await callWith({ MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: "write-only-test-token", GITHUB_READONLY_TOKEN: GH }, 401, JSON.stringify({ message: "Bad credentials" }));
   assert.equal(bad.error, "GitHub API 401: Bad credentials");
   const missing = await callWith({ MCP_AUTH_TOKEN: MCP }, 404, JSON.stringify({ message: "Not Found" }));
-  assert.match(missing.error, /^GitHub API 404: Not Found\. GITHUB_READONLY_TOKEN/);
+  assert.match(missing.error, /^GitHub read-only integration is not configured; add a repository-scoped GITHUB_READONLY_TOKEN/);
 });
 
 test("a thrown fetch error is redacted and a null JSON body does not leak internals (D3)", async () => {

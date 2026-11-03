@@ -323,3 +323,22 @@ test("Production post-deploy gate verifies Knowledge Store namespace isolation a
   assert.match(step, /schedules/);
   assert.ok(step.includes("*/5 * * * *"));
 });
+
+
+test("Production post-deploy verification accepts isolated KnowledgeStore namespaces and active five-minute Cron schedules", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
+  const observability = {
+    enabled: true,
+    head_sampling_rate: 1,
+    redact_query_string: true,
+    logs: { enabled: true, persist: true, head_sampling_rate: 1, invocation_logs: false },
+  };
+  runPreflightWithMissingObservability(
+    source,
+    "Verify Production Durable Object namespace isolation",
+    true,
+    false,
+    false,
+    observability,
+  );
+});

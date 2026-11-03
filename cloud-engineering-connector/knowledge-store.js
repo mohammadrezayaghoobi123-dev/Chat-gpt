@@ -706,6 +706,34 @@ export class KnowledgeStore extends DurableObject {
     });
   }
 
+  deferOutbox(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const eventId = identifier(input?.eventId, "eventId");
+    const leaseGeneration = input?.leaseGeneration;
+    if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw new TypeError("leaseGeneration must be a positive safe integer.");
+    const retryAfterMs = input?.retryAfterMs === undefined ? 300_000 : input.retryAfterMs;
+    if (!Number.isSafeInteger(retryAfterMs) || retryAfterMs < 60_000 || retryAfterMs > 86_400_000) {
+      throw new TypeError("retryAfterMs must be between 60000 and 86400000 milliseconds.");
+    }
+    const now = timestamp(input?.now);
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.ctx.storage.sql.exec(
+        "SELECT status, lease_generation FROM knowledge_outbox WHERE tenant_id=? AND event_id=?",
+        tenantId, eventId
+      ).toArray()[0];
+      if (!current || current.status !== "processing" || current.lease_generation !== leaseGeneration) {
+        throw fail("KNOWLEDGE_OUTBOX_LEASE_CONFLICT", "Outbox lease is stale or the event is not processing.");
+      }
+      this.ctx.storage.sql.exec(
+        "UPDATE knowledge_outbox SET status='retry', attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END, " +
+        "next_attempt_at=?, lease_until=NULL, last_error=NULL, updated_at=? " +
+        "WHERE tenant_id=? AND event_id=? AND status='processing' AND lease_generation=?",
+        now + retryAfterMs, now, tenantId, eventId, leaseGeneration
+      );
+      return this.getOutboxEvent({ tenantId, eventId });
+    });
+  }
+
   failOutbox(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
     const eventId = identifier(input?.eventId, "eventId");

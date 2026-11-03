@@ -102,12 +102,25 @@ describe("Option C Brain Store", () => {
     });
     const claimed = await store.claimOutbox({ now: 101, leaseMs: 1000 });
     expect(claimed).toMatchObject({ eventId: "evt-001", status: "processing", attempts: 1 });
-    await store.failOutbox({ eventId: "evt-001", leaseGeneration: claimed.leaseGeneration, error: "temporary GitHub 503", now: 102, maxAttempts: 2 });
+    await store.failOutbox({ tenantId: "tenant-a", eventId: "evt-001", leaseGeneration: claimed.leaseGeneration, error: "temporary GitHub 503", now: 102, maxAttempts: 2 });
     const retry = await store.claimOutbox({ now: 100_000, leaseMs: 1000 });
     expect(retry).toMatchObject({ eventId: "evt-001", status: "processing", attempts: 2 });
-    await store.failOutbox({ eventId: "evt-001", leaseGeneration: retry.leaseGeneration, error: "permanent failure", now: 100_001, maxAttempts: 2 });
+    await store.failOutbox({ tenantId: "tenant-a", eventId: "evt-001", leaseGeneration: retry.leaseGeneration, error: "permanent failure", now: 100_001, maxAttempts: 2 });
     await expect(store.getOutboxEvent({ tenantId: "tenant-a", eventId: "evt-001" }))
       .resolves.toMatchObject({ status: "dead_letter", attempts: 2 });
+    const otherTenant = await store.enqueueOutbox({
+      ...input, tenantId: "tenant-b", eventId: "evt-tenant-b",
+      payload: { repository: "owner/other-tenant", path: "docs/other.md" }, now: 100_002,
+    });
+    expect(otherTenant).toMatchObject({ tenantId: "tenant-b", eventId: "evt-tenant-b", status: "pending" });
+    const otherClaim = await store.claimOutbox({ now: 100_003, leaseMs: 1000 });
+    expect(otherClaim).toMatchObject({ tenantId: "tenant-b", eventId: "evt-tenant-b", status: "processing" });
+    await store.completeOutbox({
+      tenantId: "tenant-b", eventId: "evt-tenant-b",
+      leaseGeneration: otherClaim.leaseGeneration, now: 100_004,
+    });
+    await expect(store.getOutboxEvent({ tenantId: "tenant-b", eventId: "evt-tenant-b" }))
+      .resolves.toMatchObject({ status: "completed" });
   });
 
   it("indexes only derived snapshots and can rebuild FTS5 from stored index sources", async () => {

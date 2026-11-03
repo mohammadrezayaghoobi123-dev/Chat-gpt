@@ -149,7 +149,9 @@ The K1 slice implements the durable ledger primitives. It does not yet implement
 - The owner Vault is rooted in the current allowlisted repository, under `knowledge/tenants/owner/`, with `main` as canonical ref.
 - The read-only sync tool uses `GITHUB_READONLY_TOKEN`, resolves the latest path-specific commit on `main`, fetches that exact commit, verifies content bytes and SHA-256, and indexes only a verified snapshot.
 - Immutable revision registration and per-document sync status are wired to Brain Store.
-- Expected-blob-SHA compare-and-swap, draft PR proposals, and outbox-backed proposal reconciliation remain to be implemented before Vault writes are enabled.
+- The owner-only `knowledge_document_propose` tool requires the exact current Git blob SHA (or `ABSENT` for creation), performs the comparison using `GITHUB_READONLY_TOKEN` before any write, then uses the existing WriteControl-protected PR flow to create a draft PR against `main`.
+- The proposal is recorded in Brain Store outbox with the expected blob SHA, proposed content SHA-256, PR number/URL, branch, and commit. The PR is never merged automatically.
+- Live proposal creation and merge acceptance have not been exercised against GitHub Staging/Production; main branch protection remains a prerequisite for accepting canonical writes.
 
 ### K4 — Outbox dispatcher and reconciliation
 - Durable claims, lease fencing, bounded retries, dead-letter inspection.

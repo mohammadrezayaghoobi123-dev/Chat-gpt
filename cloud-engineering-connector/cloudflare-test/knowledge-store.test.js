@@ -46,15 +46,15 @@ describe("KnowledgeStore tenant-scoped data integrity", () => {
   it("rejects relationships whose endpoints do not both exist in the same tenant", async () => {
     const store = storeFor("knowledge-relationship-foreign-keys");
     await store.upsertEntity({ tenantId: "tenant-a", entityId: "source", entityType: "service", name: "Source", now: 100 });
-    await expect(store.createRelationship({
+    await expect(Promise.resolve().then(() => store.createRelationship({
       tenantId: "tenant-a", relationshipId: "rel-1", sourceEntityId: "source",
       targetEntityId: "missing", relationType: "depends_on", now: 101,
-    })).rejects.toThrow();
+    }))).rejects.toThrow();
     await store.upsertEntity({ tenantId: "tenant-b", entityId: "target", entityType: "service", name: "Other tenant", now: 100 });
     await expect(store.createRelationship({
       tenantId: "tenant-a", relationshipId: "rel-2", sourceEntityId: "source",
       targetEntityId: "target", relationType: "depends_on", now: 102,
-    })).rejects.toThrow();
+    }))).rejects.toThrow();
   });
 
   it("stores immutable document revisions keyed by tenant, document, and Git commit SHA", async () => {
@@ -78,16 +78,16 @@ describe("KnowledgeStore tenant-scoped data integrity", () => {
       tenantId: "tenant-a", documentId: "doc-1", repository: "owner/repo",
       path: "docs/design.md", commitSha: "a".repeat(40), contentSha256: "b".repeat(64),
     };
-    await expect(store.putDocumentRef({ ...base, commitSha: "not-a-git-sha" })).rejects.toThrow(/commitSha/);
-    await expect(store.putDocumentRef({ ...base, path: "../secrets.md" })).rejects.toThrow(/path/);
-    await expect(store.upsertEntity({
+    await expect(Promise.resolve().then(() => store.putDocumentRef({ ...base, commitSha: "not-a-git-sha" }))).rejects.toThrow(/commitSha/);
+    await expect(Promise.resolve().then(() => store.putDocumentRef({ ...base, path: "../secrets.md" }))).rejects.toThrow(/path/);
+    await expect(Promise.resolve().then(() => store.upsertEntity({
       tenantId: "tenant-a", entityId: "bad-entity", entityType: "note",
       name: "Bad properties", properties: ["not", "an", "object"],
-    })).rejects.toThrow(/properties/);
-    await expect(store.upsertEntity({
+    }))).rejects.toThrow(/properties/);
+    await expect(Promise.resolve().then(() => store.upsertEntity({
       tenantId: "tenant-a", entityId: "bad/id", entityType: "note",
       name: "Bad identifier", properties: {},
-    })).rejects.toThrow(/entityId/);
+    }))).rejects.toThrow(/entityId/);
   });
 
   it("persists tenant records in the Durable Object SQLite storage", async () => {

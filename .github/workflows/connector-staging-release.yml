@@ -226,11 +226,12 @@ jobs:
           });
           const body = await response.json();
           if (!response.ok || !body.success) throw new Error("Automatic rollback failed; manual rollback is required.");
-          const [health, readiness] = await Promise.all([
-            fetch(new URL("/healthz", process.env.STAGING_MCP_URL), { signal: AbortSignal.timeout(15000) }),
-            fetch(new URL("/readyz", process.env.STAGING_MCP_URL), { signal: AbortSignal.timeout(15000) }),
-          ]);
-          if (!health.ok || !readiness.ok) throw new Error("Rollback was requested but Staging liveness/readiness did not recover.");
+          // The captured pre-release Worker may predate /readyz; rollback verifies
+          // restored liveness only. Candidate readiness is asserted before rollback.
+          const health = await fetch(new URL("/healthz", process.env.STAGING_MCP_URL), {
+            signal: AbortSignal.timeout(15000),
+          });
+          if (!health.ok) throw new Error("Rollback was requested but Staging liveness did not recover.");
           console.log("Staging traffic restored to the captured immutable rollback version.");
           NODE
         env:

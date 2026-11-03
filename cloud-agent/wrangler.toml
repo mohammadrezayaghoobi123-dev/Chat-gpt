@@ -30,3 +30,15 @@ namespace_id = "931120261101"
 [ratelimits.simple]
 limit = 12
 period = 60
+
+
+[observability]
+enabled = true
+head_sampling_rate = 0.1
+redact_query_string = true
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 0.1
+persist = true
+invocation_logs = false

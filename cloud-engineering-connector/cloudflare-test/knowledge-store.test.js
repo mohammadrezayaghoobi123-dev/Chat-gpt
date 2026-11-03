@@ -165,3 +165,48 @@ describe("Option C Brain Store", () => {
     });
   });
 });
+
+test("Vault proposals persist idempotently and transition from proposed to merged", async () => {
+  const store = storeFor("vault-proposal-lifecycle");
+  const input = {
+    tenantId: "tenant-a", proposalId: "proposal-00000001", documentId: "doc_123",
+    repository: "mohammadrezayaghoobi123-dev/Chat-gpt", path: "knowledge/tenants/owner/architecture.md",
+    expectedBlobSha: "ABSENT", proposedContentSha256: "a".repeat(64),
+    pullRequestNumber: 987, pullRequestUrl: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/987",
+    branch: "assistant/mcp-vault-proposal-01", commitSha: "b".repeat(40), now: 100,
+  };
+  const recorded = await store.recordVaultProposal(input);
+  expect(recorded).toMatchObject({ tenantId: "tenant-a", proposalId: "proposal-00000001", status: "proposed" });
+  await expect(store.recordVaultProposal(input)).resolves.toMatchObject({ pullRequestNumber: 987 });
+  await expect(store.listPendingVaultProposals({ tenantId: "tenant-a" })).resolves.toHaveLength(1);
+  await expect(store.getVaultProposal({ tenantId: "tenant-b", proposalId: "proposal-00000001" })).resolves.toBeNull();
+  const merged = await store.updateVaultProposal({
+    tenantId: "tenant-a", proposalId: "proposal-00000001", status: "merged",
+    mergeCommitSha: "c".repeat(40), mergedBlobSha: "d".repeat(40), now: 200,
+  });
+  expect(merged).toMatchObject({ status: "merged", mergeCommitSha: "c".repeat(40), mergedBlobSha: "d".repeat(40) });
+  await expect(store.listPendingVaultProposals({ tenantId: "tenant-a" })).resolves.toHaveLength(0);
+  await runInDurableObject(store, async instance => {
+    expect(() => instance.updateVaultProposal({
+      tenantId: "tenant-a", proposalId: "proposal-00000001", status: "closed", now: 300,
+    })).toThrow(/already in a terminal state/);
+  });
+});
+
+test("Vault proposal IDs cannot be rebound to another change or non-canonical PR URL", async () => {
+  const store = storeFor("vault-proposal-immutability");
+  const input = {
+    tenantId: "tenant-a", proposalId: "proposal-00000002", documentId: "doc_456",
+    repository: "mohammadrezayaghoobi123-dev/Chat-gpt", path: "knowledge/tenants/owner/adr.md",
+    expectedBlobSha: "e".repeat(40), proposedContentSha256: "f".repeat(64),
+    pullRequestNumber: 988, pullRequestUrl: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/988",
+    branch: "assistant/mcp-vault-proposal-02", commitSha: "1".repeat(40), now: 100,
+  };
+  await store.recordVaultProposal(input);
+  await runInDurableObject(store, async instance => {
+    expect(() => instance.recordVaultProposal({ ...input, proposedContentSha256: "2".repeat(64) }))
+      .toThrow(/already bound to a different Vault change/);
+    expect(() => instance.recordVaultProposal({ ...input, pullRequestUrl: "https://evil.example/pull/988" }))
+      .toThrow(/canonical GitHub URL/);
+  });
+});

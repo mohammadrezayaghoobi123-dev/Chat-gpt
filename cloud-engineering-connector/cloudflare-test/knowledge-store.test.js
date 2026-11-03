@@ -166,7 +166,7 @@ describe("Option C Brain Store", () => {
   });
 });
 
-test("Vault proposals persist idempotently and transition from proposed to merged", async () => {
+it("Vault proposals persist idempotently and transition from proposed to merged", async () => {
   const store = storeFor("vault-proposal-lifecycle");
   const input = {
     tenantId: "tenant-a", proposalId: "proposal-00000001", documentId: "doc_123",
@@ -211,7 +211,7 @@ test("Vault proposal IDs cannot be rebound to another change or non-canonical PR
   });
 });
 
-test("deferOutbox releases a pending-review lease without consuming retry attempts", async () => {
+it("deferOutbox releases a pending-review lease without consuming retry attempts", async () => {
   const store = storeFor("outbox-defer");
   await store.enqueueOutbox({
     tenantId: "tenant-a", eventId: "vault-event-1", idempotencyKey: "vault-proposal-1",

@@ -28,12 +28,22 @@ function identifier(value, field) {
   return result;
 }
 
+function canonicalJson(value) {
+  return JSON.stringify(value, (key, item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+    return Object.keys(item).sort().reduce((sorted, childKey) => {
+      sorted[childKey] = item[childKey];
+      return sorted;
+    }, Object.create(null));
+  });
+}
+
 function jsonObject(value, field) {
   if (value === undefined) return "{}";
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError(field + " must be a JSON object.");
   }
-  const encoded = JSON.stringify(value);
+  const encoded = canonicalJson(value);
   if (new TextEncoder().encode(encoded).byteLength > MAX_PROPERTIES_BYTES) {
     throw new RangeError(field + " exceeds " + MAX_PROPERTIES_BYTES + " bytes.");
   }
@@ -161,12 +171,12 @@ export class KnowledgeStore extends DurableObject {
     );
     sql.exec(
       "CREATE TABLE IF NOT EXISTS knowledge_outbox (" +
-      "event_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, " +
+      "event_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, " +
       "aggregate_type TEXT NOT NULL, aggregate_id TEXT NOT NULL, event_type TEXT NOT NULL, " +
       "payload_json TEXT NOT NULL CHECK(json_valid(payload_json)), fingerprint TEXT NOT NULL, " +
       "status TEXT NOT NULL CHECK(status IN ('pending','processing','retry','completed','dead_letter')), " +
       "attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL, lease_until INTEGER, " +
-      "lease_generation INTEGER NOT NULL DEFAULT 0, last_error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+      "lease_generation INTEGER NOT NULL DEFAULT 0, last_error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(tenant_id, idempotency_key))"
     );
     sql.exec(
       "CREATE INDEX IF NOT EXISTS knowledge_outbox_due " +
@@ -501,8 +511,8 @@ export class KnowledgeStore extends DurableObject {
     const now = timestamp(input?.now);
     const fingerprint = await sha256([tenantId, aggregateType, aggregateId, eventType, payloadJson].join("\n"));
     const existing = this.ctx.storage.sql.exec(
-      "SELECT * FROM knowledge_outbox WHERE idempotency_key = ?",
-      idempotencyKey
+      "SELECT * FROM knowledge_outbox WHERE tenant_id = ? AND idempotency_key = ?",
+      tenantId, idempotencyKey
     ).toArray()[0];
     if (existing) {
       if (existing.fingerprint !== fingerprint || existing.tenant_id !== tenantId) {

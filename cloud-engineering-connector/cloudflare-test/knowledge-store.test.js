@@ -193,7 +193,7 @@ it("Vault proposals persist idempotently and transition from proposed to merged"
   });
 });
 
-test("Vault proposal IDs cannot be rebound to another change or non-canonical PR URL", async () => {
+it("Vault proposal IDs cannot be rebound to another change or non-canonical PR URL", async () => {
   const store = storeFor("vault-proposal-immutability");
   const input = {
     tenantId: "tenant-a", proposalId: "proposal-00000002", documentId: "doc_456",

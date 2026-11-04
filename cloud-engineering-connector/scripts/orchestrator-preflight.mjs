@@ -216,6 +216,7 @@ export function buildPreflightReport(input = {}) {
       openai: openaiAvailable ? agents.openai : "DISABLED_BY_POLICY",
       anthropic: anthropicAvailable ? agents.anthropic : "DISABLED_BY_POLICY"
     },
+    storageInventory: { d1DatabaseCount: d1Count, queueCount },
     baseline: { status: baseline.status ?? "UNKNOWN", commitSha: baseline.commitSha ?? null, runId: baseline.runId ?? null },
     checks,
     blockers,

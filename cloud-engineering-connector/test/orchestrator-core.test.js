@@ -79,6 +79,7 @@ function makeStore({ tasks = [], stopSwitch = false, outbox = [] } = {}) {
       messages.set(envelope.messageId, { fingerprint: JSON.stringify(envelope), result: null });
       return { inserted: true, priorResult: null };
     },
+    async claimTask({ ownerId, leaseMs }) { return { ownerId, fencingToken: 1, leaseUntil: NOW + leaseMs }; },
     async claimOutbox() { counters.claimed += 1; return outbox.shift() ?? null; },
     async completeOutbox() { counters.completed += 1; },
     async deferOutbox() { counters.deferred += 1; },
@@ -100,6 +101,8 @@ function depsFor(store, overrides = {}) {
     getCapability: async () => capability(),
     getQuota: async () => quota(),
     createEventId: (taskId, action) => taskId + ":" + action + ":" + NOW,
+    workerId: "agent:1",
+    createLeaseToken: async taskId => "lease-token-for-" + taskId,
     ...overrides
   };
 }
@@ -130,7 +133,7 @@ test("intakeTask validates and persists a task through the injected store", asyn
     tenantId: "tenant-a", task: validTask(), idempotencyKey: "intake-1",
     eventId: "created-1", outboxEventId: "outbox-1"
   }, depsFor(store));
-  assert.equal(result.state, "RECEIVED");
+  assert.equal(result.state, "READY");
   assert.equal(result.task.taskId, "task-core");
 });
 
@@ -144,7 +147,7 @@ test("intakeTask rejects unauthenticated actors and malformed task contracts", a
   await assert.rejects(
     intakeTask({ tenantId: "tenant-a", task: validTask("bad", { acceptanceCriteria: [] }), idempotencyKey: "x", eventId: "e", outboxEventId: "o" },
       depsFor(store)),
-    error => error.code === "INVALID_TASK_CONTRACT"
+    error => error.code === "INVALID_TASK"
   );
 });
 
@@ -206,7 +209,7 @@ test("processAgentMessage verifies sender, expiry, correlation, and scope before
     error => error.code === "MESSAGE_EXPIRED"
   );
   await assert.rejects(
-    processAgentMessage(validEnvelope(task, { scope: { ...task.scope, paths: ["../../.env"] } }), deps),
+    processAgentMessage(validEnvelope(task, { scope: { ...task.scope, paths: ["secrets/config.json"] } }), deps),
     error => error.code === "MESSAGE_SCOPE_ESCALATION"
   );
   await assert.rejects(
@@ -281,7 +284,7 @@ test("runDispatchCycle never invokes an unverified adapter and defers the outbox
     tenantId: "tenant-a", eventId: "outbox-1", aggregateType: "task", aggregateId: task.taskId,
     eventType: "orchestrator.task.received", leaseGeneration: 1, payload: { taskId: task.taskId }
   };
-  const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "RECEIVED", version: 1, fencingToken: 0 }], outbox: [event] });
+  const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "SCHEDULED", version: 3, fencingToken: 0 }], outbox: [event] });
   let invoked = 0;
   const result = await runDispatchCycle(depsFor(store, {
     adapters: { task: { verified: false, authenticated: false, state: "UNAVAILABLE", invoke: async () => { invoked += 1; } } }
@@ -297,13 +300,14 @@ test("runDispatchCycle invokes only a verified zero-cost adapter and completes t
     tenantId: "tenant-a", eventId: "outbox-2", aggregateType: "task", aggregateId: task.taskId,
     eventType: "orchestrator.task.received", leaseGeneration: 1, payload: { taskId: task.taskId }
   };
-  const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "RECEIVED", version: 1, fencingToken: 0 }], outbox: [event] });
+  const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "SCHEDULED", version: 3, fencingToken: 0 }], outbox: [event] });
   let invoked = 0;
   const result = await runDispatchCycle(depsFor(store, {
     adapters: { task: {
       verified: true, authenticated: true, state: "AVAILABLE_VERIFIED_FREE",
-      billingEnabled: false, paidFallback: false, maxSpendCents: 0, mock: false,
-      invoke: async () => { invoked += 1; return { ok: true }; }
+      billingEnabled: false, paidFallback: false, maxSpendCents: 0, quotaRemaining: 10,
+      expiresAt: NOW + 60_000, mock: false,
+      invoke: async () => { invoked += 1; return { ok: true, commitSha: SHA }; }
     } }
   }));
   assert.equal(invoked, 1);

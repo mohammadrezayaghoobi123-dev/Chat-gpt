@@ -269,6 +269,24 @@ jobs:
           });
           const body = await response.json();
           if (!response.ok || !body.success) throw new Error("Automatic Production rollback failed; manual rollback is required.");
+          const verificationUrl = url + "?per_page=1&page=1";
+          const verificationResponse = await fetch(verificationUrl, {
+            headers: { authorization: "Bearer " + token, accept: "application/json" },
+            signal: AbortSignal.timeout(15000),
+          });
+          const verificationBody = await verificationResponse.json();
+          if (!verificationResponse.ok || !verificationBody.success) {
+            throw new Error("Production rollback was requested, but the active deployment could not be verified.");
+          }
+          const activeDeployment = verificationBody.result?.deployments?.[0];
+          const activeVersions = activeDeployment?.versions || [];
+          if (
+            activeVersions.length !== 1 ||
+            activeVersions[0]?.version_id !== previous ||
+            activeVersions[0]?.percentage !== 100
+          ) {
+            throw new Error("Production rollback was requested, but 100% traffic is not routed to the captured previous version.");
+          }
           // The pre-release Production Worker may predate /readyz and the Durable Object migration.
           const health = await fetch(new URL("/healthz", process.env.PRODUCTION_MCP_URL), { signal: AbortSignal.timeout(15000) });
           if (!health.ok) throw new Error("Rollback was requested but Production liveness did not recover.");

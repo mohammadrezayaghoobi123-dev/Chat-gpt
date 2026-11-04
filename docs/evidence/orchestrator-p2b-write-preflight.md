@@ -40,7 +40,7 @@ Positive fixtures use synthetic evidence-shaped values only. They do not prove a
 - Exact code/test SHA: `07d741193559cc9c8a0e98d91178c8c616779a66`.
 - Orchestrator GitHub Intake Contract run `41819006199`: success; 39 tests passed, 0 failed (15 P2-A + 24 P2-B).
 - Cloud Engineering Connector CI run `41819006287`: success; Node suite 305 passed, 0 failed; Durable Object/Vitest suite 70 passed, 0 failed; `npm audit` reported 0 vulnerabilities; syntax checks and Wrangler production/staging dry-runs passed. Staging smoke was skipped; no deployment occurred.
-- Full History Secret Scan run `41819006229`: success on this PR head; PR diff scan found no leaks and full-history scan checked 2,421 commits with no leaks.
+- Full History Secret Scan run `41819006229`: success on code/test SHA `07d741193559cc9c8a0e98d91178c8c616779a66` before the evidence-only documentation commit; PR diff scan found no leaks and full-history scan checked 2,421 commits with no leaks.
 
 ## Current blockers — no values inferred
 

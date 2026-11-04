@@ -827,25 +827,42 @@ export class KnowledgeStore extends DurableObject {
 
   claimOutbox(input) {
     const now = timestamp(input?.now);
+    const tenantId = input?.tenantId === undefined ? null : identifier(input.tenantId, "tenantId");
     const leaseMs = input?.leaseMs === undefined ? 30_000 : input.leaseMs;
     if (!Number.isSafeInteger(leaseMs) || leaseMs < 1_000 || leaseMs > 300_000) {
       throw new TypeError("leaseMs must be between 1000 and 300000 milliseconds.");
     }
-    const sql = this.ctx.storage.sql;
-    const row = sql.exec(
-      "SELECT * FROM knowledge_outbox WHERE " +
-      "((status IN ('pending','retry') AND next_attempt_at <= ?) OR (status = 'processing' AND lease_until <= ?)) " +
-      "ORDER BY next_attempt_at, created_at LIMIT 1",
-      now, now
-    ).toArray()[0];
-    if (!row) return null;
-    const leaseGeneration = row.lease_generation + 1;
-    sql.exec(
-      "UPDATE knowledge_outbox SET status='processing', attempts=attempts+1, lease_until=?, " +
-      "lease_generation=?, updated_at=? WHERE event_id=? AND lease_generation=?",
-      now + leaseMs, leaseGeneration, now, row.event_id, row.lease_generation
-    );
-    return outboxRecord(sql.exec("SELECT * FROM knowledge_outbox WHERE event_id = ?", row.event_id).one());
+    return this.ctx.storage.transactionSync(() => {
+      const sql = this.ctx.storage.sql;
+      const eligibility =
+        "((status IN ('pending','retry') AND next_attempt_at <= ?) OR (status = 'processing' AND lease_until <= ?))";
+      const row = tenantId
+        ? sql.exec(
+            "SELECT * FROM knowledge_outbox WHERE tenant_id=? AND " + eligibility +
+            " ORDER BY next_attempt_at, created_at LIMIT 1",
+            tenantId, now, now
+          ).toArray()[0]
+        : sql.exec(
+            "SELECT * FROM knowledge_outbox WHERE " + eligibility +
+            " ORDER BY next_attempt_at, created_at LIMIT 1",
+            now, now
+          ).toArray()[0];
+      if (!row) return null;
+      const leaseGeneration = row.lease_generation + 1;
+      sql.exec(
+        "UPDATE knowledge_outbox SET status='processing', attempts=attempts+1, lease_until=?, " +
+        "lease_generation=?, updated_at=? WHERE tenant_id=? AND event_id=? AND lease_generation=?",
+        now + leaseMs, leaseGeneration, now, row.tenant_id, row.event_id, row.lease_generation
+      );
+      const updated = sql.exec(
+        "SELECT * FROM knowledge_outbox WHERE tenant_id=? AND event_id=?",
+        row.tenant_id, row.event_id
+      ).toArray()[0];
+      if (!updated || updated.status !== "processing" || updated.lease_generation !== leaseGeneration) {
+        throw fail("KNOWLEDGE_OUTBOX_LEASE_CONFLICT", "Outbox event could not be claimed with a unique lease generation.");
+      }
+      return outboxRecord(updated);
+    });
   }
 
   completeOutbox(input) {

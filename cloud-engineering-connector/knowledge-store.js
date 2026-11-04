@@ -1135,8 +1135,9 @@ export class KnowledgeStore extends DurableObject {
           "SELECT * FROM orchestrator_execution_leases WHERE tenant_id=? AND task_id=?",
           tenantId, taskId
         ).toArray()[0];
+        const leaseOwnerId = input?.leaseOwnerId ?? actorId;
         if (!lease || lease.lease_until <= now || lease.lease_token_hash !== leaseTokenHash ||
-            lease.fencing_token !== input.fencingToken || lease.owner_id !== actorId) {
+            lease.fencing_token !== input.fencingToken || lease.owner_id !== leaseOwnerId) {
           throw fail("ORCHESTRATOR_LEASE_CONFLICT", "Execution lease is stale, expired, or owned by another actor.");
         }
         effectiveEvidence = {

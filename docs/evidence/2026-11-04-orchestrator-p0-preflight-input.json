@@ -1,0 +1,105 @@
+{
+  "generatedAt": "2026-11-04T07:55:35.143Z",
+  "repo": {
+    "name": "mohammadrezayaghoobi123-dev/Chat-gpt",
+    "visibility": "public",
+    "defaultBranch": "main",
+    "mainSha": "f2cae91de818385ec48daafc43c621b9e2cc0675",
+    "baseBranch": "integration/unify-main-and-integrated-2026-11-02",
+    "baseSha": "8830dfe8908bf1e44a86e592946fb84eacb51756"
+  },
+  "github": {
+    "standardPublicRunnerFree": true,
+    "workflowPermissions": [
+      "contents:read",
+      "pull-requests:read",
+      "actions:read"
+    ],
+    "protectedBranchPolicyVerified": false,
+    "taskScopedWriteCredentialVerified": false,
+    "pullRequests": [
+      {
+        "number": 145,
+        "state": "open",
+        "draft": false,
+        "merged": false,
+        "headSha": "bc747dd84fb1fbcb8c8311412825779c4f66052f",
+        "base": "integration/unify-main-and-integrated-2026-11-02",
+        "baseSha": "8830dfe8908bf1e44a86e592946fb84eacb51756"
+      },
+      {
+        "number": 146,
+        "state": "open",
+        "draft": false,
+        "merged": false,
+        "headSha": "ae05d3bdc2c396770ec470f6c5483806ded5107f",
+        "base": "docs/ai-engineering-handoff-protocol-2026-11-03",
+        "baseSha": "4af7e6395cf1fa17fe3837e2b46cbbe95e1a0c6e"
+      },
+      {
+        "number": 147,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "9edcb05e603feebf39063f05cc35a70c12274bd3",
+        "base": "integration/unify-main-and-integrated-2026-11-02",
+        "baseSha": "8830dfe8908bf1e44a86e592946fb84eacb51756"
+      }
+    ]
+  },
+  "cloudflareInventory": {
+    "planVerified": false,
+    "workers": [
+      "chat-gpt111",
+      "chat-gpt111-staging",
+      "master-brain-cloud-agent"
+    ],
+    "durableObjectNamespaces": [
+      {
+        "script": "master-brain-cloud-agent",
+        "className": "AgentBudget",
+        "name": "master-brain-cloud-agent_AgentBudget"
+      },
+      {
+        "script": "master-brain-cloud-agent",
+        "className": "AgentSession",
+        "name": "master-brain-cloud-agent_AgentSession"
+      },
+      {
+        "script": "chat-gpt111-staging",
+        "className": "WriteControl",
+        "name": "chat-gpt111-staging_WriteControl"
+      }
+    ],
+    "knowledgeStoreSourceDeclared": true,
+    "knowledgeStoreNamespacePresent": false,
+    "d1Databases": [],
+    "queues": []
+  },
+  "agentEligibility": {
+    "openai": "UNAVAILABLE",
+    "anthropic": "UNAVAILABLE"
+  },
+  "independentReviewer": {
+    "verified": false
+  },
+  "backupRestore": {
+    "verified": false,
+    "externalCheckpoint": false
+  },
+  "baseline": {
+    "status": "PASS",
+    "commitSha": "8830dfe8908bf1e44a86e592946fb84eacb51756"
+  },
+  "evidenceRefs": [
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/commit/8830dfe8908bf1e44a86e592946fb84eacb51756",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/commit/f2cae91de818385ec48daafc43c621b9e2cc0675",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/145",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/146",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/147",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41656636920",
+    "https://developers.openai.com/api/docs/guides/chatgpt-api-credits",
+    "https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers",
+    "https://docs.github.com/en/actions/concepts/billing-and-usage"
+  ]
+}

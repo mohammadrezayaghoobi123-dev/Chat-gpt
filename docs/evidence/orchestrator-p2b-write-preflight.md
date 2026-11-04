@@ -1,12 +1,12 @@
 # P2-B Write Preflight — Evidence and Current Blockers
 
-**Status:** Structural preflight implemented. P2-B execution remains BLOCKED. No GitHub write identity, live ledger, task record, branch, or external side effect is enabled by this module.
+**Status:** Structural preflight implemented and focused CI-verified on `665a42e81ceae32dd821185296735f38edac9078`. P2-B execution remains BLOCKED. No GitHub write identity, live ledger, task record, branch, or external side effect is enabled by this module.
 
 ## Purpose
 
 `cloud-engineering-connector/orchestrator-github-write-preflight.js` checks whether all P2-B prerequisites have independently verifiable evidence before a separate execution authorization can even be considered.
 
-The only positive result is `READY_FOR_SEPARATE_EXECUTION_APPROVAL`. It is not an `ALLOW` decision and does not authorize execution. Every result explicitly returns:
+The only positive result is `READY_FOR_SEPARATE_EXECUTION_APPROVAL`. It is not an `ALLOW` decision and does not authorize execution. Owner approval is cryptographically bound to a canonical SHA-256 digest of the exact repository identity, actor/event/label policy, credential identity/scope, ledger evidence, repository controls, base ref/SHA, independent reviewer, and stop-switch state. Any change invalidates the approval hash. Every result explicitly returns:
 - `sideEffects: false`
 - `branchCreation: false`
 - `taskPersistence: false`
@@ -28,9 +28,16 @@ Missing or malformed evidence returns `BLOCKED` with stable reason codes.
 
 ## Verification fixtures are not approvals
 
-The positive test fixture uses synthetic evidence-shaped values to prove schema behavior. It does not assert that any real owner approval, actor allowlist, GitHub App, Durable Object namespace, backup/restore, branch protection, reviewer, or stop-switch evidence exists. No secret values or credential material are read.
+The positive test fixture uses synthetic evidence-shaped values to prove schema behavior, including exact scope-hash binding. It does not assert that any real owner approval, actor allowlist, GitHub App, Durable Object namespace, backup/restore, branch protection, reviewer, or stop-switch evidence exists. No secret values or credential material are read.
 
 The preflight module is deliberately pure and has no GitHub, Cloudflare, network, or ledger imports. A future write-capable adapter must independently retrieve and authenticate these evidence sources, bind approval to the exact scope hash, re-check the stop switch immediately before the side effect, and require a separate explicit authorization. It must not treat caller-supplied booleans as authentication.
+
+## Verification evidence
+
+- Exact tested branch SHA: `665a42e81ceae32dd821185296735f38edac9078`.
+- Orchestrator GitHub Intake Contract run `41815605948`: success, 29 tests passed, 0 failed (15 P2-A + 14 P2-B).
+- Full History Secret Scan run `41815605982`: pending at the time this evidence file was updated; do not treat it as passed until a completed success is observed.
+- Full Connector CI is triggered by Draft PR #153 and must be rechecked against the final head SHA.
 
 ## Test coverage
 

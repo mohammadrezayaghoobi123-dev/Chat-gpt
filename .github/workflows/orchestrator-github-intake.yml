@@ -1,6 +1,9 @@
 name: Orchestrator GitHub Intake Contract
 
 on:
+  push:
+    branches:
+      - "plan/orchestrator-p2-github-intake-2026-11-04"
   pull_request:
     paths:
       - ".github/workflows/orchestrator-github-intake.yml"

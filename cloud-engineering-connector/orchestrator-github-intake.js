@@ -64,7 +64,7 @@ function validateTaskScope(scope) {
 }
 
 function validConfiguration(config) {
-  return isRecord(config) &&
+  return isRecord(config) && config.schemaVersion === 1 &&
     Number.isSafeInteger(config.repositoryId) && config.repositoryId > 0 &&
     typeof config.repository === "string" && REPOSITORY.test(config.repository) &&
     Array.isArray(config.authorizedActorIds) && config.authorizedActorIds.length > 0 &&
@@ -148,6 +148,7 @@ export async function validateGitHubIntakeEvent({
   return {
     accepted: true,
     decision: "DRY_RUN_ACCEPT",
+    schemaVersion: 1,
     reasonCode: "READ_ONLY_INTAKE_VALIDATED",
     repository,
     repositoryId,

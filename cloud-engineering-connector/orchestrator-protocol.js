@@ -115,7 +115,7 @@ export function validateMessageEnvelope(envelope, { now, authenticatedSender } =
   if (!Number.isSafeInteger(now) || now < 1) {
     throw fail("INVALID_CLOCK", "A trusted current timestamp is required.");
   }
-  if (!isRecord(authenticatedSender) || authenticatedSender.authenticated !== true ||
+  if (!isRecord(authenticatedSender) || authenticatedSender.authenticated !== true || authenticatedSender.identityVerified !== true ||
       typeof authenticatedSender.id !== "string" || authenticatedSender.id.length === 0) {
     throw fail("AUTHENTICATED_SENDER_REQUIRED", "An authenticated transport identity is required.");
   }

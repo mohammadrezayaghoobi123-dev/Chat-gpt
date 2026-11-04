@@ -1,6 +1,6 @@
 # P2-A Read-Only GitHub Intake Contract — Evidence
 
-**Status:** Implemented as a deterministic validation contract; CI verification pending. No live task intake or side effect is enabled.
+**Status:** P2-A read-only validation contract implemented and CI-verified on `6e31ea9575d0baa8a3f5da255f161bb19de86008`. No live task intake or side effect is enabled.
 
 ## Repository identity
 
@@ -32,6 +32,7 @@ Replay protection is an interface contract: `replayStore.claim({ deliveryId, ide
 - pins `actions/checkout` to a full commit SHA;
 - disables persisted checkout credentials;
 - runs syntax checks and the focused Node test file;
+- observed runner token permissions were `contents: read` and GitHub's implicit `metadata: read` only.
 - does not receive issue/comment events and does not execute task text.
 
 This is intentionally not a live issue-intake trigger. The owner has not yet approved a task-creation event, actor-ID allowlist, exact label, or live credential/replay-store design.
@@ -50,6 +51,15 @@ The focused test suite covers:
 - prompt-injection strings remaining untrusted data and not being returned;
 - protected branch, traversal, sensitive path, and symlink-escape rejection;
 - replay-store errors and sanitized deny results.
+
+## Verification evidence
+
+Verified on exact PR head `6e31ea9575d0baa8a3f5da255f161bb19de86008`:
+- Orchestrator GitHub Intake Contract: run `41813063575` — success; 15 tests passed, 0 failed.
+- Cloud Engineering Connector CI: run `41813063638` — success; 281 Node tests passed, 0 failed; syntax and Wrangler configuration checks passed.
+- Full History Secret Scan: run `41813063665` — success.
+- The first focused run exposed missing protection for `.github/workflows/`; the path deny rule was added and the subsequent exact-SHA focused run passed.
+- PR #152 remains Draft and unmerged. No merge was performed.
 
 ## Explicit non-claims / remaining gates
 

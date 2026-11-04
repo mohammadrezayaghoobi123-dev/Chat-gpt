@@ -105,6 +105,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const ledger = ledgerFor("ledger-transition-outbox-atomic");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0007", inputHash: "5".repeat(64), now });
     const lease = await ledger.claimTask({ workerId: "agent:worker-1", leaseMs: 30_000, now });
+    expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
     const result = await ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
       actor: agent, evidence, now: now + 1, workerId: "agent:worker-1", leaseGeneration: lease.leaseGeneration,

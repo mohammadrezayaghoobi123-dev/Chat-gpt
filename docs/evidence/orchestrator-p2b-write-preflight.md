@@ -89,3 +89,33 @@ The code-validation head was `f81ad2ab3fdca789e668ee9e2d80e65223fbbf35`. The lat
 - These checks do not constitute a live provider exercise, a staging deployment, or proof of Production readiness.
 
 The latest evidence-document commit `a18a77f036e1af87350ce899150c6f5f0594d0b2` passed Cloud Engineering Connector CI run `41898873033`, Orchestrator GitHub Intake Contract run `41898873296`, and Full History Secret Scan run `41898873112`. Staging post-deploy smoke remained skipped. The live inventory findings above are read-only observations and do not authorize provisioning, binding migrations, secret changes, or deployment.
+
+
+## Ledger readiness defect and release-gate correction — 2026-11-04
+
+The repository already contained the SQLite Durable Object implementation in `orchestrator-ledger.js`, its class export in `index.js`, and Production/Staging `ORCHESTRATOR_LEDGER` bindings with additive Wrangler migration `v3`. The live account inventory did not yet show the namespace on either deployed `chat-gpt111` Worker, so source configuration alone was not evidence of a live namespace.
+
+A real readiness gap was found: `GET /readyz` checked `WRITE_CONTROL` and `KNOWLEDGE_STORE` but did not check `ORCHESTRATOR_LEDGER`. It could therefore report ready while the orchestration ledger was unavailable.
+
+Corrections on the P2-B branch:
+
+1. `/readyz` now requires the `ORCHESTRATOR_LEDGER` binding, calls its SQLite `ping()`, and verifies schema version 1. It returns component-specific readiness states and HTTP 503 when any required Durable Object is unavailable.
+2. Worker and credential-matrix tests now verify successful Ledger readiness and fail-closed behavior when the Ledger binding is absent.
+3. Staging post-deploy verification now requires the `ORCHESTRATOR_LEDGER` namespace after the Wrangler migration, and Staging smoke asserts the Ledger readiness field.
+4. Production post-deploy verification now requires separate Production and Staging `ORCHESTRATOR_LEDGER` namespaces.
+5. Wrangler contract tests verify the independent SQLite binding and migration v3 in both environments.
+
+TDD evidence: the new readiness contract test first failed against the old implementation (318 Node tests passed, 1 failed), specifically because `readyz` did not require the Ledger. After the implementation and test-fixture corrections, the verified code head was `1f3356abe1b04aba36fcd6a79087abcadb866c86`.
+
+Verification on that exact code head:
+
+- Cloud Engineering Connector CI run `41903650137`: success.
+- Node test suite: 323 passed, 0 failed.
+- Cloudflare Durable Object/Vitest suite: 70 passed across 4 test files.
+- `npm audit --audit-level=moderate`: 0 vulnerabilities.
+- Production and Staging Wrangler dry-runs: both completed successfully.
+- Orchestrator GitHub Intake Contract run `41903650073`: success.
+- Full History Secret Scan run `41903650201`: success.
+- Post-deploy Staging smoke: skipped; no deployment occurred.
+
+The code correction is CI-verified but not deployed. The previously observed live Cloudflare inventory still lacked the Ledger namespace binding on deployed Workers at the time of inspection. A Staging release using the approved immutable release workflow is still required to apply migration v3 and prove the live binding and SQLite probe. No Worker, namespace, secret, billing, traffic, or Production deployment was changed by this work.

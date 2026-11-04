@@ -161,6 +161,15 @@ test("scheduleTask schedules only when dependencies, scope, capability, quota, a
   assert.equal(result.task.state, "SCHEDULED");
 });
 
+
+test("scheduleTask revalidates a RETRY_WAIT task before scheduling the next bounded attempt", async () => {
+  const task = validTask("task-retry");
+  const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "RETRY_WAIT", version: 4, fencingToken: 1 }] });
+  const result = await scheduleTask(task.taskId, depsFor(store));
+  assert.equal(result.scheduled, true);
+  assert.equal(result.task.state, "SCHEDULED");
+});
+
 test("scheduleTask blocks missing dependencies and active stop switch", async () => {
   const task = validTask("task-dep", { dependencies: ["task-missing"] });
   const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "READY", version: 1, fencingToken: 0 }] });
@@ -315,6 +324,27 @@ test("runDispatchCycle never invokes an unverified adapter and defers the outbox
   assert.equal(invoked, 0);
   assert.equal(result.deferred, 1);
   assert.equal(result.invoked, 0);
+});
+
+
+test("runDispatchCycle moves transient execution failures to RETRY_WAIT and defers the outbox", async () => {
+  const task = validTask("task-retry-dispatch");
+  const event = {
+    tenantId: "tenant-a", eventId: "outbox-retry", aggregateType: "task", aggregateId: task.taskId,
+    eventType: "orchestrator.task.received", leaseGeneration: 1, payload: { taskId: task.taskId }
+  };
+  const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "SCHEDULED", version: 3, fencingToken: 0 }], outbox: [event] });
+  const result = await runDispatchCycle(depsFor(store, {
+    adapters: { task: {
+      verified: true, authenticated: true, state: "AVAILABLE_VERIFIED_FREE",
+      billingEnabled: false, paidFallback: false, maxSpendCents: 0, quotaRemaining: 10,
+      expiresAt: NOW + 60_000, mock: false,
+      invoke: async () => { throw Object.assign(new Error("temporary runner outage"), { transient: true }); }
+    } }
+  }));
+  assert.equal(result.deferred, 1);
+  assert.equal(result.failed, 0);
+  assert.equal((await store.getTask({ tenantId: "tenant-a", taskId: task.taskId })).state, "RETRY_WAIT");
 });
 
 test("runDispatchCycle invokes only a verified zero-cost adapter and completes the outbox event", async () => {

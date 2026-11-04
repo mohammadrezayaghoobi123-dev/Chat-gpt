@@ -151,8 +151,8 @@ test("readyz uses a lightweight Durable Object ping rather than a full storage s
     KNOWLEDGE_STORE: {
       idFromName: name => name,
       get: () => ({ ping: async () => ({ ok: true, schemaVersion: 3 }) })
-    }
-    ,ORCHESTRATOR_LEDGER: {
+    },
+    ORCHESTRATOR_LEDGER: {
       idFromName: name => name,
       get: () => ({ ping: async () => ({ ok: true, schemaVersion: 1 }) })
     }

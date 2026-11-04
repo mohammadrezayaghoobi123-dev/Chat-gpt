@@ -65,7 +65,7 @@ async function fixture() {
     branchPolicy: { prefix: "task/", allowedPaths: ["cloud-engineering-connector/src", "docs/evidence"] },
     requestedBranchName: "task/issue-123",
     requestedPaths: ["docs/evidence/task-123.md"],
-    changedFileManifest: { verified: true, repositoryId: 1398846697, baseSha: sha40, branchName: "task/issue-123", headSha: "c".repeat(40), files: [{ path: "docs/evidence/task-123.md", mode: "100644", type: "blob" }], treeEntries: [{ path: "docs", mode: "040000", type: "tree" }, { path: "docs/evidence", mode: "040000", type: "tree" }, { path: "docs/evidence/task-123.md", mode: "100644", type: "blob" }] },
+    changedFileManifest: { repositoryId: 1398846697, baseSha: sha40, branchName: "task/issue-123", headSha: "c".repeat(40), files: [{ path: "docs/evidence/task-123.md", mode: "100644", type: "blob" }], treeEntries: [{ path: "docs", mode: "040000", type: "tree" }, { path: "docs/evidence", mode: "040000", type: "tree" }, { path: "docs/evidence/task-123.md", mode: "100644", type: "blob" }] },
   };
   input.ownerApproval.approvedScopeHash = await computeP2BApprovalScopeHash(input);
   return input;
@@ -391,5 +391,12 @@ test("requires exact repository, base SHA, head SHA, and requested paths in the 
 test("blocks when no changed-file manifest is supplied", async () => {
   const result = await evaluatePatch({ changedFileManifest: undefined });
   assert.ok(result.reasonCodes.includes("CHANGED_FILE_MANIFEST_INVALID_OR_SYMLINK_DETECTED"));
+  assert.equal(result.executionAuthorized, false);
+});
+test("does not treat a caller-supplied verified boolean as proof of manifest provenance", async () => {
+  const input = await fixture();
+  input.changedFileManifest.verified = false;
+  const result = await evaluateP2BWritePreflight(input);
+  assert.equal(result.decision, "READY_FOR_SEPARATE_EXECUTION_APPROVAL");
   assert.equal(result.executionAuthorized, false);
 });

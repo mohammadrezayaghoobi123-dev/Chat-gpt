@@ -62,6 +62,8 @@ async function fixture() {
     },
     stopSwitch: { readable: true, enabled: false },
     branchPolicy: { prefix: "task/", allowedPaths: ["cloud-engineering-connector/src", "docs/evidence"] },
+    requestedBranchName: "task/issue-123",
+    requestedPaths: ["docs/evidence/task-123.md"],
   };
   input.ownerApproval.approvedScopeHash = await computeP2BApprovalScopeHash(input);
   return input;
@@ -90,7 +92,7 @@ test("missing approvals and infrastructure evidence fail closed", async () => {
   assert.equal(result.decision, "BLOCKED");
   assert.equal(result.sideEffects, false);
   assert.equal(result.executionAuthorized, false);
-  assert.equal(result.reasonCodes.length, 10);
+  assert.equal(result.reasonCodes.length, 11);
 });
 
 test("requires a trusted clock", async () => {
@@ -275,6 +277,48 @@ test("branch and path policy are bound to owner approval scope", async () => {
   const result = await evaluateP2BWritePreflight({
     ...input,
     branchPolicy: { prefix: "different/", allowedPaths: ["docs/evidence"] },
+  });
+  assert.ok(result.reasonCodes.includes("OWNER_APPROVAL_MISSING_INVALID_OR_SCOPE_MISMATCH"));
+  assert.notEqual(result.approvalScopeHash, input.ownerApproval.approvedScopeHash);
+});
+
+test("rejects requested branches outside the approved prefix", async () => {
+  for (const requestedBranchName of [
+    "feature/issue-123",
+    "main",
+    "task/",
+    "task/../main",
+    "task/issue.lock",
+    "task/issue/",
+  ]) {
+    const result = await evaluatePatch({ requestedBranchName });
+    assert.ok(result.reasonCodes.includes("REQUESTED_BRANCH_OR_CHANGED_PATHS_OUT_OF_SCOPE"));
+    assert.equal(result.executionAuthorized, false);
+  }
+});
+
+test("rejects changed paths outside the approved allowlist or with unsafe syntax", async () => {
+  for (const requestedPaths of [
+    ["src/unapproved.js"],
+    ["docs/evidence/../../secrets/token.txt"],
+    ["/etc/passwd"],
+    ["docs\\\\evidence\\\\file.md"],
+    [".github/workflows/ci.yml"],
+    ["docs/evidence/secret-key.txt"],
+    ["docs/evidence/file.md", "docs/evidence/file.md"],
+    [],
+  ]) {
+    const result = await evaluatePatch({ requestedPaths });
+    assert.ok(result.reasonCodes.includes("REQUESTED_BRANCH_OR_CHANGED_PATHS_OUT_OF_SCOPE"));
+    assert.equal(result.executionAuthorized, false);
+  }
+});
+
+test("binds exact requested branch and changed paths to owner approval", async () => {
+  const input = await fixture();
+  const result = await evaluateP2BWritePreflight({
+    ...input,
+    requestedPaths: ["docs/evidence/another-file.md"],
   });
   assert.ok(result.reasonCodes.includes("OWNER_APPROVAL_MISSING_INVALID_OR_SCOPE_MISMATCH"));
   assert.notEqual(result.approvalScopeHash, input.ownerApproval.approvedScopeHash);

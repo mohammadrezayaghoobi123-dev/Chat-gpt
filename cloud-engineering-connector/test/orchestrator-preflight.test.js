@@ -1,0 +1,107 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { buildPreflightReport } from "../scripts/orchestrator-preflight.mjs";
+
+function input(overrides = {}) {
+  return {
+    generatedAt: "2026-11-04T12:00:00.000Z",
+    repo: {
+      name: "mohammadrezayaghoobi123-dev/Chat-gpt",
+      visibility: "public",
+      defaultBranch: "main",
+      mainSha: "f2cae91de818385ec48daafc43c621b9e2cc0675",
+      baseBranch: "integration/unify-main-and-integrated-2026-11-02",
+      baseSha: "8830dfe8908bf1e44a86e592946fb84eacb51756"
+    },
+    github: {
+      standardPublicRunnerFree: true,
+      workflowPermissions: ["contents:read", "pull-requests:read", "actions:read"],
+      protectedBranchPolicyVerified: true,
+      taskScopedWriteCredentialVerified: false,
+      pullRequests: []
+    },
+    cloudflareInventory: {
+      planVerified: true,
+      planName: "Workers Free",
+      workers: ["chat-gpt111", "chat-gpt111-staging"],
+      durableObjectNamespaces: [
+        { script: "chat-gpt111-staging", className: "WriteControl" }
+      ],
+      knowledgeStoreSourceDeclared: true,
+      d1Databases: [],
+      queues: []
+    },
+    agentEligibility: {
+      openai: "UNAVAILABLE",
+      anthropic: "UNAVAILABLE"
+    },
+    independentReviewer: { verified: false },
+    backupRestore: { verified: false, externalCheckpoint: false },
+    baseline: { status: "PASS", runId: "41700000000" },
+    evidenceRefs: ["https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt"]
+  , ...overrides };
+}
+
+test("blocks execution when KnowledgeStore is declared but has no deployed namespace", () => {
+  const report = buildPreflightReport(input());
+  assert.equal(report.status, "BLOCKED");
+  assert.equal(report.checks.find(item => item.id === "knowledge_store_runtime")?.status, "BLOCKED");
+  assert.match(report.blockers.join("\n"), /KnowledgeStore runtime namespace is missing/);
+});
+
+test("recognizes public standard GitHub-hosted runners as a zero-cost execution path", () => {
+  const report = buildPreflightReport(input());
+  assert.equal(report.checks.find(item => item.id === "github_actions_cost")?.status, "PASS");
+});
+
+test("fails closed when model-provider eligibility is unknown or unavailable", () => {
+  const report = buildPreflightReport(input({
+    agentEligibility: { openai: "UNKNOWN", anthropic: "UNAVAILABLE" }
+  }));
+  assert.equal(report.agentAdapters.openai, "DISABLED_BY_POLICY");
+  assert.equal(report.agentAdapters.anthropic, "DISABLED_BY_POLICY");
+  assert.equal(report.checks.find(item => item.id === "model_invocation")?.status, "BLOCKED");
+});
+
+test("blocks independent review and external backup gaps", () => {
+  const report = buildPreflightReport(input());
+  assert.equal(report.checks.find(item => item.id === "independent_reviewer")?.status, "BLOCKED");
+  assert.equal(report.checks.find(item => item.id === "external_backup_restore")?.status, "BLOCKED");
+});
+
+test("does not expose secret-shaped fields or bearer credentials in the report", () => {
+  const report = buildPreflightReport(input({
+    evidenceRefs: [
+      "Bearer ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+      "https://example.test/report"
+    ],
+    cloudflareInventory: {
+      planVerified: false,
+      workers: [],
+      durableObjectNamespaces: [],
+      knowledgeStoreSourceDeclared: true,
+      d1Databases: [],
+      queues: [],
+      secretValue: "do-not-leak-this-secret-value"
+    }
+  }));
+  const serialized = JSON.stringify(report);
+  assert.equal(serialized.includes("do-not-leak-this-secret-value"), false);
+  assert.equal(serialized.includes("ghp_abcdefghijklmnopqrstuvwxyz0123456789"), false);
+  assert.match(serialized, /REDACTED/);
+});
+
+test("marks an unverified Cloudflare plan as unknown and blocks cost-sensitive actions", () => {
+  const report = buildPreflightReport(input({
+    cloudflareInventory: {
+      planVerified: false,
+      workers: [],
+      durableObjectNamespaces: [],
+      knowledgeStoreSourceDeclared: true,
+      d1Databases: [],
+      queues: []
+    }
+  }));
+  assert.equal(report.checks.find(item => item.id === "cloudflare_plan")?.status, "UNKNOWN");
+  assert.equal(report.status, "BLOCKED");
+});

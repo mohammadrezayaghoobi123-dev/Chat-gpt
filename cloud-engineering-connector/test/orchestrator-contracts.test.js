@@ -117,3 +117,16 @@ test("rejects Windows absolute paths in a repository-relative scope", () => {
     scope: { branch: "feature/task-123", paths: ["C:/Users/agent/.env"], operations: ["read"] }
   })), error => error.code === "INVALID_SCOPE");
 });
+
+test("rejects impossible calendar timestamps", () => {
+  assert.throws(() => validateTask(validTask({
+    createdAt: "2026-02-31T10:00:00.000Z",
+    expiresAt: "2026-03-01T10:00:00.000Z"
+  })), error => error.code === "INVALID_TIMESTAMP");
+});
+
+test("rejects Git branch names containing ref metacharacters", () => {
+  assert.throws(() => validateTask(validTask({
+    scope: { branch: "feature/unsafe?ref", paths: ["src/worker.js"], operations: ["read"] }
+  })), error => error.code === "INVALID_SCOPE");
+});

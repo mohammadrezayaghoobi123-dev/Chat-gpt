@@ -100,6 +100,19 @@ describe("KnowledgeStore orchestrator ledger v4", () => {
     });
     expect(await store.ping()).toEqual({ ok: true, schemaVersion: 4 });
     await runInDurableObject(store, async instance => {
+      for (const table of [
+        "orchestrator_processed_messages",
+        "orchestrator_execution_leases",
+        "orchestrator_approvals",
+        "orchestrator_policy_decisions",
+        "orchestrator_agent_capability_snapshots",
+        "orchestrator_control_state",
+        "orchestrator_audit_events",
+        "orchestrator_task_events",
+        "orchestrator_tasks"
+      ]) {
+        instance.ctx.storage.sql.exec("DROP TABLE IF EXISTS " + table);
+      }
       instance.ctx.storage.sql.exec("DELETE FROM knowledge_schema_migrations WHERE version = 4");
       instance.ensureSchema();
       expect(instance.ping()).toEqual({ ok: true, schemaVersion: 4 });

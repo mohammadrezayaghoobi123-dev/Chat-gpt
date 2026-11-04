@@ -380,7 +380,8 @@ test("runDispatchCycle invokes only a verified zero-cost adapter and completes t
   let invoked = 0;
   const result = await runDispatchCycle(depsFor(store, {
     adapters: { task: {
-      verified: true, authenticated: true, state: "AVAILABLE_VERIFIED_FREE",
+      verified: true, authenticated: true, provider: "test-runner", authenticatedIdentity: "runner:1",
+      state: "AVAILABLE_VERIFIED_FREE",
       billingEnabled: false, paidFallback: false, maxSpendCents: 0, quotaRemaining: 10,
       expiresAt: NOW + 60_000, mock: false,
       invoke: async () => { invoked += 1; return { ok: true, commitSha: SHA }; }

@@ -136,7 +136,8 @@ export async function fetchP2BGitHubChangedFileManifest({
     if (page === 5) fail("GITHUB_MANIFEST_COMPARE_PAGINATION_LIMIT");
   }
 
-  if (!["ahead", "identical"].includes(compareData?.status) ||
+  if (compareData?.status !== "ahead" ||
+      !Number.isSafeInteger(compareData?.ahead_by) || compareData.ahead_by < 1 ||
       compareData?.base_commit?.sha !== baseSha ||
       compareData?.head_commit?.sha !== headSha) fail("GITHUB_MANIFEST_COMPARE_SHA_MISMATCH");
   if (compareFiles.length !== requestedPaths.length) fail("GITHUB_MANIFEST_DIFF_PATH_SET_MISMATCH");

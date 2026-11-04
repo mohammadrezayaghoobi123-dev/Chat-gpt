@@ -80,7 +80,7 @@ describe("KnowledgeStore orchestrator ledger v4", () => {
       tenantId: "tenant-a", entityId: "preserved-entity", entityType: "service",
       name: "Preserved", properties: { canonical: "KnowledgeStore" }, expectedVersion: 0, now: 100
     });
-    await expect(store.ping()).resolves.toEqual({ ok: true, schemaVersion: 4 });
+    expect(await store.ping()).toEqual({ ok: true, schemaVersion: 4 });
     await runInDurableObject(store, async instance => {
       instance.ctx.storage.sql.exec("DELETE FROM knowledge_schema_migrations WHERE version = 4");
       instance.ensureSchema();

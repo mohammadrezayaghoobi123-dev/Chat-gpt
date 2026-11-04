@@ -106,7 +106,10 @@ describe("OrchestratorLedger durable coordination contract", () => {
     expect(await ledger.recordMessage(input)).toMatchObject({ accepted: false, replay: true });
     await expect(ledger.recordMessage({ ...input, authenticatedSender: undefined }))
       .resolves.toMatchObject({ accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" });
-    expect(await ledger.recordMessage({ ...input, inputHash: "4".repeat(64) })).toMatchObject({ accepted: false, conflict: true });
+    const changedHash = "4".repeat(64);
+    const changedEnvelope = protocolEnvelope("msg-0001", "task-0001", changedHash, { step: 1 });
+    expect(await ledger.recordMessage({ ...input, inputHash: changedHash, envelope: changedEnvelope }))
+      .toMatchObject({ accepted: false, conflict: true });
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_processed_messages").one().count).toBe(1);
     });
@@ -154,6 +157,8 @@ describe("OrchestratorLedger durable coordination contract", () => {
       eventId: "event-0002", idempotencyKey: "outbox-key-0002", taskId: "task-0001",
       eventType: "task.created", payload: { taskId: "task-0001" }, now,
     });
+    await expect(ledger.claimOutbox({ workerId: "publisher-1", leaseMs: 100, now }))
+      .resolves.toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
     const first = await ledger.claimOutbox({ workerId: "publisher-1", authenticatedWorker: authenticatedWorker("publisher-1", "publisher"), leaseMs: 100, now });
     const second = await ledger.claimOutbox({ workerId: "publisher-2", authenticatedWorker: authenticatedWorker("publisher-2", "publisher"), leaseMs: 100, now: now + 101 });
     expect(second.leaseGeneration).toBe(first.leaseGeneration + 1);
@@ -179,9 +184,11 @@ describe("OrchestratorLedger durable coordination contract", () => {
     });
     expect(replay).toMatchObject({ appended: false, replay: true, event: { actorRole: "agent" } });
     expect(second.event.previousHash).toBe(first.event.eventHash);
-    await expect(ledger.appendAuditEvent({
-      ...input, actor: { ...agent, identityVerified: false },
-    })).rejects.toMatchObject({ code: "AUTHENTICATED_ACTOR_REQUIRED" });
+    await runInDurableObject(ledger, async instance => {
+      await expect(instance.appendAuditEvent({
+        ...input, actor: { ...agent, identityVerified: false },
+      })).rejects.toMatchObject({ code: "AUTHENTICATED_ACTOR_REQUIRED" });
+    });
     await expect(ledger.appendAuditEvent({ ...input, details: { version: 99 } }))
       .resolves.toMatchObject({ appended: false, conflict: true });
     await runInDurableObject(ledger, async (_instance, state) => {
@@ -209,11 +216,12 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("requires reconciliation evidence before reclaiming an expired lease and preserves task state", async () => {
     const ledger = ledgerFor("ledger-expired-lease-reconciliation");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0012", inputHash: "b".repeat(64), now });
-    const first = await ledger.claimTask({ workerId: "agent:worker-1", leaseMs: 100, now });
-    await expect(ledger.claimTask({ workerId: "agent:worker-1", leaseMs: 100, now: now + 101 }))
+    const worker = authenticatedWorker("agent:worker-1");
+    const first = await ledger.claimTask({ workerId: "agent:worker-1", authenticatedWorker: worker, leaseMs: 100, now });
+    await expect(ledger.claimTask({ workerId: "agent:worker-1", authenticatedWorker: worker, leaseMs: 100, now: now + 101 }))
       .resolves.toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
     const reclaimed = await ledger.claimTask({
-      workerId: "agent:worker-1", leaseMs: 100, now: now + 101,
+      workerId: "agent:worker-1", authenticatedWorker: worker, leaseMs: 100, now: now + 101,
       reconciliationEvidence: { checked: true, priorGeneration: first.leaseGeneration, evidenceRef: "github://audit/reconcile/12" },
     });
     expect(reclaimed).toMatchObject({ claimed: true, leaseGeneration: 2, reconciliationRequired: true });
@@ -247,7 +255,8 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("persists the four-round ceiling so retries cannot reset agent coordination rounds", async () => {
     const ledger = ledgerFor("ledger-agent-round-limit");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-agent-rounds", inputHash: "c".repeat(64), now });
-    const lease = await ledger.claimTask({ workerId: "agent:worker-1", leaseMs: 30_000, now });
+    const worker = authenticatedWorker("agent:worker-1");
+    const lease = await ledger.claimTask({ workerId: "agent:worker-1", authenticatedWorker: worker, leaseMs: 30_000, now });
     let version = 1;
     for (let round = 1; round <= 4; round += 1) {
       const result = await ledger.advanceAgentRound({
@@ -259,7 +268,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     }
     await expect(ledger.advanceAgentRound({
       taskId: "task-0001", expectedVersion: version, expectedRound: 4,
-      nextRound: 5, workerId: "agent:worker-1", leaseGeneration: lease.leaseGeneration, now: now + 5,
+      nextRound: 5, workerId: "agent:worker-1", authenticatedWorker: worker, leaseGeneration: lease.leaseGeneration, now: now + 5,
     })).resolves.toMatchObject({ advanced: false, reason: "AGENT_ROUND_LIMIT" });
     await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ agentRound: 4, version: 5 });
   });

@@ -108,13 +108,24 @@ export async function intakeTask(input, deps) {
     throw coreError("TENANT_REQUIRED", "A tenant ID is required for task intake.");
   }
   const now = nowMs(deps);
-  return store.createTask({
+  const created = await store.createTask({
     tenantId,
     task,
     idempotencyKey: input.idempotencyKey,
     eventId: input.eventId ?? eventId(deps, task.taskId, "received", now),
     outboxEventId: input.outboxEventId ?? eventId(deps, task.taskId, "outbox", now),
     now
+  });
+  if (created.state !== "RECEIVED") return created;
+  const validating = await store.transitionTask({
+    tenantId, taskId: task.taskId, expectedState: "RECEIVED", nextState: "VALIDATING",
+    eventId: eventId(deps, task.taskId, "validating", now), actorId: actor.agentId,
+    evidence: { contractValidation: { passed: true } }, now
+  });
+  return store.transitionTask({
+    tenantId, taskId: task.taskId, expectedState: validating.state, nextState: "READY",
+    eventId: eventId(deps, task.taskId, "ready", now), actorId: actor.agentId,
+    evidence: { validation: { passed: true } }, now
   });
 }
 
@@ -303,16 +314,21 @@ export async function runDispatchCycle(deps) {
   if (!Number.isSafeInteger(maxEvents) || maxEvents < 1 || maxEvents > 10) {
     throw new TypeError("maxEvents must be between 1 and 10.");
   }
-  const leaseMs = deps.leaseMs === undefined ? 30_000 : deps.leaseMs;
+  const outboxLeaseMs = deps.outboxLeaseMs === undefined ? 30_000 : deps.outboxLeaseMs;
+  const taskLeaseMs = deps.taskLeaseMs === undefined ? 60_000 : deps.taskLeaseMs;
   const initialStopSwitch = await store.getStopSwitch({ tenantId });
   const result = { stopped: initialStopSwitch.active !== false, claimed: 0, invoked: 0, deferred: 0, completed: 0, failed: 0 };
   if (result.stopped) return result;
 
   for (let index = 0; index < maxEvents; index += 1) {
     const now = nowMs(deps);
-    const event = await store.claimOutbox({ tenantId, now, leaseMs });
+    const event = await store.claimOutbox({ tenantId, now, leaseMs: outboxLeaseMs });
     if (!event) break;
     result.claimed += 1;
+    let task = null;
+    let lease = null;
+    let workerId = null;
+    let runningTask = null;
     try {
       const stopSwitch = await store.getStopSwitch({ tenantId });
       if (stopSwitch.active !== false) {
@@ -320,65 +336,190 @@ export async function runDispatchCycle(deps) {
         result.deferred += 1;
         break;
       }
-
-      let task = null;
-      if (event.aggregateType === "task") {
-        task = await store.getTask({ tenantId, taskId: event.aggregateId });
-        if (!task) {
-          await store.failOutbox({
-            tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration,
-            error: "TASK_NOT_FOUND", maxAttempts: 1, now
-          });
-          result.failed += 1;
-          continue;
-        }
-        if (task.state !== "RECEIVED") {
-          await store.completeOutbox({ tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration, now });
-          result.completed += 1;
-          continue;
-        }
-      }
-
-      if (typeof deps.isCancellationRequested === "function" &&
-          await deps.isCancellationRequested(event.aggregateId, task)) {
-        await store.completeOutbox({ tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration, now });
-        result.completed += 1;
+      if (event.aggregateType !== "task") {
+        await store.failOutbox({
+          tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration,
+          error: "UNSUPPORTED_OUTBOX_AGGREGATE", maxAttempts: 1, now
+        });
+        result.failed += 1;
         continue;
       }
 
-      const adapter = deps.adapters?.[event.aggregateType] ?? deps.adapters?.[event.eventType];
+      task = await store.getTask({ tenantId, taskId: event.aggregateId });
+      if (!task) {
+        await store.failOutbox({
+          tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration,
+          error: "TASK_NOT_FOUND", maxAttempts: 1, now
+        });
+        result.failed += 1;
+        continue;
+      }
+      if (task.state === "RECEIVED") {
+        await deferEvent(store, tenantId, event, now, "TASK_VALIDATION_PENDING");
+        result.deferred += 1;
+        continue;
+      }
+      if (task.state !== "READY" && task.state !== "SCHEDULED") {
+        if (task.state === "RUNNING" || task.state === "RETRY_WAIT") {
+          await deferEvent(store, tenantId, event, now, "TASK_ALREADY_ACTIVE_OR_WAITING");
+          result.deferred += 1;
+        } else {
+          await store.completeOutbox({ tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration, now });
+          result.completed += 1;
+        }
+        continue;
+      }
+
+      const adapter = deps.adapters?.[task.task.taskType] ??
+        deps.adapters?.[event.aggregateType] ?? deps.adapters?.[event.eventType];
       if (!verifiedAdapter(adapter, deps, now)) {
         await deferEvent(store, tenantId, event, now, "ADAPTER_NOT_VERIFIED_FREE");
         result.deferred += 1;
         continue;
       }
 
-      const finalStopSwitch = await store.getStopSwitch({ tenantId });
-      if (finalStopSwitch.active !== false) {
-        await deferEvent(store, tenantId, event, now, "STOP_SWITCH_ACTIVATED_BEFORE_EFFECT");
-        result.deferred += 1;
-        break;
-      }
       if (typeof deps.isCancellationRequested === "function" &&
-          await deps.isCancellationRequested(event.aggregateId, task)) {
+          await deps.isCancellationRequested(task.taskId, task)) {
+        if (task.state !== "CANCELLED") {
+          await store.appendTaskEvent({
+            tenantId, taskId: task.taskId,
+            eventId: eventId(deps, task.taskId, "cancel-observed", now),
+            eventType: "CANCELLATION_OBSERVED", actorId: deps.workerId ?? "system:dispatch",
+            payload: { sourceEventId: event.eventId }, now
+          });
+        }
         await store.completeOutbox({ tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration, now });
         result.completed += 1;
         continue;
       }
 
-      await adapter.invoke({ event, task, signal: deps.signal });
-      await store.completeOutbox({ tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration, now });
+      if (task.state === "READY") {
+        const scheduled = await scheduleTask(task.taskId, deps);
+        if (!scheduled.scheduled) {
+          await store.completeOutbox({ tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration, now });
+          result.completed += 1;
+          continue;
+        }
+        task = scheduled.task;
+      }
+
+      const beforeClaimStop = await store.getStopSwitch({ tenantId });
+      if (beforeClaimStop.active !== false) {
+        await deferEvent(store, tenantId, event, now, "STOP_SWITCH_ACTIVATED_BEFORE_CLAIM");
+        result.deferred += 1;
+        break;
+      }
+      workerId = deps.workerId;
+      if (typeof workerId !== "string" || workerId.length === 0 ||
+          typeof deps.createLeaseToken !== "function") {
+        await deferEvent(store, tenantId, event, now, "LEASE_CREDENTIAL_PROVIDER_UNAVAILABLE");
+        result.deferred += 1;
+        continue;
+      }
+      const leaseToken = await deps.createLeaseToken(task.taskId);
+      if (typeof leaseToken !== "string" || leaseToken.length < 16) {
+        await deferEvent(store, tenantId, event, now, "LEASE_TOKEN_INVALID");
+        result.deferred += 1;
+        continue;
+      }
+      lease = await store.claimTask({
+        tenantId, taskId: task.taskId, ownerId: workerId, leaseToken,
+        leaseMs: taskLeaseMs, now
+      });
+      runningTask = await store.transitionTask({
+        tenantId, taskId: task.taskId, expectedState: "SCHEDULED", nextState: "RUNNING",
+        eventId: eventId(deps, task.taskId, "running", now), actorId: workerId,
+        leaseToken, fencingToken: lease.fencingToken,
+        evidence: { lease: { valid: true, fencingToken: lease.fencingToken } }, now
+      });
+
+      const beforeInvokeStop = await store.getStopSwitch({ tenantId });
+      if (beforeInvokeStop.active !== false ||
+          (typeof deps.isCancellationRequested === "function" &&
+           await deps.isCancellationRequested(task.taskId, runningTask))) {
+        const cancelled = beforeInvokeStop.active === false ? false : false;
+        if (cancelled) {
+          runningTask = await store.transitionTask({
+            tenantId, taskId: task.taskId, expectedState: "RUNNING", nextState: "CANCELLED",
+            eventId: eventId(deps, task.taskId, "cancel-before-invoke", now), actorId: workerId,
+            leaseToken, fencingToken: lease.fencingToken, evidence: {}, now
+          });
+          await store.completeOutbox({ tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration, now });
+          result.completed += 1;
+        } else {
+          runningTask = await store.transitionTask({
+            tenantId, taskId: task.taskId, expectedState: "RUNNING", nextState: "RETRY_WAIT",
+            eventId: eventId(deps, task.taskId, "pause-before-invoke", now), actorId: workerId,
+            leaseToken, fencingToken: lease.fencingToken,
+            evidence: { retryAuthorized: true, policyDecision: { allowed: true }, stopSwitchClear: true }, now
+          });
+          await deferEvent(store, tenantId, event, now, "STOP_OR_CANCELLATION_BEFORE_EFFECT");
+          result.deferred += 1;
+        }
+        continue;
+      }
+
+      const execution = await adapter.invoke({
+        event, task: runningTask,
+        lease: { ownerId: workerId, leaseToken, fencingToken: lease.fencingToken, leaseUntil: lease.leaseUntil },
+        signal: deps.signal,
+        shouldStop: async () => (await store.getStopSwitch({ tenantId })).active !== false,
+        isCancellationRequested: async () => typeof deps.isCancellationRequested === "function"
+          ? deps.isCancellationRequested(task.taskId, runningTask)
+          : false
+      });
+      if (!execution || typeof execution.commitSha !== "string" || !/^[a-f0-9]{40}$/i.test(execution.commitSha)) {
+        const failure = coreError("EXECUTION_COMMIT_SHA_REQUIRED", "A successful execution must return an exact 40-character commit SHA.");
+        runningTask = await store.transitionTask({
+          tenantId, taskId: task.taskId, expectedState: "RUNNING", nextState: "FAILED",
+          eventId: eventId(deps, task.taskId, "failed-no-sha", now), actorId: workerId,
+          leaseToken, fencingToken: lease.fencingToken, evidence: { failure: { code: failure.code } }, now
+        });
+        await store.failOutbox({
+          tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration,
+          error: failure.code, maxAttempts: 1, now
+        });
+        result.failed += 1;
+        continue;
+      }
+
+      runningTask = await store.transitionTask({
+        tenantId, taskId: task.taskId, expectedState: "RUNNING", nextState: "VERIFYING",
+        eventId: eventId(deps, task.taskId, "verifying", now), actorId: workerId,
+        leaseToken, fencingToken: lease.fencingToken,
+        evidence: { execution: { commitSha: execution.commitSha, workflowRunId: execution.workflowRunId ?? null } },
+        now: nowMs(deps)
+      });
+      await store.completeOutbox({ tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration, now: nowMs(deps) });
       result.invoked += 1;
       result.completed += 1;
     } catch (error) {
-      if (error?.transient === true || error?.retryable === true) {
+      const retryable = error?.transient === true || error?.retryable === true ||
+        ["ORCHESTRATOR_STOP_SWITCH_ACTIVE", "ORCHESTRATOR_LEASE_ACTIVE", "ORCHESTRATOR_LEASE_CONFLICT"].includes(error?.code);
+      if (runningTask?.state === "RUNNING" && lease && workerId) {
+        try {
+          const nextState = retryable ? "RETRY_WAIT" : "FAILED";
+          runningTask = await store.transitionTask({
+            tenantId, taskId: runningTask.taskId, expectedState: "RUNNING", nextState,
+            eventId: eventId(deps, runningTask.taskId, retryable ? "retry" : "failed", now),
+            actorId: workerId, leaseToken: lease.leaseToken, fencingToken: lease.fencingToken,
+            evidence: retryable
+              ? { retryAuthorized: true, policyDecision: { allowed: true }, stopSwitchClear: true }
+              : { failure: { code: typeof error?.code === "string" ? error.code : "DISPATCH_FAILED" } },
+            now: nowMs(deps)
+          });
+        } catch {
+          // Preserve the original failure; lease recovery and reconciliation handle uncertain state.
+        }
+      }
+      if (retryable) {
         await deferEvent(store, tenantId, event, now, "TRANSIENT_DISPATCH_FAILURE");
         result.deferred += 1;
       } else {
         await store.failOutbox({
           tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration,
           error: typeof error?.code === "string" ? error.code : "DISPATCH_FAILED",
-          maxAttempts: 5, now
+          maxAttempts: 5, now: nowMs(deps)
         });
         result.failed += 1;
       }

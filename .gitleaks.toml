@@ -101,3 +101,12 @@ regexes = [
   '''idempotencyKey\s*:\s*["']vault-proposal-stale-0001["']''',
   '''idempotencyKey\s*:\s*["']vault-proposal-success-0001["']'''
 ]
+
+[[allowlists]]
+description = "Synthetic JWT fixture used only by the orchestrator preflight redaction test; exact historical commit, test file, and payload marker only."
+targetRules = ["jwt"]
+condition = "AND"
+commits = ["4cb3f9b9a2a64ccacb704066de1974a9af134c49"]
+paths = ['''^cloud-engineering-connector/test/orchestrator-preflight\\.test\\.js$''']
+regexTarget = "line"
+regexes = ['''session\\s+[A-Za-z0-9_-]{20,}\\.eyJzdWIiOiJ1c2VyIn0\\.[A-Za-z0-9_-]{20,}''']

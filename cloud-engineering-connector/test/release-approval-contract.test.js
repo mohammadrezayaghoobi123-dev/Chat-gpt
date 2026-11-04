@@ -460,7 +460,8 @@ test("release evidence helper records audit metadata without serializing credent
     "active_deployment_id",
     "active_version_id",
     "active_traffic_percentage",
-    "deployment_verification",
+    "active_traffic_verification",
+    "candidate_deployment_association",
   ]) {
     assert.ok(helper.includes(field), "release evidence must record " + field);
   }
@@ -510,11 +511,12 @@ test("release evidence helper records the active deployment and never writes cre
       body: { success: true, result: { deployments: [{ id: "deployment-123", versions: [{ version_id: "version-456", percentage: 100 }] }] } },
     },
   });
-  assert.equal(manifest.deployment_verification, "verified");
+  assert.equal(manifest.active_traffic_verification, "verified");
   assert.equal(manifest.active_deployment_id, "deployment-123");
   assert.equal(manifest.active_version_id, "version-456");
   assert.equal(manifest.active_traffic_percentage, 100);
   assert.equal(manifest.candidate_sha, "a".repeat(40));
+  assert.equal(manifest.candidate_deployment_association, "not_established_by_current_api_metadata");
   assert.equal(manifest.rollback_outcome, "skipped");
   assert.equal(JSON.stringify(manifest).includes("do-not-write-this-token"), false);
 });

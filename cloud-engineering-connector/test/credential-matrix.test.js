@@ -152,12 +152,17 @@ test("readyz uses a lightweight Durable Object ping rather than a full storage s
       idFromName: name => name,
       get: () => ({ ping: async () => ({ ok: true, schemaVersion: 3 }) })
     }
+    ,ORCHESTRATOR_LEDGER: {
+      idFromName: name => name,
+      get: () => ({ ping: async () => ({ ok: true, schemaVersion: 1 }) })
+    }
   });
   const body = await response.json();
   assert.equal(response.status, 200);
   assert.equal(body.status, "ready");
   assert.equal(body.durable_objects, "ok");
   assert.equal(body.knowledge_store, "ok");
+  assert.equal(body.orchestrator_ledger, "ok");
 });
 
 test("readyz is rate limited before it touches the shared write-control Durable Object (DEF-0012)", async () => {

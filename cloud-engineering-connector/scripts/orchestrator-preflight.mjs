@@ -13,7 +13,7 @@ export function sanitizeEvidence(value, key = "") {
       .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, "[REDACTED]")
       .replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g, "[REDACTED]")
       .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "[REDACTED]")
-      .replace(/([?&](?:access_token|refresh_token|id_token|client_secret|api_key|apikey|token|password|secret)=)[^&#\s]*/gi, "$1[REDACTED]")
+      .replace(/([?&](?:access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|x-api-key|api[_-]?key|apikey|token|password|secret|signature|sig)=)[^&#\s]*/gi, "$1[REDACTED]")
       .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED]");
   }
   if (Array.isArray(value)) return value.map(item => sanitizeEvidence(item));

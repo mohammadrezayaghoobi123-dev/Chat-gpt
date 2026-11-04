@@ -1,7 +1,6 @@
 name: AI Engineering Task
 description: Create a traceable engineering task for the centralized operations workflow.
 title: "[Engineering]: "
-labels: ["engineering"]
 body:
   - type: markdown
     attributes:
@@ -11,29 +10,17 @@ body:
     id: work_type
     attributes:
       label: Work type
-      options:
-        - Architecture
-        - Implementation
-        - Bug
-        - Security
-        - Testing
-        - Infrastructure
-        - Documentation
-        - Release readiness
+      options: [Architecture, Implementation, Bug, Security, Testing, Infrastructure, Documentation, Release readiness]
     validations:
       required: true
   - type: dropdown
     id: priority
     attributes:
       label: Priority
-      options:
-        - P0 - Critical
-        - P1 - High
-        - P2 - Normal
-        - P3 - Low
+      options: [P0 - Critical, P1 - High, P2 - Normal, P3 - Low]
     validations:
       required: true
-  - type: textarea
+  - type: input
     id: owner
     attributes:
       label: Accountable owner
@@ -75,7 +62,7 @@ body:
     id: evidence
     attributes:
       label: Evidence and reproduction
-      description: Include links, exact SHA, CI run, logs with secrets redacted, or reproduction steps.
+      description: Include links, exact SHA, CI run, or reproduction steps. Do not paste logs; link to access-controlled evidence.
   - type: textarea
     id: risks
     attributes:
@@ -95,7 +82,7 @@ body:
     attributes:
       label: Safety confirmation
       options:
-        - label: No secrets or credential values are included.
+        - label: No secrets, tokens, logs, or credential values are included.
           required: true
         - label: No change to main or Production is implied without explicit owner authorization.
           required: true

@@ -6,7 +6,7 @@ const MAX_TEXT_BYTES = 32 * 1024;
 const DEFAULT_MAX_AGE_MS = 15 * 60 * 1000;
 const DEFAULT_FUTURE_SKEW_MS = 60 * 1000;
 const PROTECTED_BRANCHES = new Set(["main", "master", "production", "release/production"]);
-const SENSITIVE_PATH = /(^|\/)(?:\.git|\.ssh|\.aws|\.azure|\.kube|\.docker|secrets?|credentials?)(?:\/|$)|(^|\/)\.env(?:\.[^/]*)?$|\.(?:pem|key|p12|p8|pfx|tfstate|tfvars)$/i;
+const SENSITIVE_PATH = /(^|\/)(?:\.git|\.github\/workflows|\.ssh|\.aws|\.azure|\.kube|\.docker|secrets?|credentials?)(?:\/|$)|(^|\/)\.env(?:\.[^/]*)?$|\.(?:pem|key|p12|p8|pfx|tfstate|tfvars)$/i;
 
 function fail(reasonCode) {
   return { accepted: false, decision: "DENY", reasonCode };

@@ -104,6 +104,8 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const input = { messageId: "msg-0001", taskId: "task-0001", inputHash: "3".repeat(64), envelope: protocolEnvelope("msg-0001", "task-0001", "3".repeat(64), { step: 1 }), authenticatedSender, now };
     expect(await ledger.recordMessage(input)).toMatchObject({ accepted: true });
     expect(await ledger.recordMessage(input)).toMatchObject({ accepted: false, replay: true });
+    await expect(ledger.recordMessage({ ...input, authenticatedSender: undefined }))
+      .resolves.toMatchObject({ accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" });
     expect(await ledger.recordMessage({ ...input, inputHash: "4".repeat(64) })).toMatchObject({ accepted: false, conflict: true });
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_processed_messages").one().count).toBe(1);
@@ -171,13 +173,21 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const first = await ledger.appendAuditEvent(input);
     const replay = await ledger.appendAuditEvent(input);
     const second = await ledger.appendAuditEvent({ ...input, eventId: "audit-0002", eventType: "task.scheduled", now: now + 1 });
-    expect(first).toMatchObject({ appended: true, event: { eventId: "audit-0001", previousHash: null } });
-    expect(replay).toMatchObject({ appended: false, replay: true });
+    expect(first).toMatchObject({
+      appended: true,
+      event: { eventId: "audit-0001", actorId: "agent:worker-1", actorRole: "agent", previousHash: null },
+    });
+    expect(replay).toMatchObject({ appended: false, replay: true, event: { actorRole: "agent" } });
     expect(second.event.previousHash).toBe(first.event.eventHash);
+    await expect(ledger.appendAuditEvent({
+      ...input, actor: { ...agent, identityVerified: false },
+    })).rejects.toMatchObject({ code: "AUTHENTICATED_ACTOR_REQUIRED" });
     await expect(ledger.appendAuditEvent({ ...input, details: { version: 99 } }))
       .resolves.toMatchObject({ appended: false, conflict: true });
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_audit_events").one().count).toBe(2);
+      expect(state.storage.sql.exec("SELECT actor_id, actor_role FROM orchestrator_audit_events WHERE event_id='audit-0001'").one())
+        .toMatchObject({ actor_id: "agent:worker-1", actor_role: "agent" });
     });
   });
 

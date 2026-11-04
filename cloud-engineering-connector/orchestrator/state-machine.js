@@ -48,6 +48,7 @@ function isCommitSha(value) {
 }
 
 export function canTransition(currentState, nextState, evidence = {}) {
+  const context = evidence && typeof evidence === "object" && !Array.isArray(evidence) ? evidence : {};
   if (!STATE_SET.has(currentState) || !STATE_SET.has(nextState)) {
     return denied("UNKNOWN_STATE");
   }
@@ -56,14 +57,14 @@ export function canTransition(currentState, nextState, evidence = {}) {
   }
 
   if (currentState === "RUNNING" && nextState === "VERIFYING") {
-    if (!isCommitSha(evidence.execution?.commitSha)) {
+    if (!isCommitSha(context.execution?.commitSha)) {
       return denied("EXECUTION_COMMIT_SHA_REQUIRED");
     }
   }
 
   if (currentState === "VERIFYING" && nextState === "REVIEW_PENDING") {
-    const executionSha = evidence.execution?.commitSha;
-    const verification = evidence.verification;
+    const executionSha = context.execution?.commitSha;
+    const verification = context.verification;
     if (verification?.status !== "PASS" ||
         !isCommitSha(verification?.commitSha) ||
         verification.commitSha !== executionSha) {
@@ -72,10 +73,10 @@ export function canTransition(currentState, nextState, evidence = {}) {
   }
 
   if (currentState === "REVIEW_PENDING" && nextState === "COMPLETED") {
-    const review = evidence.independentReview;
+    const review = context.independentReview;
     const reviewerId = review?.reviewerId;
-    const executorId = evidence.executorId;
-    const verifiedSha = evidence.verification?.commitSha;
+    const executorId = context.executorId;
+    const verifiedSha = context.verification?.commitSha;
     if (review?.status !== "APPROVED" ||
         typeof reviewerId !== "string" || reviewerId.length === 0 ||
         typeof executorId !== "string" || executorId.length === 0 ||
@@ -87,17 +88,17 @@ export function canTransition(currentState, nextState, evidence = {}) {
   }
 
   if (currentState === "RETRY_WAIT" && nextState === "SCHEDULED" &&
-      evidence.retryAuthorized !== true) {
+      context.retryAuthorized !== true) {
     return denied("RETRY_AUTHORIZATION_REQUIRED");
   }
 
   if (currentState === "BLOCKED" && nextState === "VALIDATING" &&
-      evidence.unblockApproved !== true) {
+      context.unblockApproved !== true) {
     return denied("UNBLOCK_APPROVAL_REQUIRED");
   }
 
   if (currentState === "DISPUTED" && nextState === "REVIEW_PENDING" &&
-      evidence.adjudication?.status !== "RESOLVED") {
+      context.adjudication?.status !== "RESOLVED") {
     return denied("DISPUTE_RESOLUTION_REQUIRED");
   }
 

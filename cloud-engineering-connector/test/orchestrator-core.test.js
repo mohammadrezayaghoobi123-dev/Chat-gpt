@@ -97,6 +97,8 @@ function depsFor(store, overrides = {}) {
     now: NOW,
     getAuthenticatedActor: async () => actor(),
     authenticateActor: async () => actor(),
+    canCancelTask: async () => true,
+    authenticateWorker: async () => actor(),
     authenticateSender: async envelope => ({
       authenticated: true, principalId: envelope.sender.principalId, agentId: envelope.sender.agentId
     }),
@@ -261,6 +263,16 @@ test("requestCancellation records a durable state transition for an authenticate
 });
 
 
+
+test("requestCancellation denies an authenticated actor without task-level authority", async () => {
+  const task = validTask("task-cancel-denied");
+  const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "READY", version: 2, fencingToken: 0 }] });
+  await assert.rejects(
+    requestCancellation(task.taskId, actor(), depsFor(store, { canCancelTask: async () => false })),
+    error => error.code === "ACTOR_NOT_AUTHORIZED"
+  );
+});
+
 test("requestCancellation records a pending durable request when a running lease is unavailable", async () => {
   const task = validTask("task-cancel-pending");
   const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "RUNNING", version: 4, fencingToken: 2 }] });
@@ -310,6 +322,16 @@ test("runDispatchCycle stops before claiming when the stop switch is active", as
   assert.equal(store.counters.claimed, 0);
 });
 
+
+test("runDispatchCycle refuses an unauthenticated worker before claiming any outbox event", async () => {
+  const store = makeStore();
+  await assert.rejects(
+    runDispatchCycle(depsFor(store, { authenticateWorker: async () => null })),
+    error => error.code === "WORKER_UNAUTHENTICATED"
+  );
+  assert.equal(store.counters.claimed, 0);
+});
+
 test("runDispatchCycle never invokes an unverified adapter and defers the outbox event", async () => {
   const task = validTask("task-dispatch");
   const event = {
@@ -336,7 +358,8 @@ test("runDispatchCycle moves transient execution failures to RETRY_WAIT and defe
   const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "SCHEDULED", version: 3, fencingToken: 0 }], outbox: [event] });
   const result = await runDispatchCycle(depsFor(store, {
     adapters: { task: {
-      verified: true, authenticated: true, state: "AVAILABLE_VERIFIED_FREE",
+      verified: true, authenticated: true, provider: "test-runner", authenticatedIdentity: "runner:1",
+      state: "AVAILABLE_VERIFIED_FREE",
       billingEnabled: false, paidFallback: false, maxSpendCents: 0, quotaRemaining: 10,
       expiresAt: NOW + 60_000, mock: false,
       invoke: async () => { throw Object.assign(new Error("temporary runner outage"), { transient: true }); }

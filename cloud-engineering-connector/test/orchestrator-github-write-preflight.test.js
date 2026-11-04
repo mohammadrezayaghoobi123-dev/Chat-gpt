@@ -65,7 +65,7 @@ async function fixture() {
     branchPolicy: { prefix: "task/", allowedPaths: ["cloud-engineering-connector/src", "docs/evidence"] },
     requestedBranchName: "task/issue-123",
     requestedPaths: ["docs/evidence/task-123.md"],
-    changedFileManifest: { verified: true, repositoryId: 1398846697, baseSha: sha40, headSha: "c".repeat(40), files: [{ path: "docs/evidence/task-123.md", mode: "100644", type: "blob" }], treeEntries: [{ path: "docs", mode: "040000", type: "tree" }, { path: "docs/evidence", mode: "040000", type: "tree" }, { path: "docs/evidence/task-123.md", mode: "100644", type: "blob" }] },
+    changedFileManifest: { verified: true, repositoryId: 1398846697, baseSha: sha40, branchName: "task/issue-123", headSha: "c".repeat(40), files: [{ path: "docs/evidence/task-123.md", mode: "100644", type: "blob" }], treeEntries: [{ path: "docs", mode: "040000", type: "tree" }, { path: "docs/evidence", mode: "040000", type: "tree" }, { path: "docs/evidence/task-123.md", mode: "100644", type: "blob" }] },
   };
   input.ownerApproval.approvedScopeHash = await computeP2BApprovalScopeHash(input);
   return input;
@@ -365,7 +365,7 @@ test("rejects symlink or submodule ancestors of changed files", async () => {
         { path: "docs/evidence/task-123.md", mode: "100644", type: "blob" },
       ],
     };
-    assert.equal(validateP2BChangedFileManifest({ repository: input.repository, base: input.base, requestedPaths: input.requestedPaths, manifest: changedFileManifest }), false);
+    assert.equal(validateP2BChangedFileManifest({ repository: input.repository, base: input.base, requestedPaths: input.requestedPaths, requestedBranchName: input.requestedBranchName, manifest: changedFileManifest }), false);
   }
 });
 
@@ -374,6 +374,7 @@ test("requires exact repository, base SHA, head SHA, and requested paths in the 
   const variants = [
     { ...input.changedFileManifest, repositoryId: 1 },
     { ...input.changedFileManifest, baseSha: "d".repeat(40) },
+    { ...input.changedFileManifest, branchName: "task/another-issue" },
     { ...input.changedFileManifest, headSha: "not-a-sha" },
     { ...input.changedFileManifest, files: [] },
     { ...input.changedFileManifest, files: [{ path: "docs/evidence/other.md", mode: "100644", type: "blob" }] },
@@ -381,7 +382,7 @@ test("requires exact repository, base SHA, head SHA, and requested paths in the 
     { ...input.changedFileManifest, treeEntries: input.changedFileManifest.treeEntries.slice(1) },
   ];
   for (const manifest of variants) {
-    assert.equal(validateP2BChangedFileManifest({ repository: input.repository, base: input.base, requestedPaths: input.requestedPaths, manifest }), false);
+    assert.equal(validateP2BChangedFileManifest({ repository: input.repository, base: input.base, requestedPaths: input.requestedPaths, requestedBranchName: input.requestedBranchName, manifest }), false);
     const result = await evaluatePatch({ changedFileManifest: manifest });
     assert.ok(result.reasonCodes.includes("CHANGED_FILE_MANIFEST_INVALID_OR_SYMLINK_DETECTED"));
   }

@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { transitionTask as transitionTaskCore, TASK_STATES } from "./orchestrator-core.js";
+import { assertAgentRoundLimit } from "./orchestrator-protocol.js";
 import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orchestrator-protocol.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -217,23 +218,27 @@ export class OrchestratorLedger extends DurableObject {
         task.createdAt < 1 || task.updatedAt < task.createdAt) {
       throw fail("task projection is invalid.");
     }
-    const taskJson = serializeBounded(task, "task");
+    const normalizedTask = { ...task, agentRound: task.agentRound ?? 0 };
+    if (!Number.isSafeInteger(normalizedTask.agentRound) || normalizedTask.agentRound < 0 || normalizedTask.agentRound > 4) {
+      throw fail("agentRound must be an integer from zero through four.", "INVALID_AGENT_ROUND");
+    }
+    const taskJson = serializeBounded(normalizedTask, "task");
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       const existing = sql.exec("SELECT * FROM orchestrator_tasks WHERE idempotency_key = ?", idempotencyKey).toArray()[0];
       if (existing) {
-        if (existing.input_hash !== inputHash || existing.task_id !== task.taskId) {
+        if (existing.input_hash !== inputHash || existing.task_id !== normalizedTask.taskId) {
           return { created: false, conflict: true, reason: "IDEMPOTENCY_CONFLICT" };
         }
         return { created: false, replay: true, task: taskFromRow(existing) };
       }
-      const taskIdExisting = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", task.taskId).toArray()[0];
+      const taskIdExisting = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", normalizedTask.taskId).toArray()[0];
       if (taskIdExisting) return { created: false, conflict: true, reason: "TASK_ID_CONFLICT" };
       sql.exec(
         "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        task.taskId, idempotencyKey, inputHash, task.state, task.version, taskJson, task.createdAt, task.updatedAt,
+        normalizedTask.taskId, idempotencyKey, inputHash, normalizedTask.state, normalizedTask.version, taskJson, normalizedTask.createdAt, normalizedTask.updatedAt,
       );
-      return { created: true, task };
+      return { created: true, task: normalizedTask };
     });
   }
 
@@ -297,6 +302,13 @@ export class OrchestratorLedger extends DurableObject {
     hash(inputHash, "inputHash");
     timestamp(now);
     const untrustedEnvelopeJson = serializeBounded(envelope, "message envelope");
+    if (!authenticatedSender || authenticatedSender.authenticated !== true || authenticatedSender.identityVerified !== true ||
+        typeof authenticatedSender.id !== "string" || authenticatedSender.id.length === 0) {
+      return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
+    }
+    if (!envelope || envelope.senderId !== authenticatedSender.id) {
+      return { accepted: false, reason: "SENDER_IDENTITY_MISMATCH" };
+    }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       const task = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
@@ -382,6 +394,54 @@ export class OrchestratorLedger extends DurableObject {
         };
       }
       return { claimed: false, reason: assigneeMismatch ? "ASSIGNEE_MISMATCH" : "NO_TASK_AVAILABLE" };
+    });
+  }
+
+  advanceAgentRound({ taskId, expectedVersion, expectedRound, nextRound, workerId, leaseGeneration, now }) {
+    identifier(taskId, "taskId");
+    identifier(workerId, "workerId");
+    timestamp(now);
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1 ||
+        !Number.isSafeInteger(expectedRound) || expectedRound < 0 ||
+        !Number.isSafeInteger(nextRound) || nextRound < 1 ||
+        !Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) {
+      return { advanced: false, reason: "INVALID_AGENT_ROUND" };
+    }
+    if (nextRound > 4) return { advanced: false, reason: "AGENT_ROUND_LIMIT" };
+    const sql = this.ctx.storage.sql;
+    return this.ctx.storage.transactionSync(() => {
+      const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
+      if (!row) return { advanced: false, reason: "NOT_FOUND" };
+      const current = taskFromRow(row);
+      if (row.version !== expectedVersion || (current.agentRound ?? 0) !== expectedRound) {
+        return { advanced: false, reason: "VERSION_OR_ROUND_CONFLICT", task: current };
+      }
+      try {
+        assertAgentRoundLimit({ currentRound: expectedRound, nextRound });
+      } catch (error) {
+        return { advanced: false, reason: error?.code ?? "INVALID_AGENT_ROUND" };
+      }
+      const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
+      if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now ||
+          current.executorId && current.executorId !== workerId) {
+        return { advanced: false, reason: "LEASE_FENCE_MISMATCH" };
+      }
+      const next = {
+        ...current,
+        agentRound: nextRound,
+        version: current.version + 1,
+        updatedAt: now,
+        lastAgentRound: { from: expectedRound, to: nextRound, workerId, leaseGeneration, occurredAt: now },
+      };
+      sql.exec(
+        "UPDATE orchestrator_tasks SET version = ?, task_json = ?, updated_at = ? WHERE task_id = ? AND version = ?",
+        next.version, serializeBounded(next, "task"), now, taskId, expectedVersion,
+      );
+      const persisted = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
+      if (!persisted || persisted.version !== next.version || persisted.task_json !== canonicalJson(next)) {
+        throw fail("Agent round persistence verification failed; transaction rolled back.", "PERSISTENCE_VERIFICATION_FAILED");
+      }
+      return { advanced: true, task: next };
     });
   }
 

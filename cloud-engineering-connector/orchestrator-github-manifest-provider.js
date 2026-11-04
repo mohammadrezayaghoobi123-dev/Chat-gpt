@@ -163,14 +163,27 @@ export async function fetchP2BGitHubChangedFileManifest({
 
   const treeEntries = treeResult.data.tree.map(entry => {
     if (!isRecord(entry) || typeof entry.path !== "string" ||
-        !["blob", "tree", "commit"].includes(entry.type) ||
-        typeof entry.mode !== "string") fail("GITHUB_MANIFEST_TREE_ENTRY_INVALID");
+        entry.path.length < 1 || entry.path.length > 1024 ||
+        entry.path.startsWith("/") || entry.path.includes(String.fromCharCode(92)) ||
+        entry.path.split("/").some(part => part === "" || part === "." || part === "..") ||
+        !(
+          (entry.type === "tree" && entry.mode === "040000") ||
+          (entry.type === "blob" && ["100644", "100755", "120000"].includes(entry.mode)) ||
+          (entry.type === "commit" && entry.mode === "160000")
+        )) fail("GITHUB_MANIFEST_TREE_ENTRY_INVALID");
     return { path: entry.path, mode: entry.mode, type: entry.type };
   });
   const treeMap = new Map(treeEntries.map(entry => [entry.path, entry]));
   if (treeMap.size !== treeEntries.length) fail("GITHUB_MANIFEST_TREE_DUPLICATE_PATH");
 
   const files = requestedPaths.map(path => {
+    const segments = path.split("/");
+    for (let index = 1; index < segments.length; index += 1) {
+      const parent = treeMap.get(segments.slice(0, index).join("/"));
+      if (!parent || parent.type !== "tree" || parent.mode !== "040000") {
+        fail("GITHUB_MANIFEST_TREE_ANCESTOR_INVALID");
+      }
+    }
     const entry = treeMap.get(path);
     if (!entry || entry.type !== "blob" || !["100644", "100755"].includes(entry.mode)) {
       fail("GITHUB_MANIFEST_NON_REGULAR_FILE");

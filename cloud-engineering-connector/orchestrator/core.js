@@ -381,7 +381,14 @@ export async function runDispatchCycle(deps) {
 
       if (typeof deps.isCancellationRequested === "function" &&
           await deps.isCancellationRequested(task.taskId, task)) {
-        if (task.state !== "CANCELLED") {
+        if (task.state !== "CANCELLED" && canTransition(task.state, "CANCELLED", {}).allowed) {
+          await store.transitionTask({
+            tenantId, taskId: task.taskId, expectedState: task.state, nextState: "CANCELLED",
+            eventId: eventId(deps, task.taskId, "cancel-observed", now),
+            actorId: deps.workerId ?? "system:dispatch",
+            evidence: { cancellationRequested: true, sourceEventId: event.eventId }, now
+          });
+        } else {
           await store.appendTaskEvent({
             tenantId, taskId: task.taskId,
             eventId: eventId(deps, task.taskId, "cancel-observed", now),

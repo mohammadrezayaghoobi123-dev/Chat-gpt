@@ -91,7 +91,7 @@ function validateScope(scope) {
   }
   const paths = scope.paths.map(path => {
     if (typeof path !== "string" || path.trim() !== path || path.length === 0 || path.length > 240 ||
-        path.startsWith("/") || path.includes("\\") ||
+        path.startsWith("/") || /^[A-Za-z]:/.test(path) || path.startsWith("~") || path.includes("\\") ||
         path.split("/").some(segment => segment === "" || segment === "." || segment === "..") ||
         /[\u0000-\u001f\u007f]/.test(path)) {
       fail("INVALID_SCOPE", "scope.paths contains an absolute, traversal, empty, or malformed path.");

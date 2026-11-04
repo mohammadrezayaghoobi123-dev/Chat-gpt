@@ -15,7 +15,7 @@ async function expectLocalCode(store, operation, code) {
     } catch (error) {
       caught = error;
     }
-    expect(caught?.code).toBe(code);
+    expect(caught?.code, caught ? caught.name + ": " + caught.message : "operation completed without throwing").toBe(code);
   });
 }
 

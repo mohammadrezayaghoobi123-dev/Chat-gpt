@@ -1,6 +1,6 @@
 # P2-A Read-Only GitHub Intake Contract — Evidence
 
-**Status:** P2-A read-only validation contract implemented and CI-verified on `6e31ea9575d0baa8a3f5da255f161bb19de86008`. No live task intake or side effect is enabled.
+**Status:** P2-A read-only validation contract implemented and CI-verified on `f1f6b9157c76b2bf0ba1fa6844961d0b8085cccf`. No live task intake or side effect is enabled.
 
 ## Repository identity
 
@@ -54,10 +54,10 @@ The focused test suite covers:
 
 ## Verification evidence
 
-Verified on exact PR head `6e31ea9575d0baa8a3f5da255f161bb19de86008`:
-- Orchestrator GitHub Intake Contract: run `41813063575` — success; 15 tests passed, 0 failed.
-- Cloud Engineering Connector CI: run `41813063638` — success; 281 Node tests passed, 0 failed; syntax and Wrangler configuration checks passed.
-- Full History Secret Scan: run `41813063665` — success.
+Verified on exact PR head `f1f6b9157c76b2bf0ba1fa6844961d0b8085cccf`:
+- Orchestrator GitHub Intake Contract: run `41813882950` — success; 15 tests passed, 0 failed.
+- Cloud Engineering Connector CI: run `41813868609` — success; 281 Node tests passed, 0 failed; syntax and Wrangler configuration checks passed.
+- Full History Secret Scan: run `41813882827` — success.
 - The first focused run exposed missing protection for `.github/workflows/`; the path deny rule was added and the subsequent exact-SHA focused run passed.
 - PR #152 remains Draft and unmerged. No merge was performed.
 

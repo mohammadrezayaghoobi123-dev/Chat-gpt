@@ -63,8 +63,8 @@ function parseJson(value, field) {
 }
 
 function validLeaseMs(value) {
-  if (!Number.isSafeInteger(value) || value < 1_000 || value > MAX_LEASE_MS) {
-    throw fail("leaseMs must be an integer between 1000 and 86400000.");
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_LEASE_MS) {
+    throw fail("leaseMs must be an integer between 1 and 86400000.");
   }
 }
 

@@ -112,6 +112,13 @@ function validateScope(scopeRef) {
 
 export function validateMessageEnvelope(envelope, { now, authenticatedSender } = {}) {
   if (!isRecord(envelope)) throw fail("INVALID_MESSAGE", "Message envelope must be a JSON object.");
+  const allowedFields = new Set([
+    "protocolVersion", "messageId", "taskId", "correlationId", "senderId", "recipientId",
+    "type", "createdAt", "expiresAt", "scopeRef", "inputHash", "evidenceRefs", "payload",
+  ]);
+  if (Object.keys(envelope).some(key => !allowedFields.has(key))) {
+    throw fail("UNKNOWN_ENVELOPE_FIELD", "Message envelope contains an unsupported field.");
+  }
   if (!Number.isSafeInteger(now) || now < 1) {
     throw fail("INVALID_CLOCK", "A trusted current timestamp is required.");
   }

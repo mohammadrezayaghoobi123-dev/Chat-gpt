@@ -189,6 +189,10 @@ export function buildPreflightReport(input = {}) {
       workers: Array.isArray(cloudflare.workers) ? cloudflare.workers.map(worker =>
         typeof worker === "string" ? worker : worker?.name ?? worker?.id ?? "UNKNOWN"
       ) : [],
+      workerBindings: Array.isArray(cloudflare.workerBindings) ? cloudflare.workerBindings.map(worker => ({
+        worker: worker?.worker ?? null,
+        durableObjectBindings: Array.isArray(worker?.durableObjectBindings) ? worker.durableObjectBindings : []
+      })) : [],
       durableObjectNamespaces: namespaces?.map(namespace => ({
         script: namespace?.script ?? null,
         className: namespace?.className ?? namespace?.class ?? null,
@@ -212,7 +216,7 @@ export function buildPreflightReport(input = {}) {
       openai: openaiAvailable ? agents.openai : "DISABLED_BY_POLICY",
       anthropic: anthropicAvailable ? agents.anthropic : "DISABLED_BY_POLICY"
     },
-    baseline: { status: baseline.status ?? "UNKNOWN", commitSha: baseline.commitSha ?? null },
+    baseline: { status: baseline.status ?? "UNKNOWN", commitSha: baseline.commitSha ?? null, runId: baseline.runId ?? null },
     checks,
     blockers,
     evidenceRefs: Array.isArray(input.evidenceRefs) ? input.evidenceRefs : []

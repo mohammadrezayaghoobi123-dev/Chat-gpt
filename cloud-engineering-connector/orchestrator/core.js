@@ -327,6 +327,7 @@ export async function runDispatchCycle(deps) {
     result.claimed += 1;
     let task = null;
     let lease = null;
+    let leaseToken = null;
     let workerId = null;
     let runningTask = null;
     try {
@@ -416,7 +417,7 @@ export async function runDispatchCycle(deps) {
         result.deferred += 1;
         continue;
       }
-      const leaseToken = await deps.createLeaseToken(task.taskId);
+      leaseToken = await deps.createLeaseToken(task.taskId);
       if (typeof leaseToken !== "string" || leaseToken.length < 16) {
         await deferEvent(store, tenantId, event, now, "LEASE_TOKEN_INVALID");
         result.deferred += 1;
@@ -434,28 +435,27 @@ export async function runDispatchCycle(deps) {
       });
 
       const beforeInvokeStop = await store.getStopSwitch({ tenantId });
-      if (beforeInvokeStop.active !== false ||
-          (typeof deps.isCancellationRequested === "function" &&
-           await deps.isCancellationRequested(task.taskId, runningTask))) {
-        const cancelled = beforeInvokeStop.active === false ? false : false;
-        if (cancelled) {
-          runningTask = await store.transitionTask({
-            tenantId, taskId: task.taskId, expectedState: "RUNNING", nextState: "CANCELLED",
-            eventId: eventId(deps, task.taskId, "cancel-before-invoke", now), actorId: workerId,
-            leaseToken, fencingToken: lease.fencingToken, evidence: {}, now
-          });
-          await store.completeOutbox({ tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration, now });
-          result.completed += 1;
-        } else {
-          runningTask = await store.transitionTask({
-            tenantId, taskId: task.taskId, expectedState: "RUNNING", nextState: "RETRY_WAIT",
-            eventId: eventId(deps, task.taskId, "pause-before-invoke", now), actorId: workerId,
-            leaseToken, fencingToken: lease.fencingToken,
-            evidence: { retryAuthorized: true, policyDecision: { allowed: true }, stopSwitchClear: true }, now
-          });
-          await deferEvent(store, tenantId, event, now, "STOP_OR_CANCELLATION_BEFORE_EFFECT");
-          result.deferred += 1;
-        }
+      const cancellationRequested = typeof deps.isCancellationRequested === "function" &&
+        await deps.isCancellationRequested(task.taskId, runningTask);
+      if (cancellationRequested) {
+        runningTask = await store.transitionTask({
+          tenantId, taskId: task.taskId, expectedState: "RUNNING", nextState: "CANCELLED",
+          eventId: eventId(deps, task.taskId, "cancel-before-invoke", now), actorId: workerId,
+          leaseToken, fencingToken: lease.fencingToken, evidence: { cancellationRequested: true }, now
+        });
+        await store.completeOutbox({ tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration, now });
+        result.completed += 1;
+        continue;
+      }
+      if (beforeInvokeStop.active !== false) {
+        runningTask = await store.transitionTask({
+          tenantId, taskId: task.taskId, expectedState: "RUNNING", nextState: "RETRY_WAIT",
+          eventId: eventId(deps, task.taskId, "pause-before-invoke", now), actorId: workerId,
+          leaseToken, fencingToken: lease.fencingToken,
+          evidence: { retryAuthorized: true, policyDecision: { allowed: true }, stopSwitchClear: true }, now
+        });
+        await deferEvent(store, tenantId, event, now, "STOP_SWITCH_BEFORE_EFFECT");
+        result.deferred += 1;
         continue;
       }
 
@@ -502,7 +502,7 @@ export async function runDispatchCycle(deps) {
           runningTask = await store.transitionTask({
             tenantId, taskId: runningTask.taskId, expectedState: "RUNNING", nextState,
             eventId: eventId(deps, runningTask.taskId, retryable ? "retry" : "failed", now),
-            actorId: workerId, leaseToken: lease.leaseToken, fencingToken: lease.fencingToken,
+            actorId: workerId, leaseToken, fencingToken: lease.fencingToken,
             evidence: retryable
               ? { retryAuthorized: true, policyDecision: { allowed: true }, stopSwitchClear: true }
               : { failure: { code: typeof error?.code === "string" ? error.code : "DISPATCH_FAILED" } },

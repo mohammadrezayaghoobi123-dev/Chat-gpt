@@ -222,7 +222,7 @@ describe("KnowledgeStore orchestrator ledger v4", () => {
       .resolves.toMatchObject({ active: true, source: "DEFAULT_FAIL_CLOSED" });
     await expect(store.setStopSwitch({
       tenantId: "tenant-a", active: false, actorId: "owner:1", reason: "owner approved",
-      ownerAuthorization: { approved: true, principalId: "owner:1", approvalId: "approval-001" }, now: 2000
+      ownerAuthorization: { verified: true, principalId: "owner:1", approvalId: "approval-001" }, now: 2000
     })).resolves.toMatchObject({ active: false, source: "PERSISTED" });
     await expect(store.setStopSwitch({
       tenantId: "tenant-a", active: true, actorId: "operator:1", reason: "emergency pause", now: 3000

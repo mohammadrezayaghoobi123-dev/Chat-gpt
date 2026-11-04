@@ -301,6 +301,35 @@ describe("KnowledgeStore orchestrator ledger v4", () => {
   });
 
 
+
+  it("persists immutable idempotent policy decisions in the tenant-scoped ledger", async () => {
+    const store = storeFor("orchestrator-policy-decision-ledger");
+    await store.createTask(createInput("task-policy", "tenant-a", 1000));
+    const input = {
+      tenantId: "tenant-a", taskId: "task-policy", decisionId: "decision-001",
+      actorId: "agent:1", action: "schedule_task", allowed: true,
+      decisionCode: "ALLOW", reason: "Policy requirements satisfied.",
+      evidence: { branch: "feature/task-policy", quotaRemaining: 5 }, now: 2000
+    };
+    const first = await store.recordPolicyDecision(input);
+    const replay = await store.recordPolicyDecision(input);
+    expect(first).toMatchObject({ decisionId: "decision-001", allowed: true, decisionCode: "ALLOW" });
+    expect(replay).toEqual(first);
+    await expectLocalCode(store, instance => instance.recordPolicyDecision({
+      ...input, reason: "tampered reason"
+    }), "ORCHESTRATOR_POLICY_DECISION_CONFLICT");
+    await runInDurableObject(store, async instance => {
+      expect(() => instance.ctx.storage.sql.exec(
+        "UPDATE orchestrator_policy_decisions SET reason='tampered' WHERE tenant_id=? AND decision_id=?",
+        "tenant-a", "decision-001"
+      )).toThrow(/append-only/);
+      expect(() => instance.ctx.storage.sql.exec(
+        "DELETE FROM orchestrator_policy_decisions WHERE tenant_id=? AND decision_id=?",
+        "tenant-a", "decision-001"
+      )).toThrow(/append-only/);
+    });
+  });
+
   it("claims outbox events within the requested tenant only", async () => {
     const store = storeFor("orchestrator-outbox-tenant-filter");
     await store.createTask(createInput("task-tenant-a", "tenant-a", 1000));

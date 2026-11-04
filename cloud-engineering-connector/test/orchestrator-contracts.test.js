@@ -111,3 +111,9 @@ test("rejects undeclared sender fields instead of silently trusting them", () =>
     sender: { agentId: "chatgpt", principalId: "service:chatgpt", email: "untrusted@example.test" }
   })), error => error.code === "UNKNOWN_FIELD");
 });
+
+test("rejects Windows absolute paths in a repository-relative scope", () => {
+  assert.throws(() => validateTask(validTask({
+    scope: { branch: "feature/task-123", paths: ["C:/Users/agent/.env"], operations: ["read"] }
+  })), error => error.code === "INVALID_SCOPE");
+});

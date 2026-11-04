@@ -141,7 +141,10 @@ jobs:
           }
           // First Production deployment creates WRITE_CONTROL through the checked-in SQLite migration.
           const active = deploymentData.deployments?.[0];
-          const previous = active?.versions?.find((version) => version.percentage === 100) || active?.versions?.[0];
+          const versions = active?.versions || [];
+          assert.equal(versions.length, 1, "Production rollback target must have exactly one active version");
+          const previous = versions[0];
+          assert.equal(previous?.percentage, 100, "Production rollback target must receive exactly 100% traffic");
           assert.ok(previous?.version_id, "Could not identify the current 100% Production version for rollback");
           appendFileSync(process.env.GITHUB_OUTPUT, `previous_version_id=${previous.version_id}\n`);
           console.log("Production preflight passed; isolated namespace checks passed; immutable rollback target captured.");

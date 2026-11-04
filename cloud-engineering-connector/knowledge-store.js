@@ -1084,8 +1084,9 @@ export class KnowledgeStore extends DurableObject {
     const evidence = input?.evidence ?? {};
     const evidenceJson = jsonObject(evidence, "evidence");
     const now = timestamp(input?.now);
+    const requiresLease = expectedState === "RUNNING" || nextState === "RUNNING";
     let leaseTokenHash = null;
-    if (nextState === "RUNNING") {
+    if (requiresLease) {
       const leaseToken = requiredString(input?.leaseToken, "leaseToken", 512);
       leaseTokenHash = await sha256(leaseToken);
       if (!Number.isSafeInteger(input?.fencingToken) || input.fencingToken < 1) {
@@ -1104,8 +1105,15 @@ export class KnowledgeStore extends DurableObject {
         throw fail("ORCHESTRATOR_STATE_CONFLICT", "Task state changed; reload before attempting the transition.");
       }
 
+      if (nextState === "SCHEDULED" || nextState === "RUNNING") {
+        const stopSwitch = this.getStopSwitch({ tenantId });
+        if (stopSwitch.active) {
+          throw fail("ORCHESTRATOR_STOP_SWITCH_ACTIVE", "Stop switch is active or unreadable; scheduling and execution are denied.");
+        }
+      }
+
       let effectiveEvidence = parseJson(evidenceJson, "transition evidence");
-      if (nextState === "RUNNING") {
+      if (requiresLease) {
         const lease = sql.exec(
           "SELECT * FROM orchestrator_execution_leases WHERE tenant_id=? AND task_id=?",
           tenantId, taskId
@@ -1135,6 +1143,13 @@ export class KnowledgeStore extends DurableObject {
       ).one();
       if (updated.state !== nextState || updated.version !== current.version + 1) {
         throw fail("ORCHESTRATOR_STATE_CONFLICT", "Task compare-and-set transition did not persist.");
+      }
+      if (expectedState === "RUNNING" && nextState !== "RUNNING") {
+        sql.exec(
+          "UPDATE orchestrator_execution_leases SET lease_until=?, updated_at=? " +
+          "WHERE tenant_id=? AND task_id=? AND fencing_token=?",
+          now, now, tenantId, taskId, input.fencingToken
+        );
       }
       this.appendTaskEventSql({
         tenantId, taskId, eventId, eventType: "STATE_TRANSITION", actorId,
@@ -1207,6 +1222,10 @@ export class KnowledgeStore extends DurableObject {
 
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
+      const stopSwitch = this.getStopSwitch({ tenantId });
+      if (stopSwitch.active) {
+        throw fail("ORCHESTRATOR_STOP_SWITCH_ACTIVE", "Stop switch is active or unreadable; task claims are denied.");
+      }
       const task = sql.exec(
         "SELECT * FROM orchestrator_tasks WHERE tenant_id=? AND task_id=?",
         tenantId, taskId

@@ -184,6 +184,62 @@ function validRequestedScope(branchPolicy, requestedBranchName, requestedPaths) 
   return true;
 }
 
+
+/**
+ * Validates a Git tree manifest for the exact requested changed paths.
+ * The caller must obtain this manifest from an authenticated GitHub API
+ * response for the target repository and exact base/head SHAs.
+ */
+export function validateP2BChangedFileManifest({
+  repository,
+  base,
+  requestedPaths,
+  manifest,
+} = {}) {
+  if (!validRepository(repository) || !validBase(base) ||
+      !Array.isArray(requestedPaths) || requestedPaths.length < 1 ||
+      !isRecord(manifest) || manifest.verified !== true ||
+      manifest.repositoryId !== TARGET_REPOSITORY_ID ||
+      manifest.baseSha !== base.sha || !SHA40.test(manifest.headSha ?? "") ||
+      !Array.isArray(manifest.files) || !Array.isArray(manifest.treeEntries)) return false;
+
+  const requested = new Set(requestedPaths);
+  if (requested.size !== requestedPaths.length ||
+      manifest.files.length !== requested.size) return false;
+
+  const fileMap = new Map();
+  for (const file of manifest.files) {
+    if (!isRecord(file) || !safeRelativePath(file.path) ||
+        !["100644", "100755"].includes(file.mode) ||
+        file.type !== "blob" || fileMap.has(file.path)) return false;
+    fileMap.set(file.path, file);
+  }
+  if ([...requested].some(path => !fileMap.has(path))) return false;
+
+  const treeMap = new Map();
+  for (const entry of manifest.treeEntries) {
+    if (!isRecord(entry) || typeof entry.path !== "string" ||
+        entry.path.startsWith("/") || entry.path.includes(String.fromCharCode(92)) ||
+        treeMap.has(entry.path)) return false;
+    treeMap.set(entry.path, entry);
+  }
+
+  for (const path of requested) {
+    const file = fileMap.get(path);
+    const treeFile = treeMap.get(path);
+    if (!treeFile || treeFile.type !== "blob" || treeFile.mode !== file.mode ||
+        !["100644", "100755"].includes(treeFile.mode)) return false;
+
+    const segments = path.split("/");
+    for (let index = 1; index < segments.length; index += 1) {
+      const parent = segments.slice(0, index).join("/");
+      const parentEntry = treeMap.get(parent);
+      if (!parentEntry || parentEntry.type !== "tree" || parentEntry.mode !== "040000") return false;
+    }
+  }
+  return true;
+}
+
 function validStopSwitch(value) {
   return isRecord(value) && value.readable === true && value.enabled === false;
 }
@@ -208,6 +264,7 @@ export async function evaluateP2BWritePreflight({
   branchPolicy,
   requestedBranchName,
   requestedPaths,
+  changedFileManifest,
 } = {}) {
   if (!Number.isSafeInteger(now) || now < 1) {
     return { decision: "BLOCKED", reasonCodes: ["TRUSTED_CLOCK_REQUIRED"], sideEffects: false };
@@ -234,6 +291,7 @@ export async function evaluateP2BWritePreflight({
     ["STOP_SWITCH_NOT_CLEAR", validStopSwitch(stopSwitch)],
     ["BRANCH_PREFIX_OR_PATH_ALLOWLIST_INVALID", validBranchPolicy(branchPolicy)],
     ["REQUESTED_BRANCH_OR_CHANGED_PATHS_OUT_OF_SCOPE", validRequestedScope(branchPolicy, requestedBranchName, requestedPaths)],
+    ["CHANGED_FILE_MANIFEST_INVALID_OR_SYMLINK_DETECTED", validateP2BChangedFileManifest({ repository, base, requestedPaths, manifest: changedFileManifest })],
   ];
   const reasonCodes = checks.filter(([, passed]) => !passed).map(([code]) => code);
 

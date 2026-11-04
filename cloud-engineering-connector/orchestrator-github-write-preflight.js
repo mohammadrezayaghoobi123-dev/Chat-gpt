@@ -2,21 +2,53 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const SHA40 = /^[a-f0-9]{40}$/;
 const ACTOR_ID = /^[0-9]{1,20}$/;
 const LABEL = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,63}$/;
+const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function validOwnerApproval(value, now) {
+function canonical(value) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) return value.map(canonical);
+  if (!isRecord(value)) throw new TypeError("Approval scope must contain JSON-safe values.");
+  return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
+}
+
+export async function computeP2BApprovalScopeHash(input = {}) {
+  const descriptor = {
+    repository: input.repository,
+    actorPolicy: input.actorPolicy,
+    credential: input.credential,
+    ledger: input.ledger,
+    repositoryControls: input.repositoryControls,
+    base: input.base,
+    independentReviewer: input.independentReviewer,
+    stopSwitch: input.stopSwitch,
+  };
+  const bytes = new TextEncoder().encode(JSON.stringify(canonical(descriptor)));
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function validOwnerApproval(value, now, expectedScopeHash) {
   return isRecord(value) &&
     value.authenticated === true &&
     value.identityVerified === true &&
     value.role === "owner" &&
     typeof value.authorizationId === "string" && value.authorizationId.length >= 8 &&
     SHA256.test(value.approvedScopeHash ?? "") &&
+    value.approvedScopeHash === expectedScopeHash &&
     Number.isSafeInteger(value.approvedAt) && value.approvedAt > 0 &&
     Number.isSafeInteger(value.expiresAt) && value.expiresAt > now &&
     value.approvedAt <= now;
+}
+
+function validRepository(value) {
+  return isRecord(value) &&
+    typeof value.fullName === "string" && REPOSITORY.test(value.fullName) &&
+    Number.isSafeInteger(value.id) && value.id > 0;
 }
 
 function validActorPolicy(value) {
@@ -90,12 +122,12 @@ function validStopSwitch(value) {
 /**
  * Structural P2-B preflight only. This function never grants permission,
  * creates a branch/task, writes to GitHub, or calls the P1 ledger.
- *
- * All evidence objects must be populated by trusted, independently verified
- * control-plane sources. Caller-supplied booleans are not authentication.
+ * All evidence objects must come from trusted, independently verified sources.
+ * Caller-supplied booleans are not authentication.
  */
-export function evaluateP2BWritePreflight({
+export async function evaluateP2BWritePreflight({
   now,
+  repository,
   ownerApproval,
   actorPolicy,
   credential,
@@ -109,8 +141,18 @@ export function evaluateP2BWritePreflight({
     return { decision: "BLOCKED", reasonCodes: ["TRUSTED_CLOCK_REQUIRED"], sideEffects: false };
   }
 
+  let expectedScopeHash;
+  try {
+    expectedScopeHash = await computeP2BApprovalScopeHash({
+      repository, actorPolicy, credential, ledger, repositoryControls, base, independentReviewer, stopSwitch,
+    });
+  } catch {
+    return { decision: "BLOCKED", reasonCodes: ["APPROVAL_SCOPE_INVALID"], sideEffects: false };
+  }
+
   const checks = [
-    ["OWNER_APPROVAL_MISSING_OR_INVALID", validOwnerApproval(ownerApproval, now)],
+    ["REPOSITORY_IDENTITY_INVALID", validRepository(repository)],
+    ["OWNER_APPROVAL_MISSING_INVALID_OR_SCOPE_MISMATCH", validOwnerApproval(ownerApproval, now, expectedScopeHash)],
     ["ACTOR_EVENT_LABEL_POLICY_INVALID", validActorPolicy(actorPolicy)],
     ["TASK_SCOPED_CREDENTIAL_INVALID", validCredential(credential)],
     ["DURABLE_LEDGER_NOT_VERIFIED", validLedger(ledger)],
@@ -124,6 +166,7 @@ export function evaluateP2BWritePreflight({
   return {
     decision: reasonCodes.length === 0 ? "READY_FOR_SEPARATE_EXECUTION_APPROVAL" : "BLOCKED",
     reasonCodes,
+    approvalScopeHash: expectedScopeHash,
     sideEffects: false,
     branchCreation: false,
     taskPersistence: false,

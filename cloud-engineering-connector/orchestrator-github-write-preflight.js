@@ -277,7 +277,7 @@ export async function evaluateP2BWritePreflight({
   let expectedScopeHash;
   try {
     expectedScopeHash = await computeP2BApprovalScopeHash({
-      repository, actorPolicy, credential, ledger, repositoryControls, base, independentReviewer, stopSwitch, branchPolicy, requestedBranchName, requestedPaths,
+      repository, actorPolicy, credential, ledger, repositoryControls, base, independentReviewer, stopSwitch, branchPolicy, requestedBranchName, requestedPaths, changedFileManifest,
     });
   } catch {
     return { decision: "BLOCKED", reasonCodes: ["APPROVAL_SCOPE_INVALID"], sideEffects: false };

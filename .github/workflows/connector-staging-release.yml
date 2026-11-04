@@ -135,7 +135,10 @@ jobs:
           assert.equal(observability?.logs?.invocation_logs, false, "Staging invocation logs must remain disabled to reduce sensitive-data exposure");
 
           const active = deploymentData.deployments?.[0];
-          const previous = active?.versions?.find((version) => version.percentage === 100) || active?.versions?.[0];
+          const versions = active?.versions || [];
+          assert.equal(versions.length, 1, "Staging rollback target must have exactly one active version");
+          const previous = versions[0];
+          assert.equal(previous?.percentage, 100, "Staging rollback target must receive exactly 100% traffic");
           assert.ok(previous?.version_id, "Could not identify the current 100% Staging version for rollback");
           appendFileSync(process.env.GITHUB_OUTPUT, `previous_version_id=${previous.version_id}\n`);
           console.log("Staging binding preflight passed; rollback target captured by immutable version ID.");

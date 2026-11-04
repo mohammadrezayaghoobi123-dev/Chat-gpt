@@ -1,6 +1,6 @@
 # P2-B Write Preflight — Evidence and Current Blockers
 
-**Status:** Structural preflight now validates task branch/path scope and a supplied changed-tree manifest, including symlink/submodule rejection. Code/test SHA `b3808fee4700f5006603cb2d043ce7809191f65e` is CI-verified. P2-B execution remains BLOCKED. No GitHub write identity, live ledger, task record, branch, or external side effect is enabled.
+**Status:** Structural preflight now validates task branch/path scope and a supplied changed-tree manifest, including symlink/submodule rejection. Code/test SHA `f18726442e9cf3ca91e32339295234a844bc7de9` is CI-verified. P2-B execution remains BLOCKED. No GitHub write identity, live ledger, task record, branch, or external side effect is enabled.
 
 ## Purpose and safety boundary
 
@@ -26,9 +26,9 @@ Owner approval is bound to a canonical SHA-256 digest of repository identity, ac
 12. Supplied changed-tree manifest must match the exact repository ID, base SHA, requested branch name, head SHA shape, and exact requested path set. Changed leaves must be regular Git blobs (`100644` or `100755`); symlink (`120000`), submodule (`160000`), directory leaves, missing entries, and non-tree ancestors are rejected.
 13. The entire changed-file manifest, including head SHA, changed file modes, and tree entries, is included in the canonical owner-approval digest. Changing any manifest field invalidates the approval.
 
-## Important limitation: manifest provenance
+## Read-only GitHub manifest provider\n\n`cloud-engineering-connector/orchestrator-github-manifest-provider.js` now retrieves repository identity, branch ref, commit/tree, compare metadata, and recursive tree through authenticated GitHub REST GET requests. It verifies the exact repository ID, base/head SHAs, task branch prefix, exact changed-path set, compare status, complete (non-truncated) tree, and regular-file modes. It rejects deletes, renames, copies, symlinks, submodules, unsupported paths, and truncated trees. It performs no GitHub writes, branch creation, task persistence, ledger writes, or provider invocation. Tests use a synthetic fetch implementation and a dummy token; no live credential or production GitHub write was used.\n\n## Important limitation: manifest provenance
 
-The module is deliberately pure and has no GitHub, Cloudflare, network, or ledger imports. The manifest validator checks structure only. It does **not** fetch or authenticate a GitHub compare/tree response. It deliberately ignores any caller-supplied `verified` boolean because such a boolean is not proof of provenance.
+The module is deliberately pure and has no GitHub, Cloudflare, network, or ledger imports. The preflight validator checks structure only. The separate read-only provider fetches GitHub evidence but has not been exercised with a live token. The manifest itself is not a self-authenticating token. It deliberately ignores any caller-supplied `verified` boolean because such a boolean is not proof of provenance.
 
 Before any future write path exists, its adapter must retrieve the branch ref, compare/diff, and recursive Git tree through authenticated GitHub API calls for the exact repository, base SHA, requested branch, and head SHA. It must verify those responses, reject stale/raced heads, ensure the diff path set exactly matches the approved set, reject symlink/path-resolution escapes, and re-check the stop switch immediately before any side effect. Caller-supplied booleans must never be treated as authentication.
 
@@ -38,10 +38,10 @@ Positive fixtures use synthetic evidence-shaped values only. They do not prove a
 
 ## Verification evidence
 
-- Exact code/test SHA: `b3808fee4700f5006603cb2d043ce7809191f65e`.
-- Orchestrator GitHub Intake Contract run `41886574098`: success; 41 tests passed, 0 failed (15 P2-A + 26 P2-B).
-- Cloud Engineering Connector CI run `41886573742`: success; Node suite 307 passed, 0 failed; Durable Object/Vitest suite 70 passed, 0 failed; `npm audit` reported 0 vulnerabilities; syntax checks and Wrangler production/staging dry-runs passed. Staging post-deploy smoke was skipped; no deployment occurred.
-- Full History Secret Scan run `41886573677`: success on exact code/test SHA; 2,427 commits scanned, no leaks found.
+- Exact code/test SHA: `f18726442e9cf3ca91e32339295234a844bc7de9`.
+- Orchestrator GitHub Intake Contract run `41887059133`: success; 49 tests passed, 0 failed (15 P2-A + 26 P2-B + 8 manifest-provider tests).
+- Cloud Engineering Connector CI run `41887067061`: success; Node suite 315 passed, 0 failed; Durable Object/Vitest suite 70 passed, 0 failed; `npm audit` reported 0 vulnerabilities; syntax checks and Wrangler production/staging dry-runs passed. Staging post-deploy smoke was skipped; no deployment occurred.
+- Full History Secret Scan run `41887067075`: success on exact code/test SHA; 2,432 commits scanned, no leaks found.
 
 ## Current blockers — no values inferred
 
@@ -53,7 +53,7 @@ Positive fixtures use synthetic evidence-shaped values only. They do not prove a
 - Branch-protection state and required review policy remain unverified.
 - Independent reviewer identity remains unverified.
 - No verified stop-switch source for this write path.
-- No authenticated GitHub diff/tree adapter or actual write-capable executor exists in this P2-B preflight.
+- The read-only authenticated GitHub manifest provider exists, but it has only been tested against synthetic API fixtures. No live token-backed API retrieval, authenticated GitHub diff/tree evidence, or actual write-capable executor has been verified.
 
 ## Safety boundary
 

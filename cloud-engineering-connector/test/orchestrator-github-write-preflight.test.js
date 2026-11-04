@@ -400,3 +400,35 @@ test("does not treat a caller-supplied verified boolean as proof of manifest pro
   assert.equal(result.decision, "READY_FOR_SEPARATE_EXECUTION_APPROVAL");
   assert.equal(result.executionAuthorized, false);
 });
+test("binds the exact changed-file manifest and head SHA to owner approval", async () => {
+  const input = await fixture();
+  const changedFileManifest = {
+    ...input.changedFileManifest,
+    headSha: "d".repeat(40),
+  };
+  const result = await evaluateP2BWritePreflight({
+    ...input,
+    changedFileManifest,
+  });
+  assert.ok(result.reasonCodes.includes("OWNER_APPROVAL_MISSING_INVALID_OR_SCOPE_MISMATCH"));
+  assert.ok(result.reasonCodes.includes("CHANGED_FILE_MANIFEST_INVALID_OR_SYMLINK_DETECTED") === false);
+  assert.notEqual(result.approvalScopeHash, input.ownerApproval.approvedScopeHash);
+  assert.equal(result.executionAuthorized, false);
+});
+
+test("binds the complete Git tree evidence, not only the requested file list", async () => {
+  const input = await fixture();
+  const changedFileManifest = {
+    ...input.changedFileManifest,
+    treeEntries: [
+      ...input.changedFileManifest.treeEntries,
+      { path: "docs/evidence/extra.md", mode: "100644", type: "blob" },
+    ],
+  };
+  const result = await evaluateP2BWritePreflight({
+    ...input,
+    changedFileManifest,
+  });
+  assert.ok(result.reasonCodes.includes("OWNER_APPROVAL_MISSING_INVALID_OR_SCOPE_MISMATCH"));
+  assert.notEqual(result.approvalScopeHash, input.ownerApproval.approvedScopeHash);
+});

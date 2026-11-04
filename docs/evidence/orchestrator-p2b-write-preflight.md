@@ -62,7 +62,7 @@ The focused suite verifies:
 
 ## Current blockers — no values inferred
 
-- No owner-approved branch prefix or path allowlist supplied; test values are synthetic only.
+- No owner-approved branch prefix or path allowlist supplied; test values and tree manifests are synthetic only.
 - No owner-approved actor ID list supplied.
 - No owner-approved task event/action and exact label supplied.
 - No task-scoped GitHub App or Actions write identity verified.

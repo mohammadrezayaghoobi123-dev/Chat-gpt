@@ -187,8 +187,9 @@ function validRequestedScope(branchPolicy, requestedBranchName, requestedPaths) 
 
 /**
  * Validates a Git tree manifest for the exact requested changed paths.
- * The caller must obtain this manifest from an authenticated GitHub API
- * response for the target repository and exact base/head SHAs.
+ * This is structural validation only. The caller must obtain these values
+ * from authenticated GitHub API responses for the exact repository, branch,
+ * base SHA, and head SHA; no caller-supplied boolean proves provenance.
  */
 export function validateP2BChangedFileManifest({
   repository,
@@ -199,7 +200,7 @@ export function validateP2BChangedFileManifest({
 } = {}) {
   if (!validRepository(repository) || !validBase(base) ||
       !Array.isArray(requestedPaths) || requestedPaths.length < 1 ||
-      !isRecord(manifest) || manifest.verified !== true ||
+      !isRecord(manifest) ||
       manifest.repositoryId !== TARGET_REPOSITORY_ID ||
       manifest.baseSha !== base.sha || manifest.branchName !== requestedBranchName ||
       !SHA40.test(manifest.headSha ?? "") ||

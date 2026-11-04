@@ -253,6 +253,28 @@ test("requestCancellation rejects unauthenticated actors and preserves terminal 
   assert.equal(result.reason, "TERMINAL_STATE");
 });
 
+
+test("requestCancellation uses the current execution lease when cancelling a running task", async () => {
+  const task = validTask("task-running-cancel");
+  const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "RUNNING", version: 4, fencingToken: 2 }] });
+  const result = await requestCancellation(task.taskId, actor(), depsFor(store, {
+    getLeaseCredentials: async () => ({
+      ownerId: "agent:1", leaseToken: "active-lease-token", fencingToken: 2
+    })
+  }));
+  assert.equal(result.cancelled, true);
+  assert.equal(result.task.state, "CANCELLED");
+  assert.equal(store.events.at(-1).leaseOwnerId, "agent:1");
+  assert.equal(store.events.at(-1).actorId, "owner:1");
+});
+
+test("runDispatchCycle stops before claiming when the stop switch is active", async () => {
+  const store = makeStore({ stopSwitch: true });
+  const result = await runDispatchCycle(depsFor(store));
+  assert.equal(result.stopped, true);
+  assert.equal(store.counters.claimed, 0);
+});
+
 test("runDispatchCycle never invokes an unverified adapter and defers the outbox event", async () => {
   const task = validTask("task-dispatch");
   const event = {

@@ -194,13 +194,15 @@ export function validateP2BChangedFileManifest({
   repository,
   base,
   requestedPaths,
+  requestedBranchName,
   manifest,
 } = {}) {
   if (!validRepository(repository) || !validBase(base) ||
       !Array.isArray(requestedPaths) || requestedPaths.length < 1 ||
       !isRecord(manifest) || manifest.verified !== true ||
       manifest.repositoryId !== TARGET_REPOSITORY_ID ||
-      manifest.baseSha !== base.sha || !SHA40.test(manifest.headSha ?? "") ||
+      manifest.baseSha !== base.sha || manifest.branchName !== requestedBranchName ||
+      !SHA40.test(manifest.headSha ?? "") ||
       !Array.isArray(manifest.files) || !Array.isArray(manifest.treeEntries)) return false;
 
   const requested = new Set(requestedPaths);
@@ -291,7 +293,7 @@ export async function evaluateP2BWritePreflight({
     ["STOP_SWITCH_NOT_CLEAR", validStopSwitch(stopSwitch)],
     ["BRANCH_PREFIX_OR_PATH_ALLOWLIST_INVALID", validBranchPolicy(branchPolicy)],
     ["REQUESTED_BRANCH_OR_CHANGED_PATHS_OUT_OF_SCOPE", validRequestedScope(branchPolicy, requestedBranchName, requestedPaths)],
-    ["CHANGED_FILE_MANIFEST_INVALID_OR_SYMLINK_DETECTED", validateP2BChangedFileManifest({ repository, base, requestedPaths, manifest: changedFileManifest })],
+    ["CHANGED_FILE_MANIFEST_INVALID_OR_SYMLINK_DETECTED", validateP2BChangedFileManifest({ repository, base, requestedPaths, requestedBranchName, manifest: changedFileManifest })],
   ];
   const reasonCodes = checks.filter(([, passed]) => !passed).map(([code]) => code);
 

@@ -61,6 +61,7 @@ async function fixture() {
       evidenceRef: "reviewer-identity-proof-2026-11-04",
     },
     stopSwitch: { readable: true, enabled: false },
+    branchPolicy: { prefix: "task/", allowedPaths: ["cloud-engineering-connector/src", "docs/evidence"] },
   };
   input.ownerApproval.approvedScopeHash = await computeP2BApprovalScopeHash(input);
   return input;
@@ -89,7 +90,7 @@ test("missing approvals and infrastructure evidence fail closed", async () => {
   assert.equal(result.decision, "BLOCKED");
   assert.equal(result.sideEffects, false);
   assert.equal(result.executionAuthorized, false);
-  assert.equal(result.reasonCodes.length, 9);
+  assert.equal(result.reasonCodes.length, 10);
 });
 
 test("requires a trusted clock", async () => {

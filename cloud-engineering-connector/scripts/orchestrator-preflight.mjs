@@ -67,16 +67,23 @@ export function buildPreflightReport(input = {}) {
   );
 
   const permissions = Array.isArray(github.workflowPermissions) ? github.workflowPermissions : null;
-  const hasWritePermission = permissions?.some(permission => /:write$/i.test(permission));
-  const readOnlyPermissions = permissions?.length > 0 && !hasWritePermission;
+  const allPermissionsExplicitlyReadOnly =
+    permissions?.length > 0 && permissions.every(permission =>
+      typeof permission === "string" && /^[a-z-]+:read$/i.test(permission)
+    );
+  const hasWritePermission = permissions?.some(permission =>
+    typeof permission === "string" && /:write$/i.test(permission)
+  );
   addCheck(
     checks, blockers, "workflow_permissions",
-    readOnlyPermissions ? "PASS" : hasWritePermission ? "BLOCKED" : "UNKNOWN",
-    readOnlyPermissions
-      ? "Workflow permissions are explicitly read-only."
+    allPermissionsExplicitlyReadOnly ? "PASS" : hasWritePermission || permissions?.length ? "BLOCKED" : "UNKNOWN",
+    allPermissionsExplicitlyReadOnly
+      ? "Every declared workflow permission is explicitly read-only."
       : hasWritePermission
         ? "Workflow permission list includes write access."
-        : "Workflow permissions are missing or unverified."
+        : permissions?.length
+          ? "Workflow permission list includes an unknown or non-read-only scope."
+          : "Workflow permissions are missing or unverified."
   );
 
   addCheck(

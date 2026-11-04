@@ -84,6 +84,7 @@ jobs:
           const readinessBody = await readiness.json();
           assert.equal(readinessBody.status, 'ready');
           assert.equal(readinessBody.durable_objects, 'ok', 'readyz must execute a live SQLite Durable Object probe');
+          assert.equal(readinessBody.orchestrator_ledger, 'ok', 'readyz must execute the independent OrchestratorLedger SQLite probe');
           for (const [header, expected] of [
             ['x-content-type-options', 'nosniff'],
             ['x-frame-options', 'DENY'],

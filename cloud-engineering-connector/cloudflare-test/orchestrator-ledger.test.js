@@ -70,6 +70,11 @@ function validEnvelope(task, overrides = {}) {
 }
 
 async function scheduleTask(store, taskId = "task-001", tenantId = "tenant-a") {
+  await store.setStopSwitch({
+    tenantId, active: false, actorId: "owner:1", reason: "test scheduling",
+    ownerAuthorization: { verified: true, principalId: "owner:1", approvalId: "schedule-" + taskId },
+    now: 1500
+  });
   await store.transitionTask({
     tenantId, taskId, expectedState: "RECEIVED", nextState: "VALIDATING",
     eventId: "transition-" + taskId + "-1", actorId: "owner:1", evidence: {}, now: 2000
@@ -227,6 +232,59 @@ describe("KnowledgeStore orchestrator ledger v4", () => {
       fencingToken: second.fencingToken, evidence: {}, now: 6200
     });
     expect(running).toMatchObject({ state: "RUNNING", fencingToken: 2 });
+    await expectLocalCode(store, instance => instance.transitionTask({
+      tenantId: "tenant-a", taskId: "task-fence", expectedState: "RUNNING", nextState: "VERIFYING",
+      eventId: "stale-worker-finish", actorId: "agent:1", leaseToken: "first-lease-token",
+      fencingToken: first.fencingToken, evidence: { execution: { commitSha: "b".repeat(40) } }, now: 6250
+    }), "ORCHESTRATOR_LEASE_CONFLICT");
+    const verified = await store.transitionTask({
+      tenantId: "tenant-a", taskId: "task-fence", expectedState: "RUNNING", nextState: "VERIFYING",
+      eventId: "current-worker-finish", actorId: "agent:2", leaseToken: "second-lease-token",
+      fencingToken: second.fencingToken, evidence: { execution: { commitSha: "b".repeat(40) } }, now: 6300
+    });
+    expect(verified).toMatchObject({ state: "VERIFYING", fencingToken: 2 });
+    await runInDurableObject(store, async instance => {
+      expect(instance.ctx.storage.sql.exec(
+        "SELECT lease_until FROM orchestrator_execution_leases WHERE tenant_id=? AND task_id=?",
+        "tenant-a", "task-fence"
+      ).one().lease_until).toBe(6300);
+    });
+  });
+
+
+  it("enforces the persisted stop switch before scheduling and claiming", async () => {
+    const store = storeFor("orchestrator-stop-switch-enforcement");
+    await store.createTask(createInput("task-stop"));
+    await store.transitionTask({
+      tenantId: "tenant-a", taskId: "task-stop", expectedState: "RECEIVED", nextState: "VALIDATING",
+      eventId: "stop-transition-1", actorId: "owner:1", evidence: {}, now: 2000
+    });
+    await store.transitionTask({
+      tenantId: "tenant-a", taskId: "task-stop", expectedState: "VALIDATING", nextState: "READY",
+      eventId: "stop-transition-2", actorId: "owner:1",
+      evidence: { validation: { passed: true } }, now: 3000
+    });
+    await expectLocalCode(store, instance => instance.transitionTask({
+      tenantId: "tenant-a", taskId: "task-stop", expectedState: "READY", nextState: "SCHEDULED",
+      eventId: "stop-transition-denied", actorId: "owner:1",
+      evidence: { policyDecision: { allowed: true }, stopSwitchClear: true }, now: 4000
+    }), "ORCHESTRATOR_STOP_SWITCH_ACTIVE");
+    await store.setStopSwitch({
+      tenantId: "tenant-a", active: false, actorId: "owner:1", reason: "owner resume",
+      ownerAuthorization: { verified: true, principalId: "owner:1", approvalId: "resume-task-stop" }, now: 4100
+    });
+    await store.transitionTask({
+      tenantId: "tenant-a", taskId: "task-stop", expectedState: "READY", nextState: "SCHEDULED",
+      eventId: "stop-transition-allowed", actorId: "owner:1",
+      evidence: { policyDecision: { allowed: true }, stopSwitchClear: true }, now: 4200
+    });
+    await store.setStopSwitch({
+      tenantId: "tenant-a", active: true, actorId: "operator:1", reason: "emergency pause", now: 4300
+    });
+    await expectLocalCode(store, instance => instance.claimTask({
+      tenantId: "tenant-a", taskId: "task-stop", ownerId: "agent:1",
+      leaseToken: "stop-test-lease", leaseMs: 1000, now: 4400
+    }), "ORCHESTRATOR_STOP_SWITCH_ACTIVE");
   });
 
   it("defaults the stop switch to active, persists owner-authorized changes, and fails closed on read errors", async () => {

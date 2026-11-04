@@ -20,7 +20,8 @@ const evidence = {
   active_deployment_id: null,
   active_version_id: null,
   active_traffic_percentage: null,
-  deployment_verification: "not_attempted",
+  active_traffic_verification: "not_attempted",
+  candidate_deployment_association: "not_established_by_current_api_metadata",
 };
 
 const account = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -44,7 +45,7 @@ if (account && token) {
       evidence.active_deployment_id = active?.id || null;
       evidence.active_version_id = fullyActive ? versions[0].version_id || null : null;
       evidence.active_traffic_percentage = fullyActive ? versions[0].percentage : null;
-      evidence.deployment_verification =
+      evidence.active_traffic_verification =
         fullyActive && evidence.active_version_id ? "verified" : "not_single_100_percent_version";
     } else {
       evidence.deployment_verification = "unavailable";

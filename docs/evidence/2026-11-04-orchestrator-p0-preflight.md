@@ -105,3 +105,18 @@ These are release blockers, not reasons to skip tests or claim approval.
 ## Safety record
 
 No changes were made to **main**, PRs #145/#146/#147, Cloudflare Workers, deployments, traffic percentages, bindings, secrets, billing, or subscription settings. No secret values were read or logged. This report is a sanitized snapshot, not a deployment authorization.
+
+## 8. P0 implementation and verification evidence
+
+The read-only preflight report builder, sanitized input snapshot, unit tests, and read-only workflow were added on the isolated branch **integration/orchestrator-p0-preflight-2026-11-04**. The branch is based on the approved integration SHA and contains only the six P0 files listed in the branch comparison.
+
+TDD evidence:
+
+- Red: [Cloud Engineering Connector CI run 41795462661](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41795462661) on commit **72e67611c7dafe4eaa35edd144bec8e6037b3773** failed at the expected preflight assertions while the behavior was stubbed.
+- Green: [Cloud Engineering Connector CI run 41795852456](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41795852456) on commit **78bbcbe4ab5718ca1402cbaa852b75c22c97d71a** succeeded.
+- The green run completed dependency installation, npm audit, all Node and Durable Object test suites, syntax checks, Wrangler dry-runs, and the CLI preflight report generation.
+- [Full History Secret Scan run 41795852451](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41795852451) on the same SHA succeeded.
+
+The generated preflight result is intentionally **BLOCKED** because the external environment gates above are not satisfied. The command exits successfully when it generates a valid blocked report; it exits non-zero only for unreadable or malformed input. This separates a valid risk finding from a tooling failure.
+
+The new workflow file is configured for manual dispatch and pull-request validation. Its own event-triggered run has not yet been recorded in this snapshot; the successful existing connector CI run validates the implementation and CLI, not the new workflow's GitHub event wiring.

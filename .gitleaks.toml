@@ -103,10 +103,10 @@ regexes = [
 ]
 
 [[allowlists]]
-description = "Synthetic JWT fixture used only by the orchestrator preflight redaction test; exact historical commit, test file, and payload marker only."
+description = "Synthetic, unsigned JWT-shaped fixture used only in an orchestrator redaction test; exact historical commit, test path, and literal only. Not a credential."
 targetRules = ["jwt"]
 condition = "AND"
 commits = ["4cb3f9b9a2a64ccacb704066de1974a9af134c49"]
-paths = ['''^cloud-engineering-connector/test/orchestrator-preflight\\.test\\.js$''']
+paths = ['''^cloud-engineering-connector/test/orchestrator-preflight\.test\.js$''']
 regexTarget = "line"
-regexes = ['''session\\s+[A-Za-z0-9_-]{20,}\\.eyJzdWIiOiJ1c2VyIn0\\.[A-Za-z0-9_-]{20,}''']
+regexes = ['''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJ1c2VyIn0\.signaturepayloadlongenough123456''']

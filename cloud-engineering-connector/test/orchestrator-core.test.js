@@ -215,6 +215,10 @@ test("processAgentMessage verifies sender, expiry, correlation, and scope before
     error => error.code === "MESSAGE_SCOPE_ESCALATION"
   );
   await assert.rejects(
+    processAgentMessage(validEnvelope(task, { correlationId: "corr-other-task" }), deps),
+    error => error.code === "MESSAGE_CORRELATION_MISMATCH"
+  );
+  await assert.rejects(
     processAgentMessage(validEnvelope(task), depsFor(store, {
       authenticateSender: async () => ({ authenticated: false })
     })),
@@ -242,6 +246,20 @@ test("requestCancellation records a durable state transition for an authenticate
   const result = await requestCancellation(task.taskId, actor(), depsFor(store));
   assert.equal(result.cancelled, true);
   assert.equal(result.task.state, "CANCELLED");
+});
+
+
+test("requestCancellation records a pending durable request when a running lease is unavailable", async () => {
+  const task = validTask("task-cancel-pending");
+  const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "RUNNING", version: 4, fencingToken: 2 }] });
+  let signalled = 0;
+  const result = await requestCancellation(task.taskId, actor(), depsFor(store, {
+    signalCancellation: async () => { signalled += 1; }
+  }));
+  assert.equal(result.cancelled, false);
+  assert.equal(result.pending, true);
+  assert.equal(signalled, 1);
+  assert.equal(store.events.at(-1).eventType, "CANCELLATION_REQUESTED");
 });
 
 test("requestCancellation rejects unauthenticated actors and preserves terminal tasks", async () => {
@@ -302,7 +320,7 @@ test("runDispatchCycle invokes only a verified zero-cost adapter and completes t
     tenantId: "tenant-a", eventId: "outbox-2", aggregateType: "task", aggregateId: task.taskId,
     eventType: "orchestrator.task.received", leaseGeneration: 1, payload: { taskId: task.taskId }
   };
-  const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "SCHEDULED", version: 3, fencingToken: 0 }], outbox: [event] });
+  const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "READY", version: 2, fencingToken: 0 }], outbox: [event] });
   let invoked = 0;
   const result = await runDispatchCycle(depsFor(store, {
     adapters: { task: {
@@ -315,4 +333,5 @@ test("runDispatchCycle invokes only a verified zero-cost adapter and completes t
   assert.equal(invoked, 1);
   assert.equal(result.invoked, 1);
   assert.equal(result.completed, 1);
+  assert.equal((await store.getTask({ tenantId: "tenant-a", taskId: task.taskId })).state, "VERIFYING");
 });

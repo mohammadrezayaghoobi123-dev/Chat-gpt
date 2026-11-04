@@ -65,3 +65,18 @@ test("Production and Staging declare independent OrchestratorLedger SQLite bindi
   assert.match(staging, /\[\[env\.staging\.durable_objects\.bindings\]\][\s\S]*?name\s*=\s*"ORCHESTRATOR_LEDGER"[\s\S]*?class_name\s*=\s*"OrchestratorLedger"/);
   assert.match(staging, /\[\[env\.staging\.migrations\]\][\s\S]*?tag\s*=\s*"v3"[\s\S]*?new_sqlite_classes\s*=\s*\["OrchestratorLedger"\]/);
 });
+
+
+test("Production and Staging declare independent KnowledgeStore SQLite bindings and v2 migrations", () => {
+  const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
+  assert.match(production, /\[\[durable_objects\.bindings\]\][\s\S]*?name\s*=\s*"KNOWLEDGE_STORE"[\s\S]*?class_name\s*=\s*"KnowledgeStore"/);
+  assert.match(production, /\[\[migrations\]\][\s\S]*?tag\s*=\s*"v2"[\s\S]*?new_sqlite_classes\s*=\s*\["KnowledgeStore"\]/);
+  assert.match(staging, /\[\[env\.staging\.durable_objects\.bindings\]\][\s\S]*?name\s*=\s*"KNOWLEDGE_STORE"[\s\S]*?class_name\s*=\s*"KnowledgeStore"/);
+  assert.match(staging, /\[\[env\.staging\.migrations\]\][\s\S]*?tag\s*=\s*"v2"[\s\S]*?new_sqlite_classes\s*=\s*\["KnowledgeStore"\]/);
+});
+
+test("Production and Staging both declare the five-minute reconciliation Cron", () => {
+  const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
+  assert.match(production, /\[triggers\][\s\S]*?crons\s*=\s*\["\*\/5 \* \* \* \*"\]/);
+  assert.match(staging, /\[env\.staging\.triggers\][\s\S]*?crons\s*=\s*\["\*\/5 \* \* \* \*"\]/);
+});

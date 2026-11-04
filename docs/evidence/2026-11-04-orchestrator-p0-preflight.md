@@ -123,4 +123,4 @@ The new workflow file is configured for manual dispatch and pull-request validat
 
 ### Review handoff
 
-A draft review request was opened as [PR #148](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/148), targeting the approved integration branch. It remains draft and unmerged. PRs #145, #146, and #147 remain unchanged. The new workflow's pull-request event has not yet been exercised; the successful push-triggered connector CI run is the verified code/test evidence for this P0 change.
+A draft review request was opened as [PR #148](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/148), targeting the approved integration branch. It remains draft and unmerged. PRs #145, #146, and #147 remain unchanged. The new workflow's pull-request event validation is recorded above. PR #148 remains draft and unmerged.

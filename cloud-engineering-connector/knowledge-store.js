@@ -1,4 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
+import { validateEnvelope, validateTask } from "./orchestrator/contracts.js";
+import { canTransition, TASK_STATES } from "./orchestrator/state-machine.js";
 
 const MAX_NAME = 240;
 const MAX_TYPE = 80;
@@ -119,6 +121,41 @@ function outboxRecord(row) {
   };
 }
 
+function orchestratorTaskRecord(row) {
+  if (!row) return null;
+  return {
+    tenantId: row.tenant_id,
+    taskId: row.task_id,
+    idempotencyKey: row.idempotency_key,
+    correlationId: row.correlation_id,
+    taskType: row.task_type,
+    inputHash: row.input_hash,
+    state: row.state,
+    task: parseJson(row.task_json, "orchestrator task"),
+    version: row.version,
+    fencingToken: row.fencing_token,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    expiresAt: row.expires_at
+  };
+}
+
+function orchestratorTaskEventRecord(row) {
+  if (!row) return null;
+  return {
+    tenantId: row.tenant_id,
+    eventId: row.event_id,
+    taskId: row.task_id,
+    sequence: row.sequence,
+    eventType: row.event_type,
+    fromState: row.from_state,
+    toState: row.to_state,
+    actorId: row.actor_id,
+    payload: parseJson(row.payload_json, "orchestrator task event"),
+    createdAt: row.created_at
+  };
+}
+
 export class KnowledgeStore extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
@@ -230,6 +267,136 @@ export class KnowledgeStore extends DurableObject {
     );
     sql.exec(
       "INSERT OR IGNORE INTO knowledge_schema_migrations(version, applied_at) VALUES(3, ?)",
+      Date.now()
+    );
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS orchestrator_tasks (" +
+      "tenant_id TEXT NOT NULL, task_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, " +
+      "correlation_id TEXT NOT NULL, task_type TEXT NOT NULL, input_hash TEXT NOT NULL CHECK(length(input_hash)=64), " +
+      "state TEXT NOT NULL CHECK(state IN ('RECEIVED','VALIDATING','READY','SCHEDULED','RUNNING','VERIFYING','REVIEW_PENDING','COMPLETED','BLOCKED','FAILED','CANCELLED','DISPUTED','QUARANTINED','RETRY_WAIT')), " +
+      "task_json TEXT NOT NULL CHECK(json_valid(task_json)), version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0), " +
+      "fencing_token INTEGER NOT NULL DEFAULT 0 CHECK(fencing_token >= 0), created_at INTEGER NOT NULL, " +
+      "updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY(tenant_id, task_id), UNIQUE(tenant_id, idempotency_key))"
+    );
+    sql.exec(
+      "CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_state " +
+      "ON orchestrator_tasks(tenant_id, state, updated_at)"
+    );
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS orchestrator_task_events (" +
+      "tenant_id TEXT NOT NULL, event_id TEXT NOT NULL, task_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK(sequence > 0), " +
+      "event_type TEXT NOT NULL, from_state TEXT, to_state TEXT, actor_id TEXT NOT NULL, " +
+      "payload_json TEXT NOT NULL CHECK(json_valid(payload_json)), created_at INTEGER NOT NULL, " +
+      "PRIMARY KEY(tenant_id, event_id), UNIQUE(tenant_id, task_id, sequence), " +
+      "FOREIGN KEY(tenant_id, task_id) REFERENCES orchestrator_tasks(tenant_id, task_id))"
+    );
+    sql.exec(
+      "CREATE INDEX IF NOT EXISTS orchestrator_task_events_by_task " +
+      "ON orchestrator_task_events(tenant_id, task_id, sequence)"
+    );
+    sql.exec(
+      "CREATE TRIGGER IF NOT EXISTS orchestrator_task_events_no_update BEFORE UPDATE ON orchestrator_task_events " +
+      "BEGIN SELECT RAISE(ABORT, 'orchestrator task events are append-only'); END"
+    );
+    sql.exec(
+      "CREATE TRIGGER IF NOT EXISTS orchestrator_task_events_no_delete BEFORE DELETE ON orchestrator_task_events " +
+      "BEGIN SELECT RAISE(ABORT, 'orchestrator task events are append-only'); END"
+    );
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS orchestrator_processed_messages (" +
+      "tenant_id TEXT NOT NULL, message_id TEXT NOT NULL, task_id TEXT NOT NULL, correlation_id TEXT NOT NULL, " +
+      "fingerprint TEXT NOT NULL CHECK(length(fingerprint)=64), result_json TEXT CHECK(result_json IS NULL OR json_valid(result_json)), " +
+      "processed_at INTEGER NOT NULL, PRIMARY KEY(tenant_id, message_id), " +
+      "FOREIGN KEY(tenant_id, task_id) REFERENCES orchestrator_tasks(tenant_id, task_id))"
+    );
+    sql.exec(
+      "CREATE TRIGGER IF NOT EXISTS orchestrator_processed_messages_no_update BEFORE UPDATE ON orchestrator_processed_messages " +
+      "BEGIN SELECT RAISE(ABORT, 'processed message records are immutable'); END"
+    );
+    sql.exec(
+      "CREATE TRIGGER IF NOT EXISTS orchestrator_processed_messages_no_delete BEFORE DELETE ON orchestrator_processed_messages " +
+      "BEGIN SELECT RAISE(ABORT, 'processed message records are immutable'); END"
+    );
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS orchestrator_execution_leases (" +
+      "tenant_id TEXT NOT NULL, task_id TEXT NOT NULL, owner_id TEXT NOT NULL, lease_token_hash TEXT NOT NULL, " +
+      "fencing_token INTEGER NOT NULL CHECK(fencing_token > 0), lease_until INTEGER NOT NULL, updated_at INTEGER NOT NULL, " +
+      "PRIMARY KEY(tenant_id, task_id), FOREIGN KEY(tenant_id, task_id) REFERENCES orchestrator_tasks(tenant_id, task_id))"
+    );
+    sql.exec(
+      "CREATE INDEX IF NOT EXISTS orchestrator_execution_leases_by_expiry " +
+      "ON orchestrator_execution_leases(lease_until)"
+    );
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS orchestrator_approvals (" +
+      "tenant_id TEXT NOT NULL, approval_id TEXT NOT NULL, task_id TEXT NOT NULL, approval_type TEXT NOT NULL, " +
+      "actor_id TEXT NOT NULL, status TEXT NOT NULL, reviewed_sha TEXT, evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json)), " +
+      "created_at INTEGER NOT NULL, PRIMARY KEY(tenant_id, approval_id), " +
+      "FOREIGN KEY(tenant_id, task_id) REFERENCES orchestrator_tasks(tenant_id, task_id))"
+    );
+    sql.exec(
+      "CREATE TRIGGER IF NOT EXISTS orchestrator_approvals_no_update BEFORE UPDATE ON orchestrator_approvals " +
+      "BEGIN SELECT RAISE(ABORT, 'approval records are append-only'); END"
+    );
+    sql.exec(
+      "CREATE TRIGGER IF NOT EXISTS orchestrator_approvals_no_delete BEFORE DELETE ON orchestrator_approvals " +
+      "BEGIN SELECT RAISE(ABORT, 'approval records are append-only'); END"
+    );
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS orchestrator_policy_decisions (" +
+      "tenant_id TEXT NOT NULL, decision_id TEXT NOT NULL, task_id TEXT NOT NULL, actor_id TEXT NOT NULL, " +
+      "action TEXT NOT NULL, allowed INTEGER NOT NULL CHECK(allowed IN (0,1)), decision_code TEXT NOT NULL, " +
+      "reason TEXT NOT NULL, evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json)), created_at INTEGER NOT NULL, " +
+      "PRIMARY KEY(tenant_id, decision_id), FOREIGN KEY(tenant_id, task_id) REFERENCES orchestrator_tasks(tenant_id, task_id))"
+    );
+    sql.exec(
+      "CREATE TRIGGER IF NOT EXISTS orchestrator_policy_decisions_no_update BEFORE UPDATE ON orchestrator_policy_decisions " +
+      "BEGIN SELECT RAISE(ABORT, 'policy decision records are append-only'); END"
+    );
+    sql.exec(
+      "CREATE TRIGGER IF NOT EXISTS orchestrator_policy_decisions_no_delete BEFORE DELETE ON orchestrator_policy_decisions " +
+      "BEGIN SELECT RAISE(ABORT, 'policy decision records are append-only'); END"
+    );
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS orchestrator_agent_capability_snapshots (" +
+      "tenant_id TEXT NOT NULL, agent_id TEXT NOT NULL, capability TEXT NOT NULL, state TEXT NOT NULL, " +
+      "evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json)), checked_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, " +
+      "PRIMARY KEY(tenant_id, agent_id, capability, checked_at))"
+    );
+    sql.exec(
+      "CREATE TRIGGER IF NOT EXISTS orchestrator_agent_capabilities_no_update BEFORE UPDATE ON orchestrator_agent_capability_snapshots " +
+      "BEGIN SELECT RAISE(ABORT, 'agent capability snapshots are append-only'); END"
+    );
+    sql.exec(
+      "CREATE TRIGGER IF NOT EXISTS orchestrator_agent_capabilities_no_delete BEFORE DELETE ON orchestrator_agent_capability_snapshots " +
+      "BEGIN SELECT RAISE(ABORT, 'agent capability snapshots are append-only'); END"
+    );
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS orchestrator_control_state (" +
+      "tenant_id TEXT NOT NULL, control_key TEXT NOT NULL, active INTEGER NOT NULL CHECK(active IN (0,1)), " +
+      "actor_id TEXT NOT NULL, authorization_ref TEXT, reason TEXT NOT NULL, version INTEGER NOT NULL CHECK(version > 0), " +
+      "updated_at INTEGER NOT NULL, PRIMARY KEY(tenant_id, control_key))"
+    );
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS orchestrator_audit_events (" +
+      "tenant_id TEXT NOT NULL, event_id TEXT NOT NULL, task_id TEXT, actor_id TEXT NOT NULL, event_type TEXT NOT NULL, " +
+      "payload_json TEXT NOT NULL CHECK(json_valid(payload_json)), previous_hash TEXT, event_hash TEXT, created_at INTEGER NOT NULL, " +
+      "PRIMARY KEY(tenant_id, event_id))"
+    );
+    sql.exec(
+      "CREATE INDEX IF NOT EXISTS orchestrator_audit_events_by_task " +
+      "ON orchestrator_audit_events(tenant_id, task_id, created_at)"
+    );
+    sql.exec(
+      "CREATE TRIGGER IF NOT EXISTS orchestrator_audit_events_no_update BEFORE UPDATE ON orchestrator_audit_events " +
+      "BEGIN SELECT RAISE(ABORT, 'orchestrator audit events are append-only'); END"
+    );
+    sql.exec(
+      "CREATE TRIGGER IF NOT EXISTS orchestrator_audit_events_no_delete BEFORE DELETE ON orchestrator_audit_events " +
+      "BEGIN SELECT RAISE(ABORT, 'orchestrator audit events are append-only'); END"
+    );
+    sql.exec(
+      "INSERT OR IGNORE INTO knowledge_schema_migrations(version, applied_at) VALUES(4, ?)",
       Date.now()
     );
   }
@@ -771,4 +938,371 @@ export class KnowledgeStore extends DurableObject {
       tenantId, eventId
     ).toArray()[0]);
   }
+  appendAuditEventSql({ tenantId, eventId, taskId = null, actorId, eventType, payloadJson, now }) {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO orchestrator_audit_events(tenant_id, event_id, task_id, actor_id, event_type, payload_json, previous_hash, event_hash, created_at) " +
+      "VALUES(?, ?, ?, ?, ?, ?, NULL, NULL, ?) ON CONFLICT(tenant_id, event_id) DO NOTHING",
+      tenantId, eventId, taskId, actorId, eventType, payloadJson, now
+    );
+  }
+
+  appendTaskEventSql({ tenantId, taskId, eventId, eventType, actorId, payloadJson, now, fromState = null, toState = null }) {
+    const sql = this.ctx.storage.sql;
+    const existing = sql.exec(
+      "SELECT * FROM orchestrator_task_events WHERE tenant_id=? AND event_id=?",
+      tenantId, eventId
+    ).toArray()[0];
+    if (existing) {
+      if (existing.task_id !== taskId || existing.event_type !== eventType ||
+          existing.actor_id !== actorId || existing.payload_json !== payloadJson ||
+          existing.from_state !== fromState || existing.to_state !== toState) {
+        throw fail("ORCHESTRATOR_EVENT_ID_CONFLICT", "Task event ID is already bound to different event data.");
+      }
+      return orchestratorTaskEventRecord(existing);
+    }
+    const task = sql.exec(
+      "SELECT task_id FROM orchestrator_tasks WHERE tenant_id=? AND task_id=?",
+      tenantId, taskId
+    ).toArray()[0];
+    if (!task) throw fail("ORCHESTRATOR_TASK_NOT_FOUND", "Task does not exist in this tenant.");
+    const sequence = Number(sql.exec(
+      "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM orchestrator_task_events WHERE tenant_id=? AND task_id=?",
+      tenantId, taskId
+    ).one().next_sequence);
+    sql.exec(
+      "INSERT INTO orchestrator_task_events(tenant_id, event_id, task_id, sequence, event_type, from_state, to_state, actor_id, payload_json, created_at) " +
+      "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      tenantId, eventId, taskId, sequence, eventType, fromState, toState, actorId, payloadJson, now
+    );
+    this.appendAuditEventSql({
+      tenantId, eventId: "task:" + eventId, taskId, actorId,
+      eventType, payloadJson, now
+    });
+    return orchestratorTaskEventRecord(sql.exec(
+      "SELECT * FROM orchestrator_task_events WHERE tenant_id=? AND event_id=?",
+      tenantId, eventId
+    ).one());
+  }
+
+  async createTask(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const task = validateTask(input?.task);
+    const idempotencyKey = requiredString(input?.idempotencyKey, "idempotencyKey", 100);
+    const eventId = identifier(input?.eventId, "eventId");
+    const outboxEventId = identifier(input?.outboxEventId, "outboxEventId");
+    const now = timestamp(input?.now);
+    const taskJson = canonicalJson(task);
+    const outboxPayload = {
+      taskId: task.taskId,
+      correlationId: task.correlationId,
+      inputHash: task.inputHash,
+      taskType: task.taskType
+    };
+    const payloadJson = canonicalJson(outboxPayload);
+    const outboxKey = "orchestrator-task:" + idempotencyKey;
+    const fingerprint = await sha256([
+      tenantId, "task", task.taskId, "orchestrator.task.received", payloadJson
+    ].join("\n"));
+
+    return this.ctx.storage.transactionSync(() => {
+      const sql = this.ctx.storage.sql;
+      const existing = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE tenant_id=? AND idempotency_key=?",
+        tenantId, idempotencyKey
+      ).toArray()[0];
+      if (existing) {
+        if (existing.task_id !== task.taskId || existing.task_json !== taskJson) {
+          throw fail("ORCHESTRATOR_TASK_IDEMPOTENCY_CONFLICT", "Task idempotency key is already bound to different task input.");
+        }
+        return orchestratorTaskRecord(existing);
+      }
+      const byId = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE tenant_id=? AND task_id=?",
+        tenantId, task.taskId
+      ).toArray()[0];
+      if (byId) throw fail("ORCHESTRATOR_TASK_IDEMPOTENCY_CONFLICT", "Task ID is already bound to a different idempotency key.");
+
+      sql.exec(
+        "INSERT INTO orchestrator_tasks(tenant_id, task_id, idempotency_key, correlation_id, task_type, input_hash, state, task_json, version, fencing_token, created_at, updated_at, expires_at) " +
+        "VALUES(?, ?, ?, ?, ?, ?, 'RECEIVED', ?, 1, 0, ?, ?, ?)",
+        tenantId, task.taskId, idempotencyKey, task.correlationId, task.taskType,
+        task.inputHash, taskJson, now, now, Date.parse(task.expiresAt)
+      );
+      this.appendTaskEventSql({
+        tenantId, taskId: task.taskId, eventId, eventType: "TASK_RECEIVED",
+        actorId: "system:orchestrator", payloadJson: canonicalJson({ taskId: task.taskId, inputHash: task.inputHash }),
+        now, fromState: null, toState: "RECEIVED"
+      });
+      sql.exec(
+        "INSERT INTO knowledge_outbox(event_id, tenant_id, idempotency_key, aggregate_type, aggregate_id, event_type, payload_json, fingerprint, status, attempts, next_attempt_at, lease_until, lease_generation, last_error, created_at, updated_at) " +
+        "VALUES(?, ?, ?, 'task', ?, 'orchestrator.task.received', ?, ?, 'pending', 0, ?, NULL, 0, NULL, ?, ?)",
+        outboxEventId, tenantId, outboxKey, task.taskId, payloadJson, fingerprint, now, now, now
+      );
+      return orchestratorTaskRecord(sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE tenant_id=? AND task_id=?",
+        tenantId, task.taskId
+      ).one());
+    });
+  }
+
+  getTask(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const taskId = identifier(input?.taskId, "taskId");
+    return orchestratorTaskRecord(this.ctx.storage.sql.exec(
+      "SELECT * FROM orchestrator_tasks WHERE tenant_id=? AND task_id=?",
+      tenantId, taskId
+    ).toArray()[0]);
+  }
+
+  appendTaskEvent(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const taskId = identifier(input?.taskId, "taskId");
+    const eventId = identifier(input?.eventId, "eventId");
+    const eventType = requiredString(input?.eventType, "eventType", MAX_TYPE);
+    const actorId = identifier(input?.actorId, "actorId");
+    const payloadJson = jsonObject(input?.payload, "payload");
+    const fromState = input?.fromState ?? null;
+    const toState = input?.toState ?? null;
+    if (fromState !== null && !TASK_STATES.includes(fromState)) throw new TypeError("fromState is invalid.");
+    if (toState !== null && !TASK_STATES.includes(toState)) throw new TypeError("toState is invalid.");
+    const now = timestamp(input?.now);
+    return this.ctx.storage.transactionSync(() => this.appendTaskEventSql({
+      tenantId, taskId, eventId, eventType, actorId, payloadJson, now, fromState, toState
+    }));
+  }
+
+  async transitionTask(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const taskId = identifier(input?.taskId, "taskId");
+    const expectedState = input?.expectedState;
+    const nextState = input?.nextState;
+    if (!TASK_STATES.includes(expectedState) || !TASK_STATES.includes(nextState)) {
+      throw new TypeError("expectedState and nextState must be valid task states.");
+    }
+    const eventId = identifier(input?.eventId, "eventId");
+    const actorId = identifier(input?.actorId, "actorId");
+    const evidence = input?.evidence ?? {};
+    const evidenceJson = jsonObject(evidence, "evidence");
+    const now = timestamp(input?.now);
+    let leaseTokenHash = null;
+    if (nextState === "RUNNING") {
+      const leaseToken = requiredString(input?.leaseToken, "leaseToken", 512);
+      leaseTokenHash = await sha256(leaseToken);
+      if (!Number.isSafeInteger(input?.fencingToken) || input.fencingToken < 1) {
+        throw new TypeError("fencingToken must be a positive safe integer.");
+      }
+    }
+
+    return this.ctx.storage.transactionSync(() => {
+      const sql = this.ctx.storage.sql;
+      const current = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE tenant_id=? AND task_id=?",
+        tenantId, taskId
+      ).toArray()[0];
+      if (!current) throw fail("ORCHESTRATOR_TASK_NOT_FOUND", "Task does not exist in this tenant.");
+      if (current.state !== expectedState) {
+        throw fail("ORCHESTRATOR_STATE_CONFLICT", "Task state changed; reload before attempting the transition.");
+      }
+
+      let effectiveEvidence = parseJson(evidenceJson, "transition evidence");
+      if (nextState === "RUNNING") {
+        const lease = sql.exec(
+          "SELECT * FROM orchestrator_execution_leases WHERE tenant_id=? AND task_id=?",
+          tenantId, taskId
+        ).toArray()[0];
+        if (!lease || lease.lease_until <= now || lease.lease_token_hash !== leaseTokenHash ||
+            lease.fencing_token !== input.fencingToken || lease.owner_id !== actorId) {
+          throw fail("ORCHESTRATOR_LEASE_CONFLICT", "Execution lease is stale, expired, or owned by another actor.");
+        }
+        effectiveEvidence = {
+          ...effectiveEvidence,
+          lease: { valid: true, fencingToken: lease.fencing_token }
+        };
+      }
+
+      const decision = canTransition(expectedState, nextState, effectiveEvidence);
+      if (!decision.allowed) {
+        throw fail("ORCHESTRATOR_INVALID_TRANSITION", "Task transition denied: " + decision.reason);
+      }
+      sql.exec(
+        "UPDATE orchestrator_tasks SET state=?, version=version+1, updated_at=? " +
+        "WHERE tenant_id=? AND task_id=? AND state=? AND version=?",
+        nextState, now, tenantId, taskId, expectedState, current.version
+      );
+      const updated = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE tenant_id=? AND task_id=?",
+        tenantId, taskId
+      ).one();
+      if (updated.state !== nextState || updated.version !== current.version + 1) {
+        throw fail("ORCHESTRATOR_STATE_CONFLICT", "Task compare-and-set transition did not persist.");
+      }
+      this.appendTaskEventSql({
+        tenantId, taskId, eventId, eventType: "STATE_TRANSITION", actorId,
+        payloadJson: canonicalJson({ evidence: effectiveEvidence, evidenceJson }),
+        now, fromState: expectedState, toState: nextState
+      });
+      return orchestratorTaskRecord(updated);
+    });
+  }
+
+  async recordMessage(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const envelope = validateEnvelope(input?.envelope);
+    const fingerprint = await sha256(canonicalJson(envelope));
+    const resultJson = input?.result === undefined || input.result === null
+      ? null
+      : jsonObject(input.result, "result");
+    const now = timestamp(input?.now);
+
+    return this.ctx.storage.transactionSync(() => {
+      const sql = this.ctx.storage.sql;
+      const existing = sql.exec(
+        "SELECT * FROM orchestrator_processed_messages WHERE tenant_id=? AND message_id=?",
+        tenantId, envelope.messageId
+      ).toArray()[0];
+      if (existing) {
+        if (existing.fingerprint !== fingerprint || existing.task_id !== envelope.taskId ||
+            existing.correlation_id !== envelope.correlationId) {
+          throw fail("ORCHESTRATOR_MESSAGE_ID_CONFLICT", "Message ID is already bound to different message content.");
+        }
+        return {
+          inserted: false,
+          priorResult: existing.result_json === null ? null : parseJson(existing.result_json, "processed message result")
+        };
+      }
+      const task = sql.exec(
+        "SELECT correlation_id, input_hash FROM orchestrator_tasks WHERE tenant_id=? AND task_id=?",
+        tenantId, envelope.taskId
+      ).toArray()[0];
+      if (!task) throw fail("ORCHESTRATOR_TASK_NOT_FOUND", "Message references a task outside this tenant.");
+      if (task.correlation_id !== envelope.correlationId || task.input_hash !== envelope.inputHash) {
+        throw fail("ORCHESTRATOR_MESSAGE_TASK_MISMATCH", "Message correlation or input hash does not match its task.");
+      }
+      sql.exec(
+        "INSERT INTO orchestrator_processed_messages(tenant_id, message_id, task_id, correlation_id, fingerprint, result_json, processed_at) " +
+        "VALUES(?, ?, ?, ?, ?, ?, ?)",
+        tenantId, envelope.messageId, envelope.taskId, envelope.correlationId, fingerprint, resultJson, now
+      );
+      this.appendAuditEventSql({
+        tenantId, eventId: "message:" + envelope.messageId, taskId: envelope.taskId,
+        actorId: envelope.sender.principalId, eventType: "MESSAGE_PROCESSED",
+        payloadJson: canonicalJson({ messageId: envelope.messageId, fingerprint, messageType: envelope.messageType }),
+        now
+      });
+      return { inserted: true, priorResult: null };
+    });
+  }
+
+  async claimTask(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const taskId = identifier(input?.taskId, "taskId");
+    const ownerId = identifier(input?.ownerId, "ownerId");
+    const leaseToken = requiredString(input?.leaseToken, "leaseToken", 512);
+    const leaseTokenHash = await sha256(leaseToken);
+    const leaseMs = input?.leaseMs === undefined ? 30_000 : input.leaseMs;
+    if (!Number.isSafeInteger(leaseMs) || leaseMs < 1_000 || leaseMs > 300_000) {
+      throw new TypeError("leaseMs must be between 1000 and 300000 milliseconds.");
+    }
+    const now = timestamp(input?.now);
+
+    return this.ctx.storage.transactionSync(() => {
+      const sql = this.ctx.storage.sql;
+      const task = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE tenant_id=? AND task_id=?",
+        tenantId, taskId
+      ).toArray()[0];
+      if (!task) throw fail("ORCHESTRATOR_TASK_NOT_FOUND", "Task does not exist in this tenant.");
+      if (task.state !== "SCHEDULED") {
+        throw fail("ORCHESTRATOR_TASK_NOT_SCHEDULED", "Only scheduled tasks can be claimed for execution.");
+      }
+      const existing = sql.exec(
+        "SELECT lease_until FROM orchestrator_execution_leases WHERE tenant_id=? AND task_id=?",
+        tenantId, taskId
+      ).toArray()[0];
+      if (existing && existing.lease_until > now) {
+        throw fail("ORCHESTRATOR_LEASE_ACTIVE", "Task already has an active execution lease.");
+      }
+      const fencingToken = task.fencing_token + 1;
+      const leaseUntil = now + leaseMs;
+      sql.exec(
+        "UPDATE orchestrator_tasks SET fencing_token=?, updated_at=? WHERE tenant_id=? AND task_id=?",
+        fencingToken, now, tenantId, taskId
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_execution_leases(tenant_id, task_id, owner_id, lease_token_hash, fencing_token, lease_until, updated_at) " +
+        "VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(tenant_id, task_id) DO UPDATE SET " +
+        "owner_id=excluded.owner_id, lease_token_hash=excluded.lease_token_hash, fencing_token=excluded.fencing_token, " +
+        "lease_until=excluded.lease_until, updated_at=excluded.updated_at",
+        tenantId, taskId, ownerId, leaseTokenHash, fencingToken, leaseUntil, now
+      );
+      this.appendTaskEventSql({
+        tenantId, taskId, eventId: "lease:" + taskId + ":" + fencingToken,
+        eventType: "LEASE_CLAIMED", actorId: ownerId,
+        payloadJson: canonicalJson({ fencingToken, leaseUntil }), now
+      });
+      return { tenantId, taskId, ownerId, fencingToken, leaseUntil };
+    });
+  }
+
+  setStopSwitch(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    if (typeof input?.active !== "boolean") throw new TypeError("active must be a boolean.");
+    const actorId = identifier(input?.actorId, "actorId");
+    const reason = requiredString(input?.reason, "reason", 500);
+    let authorizationRef = null;
+    if (input.active === false) {
+      const authorization = input.ownerAuthorization;
+      if (!authorization || authorization.verified !== true ||
+          authorization.principalId !== actorId ||
+          typeof authorization.approvalId !== "string" || authorization.approvalId.length === 0) {
+        throw fail("ORCHESTRATOR_OWNER_AUTHORIZATION_REQUIRED", "Disabling the stop switch requires verified owner authorization.");
+      }
+      authorizationRef = requiredString(authorization.approvalId, "approvalId", 128);
+    }
+    const now = timestamp(input?.now);
+    return this.ctx.storage.transactionSync(() => {
+      const sql = this.ctx.storage.sql;
+      const existing = sql.exec(
+        "SELECT version FROM orchestrator_control_state WHERE tenant_id=? AND control_key='stop_switch'",
+        tenantId
+      ).toArray()[0];
+      const version = (existing?.version ?? 0) + 1;
+      sql.exec(
+        "INSERT INTO orchestrator_control_state(tenant_id, control_key, active, actor_id, authorization_ref, reason, version, updated_at) " +
+        "VALUES(?, 'stop_switch', ?, ?, ?, ?, ?, ?) ON CONFLICT(tenant_id, control_key) DO UPDATE SET " +
+        "active=excluded.active, actor_id=excluded.actor_id, authorization_ref=excluded.authorization_ref, " +
+        "reason=excluded.reason, version=excluded.version, updated_at=excluded.updated_at",
+        tenantId, input.active ? 1 : 0, actorId, authorizationRef, reason, version, now
+      );
+      this.appendAuditEventSql({
+        tenantId, eventId: "stop-switch:" + version, taskId: null, actorId,
+        eventType: "STOP_SWITCH_CHANGED",
+        payloadJson: canonicalJson({ active: input.active, reason, authorizationRef, version }),
+        now
+      });
+      return this.getStopSwitch({ tenantId });
+    });
+  }
+
+  getStopSwitch(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    try {
+      const row = this.ctx.storage.sql.exec(
+        "SELECT * FROM orchestrator_control_state WHERE tenant_id=? AND control_key='stop_switch'",
+        tenantId
+      ).toArray()[0];
+      if (!row) return { tenantId, active: true, source: "DEFAULT_FAIL_CLOSED", version: 0, updatedAt: null };
+      if (row.active !== 0 && row.active !== 1) {
+        return { tenantId, active: true, source: "INVALID_ROW_FAIL_CLOSED", version: row.version, updatedAt: row.updated_at };
+      }
+      return {
+        tenantId, active: row.active === 1, source: "PERSISTED",
+        actorId: row.actor_id, authorizationRef: row.authorization_ref,
+        reason: row.reason, version: row.version, updatedAt: row.updated_at
+      };
+    } catch {
+      return { tenantId, active: true, source: "READ_ERROR_FAIL_CLOSED", version: null, updatedAt: null };
+    }
+  }
+
 }

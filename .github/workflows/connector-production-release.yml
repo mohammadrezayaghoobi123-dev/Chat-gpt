@@ -224,6 +224,7 @@ jobs:
           NODE
 
       - name: Run live Production acceptance
+        id: acceptance
         run: node test/production-smoke.mjs
         env:
           MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
@@ -249,6 +250,7 @@ jobs:
           NODE
 
       - name: Roll back Production if post-deploy acceptance fails
+        id: rollback
         if: failure() && steps.deploy.outcome == 'success' && steps.preflight.outputs.previous_version_id != ''
         shell: bash
         run: |
@@ -296,3 +298,25 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           PREVIOUS_VERSION_ID: ${{ steps.preflight.outputs.previous_version_id }}
+
+      - name: Write release evidence manifest
+        if: always()
+        run: node scripts/write-release-evidence.mjs
+        env:
+          RELEASE_ENV: production
+          WORKER_NAME: chat-gpt111
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIOUS_VERSION_ID: ${{ steps.preflight.outputs.previous_version_id }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          ACCEPTANCE_OUTCOME: ${{ steps.acceptance.outcome }}
+          ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
+
+      - name: Upload release evidence artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: connector-production-release-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: cloud-engineering-connector/release-evidence.json
+          if-no-files-found: error
+          retention-days: 90

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   computeP2BApprovalScopeHash,
   evaluateP2BWritePreflight,
+  validateP2BChangedFileManifest,
 } from "../orchestrator-github-write-preflight.js";
 
 const NOW = 1_800_000_000_000;
@@ -64,6 +65,7 @@ async function fixture() {
     branchPolicy: { prefix: "task/", allowedPaths: ["cloud-engineering-connector/src", "docs/evidence"] },
     requestedBranchName: "task/issue-123",
     requestedPaths: ["docs/evidence/task-123.md"],
+    changedFileManifest: { verified: true, repositoryId: 1398846697, baseSha: sha40, headSha: "c".repeat(40), files: [{ path: "docs/evidence/task-123.md", mode: "100644", type: "blob" }], treeEntries: [{ path: "docs", mode: "040000", type: "tree" }, { path: "docs/evidence", mode: "040000", type: "tree" }, { path: "docs/evidence/task-123.md", mode: "100644", type: "blob" }] },
   };
   input.ownerApproval.approvedScopeHash = await computeP2BApprovalScopeHash(input);
   return input;
@@ -92,7 +94,7 @@ test("missing approvals and infrastructure evidence fail closed", async () => {
   assert.equal(result.decision, "BLOCKED");
   assert.equal(result.sideEffects, false);
   assert.equal(result.executionAuthorized, false);
-  assert.equal(result.reasonCodes.length, 11);
+  assert.equal(result.reasonCodes.length, 12);
 });
 
 test("requires a trusted clock", async () => {

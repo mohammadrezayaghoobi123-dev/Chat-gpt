@@ -1,6 +1,6 @@
 # P2-B Write Preflight — Evidence and Current Blockers
 
-**Status:** Structural preflight implemented and focused CI-verified on `665a42e81ceae32dd821185296735f38edac9078`. P2-B execution remains BLOCKED. No GitHub write identity, live ledger, task record, branch, or external side effect is enabled by this module.
+**Status:** Structural preflight implemented and focused CI-verified on `76f98510dbd632648a9ebdcd7debbbdd630bfb2e`. P2-B execution remains BLOCKED. No GitHub write identity, live ledger, task record, branch, or external side effect is enabled by this module.
 
 ## Purpose
 
@@ -34,10 +34,10 @@ The preflight module is deliberately pure and has no GitHub, Cloudflare, network
 
 ## Verification evidence
 
-- Exact tested branch SHA: `665a42e81ceae32dd821185296735f38edac9078`.
-- Orchestrator GitHub Intake Contract run `41815605948`: success, 29 tests passed, 0 failed (15 P2-A + 14 P2-B).
-- Full History Secret Scan run `41815605982`: pending at the time this evidence file was updated; do not treat it as passed until a completed success is observed.
-- Full Connector CI is triggered by Draft PR #153 and must be rechecked against the final head SHA.
+- Exact tested branch SHA: `76f98510dbd632648a9ebdcd7debbbdd630bfb2e`.
+- Orchestrator GitHub Intake Contract run `41815676985`: success, 29 tests passed, 0 failed (15 P2-A + 14 P2-B).
+- Full History Secret Scan run `41815676952`: success.
+- Full Connector CI run `41815676925`: success; 295 tests passed, 0 failed; dependency audit, syntax checks, and Wrangler dry-run checks completed.
 
 ## Test coverage
 

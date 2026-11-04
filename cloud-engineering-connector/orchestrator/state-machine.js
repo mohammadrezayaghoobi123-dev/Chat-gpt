@@ -56,6 +56,22 @@ export function canTransition(currentState, nextState, evidence = {}) {
     return denied("TRANSITION_NOT_ALLOWED");
   }
 
+  if (currentState === "VALIDATING" && nextState === "READY" &&
+      context.validation?.passed !== true) {
+    return denied("VALIDATION_EVIDENCE_REQUIRED");
+  }
+
+  if (currentState === "READY" && nextState === "SCHEDULED" &&
+      (context.policyDecision?.allowed !== true || context.stopSwitchClear !== true)) {
+    return denied("POLICY_APPROVAL_AND_STOP_SWITCH_CLEARANCE_REQUIRED");
+  }
+
+  if (currentState === "SCHEDULED" && nextState === "RUNNING" &&
+      (context.lease?.valid !== true || !Number.isSafeInteger(context.lease.fencingToken) ||
+       context.lease.fencingToken < 1)) {
+    return denied("VALID_FENCED_LEASE_REQUIRED");
+  }
+
   if (currentState === "RUNNING" && nextState === "VERIFYING") {
     if (!isCommitSha(context.execution?.commitSha)) {
       return denied("EXECUTION_COMMIT_SHA_REQUIRED");
@@ -88,8 +104,9 @@ export function canTransition(currentState, nextState, evidence = {}) {
   }
 
   if (currentState === "RETRY_WAIT" && nextState === "SCHEDULED" &&
-      context.retryAuthorized !== true) {
-    return denied("RETRY_AUTHORIZATION_REQUIRED");
+      (context.retryAuthorized !== true || context.policyDecision?.allowed !== true ||
+       context.stopSwitchClear !== true)) {
+    return denied("RETRY_POLICY_AND_STOP_SWITCH_CLEARANCE_REQUIRED");
   }
 
   if (currentState === "BLOCKED" && nextState === "VALIDATING" &&

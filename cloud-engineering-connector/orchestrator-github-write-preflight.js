@@ -31,6 +31,7 @@ export async function computeP2BApprovalScopeHash(input = {}) {
     branchPolicy: input.branchPolicy,
     requestedBranchName: input.requestedBranchName,
     requestedPaths: input.requestedPaths,
+    changedFileManifest: input.changedFileManifest,
   };
   const bytes = new TextEncoder().encode(JSON.stringify(canonical(descriptor)));
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);

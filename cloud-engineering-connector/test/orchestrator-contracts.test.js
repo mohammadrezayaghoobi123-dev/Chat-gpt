@@ -99,3 +99,15 @@ test("enforces the four-round limit durably represented in the envelope contract
   assert.throws(() => validateEnvelope(validEnvelope({ round: 5 })), error => error.code === "MAX_AGENT_ROUNDS_EXCEEDED");
   assert.throws(() => validateEnvelope(validEnvelope({ round: -1 })), error => error.code === "INVALID_ROUND");
 });
+
+test("rejects unknown fields inside the explicit scope contract", () => {
+  assert.throws(() => validateTask(validTask({
+    scope: { ...validScope(), pathPattern: "**/*" }
+  })), error => error.code === "UNKNOWN_FIELD");
+});
+
+test("rejects undeclared sender fields instead of silently trusting them", () => {
+  assert.throws(() => validateEnvelope(validEnvelope({
+    sender: { agentId: "chatgpt", principalId: "service:chatgpt", email: "untrusted@example.test" }
+  })), error => error.code === "UNKNOWN_FIELD");
+});

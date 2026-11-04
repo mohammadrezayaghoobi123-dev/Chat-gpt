@@ -4,6 +4,7 @@ import { validateGitHubIntakeEvent, INTAKE_LIMITS } from "../orchestrator-github
 
 const NOW = 1_800_000_000_000;
 const config = {
+  schemaVersion: 1,
   repository: "mohammadrezayaghoobi123-dev/Chat-gpt",
   repositoryId: 1_398_846_697,
   authorizedActorIds: ["335530603"],
@@ -55,6 +56,7 @@ test("accepts only a configured, authorized, labeled GitHub issue event in dry-r
   const result = await validateGitHubIntakeEvent(input());
   assert.equal(result.accepted, true);
   assert.equal(result.decision, "DRY_RUN_ACCEPT");
+  assert.equal(result.schemaVersion, 1);
   assert.equal(result.sideEffects, false);
   assert.equal(result.taskExecution, false);
   assert.equal(result.issueNumber, 42);
@@ -70,6 +72,7 @@ test("fails closed when actor allowlist, label policy, or event policy is absent
     { ...config, authorizedActorIds: [] },
     { ...config, allowedEventActions: {} },
     { ...config, requiredLabel: "" },
+    { ...config, schemaVersion: 2 },
   ]) {
     const result = await validateGitHubIntakeEvent(input({ config: badConfig }));
     assert.equal(result.accepted, false);

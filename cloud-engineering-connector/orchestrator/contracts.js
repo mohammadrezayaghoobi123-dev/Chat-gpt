@@ -78,6 +78,7 @@ function validateStringArray(value, label, { min = 0, max = 100, itemMax = 512 }
 
 function validateScope(scope) {
   if (!isPlainObject(scope)) fail("INVALID_SCOPE", "scope must be an object with an explicit branch, paths, and operations.");
+  rejectUnknownFields(scope, new Set(["branch", "paths", "operations"]), "scope");
   const branch = scope.branch;
   if (typeof branch !== "string" || branch.trim() !== branch || branch.length === 0 ||
       branch.length > 128 || branch.startsWith("/") || branch.includes("\\") ||
@@ -125,6 +126,9 @@ export function validateTask(input) {
   requireForwardWindow(createdAt, expiresAt);
 
   const scope = validateScope(input.scope);
+  if (!Array.isArray(input.acceptanceCriteria) || input.acceptanceCriteria.length < 1 || input.acceptanceCriteria.length > 50) {
+    fail("INVALID_ACCEPTANCE_CRITERIA", "A task must declare between 1 and 50 acceptance criteria.");
+  }
   const acceptanceCriteria = validateStringArray(input.acceptanceCriteria, "acceptanceCriteria", {
     min: 1, max: 50, itemMax: 1000
   });
@@ -164,6 +168,7 @@ export function validateEnvelope(input) {
     : requireId(input.parentMessageId, "parentMessageId");
 
   if (!isPlainObject(input.sender)) fail("INVALID_SENDER", "sender must contain agentId and principalId.");
+  rejectUnknownFields(input.sender, new Set(["agentId", "principalId"]), "sender");
   let sender;
   try {
     sender = {

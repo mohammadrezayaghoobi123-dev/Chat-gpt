@@ -467,3 +467,68 @@ test("release evidence helper records audit metadata without serializing credent
   assert.doesNotMatch(helper, /JSON\.stringify\(process\.env\)|process\.env\.CLOUDFLARE_API_TOKEN\s*[,}]/,
     "release evidence must never serialize or store the Cloudflare API token");
 });
+
+
+function executeReleaseEvidenceHelper({ cloudflareResponse, includeCredentials = true }) {
+  const helper = readFileSync(new URL("../scripts/write-release-evidence.mjs", import.meta.url), "utf8");
+  const prelude = cloudflareResponse
+    ? "globalThis.fetch = async () => new Response(" + JSON.stringify(JSON.stringify(cloudflareResponse.body)) +
+      ", { status: " + cloudflareResponse.status + ", headers: { 'content-type': 'application/json' } });"
+    : "globalThis.fetch = async () => { throw new Error('fetch must not run without credentials'); };";
+  const directory = mkdtempSync(join(tmpdir(), "release-evidence-helper-"));
+  try {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", prelude + "\n" + helper], {
+      cwd: directory,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        RELEASE_ENV: "staging",
+        WORKER_NAME: "chat-gpt111-staging",
+        GITHUB_SHA: "a".repeat(40),
+        GITHUB_RUN_ID: "123456",
+        GITHUB_RUN_ATTEMPT: "1",
+        DEPLOY_OUTCOME: "success",
+        ACCEPTANCE_OUTCOME: "success",
+        ROLLBACK_OUTCOME: "skipped",
+        PREVIOUS_VERSION_ID: "previous-version",
+        CLOUDFLARE_ACCOUNT_ID: includeCredentials ? "test-account" : "",
+        CLOUDFLARE_API_TOKEN: includeCredentials ? "do-not-write-this-token" : "",
+      },
+    });
+    assert.equal(result.status, 0, "evidence helper should write a manifest: " + result.stderr + result.stdout);
+    const manifestText = readFileSync(join(directory, "release-evidence.json"), "utf8");
+    return JSON.parse(manifestText);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test("release evidence helper records the active deployment and never writes credential values", () => {
+  const manifest = executeReleaseEvidenceHelper({
+    cloudflareResponse: {
+      status: 200,
+      body: { success: true, result: { deployments: [{ id: "deployment-123", versions: [{ version_id: "version-456", percentage: 100 }] }] } },
+    },
+  });
+  assert.equal(manifest.deployment_verification, "verified");
+  assert.equal(manifest.active_deployment_id, "deployment-123");
+  assert.equal(manifest.active_version_id, "version-456");
+  assert.equal(manifest.active_traffic_percentage, 100);
+  assert.equal(manifest.candidate_sha, "a".repeat(40));
+  assert.equal(manifest.rollback_outcome, "skipped");
+  assert.equal(JSON.stringify(manifest).includes("do-not-write-this-token"), false);
+});
+
+test("release evidence helper still writes a manifest when Cloudflare metadata is unavailable", () => {
+  const manifest = executeReleaseEvidenceHelper({
+    cloudflareResponse: { status: 403, body: { success: false, errors: [{ message: "forbidden" }] } },
+  });
+  assert.equal(manifest.deployment_verification, "unavailable");
+  assert.equal(manifest.deployment_http_status, 403);
+});
+
+test("release evidence helper writes an explicit not-attempted state when credentials are absent", () => {
+  const manifest = executeReleaseEvidenceHelper({ includeCredentials: false });
+  assert.equal(manifest.deployment_verification, "not_attempted");
+  assert.equal(manifest.active_version_id, null);
+});

@@ -77,9 +77,9 @@ The account namespace inventory returned exactly three namespaces: `master-brain
 
 The GitHub integration returned HTTP 403 for branch-protection reads (`Resource not accessible by integration`). Therefore branch protection and required approvals remain **unknown**, not absent and not verified. No attempt was made to bypass the permission boundary.
 
-## Verification on current P2-B head
+## Verification of code changes and latest evidence-document head
 
-Current PR #153 head: `f81ad2ab3fdca789e668ee9e2d80e65223fbbf35`.
+The code-validation head was `f81ad2ab3fdca789e668ee9e2d80e65223fbbf35`. The latest PR #153 head is the evidence-only documentation commit `a18a77f036e1af87350ce899150c6f5f0594d0b2`.
 
 - Orchestrator GitHub Intake Contract run `41898547416`: success.
 - Cloud Engineering Connector CI run `41898547404`: success; staging post-deploy smoke skipped.
@@ -88,4 +88,4 @@ Current PR #153 head: `f81ad2ab3fdca789e668ee9e2d80e65223fbbf35`.
 - The new malformed-tree and non-tree-ancestor negative tests are included in the successful intake-contract run.
 - These checks do not constitute a live provider exercise, a staging deployment, or proof of Production readiness.
 
-The live inventory findings above are read-only observations and do not authorize provisioning, binding migrations, secret changes, or deployment.
+The latest evidence-document commit `a18a77f036e1af87350ce899150c6f5f0594d0b2` passed Cloud Engineering Connector CI run `41898873033`, Orchestrator GitHub Intake Contract run `41898873296`, and Full History Secret Scan run `41898873112`. Staging post-deploy smoke remained skipped. The live inventory findings above are read-only observations and do not authorize provisioning, binding migrations, secret changes, or deployment.

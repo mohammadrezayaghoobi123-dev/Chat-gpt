@@ -229,7 +229,7 @@ jobs:
         env:
           MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
 
-      - name: Confirm deployed version and write release evidence
+      - name: Verify deployed version before finalizing release
         if: success()
         shell: bash
         env:
@@ -240,13 +240,15 @@ jobs:
           const account = process.env.CLOUDFLARE_ACCOUNT_ID;
           const token = process.env.CLOUDFLARE_API_TOKEN;
           const url = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/chat-gpt111/deployments?per_page=1&page=1`;
-          const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+          const response = await fetch(url, { headers: { authorization: `Bearer ${token}`, accept: "application/json" }, signal: AbortSignal.timeout(15000) });
           const body = await response.json();
           if (!response.ok || !body.success) throw new Error("Could not verify final Production deployment.");
           const active = body.result.deployments?.[0];
-          const version = active?.versions?.find((item) => item.percentage === 100);
-          if (!version?.version_id) throw new Error("Production does not have one active 100% version.");
-          console.log(`Production deployment verified. Candidate=${process.env.GITHUB_SHA}; Version=${version.version_id}; Deployment=${active.id}`);
+          const versions = active?.versions || [];
+          if (versions.length !== 1 || versions[0]?.percentage !== 100 || !versions[0]?.version_id) {
+            throw new Error("Production must have exactly one active version receiving 100% traffic.");
+          }
+          console.log(`Production active deployment verified. Version=${versions[0].version_id}; Deployment=${active.id}`);
           NODE
 
       - name: Roll back Production if post-deploy acceptance fails

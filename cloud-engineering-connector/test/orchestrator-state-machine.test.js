@@ -76,3 +76,31 @@ test("keeps terminal states closed and rejects unknown states", () => {
   assert.equal(canTransition("NOT_A_STATE", "RUNNING").allowed, false);
   assert.equal(canTransition("RECEIVED", "NOT_A_STATE").allowed, false);
 });
+
+test("allows every unconditional transition in the approved transition graph", () => {
+  const transitions = [
+    ["RECEIVED", "BLOCKED"], ["RECEIVED", "CANCELLED"], ["RECEIVED", "QUARANTINED"],
+    ["VALIDATING", "BLOCKED"], ["VALIDATING", "FAILED"], ["VALIDATING", "CANCELLED"], ["VALIDATING", "QUARANTINED"],
+    ["READY", "BLOCKED"], ["READY", "CANCELLED"],
+    ["SCHEDULED", "RETRY_WAIT"], ["SCHEDULED", "BLOCKED"], ["SCHEDULED", "CANCELLED"],
+    ["RUNNING", "RETRY_WAIT"], ["RUNNING", "FAILED"], ["RUNNING", "CANCELLED"], ["RUNNING", "QUARANTINED"],
+    ["VERIFYING", "BLOCKED"], ["VERIFYING", "FAILED"], ["VERIFYING", "DISPUTED"], ["VERIFYING", "CANCELLED"],
+    ["REVIEW_PENDING", "DISPUTED"], ["REVIEW_PENDING", "BLOCKED"], ["REVIEW_PENDING", "CANCELLED"],
+    ["BLOCKED", "CANCELLED"], ["DISPUTED", "CANCELLED"], ["DISPUTED", "QUARANTINED"],
+    ["RETRY_WAIT", "BLOCKED"], ["RETRY_WAIT", "FAILED"], ["RETRY_WAIT", "CANCELLED"]
+  ];
+  for (const [from, to] of transitions) {
+    assert.equal(canTransition(from, to).allowed, true, from + " -> " + to);
+  }
+});
+
+test("requires explicit resolution before a disputed task can return to review", () => {
+  assert.equal(canTransition("DISPUTED", "REVIEW_PENDING").allowed, false);
+  assert.equal(canTransition("DISPUTED", "REVIEW_PENDING", {
+    adjudication: { status: "RESOLVED" }
+  }).allowed, true);
+});
+
+test("handles malformed evidence input without throwing", () => {
+  assert.equal(canTransition("RECEIVED", "VALIDATING", null).allowed, true);
+});

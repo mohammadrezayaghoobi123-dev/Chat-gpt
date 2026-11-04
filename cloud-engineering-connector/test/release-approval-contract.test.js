@@ -15,6 +15,7 @@ const workflows = [
       "Verify Staging KnowledgeStore binding and scheduled reconciliation",
       "Confirm deployed version and write release evidence",
       "Roll back Staging if post-deploy acceptance fails",
+      "Write release evidence manifest",
     ],
   },
   {
@@ -26,6 +27,7 @@ const workflows = [
       "Verify Production Durable Object namespace isolation",
       "Confirm deployed version and write release evidence",
       "Roll back Production if post-deploy acceptance fails",
+      "Write release evidence manifest",
     ],
   },
 ];

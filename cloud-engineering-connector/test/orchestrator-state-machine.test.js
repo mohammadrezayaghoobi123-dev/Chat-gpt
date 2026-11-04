@@ -21,7 +21,10 @@ test("allows ordinary forward transitions in the task lifecycle", () => {
     ["RUNNING", "VERIFYING"],
     ["VERIFYING", "REVIEW_PENDING"]
   ]) {
-    const evidence = from === "RUNNING" ? { execution: { commitSha: SHA } }
+    const evidence = from === "VALIDATING" ? { validation: { passed: true } }
+      : from === "READY" ? { policyDecision: { allowed: true }, stopSwitchClear: true }
+      : from === "SCHEDULED" ? { lease: { valid: true, fencingToken: 1 } }
+      : from === "RUNNING" ? { execution: { commitSha: SHA } }
       : from === "VERIFYING" ? { execution: { commitSha: SHA }, verification: { status: "PASS", commitSha: SHA } }
       : {};
     assert.equal(canTransition(from, to, evidence).allowed, true, from + " -> " + to);
@@ -103,4 +106,34 @@ test("requires explicit resolution before a disputed task can return to review",
 
 test("handles malformed evidence input without throwing", () => {
   assert.equal(canTransition("RECEIVED", "VALIDATING", null).allowed, true);
+});
+
+test("requires validation, policy and stop-switch clearance, and a fenced lease before execution", () => {
+  assert.equal(canTransition("VALIDATING", "READY").allowed, false);
+  assert.equal(canTransition("VALIDATING", "READY", { validation: { passed: true } }).allowed, true);
+
+  assert.equal(canTransition("READY", "SCHEDULED", { policyDecision: { allowed: true } }).allowed, false);
+  assert.equal(canTransition("READY", "SCHEDULED", {
+    policyDecision: { allowed: true }, stopSwitchClear: true
+  }).allowed, true);
+  assert.equal(canTransition("READY", "SCHEDULED", {
+    policyDecision: { allowed: true }, stopSwitchClear: false
+  }).allowed, false);
+
+  assert.equal(canTransition("SCHEDULED", "RUNNING").allowed, false);
+  assert.equal(canTransition("SCHEDULED", "RUNNING", {
+    lease: { valid: true, fencingToken: 1 }
+  }).allowed, true);
+  assert.equal(canTransition("SCHEDULED", "RUNNING", {
+    lease: { valid: true, fencingToken: 0 }
+  }).allowed, false);
+});
+
+test("requires policy and stop-switch clearance before retry scheduling", () => {
+  assert.equal(canTransition("RETRY_WAIT", "SCHEDULED", {
+    retryAuthorized: true
+  }).allowed, false);
+  assert.equal(canTransition("RETRY_WAIT", "SCHEDULED", {
+    retryAuthorized: true, policyDecision: { allowed: true }, stopSwitchClear: true
+  }).allowed, true);
 });

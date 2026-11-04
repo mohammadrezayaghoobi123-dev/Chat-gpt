@@ -79,7 +79,7 @@ body:
   - type: textarea
     id: risks
     attributes:
-      label: Risks, dependencies, and rollback
+      label: Risks and rollback
       description: Identify security impact, dependencies, release gates, and rollback strategy.
     validations:
       required: true
@@ -88,6 +88,8 @@ body:
     attributes:
       label: Notion Operations Hub link
       description: Link the matching project/task record.
+    validations:
+      required: true
   - type: checkboxes
     id: safety
     attributes:

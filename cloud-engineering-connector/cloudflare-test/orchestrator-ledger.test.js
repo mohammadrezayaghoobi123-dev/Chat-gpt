@@ -7,7 +7,7 @@ function ledgerFor(name) {
 }
 const now = 1_800_000_000_000;
 const task = (taskId = "task-0001") => ({
-  taskId, state: "SCHEDULED", version: 1, createdAt: now, updatedAt: now,
+  taskId, state: "SCHEDULED", version: 1, agentRound: 0, createdAt: now, updatedAt: now,
   executorId: "agent:worker-1", commitSha: "a".repeat(40),
   objective: "bounded task",
 });
@@ -220,6 +220,26 @@ describe("OrchestratorLedger durable coordination contract", () => {
       messageId: "msg-auth-required", taskId: "task-0001", inputHash: "d".repeat(64), envelope,
       authenticatedSender: { id: "agent:worker-1", authenticated: true, identityVerified: false }, now,
     })).resolves.toMatchObject({ accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" });
+  });
+
+  it("persists the four-round ceiling so retries cannot reset agent coordination rounds", async () => {
+    const ledger = ledgerFor("ledger-agent-round-limit");
+    await ledger.createTask({ task: task(), idempotencyKey: "task-create-agent-rounds", inputHash: "c".repeat(64), now });
+    const lease = await ledger.claimTask({ workerId: "agent:worker-1", leaseMs: 30_000, now });
+    let version = 1;
+    for (let round = 1; round <= 4; round += 1) {
+      const result = await ledger.advanceAgentRound({
+        taskId: "task-0001", expectedVersion: version, expectedRound: round - 1,
+        nextRound: round, workerId: "agent:worker-1", leaseGeneration: lease.leaseGeneration, now: now + round,
+      });
+      expect(result).toMatchObject({ advanced: true, task: { agentRound: round, version: version + 1 } });
+      version += 1;
+    }
+    await expect(ledger.advanceAgentRound({
+      taskId: "task-0001", expectedVersion: version, expectedRound: 4,
+      nextRound: 5, workerId: "agent:worker-1", leaseGeneration: lease.leaseGeneration, now: now + 5,
+    })).resolves.toMatchObject({ advanced: false, reason: "AGENT_ROUND_LIMIT" });
+    await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ agentRound: 4, version: 5 });
   });
 
   it("rejects a message whose envelope identifiers do not match the durable deduplication key", async () => {

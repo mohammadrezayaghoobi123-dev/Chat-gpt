@@ -554,7 +554,7 @@ for (const workflow of workflows) {
     const stepName = "- name: Verify deployed version before finalizing release";
     const start = source.indexOf(stepName);
     assert.ok(start >= 0, "deployment verification step must have an accurate name");
-    const end = source.indexOf("\\n      - name:", start + stepName.length);
+    const end = source.indexOf("\n      - name:", start + stepName.length);
     const block = source.slice(start, end < 0 ? source.length : end);
     assert.match(block, /versions\\.length\\s*!==\\s*1/, "verification must reject split traffic across multiple versions");
     assert.match(block, /versions\\[0\\]\\?\\.percentage\\s*!==\\s*100/, "verification must require exactly 100% traffic");

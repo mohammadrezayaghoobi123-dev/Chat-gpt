@@ -58,6 +58,20 @@ function requireTimestamp(value, label) {
   if (typeof value !== "string" || !TIMESTAMP_PATTERN.test(value) || !Number.isFinite(Date.parse(value))) {
     fail("INVALID_TIMESTAMP", `${label} must be an ISO-8601 timestamp with an explicit timezone.`);
   }
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+  const calendarDate = new Date(Date.UTC(year, month - 1, day));
+  const [hour, minute, second] = value.slice(11, 19).split(":").map(Number);
+  const offset = value.endsWith("Z") ? null : value.slice(-6);
+  const offsetHours = offset ? Number(offset.slice(1, 3)) : 0;
+  const offsetMinutes = offset ? Number(offset.slice(4, 6)) : 0;
+  if (calendarDate.getUTCFullYear() !== year ||
+      calendarDate.getUTCMonth() + 1 !== month ||
+      calendarDate.getUTCDate() !== day ||
+      hour > 23 || minute > 59 || second > 59 ||
+      offsetHours > 14 || offsetMinutes > 59 ||
+      (offsetHours === 14 && offsetMinutes !== 0)) {
+    fail("INVALID_TIMESTAMP", `${label} contains an invalid calendar date, time, or UTC offset.`);
+  }
   return value;
 }
 
@@ -80,10 +94,11 @@ function validateScope(scope) {
   if (!isPlainObject(scope)) fail("INVALID_SCOPE", "scope must be an object with an explicit branch, paths, and operations.");
   rejectUnknownFields(scope, new Set(["branch", "paths", "operations"]), "scope");
   const branch = scope.branch;
-  if (typeof branch !== "string" || branch.trim() !== branch || branch.length === 0 ||
-      branch.length > 128 || branch.startsWith("/") || branch.includes("\\") ||
-      branch.split("/").some(segment => segment === "" || segment === "." || segment === "..") ||
-      /[\u0000-\u0020\u007f]/.test(branch)) {
+  if (typeof branch !== "string" || branch.trim() !== branch ||
+      !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(branch) ||
+      branch.startsWith("/") || branch.endsWith("/") || branch.includes("//") ||
+      branch.includes("\\") ||
+      branch.split("/").some(segment => segment === "" || segment === "." || segment === ".." || segment.endsWith(".lock"))) {
     fail("INVALID_SCOPE", "scope.branch must be a normalized relative Git branch name.");
   }
   if (!Array.isArray(scope.paths) || scope.paths.length < 1 || scope.paths.length > 100) {

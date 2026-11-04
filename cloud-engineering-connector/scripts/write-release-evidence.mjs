@@ -48,11 +48,11 @@ if (account && token) {
       evidence.active_traffic_verification =
         fullyActive && evidence.active_version_id ? "verified" : "not_single_100_percent_version";
     } else {
-      evidence.deployment_verification = "unavailable";
+      evidence.active_traffic_verification = "unavailable";
       evidence.deployment_http_status = response.status;
     }
   } catch {
-    evidence.deployment_verification = "unavailable";
+    evidence.active_traffic_verification = "unavailable";
     evidence.deployment_error = "Cloudflare deployment metadata could not be retrieved.";
   }
 }

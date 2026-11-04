@@ -1088,6 +1088,62 @@ export class KnowledgeStore extends DurableObject {
     }));
   }
 
+  recordPolicyDecision(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const taskId = identifier(input?.taskId, "taskId");
+    const decisionId = identifier(input?.decisionId, "decisionId");
+    const actorId = identifier(input?.actorId, "actorId");
+    const action = requiredString(input?.action, "action", MAX_TYPE);
+    if (typeof input?.allowed !== "boolean") throw new TypeError("allowed must be a boolean.");
+    const decisionCode = requiredString(input?.decisionCode, "decisionCode", MAX_TYPE);
+    const reason = requiredString(input?.reason, "reason", 2000);
+    const evidenceJson = jsonObject(input?.evidence ?? {}, "evidence");
+    const now = timestamp(input?.now);
+
+    return this.ctx.storage.transactionSync(() => {
+      const sql = this.ctx.storage.sql;
+      const existing = sql.exec(
+        "SELECT * FROM orchestrator_policy_decisions WHERE tenant_id=? AND decision_id=?",
+        tenantId, decisionId
+      ).toArray()[0];
+      if (existing) {
+        if (existing.task_id !== taskId || existing.actor_id !== actorId ||
+            existing.action !== action || existing.allowed !== (input.allowed ? 1 : 0) ||
+            existing.decision_code !== decisionCode || existing.reason !== reason ||
+            existing.evidence_json !== evidenceJson) {
+          throw fail("ORCHESTRATOR_POLICY_DECISION_CONFLICT", "Policy decision ID is already bound to different decision data.");
+        }
+        return {
+          tenantId, decisionId, taskId, actorId, action, allowed: existing.allowed === 1,
+          decisionCode, reason, evidence: parseJson(existing.evidence_json, "policy decision evidence"),
+          createdAt: existing.created_at
+        };
+      }
+      const task = sql.exec(
+        "SELECT task_id FROM orchestrator_tasks WHERE tenant_id=? AND task_id=?",
+        tenantId, taskId
+      ).toArray()[0];
+      if (!task) throw fail("ORCHESTRATOR_TASK_NOT_FOUND", "Policy decision references a task outside this tenant.");
+      sql.exec(
+        "INSERT INTO orchestrator_policy_decisions(tenant_id, decision_id, task_id, actor_id, action, allowed, decision_code, reason, evidence_json, created_at) " +
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        tenantId, decisionId, taskId, actorId, action, input.allowed ? 1 : 0,
+        decisionCode, reason, evidenceJson, now
+      );
+      this.appendAuditEventSql({
+        tenantId, eventId: "policy:" + decisionId, taskId, actorId,
+        eventType: "POLICY_DECISION",
+        payloadJson: canonicalJson({ decisionId, action, allowed: input.allowed, decisionCode }),
+        now
+      });
+      return {
+        tenantId, decisionId, taskId, actorId, action, allowed: input.allowed,
+        decisionCode, reason, evidence: parseJson(evidenceJson, "policy decision evidence"),
+        createdAt: now
+      };
+    });
+  }
+
   async transitionTask(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
     const taskId = identifier(input?.taskId, "taskId");

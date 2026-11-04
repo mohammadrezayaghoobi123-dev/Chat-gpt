@@ -124,3 +124,15 @@ The new workflow file is configured for manual dispatch and pull-request validat
 ### Review handoff
 
 A draft review request was opened as [PR #148](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/148), targeting the approved integration branch. It remains draft and unmerged. PRs #145, #146, and #147 remain unchanged. The new workflow's pull-request event validation is recorded above. PR #148 remains draft and unmerged.
+
+## Implementation and validation addendum — 2026-11-04
+
+The P0 preflight implementation is tracked in [Draft PR #148](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/148), targeting the approved Integration branch. The current P0 branch head at this addendum is `b6c6ce682e9a2d42119473f7c68f47711cba507c`.
+
+- The deterministic preflight evaluator, ten contract tests, and read-only workflow are implemented.
+- Cloud Engineering Connector CI passed on implementation SHA `bf81f144cf1be244889cf49f8d87e3566810a274`: [run 41796575601](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41796575601).
+- Orchestrator P0 Read-Only Preflight passed on the same implementation SHA: [run 41796575608](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41796575608). The report correctly returned **BLOCKED** and enumerated the seven outstanding gates; a successful workflow means the evaluator executed correctly, not that those gates passed.
+- Full History Secret Scan passed on the current branch head `b6c6ce682e9a2d42119473f7c68f47711cba507c`: [run 41796717823](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41796717823). The allowlist for the synthetic JWT-shaped fixture is restricted to the exact historical commit, exact test path, JWT rule, and exact fixture literal.
+- The full Python suite and Master Brain MVP test workflows were cancelled while the branch was receiving additional commits. They are **not** counted as passed. A final exact-head run is required before this PR can be considered fully validated.
+
+No production or staging operation is authorized by this addendum. `main` remains at `f2cae91de818385ec48daafc43c621b9e2cc0675`.

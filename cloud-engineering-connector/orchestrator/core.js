@@ -148,7 +148,9 @@ export async function scheduleTask(taskId, deps) {
   if (typeof tenantId !== "string" || tenantId.length === 0) throw coreError("TENANT_REQUIRED", "A tenant ID is required.");
   const record = await store.getTask({ tenantId, taskId });
   if (!record) throw coreError("ORCHESTRATOR_TASK_NOT_FOUND", "Task does not exist.");
-  if (record.state !== "READY") throw coreError("TASK_NOT_READY", "Only READY tasks can be scheduled.");
+  if (record.state !== "READY" && record.state !== "RETRY_WAIT") {
+    throw coreError("TASK_NOT_READY", "Only READY or RETRY_WAIT tasks can be scheduled.");
+  }
 
   const actor = await authenticatedActor(deps);
   const now = nowMs(deps);
@@ -191,13 +193,14 @@ export async function scheduleTask(taskId, deps) {
   const task = await store.transitionTask({
     tenantId,
     taskId,
-    expectedState: "READY",
+    expectedState: record.state,
     nextState: "SCHEDULED",
     eventId: eventId(deps, taskId, "schedule", now),
     actorId: actor.agentId,
     evidence: {
       policyDecision: { allowed: true, decisionCode: decision.decisionCode },
-      stopSwitchClear: stopSwitch.active === false
+      stopSwitchClear: stopSwitch.active === false,
+      retryAuthorized: record.state === "RETRY_WAIT"
     },
     now
   });
@@ -378,7 +381,7 @@ export async function runDispatchCycle(deps) {
         result.deferred += 1;
         continue;
       }
-      if (task.state !== "READY" && task.state !== "SCHEDULED") {
+      if (task.state !== "READY" && task.state !== "RETRY_WAIT" && task.state !== "SCHEDULED") {
         if (task.state === "RUNNING" || task.state === "RETRY_WAIT") {
           await deferEvent(store, tenantId, event, now, "TASK_ALREADY_ACTIVE_OR_WAITING");
           result.deferred += 1;
@@ -419,7 +422,7 @@ export async function runDispatchCycle(deps) {
         continue;
       }
 
-      if (task.state === "READY") {
+      if (task.state === "READY" || task.state === "RETRY_WAIT") {
         const scheduled = await scheduleTask(task.taskId, deps);
         if (!scheduled.scheduled) {
           if (scheduled.deferred) {

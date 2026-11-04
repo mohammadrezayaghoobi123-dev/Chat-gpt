@@ -396,6 +396,7 @@ test("blocks when no changed-file manifest is supplied", async () => {
 test("does not treat a caller-supplied verified boolean as proof of manifest provenance", async () => {
   const input = await fixture();
   input.changedFileManifest.verified = false;
+  input.ownerApproval.approvedScopeHash = await computeP2BApprovalScopeHash(input);
   const result = await evaluateP2BWritePreflight(input);
   assert.equal(result.decision, "READY_FOR_SEPARATE_EXECUTION_APPROVAL");
   assert.equal(result.executionAuthorized, false);

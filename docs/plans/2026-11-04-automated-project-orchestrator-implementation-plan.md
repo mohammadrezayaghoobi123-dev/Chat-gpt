@@ -389,6 +389,7 @@ Commit only audit/recovery modules, runbooks, tests, and CI updates.
 - Create: `docs/evidence/orchestrator-staging-acceptance.md`
 - Create: `docs/evidence/orchestrator-production-readiness.md`
 - Create: `docs/runbooks/orchestrator-rollback.md`
+- Create: `cloud-engineering-connector/test/orchestrator-release-evidence.test.js`
 - No Worker production configuration, secrets, traffic weights, branch protection, or deployment workflow changes until separately authorized.
 
 **Interfaces:**

@@ -14,7 +14,7 @@ async function sha256(value) {
 describe("Option C Brain Store", () => {
   it("initializes the versioned SQLite schema and readiness probe", async () => {
     const store = storeFor("knowledge-schema-v2");
-    await expect(store.ping()).resolves.toEqual({ ok: true, schemaVersion: 3 });
+    await expect(store.ping()).resolves.toEqual({ ok: true, schemaVersion: 4 });
   });
 
   it("enforces tenant-scoped optimistic entity updates", async () => {
@@ -166,7 +166,7 @@ describe("Option C Brain Store", () => {
       name: "Persistent", properties: { durable: true }, expectedVersion: 0, now: 500,
     });
     await runInDurableObject(store, async instance => {
-      expect(instance.ping()).toEqual({ ok: true, schemaVersion: 3 });
+      expect(instance.ping()).toEqual({ ok: true, schemaVersion: 4 });
       expect(instance.getEntity({ tenantId: "tenant-a", entityId: "persisted" }))
         .toMatchObject({ name: "Persistent", properties: { durable: true }, version: 1 });
     });

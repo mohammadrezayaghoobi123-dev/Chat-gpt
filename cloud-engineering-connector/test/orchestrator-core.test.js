@@ -8,7 +8,7 @@ import {
   isTerminalTaskState,
 } from "../orchestrator-core.js";
 
-const actor = { id: "agent:planner", authenticated: true, role: "agent" };
+const actor = { id: "agent:planner", authenticated: true, identityVerified: true, role: "agent" };
 const evidence = { kind: "test", reference: "ci://run/123", outcome: "passed" };
 const baseTask = (state = "RECEIVED", version = 1) => ({
   taskId: "task-123",
@@ -82,7 +82,12 @@ test("completion requires passing acceptance evidence and an independent approva
     acceptance: { passed: true, criteria: [{ id: "tests", passed: true }] },
     approval: { reviewerId: "human:reviewer", executorId: "agent:builder", independent: true, commitSha: task.commitSha },
   };
-  assert.equal(assertTaskCompletion({ task, evidence: valid }).state, "COMPLETED");
+  const reviewer = { id: "human:reviewer", authenticated: true, identityVerified: true, role: "reviewer" };
+  assert.equal(assertTaskCompletion({ task, evidence: valid, authenticatedReviewer: reviewer }).state, "COMPLETED");
+  assert.throws(() => assertTaskCompletion({ task, evidence: valid }), { code: "AUTHENTICATED_ACTOR_REQUIRED" });
+  assert.throws(() => transitionTask({
+    task, expectedVersion: task.version, nextState: "COMPLETED", actor, evidence: valid, now: 1_800_000_000_100,
+  }), { code: "INDEPENDENT_APPROVAL_REQUIRED" });
   for (const invalid of [
     {},
     { ...valid, acceptance: { passed: false, criteria: [{ id: "tests", passed: false }] } },
@@ -91,7 +96,7 @@ test("completion requires passing acceptance evidence and an independent approva
     { ...valid, approval: { ...valid.approval, reviewerId: task.executorId } },
     { ...valid, approval: { ...valid.approval, independent: false } },
     { ...valid, approval: { ...valid.approval, commitSha: "b".repeat(40) } },
-  ]) assert.throws(() => assertTaskCompletion({ task, evidence: invalid }));
+  ]) assert.throws(() => assertTaskCompletion({ task, evidence: invalid, authenticatedReviewer: reviewer }));
 });
 
 test("rejects stale task versions with a compare-and-set conflict", () => {
@@ -110,7 +115,7 @@ test("rejects unknown states, malformed task projections, and unauthenticated ac
   }), { code: "INVALID_TASK" });
   assert.throws(() => transitionTask({
     task: baseTask(), expectedVersion: 1, nextState: "VALIDATING",
-    actor: { id: "agent:fake", authenticated: false }, evidence, now: 1_800_000_000_100,
+    actor: { id: "agent:fake", authenticated: false, identityVerified: false, role: "agent" }, evidence, now: 1_800_000_000_100,
   }), { code: "UNAUTHENTICATED_ACTOR" });
 });
 
@@ -119,7 +124,7 @@ test("quarantine can only be released by an explicitly owner-authorized resoluti
   assert.throws(() => transitionTask({
     task, expectedVersion: 1, nextState: "VALIDATING", actor, evidence, now: 1_800_000_000_100,
   }), { code: "OWNER_RESOLUTION_REQUIRED" });
-  const owner = { id: "owner:verified", authenticated: true, role: "owner" };
+  const owner = { id: "owner:verified", authenticated: true, identityVerified: true, role: "owner" };
   const next = transitionTask({
     task, expectedVersion: 1, nextState: "VALIDATING", actor: owner,
     evidence: { ...evidence, ownerResolutionId: "resolution-123" }, now: 1_800_000_000_100,

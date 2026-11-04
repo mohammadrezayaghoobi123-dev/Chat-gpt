@@ -25,6 +25,7 @@ function fixtures(overrides = {}) {
     commit: { sha: headSha, tree: { sha: treeSha } },
     compare: {
       status: "ahead",
+      ahead_by: 1,
       base_commit: { sha: baseSha },
       head_commit: { sha: headSha },
       files: [{ filename: "docs/evidence/task-1.md", status: "modified" }],
@@ -104,6 +105,7 @@ test("rejects compare responses whose base or head SHA do not match", async () =
   const { fetchImpl } = fixtures({
     compare: {
       status: "ahead",
+      ahead_by: 1,
       base_commit: { sha: "e".repeat(40) },
       head_commit: { sha: headSha },
       files: [{ filename: "docs/evidence/task-1.md", status: "modified" }],
@@ -119,6 +121,7 @@ test("rejects a diff whose exact path set differs from approved paths", async ()
   const { fetchImpl } = fixtures({
     compare: {
       status: "ahead",
+      ahead_by: 1,
       base_commit: { sha: baseSha },
       head_commit: { sha: headSha },
       files: [{ filename: "docs/evidence/other.md", status: "modified" }],
@@ -135,6 +138,7 @@ test("rejects deletes, renames, copies, and other unsupported diff operations", 
     const { fetchImpl } = fixtures({
       compare: {
         status: "ahead",
+      ahead_by: 1,
         base_commit: { sha: baseSha },
         head_commit: { sha: headSha },
         files: [{ filename: "docs/evidence/task-1.md", status }],
@@ -184,4 +188,20 @@ test("rejects missing token and unsafe request scopes before network access", as
     /GITHUB_MANIFEST_REQUESTED_PATHS_INVALID/,
   );
   assert.equal(calls.length, 0);
+});
+
+test("rejects an identical compare result because no approved changes exist", async () => {
+  const { fetchImpl } = fixtures({
+    compare: {
+      status: "identical",
+      ahead_by: 0,
+      base_commit: { sha: baseSha },
+      head_commit: { sha: headSha },
+      files: [{ filename: "docs/evidence/task-1.md", status: "modified" }],
+    },
+  });
+  await assert.rejects(
+    fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl }),
+    /GITHUB_MANIFEST_COMPARE_SHA_MISMATCH/,
+  );
 });

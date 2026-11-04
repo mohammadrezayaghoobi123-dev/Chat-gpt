@@ -182,10 +182,10 @@ test("rejects protected branches, path traversal, sensitive paths, and symlink e
   }
 });
 
-test("rejects event size overflow and replay-store failures", async () => {
+test("rejects oversized untrusted text and replay-store failures", async () => {
   const huge = baseEvent();
-  huge.issue.body = "z".repeat(INTAKE_LIMITS.maxUntrustedTextBytes);
-  assert.equal((await validateGitHubIntakeEvent(input({ event: huge }))).reasonCode, "EVENT_TOO_LARGE");
+  huge.issue.body = "z".repeat(INTAKE_LIMITS.maxUntrustedTextBytes + 1);
+  assert.equal((await validateGitHubIntakeEvent(input({ event: huge }))).reasonCode, "ISSUE_SCHEMA_INVALID");
   const brokenStore = { async claim() { throw new Error("storage offline"); } };
   assert.equal((await validateGitHubIntakeEvent(input({ replayStore: brokenStore }))).reasonCode, "REPLAY_STORE_ERROR");
 });

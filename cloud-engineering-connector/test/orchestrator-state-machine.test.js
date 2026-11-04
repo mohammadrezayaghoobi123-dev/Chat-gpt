@@ -1,0 +1,78 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { canTransition, TASK_STATES } from "../orchestrator/state-machine.js";
+
+const SHA = "b".repeat(40);
+
+test("exposes the complete approved task state set", () => {
+  assert.deepEqual([...TASK_STATES], [
+    "RECEIVED", "VALIDATING", "READY", "SCHEDULED", "RUNNING", "VERIFYING",
+    "REVIEW_PENDING", "COMPLETED", "BLOCKED", "FAILED", "CANCELLED",
+    "DISPUTED", "QUARANTINED", "RETRY_WAIT"
+  ]);
+});
+
+test("allows ordinary forward transitions in the task lifecycle", () => {
+  for (const [from, to] of [
+    ["RECEIVED", "VALIDATING"],
+    ["VALIDATING", "READY"],
+    ["READY", "SCHEDULED"],
+    ["SCHEDULED", "RUNNING"],
+    ["RUNNING", "VERIFYING"],
+    ["VERIFYING", "REVIEW_PENDING"]
+  ]) {
+    const evidence = from === "RUNNING" ? { execution: { commitSha: SHA } }
+      : from === "VERIFYING" ? { execution: { commitSha: SHA }, verification: { status: "PASS", commitSha: SHA } }
+      : {};
+    assert.equal(canTransition(from, to, evidence).allowed, true, from + " -> " + to);
+  }
+});
+
+test("rejects direct completion from RUNNING or FAILED", () => {
+  assert.equal(canTransition("RUNNING", "COMPLETED").allowed, false);
+  assert.equal(canTransition("FAILED", "COMPLETED").allowed, false);
+});
+
+test("requires an exact execution SHA before entering verification", () => {
+  assert.equal(canTransition("RUNNING", "VERIFYING").allowed, false);
+  assert.equal(canTransition("RUNNING", "VERIFYING", { execution: { commitSha: SHA } }).allowed, true);
+  assert.equal(canTransition("RUNNING", "VERIFYING", { execution: { commitSha: "bad" } }).allowed, false);
+});
+
+test("requires passing verification bound to the execution SHA before review", () => {
+  const execution = { execution: { commitSha: SHA } };
+  assert.equal(canTransition("VERIFYING", "REVIEW_PENDING", execution).allowed, false);
+  assert.equal(canTransition("VERIFYING", "REVIEW_PENDING", {
+    ...execution, verification: { status: "PASS", commitSha: SHA }
+  }).allowed, true);
+  assert.equal(canTransition("VERIFYING", "REVIEW_PENDING", {
+    ...execution, verification: { status: "PASS", commitSha: "c".repeat(40) }
+  }).allowed, false);
+});
+
+test("requires a distinct reviewer approval for exact-SHA completion", () => {
+  const evidence = {
+    verification: { status: "PASS", commitSha: SHA },
+    independentReview: { status: "APPROVED", reviewerId: "reviewer-2", reviewedSha: SHA },
+    executorId: "agent-1"
+  };
+  assert.equal(canTransition("REVIEW_PENDING", "COMPLETED").allowed, false);
+  assert.equal(canTransition("REVIEW_PENDING", "COMPLETED", { ...evidence, independentReview: { status: "COMMENTED", reviewerId: "reviewer-2", reviewedSha: SHA } }).allowed, false);
+  assert.equal(canTransition("REVIEW_PENDING", "COMPLETED", { ...evidence, independentReview: { status: "APPROVED", reviewerId: "agent-1", reviewedSha: SHA } }).allowed, false);
+  assert.equal(canTransition("REVIEW_PENDING", "COMPLETED", evidence).allowed, true);
+});
+
+test("requires explicit authorization to retry or unblock a task", () => {
+  assert.equal(canTransition("RETRY_WAIT", "SCHEDULED").allowed, false);
+  assert.equal(canTransition("RETRY_WAIT", "SCHEDULED", { retryAuthorized: true }).allowed, true);
+  assert.equal(canTransition("BLOCKED", "VALIDATING").allowed, false);
+  assert.equal(canTransition("BLOCKED", "VALIDATING", { unblockApproved: true }).allowed, true);
+});
+
+test("keeps terminal states closed and rejects unknown states", () => {
+  for (const state of ["COMPLETED", "FAILED", "CANCELLED", "QUARANTINED"]) {
+    assert.equal(canTransition(state, "VALIDATING").allowed, false);
+  }
+  assert.equal(canTransition("NOT_A_STATE", "RUNNING").allowed, false);
+  assert.equal(canTransition("RECEIVED", "NOT_A_STATE").allowed, false);
+});

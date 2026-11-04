@@ -1,5 +1,5 @@
-import { validateEnvelope, validateTask } from "./contracts.js";
-import { canTransition, MAX_AGENT_ROUNDS } from "./state-machine.js";
+import { MAX_AGENT_ROUNDS, validateEnvelope, validateTask } from "./contracts.js";
+import { canTransition } from "./state-machine.js";
 import { evaluatePolicy } from "./policy.js";
 
 const TERMINAL_STATES = new Set(["COMPLETED", "FAILED", "CANCELLED", "QUARANTINED"]);

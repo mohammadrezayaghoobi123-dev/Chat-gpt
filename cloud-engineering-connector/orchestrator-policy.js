@@ -65,6 +65,9 @@ function validApproval(approval, actor, scope) {
   return isRecord(approval) &&
     approval.status === "APPROVED" &&
     approval.authenticated === true &&
+    approval.identityVerified === true &&
+    approval.role === "owner" &&
+    typeof approval.ownerAuthorizationId === "string" && approval.ownerAuthorizationId.length > 0 &&
     approval.independent === true &&
     typeof approval.approverId === "string" &&
     approval.approverId.length > 0 &&
@@ -121,6 +124,8 @@ export function evaluateOrchestratorPolicy({
 
   if (action === "provider.invoke") {
     if (!isRecord(agentCapability) || agentCapability.status !== "AVAILABLE" ||
+        agentCapability.actorId !== actor.id || !Array.isArray(agentCapability.actions) ||
+        !agentCapability.actions.includes("provider.invoke") ||
         agentCapability.verifiedIdentity !== true || agentCapability.officialZeroCost !== true) {
       return deny("PROVIDER_CAPABILITY_UNVERIFIED", context);
     }

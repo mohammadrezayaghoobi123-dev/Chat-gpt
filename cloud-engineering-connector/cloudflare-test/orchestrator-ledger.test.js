@@ -203,14 +203,14 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("rejects secret-bearing fields and never creates or writes KnowledgeStore tables", async () => {
     const ledger = ledgerFor("ledger-secret-isolation");
-    await expect(ledger.createTask({
+    await expect(Promise.resolve().then(() => ledger.createTask({
       task: { ...task(), apiKey: "must-not-persist" }, idempotencyKey: "task-secret-0001", inputHash: "c".repeat(64), now,
-    })).rejects.toThrow(/sensitive field/);
+    }))).rejects.toThrow(/sensitive field/);
     await ledger.createTask({ task: task(), idempotencyKey: "task-safe-0001", inputHash: "d".repeat(64), now });
-    await expect(ledger.recordMessage({
+    await expect(Promise.resolve().then(() => ledger.recordMessage({
       messageId: "msg-secret-0001", taskId: "task-0001", inputHash: "e".repeat(64),
       envelope: { token: "must-not-persist" }, now,
-    })).rejects.toThrow(/sensitive field/);
+    }))).rejects.toThrow(/sensitive field/);
     await runInDurableObject(ledger, async (_instance, state) => {
       const tables = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row => row.name);
       expect(tables.some(name => name.startsWith("knowledge_"))).toBe(false);

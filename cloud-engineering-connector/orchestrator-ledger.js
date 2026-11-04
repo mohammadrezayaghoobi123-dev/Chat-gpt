@@ -313,8 +313,15 @@ export class OrchestratorLedger extends DurableObject {
     hash(inputHash, "inputHash");
     timestamp(now);
     serializeBounded(envelope, "message envelope");
-    if (!envelope || typeof envelope !== "object" || envelope.messageId !== messageId ||
-        envelope.taskId !== taskId || envelope.senderId !== authenticatedSender?.id) {
+    if (!authenticatedSender || authenticatedSender.authenticated !== true ||
+        authenticatedSender.identityVerified !== true ||
+        typeof authenticatedSender.id !== "string" || authenticatedSender.id.length === 0) {
+      return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
+    }
+    if (!envelope || typeof envelope !== "object" || envelope.senderId !== authenticatedSender.id) {
+      return { accepted: false, reason: "SENDER_IDENTITY_MISMATCH" };
+    }
+    if (envelope.messageId !== messageId || envelope.taskId !== taskId) {
       return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
     }
     let validatedEnvelope;

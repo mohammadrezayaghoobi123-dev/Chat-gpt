@@ -563,3 +563,18 @@ for (const workflow of workflows) {
     assert.match(block, /Version=/, "must report the active version ID");
   });
 }
+
+
+for (const workflow of workflows) {
+  test(workflow.name + " release preflight captures a rollback target only from exactly one 100% active version", () => {
+    const source = readFileSync(workflow.path, "utf8");
+    const stepName = workflow.name === "Staging"
+      ? "Preflight Staging bindings and capture rollback target"
+      : "Preflight Production credentials, namespace isolation, and rollback target";
+    const script = extractPreflightScript(source, stepName);
+    assert.match(script, /versions\.length\s*===\s*1/, "preflight must reject zero or multiple active versions");
+    assert.match(script, /versions\[0\]\.percentage\s*===\s*100/, "preflight must require the sole active version to receive 100% traffic");
+    assert.doesNotMatch(script, /versions\?\.find\(\s*\(?\s*version\s*\)?\s*=>\s*version\.percentage\s*===\s*100\s*\)\s*\|\|\s*active\?\.versions\?\.\[0\]/,
+      "preflight must not fall back to an arbitrary version when the 100% target is ambiguous");
+  });
+}

@@ -120,3 +120,7 @@ TDD evidence:
 The generated preflight result is intentionally **BLOCKED** because the external environment gates above are not satisfied. The command exits successfully when it generates a valid blocked report; it exits non-zero only for unreadable or malformed input. This separates a valid risk finding from a tooling failure.
 
 The new workflow file is configured for manual dispatch and pull-request validation. Its own event-triggered run has not yet been recorded in this snapshot; the successful existing connector CI run validates the implementation and CLI, not the new workflow's GitHub event wiring.
+
+### Review handoff
+
+A draft review request was opened as [PR #148](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/148), targeting the approved integration branch. It remains draft and unmerged. PRs #145, #146, and #147 remain unchanged. The new workflow's pull-request event has not yet been exercised; the successful push-triggered connector CI run is the verified code/test evidence for this P0 change.

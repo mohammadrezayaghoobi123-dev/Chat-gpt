@@ -548,6 +548,7 @@ test("Master Brain MVP CI job has a finite timeout", () => {
 });
 
 
+
 for (const workflow of workflows) {
   test(workflow.name + " deployment verification checks one 100% active version without claiming candidate identity", () => {
     const source = readFileSync(workflow.path, "utf8");
@@ -556,9 +557,9 @@ for (const workflow of workflows) {
     assert.ok(start >= 0, "deployment verification step must have an accurate name");
     const end = source.indexOf("\n      - name:", start + stepName.length);
     const block = source.slice(start, end < 0 ? source.length : end);
-    assert.match(block, /versions\\.length\\s*!==\\s*1/, "verification must reject split traffic across multiple versions");
-    assert.match(block, /versions\\[0\\]\\?\\.percentage\\s*!==\\s*100/, "verification must require exactly 100% traffic");
-    assert.doesNotMatch(block, /Candidate=\\$\\{process\\.env\\.GITHUB_SHA\\}/, "must not imply that Cloudflare metadata proves candidate SHA identity");
-    assert.match(block, /Active version=|Version=/, "must report the active version ID");
+    assert.match(block, /versions\.length\s*!==\s*1/, "verification must reject split traffic across multiple versions");
+    assert.match(block, /versions\[0\]\?\.percentage\s*!==\s*100/, "verification must require exactly 100% traffic");
+    assert.doesNotMatch(block, /Candidate=\$\{process\.env\.GITHUB_SHA\}/, "must not imply that Cloudflare metadata proves candidate SHA identity");
+    assert.match(block, /Version=/, "must report the active version ID");
   });
 }

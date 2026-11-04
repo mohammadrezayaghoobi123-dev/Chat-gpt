@@ -105,3 +105,22 @@ test("marks an unverified Cloudflare plan as unknown and blocks cost-sensitive a
   assert.equal(report.checks.find(item => item.id === "cloudflare_plan")?.status, "UNKNOWN");
   assert.equal(report.status, "BLOCKED");
 });
+
+test("records empty D1 and Queue inventories without requiring new storage services", () => {
+  const report = buildPreflightReport(input());
+  assert.deepEqual(report.storageInventory, { d1DatabaseCount: 0, queueCount: 0 });
+  assert.equal(report.checks.find(item => item.id === "storage_inventory")?.status, "INFO");
+});
+
+test("blocks workflow permissions that include write access", () => {
+  const report = buildPreflightReport(input({
+    github: {
+      standardPublicRunnerFree: true,
+      workflowPermissions: ["contents:write"],
+      protectedBranchPolicyVerified: false,
+      taskScopedWriteCredentialVerified: false,
+      pullRequests: []
+    }
+  }));
+  assert.equal(report.checks.find(item => item.id === "workflow_permissions")?.status, "BLOCKED");
+});

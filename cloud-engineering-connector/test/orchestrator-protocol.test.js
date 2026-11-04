@@ -10,7 +10,7 @@ import {
 } from "../orchestrator-protocol.js";
 
 const now = 1_800_000_000_000;
-const sender = { id: "agent:planner", authenticated: true };
+const sender = { id: "agent:planner", authenticated: true, identityVerified: true };
 const envelope = (overrides = {}) => ({
   protocolVersion: 1,
   messageId: "msg-0001",
@@ -67,11 +67,12 @@ test("rejects missing fields, unsupported versions, invalid times, expired messa
 
 test("rejects self-declared or mismatched sender identity without authenticated context", () => {
   assert.throws(() => validateMessageEnvelope(envelope(), { now }), { code: "AUTHENTICATED_SENDER_REQUIRED" });
+  assert.throws(() => validateMessageEnvelope(envelope(), { now, authenticatedSender: { id: sender.id, authenticated: true } }), { code: "AUTHENTICATED_SENDER_REQUIRED" });
   assert.throws(() => validateMessageEnvelope(envelope({ senderId: "agent:forged" }), {
     now, authenticatedSender: sender,
   }), { code: "SENDER_IDENTITY_MISMATCH" });
   assert.throws(() => validateMessageEnvelope(envelope(), {
-    now, authenticatedSender: { id: sender.id, authenticated: false },
+    now, authenticatedSender: { id: sender.id, authenticated: false, identityVerified: false },
   }), { code: "AUTHENTICATED_SENDER_REQUIRED" });
 });
 

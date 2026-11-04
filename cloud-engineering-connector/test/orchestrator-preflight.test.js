@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildPreflightReport } from "../scripts/orchestrator-preflight.mjs";
+import { buildPreflightReport, sanitizeEvidence } from "../scripts/orchestrator-preflight.mjs";
 
 function input(overrides = {}) {
   return {
@@ -137,7 +137,7 @@ test("redacts credential values embedded in evidence URL query strings", () => {
 
 test("redacts JWT-shaped credentials in evidence strings", () => {
   const value = sanitizeEvidence(
-    "session eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.signaturepayloadlongenough123456"
+    ["session ", "eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiJ1c2VyIn0", "signaturepayloadlongenough123456"].join(".")
   );
   assert.equal(value.includes("eyJhbGciOiJIUzI1NiJ9"), false);
   assert.match(value, /REDACTED/);

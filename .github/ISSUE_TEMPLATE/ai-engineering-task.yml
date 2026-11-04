@@ -34,6 +34,19 @@ body:
     validations:
       required: true
   - type: textarea
+    id: owner
+    attributes:
+      label: Accountable owner
+      description: Provide the responsible GitHub handle or team. This is the accountable task owner, not an agent identity claim.
+      placeholder: "@github-handle or team"
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: List blocking tasks, external approvals, required integrations, or write "None".
+  - type: textarea
     id: problem
     attributes:
       label: Problem / objective

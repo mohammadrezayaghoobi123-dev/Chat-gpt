@@ -41,7 +41,9 @@ function quota() {
 }
 
 function makeStore({ tasks = [], stopSwitch = false, outbox = [] } = {}) {
-  const taskMap = new Map(tasks.map(record => [record.task.taskId, structuredClone(record)]));
+  const taskMap = new Map(tasks.map(record => [record.task.taskId, {
+    ...structuredClone(record), taskId: record.task.taskId
+  }]));
   const events = [];
   const messages = new Map();
   const counters = { claimed: 0, completed: 0, deferred: 0, failed: 0 };
@@ -147,7 +149,7 @@ test("intakeTask rejects unauthenticated actors and malformed task contracts", a
   await assert.rejects(
     intakeTask({ tenantId: "tenant-a", task: validTask("bad", { acceptanceCriteria: [] }), idempotencyKey: "x", eventId: "e", outboxEventId: "o" },
       depsFor(store)),
-    error => error.code === "INVALID_TASK"
+    error => error.code === "INVALID_ACCEPTANCE_CRITERIA"
   );
 });
 

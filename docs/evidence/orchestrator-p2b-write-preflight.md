@@ -1,6 +1,6 @@
 # P2-B Write Preflight — Evidence and Current Blockers
 
-**Status:** Structural preflight now validates task branch/path scope and a supplied changed-tree manifest, including symlink/submodule rejection. Code/test SHA `07d741193559cc9c8a0e98d91178c8c616779a66` is CI-verified. P2-B execution remains BLOCKED. No GitHub write identity, live ledger, task record, branch, or external side effect is enabled.
+**Status:** Structural preflight now validates task branch/path scope and a supplied changed-tree manifest, including symlink/submodule rejection. Code/test SHA `b3808fee4700f5006603cb2d043ce7809191f65e` is CI-verified. P2-B execution remains BLOCKED. No GitHub write identity, live ledger, task record, branch, or external side effect is enabled.
 
 ## Purpose and safety boundary
 
@@ -8,7 +8,7 @@
 
 The only positive result is `READY_FOR_SEPARATE_EXECUTION_APPROVAL`. It is not an `ALLOW` decision. Every result explicitly sets `sideEffects`, `branchCreation`, `taskPersistence`, `ledgerWrites`, and `executionAuthorized` to `false`.
 
-Owner approval is bound to a canonical SHA-256 digest of repository identity, actor/event/label policy, credential identity/scope, ledger evidence, repository controls, base ref/SHA, independent reviewer, stop-switch state, branch/path policy, requested branch name, and exact requested changed-path set. Any change invalidates the approval hash.
+Owner approval is bound to a canonical SHA-256 digest of repository identity, actor/event/label policy, credential identity/scope, ledger evidence, repository controls, base ref/SHA, independent reviewer, stop-switch state, branch/path policy, requested branch name, exact requested changed-path set, and the complete supplied changed-file manifest (including head SHA and tree entries). Any change invalidates the approval hash.
 
 ## Implemented structural controls
 
@@ -24,6 +24,7 @@ Owner approval is bound to a canonical SHA-256 digest of repository identity, ac
 10. Constrained non-protected branch prefix and bounded repository-relative path allowlist.
 11. Requested branch must use the approved prefix; each requested path must be within an approved allowlist prefix. Traversal, absolute paths, backslashes, sensitive paths, duplicates, and out-of-scope paths are rejected.
 12. Supplied changed-tree manifest must match the exact repository ID, base SHA, requested branch name, head SHA shape, and exact requested path set. Changed leaves must be regular Git blobs (`100644` or `100755`); symlink (`120000`), submodule (`160000`), directory leaves, missing entries, and non-tree ancestors are rejected.
+13. The entire changed-file manifest, including head SHA, changed file modes, and tree entries, is included in the canonical owner-approval digest. Changing any manifest field invalidates the approval.
 
 ## Important limitation: manifest provenance
 
@@ -37,10 +38,10 @@ Positive fixtures use synthetic evidence-shaped values only. They do not prove a
 
 ## Verification evidence
 
-- Exact code/test SHA: `07d741193559cc9c8a0e98d91178c8c616779a66`.
-- Orchestrator GitHub Intake Contract run `41819006199`: success; 39 tests passed, 0 failed (15 P2-A + 24 P2-B).
-- Cloud Engineering Connector CI run `41819006287`: success; Node suite 305 passed, 0 failed; Durable Object/Vitest suite 70 passed, 0 failed; `npm audit` reported 0 vulnerabilities; syntax checks and Wrangler production/staging dry-runs passed. Staging smoke was skipped; no deployment occurred.
-- Full History Secret Scan run `41819006229`: success on code/test SHA `07d741193559cc9c8a0e98d91178c8c616779a66` before the evidence-only documentation commit; PR diff scan found no leaks and full-history scan checked 2,421 commits with no leaks.
+- Exact code/test SHA: `b3808fee4700f5006603cb2d043ce7809191f65e`.
+- Orchestrator GitHub Intake Contract run `41886574098`: success; 41 tests passed, 0 failed (15 P2-A + 26 P2-B).
+- Cloud Engineering Connector CI run `41886573742`: success; Node suite 307 passed, 0 failed; Durable Object/Vitest suite 70 passed, 0 failed; `npm audit` reported 0 vulnerabilities; syntax checks and Wrangler production/staging dry-runs passed. Staging post-deploy smoke was skipped; no deployment occurred.
+- Full History Secret Scan run `41886573677`: success on exact code/test SHA; 2,427 commits scanned, no leaks found.
 
 ## Current blockers — no values inferred
 

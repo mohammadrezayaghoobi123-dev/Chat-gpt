@@ -63,6 +63,19 @@ function policyFailure(decision) {
   return coreError(decision.decisionCode, decision.reason);
 }
 
+async function deferScheduling(record, decision, actor, deps, now, eventType = "SCHEDULING_DEFERRED", details = {}) {
+  await requireStore(deps).appendTaskEvent({
+    tenantId: deps.tenantId,
+    taskId: record.taskId,
+    eventId: eventId(deps, record.taskId, "deferred-" + decision.decisionCode.toLowerCase(), now),
+    eventType,
+    actorId: actorId(actor),
+    payload: { decisionCode: decision.decisionCode, ...details },
+    now
+  });
+  return { scheduled: false, deferred: true, task: record, decision };
+}
+
 async function blockTask(record, decision, actor, deps, now) {
   if (TERMINAL_STATES.has(record.state)) {
     return { scheduled: false, task: record, decision, alreadyTerminal: true };
@@ -143,10 +156,10 @@ export async function scheduleTask(taskId, deps) {
   for (const dependencyId of record.task.dependencies ?? []) {
     const dependency = await store.getTask({ tenantId, taskId: dependencyId });
     if (!dependency || dependency.state !== "COMPLETED") {
-      return blockTask(record, {
+      return deferScheduling(record, {
         allowed: false, decisionCode: "DEPENDENCY_NOT_COMPLETED",
         reason: "All declared task dependencies must be COMPLETED before scheduling."
-      }, actor, deps, now);
+      }, actor, deps, now, "DEPENDENCY_WAIT", { dependencyId });
     }
   }
 
@@ -168,7 +181,12 @@ export async function scheduleTask(taskId, deps) {
     quota,
     now
   });
-  if (!decision.allowed) return blockTask(record, decision, actor, deps, now);
+  if (!decision.allowed) {
+    if (["STOP_SWITCH_ACTIVE", "QUOTA_EXHAUSTED", "CAPABILITY_EXPIRED"].includes(decision.decisionCode)) {
+      return deferScheduling(record, decision, actor, deps, now);
+    }
+    return blockTask(record, decision, actor, deps, now);
+  }
 
   const task = await store.transitionTask({
     tenantId,
@@ -404,8 +422,13 @@ export async function runDispatchCycle(deps) {
       if (task.state === "READY") {
         const scheduled = await scheduleTask(task.taskId, deps);
         if (!scheduled.scheduled) {
-          await store.completeOutbox({ tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration, now });
-          result.completed += 1;
+          if (scheduled.deferred) {
+            await deferEvent(store, tenantId, event, now, scheduled.decision?.decisionCode ?? "SCHEDULING_DEFERRED");
+            result.deferred += 1;
+          } else {
+            await store.completeOutbox({ tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration, now });
+            result.completed += 1;
+          }
           continue;
         }
         task = scheduled.task;

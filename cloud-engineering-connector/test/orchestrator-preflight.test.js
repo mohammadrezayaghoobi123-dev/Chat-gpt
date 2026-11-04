@@ -142,3 +142,16 @@ test("redacts JWT-shaped credentials in evidence strings", () => {
   assert.equal(value.includes("eyJhbGciOiJIUzI1NiJ9"), false);
   assert.match(value, /REDACTED/);
 });
+
+test("redacts hyphenated API credentials and signature query parameters", () => {
+  const value = sanitizeEvidence(
+    "https://example.test/hook?x-api-key=hidden&access-token=hidden2&signature=hidden3&view=public"
+  );
+  assert.equal(value.includes("hidden"), false);
+  assert.equal(value.includes("hidden2"), false);
+  assert.equal(value.includes("hidden3"), false);
+  assert.match(value, /x-api-key=\[REDACTED\]/);
+  assert.match(value, /access-token=\[REDACTED\]/);
+  assert.match(value, /signature=\[REDACTED\]/);
+  assert.match(value, /view=public/);
+});

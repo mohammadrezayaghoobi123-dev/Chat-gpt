@@ -205,3 +205,57 @@ test("rejects an identical compare result because no approved changes exist", as
     /GITHUB_MANIFEST_COMPARE_SHA_MISMATCH/,
   );
 });
+
+
+test("rejects malformed tree paths and inconsistent Git tree modes", async () => {
+  const malformedPath = fixtures({
+    tree: {
+      sha: treeSha,
+      truncated: false,
+      tree: [
+        { path: "../escape", mode: "100644", type: "blob" },
+        { path: "docs", mode: "040000", type: "tree" },
+        { path: "docs/evidence", mode: "040000", type: "tree" },
+        { path: "docs/evidence/task-1.md", mode: "100644", type: "blob" },
+      ],
+    },
+  });
+  await assert.rejects(
+    fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl: malformedPath.fetchImpl }),
+    /GITHUB_MANIFEST_TREE_ENTRY_INVALID/,
+  );
+
+  const inconsistentMode = fixtures({
+    tree: {
+      sha: treeSha,
+      truncated: false,
+      tree: [
+        { path: "docs", mode: "100644", type: "tree" },
+        { path: "docs/evidence", mode: "040000", type: "tree" },
+        { path: "docs/evidence/task-1.md", mode: "100644", type: "blob" },
+      ],
+    },
+  });
+  await assert.rejects(
+    fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl: inconsistentMode.fetchImpl }),
+    /GITHUB_MANIFEST_TREE_ENTRY_INVALID/,
+  );
+});
+
+test("rejects a requested file whose parent is not a Git tree", async () => {
+  const invalidParent = fixtures({
+    tree: {
+      sha: treeSha,
+      truncated: false,
+      tree: [
+        { path: "docs", mode: "100644", type: "blob" },
+        { path: "docs/evidence", mode: "040000", type: "tree" },
+        { path: "docs/evidence/task-1.md", mode: "100644", type: "blob" },
+      ],
+    },
+  });
+  await assert.rejects(
+    fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl: invalidParent.fetchImpl }),
+    /GITHUB_MANIFEST_TREE_ANCESTOR_INVALID/,
+  );
+});

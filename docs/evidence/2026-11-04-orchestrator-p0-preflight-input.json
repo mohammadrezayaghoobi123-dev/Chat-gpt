@@ -74,7 +74,26 @@
     "knowledgeStoreSourceDeclared": true,
     "knowledgeStoreNamespacePresent": false,
     "d1Databases": [],
-    "queues": []
+    "queues": [],
+    "workerBindings": [
+      {
+        "worker": "chat-gpt111",
+        "durableObjectBindings": []
+      },
+      {
+        "worker": "chat-gpt111-staging",
+        "durableObjectBindings": [
+          "WRITE_CONTROL"
+        ]
+      },
+      {
+        "worker": "master-brain-cloud-agent",
+        "durableObjectBindings": [
+          "AgentBudget",
+          "AgentSession"
+        ]
+      }
+    ]
   },
   "agentEligibility": {
     "openai": "UNAVAILABLE",
@@ -89,7 +108,8 @@
   },
   "baseline": {
     "status": "PASS",
-    "commitSha": "8830dfe8908bf1e44a86e592946fb84eacb51756"
+    "commitSha": "8830dfe8908bf1e44a86e592946fb84eacb51756",
+    "runId": "41656636343"
   },
   "evidenceRefs": [
     "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/commit/8830dfe8908bf1e44a86e592946fb84eacb51756",
@@ -97,7 +117,7 @@
     "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/145",
     "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/146",
     "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/147",
-    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41656636920",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41656636343",
     "https://developers.openai.com/api/docs/guides/chatgpt-api-credits",
     "https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers",
     "https://docs.github.com/en/actions/concepts/billing-and-usage"

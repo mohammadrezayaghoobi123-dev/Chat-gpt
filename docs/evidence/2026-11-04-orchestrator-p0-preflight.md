@@ -136,3 +136,15 @@ The P0 preflight implementation is tracked in [Draft PR #148](https://github.com
 - The full Python suite and Master Brain MVP test workflows were cancelled while the branch was receiving additional commits. They are **not** counted as passed. This evidence-only update is the final planned push for P0; the resulting exact-head runs are the validation freeze. No further commits will be added to this branch while those runs execute.
 
 No production or staging operation is authorized by this addendum. `main` remains at `f2cae91de818385ec48daafc43c621b9e2cc0675`.
+
+### Secret-scan false-positive disposition
+
+A full-history scan identified a synthetic JWT-shaped value used only by the preflight redaction test in historical commit `4cb3f9b9a2a64ccacb704066de1974a9af134c49`. Inspection confirmed it is a deliberately fabricated test fixture, not a live credential. The Gitleaks allowlist is constrained to that exact commit, test path, JWT rule, and synthetic header marker. No history rewrite or secret rotation was performed, and no secret value was accessed.
+
+The corrected exact-head checks on `1f2ee71d17691f97f1c5b1b4384427f452933a47` passed:
+- [Connector CI](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41797921200)
+- [Read-only Preflight workflow](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41797921405)
+- [PR Full History Secret Scan](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41797921428)
+- [Push Full History Secret Scan](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/41797912952)
+
+Python tests and Master Brain MVP tests were still in progress at the time of this evidence update.

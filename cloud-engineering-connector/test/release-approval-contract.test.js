@@ -344,3 +344,81 @@ test("Production post-deploy verification accepts isolated KnowledgeStore namesp
     observability,
   );
 });
+
+
+const rollbackCases = [
+  {
+    name: "Staging",
+    workflowPath: new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url),
+    stepName: "Roll back Staging if post-deploy acceptance fails",
+    workerName: "chat-gpt111-staging",
+    endpointEnv: "STAGING_MCP_URL",
+    endpoint: "https://staging.example.invalid",
+  },
+  {
+    name: "Production",
+    workflowPath: new URL("../../.github/workflows/connector-production-release.yml", import.meta.url),
+    stepName: "Roll back Production if post-deploy acceptance fails",
+    workerName: "chat-gpt111",
+    endpointEnv: "PRODUCTION_MCP_URL",
+    endpoint: "https://production.example.invalid",
+  },
+];
+
+function extractRollbackScript(source, stepName) {
+  const start = source.indexOf("      - name: " + stepName);
+  assert.ok(start >= 0, "rollback step must exist: " + stepName);
+  const next = source.indexOf("\n      - name: ", start + 1);
+  const step = source.slice(start, next >= 0 ? next : undefined);
+  const runMarker = "        run: |\n";
+  const runStart = step.indexOf(runMarker);
+  assert.ok(runStart >= 0, "rollback run block must exist: " + stepName);
+  const lines = step.slice(runStart + runMarker.length).split("\n");
+  const heredocStart = lines.findIndex((line) => line.trim() === "node --input-type=module <<'NODE'");
+  const heredocEnd = lines.findIndex((line, index) => index > heredocStart && line.trim() === "NODE");
+  assert.ok(heredocStart >= 0 && heredocEnd > heredocStart, "rollback Node heredoc must be extractable: " + stepName);
+  return lines.slice(heredocStart + 1, heredocEnd).map((line) => line.replace(/^ {10}/, "")).join("\n");
+}
+
+for (const rollbackCase of rollbackCases) {
+  test(rollbackCase.name + " rollback fails closed when Cloudflare does not route 100% traffic to the captured previous version", () => {
+    const source = readFileSync(rollbackCase.workflowPath, "utf8");
+    const script = extractRollbackScript(source, rollbackCase.stepName);
+    const prelude = [
+      "globalThis.fetch = async (input, init = {}) => {",
+      "  const url = new URL(String(input));",
+      "  if (url.pathname.endsWith('/deployments') && init.method === 'POST') {",
+      "    return new Response(JSON.stringify({ success: true, result: { id: 'rollback-deployment' } }), { status: 200, headers: { 'content-type': 'application/json' } });",
+      "  }",
+      "  if (url.pathname.endsWith('/deployments') && (!init.method || init.method === 'GET')) {",
+      "    return new Response(JSON.stringify({ success: true, result: { deployments: [{ id: 'rollback-deployment', versions: [{ version_id: 'different-version', percentage: 100 }] }] } }), { status: 200, headers: { 'content-type': 'application/json' } });",
+      "  }",
+      "  if (url.pathname.endsWith('/healthz') || url.pathname.endsWith('/readyz')) {",
+      "    return new Response('ok', { status: 200 });",
+      "  }",
+      "  throw new Error('Unexpected rollback verification request: ' + url);",
+      "};",
+    ].join("\n");
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", prelude + "\n" + script], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CLOUDFLARE_ACCOUNT_ID: "test-account",
+        CLOUDFLARE_API_TOKEN: "test-token",
+        PREVIOUS_VERSION_ID: "previous-version",
+        STAGING_MCP_URL: rollbackCase.endpoint,
+        PRODUCTION_MCP_URL: rollbackCase.endpoint,
+      },
+    });
+    assert.notEqual(
+      result.status,
+      0,
+      rollbackCase.name + " rollback must not report success when the active deployment still routes to a different version",
+    );
+    assert.match(
+      result.stderr + result.stdout,
+      /rollback.*version|version.*rollback|traffic.*version/i,
+      "rollback failure must identify the active-version verification failure",
+    );
+  });
+}

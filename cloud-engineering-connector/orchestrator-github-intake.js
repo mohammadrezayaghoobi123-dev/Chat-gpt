@@ -1,8 +1,7 @@
-const SHA256 = /^[a-f0-9]{64}$/;
 const ACTOR_ID = /^[0-9]{1,20}$/;
 const DELIVERY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const MAX_EVENT_BYTES = 64 * 1024;
+const MAX_EVENT_BYTES = 40 * 1024;
 const MAX_TEXT_BYTES = 32 * 1024;
 const DEFAULT_MAX_AGE_MS = 15 * 60 * 1000;
 const DEFAULT_FUTURE_SKEW_MS = 60 * 1000;
@@ -119,7 +118,7 @@ export async function validateGitHubIntakeEvent({
   if (!isRecord(issue) || !Number.isSafeInteger(issue.number) || issue.number < 1 ||
       typeof issue.title !== "string" || typeof issue.body !== "string" ||
       byteLength(issue.title) > 4096 || byteLength(issue.body) > MAX_TEXT_BYTES ||
-      !Array.isArray(issue.labels) ||
+      !Array.isArray(issue.labels) || issue.labels.length > 64 ||
       !issue.labels.every(label => isRecord(label) && typeof label.name === "string" && label.name.length <= 64) ||
       !safeIssueUrl(issue.html_url, repository, issue.number)) return fail("ISSUE_SCHEMA_INVALID");
 

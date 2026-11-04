@@ -300,6 +300,17 @@ describe("KnowledgeStore orchestrator ledger v4", () => {
     }), "ORCHESTRATOR_STOP_SWITCH_ACTIVE");
   });
 
+
+  it("claims outbox events within the requested tenant only", async () => {
+    const store = storeFor("orchestrator-outbox-tenant-filter");
+    await store.createTask(createInput("task-tenant-a", "tenant-a", 1000));
+    await store.createTask(createInput("task-tenant-b", "tenant-b", 1000));
+    const tenantB = await store.claimOutbox({ tenantId: "tenant-b", now: 2000, leaseMs: 1000 });
+    expect(tenantB).toMatchObject({ tenantId: "tenant-b", aggregateId: "task-tenant-b" });
+    const tenantA = await store.claimOutbox({ tenantId: "tenant-a", now: 2000, leaseMs: 1000 });
+    expect(tenantA).toMatchObject({ tenantId: "tenant-a", aggregateId: "task-tenant-a" });
+  });
+
   it("defaults the stop switch to active, persists owner-authorized changes, and fails closed on read errors", async () => {
     const store = storeFor("orchestrator-stop-switch");
     await expect(store.getStopSwitch({ tenantId: "tenant-a" }))

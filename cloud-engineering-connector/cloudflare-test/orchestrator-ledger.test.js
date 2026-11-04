@@ -11,7 +11,15 @@ const task = (taskId = "task-0001") => ({
   executorId: "agent:worker-1", commitSha: "a".repeat(40),
   objective: "bounded task",
 });
-const agent = { id: "agent:worker-1", authenticated: true, role: "agent" };
+const agent = { id: "agent:worker-1", authenticated: true, identityVerified: true, role: "agent" };
+const authenticatedSender = { id: "agent:worker-1", authenticated: true, identityVerified: true };
+const protocolEnvelope = (messageId, taskId, inputHash, payload, createdAt = now) => ({
+  protocolVersion: 1, messageId, taskId, correlationId: "corr-0001",
+  senderId: "agent:worker-1", recipientId: "agent:worker-2", type: "PROGRESS",
+  createdAt, expiresAt: createdAt + 60_000,
+  scopeRef: { repository: "owner/repo", baseBranch: "integration", targetBranch: "task/task-0001", allowedPaths: ["src/**"] },
+  inputHash, evidenceRefs: [], payload,
+});
 const evidence = { kind: "test-evidence", reference: "ci://run/123" };
 
 describe("OrchestratorLedger durable coordination contract", () => {
@@ -85,14 +93,14 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0005", inputHash: "1".repeat(64), now });
     await expect(ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 2, expectedState: "SCHEDULED", nextState: "RUNNING",
-      actor: { id: "owner:one", authenticated: true, role: "owner" }, evidence, now: now + 1,
+      actor: { id: "owner:one", authenticated: true, identityVerified: true, role: "owner" }, evidence, now: now + 1,
     })).resolves.toMatchObject({ updated: false, reason: "VERSION_OR_STATE_CONFLICT" });
   });
 
   it("deduplicates repeated messages and rejects the same message ID with a different input hash", async () => {
     const ledger = ledgerFor("ledger-message-dedup");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0006", inputHash: "2".repeat(64), now });
-    const input = { messageId: "msg-0001", taskId: "task-0001", inputHash: "3".repeat(64), envelope: { messageId: "msg-0001", taskId: "task-0001", type: "PROGRESS", payload: { step: 1 } }, now };
+    const input = { messageId: "msg-0001", taskId: "task-0001", inputHash: "3".repeat(64), envelope: protocolEnvelope("msg-0001", "task-0001", "3".repeat(64), { step: 1 }), authenticatedSender, now };
     expect(await ledger.recordMessage(input)).toMatchObject({ accepted: true });
     expect(await ledger.recordMessage(input)).toMatchObject({ accepted: false, replay: true });
     expect(await ledger.recordMessage({ ...input, inputHash: "4".repeat(64) })).toMatchObject({ accepted: false, conflict: true });
@@ -156,7 +164,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const ledger = ledgerFor("ledger-audit-chain");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0010", inputHash: "8".repeat(64), now });
     const input = {
-      eventId: "audit-0001", taskId: "task-0001", actor: "agent:worker-1",
+      eventId: "audit-0001", taskId: "task-0001", actor: agent,
       eventType: "task.created", details: { version: 1 }, now,
     };
     const first = await ledger.appendAuditEvent(input);
@@ -177,7 +185,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0011", inputHash: "9".repeat(64), now });
     const input = {
       messageId: "msg-100-duplicates", taskId: "task-0001", inputHash: "a".repeat(64),
-      envelope: { messageId: "msg-100-duplicates", taskId: "task-0001", type: "ACKNOWLEDGEMENT", payload: { accepted: true } }, now,
+      envelope: protocolEnvelope("msg-100-duplicates", "task-0001", "a".repeat(64), { accepted: true }), authenticatedSender, now,
     };
     const results = await Promise.all(Array.from({ length: 100 }, () => ledger.recordMessage(input)));
     expect(results.filter(result => result.accepted)).toHaveLength(1);
@@ -201,12 +209,25 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
   });
 
+  it("refuses to persist a protocol message without a verified authenticated sender context", async () => {
+    const ledger = ledgerFor("ledger-message-authentication");
+    await ledger.createTask({ task: task(), idempotencyKey: "task-create-auth-message", inputHash: "c".repeat(64), now });
+    const envelope = protocolEnvelope("msg-auth-required", "task-0001", "d".repeat(64), { step: 1 });
+    await expect(ledger.recordMessage({
+      messageId: "msg-auth-required", taskId: "task-0001", inputHash: "d".repeat(64), envelope, now,
+    })).resolves.toMatchObject({ accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" });
+    await expect(ledger.recordMessage({
+      messageId: "msg-auth-required", taskId: "task-0001", inputHash: "d".repeat(64), envelope,
+      authenticatedSender: { id: "agent:worker-1", authenticated: true, identityVerified: false }, now,
+    })).resolves.toMatchObject({ accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" });
+  });
+
   it("rejects a message whose envelope identifiers do not match the durable deduplication key", async () => {
     const ledger = ledgerFor("ledger-message-envelope-binding");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-envelope-binding", inputHash: "f".repeat(64), now });
     const result = await ledger.recordMessage({
       messageId: "msg-indexed-as-one", taskId: "task-0001", inputHash: "a".repeat(64),
-      envelope: { messageId: "msg-claimed-as-two", taskId: "task-0001", type: "PROGRESS", payload: {} }, now,
+      envelope: protocolEnvelope("msg-claimed-as-two", "task-0001", "a".repeat(64), {}), authenticatedSender, now,
     });
     expect(result).toMatchObject({ accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" });
   });

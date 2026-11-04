@@ -124,3 +124,21 @@ test("blocks workflow permissions that include write access", () => {
   }));
   assert.equal(report.checks.find(item => item.id === "workflow_permissions")?.status, "BLOCKED");
 });
+
+test("redacts credential values embedded in evidence URL query strings", () => {
+  const value = sanitizeEvidence(
+    "https://example.test/report?access_token=do-not-leak&client_secret=also-secret&view=summary"
+  );
+  assert.equal(value.includes("do-not-leak"), false);
+  assert.equal(value.includes("also-secret"), false);
+  assert.match(value, /access_token=\[REDACTED\]/);
+  assert.match(value, /view=summary/);
+});
+
+test("redacts JWT-shaped credentials in evidence strings", () => {
+  const value = sanitizeEvidence(
+    "session eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.signaturepayloadlongenough123456"
+  );
+  assert.equal(value.includes("eyJhbGciOiJIUzI1NiJ9"), false);
+  assert.match(value, /REDACTED/);
+});

@@ -2,7 +2,8 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const SHA40 = /^[a-f0-9]{40}$/;
 const ACTOR_ID = /^[0-9]{1,20}$/;
 const LABEL = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,63}$/;
-const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const TARGET_REPOSITORY = "mohammadrezayaghoobi123-dev/Chat-gpt";
+const TARGET_REPOSITORY_ID = 1398846697;
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);

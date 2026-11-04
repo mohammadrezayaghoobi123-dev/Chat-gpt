@@ -6,6 +6,19 @@ function storeFor(name) {
   return env.KNOWLEDGE_STORE.get(env.KNOWLEDGE_STORE.idFromName(name));
 }
 
+
+async function expectLocalCode(store, operation, code) {
+  await runInDurableObject(store, async instance => {
+    let caught;
+    try {
+      await operation(instance);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught?.code).toBe(code);
+  });
+}
+
 function validTask(taskId = "task-001", overrides = {}) {
   return {
     schemaVersion: 1,
@@ -116,9 +129,9 @@ describe("KnowledgeStore orchestrator ledger v4", () => {
         "tenant-a", "task-001"
       ).one().count).toBe(1);
     });
-    await expect(store.createTask({
+    await expectLocalCode(store, instance => instance.createTask({
       ...input, task: validTask("task-001", { inputHash: "b".repeat(64) })
-    })).rejects.toMatchObject({ code: "ORCHESTRATOR_TASK_IDEMPOTENCY_CONFLICT" });
+    }), "ORCHESTRATOR_TASK_IDEMPOTENCY_CONFLICT");
   });
 
   it("keeps tasks tenant-isolated and applies expected-state compare-and-set", async () => {
@@ -130,14 +143,14 @@ describe("KnowledgeStore orchestrator ledger v4", () => {
       eventId: "cas-transition-1", actorId: "owner:1", evidence: {}, now: 2000
     });
     expect(changed).toMatchObject({ state: "VALIDATING", version: 2 });
-    await expect(store.transitionTask({
+    await expectLocalCode(store, instance => instance.transitionTask({
       tenantId: "tenant-a", taskId: "task-cas", expectedState: "RECEIVED", nextState: "VALIDATING",
       eventId: "cas-transition-stale", actorId: "owner:1", evidence: {}, now: 3000
-    })).rejects.toMatchObject({ code: "ORCHESTRATOR_STATE_CONFLICT" });
-    await expect(store.appendTaskEvent({
+    }), "ORCHESTRATOR_STATE_CONFLICT");
+    await expectLocalCode(store, instance => instance.appendTaskEvent({
       tenantId: "tenant-b", taskId: "task-cas", eventId: "cross-tenant-event",
       eventType: "NOTE", actorId: "agent:2", payload: {}, now: 4000
-    })).rejects.toMatchObject({ code: "ORCHESTRATOR_TASK_NOT_FOUND" });
+    }), "ORCHESTRATOR_TASK_NOT_FOUND");
   });
 
   it("appends immutable task events and deduplicates identical event IDs", async () => {
@@ -150,8 +163,8 @@ describe("KnowledgeStore orchestrator ledger v4", () => {
     const event = await store.appendTaskEvent(input);
     expect(event).toMatchObject({ eventId: "event-note-1", sequence: 2, eventType: "AGENT_NOTE" });
     await expect(store.appendTaskEvent(input)).resolves.toEqual(event);
-    await expect(store.appendTaskEvent({ ...input, payload: { note: "tampered" } }))
-      .rejects.toMatchObject({ code: "ORCHESTRATOR_EVENT_ID_CONFLICT" });
+    await expectLocalCode(store, instance => instance.appendTaskEvent({ ...input, payload: { note: "tampered" } }),
+      "ORCHESTRATOR_EVENT_ID_CONFLICT");
     await runInDurableObject(store, async instance => {
       expect(() => instance.ctx.storage.sql.exec(
         "UPDATE orchestrator_task_events SET event_type='TAMPERED' WHERE tenant_id=? AND event_id=?",
@@ -175,14 +188,14 @@ describe("KnowledgeStore orchestrator ledger v4", () => {
     await expect(store.recordMessage({
       tenantId: "tenant-a", envelope, result: { accepted: false }, now: 3000
     })).resolves.toEqual({ inserted: false, priorResult: { accepted: true } });
-    await expect(store.recordMessage({
+    await expectLocalCode(store, instance => instance.recordMessage({
       tenantId: "tenant-a", envelope: {
         ...envelope, payload: { summary: "different content" }
       }, now: 4000
-    })).rejects.toMatchObject({ code: "ORCHESTRATOR_MESSAGE_ID_CONFLICT" });
-    await expect(store.recordMessage({
+    }), "ORCHESTRATOR_MESSAGE_ID_CONFLICT");
+    await expectLocalCode(store, instance => instance.recordMessage({
       tenantId: "tenant-b", envelope, now: 5000
-    })).rejects.toMatchObject({ code: "ORCHESTRATOR_TASK_NOT_FOUND" });
+    }), "ORCHESTRATOR_TASK_NOT_FOUND");
   });
 
   it("reclaims expired leases with a higher fencing token and rejects stale workers", async () => {
@@ -194,20 +207,20 @@ describe("KnowledgeStore orchestrator ledger v4", () => {
       leaseToken: "first-lease-token", leaseMs: 1000, now: 5000
     });
     expect(first).toMatchObject({ fencingToken: 1, leaseUntil: 6000 });
-    await expect(store.claimTask({
+    await expectLocalCode(store, instance => instance.claimTask({
       tenantId: "tenant-a", taskId: "task-fence", ownerId: "agent:2",
       leaseToken: "second-lease-token", leaseMs: 1000, now: 5500
-    })).rejects.toMatchObject({ code: "ORCHESTRATOR_LEASE_ACTIVE" });
+    }), "ORCHESTRATOR_LEASE_ACTIVE");
     const second = await store.claimTask({
       tenantId: "tenant-a", taskId: "task-fence", ownerId: "agent:2",
       leaseToken: "second-lease-token", leaseMs: 1000, now: 6000
     });
     expect(second.fencingToken).toBe(2);
-    await expect(store.transitionTask({
+    await expectLocalCode(store, instance => instance.transitionTask({
       tenantId: "tenant-a", taskId: "task-fence", expectedState: "SCHEDULED", nextState: "RUNNING",
       eventId: "stale-worker-start", actorId: "agent:1", leaseToken: "first-lease-token",
       fencingToken: first.fencingToken, evidence: {}, now: 6100
-    })).rejects.toMatchObject({ code: "ORCHESTRATOR_LEASE_CONFLICT" });
+    }), "ORCHESTRATOR_LEASE_CONFLICT");
     const running = await store.transitionTask({
       tenantId: "tenant-a", taskId: "task-fence", expectedState: "SCHEDULED", nextState: "RUNNING",
       eventId: "current-worker-start", actorId: "agent:2", leaseToken: "second-lease-token",
@@ -227,9 +240,9 @@ describe("KnowledgeStore orchestrator ledger v4", () => {
     await expect(store.setStopSwitch({
       tenantId: "tenant-a", active: true, actorId: "operator:1", reason: "emergency pause", now: 3000
     })).resolves.toMatchObject({ active: true, source: "PERSISTED" });
-    await expect(store.setStopSwitch({
+    await expectLocalCode(store, instance => instance.setStopSwitch({
       tenantId: "tenant-a", active: false, actorId: "operator:1", reason: "unauthorized resume", now: 4000
-    })).rejects.toMatchObject({ code: "ORCHESTRATOR_OWNER_AUTHORIZATION_REQUIRED" });
+    }), "ORCHESTRATOR_OWNER_AUTHORIZATION_REQUIRED");
     await runInDurableObject(store, async instance => {
       instance.ctx.storage.sql.exec("DROP TABLE orchestrator_control_state");
     });

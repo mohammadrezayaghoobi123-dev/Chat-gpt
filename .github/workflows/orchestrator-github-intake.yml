@@ -1,0 +1,40 @@
+name: Orchestrator GitHub Intake Contract
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/orchestrator-github-intake.yml"
+      - "cloud-engineering-connector/orchestrator-github-intake.js"
+      - "cloud-engineering-connector/test/orchestrator-github-intake.test.js"
+      - "cloud-engineering-connector/package.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: orchestrator-github-intake-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  read-only-contract:
+    name: Read-only intake contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify runtime
+        run: node --version
+      - name: Syntax check
+        working-directory: cloud-engineering-connector
+        run: |
+          node --check orchestrator-github-intake.js
+          node --check test/orchestrator-github-intake.test.js
+      - name: Run intake security contract tests
+        working-directory: cloud-engineering-connector
+        run: node --test test/orchestrator-github-intake.test.js

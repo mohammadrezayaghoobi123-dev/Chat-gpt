@@ -67,7 +67,9 @@ test("requires a distinct reviewer approval for exact-SHA completion", () => {
 
 test("requires explicit authorization to retry or unblock a task", () => {
   assert.equal(canTransition("RETRY_WAIT", "SCHEDULED").allowed, false);
-  assert.equal(canTransition("RETRY_WAIT", "SCHEDULED", { retryAuthorized: true }).allowed, true);
+  assert.equal(canTransition("RETRY_WAIT", "SCHEDULED", {
+    retryAuthorized: true, policyDecision: { allowed: true }, stopSwitchClear: true
+  }).allowed, true);
   assert.equal(canTransition("BLOCKED", "VALIDATING").allowed, false);
   assert.equal(canTransition("BLOCKED", "VALIDATING", { unblockApproved: true }).allowed, true);
 });

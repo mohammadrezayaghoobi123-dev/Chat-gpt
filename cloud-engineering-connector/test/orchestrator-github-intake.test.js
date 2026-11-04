@@ -182,10 +182,16 @@ test("rejects protected branches, path traversal, sensitive paths, and symlink e
   }
 });
 
-test("rejects oversized untrusted text and replay-store failures", async () => {
+test("rejects oversized untrusted text, aggregate event payloads, and replay-store failures", async () => {
   const huge = baseEvent();
   huge.issue.body = "z".repeat(INTAKE_LIMITS.maxUntrustedTextBytes + 1);
   assert.equal((await validateGitHubIntakeEvent(input({ event: huge }))).reasonCode, "ISSUE_SCHEMA_INVALID");
+  const aggregate = baseEvent();
+  aggregate.issue.title = "t".repeat(4096);
+  aggregate.issue.body = "z".repeat(INTAKE_LIMITS.maxUntrustedTextBytes);
+  aggregate.issue.labels = Array.from({ length: 64 }, (_, index) => ({ name: `label-${String(index).padStart(2, "0")}-` + "x".repeat(54) }));
+  aggregate.issue.labels[0] = { name: config.requiredLabel };
+  assert.equal((await validateGitHubIntakeEvent(input({ event: aggregate }))).reasonCode, "EVENT_TOO_LARGE");
   const brokenStore = { async claim() { throw new Error("storage offline"); } };
   assert.equal((await validateGitHubIntakeEvent(input({ replayStore: brokenStore }))).reasonCode, "REPLAY_STORE_ERROR");
 });

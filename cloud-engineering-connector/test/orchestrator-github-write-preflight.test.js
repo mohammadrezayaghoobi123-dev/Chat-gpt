@@ -247,3 +247,35 @@ test("multiple independent failures are reported without enabling partial execut
   assert.equal(result.ledgerWrites, false);
   assert.equal(result.executionAuthorized, false);
 });
+
+test("rejects unsafe branch prefixes and path allowlists", async () => {
+  const invalidPolicies = [
+    undefined,
+    { prefix: "main/", allowedPaths: ["docs"] },
+    { prefix: "production/", allowedPaths: ["docs"] },
+    { prefix: "../task/", allowedPaths: ["docs"] },
+    { prefix: "task", allowedPaths: ["docs"] },
+    { prefix: "task/", allowedPaths: [] },
+    { prefix: "task/", allowedPaths: ["../secrets"] },
+    { prefix: "task/", allowedPaths: ["/etc/passwd"] },
+    { prefix: "task/", allowedPaths: [".github/workflows"] },
+    { prefix: "task/", allowedPaths: ["docs/CODEOWNERS"] },
+    { prefix: "task/", allowedPaths: ["deploy/production"] },
+    { prefix: "task/", allowedPaths: ["docs/evidence", "docs/evidence"] },
+  ];
+  for (const branchPolicy of invalidPolicies) {
+    const result = await evaluatePatch({ branchPolicy });
+    assert.ok(result.reasonCodes.includes("BRANCH_PREFIX_OR_PATH_ALLOWLIST_INVALID"));
+    assert.equal(result.executionAuthorized, false);
+  }
+});
+
+test("branch and path policy are bound to owner approval scope", async () => {
+  const input = await fixture();
+  const result = await evaluateP2BWritePreflight({
+    ...input,
+    branchPolicy: { prefix: "different/", allowedPaths: ["docs/evidence"] },
+  });
+  assert.ok(result.reasonCodes.includes("OWNER_APPROVAL_MISSING_INVALID_OR_SCOPE_MISMATCH"));
+  assert.notEqual(result.approvalScopeHash, input.ownerApproval.approvedScopeHash);
+});

@@ -12,6 +12,8 @@ on:
       - "cloud-engineering-connector/test/orchestrator-github-intake.test.js"
       - "cloud-engineering-connector/package.json"
       - "cloud-engineering-connector/orchestrator-github-write-preflight.js"
+      - "cloud-engineering-connector/orchestrator-github-manifest-provider.js"
+      - "cloud-engineering-connector/test/orchestrator-github-manifest-provider.test.js"
       - "cloud-engineering-connector/test/orchestrator-github-write-preflight.test.js"
   workflow_dispatch:
 
@@ -42,7 +44,9 @@ jobs:
           node --check orchestrator-github-intake.js
           node --check test/orchestrator-github-intake.test.js
           node --check orchestrator-github-write-preflight.js
+          node --check orchestrator-github-manifest-provider.js
           node --check test/orchestrator-github-write-preflight.test.js
+          node --check test/orchestrator-github-manifest-provider.test.js
       - name: Run intake security contract tests
         working-directory: cloud-engineering-connector
-        run: node --test test/orchestrator-github-intake.test.js test/orchestrator-github-write-preflight.test.js
+        run: node --test test/orchestrator-github-intake.test.js test/orchestrator-github-write-preflight.test.js test/orchestrator-github-manifest-provider.test.js

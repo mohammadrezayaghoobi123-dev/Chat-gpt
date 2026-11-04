@@ -29,6 +29,8 @@ export async function computeP2BApprovalScopeHash(input = {}) {
     independentReviewer: input.independentReviewer,
     stopSwitch: input.stopSwitch,
     branchPolicy: input.branchPolicy,
+    requestedBranchName: input.requestedBranchName,
+    requestedPaths: input.requestedPaths,
   };
   const bytes = new TextEncoder().encode(JSON.stringify(canonical(descriptor)));
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
@@ -146,6 +148,42 @@ function validBranchPolicy(value) {
   return true;
 }
 
+
+function safeRelativePath(path) {
+  if (typeof path !== "string" || path.length < 1 || path.length > 240 ||
+      path.startsWith("/") || path.includes(String.fromCharCode(92)) ||
+      path.includes(":") || path.endsWith("/") ||
+      path.split("/").some(segment => segment === "" || segment === "." || segment === "..")) return false;
+  const segments = path.split("/");
+  const lowerSegments = segments.map(segment => segment.toLowerCase());
+  return !lowerSegments.some(segment =>
+    [".git", ".github", "secrets", "credentials", "codeowners"].includes(segment) ||
+    segment.startsWith(".env")) &&
+    !path.toLowerCase().includes("secret") &&
+    !path.toLowerCase().includes("credential");
+}
+
+function validRequestedScope(branchPolicy, requestedBranchName, requestedPaths) {
+  if (!validBranchPolicy(branchPolicy) ||
+      typeof requestedBranchName !== "string" ||
+      !requestedBranchName.startsWith(branchPolicy.prefix)) return false;
+  const suffix = requestedBranchName.slice(branchPolicy.prefix.length);
+  const suffixSegments = suffix.split("/");
+  if (!suffixSegments.every(segment => /^[a-z0-9][a-z0-9._-]*$/.test(segment)) ||
+      suffixSegments.some(segment => segment === "." || segment === ".." ||
+        segment.endsWith(".lock") || segment.endsWith(".")) ||
+      suffix.includes("@{")) return false;
+  if (!Array.isArray(requestedPaths) || requestedPaths.length < 1 || requestedPaths.length > 128) return false;
+  const seen = new Set();
+  for (const path of requestedPaths) {
+    if (!safeRelativePath(path) || seen.has(path)) return false;
+    const inScope = branchPolicy.allowedPaths.some(root => path === root || path.startsWith(root + "/"));
+    if (!inScope) return false;
+    seen.add(path);
+  }
+  return true;
+}
+
 function validStopSwitch(value) {
   return isRecord(value) && value.readable === true && value.enabled === false;
 }
@@ -168,6 +206,8 @@ export async function evaluateP2BWritePreflight({
   independentReviewer,
   stopSwitch,
   branchPolicy,
+  requestedBranchName,
+  requestedPaths,
 } = {}) {
   if (!Number.isSafeInteger(now) || now < 1) {
     return { decision: "BLOCKED", reasonCodes: ["TRUSTED_CLOCK_REQUIRED"], sideEffects: false };
@@ -176,7 +216,7 @@ export async function evaluateP2BWritePreflight({
   let expectedScopeHash;
   try {
     expectedScopeHash = await computeP2BApprovalScopeHash({
-      repository, actorPolicy, credential, ledger, repositoryControls, base, independentReviewer, stopSwitch, branchPolicy,
+      repository, actorPolicy, credential, ledger, repositoryControls, base, independentReviewer, stopSwitch, branchPolicy, requestedBranchName, requestedPaths,
     });
   } catch {
     return { decision: "BLOCKED", reasonCodes: ["APPROVAL_SCOPE_INVALID"], sideEffects: false };
@@ -193,6 +233,7 @@ export async function evaluateP2BWritePreflight({
     ["INDEPENDENT_REVIEWER_NOT_VERIFIED", validReviewer(independentReviewer, actorPolicy?.actorIds ?? [])],
     ["STOP_SWITCH_NOT_CLEAR", validStopSwitch(stopSwitch)],
     ["BRANCH_PREFIX_OR_PATH_ALLOWLIST_INVALID", validBranchPolicy(branchPolicy)],
+    ["REQUESTED_BRANCH_OR_CHANGED_PATHS_OUT_OF_SCOPE", validRequestedScope(branchPolicy, requestedBranchName, requestedPaths)],
   ];
   const reasonCodes = checks.filter(([, passed]) => !passed).map(([code]) => code);
 

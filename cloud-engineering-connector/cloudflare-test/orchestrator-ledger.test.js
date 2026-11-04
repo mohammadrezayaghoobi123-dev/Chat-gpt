@@ -191,7 +191,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const ledger = ledgerFor("ledger-expired-lease-reconciliation");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0012", inputHash: "b".repeat(64), now });
     const first = await ledger.claimTask({ workerId: "agent:worker-1", leaseMs: 100, now });
-    await expect(ledger.claimTask({ workerId: "agent:worker-2", leaseMs: 100, now: now + 101 }))
+    await expect(ledger.claimTask({ workerId: "agent:worker-1", leaseMs: 100, now: now + 101 }))
       .resolves.toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
     const reclaimed = await ledger.claimTask({
       workerId: "agent:worker-1", leaseMs: 100, now: now + 101,

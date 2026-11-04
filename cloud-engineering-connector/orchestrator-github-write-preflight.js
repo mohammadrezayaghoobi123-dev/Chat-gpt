@@ -9,6 +9,7 @@ function isRecord(value) {
 }
 
 function canonical(value) {
+  if (value === undefined) return null;
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (Array.isArray(value)) return value.map(canonical);
@@ -47,8 +48,7 @@ function validOwnerApproval(value, now, expectedScopeHash) {
 
 function validRepository(value) {
   return isRecord(value) &&
-    typeof value.fullName === "string" && REPOSITORY.test(value.fullName) &&
-    Number.isSafeInteger(value.id) && value.id > 0;
+    value.fullName === TARGET_REPOSITORY && value.id === TARGET_REPOSITORY_ID;
 }
 
 function validActorPolicy(value) {

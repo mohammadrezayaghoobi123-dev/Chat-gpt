@@ -325,3 +325,70 @@ test("binds exact requested branch and changed paths to owner approval", async (
   assert.ok(result.reasonCodes.includes("OWNER_APPROVAL_MISSING_INVALID_OR_SCOPE_MISMATCH"));
   assert.notEqual(result.approvalScopeHash, input.ownerApproval.approvedScopeHash);
 });
+
+test("rejects symlink, submodule, and non-regular changed files", async () => {
+  const input = await fixture();
+  const invalidModes = [
+    { mode: "120000", type: "blob" },
+    { mode: "160000", type: "commit" },
+    { mode: "040000", type: "tree" },
+    { mode: "100664", type: "blob" },
+  ];
+  for (const entry of invalidModes) {
+    const changedFileManifest = {
+      ...input.changedFileManifest,
+      files: [{ path: "docs/evidence/task-123.md", ...entry }],
+      treeEntries: [
+        { path: "docs", mode: "040000", type: "tree" },
+        { path: "docs/evidence", mode: "040000", type: "tree" },
+        { path: "docs/evidence/task-123.md", ...entry },
+      ],
+    };
+    const result = await evaluatePatch({ changedFileManifest });
+    assert.ok(result.reasonCodes.includes("CHANGED_FILE_MANIFEST_INVALID_OR_SYMLINK_DETECTED"));
+    assert.equal(result.executionAuthorized, false);
+  }
+});
+
+test("rejects symlink or submodule ancestors of changed files", async () => {
+  const input = await fixture();
+  const badParents = [
+    { path: "docs", mode: "120000", type: "blob" },
+    { path: "docs", mode: "160000", type: "commit" },
+    { path: "docs/evidence", mode: "100644", type: "blob" },
+  ];
+  for (const parent of badParents) {
+    const changedFileManifest = {
+      ...input.changedFileManifest,
+      treeEntries: [parent,
+        { path: "docs/evidence", mode: "040000", type: "tree" },
+        { path: "docs/evidence/task-123.md", mode: "100644", type: "blob" },
+      ],
+    };
+    assert.equal(validateP2BChangedFileManifest({ repository: input.repository, base: input.base, requestedPaths: input.requestedPaths, manifest: changedFileManifest }), false);
+  }
+});
+
+test("requires exact repository, base SHA, head SHA, and requested paths in the manifest", async () => {
+  const input = await fixture();
+  const variants = [
+    { ...input.changedFileManifest, repositoryId: 1 },
+    { ...input.changedFileManifest, baseSha: "d".repeat(40) },
+    { ...input.changedFileManifest, headSha: "not-a-sha" },
+    { ...input.changedFileManifest, files: [] },
+    { ...input.changedFileManifest, files: [{ path: "docs/evidence/other.md", mode: "100644", type: "blob" }] },
+    { ...input.changedFileManifest, files: [...input.changedFileManifest.files, ...input.changedFileManifest.files] },
+    { ...input.changedFileManifest, treeEntries: input.changedFileManifest.treeEntries.slice(1) },
+  ];
+  for (const manifest of variants) {
+    assert.equal(validateP2BChangedFileManifest({ repository: input.repository, base: input.base, requestedPaths: input.requestedPaths, manifest }), false);
+    const result = await evaluatePatch({ changedFileManifest: manifest });
+    assert.ok(result.reasonCodes.includes("CHANGED_FILE_MANIFEST_INVALID_OR_SYMLINK_DETECTED"));
+  }
+});
+
+test("blocks when no changed-file manifest is supplied", async () => {
+  const result = await evaluatePatch({ changedFileManifest: undefined });
+  assert.ok(result.reasonCodes.includes("CHANGED_FILE_MANIFEST_INVALID_OR_SYMLINK_DETECTED"));
+  assert.equal(result.executionAuthorized, false);
+});

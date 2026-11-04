@@ -63,7 +63,7 @@ function validateTask(task) {
 }
 
 function validateActor(actor) {
-  if (!isRecord(actor) || actor.authenticated !== true ||
+  if (!isRecord(actor) || actor.authenticated !== true || actor.identityVerified !== true ||
       typeof actor.id !== "string" || actor.id.length < 1 || actor.id.length > 160 ||
       typeof actor.role !== "string" || actor.role.length < 1 || actor.role.length > 40) {
     throw fail("UNAUTHENTICATED_ACTOR", "A verified actor identity and role are required.");
@@ -76,7 +76,7 @@ function validateEvidence(evidence) {
   }
 }
 
-function validateCompletion(task, evidence) {
+function validateCompletion(task, evidence, reviewer) {
   const acceptance = evidence.acceptance;
   const approval = evidence.approval;
   if (!isRecord(acceptance) || acceptance.passed !== true ||
@@ -89,6 +89,8 @@ function validateCompletion(task, evidence) {
       typeof approval.executorId !== "string" || approval.executorId.length === 0 ||
       approval.reviewerId === approval.executorId ||
       approval.executorId !== task.executorId ||
+      !reviewer || reviewer.id !== approval.reviewerId ||
+      !["reviewer", "owner"].includes(reviewer.role) || reviewer.id === task.executorId ||
       approval.independent !== true ||
       typeof approval.commitSha !== "string" || !SHA40.test(approval.commitSha) ||
       approval.commitSha !== task.commitSha) {
@@ -127,7 +129,7 @@ export function transitionTask({ task, expectedVersion, nextState, actor, eviden
        evidence.ownerResolutionId.length > 160)) {
     throw fail("OWNER_RESOLUTION_REQUIRED", "Quarantine release requires an authenticated owner resolution event.");
   }
-  if (nextState === "COMPLETED") validateCompletion(task, evidence);
+  if (nextState === "COMPLETED") validateCompletion(task, evidence, actor);
 
   return {
     ...task,
@@ -144,21 +146,21 @@ export function transitionTask({ task, expectedVersion, nextState, actor, eviden
   };
 }
 
-export function assertTaskCompletion({ task, evidence }) {
+export function assertTaskCompletion({ task, evidence, authenticatedReviewer }) {
   validateTask(task);
   if (task.state !== "REVIEW_PENDING") {
     throw fail("INVALID_TRANSITION", "Only tasks pending independent review can be completed.");
   }
-  validateCompletion(task, evidence);
+  if (!authenticatedReviewer) {
+    throw fail("AUTHENTICATED_ACTOR_REQUIRED", "Completion requires a separately authenticated reviewer context.");
+  }
+  validateActor(authenticatedReviewer);
+  validateCompletion(task, evidence, authenticatedReviewer);
   return transitionTask({
     task,
     expectedVersion: task.version,
     nextState: "COMPLETED",
-    actor: {
-      id: evidence.approval.reviewerId,
-      authenticated: true,
-      role: "reviewer",
-    },
+    actor: authenticatedReviewer,
     evidence,
     now: Math.max(Date.now(), task.updatedAt),
   });

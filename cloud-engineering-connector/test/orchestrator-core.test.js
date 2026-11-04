@@ -166,13 +166,15 @@ test("scheduleTask blocks missing dependencies and active stop switch", async ()
   const store = makeStore({ tasks: [{ tenantId: "tenant-a", task, state: "READY", version: 1, fencingToken: 0 }] });
   const blocked = await scheduleTask(task.taskId, depsFor(store));
   assert.equal(blocked.scheduled, false);
-  assert.equal(blocked.task.state, "BLOCKED");
+  assert.equal(blocked.deferred, true);
+  assert.equal(blocked.task.state, "READY");
 
   const task2 = validTask("task-stop");
   const store2 = makeStore({ tasks: [{ tenantId: "tenant-a", task: task2, state: "READY", version: 1, fencingToken: 0 }], stopSwitch: true });
   const stopped = await scheduleTask(task2.taskId, depsFor(store2));
   assert.equal(stopped.scheduled, false);
-  assert.equal(stopped.task.state, "BLOCKED");
+  assert.equal(stopped.deferred, true);
+  assert.equal(stopped.task.state, "READY");
 });
 
 test("scheduleTask blocks unavailable capability, exhausted quota, and protected branch", async () => {
@@ -188,7 +190,8 @@ test("scheduleTask blocks unavailable capability, exhausted quota, and protected
   const quotaDenied = await scheduleTask(task2.taskId, depsFor(store2, {
     getQuota: async () => ({ ...quota(), remaining: 0 })
   }));
-  assert.equal(quotaDenied.task.state, "BLOCKED");
+  assert.equal(quotaDenied.deferred, true);
+  assert.equal(quotaDenied.task.state, "READY");
 
   const task3 = validTask("task-main", { scope: { ...validTask().scope, branch: "main" } });
   const store3 = makeStore({ tasks: [{ tenantId: "tenant-a", task: task3, state: "READY", version: 1, fencingToken: 0 }] });

@@ -1,6 +1,6 @@
 # P2-B Write Preflight — Evidence and Current Blockers
 
-**Status:** Structural preflight now validates task branch/path scope and a supplied changed-tree manifest, including symlink/submodule rejection. Code/test SHA `f18726442e9cf3ca91e32339295234a844bc7de9` is CI-verified. P2-B execution remains BLOCKED. No GitHub write identity, live ledger, task record, branch, or external side effect is enabled.
+**Status:** Structural preflight now validates task branch/path scope and a supplied changed-tree manifest, including symlink/submodule rejection. Code/test SHA `fa617c3d94a375c0da2d553fca43b4e2e457957c` is CI-verified. P2-B execution remains BLOCKED. No GitHub write identity, live ledger, task record, branch, or external side effect is enabled.
 
 ## Purpose and safety boundary
 
@@ -38,10 +38,10 @@ Positive fixtures use synthetic evidence-shaped values only. They do not prove a
 
 ## Verification evidence
 
-- Exact code/test SHA: `f18726442e9cf3ca91e32339295234a844bc7de9`.
-- Orchestrator GitHub Intake Contract run `41887059133`: success; 49 tests passed, 0 failed (15 P2-A + 26 P2-B + 8 manifest-provider tests).
-- Cloud Engineering Connector CI run `41887067061`: success; Node suite 315 passed, 0 failed; Durable Object/Vitest suite 70 passed, 0 failed; `npm audit` reported 0 vulnerabilities; syntax checks and Wrangler production/staging dry-runs passed. Staging post-deploy smoke was skipped; no deployment occurred.
-- Full History Secret Scan run `41887067075`: success on exact code/test SHA; 2,432 commits scanned, no leaks found.
+- Exact code/test SHA: `fa617c3d94a375c0da2d553fca43b4e2e457957c`.
+- Orchestrator GitHub Intake Contract run `41887340961`: success; 50 tests passed, 0 failed (15 P2-A + 26 P2-B + 9 manifest-provider tests).
+- Cloud Engineering Connector CI run `41887352380`: success; Node suite 316 passed, 0 failed; Durable Object/Vitest suite 70 passed, 0 failed; `npm audit` reported 0 vulnerabilities; syntax checks and Wrangler production/staging dry-runs passed. Staging post-deploy smoke was skipped; no deployment occurred.
+- Full History Secret Scan run `41887352233`: success on exact code/test SHA; 2,435 commits scanned, no leaks found.
 
 ## Current blockers — no values inferred
 

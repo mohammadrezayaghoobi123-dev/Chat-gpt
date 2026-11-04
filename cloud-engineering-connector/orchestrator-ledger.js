@@ -296,29 +296,30 @@ export class OrchestratorLedger extends DurableObject {
     identifier(taskId, "taskId");
     hash(inputHash, "inputHash");
     timestamp(now);
-    serializeBounded(envelope, "message envelope");
-    if (!envelope || typeof envelope !== "object" || envelope.messageId !== messageId ||
-        envelope.taskId !== taskId || envelope.inputHash !== inputHash) {
-      return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
-    }
-    let validatedEnvelope;
-    try {
-      validatedEnvelope = validateMessageEnvelope(envelope, { now, authenticatedSender });
-    } catch (error) {
-      return { accepted: false, reason: typeof error?.code === "string" ? error.code : "INVALID_MESSAGE" };
-    }
-    const envelopeJson = serializeBounded(validatedEnvelope, "validated message envelope");
+    const untrustedEnvelopeJson = serializeBounded(envelope, "message envelope");
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       const task = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
       if (!task) return { accepted: false, reason: "TASK_NOT_FOUND" };
       const existing = sql.exec("SELECT * FROM orchestrator_processed_messages WHERE message_id = ?", messageId).toArray()[0];
       if (existing) {
-        if (existing.task_id === taskId && existing.input_hash === inputHash) {
+        if (existing.task_id === taskId && existing.input_hash === inputHash &&
+            existing.envelope_json === untrustedEnvelopeJson) {
           return { accepted: false, replay: true, messageId };
         }
         return { accepted: false, conflict: true, reason: "MESSAGE_ID_CONFLICT" };
       }
+      if (!envelope || typeof envelope !== "object" || envelope.messageId !== messageId ||
+          envelope.taskId !== taskId || envelope.inputHash !== inputHash) {
+        return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
+      }
+      let validatedEnvelope;
+      try {
+        validatedEnvelope = validateMessageEnvelope(envelope, { now, authenticatedSender });
+      } catch (error) {
+        return { accepted: false, reason: typeof error?.code === "string" ? error.code : "INVALID_MESSAGE" };
+      }
+      const envelopeJson = serializeBounded(validatedEnvelope, "validated message envelope");
       sql.exec(
         "INSERT INTO orchestrator_processed_messages (message_id, task_id, input_hash, envelope_json, received_at, status) VALUES (?, ?, ?, ?, ?, 'ACCEPTED')",
         messageId, taskId, inputHash, envelopeJson, now,

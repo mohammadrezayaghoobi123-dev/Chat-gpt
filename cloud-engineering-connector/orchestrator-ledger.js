@@ -272,17 +272,21 @@ export class OrchestratorLedger extends DurableObject {
       const next = transitionTaskCore({
         task: current, expectedVersion, nextState, actor, evidence, now,
       });
+      sql.exec(
+        "UPDATE orchestrator_tasks SET state = ?, version = ?, task_json = ?, updated_at = ? WHERE task_id = ? AND version = ? AND state = ?",
+        next.state, next.version, serializeBounded(next, "task"), next.updatedAt, taskId, expectedVersion, expectedState,
+      );
+      const persisted = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
+      if (!persisted || persisted.version !== next.version || persisted.state !== next.state ||
+          persisted.task_json !== canonicalJson(next)) {
+        throw fail("Task transition persistence verification failed; transaction rolled back.", "PERSISTENCE_VERIFICATION_FAILED");
+      }
       let outboxResult = null;
       if (outboxEvent !== undefined) {
         const outboxInput = validateOutboxInput({ ...outboxEvent, taskId, now });
         outboxResult = enqueueOutboxInTransaction(sql, outboxInput);
         if (outboxResult.conflict) throw fail("Outbox idempotency conflict; task transition rolled back.", "OUTBOX_CONFLICT");
       }
-      const updated = sql.exec(
-        "UPDATE orchestrator_tasks SET state = ?, version = ?, task_json = ?, updated_at = ? WHERE task_id = ? AND version = ? AND state = ?",
-        next.state, next.version, serializeBounded(next, "task"), next.updatedAt, taskId, expectedVersion, expectedState,
-      );
-      if (updated.rowsWritten !== 1) return { updated: false, reason: "VERSION_OR_STATE_CONFLICT" };
       return { updated: true, task: next, outbox: outboxResult };
     });
   }

@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { transitionTask as transitionTaskCore, TASK_STATES } from "./orchestrator-core.js";
-import { canonicalJson, sha256Canonical } from "./orchestrator-protocol.js";
+import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orchestrator-protocol.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
@@ -291,16 +291,23 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  recordMessage({ messageId, taskId, inputHash, envelope, now }) {
+  recordMessage({ messageId, taskId, inputHash, envelope, authenticatedSender, now }) {
     identifier(messageId, "messageId");
     identifier(taskId, "taskId");
     hash(inputHash, "inputHash");
     timestamp(now);
-    const envelopeJson = serializeBounded(envelope, "message envelope");
+    serializeBounded(envelope, "message envelope");
     if (!envelope || typeof envelope !== "object" || envelope.messageId !== messageId ||
-        envelope.taskId !== taskId || (envelope.inputHash !== undefined && envelope.inputHash !== inputHash)) {
+        envelope.taskId !== taskId || envelope.inputHash !== inputHash) {
       return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
     }
+    let validatedEnvelope;
+    try {
+      validatedEnvelope = validateMessageEnvelope(envelope, { now, authenticatedSender });
+    } catch (error) {
+      return { accepted: false, reason: typeof error?.code === "string" ? error.code : "INVALID_MESSAGE" };
+    }
+    const envelopeJson = serializeBounded(validatedEnvelope, "validated message envelope");
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       const task = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
@@ -479,16 +486,23 @@ export class OrchestratorLedger extends DurableObject {
   async appendAuditEvent({ eventId, taskId, actor, eventType, details, now }) {
     identifier(eventId, "eventId");
     identifier(taskId, "taskId");
-    identifier(actor, "actor");
+    if (!actor || typeof actor !== "object" || actor.authenticated !== true ||
+        actor.identityVerified !== true || !["agent", "reviewer", "owner", "system"].includes(actor.role)) {
+      throw fail("Audit events require an authenticated actor identity.", "AUTHENTICATED_ACTOR_REQUIRED");
+    }
+    const actorId = identifier(actor.id, "actor.id");
     identifier(eventType, "eventType");
     timestamp(now);
     const detailsJson = serializeBounded(details, "audit details");
     const sql = this.ctx.storage.sql;
+    if (!sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0]) {
+      return { appended: false, reason: "TASK_NOT_FOUND" };
+    }
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const existing = sql.exec("SELECT * FROM orchestrator_audit_events WHERE event_id = ?", eventId).toArray()[0];
       if (existing) {
-        if (existing.task_id === taskId && existing.actor_id === actor &&
+        if (existing.task_id === taskId && existing.actor_id === actorId &&
             existing.event_type === eventType && existing.details_json === detailsJson &&
             existing.created_at === now) {
           return { appended: false, replay: true, event: existing };
@@ -498,7 +512,7 @@ export class OrchestratorLedger extends DurableObject {
       const previous = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
       const previousHash = previous?.event_hash ?? null;
       const eventHash = await sha256Canonical({
-        eventId, taskId, actor, eventType, details: JSON.parse(detailsJson), occurredAt: now, previousHash,
+        eventId, taskId, actorId, eventType, details: JSON.parse(detailsJson), occurredAt: now, previousHash,
       });
       const inserted = this.ctx.storage.transactionSync(() => {
         const latest = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
@@ -507,14 +521,14 @@ export class OrchestratorLedger extends DurableObject {
         if (duplicate) return false;
         sql.exec(
           "INSERT INTO orchestrator_audit_events (event_id, task_id, actor_id, event_type, details_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-          eventId, taskId, actor, eventType, detailsJson, previousHash, eventHash, now,
+          eventId, taskId, actorId, eventType, detailsJson, previousHash, eventHash, now,
         );
         return true;
       });
       if (inserted) {
         return {
           appended: true,
-          event: { eventId, taskId, actor, eventType, details: JSON.parse(detailsJson), previousHash, eventHash, createdAt: now },
+          event: { eventId, taskId, actorId, eventType, details: JSON.parse(detailsJson), previousHash, eventHash, createdAt: now },
         };
       }
     }

@@ -532,3 +532,13 @@ test("release evidence helper writes an explicit not-attempted state when creden
   assert.equal(manifest.deployment_verification, "not_attempted");
   assert.equal(manifest.active_version_id, null);
 });
+
+
+test("Master Brain MVP CI job has a finite timeout", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/master-brain-tests.yml", import.meta.url), "utf8");
+  assert.match(
+    workflow,
+    /unit-tests:\n    runs-on: ubuntu-latest\n    timeout-minutes:\s*[1-9][0-9]*/,
+    "Master Brain unit test job must have a finite timeout to prevent indefinite CI hangs",
+  );
+});

@@ -69,6 +69,12 @@ function validLeaseMs(value) {
   }
 }
 
+function hasVerifiedWorkerIdentity(worker, workerId, allowedRoles) {
+  return worker !== null && typeof worker === "object" && !Array.isArray(worker) &&
+    worker.authenticated === true && worker.identityVerified === true &&
+    worker.id === workerId && allowedRoles.includes(worker.role);
+}
+
 function taskFromRow(row) {
   return row ? parseJson(row.task_json, "task") : null;
 }
@@ -306,16 +312,9 @@ export class OrchestratorLedger extends DurableObject {
     identifier(taskId, "taskId");
     hash(inputHash, "inputHash");
     timestamp(now);
-    const untrustedEnvelopeJson = serializeBounded(envelope, "message envelope");
-    if (!authenticatedSender || authenticatedSender.authenticated !== true ||
-        authenticatedSender.identityVerified !== true ||
-        typeof authenticatedSender.id !== "string" || authenticatedSender.id.length === 0) {
-      return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
-    }
-    if (!envelope || typeof envelope !== "object" || envelope.senderId !== authenticatedSender.id) {
-      return { accepted: false, reason: "SENDER_IDENTITY_MISMATCH" };
-    }
-    if (envelope.messageId !== messageId || envelope.taskId !== taskId || envelope.inputHash !== inputHash) {
+    serializeBounded(envelope, "message envelope");
+    if (!envelope || typeof envelope !== "object" || envelope.messageId !== messageId ||
+        envelope.taskId !== taskId || envelope.senderId !== authenticatedSender?.id) {
       return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
     }
     let validatedEnvelope;
@@ -323,6 +322,9 @@ export class OrchestratorLedger extends DurableObject {
       validatedEnvelope = validateMessageEnvelope(envelope, { now, authenticatedSender });
     } catch (error) {
       return { accepted: false, reason: typeof error?.code === "string" ? error.code : "INVALID_MESSAGE" };
+    }
+    if (validatedEnvelope.inputHash !== inputHash) {
+      return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
     }
     const envelopeJson = serializeBounded(validatedEnvelope, "validated message envelope");
     const sql = this.ctx.storage.sql;
@@ -345,10 +347,13 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  claimTask({ workerId, leaseMs, now, taskId, reconciliationEvidence } = {}) {
+  claimTask({ workerId, authenticatedWorker, leaseMs, now, taskId, reconciliationEvidence } = {}) {
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);
     timestamp(now);
+    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"])) {
+      return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
     if (taskId !== undefined) identifier(taskId, "taskId");
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
@@ -359,7 +364,7 @@ export class OrchestratorLedger extends DurableObject {
       for (const row of rows) {
         const taskProjection = taskFromRow(row);
         const assignedAgentId = taskProjection.executorId ?? taskProjection.assignedAgentId;
-        if (typeof assignedAgentId === "string" && assignedAgentId !== workerId) {
+        if (typeof assignedAgentId !== "string" || assignedAgentId !== workerId) {
           assigneeMismatch = true;
           continue;
         }
@@ -391,7 +396,7 @@ export class OrchestratorLedger extends DurableObject {
         }
         return {
           claimed: true,
-          task: taskFromRow(row),
+          task: taskProjection,
           workerId,
           leaseGeneration: generation,
           leaseUntil: now + leaseMs,
@@ -402,10 +407,13 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  advanceAgentRound({ taskId, expectedVersion, expectedRound, nextRound, workerId, leaseGeneration, now }) {
+  advanceAgentRound({ taskId, expectedVersion, expectedRound, nextRound, workerId, authenticatedWorker, leaseGeneration, now }) {
     identifier(taskId, "taskId");
     identifier(workerId, "workerId");
     timestamp(now);
+    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"])) {
+      return { advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
     if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1 ||
         !Number.isSafeInteger(expectedRound) || expectedRound < 0 ||
         !Number.isSafeInteger(nextRound) || nextRound < 1 ||
@@ -421,15 +429,20 @@ export class OrchestratorLedger extends DurableObject {
       if (row.version !== expectedVersion || (current.agentRound ?? 0) !== expectedRound) {
         return { advanced: false, reason: "VERSION_OR_ROUND_CONFLICT", task: current };
       }
+      if (now < current.updatedAt) return { advanced: false, reason: "INVALID_TIMESTAMP", task: current };
+      if (!["SCHEDULED", "RUNNING"].includes(current.state)) {
+        return { advanced: false, reason: "TASK_NOT_ROUND_ELIGIBLE", task: current };
+      }
       try {
         assertAgentRoundLimit({ currentRound: expectedRound, nextRound });
       } catch (error) {
         return { advanced: false, reason: error?.code ?? "INVALID_AGENT_ROUND" };
       }
+      const assignedAgentId = current.executorId ?? current.assignedAgentId;
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
-      if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now ||
-          current.executorId && current.executorId !== workerId) {
-        return { advanced: false, reason: "LEASE_FENCE_MISMATCH" };
+      if (assignedAgentId !== workerId || !lease || lease.worker_id !== workerId ||
+          lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
+        return { advanced: false, reason: "LEASE_FENCE_MISMATCH", task: current };
       }
       const next = {
         ...current,
@@ -450,9 +463,12 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  renewLease({ taskId, workerId, leaseGeneration, leaseMs, now }) {
+  renewLease({ taskId, workerId, authenticatedWorker, leaseGeneration, leaseMs, now }) {
     identifier(taskId, "taskId");
     identifier(workerId, "workerId");
+    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"])) {
+      return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw fail("leaseGeneration must be positive.");
     validLeaseMs(leaseMs);
     timestamp(now);
@@ -470,9 +486,12 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  releaseLease({ taskId, workerId, leaseGeneration, now }) {
+  releaseLease({ taskId, workerId, authenticatedWorker, leaseGeneration, now }) {
     identifier(taskId, "taskId");
     identifier(workerId, "workerId");
+    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"])) {
+      return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw fail("leaseGeneration must be positive.");
     timestamp(now);
     return this.ctx.storage.transactionSync(() => {
@@ -500,10 +519,13 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  claimOutbox({ workerId, leaseMs, now } = {}) {
+  claimOutbox({ workerId, authenticatedWorker, leaseMs, now } = {}) {
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);
     timestamp(now);
+    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["publisher", "system"])) {
+      return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       const rows = sql.exec(
@@ -531,19 +553,24 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  completeOutbox({ eventId, leaseGeneration, now }) {
+  completeOutbox({ eventId, workerId, authenticatedWorker, leaseGeneration, now }) {
     identifier(eventId, "eventId");
+    identifier(workerId, "workerId");
+    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["publisher", "system"])) {
+      return { completed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw fail("leaseGeneration must be positive.");
     timestamp(now);
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
       const row = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", eventId).toArray()[0];
-      if (!row || row.status !== "IN_PROGRESS" || row.lease_generation !== leaseGeneration || row.lease_until <= now) {
+      if (!row || row.status !== "IN_PROGRESS" || row.lease_worker_id !== workerId ||
+          row.lease_generation !== leaseGeneration || row.lease_until <= now) {
         return { completed: false, reason: "LEASE_FENCE_MISMATCH" };
       }
       sql.exec(
-        "UPDATE orchestrator_outbox_events SET status = 'COMPLETED', lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND status = 'IN_PROGRESS' AND lease_generation = ?",
-        now, eventId, leaseGeneration,
+        "UPDATE orchestrator_outbox_events SET status = 'COMPLETED', lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND status = 'IN_PROGRESS' AND lease_worker_id = ? AND lease_generation = ?",
+        now, eventId, workerId, leaseGeneration,
       );
       return { completed: true, eventId, leaseGeneration };
     });

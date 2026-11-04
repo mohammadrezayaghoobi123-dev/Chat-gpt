@@ -16,6 +16,7 @@ on:
       - "assistant/**"
       - "security/**"
       - "integration/**"
+      - "plan/orchestrator-p2-github-intake-2026-11-04"
     paths:
       - "cloud-engineering-connector/**"
       - ".github/workflows/connector-ci.yml"

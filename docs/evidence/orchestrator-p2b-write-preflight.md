@@ -62,3 +62,30 @@ Positive fixtures use synthetic evidence-shaped values only. They do not prove a
 ## Safety boundary
 
 This work changes only the P2-B planning branch. It does not modify `main`, PRs #145–#152, Cloudflare resources, secrets, billing, deployments, or production traffic. It does not create a task branch in the target application repository, create a task record, write to the ledger, or invoke any provider.
+
+## Live infrastructure inventory — read-only observation, 2026-11-04
+
+Cloudflare API inventory was queried using read-only GET operations. No secret values were retrieved, and no Cloudflare resource was changed.
+
+| Worker | Observed bindings relevant to orchestration | Finding |
+|---|---|---|
+| `chat-gpt111` (Production) | Secret binding names include `GITHUB_READONLY_TOKEN`, `GITHUB_TOKEN`, `MCP_AUTH_TOKEN`; rate limiter | No Durable Object namespace binding is present in the returned Worker settings. |
+| `chat-gpt111-staging` | `WriteControl` Durable Object namespace; `PUBLIC_READ_ONLY=true`; `SERVICE_MODE=cloud`; GitHub/MCP secret binding names | No KnowledgeStore or Orchestrator Ledger namespace binding is present. |
+| `master-brain-cloud-agent` | `AgentBudget`, `AgentSession` Durable Object namespaces; AI binding | These namespaces belong to this Worker and are not evidence of an orchestrator ledger for `chat-gpt111`. |
+
+The account namespace inventory returned exactly three namespaces: `master-brain-cloud-agent_AgentBudget`, `master-brain-cloud-agent_AgentSession`, and `chat-gpt111-staging_WriteControl`. No namespace named or classed as `KnowledgeStore` or `ORCHESTRATOR_LEDGER` was returned. This confirms that the P2-B ledger prerequisite is currently not provisioned in the observed account inventory; it is not merely an untested positive fixture.
+
+The GitHub integration returned HTTP 403 for branch-protection reads (`Resource not accessible by integration`). Therefore branch protection and required approvals remain **unknown**, not absent and not verified. No attempt was made to bypass the permission boundary.
+
+## Verification on current P2-B head
+
+Current PR #153 head: `f81ad2ab3fdca789e668ee9e2d80e65223fbbf35`.
+
+- Orchestrator GitHub Intake Contract run `41898547416`: success.
+- Cloud Engineering Connector CI run `41898547404`: success; staging post-deploy smoke skipped.
+- Full History Secret Scan run `41898547383`: success.
+- A second push-triggered run for the intake contract and secret scan also succeeded (`41898532226`, `41898532189`).
+- The new malformed-tree and non-tree-ancestor negative tests are included in the successful intake-contract run.
+- These checks do not constitute a live provider exercise, a staging deployment, or proof of Production readiness.
+
+The live inventory findings above are read-only observations and do not authorize provisioning, binding migrations, secret changes, or deployment.

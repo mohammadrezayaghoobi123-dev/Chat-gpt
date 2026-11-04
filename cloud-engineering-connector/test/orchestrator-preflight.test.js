@@ -155,3 +155,16 @@ test("redacts hyphenated API credentials and signature query parameters", () => 
   assert.match(value, /signature=\[REDACTED\]/);
   assert.match(value, /view=public/);
 });
+
+test("fails closed on unknown workflow permission scopes", () => {
+  const report = buildPreflightReport(input({
+    github: {
+      standardPublicRunnerFree: true,
+      workflowPermissions: ["contents:read", "repository:admin"],
+      protectedBranchPolicyVerified: false,
+      taskScopedWriteCredentialVerified: false,
+      pullRequests: []
+    }
+  }));
+  assert.equal(report.checks.find(item => item.id === "workflow_permissions")?.status, "BLOCKED");
+});

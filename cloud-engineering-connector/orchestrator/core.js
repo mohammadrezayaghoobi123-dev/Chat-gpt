@@ -273,6 +273,9 @@ export async function requestCancellation(taskId, actorInput, deps) {
   }
   const record = await store.getTask({ tenantId, taskId });
   if (!record) throw coreError("ORCHESTRATOR_TASK_NOT_FOUND", "Task does not exist.");
+  if (typeof deps.canCancelTask !== "function" || await deps.canCancelTask(actor, record.task) !== true) {
+    throw coreError("ACTOR_NOT_AUTHORIZED", "Authenticated actor is not authorized to cancel this task.");
+  }
   if (TERMINAL_STATES.has(record.state)) {
     return { cancelled: false, reason: "TERMINAL_STATE", task: record };
   }
@@ -308,6 +311,8 @@ export async function requestCancellation(taskId, actorInput, deps) {
 
 function verifiedAdapter(adapter, deps, now) {
   if (!adapter || adapter.verified !== true || adapter.authenticated !== true ||
+      typeof adapter.provider !== "string" || adapter.provider.length === 0 ||
+      typeof adapter.authenticatedIdentity !== "string" || adapter.authenticatedIdentity.length === 0 ||
       !VERIFIED_FREE_STATES.has(adapter.state) ||
       adapter.billingEnabled !== false || adapter.paidFallback !== false ||
       adapter.maxSpendCents !== 0 || !Number.isFinite(adapter.quotaRemaining) ||
@@ -340,6 +345,19 @@ export async function runDispatchCycle(deps) {
   const initialStopSwitch = await store.getStopSwitch({ tenantId });
   const result = { stopped: initialStopSwitch.active !== false, claimed: 0, invoked: 0, deferred: 0, completed: 0, failed: 0 };
   if (result.stopped) return result;
+  if (typeof deps.authenticateWorker !== "function") {
+    throw coreError("WORKER_UNAUTHENTICATED", "A trusted worker identity resolver is required before dispatch.");
+  }
+  const worker = await deps.authenticateWorker();
+  if (!worker || worker.authenticated !== true ||
+      typeof worker.principalId !== "string" || typeof worker.agentId !== "string") {
+    throw coreError("WORKER_UNAUTHENTICATED", "Dispatch worker identity is not independently authenticated.");
+  }
+  if (deps.workerId !== undefined && deps.workerId !== worker.agentId) {
+    throw coreError("WORKER_IDENTITY_MISMATCH", "Configured worker ID does not match the authenticated worker identity.");
+  }
+  const workerId = worker.agentId;
+  const dispatchDeps = { ...deps, getAuthenticatedActor: async () => worker };
 
   for (let index = 0; index < maxEvents; index += 1) {
     const now = nowMs(deps);
@@ -349,7 +367,6 @@ export async function runDispatchCycle(deps) {
     let task = null;
     let lease = null;
     let leaseToken = null;
-    let workerId = null;
     let runningTask = null;
     try {
       const stopSwitch = await store.getStopSwitch({ tenantId });
@@ -423,7 +440,7 @@ export async function runDispatchCycle(deps) {
       }
 
       if (task.state === "READY" || task.state === "RETRY_WAIT") {
-        const scheduled = await scheduleTask(task.taskId, deps);
+        const scheduled = await scheduleTask(task.taskId, dispatchDeps);
         if (!scheduled.scheduled) {
           if (scheduled.deferred) {
             await deferEvent(store, tenantId, event, now, scheduled.decision?.decisionCode ?? "SCHEDULING_DEFERRED");
@@ -443,14 +460,12 @@ export async function runDispatchCycle(deps) {
         result.deferred += 1;
         break;
       }
-      workerId = deps.workerId;
-      if (typeof workerId !== "string" || workerId.length === 0 ||
-          typeof deps.createLeaseToken !== "function") {
+      if (typeof deps.createLeaseToken !== "function") {
         await deferEvent(store, tenantId, event, now, "LEASE_CREDENTIAL_PROVIDER_UNAVAILABLE");
         result.deferred += 1;
         continue;
       }
-      leaseToken = await deps.createLeaseToken(task.taskId);
+      leaseToken = await deps.createLeaseToken(task.taskId, workerId);
       if (typeof leaseToken !== "string" || leaseToken.length < 16) {
         await deferEvent(store, tenantId, event, now, "LEASE_TOKEN_INVALID");
         result.deferred += 1;
@@ -493,7 +508,7 @@ export async function runDispatchCycle(deps) {
       }
 
       const execution = await adapter.invoke({
-        event, task: runningTask,
+        event, task: runningTask, worker,
         lease: { ownerId: workerId, leaseToken, fencingToken: lease.fencingToken, leaseUntil: lease.leaseUntil },
         signal: deps.signal,
         shouldStop: async () => (await store.getStopSwitch({ tenantId })).active !== false,
@@ -520,7 +535,17 @@ export async function runDispatchCycle(deps) {
         tenantId, taskId: task.taskId, expectedState: "RUNNING", nextState: "VERIFYING",
         eventId: eventId(deps, task.taskId, "verifying", now), actorId: workerId,
         leaseToken, fencingToken: lease.fencingToken,
-        evidence: { execution: { commitSha: execution.commitSha, workflowRunId: execution.workflowRunId ?? null } },
+        evidence: { execution: {
+          commitSha: execution.commitSha,
+          workflowRunId: execution.workflowRunId ?? null,
+          provider: adapter.provider,
+          authenticatedIdentity: adapter.authenticatedIdentity,
+          usage: {
+            inputTokens: Number.isFinite(execution.usage?.inputTokens) ? execution.usage.inputTokens : null,
+            outputTokens: Number.isFinite(execution.usage?.outputTokens) ? execution.usage.outputTokens : null,
+            costCents: Number.isFinite(execution.usage?.costCents) ? execution.usage.costCents : 0
+          }
+        } },
         now: nowMs(deps)
       });
       await store.completeOutbox({ tenantId, eventId: event.eventId, leaseGeneration: event.leaseGeneration, now: nowMs(deps) });

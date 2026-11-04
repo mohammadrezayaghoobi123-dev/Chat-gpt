@@ -71,3 +71,10 @@ test("readiness requires the independent OrchestratorLedger SQLite probe", () =>
   assert.match(worker, /orchestratorLedgerProbe\.schemaVersion\s*!==\s*1/, "readyz must enforce the Ledger schema version");
   assert.match(worker, /orchestrator_ledger:\s*"ok"/, "readyz must report Ledger readiness separately");
 });
+
+
+test("Staging release verifies the OrchestratorLedger binding after applying the migration", () => {
+  const stagingWorkflow = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  assert.match(stagingWorkflow, /bindings\.get\(["']ORCHESTRATOR_LEDGER["']\)/);
+  assert.match(stagingWorkflow, /Staging ORCHESTRATOR_LEDGER namespace ID must be present/);
+});

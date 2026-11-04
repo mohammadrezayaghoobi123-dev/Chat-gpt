@@ -297,6 +297,10 @@ export class OrchestratorLedger extends DurableObject {
     hash(inputHash, "inputHash");
     timestamp(now);
     const envelopeJson = serializeBounded(envelope, "message envelope");
+    if (!envelope || typeof envelope !== "object" || envelope.messageId !== messageId ||
+        envelope.taskId !== taskId || (envelope.inputHash !== undefined && envelope.inputHash !== inputHash)) {
+      return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
+    }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       const task = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
@@ -326,7 +330,14 @@ export class OrchestratorLedger extends DurableObject {
       const rows = taskId
         ? sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ? AND state IN ('SCHEDULED','RUNNING','VERIFYING') ORDER BY created_at LIMIT 1", taskId).toArray()
         : sql.exec("SELECT * FROM orchestrator_tasks WHERE state IN ('SCHEDULED','RUNNING','VERIFYING') ORDER BY created_at LIMIT 100").toArray();
+      let assigneeMismatch = false;
       for (const row of rows) {
+        const taskProjection = taskFromRow(row);
+        const assignedAgentId = taskProjection.executorId ?? taskProjection.assignedAgentId;
+        if (typeof assignedAgentId === "string" && assignedAgentId !== workerId) {
+          assigneeMismatch = true;
+          continue;
+        }
         const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", row.task_id).toArray()[0];
         let generation = 1;
         let reconciliationRequired = false;
@@ -362,7 +373,7 @@ export class OrchestratorLedger extends DurableObject {
           reconciliationRequired,
         };
       }
-      return { claimed: false, reason: "NO_TASK_AVAILABLE" };
+      return { claimed: false, reason: assigneeMismatch ? "ASSIGNEE_MISMATCH" : "NO_TASK_AVAILABLE" };
     });
   }
 

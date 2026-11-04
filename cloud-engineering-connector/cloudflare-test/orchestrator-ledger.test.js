@@ -64,7 +64,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0004", inputHash: "f".repeat(64), now });
     const first = await ledger.claimTask({ workerId: "agent:worker-1", leaseMs: 100, now });
     const reclaimed = await ledger.claimTask({
-      workerId: "agent:worker-2", leaseMs: 100, now: now + 101,
+      workerId: "agent:worker-1", leaseMs: 100, now: now + 101,
       reconciliationEvidence: { checked: true, priorGeneration: 1, evidenceRef: "github://audit/reconcile/1" },
     });
     expect(reclaimed.leaseGeneration).toBe(2);
@@ -92,7 +92,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("deduplicates repeated messages and rejects the same message ID with a different input hash", async () => {
     const ledger = ledgerFor("ledger-message-dedup");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0006", inputHash: "2".repeat(64), now });
-    const input = { messageId: "msg-0001", taskId: "task-0001", inputHash: "3".repeat(64), envelope: { type: "PROGRESS", payload: { step: 1 } }, now };
+    const input = { messageId: "msg-0001", taskId: "task-0001", inputHash: "3".repeat(64), envelope: { messageId: "msg-0001", taskId: "task-0001", type: "PROGRESS", payload: { step: 1 } }, now };
     expect(await ledger.recordMessage(input)).toMatchObject({ accepted: true });
     expect(await ledger.recordMessage(input)).toMatchObject({ accepted: false, replay: true });
     expect(await ledger.recordMessage({ ...input, inputHash: "4".repeat(64) })).toMatchObject({ accepted: false, conflict: true });
@@ -177,7 +177,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0011", inputHash: "9".repeat(64), now });
     const input = {
       messageId: "msg-100-duplicates", taskId: "task-0001", inputHash: "a".repeat(64),
-      envelope: { type: "ACKNOWLEDGEMENT", payload: { accepted: true } }, now,
+      envelope: { messageId: "msg-100-duplicates", taskId: "task-0001", type: "ACKNOWLEDGEMENT", payload: { accepted: true } }, now,
     };
     const results = await Promise.all(Array.from({ length: 100 }, () => ledger.recordMessage(input)));
     expect(results.filter(result => result.accepted)).toHaveLength(1);
@@ -194,11 +194,30 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await expect(ledger.claimTask({ workerId: "agent:worker-2", leaseMs: 100, now: now + 101 }))
       .resolves.toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
     const reclaimed = await ledger.claimTask({
-      workerId: "agent:worker-2", leaseMs: 100, now: now + 101,
+      workerId: "agent:worker-1", leaseMs: 100, now: now + 101,
       reconciliationEvidence: { checked: true, priorGeneration: first.leaseGeneration, evidenceRef: "github://audit/reconcile/12" },
     });
     expect(reclaimed).toMatchObject({ claimed: true, leaseGeneration: 2, reconciliationRequired: true });
     await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
+  });
+
+  it("rejects a message whose envelope identifiers do not match the durable deduplication key", async () => {
+    const ledger = ledgerFor("ledger-message-envelope-binding");
+    await ledger.createTask({ task: task(), idempotencyKey: "task-create-envelope-binding", inputHash: "f".repeat(64), now });
+    const result = await ledger.recordMessage({
+      messageId: "msg-indexed-as-one", taskId: "task-0001", inputHash: "a".repeat(64),
+      envelope: { messageId: "msg-claimed-as-two", taskId: "task-0001", type: "PROGRESS", payload: {} }, now,
+    });
+    expect(result).toMatchObject({ accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" });
+  });
+
+  it("does not allow an unassigned worker identity to claim a task assigned to another executor", async () => {
+    const ledger = ledgerFor("ledger-assignee-enforcement");
+    await ledger.createTask({ task: task(), idempotencyKey: "task-create-assignee", inputHash: "b".repeat(64), now });
+    await expect(ledger.claimTask({ workerId: "agent:unassigned", leaseMs: 30_000, now }))
+      .resolves.toMatchObject({ claimed: false, reason: "ASSIGNEE_MISMATCH" });
+    await expect(ledger.claimTask({ workerId: "agent:worker-1", leaseMs: 30_000, now }))
+      .resolves.toMatchObject({ claimed: true, leaseGeneration: 1 });
   });
 
   it("rejects secret-bearing fields and never creates or writes KnowledgeStore tables", async () => {

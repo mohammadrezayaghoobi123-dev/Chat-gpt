@@ -32,7 +32,8 @@ function epoch(value) {
 function protectedBranch(branch, configured = []) {
   const name = String(branch ?? "").toLowerCase();
   const defaults = ["main", "master", "production", "prod", "release"];
-  return [...defaults, ...configured.map(value => String(value).toLowerCase())].some(value =>
+  const configuredList = Array.isArray(configured) ? configured : [];
+  return [...defaults, ...configuredList.map(value => String(value).toLowerCase())].some(value =>
     name === value || name.startsWith(value + "/")
   );
 }

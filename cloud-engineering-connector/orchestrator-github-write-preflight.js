@@ -28,6 +28,7 @@ export async function computeP2BApprovalScopeHash(input = {}) {
     base: input.base,
     independentReviewer: input.independentReviewer,
     stopSwitch: input.stopSwitch,
+    branchPolicy: input.branchPolicy,
   };
   const bytes = new TextEncoder().encode(JSON.stringify(canonical(descriptor)));
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
@@ -116,6 +117,35 @@ function validReviewer(value, actorIds) {
     typeof value.evidenceRef === "string" && value.evidenceRef.length >= 8;
 }
 
+
+function validBranchPolicy(value) {
+  if (!isRecord(value) ||
+      typeof value.prefix !== "string" ||
+      !value.prefix.endsWith("/") ||
+      !/^[a-z][a-z0-9-]{0,31}$/.test(value.prefix.slice(0, -1)) ||
+      ["main/", "master/", "production/", "release/"].includes(value.prefix) ||
+      !Array.isArray(value.allowedPaths) ||
+      value.allowedPaths.length < 1 || value.allowedPaths.length > 64) return false;
+
+  const seen = new Set();
+  for (const path of value.allowedPaths) {
+    if (typeof path !== "string" || path.length < 1 || path.length > 240 ||
+        path.startsWith("/") || path.includes(String.fromCharCode(92)) || path.endsWith("/") ||
+        path.split("/").some(segment => segment === "" || segment === "." || segment === "..")) return false;
+    const segments = path.split("/");
+    const lower = path.toLowerCase();
+    if (segments.some(segment => [".git", ".github", "secrets", "credentials"].includes(segment.toLowerCase())) ||
+        segments.some(segment => segment.toLowerCase() === "codeowners") ||
+        segments.some(segment => segment.toLowerCase().startsWith(".env")) ||
+        lower.includes("secret") || lower.includes("credential") ||
+        lower.startsWith("deploy/") || lower.startsWith("deployment/") ||
+        lower.startsWith("infra/production/")) return false;
+    if (seen.has(path)) return false;
+    seen.add(path);
+  }
+  return true;
+}
+
 function validStopSwitch(value) {
   return isRecord(value) && value.readable === true && value.enabled === false;
 }
@@ -137,6 +167,7 @@ export async function evaluateP2BWritePreflight({
   base,
   independentReviewer,
   stopSwitch,
+  branchPolicy,
 } = {}) {
   if (!Number.isSafeInteger(now) || now < 1) {
     return { decision: "BLOCKED", reasonCodes: ["TRUSTED_CLOCK_REQUIRED"], sideEffects: false };
@@ -145,7 +176,7 @@ export async function evaluateP2BWritePreflight({
   let expectedScopeHash;
   try {
     expectedScopeHash = await computeP2BApprovalScopeHash({
-      repository, actorPolicy, credential, ledger, repositoryControls, base, independentReviewer, stopSwitch,
+      repository, actorPolicy, credential, ledger, repositoryControls, base, independentReviewer, stopSwitch, branchPolicy,
     });
   } catch {
     return { decision: "BLOCKED", reasonCodes: ["APPROVAL_SCOPE_INVALID"], sideEffects: false };
@@ -161,6 +192,7 @@ export async function evaluateP2BWritePreflight({
     ["BASE_REF_OR_SHA_NOT_VERIFIED", validBase(base)],
     ["INDEPENDENT_REVIEWER_NOT_VERIFIED", validReviewer(independentReviewer, actorPolicy?.actorIds ?? [])],
     ["STOP_SWITCH_NOT_CLEAR", validStopSwitch(stopSwitch)],
+    ["BRANCH_PREFIX_OR_PATH_ALLOWLIST_INVALID", validBranchPolicy(branchPolicy)],
   ];
   const reasonCodes = checks.filter(([, passed]) => !passed).map(([code]) => code);
 

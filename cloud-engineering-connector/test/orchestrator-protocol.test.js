@@ -62,6 +62,7 @@ test("rejects missing fields, unsupported versions, invalid times, expired messa
     { inputHash: "not-a-sha256" },
     { evidenceRefs: "not-an-array" },
     { scopeRef: undefined },
+    { unexpectedPrivilege: true },
   ]) assert.throws(() => validateMessageEnvelope(envelope(overrides), { now, authenticatedSender: sender }));
 });
 

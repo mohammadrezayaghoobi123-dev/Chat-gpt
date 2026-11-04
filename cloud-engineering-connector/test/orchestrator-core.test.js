@@ -51,9 +51,12 @@ test("rejects every transition not explicitly listed in the transition table", (
   for (const from of TASK_STATES) {
     for (const to of TASK_STATES) {
       if (LEGAL_TRANSITIONS[from]?.includes(to)) continue;
+      const expectedCode = ["COMPLETED", "CANCELLED", "FAILED"].includes(from)
+        ? "TERMINAL_STATE"
+        : "INVALID_TRANSITION";
       assert.throws(() => transitionTask({
         task: baseTask(from), expectedVersion: 1, nextState: to, actor, evidence, now: 1_800_000_000_100,
-      }), { code: "INVALID_TRANSITION" }, `${from} -> ${to}`);
+      }), { code: expectedCode }, `${from} -> ${to}`);
     }
   }
 });

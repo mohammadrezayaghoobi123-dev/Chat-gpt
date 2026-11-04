@@ -525,13 +525,15 @@ test("release evidence helper still writes a manifest when Cloudflare metadata i
   const manifest = executeReleaseEvidenceHelper({
     cloudflareResponse: { status: 403, body: { success: false, errors: [{ message: "forbidden" }] } },
   });
-  assert.equal(manifest.deployment_verification, "unavailable");
+  assert.equal(manifest.active_traffic_verification, "unavailable");
+  assert.equal(manifest.candidate_deployment_association, "not_established_by_current_api_metadata");
   assert.equal(manifest.deployment_http_status, 403);
 });
 
 test("release evidence helper writes an explicit not-attempted state when credentials are absent", () => {
   const manifest = executeReleaseEvidenceHelper({ includeCredentials: false });
-  assert.equal(manifest.deployment_verification, "not_attempted");
+  assert.equal(manifest.active_traffic_verification, "not_attempted");
+  assert.equal(manifest.candidate_deployment_association, "not_established_by_current_api_metadata");
   assert.equal(manifest.active_version_id, null);
 });
 

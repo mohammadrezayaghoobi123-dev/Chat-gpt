@@ -15,10 +15,13 @@ const scope = {
   inputHash: "a".repeat(64),
 };
 const stopSwitch = { readable: true, enabled: false };
-const capability = { status: "AVAILABLE", verifiedIdentity: true, officialZeroCost: true };
+const capability = { status: "AVAILABLE", actorId: "agent:builder", actions: ["provider.invoke"], verifiedIdentity: true, officialZeroCost: true };
 const approval = {
   status: "APPROVED",
   authenticated: true,
+  identityVerified: true,
+  role: "owner",
+  ownerAuthorizationId: "owner-approval-0001",
   approverId: "owner:reviewer",
   independent: true,
   taskId: scope.taskId,
@@ -92,6 +95,9 @@ test("missing, ambiguous, or non-independent approval denies privileged writes",
   for (const badApproval of [
     undefined,
     { ...approval, status: "PENDING" },
+    { ...approval, role: "agent" },
+    { ...approval, identityVerified: false },
+    { ...approval, ownerAuthorizationId: undefined },
     { ...approval, authenticated: false },
     { ...approval, independent: false },
     { ...approval, approverId: actor.id },
@@ -106,16 +112,24 @@ test("unavailable, unverified, disabled, or quota-exhausted model adapters canno
   for (const status of ["UNAVAILABLE", "AUTHENTICATION_UNVERIFIED", "QUOTA_EXHAUSTED", "DISABLED_BY_POLICY"]) {
     assert.equal(evaluateOrchestratorPolicy(input({
       action: "provider.invoke",
-      agentCapability: { status, verifiedIdentity: true, officialZeroCost: true },
+      agentCapability: { status, actorId: actor.id, actions: ["provider.invoke"], verifiedIdentity: true, officialZeroCost: true },
     })).decision, "DENY");
   }
   assert.equal(evaluateOrchestratorPolicy(input({
     action: "provider.invoke",
-    agentCapability: { status: "AVAILABLE", verifiedIdentity: false, officialZeroCost: true },
+    agentCapability: { status: "AVAILABLE", actorId: actor.id, actions: ["provider.invoke"], verifiedIdentity: false, officialZeroCost: true },
   })).decision, "DENY");
   assert.equal(evaluateOrchestratorPolicy(input({
     action: "provider.invoke",
-    agentCapability: { status: "AVAILABLE", verifiedIdentity: true, officialZeroCost: false },
+    agentCapability: { status: "AVAILABLE", actorId: actor.id, actions: ["provider.invoke"], verifiedIdentity: true, officialZeroCost: false },
+  })).decision, "DENY");
+  assert.equal(evaluateOrchestratorPolicy(input({
+    action: "provider.invoke",
+    agentCapability: { status: "AVAILABLE", actorId: "agent:someone-else", actions: ["provider.invoke"], verifiedIdentity: true, officialZeroCost: true },
+  })).decision, "DENY");
+  assert.equal(evaluateOrchestratorPolicy(input({
+    action: "provider.invoke",
+    agentCapability: { status: "AVAILABLE", actorId: actor.id, actions: ["repository.read"], verifiedIdentity: true, officialZeroCost: true },
   })).decision, "DENY");
 });
 

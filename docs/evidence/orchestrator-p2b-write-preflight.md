@@ -1,12 +1,12 @@
 # P2-B Write Preflight — Evidence and Current Blockers
 
-**Status:** Structural preflight now validates task branch/path scope and a supplied changed-tree manifest, including symlink/submodule rejection. Code/test SHA `fa617c3d94a375c0da2d553fca43b4e2e457957c` is CI-verified. P2-B execution remains BLOCKED. No GitHub write identity, live ledger, task record, branch, or external side effect is enabled.
+**Current status (2026-11-05 addendum):** Structural preflight validates task branch/path scope and a supplied changed-tree manifest, including symlink/submodule rejection. It now also rejects protected base-branch namespaces and malformed Git ref segments. `evaluateP2BWritePreflight` is deliberately fail-closed: it always returns `BLOCKED` because this pure module cannot independently acquire and authenticate owner, reviewer, repository-control, credential, ledger-backup, stop-switch, and clock evidence. No GitHub write identity, live ledger, task record, branch, or external side effect is enabled. Latest code/test head: `32f2fbca6b706d1b17da55f1a057ea7a624b30da`.
 
 ## Purpose and safety boundary
 
 `cloud-engineering-connector/orchestrator-github-write-preflight.js` checks prerequisite evidence before a separate execution authorization can even be considered.
 
-The only positive result is `READY_FOR_SEPARATE_EXECUTION_APPROVAL`. It is not an `ALLOW` decision. Every result explicitly sets `sideEffects`, `branchCreation`, `taskPersistence`, `ledgerWrites`, and `executionAuthorized` to `false`.
+There is currently no positive result. The validator explicitly returns `BLOCKED` with `TRUSTED_EVIDENCE_VERIFICATION_UNAVAILABLE` when all structural checks pass, and every result sets `sideEffects`, `branchCreation`, `taskPersistence`, `ledgerWrites`, and `executionAuthorized` to `false`. This is an intentional safety gate, not a production-ready approval.
 
 Owner approval is bound to a canonical SHA-256 digest of repository identity, actor/event/label policy, credential identity/scope, ledger evidence, repository controls, base ref/SHA, independent reviewer, stop-switch state, branch/path policy, requested branch name, exact requested changed-path set, and the complete supplied changed-file manifest (including head SHA and tree entries). Any change invalidates the approval hash.
 
@@ -121,3 +121,43 @@ Verification on that exact code head:
 The code correction is CI-verified but not deployed. A subsequent read-only recheck of both deployed Worker settings confirmed that neither Production nor Staging currently has a `KNOWLEDGE_STORE` or `ORCHESTRATOR_LEDGER` Durable Object binding. The account namespace inventory likewise contains neither namespace. A Staging release using the approved immutable release workflow is required to apply migrations v2/v3 and prove the live KnowledgeStore and Ledger bindings and SQLite probes. Production must then be released separately with distinct namespace verification. No Worker, namespace, secret, billing, traffic, or Production deployment was changed by this work.
 
 The evidence-document head is `40131d4436f0f50d22db5eb3df78c02ff64ed71a`. Cloud Engineering Connector CI run `41903856641`, Orchestrator GitHub Intake Contract run `41903856577`, and Full History Secret Scan run `41903856502` all succeeded on this documentation head; the post-deploy smoke remained skipped.
+
+
+## Security audit addendum — 2026-11-05
+
+### Additional branch-target validation
+
+A negative test was added first for base refs under master/*, release/*, refs/*, integration/staging-release-*, and integration/production-release-*. CI on test-only commit 00b29e0dfa3ac37e922706459716c31672231a79 reproduced the defect: the preflight accepted at least one protected base namespace. The implementation now reuses the shared isProtectedAgentTargetBranch policy for base refs, rather than maintaining a narrower local denylist.
+
+A second negative-test expansion covers malformed Git ref path segments: empty segments, dot segments, dot-prefixed segments, trailing dots, and .lock suffixes. The implementation now rejects these malformed base refs as well.
+
+### Related security fixes verified on this candidate
+
+- Shared branch-target policy is used by policy and GitHub intake, including case-insensitive protected namespaces.
+- Ledger task transitions require an active lease, matching worker ID, matching fencing generation, and authenticated worker context; caller-declared owner or system role cannot bypass lease enforcement.
+- GitHub manifest provider bounds per-request timeout, total timeout, and response bytes; streamed response bodies are capped before JSON parsing.
+- P2-B structural preflight no longer accepts caller-supplied verification booleans as trusted evidence. It intentionally remains BLOCKED until a trusted evidence-acquisition and verification adapter exists.
+
+### Exact-head CI evidence
+
+Latest candidate code/test head: 32f2fbca6b706d1b17da55f1a057ea7a624b30da.
+
+- Cloud Engineering Connector CI run 41986301127: success, including test suite, npm advisory audit, JavaScript syntax checks, and Wrangler configuration checks.
+- Orchestrator GitHub Intake Contract run 41986301115: success.
+- Full History Secret Scan run 41986301186: success on the PR event.
+- Full History Secret Scan run 41986295354: success on the push event.
+- Python Tests run 41986301194: pending at the time of this addendum.
+- Master Brain MVP Tests run 41986301123: pending at the time of this addendum.
+- Staging post-deploy smoke: skipped; no deployment occurred.
+
+The preceding test-only head 00b29e0dfa3ac37e922706459716c31672231a79 intentionally failed the new protected-base test in Intake Contract run 41986098010; the implementation correction is on the current head above.
+
+### Remaining external gates
+
+- No independent reviewer has been requested or approved on PR #154; the requested-reviewers list was empty and the reviews collection contained no approvals at the time of inspection.
+- Owner authorization for Staging Durable Object migrations remains absent.
+- Live Cloudflare KnowledgeStore/Ledger bindings and successful backup/restore evidence remain unverified; source Wrangler declarations are not live deployment evidence.
+- No production release, Staging deployment, Worker setting change, secret change, namespace migration, traffic change, or merge was performed.
+- The main branch remained at f2cae91de818385ec48daafc43c621b9e2cc0675 in the last direct ref read.
+
+These changes improve code-level fail-closed behavior. They do not remove the external authorization and infrastructure gates and do not establish Production readiness.

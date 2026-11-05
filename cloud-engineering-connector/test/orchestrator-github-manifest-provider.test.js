@@ -14,6 +14,7 @@ function response(data, { ok = true, headers = {} } = {}) {
     ok,
     headers: { get: name => headers[name.toLowerCase()] ?? null },
     async json() { return data; },
+    async text() { return JSON.stringify(data); },
   };
 }
 
@@ -258,4 +259,160 @@ test("rejects a requested file whose parent is not a Git tree", async () => {
     fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl: invalidParent.fetchImpl }),
     /GITHUB_MANIFEST_TREE_ANCESTOR_INVALID/,
   );
+});
+
+// ---- Transport hardening: bounded time and bounded size before parsing, fail closed ----
+
+const encoder = new TextEncoder();
+
+function streamResponse(parts, { headers = {}, errorAfter = null, stall = false } = {}) {
+  let index = 0;
+  const state = { reads: 0, cancelled: false };
+  const body = {
+    getReader() {
+      return {
+        async read() {
+          state.reads += 1;
+          if (stall) return new Promise(() => {});
+          if (errorAfter !== null && index >= errorAfter) throw new Error("connection reset");
+          if (index >= parts.length) return { done: true, value: undefined };
+          const value = typeof parts[index] === "string" ? encoder.encode(parts[index]) : parts[index];
+          index += 1;
+          return { done: false, value };
+        },
+        async cancel() { state.cancelled = true; },
+        releaseLock() {},
+      };
+    },
+  };
+  return {
+    state,
+    value: {
+      ok: true,
+      headers: { get: name => headers[name.toLowerCase()] ?? null },
+      body,
+      async json() { throw new Error("json() must not be used: size is enforced before parsing"); },
+      async text() { throw new Error("text() must not be used when a stream is available"); },
+    },
+  };
+}
+
+function withFirstResponse(first, rest) {
+  let n = 0;
+  return async (url, init) => (n++ === 0 ? first : rest(url, init));
+}
+
+test("passes an AbortSignal and rejects a request that never settles (real timeout)", { timeout: 3000 }, async () => {
+  let seenSignal = null;
+  const fetchImpl = (url, init) => { seenSignal = init.signal; return new Promise(() => {}); };
+  const started = Date.now();
+  await assert.rejects(
+    fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl, timeoutMs: 50 }),
+    /GITHUB_MANIFEST_TIMEOUT/,
+  );
+  assert.ok(Date.now() - started < 2000);
+  assert.ok(seenSignal instanceof AbortSignal);
+  assert.equal(seenSignal.aborted, true);
+});
+
+test("rejects a response body that stalls after headers (slow-body timeout)", { timeout: 3000 }, async () => {
+  const stalled = streamResponse([], { stall: true });
+  await assert.rejects(
+    fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl: async () => stalled.value, timeoutMs: 50 }),
+    /GITHUB_MANIFEST_TIMEOUT/,
+  );
+});
+
+test("enforces an overall deadline across sequential requests", { timeout: 3000 }, async () => {
+  const { fetchImpl: normal } = fixtures();
+  const slow = async (url, init) => { await new Promise(resolve => setTimeout(resolve, 40)); return normal(url, init); };
+  await assert.rejects(
+    fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl: slow, timeoutMs: 1000, totalTimeoutMs: 100 }),
+    /GITHUB_MANIFEST_TIMEOUT/,
+  );
+});
+
+test("rejects an oversized declared content-length before reading the body", async () => {
+  const big = streamResponse(["{}"], { headers: { "content-length": String(5 * 1024 * 1024) } });
+  await assert.rejects(
+    fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl: async () => big.value, maxResponseBytes: 1024 }),
+    /GITHUB_MANIFEST_RESPONSE_TOO_LARGE/,
+  );
+  assert.equal(big.state.reads, 0);
+});
+
+test("stops reading and cancels a streamed body that exceeds the cap without content-length", async () => {
+  const chunk = "x".repeat(600);
+  const big = streamResponse([chunk, chunk, chunk, chunk]);
+  await assert.rejects(
+    fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl: async () => big.value, maxResponseBytes: 1024 }),
+    /GITHUB_MANIFEST_RESPONSE_TOO_LARGE/,
+  );
+  assert.equal(big.state.cancelled, true);
+  assert.ok(big.state.reads <= 2);
+});
+
+test("rejects truncated, invalid, non-UTF-8, and non-object JSON as a failed step, never a manifest", async () => {
+  const bodies = [
+    ['{"id":1398846697,"full_name":"mohammadrezayaghoobi123-dev/Cha'],
+    ["not json"],
+    [new Uint8Array([0x7b, 0xff, 0xfe, 0x7d])],
+    [""],
+  ];
+  for (const parts of bodies) {
+    const bad = streamResponse(parts);
+    await assert.rejects(
+      fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl: async () => bad.value }),
+      /GITHUB_MANIFEST_REPOSITORY_FETCH_FAILED/,
+    );
+  }
+});
+
+test("rejects a connection that fails mid-body and a network error, with the step error code", async () => {
+  const broken = streamResponse(['{"id":1398846697,'], { errorAfter: 1 });
+  await assert.rejects(
+    fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl: async () => broken.value }),
+    /GITHUB_MANIFEST_REPOSITORY_FETCH_FAILED/,
+  );
+  await assert.rejects(
+    fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl: async () => { throw new Error("ECONNRESET"); } }),
+    /GITHUB_MANIFEST_REPOSITORY_FETCH_FAILED/,
+  );
+});
+
+test("a later-step failure never yields a partial manifest", async () => {
+  const { fetchImpl: normal } = fixtures();
+  const partial = streamResponse(['{"sha":"' + treeSha + '","truncated":false,"tree":[{"path":"docs"']);
+  const fetchImpl = async (url, init) => (url.includes("/git/trees/") ? partial.value : normal(url, init));
+  let result;
+  await assert.rejects((async () => { result = await fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl }); })(),
+    /GITHUB_MANIFEST_TREE_FETCH_FAILED/);
+  assert.equal(result, undefined);
+});
+
+test("rejects invalid or unbounded timeout and size limits", async () => {
+  const { fetchImpl } = fixtures();
+  for (const override of [
+    { timeoutMs: 0 }, { timeoutMs: -1 }, { timeoutMs: "5" }, { timeoutMs: 10 ** 9 }, { timeoutMs: Number.NaN },
+    { totalTimeoutMs: 0 }, { totalTimeoutMs: 10 ** 9 },
+    { maxResponseBytes: 0 }, { maxResponseBytes: -5 }, { maxResponseBytes: 10 ** 10 }, { maxResponseBytes: "1024" },
+  ]) {
+    await assert.rejects(
+      fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl, ...override }),
+      /GITHUB_MANIFEST_LIMITS_INVALID/,
+      JSON.stringify(override),
+    );
+  }
+});
+
+test("accepts a well-formed streamed manifest within limits", async () => {
+  const { values, fetchImpl: normal } = fixtures();
+  const fetchImpl = async (url, init) => {
+    const r = await normal(url, init);
+    const data = await r.json();
+    return streamResponse([JSON.stringify(data)]).value;
+  };
+  const manifest = await fetchP2BGitHubChangedFileManifest({ ...input, fetchImpl, maxResponseBytes: 1024 * 1024 });
+  assert.equal(manifest.headSha, headSha);
+  assert.equal(values.tree.truncated, false);
 });

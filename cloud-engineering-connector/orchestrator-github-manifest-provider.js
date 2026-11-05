@@ -2,6 +2,13 @@ const TARGET_REPOSITORY = "mohammadrezayaghoobi123-dev/Chat-gpt";
 const TARGET_REPOSITORY_ID = 1398846697;
 const API_ROOT = "https://api.github.com";
 const API_VERSION = "2022-11-28";
+const DEFAULT_TIMEOUT_MS = 10_000;
+const MAX_TIMEOUT_MS = 60_000;
+const DEFAULT_TOTAL_TIMEOUT_MS = 30_000;
+const MAX_TOTAL_TIMEOUT_MS = 120_000;
+const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const MAX_RESPONSE_BYTES_CEILING = 16 * 1024 * 1024;
+const TRANSPORT_ERRORS = new Set(["GITHUB_MANIFEST_TIMEOUT", "GITHUB_MANIFEST_RESPONSE_TOO_LARGE"]);
 
 function fail(code) {
   throw new Error(code);
@@ -34,6 +41,56 @@ function apiPath(...parts) {
   return parts.map((part, index) => index === 0 ? part : encodeURIComponent(part)).join("/");
 }
 
+function boundedInteger(value, fallback, min, max) {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value < min || value > max) fail("GITHUB_MANIFEST_LIMITS_INVALID");
+  return value;
+}
+
+// Reads at most maxBytes from the response body and only then parses it. A declared
+// content-length above the cap is rejected before any byte is read. A body that fails
+// mid-stream, is not valid UTF-8, or is not valid JSON never yields a value.
+async function readBoundedJson(response, maxBytes) {
+  const declared = response.headers?.get?.("content-length");
+  if (declared !== null && declared !== undefined) {
+    if (!/^[0-9]{1,15}$/.test(String(declared))) fail("GITHUB_MANIFEST_RESPONSE_INVALID");
+    if (Number(declared) > maxBytes) fail("GITHUB_MANIFEST_RESPONSE_TOO_LARGE");
+  }
+  const chunks = [];
+  let total = 0;
+  if (response.body && typeof response.body.getReader === "function") {
+    const reader = response.body.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!(value instanceof Uint8Array)) fail("GITHUB_MANIFEST_RESPONSE_INVALID");
+        total += value.byteLength;
+        if (total > maxBytes) {
+          try { await reader.cancel(); } catch { /* best effort */ }
+          fail("GITHUB_MANIFEST_RESPONSE_TOO_LARGE");
+        }
+        chunks.push(value);
+      }
+    } finally {
+      try { reader.releaseLock?.(); } catch { /* best effort */ }
+    }
+  } else if (typeof response.text === "function") {
+    const text = await response.text();
+    if (typeof text !== "string") fail("GITHUB_MANIFEST_RESPONSE_INVALID");
+    const bytes = new TextEncoder().encode(text);
+    if (bytes.byteLength > maxBytes) fail("GITHUB_MANIFEST_RESPONSE_TOO_LARGE");
+    chunks.push(bytes);
+    total = bytes.byteLength;
+  } else {
+    fail("GITHUB_MANIFEST_RESPONSE_INVALID");
+  }
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength; }
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(joined));
+}
+
 function hasNextPage(response) {
   const link = response?.headers?.get?.("link") ?? "";
   return /<[^>]+>;\s*rel="next"/i.test(link);
@@ -56,7 +113,14 @@ export async function fetchP2BGitHubChangedFileManifest({
   requestedPaths,
   token,
   fetchImpl = globalThis.fetch,
+  timeoutMs,
+  totalTimeoutMs,
+  maxResponseBytes,
 } = {}) {
+  const requestTimeoutMs = boundedInteger(timeoutMs, DEFAULT_TIMEOUT_MS, 1, MAX_TIMEOUT_MS);
+  const overallTimeoutMs = boundedInteger(totalTimeoutMs, DEFAULT_TOTAL_TIMEOUT_MS, 1, MAX_TOTAL_TIMEOUT_MS);
+  const responseByteLimit = boundedInteger(maxResponseBytes, DEFAULT_MAX_RESPONSE_BYTES, 1, MAX_RESPONSE_BYTES_CEILING);
+  const deadline = Date.now() + overallTimeoutMs;
   if (repositoryFullName !== TARGET_REPOSITORY || repositoryId !== TARGET_REPOSITORY_ID) {
     fail("GITHUB_MANIFEST_REPOSITORY_NOT_ALLOWED");
   }
@@ -82,17 +146,28 @@ export async function fetchP2BGitHubChangedFileManifest({
   };
 
   async function get(url, code) {
-    let response;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) fail("GITHUB_MANIFEST_TIMEOUT");
+    const controller = new AbortController();
+    let timer;
+    const timedOut = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error("GITHUB_MANIFEST_TIMEOUT"));
+      }, Math.min(requestTimeoutMs, remaining));
+    });
+    const attempt = (async () => {
+      const response = await fetchImpl(url, { method: "GET", headers, signal: controller.signal });
+      if (!response || response.ok !== true) fail(code);
+      return { data: await readBoundedJson(response, responseByteLimit), response };
+    })();
     try {
-      response = await fetchImpl(url, { method: "GET", headers });
-    } catch {
-      fail(code);
-    }
-    if (!response || response.ok !== true) fail(code);
-    try {
-      return { data: await response.json(), response };
-    } catch {
-      fail(code);
+      return await Promise.race([attempt, timedOut]);
+    } catch (error) {
+      if (error instanceof Error && TRANSPORT_ERRORS.has(error.message)) throw error;
+      return fail(code);
+    } finally {
+      clearTimeout(timer);
     }
   }
 

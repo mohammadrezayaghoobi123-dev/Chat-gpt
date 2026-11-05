@@ -122,7 +122,8 @@ describe("OrchestratorLedger durable coordination contract", () => {
     expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
     const result = await ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
-      actor: agent, evidence, now: now + 1, workerId: "agent:worker-1", leaseGeneration: lease.leaseGeneration,
+      actor: agent, evidence, now: now + 1, workerId: "agent:worker-1",
+      authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseGeneration: lease.leaseGeneration,
       outboxEvent: {
         eventId: "event-transition-1", idempotencyKey: "task-running-1", eventType: "task.running",
         payload: { taskId: "task-0001", version: 2 },

@@ -77,10 +77,12 @@ async function evaluatePatch(patch = {}) {
   return evaluateP2BWritePreflight(input);
 }
 
-test("complete scope-bound evidence reaches preflight only, never execution authorization", async () => {
+test("caller-supplied verification booleans cannot produce a trusted preflight approval", async () => {
   const result = await evaluateP2BWritePreflight(await fixture());
-  assert.equal(result.decision, "READY_FOR_SEPARATE_EXECUTION_APPROVAL");
-  assert.deepEqual(result.reasonCodes, []);
+  assert.equal(result.decision, "BLOCKED");
+  assert.deepEqual(result.reasonCodes, ["TRUSTED_EVIDENCE_VERIFICATION_UNAVAILABLE"]);
+  assert.equal(result.structuralChecksPassed, true);
+  assert.equal(result.trustedEvidenceVerified, false);
   assert.match(result.approvalScopeHash, /^[a-f0-9]{64}$/);
   assert.equal(result.sideEffects, false);
   assert.equal(result.branchCreation, false);

@@ -297,11 +297,22 @@ export async function evaluateP2BWritePreflight({
     ["REQUESTED_BRANCH_OR_CHANGED_PATHS_OUT_OF_SCOPE", validRequestedScope(branchPolicy, requestedBranchName, requestedPaths)],
     ["CHANGED_FILE_MANIFEST_INVALID_OR_SYMLINK_DETECTED", validateP2BChangedFileManifest({ repository, base, requestedPaths, requestedBranchName, manifest: changedFileManifest })],
   ];
-  const reasonCodes = checks.filter(([, passed]) => !passed).map(([code]) => code);
+  const structuralReasonCodes = checks.filter(([, passed]) => !passed).map(([code]) => code);
+  const structuralChecksPassed = structuralReasonCodes.length === 0;
+
+  // This module has no trusted evidence-acquisition or signature-verification
+  // boundary. Caller-provided booleans and evidence references are assertions,
+  // not proof of owner identity, reviewer identity, repository protection, or
+  // backup/restore. Therefore this structural checker must never emit READY.
+  const reasonCodes = structuralChecksPassed
+    ? ["TRUSTED_EVIDENCE_VERIFICATION_UNAVAILABLE"]
+    : structuralReasonCodes;
 
   return {
-    decision: reasonCodes.length === 0 ? "READY_FOR_SEPARATE_EXECUTION_APPROVAL" : "BLOCKED",
+    decision: "BLOCKED",
     reasonCodes,
+    structuralChecksPassed,
+    trustedEvidenceVerified: false,
     approvalScopeHash: expectedScopeHash,
     sideEffects: false,
     branchCreation: false,

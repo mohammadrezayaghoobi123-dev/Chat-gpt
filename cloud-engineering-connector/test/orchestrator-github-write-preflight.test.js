@@ -400,7 +400,9 @@ test("does not treat a caller-supplied verified boolean as proof of manifest pro
   input.changedFileManifest.verified = false;
   input.ownerApproval.approvedScopeHash = await computeP2BApprovalScopeHash(input);
   const result = await evaluateP2BWritePreflight(input);
-  assert.equal(result.decision, "READY_FOR_SEPARATE_EXECUTION_APPROVAL");
+  assert.equal(result.decision, "BLOCKED");
+  assert.ok(result.reasonCodes.includes("TRUSTED_EVIDENCE_VERIFICATION_UNAVAILABLE"));
+  assert.equal(result.trustedEvidenceVerified, false);
   assert.equal(result.executionAuthorized, false);
 });
 test("binds the exact changed-file manifest and head SHA to owner approval", async () => {

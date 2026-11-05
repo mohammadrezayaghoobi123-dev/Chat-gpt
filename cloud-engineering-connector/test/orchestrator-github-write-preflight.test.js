@@ -208,6 +208,11 @@ test("rejects protected, malformed, or unverified base refs and SHAs", async () 
     { ...input.base, ref: "refs/heads/task/issue-123" },
     { ...input.base, ref: "integration/staging-release-2026-11-05" },
     { ...input.base, ref: "integration/production-release-2026-11-05" },
+    { ...input.base, ref: "task//base" },
+    { ...input.base, ref: "task/../main" },
+    { ...input.base, ref: "task/.hidden" },
+    { ...input.base, ref: "task/base.lock" },
+    { ...input.base, ref: "task/trailing." },
     { ...input.base, sha: "short" },
     { ...input.base, verified: false },
   ]) {

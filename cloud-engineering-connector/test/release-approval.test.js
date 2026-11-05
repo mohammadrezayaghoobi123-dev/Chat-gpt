@@ -214,3 +214,17 @@ test("release approval paginates associated PRs and all reviews before accepting
   assert.ok(requestedUrls.some(url => url.includes("/commits/" + sha + "/pulls") && url.includes("page=2")));
   assert.ok(requestedUrls.some(url => url.includes("/pulls/129/reviews") && url.includes("page=2")));
 });
+
+
+test("Staging blocks an unresolved independent change request even when it targets an earlier commit", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch([stagingPull()], [
+        approval(sha, reviewer, "APPROVED", "2026-11-02T11:00:00Z"),
+        approval(headSha, "second-independent-reviewer", "CHANGES_REQUESTED", "2026-11-02T12:00:00Z"),
+      ]),
+    }),
+    /outstanding change request/,
+  );
+});

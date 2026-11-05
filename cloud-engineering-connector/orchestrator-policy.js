@@ -22,6 +22,7 @@ const SIDE_EFFECT_ACTIONS = new Set([
   "pull_request.create", "provider.invoke", "deployment.deploy",
   "secrets.read", "repository.settings.write", "billing.change",
 ]);
+const BRANCH_WRITE_ACTIONS = new Set(["branch.create", "file.write", "pull_request.create"]);
 const APPROVAL_ACTIONS = new Set(["branch.create", "file.write", "pull_request.create"]);
 const DEFAULT_PROTECTED_BRANCHES = new Set(["main", "master", "production", "release/production"]);
 const SENSITIVE_PATH = /(^|\/)(?:\.git|\.ssh|\.aws|\.azure|\.kube|\.docker|secrets?|credentials?)(?:\/|$)|(^|\/)\.env(?:\.[^/]*)?$|\.(?:pem|key|p12|p8|pfx|tfstate|tfvars)$/i;
@@ -147,6 +148,11 @@ export function evaluateOrchestratorPolicy({
   if (protectedSet.has(baseBranch) || protectedSet.has(targetBranch) ||
       isProtectedAgentTargetBranch(targetBranch)) {
     return deny("PROTECTED_BRANCH", context);
+  }
+  // A branch-writing action may never target the branch it is based on (direct write to the base);
+  // stacked work must use a distinct task/ops branch. Read-only actions are unaffected.
+  if (BRANCH_WRITE_ACTIONS.has(action) && baseBranch.toLowerCase() === targetBranch.toLowerCase()) {
+    return deny("BASE_BRANCH_WRITE", context);
   }
 
   if (APPROVAL_ACTIONS.has(action) && !validApproval(approval, actor, scope)) {

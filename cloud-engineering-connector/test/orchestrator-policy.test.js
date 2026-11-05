@@ -111,6 +111,40 @@ test("still allows an ordinary scoped task branch and a stacked integration base
   assert.equal(stacked.decision, "ALLOW");
 });
 
+test("denies any side effect whose target branch is the base branch (direct write to the base)", () => {
+  const bases = ["task/task-0001", "ops/stack-a", "integration/orchestrator-p1-contracts-2026-11-04", "Task/Task-0001"];
+  for (const baseBranch of bases) {
+    const targetBranch = baseBranch.toLowerCase() === "task/task-0001" ? "task/task-0001" : baseBranch;
+    for (const action of ["branch.create", "file.write", "pull_request.create"]) {
+      const result = evaluateOrchestratorPolicy(input({ action, baseBranch, targetBranch, scope: { ...scope, targetBranch } }));
+      assert.equal(result.decision, "DENY", action + " " + baseBranch);
+      assert.equal(result.reasonCode, "BASE_BRANCH_WRITE", action + " " + baseBranch);
+    }
+  }
+});
+
+test("allows stacked work whose base is a task or integration branch and whose target differs", () => {
+  const stacks = [
+    ["integration/orchestrator-p1-contracts-2026-11-04", "task/task-0002"],
+    ["integration/unify-main-and-integrated-2026-11-02", "ops/office-workflow"],
+    ["task/task-0001", "task/task-0002"],
+    ["ops/stack-a", "ops/stack-b"],
+  ];
+  for (const [baseBranch, targetBranch] of stacks) {
+    const result = evaluateOrchestratorPolicy(input({
+      action: "file.write", baseBranch, targetBranch, scope: { ...scope, targetBranch }, changedPaths: ["src/module.js"],
+    }));
+    assert.equal(result.decision, "ALLOW", baseBranch + " -> " + targetBranch);
+  }
+});
+
+test("a read-only action on the base branch is not treated as a base write", () => {
+  const result = evaluateOrchestratorPolicy(input({
+    action: "repository.read", baseBranch: "task/task-0001", targetBranch: "task/task-0001", scope: { ...scope, targetBranch: "task/task-0001" },
+  }));
+  assert.equal(result.decision, "ALLOW");
+});
+
 test("denies changed paths outside the task allowlist, traversal, and normalized path escape", () => {
   for (const changedPaths of [["docs/private.md"], ["src/../../.env"], ["/etc/passwd"], ["src/../secrets/key"]]) {
     assert.equal(evaluateOrchestratorPolicy(input({ action: "file.write", changedPaths })).decision, "DENY");

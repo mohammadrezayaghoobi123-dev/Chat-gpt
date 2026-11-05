@@ -103,12 +103,15 @@ function validRepositoryControls(value) {
 }
 
 function validBase(value) {
-  return isRecord(value) &&
-    typeof value.ref === "string" &&
-    /^[A-Za-z0-9][A-Za-z0-9._/-]{0,159}$/.test(value.ref) &&
-    !isProtectedAgentTargetBranch(value.ref) &&
-    SHA40.test(value.sha ?? "") &&
-    value.verified === true;
+  if (!isRecord(value) || typeof value.ref !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,159}$/.test(value.ref) ||
+      isProtectedAgentTargetBranch(value.ref) ||
+      !SHA40.test(value.sha ?? "") || value.verified !== true) return false;
+  const segments = value.ref.split("/");
+  return segments.every(segment =>
+    segment.length > 0 && segment !== "." && segment !== ".." &&
+    !segment.startsWith(".") && !segment.endsWith(".") &&
+    !segment.endsWith(".lock"));
 }
 
 function validReviewer(value, actorIds) {

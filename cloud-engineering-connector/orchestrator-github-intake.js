@@ -1,3 +1,5 @@
+import { isProtectedAgentTargetBranch } from "./orchestrator-branch-policy.js";
+
 const ACTOR_ID = /^[0-9]{1,20}$/;
 const DELIVERY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -49,8 +51,7 @@ function validateTaskScope(scope) {
   if (!isRecord(scope) || typeof scope.branch !== "string" ||
       !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,159}$/.test(scope.branch) ||
       scope.branch.split("/").some(part => part === "" || part === "." || part === "..") ||
-      PROTECTED_BRANCHES.has(scope.branch) || scope.branch.startsWith("main/") ||
-      scope.branch.startsWith("production/") ||
+      PROTECTED_BRANCHES.has(scope.branch) || isProtectedAgentTargetBranch(scope.branch) ||
       !Array.isArray(scope.allowedPaths) || scope.allowedPaths.length === 0 ||
       scope.allowedPaths.length > 64) return false;
   if (scope.symlinkEscape === true) return false;

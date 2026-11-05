@@ -179,6 +179,12 @@ test("rejects protected branches, path traversal, sensitive paths, and symlink e
     { branch: "task/42", allowedPaths: [".github/workflows/deploy.yml"] },
     { branch: "task/42", allowedPaths: ["secrets/provider.json"] },
     { branch: "task/42", allowedPaths: ["src"], symlinkEscape: true },
+    { branch: "integration/staging-release-" + "a".repeat(40), allowedPaths: ["src"] },
+    { branch: "integration/production-release-" + "b".repeat(40), allowedPaths: ["src"] },
+    { branch: "Integration/Staging-Release-x", allowedPaths: ["src"] },
+    { branch: "release/hotfix", allowedPaths: ["src"] },
+    { branch: "master/task", allowedPaths: ["src"] },
+    { branch: "refs/heads/main", allowedPaths: ["src"] },
   ];
   for (const taskScope of invalidScopes) {
     assert.equal((await validateGitHubIntakeEvent(input({ taskScope }))).reasonCode, "TASK_SCOPE_INVALID");

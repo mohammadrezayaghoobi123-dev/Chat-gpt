@@ -1,3 +1,5 @@
+import { isProtectedAgentTargetBranch } from "./orchestrator-branch-policy.js";
+
 export const POLICY_DECISIONS = Object.freeze(["ALLOW", "DENY", "QUARANTINE"]);
 
 const ACTIONS = new Set([
@@ -143,7 +145,7 @@ export function evaluateOrchestratorPolicy({
     for (const branch of protectedBranches) if (safeBranch(branch)) protectedSet.add(branch);
   }
   if (protectedSet.has(baseBranch) || protectedSet.has(targetBranch) ||
-      targetBranch.startsWith("main/") || targetBranch.startsWith("production/")) {
+      isProtectedAgentTargetBranch(targetBranch)) {
     return deny("PROTECTED_BRANCH", context);
   }
 

@@ -76,6 +76,41 @@ test("denies writes to main, protected branches, secrets, repository settings, b
   }
 });
 
+const RELEASE_TRIGGER_BRANCHES = [
+  "integration/staging-release-" + "a".repeat(40),
+  "integration/production-release-" + "b".repeat(40),
+  "integration/staging-release-latest",
+  "Integration/Staging-Release-" + "c".repeat(40),
+  "integration/PRODUCTION-RELEASE-x",
+  "release/hotfix",
+  "release/production/x",
+  "master/task",
+  "refs/heads/main",
+];
+
+test("denies agent write targets that would trigger a Staging or Production release workflow", () => {
+  for (const targetBranch of RELEASE_TRIGGER_BRANCHES) {
+    for (const action of ["branch.create", "file.write", "pull_request.create"]) {
+      const result = evaluateOrchestratorPolicy(input({ action, targetBranch, scope: { ...scope, targetBranch } }));
+      assert.equal(result.decision, "DENY", action + " " + targetBranch);
+      assert.equal(result.reasonCode, "PROTECTED_BRANCH", action + " " + targetBranch);
+    }
+  }
+});
+
+test("still allows an ordinary scoped task branch and a stacked integration base", () => {
+  for (const targetBranch of ["task/task-0001", "ops/centralized-office-workflow", "integration-notes/x"]) {
+    const result = evaluateOrchestratorPolicy(input({
+      action: "file.write", targetBranch, scope: { ...scope, targetBranch }, changedPaths: ["src/module.js"],
+    }));
+    assert.equal(result.decision, "ALLOW", targetBranch);
+  }
+  const stacked = evaluateOrchestratorPolicy(input({
+    action: "file.write", baseBranch: "integration/unify-main-and-integrated-2026-11-02", changedPaths: ["src/module.js"],
+  }));
+  assert.equal(stacked.decision, "ALLOW");
+});
+
 test("denies changed paths outside the task allowlist, traversal, and normalized path escape", () => {
   for (const changedPaths of [["docs/private.md"], ["src/../../.env"], ["/etc/passwd"], ["src/../secrets/key"]]) {
     assert.equal(evaluateOrchestratorPolicy(input({ action: "file.write", changedPaths })).decision, "DENY");

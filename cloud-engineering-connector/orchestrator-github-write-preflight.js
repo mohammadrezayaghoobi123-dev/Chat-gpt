@@ -2,6 +2,8 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const SHA40 = /^[a-f0-9]{40}$/;
 const ACTOR_ID = /^[0-9]{1,20}$/;
 const LABEL = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,63}$/;
+import { isProtectedAgentTargetBranch } from "./orchestrator-branch-policy.js";
+
 const TARGET_REPOSITORY = "mohammadrezayaghoobi123-dev/Chat-gpt";
 const TARGET_REPOSITORY_ID = 1398846697;
 
@@ -104,8 +106,7 @@ function validBase(value) {
   return isRecord(value) &&
     typeof value.ref === "string" &&
     /^[A-Za-z0-9][A-Za-z0-9._/-]{0,159}$/.test(value.ref) &&
-    !["main", "master", "production", "release/production"].includes(value.ref) &&
-    !value.ref.startsWith("main/") && !value.ref.startsWith("production/") &&
+    !isProtectedAgentTargetBranch(value.ref) &&
     SHA40.test(value.sha ?? "") &&
     value.verified === true;
 }

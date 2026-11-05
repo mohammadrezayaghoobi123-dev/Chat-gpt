@@ -263,7 +263,7 @@ export class OrchestratorLedger extends DurableObject {
     if (!input || typeof input !== "object") throw fail("transition input must be an object.");
     const {
       taskId, expectedVersion, expectedState, nextState, actor, evidence, now,
-      workerId, leaseGeneration, outboxEvent,
+      workerId, authenticatedWorker, leaseGeneration, outboxEvent,
     } = input;
     identifier(taskId, "taskId");
     timestamp(now);
@@ -274,15 +274,17 @@ export class OrchestratorLedger extends DurableObject {
       if (row.version !== expectedVersion || row.state !== expectedState) {
         return { updated: false, reason: "VERSION_OR_STATE_CONFLICT", task: taskFromRow(row) };
       }
-      if (actor?.role === "agent" || workerId !== undefined || leaseGeneration !== undefined) {
-        if (typeof workerId !== "string" || workerId !== actor?.id ||
-            !Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) {
-          return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
-        }
-        const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
-        if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
-          return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
-        }
+      // Every transition is lease-fenced. Never let a caller bypass fencing by
+      // changing the self-declared actor role from "agent" to "owner"/"system".
+      if (actor?.role !== "agent" || typeof workerId !== "string" ||
+          workerId !== actor?.id ||
+          !hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"]) ||
+          !Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) {
+        return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
+      }
+      const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
+      if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
+        return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
       const current = taskFromRow(row);
       const next = transitionTaskCore({

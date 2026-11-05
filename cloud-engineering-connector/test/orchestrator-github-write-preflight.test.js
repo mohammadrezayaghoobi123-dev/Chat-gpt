@@ -203,6 +203,11 @@ test("rejects protected, malformed, or unverified base refs and SHAs", async () 
   for (const base of [
     { ...input.base, ref: "main" },
     { ...input.base, ref: "production" },
+    { ...input.base, ref: "master/security-review" },
+    { ...input.base, ref: "release/staging" },
+    { ...input.base, ref: "refs/heads/task/issue-123" },
+    { ...input.base, ref: "integration/staging-release-2026-11-05" },
+    { ...input.base, ref: "integration/production-release-2026-11-05" },
     { ...input.base, sha: "short" },
     { ...input.base, verified: false },
   ]) {

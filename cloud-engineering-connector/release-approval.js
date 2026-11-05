@@ -124,8 +124,7 @@ export async function verifyReleaseApproval({
 
   const changeRequest = latest.find(review =>
     review.user?.login !== author &&
-    review.state === "CHANGES_REQUESTED" &&
-    review.commit_id === reviewCommitSha
+    review.state === "CHANGES_REQUESTED"
   );
   if (changeRequest) throw new Error("Release blocked: an independent reviewer has an outstanding change request for this candidate.");
 

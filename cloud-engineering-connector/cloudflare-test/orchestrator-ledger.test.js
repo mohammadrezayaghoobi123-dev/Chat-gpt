@@ -312,3 +312,23 @@ describe("OrchestratorLedger durable coordination contract", () => {
     });
   });
 });
+
+
+  it("requires a live task lease for every state transition regardless of caller-declared actor role", async () => {
+    const ledger = ledgerFor("ledger-transition-role-bypass");
+    await ledger.createTask({ task: task(), idempotencyKey: "task-create-role-bypass", inputHash: "e".repeat(64), now });
+
+    const ownerBypass = await ledger.transitionTask({
+      taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
+      actor: { id: "owner:one", authenticated: true, identityVerified: true, role: "owner" },
+      evidence, now: now + 1,
+    });
+    expect(ownerBypass).toMatchObject({ updated: false, reason: "LEASE_FENCE_MISMATCH" });
+
+    const agentWithoutLease = await ledger.transitionTask({
+      taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
+      actor: agent, evidence, now: now + 1,
+    });
+    expect(agentWithoutLease).toMatchObject({ updated: false, reason: "LEASE_FENCE_MISMATCH" });
+    await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
+  });

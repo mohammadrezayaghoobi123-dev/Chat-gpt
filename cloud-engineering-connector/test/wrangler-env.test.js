@@ -80,3 +80,25 @@ test("Production and Staging both declare the five-minute reconciliation Cron", 
   assert.match(production, /\[triggers\][\s\S]*?crons\s*=\s*\["\*\/5 \* \* \* \*"\]/);
   assert.match(staging, /\[env\.staging\.triggers\][\s\S]*?crons\s*=\s*\["\*\/5 \* \* \* \*"\]/);
 });
+
+
+test("Production and Staging bind isolated Orchestrator Outbox Queues with bounded retries and DLQs", () => {
+  const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
+  const sections = [
+    { name: "Production", text: production, queue: "chat-gpt111-orchestrator-outbox", dlq: "chat-gpt111-orchestrator-outbox-dlq", prefix: "" },
+    { name: "Staging", text: staging, queue: "chat-gpt111-staging-orchestrator-outbox", dlq: "chat-gpt111-staging-orchestrator-outbox-dlq", prefix: "env.staging." },
+  ];
+  for (const section of sections) {
+    assert.match(section.text, new RegExp("\\[\\[" + section.prefix.replaceAll(".", "\\\\.") + "queues\\.producers\\]\\]"));
+    assert.match(section.text, new RegExp('binding\\s*=\\s*"ORCHESTRATOR_OUTBOX_QUEUE"'));
+    assert.match(section.text, new RegExp('queue\\s*=\\s*"' + section.queue + '"'));
+    assert.match(section.text, new RegExp("\\[\\[" + section.prefix.replaceAll(".", "\\\\.") + "queues\\.consumers\\]\\]"));
+    assert.match(section.text, new RegExp('queue\\s*=\\s*"' + section.queue + '"'));
+    assert.match(section.text, /max_batch_size\\s*=\\s*5/);
+    assert.match(section.text, /max_retries\\s*=\\s*5/);
+    assert.match(section.text, new RegExp('dead_letter_queue\\s*=\\s*"' + section.dlq + '"'));
+    assert.match(section.text, /retry_delay\\s*=\\s*30/);
+  }
+  assert.notEqual(sections[0].queue, sections[1].queue);
+  assert.notEqual(sections[0].dlq, sections[1].dlq);
+});

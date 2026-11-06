@@ -31,7 +31,7 @@ test("Production release verifies an isolated OrchestratorLedger namespace after
 
 
 test("Production release refuses deployment unless both isolated outbox Queue/DLQ pairs exist", () => {
-  assert.match(releaseWorkflow, /\/queues\\?per_page=100&page=/);
+  assert.match(releaseWorkflow, /\/queues\?per_page=100&page=/);
   for (const name of [
     "chat-gpt111-orchestrator-outbox",
     "chat-gpt111-staging-orchestrator-outbox",

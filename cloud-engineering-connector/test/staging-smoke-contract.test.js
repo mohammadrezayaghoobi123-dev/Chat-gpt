@@ -84,3 +84,16 @@ test("Staging release verifies the OrchestratorLedger binding after applying the
   assert.match(stagingWorkflow, /bindings\.get\(["']ORCHESTRATOR_LEDGER["']\)/);
   assert.match(stagingWorkflow, /Staging ORCHESTRATOR_LEDGER namespace ID must be present/);
 });
+
+
+test("Staging release preflights its Queue resource and verifies the deployed consumer retry/DLQ contract", () => {
+  const release = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  assert.match(release, /accounts\/\$\{account\}\/queues\?per_page=100/);
+  assert.match(release, /chat-gpt111-staging-orchestrator-outbox/);
+  assert.match(release, /chat-gpt111-staging-orchestrator-outbox-dlq/);
+  assert.match(release, /consumer\.settings\?\.batch_size, 5/);
+  assert.match(release, /consumer\.settings\?\.max_concurrency, 5/);
+  assert.match(release, /consumer\.settings\?\.max_retries, 5/);
+  assert.match(release, /consumer\.settings\?\.retry_delay, 30/);
+  assert.match(release, /consumer\.dead_letter_queue/);
+});

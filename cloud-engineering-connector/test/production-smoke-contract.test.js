@@ -63,3 +63,13 @@ test("Production release paginates every Cloudflare Queue inventory page in pref
   assert.equal((releaseWorkflow.match(/result_info\?\.total_pages/g) || []).length, 2);
   assert.equal((releaseWorkflow.match(/page <= 1000/g) || []).length, 2);
 });
+
+
+test("Production release verifies both isolated DLQ archive consumers", () => {
+  const release = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
+  assert.match(release, /productionDlqConsumer/);
+  assert.match(release, /stagingDlqConsumer/);
+  assert.match(release, /DLQ archive consumer must be attached/);
+  assert.match(release, /max_retries, 100/);
+  assert.match(release, /retry_delay, 60/);
+});

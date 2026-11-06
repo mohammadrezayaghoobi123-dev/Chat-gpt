@@ -868,7 +868,7 @@ it("records a receipt only when every immutable Queue field matches the durable 
 
 
 it("integrates the real Durable Object Ledger with publisher and Queue consumer across duplicate delivery", async () => {
-  const ledger = ledgerFor("ledger-outbox-publisher-consumer-e2e");
+  const ledger = ledgerFor("orchestrator-ledger-global");
   const integrationNow = Date.now();
   const taskId = "task-queue-e2e-0001";
   const created = await createTask(ledger, {

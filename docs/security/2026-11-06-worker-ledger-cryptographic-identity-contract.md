@@ -7,9 +7,21 @@
 
 ## 1. Trust boundary
 
-The only trusted signer is the Cloudflare Worker process after it has authenticated the upstream principal and independently derived the principal's identity and role. MCP request arguments, webhook JSON, task payloads, caller-provided context objects, and legacy boolean fields are untrusted.
+The only trusted signer is the Cloudflare Worker process after it has authenticated the upstream principal through a mechanism that establishes the required principal class and independently derived the principal's identity and role. MCP request arguments, webhook JSON, task payloads, caller-provided context objects, and legacy boolean fields are untrusted.
 
 The Durable Object is the policy enforcement point. It must verify the assertion itself. The Worker must never pass a pre-decoded `authenticatedWorker` object as proof.
+
+## 1A. Important identity limitation in the current Worker
+
+The inspected `worker.js` currently authenticates MCP requests using one shared `MCP_AUTH_TOKEN` bearer secret and reduces the result to a Boolean `authenticated`. That proves possession of a service credential; it does **not** identify an individual human, agent, publisher, or system worker. The Worker must not derive `sub` or an `agent` role from RPC arguments, task payloads, `actor` objects, or client-supplied metadata.
+
+Until a separate trusted principal-authentication mechanism exists:
+- The shared MCP credential may map only to a fixed, explicitly named service principal (for example, `mcp-gateway`) and only to operations authorized for that service principal.
+- It must not mint `agent`, `publisher`, or `system` assertions merely because the request asks for those roles.
+- Agent assertions require a distinct authenticated agent channel or a trusted server-side scheduler/worker registry that proves the agent identity. Publisher assertions require an independently authenticated publisher service.
+- If the required principal cannot be established, the Worker must not mint an assertion and the Durable Object must reject the mutation.
+
+A future per-user identity provider or per-client credential design is a separate architecture decision. A single shared bearer secret cannot support non-repudiable per-user attribution.
 
 ## 2. Wire format
 
@@ -71,7 +83,7 @@ If Web Crypto verification is asynchronous, the implementation must not split au
 | `recordMessage` | Explicit sender policy only | assertion sub = authenticatedSender.id |
 | `appendAuditEvent` | Explicit actor policy only | assertion sub = actor.id |
 
-The exact operation string is included in the signature. A token minted for `claimTask` cannot authorize `completeOutbox`. Roles are derived by the Worker from trusted server-side policy; the caller cannot choose a role.
+The exact operation string is included in the signature. A token minted for `claimTask` cannot authorize `completeOutbox`. Roles are derived by the Worker from trusted server-side policy and a verified principal class; the caller cannot choose a role. The existing shared `MCP_AUTH_TOKEN` is not sufficient evidence for agent, publisher, or system identity.
 
 Read-only methods do not gain write authority by possessing a worker assertion. Any future administrative operation requires a separate role and operation entry, not a generic wildcard.
 

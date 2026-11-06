@@ -1179,7 +1179,8 @@ async function handleScheduled(controller,env,ctx){
  const orchestratorTask=processOrchestratorOutbox(env).then(result=>{
   const summary={observed_at:new Date().toISOString(),...result};
   console.log(JSON.stringify({event:"orchestrator_outbox_publish",...summary}));
-  if(result&&(result.failed>0||result.deadLettered>0||result.reason)){
+  if(result&&(result.failed>0||result.deadLettered>0||
+      (result.reason&&result.reason!=="orchestrator_outbox_queue_unavailable"))){
    console.error(JSON.stringify({event:"orchestrator_outbox_publish_alert",severity:"error",...summary}));
   }
   return result;

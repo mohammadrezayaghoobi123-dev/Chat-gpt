@@ -203,6 +203,76 @@ describe("OrchestratorLedger durable coordination contract", () => {
       .resolves.toMatchObject({ completed: true });
   });
 
+  it("schedules bounded outbox retries and dead-letters permanent failures", async () => {
+    const ledger = ledgerFor("ledger-outbox-retry-dead-letter");
+    await createTask(ledger, {
+      task: task(), idempotencyKey: "task-create-outbox-retry", inputHash: "9".repeat(64), now,
+    });
+    await ledger.enqueueOutbox({
+      eventId: "event-outbox-retry", idempotencyKey: "outbox-retry-key",
+      taskId: "task-0001", eventType: "task.created", payload: { taskId: "task-0001" },
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now,
+      }),
+      now,
+    });
+    const first = await ledger.claimOutbox({
+      workerId: "publisher-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "publisher-1", role: "publisher", operation: "claimOutbox", nowMs: now,
+      }),
+      leaseMs: 30_000, now,
+    });
+    const failed = await ledger.failOutbox({
+      eventId: "event-outbox-retry", workerId: "publisher-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "publisher-1", role: "publisher", operation: "failOutbox", nowMs: now + 1,
+      }),
+      leaseGeneration: first.leaseGeneration, retryable: true,
+      errorCode: "UPSTREAM_TIMEOUT", now: now + 1,
+    });
+    expect(failed).toMatchObject({
+      failed: true, retryScheduled: true, deadLettered: false,
+      nextAttemptAt: now + 1_001,
+    });
+    await expect(ledger.claimOutbox({
+      workerId: "publisher-2",
+      workerAssertion: await createWorkerAssertion({
+        subject: "publisher-2", role: "publisher", operation: "claimOutbox", nowMs: now + 500,
+      }),
+      leaseMs: 30_000, now: now + 500,
+    })).resolves.toMatchObject({ claimed: false, reason: "NO_OUTBOX_AVAILABLE" });
+
+    const retry = await ledger.claimOutbox({
+      workerId: "publisher-2",
+      workerAssertion: await createWorkerAssertion({
+        subject: "publisher-2", role: "publisher", operation: "claimOutbox", nowMs: now + 1_001,
+      }),
+      leaseMs: 30_000, now: now + 1_001,
+    });
+    expect(retry).toMatchObject({ claimed: true, event: { attempts: 2 } });
+    const deadLetter = await ledger.failOutbox({
+      eventId: "event-outbox-retry", workerId: "publisher-2",
+      workerAssertion: await createWorkerAssertion({
+        subject: "publisher-2", role: "publisher", operation: "failOutbox", nowMs: now + 1_002,
+      }),
+      leaseGeneration: retry.leaseGeneration, retryable: false,
+      errorCode: "UPSTREAM_REJECTED", now: now + 1_002,
+    });
+    expect(deadLetter).toMatchObject({ failed: true, retryScheduled: false, deadLettered: true });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT retry_state, last_error_code, dead_lettered_at FROM orchestrator_outbox_events WHERE event_id = ?",
+        "event-outbox-retry",
+      ).one()).toMatchObject({
+        retry_state: "DEAD_LETTER",
+        last_error_code: "UPSTREAM_REJECTED",
+        dead_lettered_at: now + 1_002,
+      });
+    });
+  });
+
   it("appends immutable hash-linked audit events and rejects event ID rebinding", async () => {
     const ledger = ledgerFor("ledger-audit-chain");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0010", inputHash: "8".repeat(64), now });

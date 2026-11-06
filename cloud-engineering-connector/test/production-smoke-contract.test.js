@@ -11,6 +11,11 @@ test("Production smoke passes the Production URL and release identity to the sha
   assert.doesNotMatch(smoke, /process\.env\.MCP_BASE_URL\s*=/);
 });
 
+test("Production release requires the webhook and Ledger assertion secret bindings", () => {
+  assert.match(releaseWorkflow, /"GITHUB_WEBHOOK_SECRET"/);
+  assert.match(releaseWorkflow, /"LEDGER_WORKER_ASSERTION_KEYS"/);
+});
+
 test("Production release preflight requires a verifiable PUBLIC_READ_ONLY=true flag", () => {
   assert.match(releaseWorkflow, /assert\.equal\(publicReadOnly\?\.type,\s*"plain_text"/);
   assert.match(releaseWorkflow, /assert\.equal\(publicReadOnly\.text,\s*"true"/);

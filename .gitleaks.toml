@@ -127,8 +127,8 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["d5ffafb6df54e26189d8494548f7693fdcfdf108"]
 paths = ['''^cloud-engineering-connector/test/orchestrator-worker-identity\.test\.js$''']
-regexTarget = "line"
-regexes = ['''const key = "3031323334353637383961626364656630313233343536373839616263646566";''']
+regexTarget = "secret"
+regexes = ['''^3031323334353637383961626364656630313233343536373839616263646566
 
 [[allowlists]]
 description = "Synthetic 32-byte HMAC test key; exact historical commit, file, and literal line only."
@@ -138,3 +138,14 @@ commits = ["a5c36d1c2e7461e38578a688133c797f541b4b46"]
 paths = ['''^cloud-engineering-connector/test/orchestrator-outbox-publisher\.test\.js$''']
 regexTarget = "line"
 regexes = ['''const key = "3031323334353637383961626364656630313233343536373839616263646566";''']
+'']
+
+[[allowlists]]
+description = "Synthetic 32-byte HMAC test key; exact historical commit, file, and literal line only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["a5c36d1c2e7461e38578a688133c797f541b4b46"]
+paths = ['''^cloud-engineering-connector/test/orchestrator-outbox-publisher\.test\.js$''']
+regexTarget = "secret"
+regexes = ['''^3031323334353637383961626364656630313233343536373839616263646566
+'']

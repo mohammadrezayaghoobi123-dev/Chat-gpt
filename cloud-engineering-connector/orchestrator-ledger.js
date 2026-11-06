@@ -238,6 +238,19 @@ export class OrchestratorLedger extends DurableObject {
       )
     `);
     sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_outbox_dead_letters (
+        source_queue TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        message_attempts INTEGER NOT NULL CHECK(message_attempts BETWEEN 1 AND 100),
+        message_timestamp INTEGER NOT NULL,
+        body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
+        body_json TEXT NOT NULL CHECK(json_valid(body_json)),
+        archived_at INTEGER NOT NULL,
+        PRIMARY KEY (source_queue, message_id)
+      )
+    `);
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_dead_letters_by_time ON orchestrator_outbox_dead_letters(archived_at)");
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_consumed_assertions (
         jti TEXT PRIMARY KEY,
         subject TEXT NOT NULL,
@@ -943,6 +956,61 @@ export class OrchestratorLedger extends DurableObject {
         eventId, eventType, schemaVersion, envelopeSha256, consumerId, now,
       );
       return { recorded: true, eventId };
+    });
+  }
+
+  async recordOutboxDeadLetter({
+    queueName, messageId, messageAttempts, messageTimestamp, body,
+    bodySha256, archiverId, workerAssertion, now,
+  } = {}) {
+    identifier(queueName, "queueName");
+    identifier(messageId, "messageId");
+    if (!Number.isSafeInteger(messageAttempts) || messageAttempts < 1 || messageAttempts > 100) {
+      throw fail("messageAttempts must be an integer between 1 and 100.");
+    }
+    timestamp(messageTimestamp, "messageTimestamp");
+    timestamp(now);
+    const bodyJson = serializeBounded(body, "dead-letter body");
+    hash(bodySha256, "bodySha256");
+    const expectedSha256 = await sha256Canonical({
+      queueName, messageId, messageAttempts, messageTimestamp, body: JSON.parse(bodyJson),
+    });
+    if (expectedSha256 !== bodySha256) {
+      return { recorded: false, reason: "DEAD_LETTER_HASH_MISMATCH" };
+    }
+    if (archiverId !== "orchestrator-outbox-dlq-archiver") {
+      return { recorded: false, reason: "INVALID_DEAD_LETTER_ARCHIVER" };
+    }
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: archiverId, role: "consumer", operation: "recordOutboxDeadLetter", nowMs: now,
+      });
+    } catch {
+      return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
+    const sql = this.ctx.storage.sql;
+    return this.ctx.storage.transactionSync(() => {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      const existing = sql.exec(
+        "SELECT * FROM orchestrator_outbox_dead_letters WHERE source_queue = ? AND message_id = ?",
+        queueName, messageId,
+      ).toArray()[0];
+      if (existing) {
+        if (existing.message_attempts === messageAttempts &&
+            existing.message_timestamp === messageTimestamp &&
+            existing.body_sha256 === bodySha256 && existing.body_json === bodyJson) {
+          return { recorded: false, replay: true, messageId };
+        }
+        return { recorded: false, conflict: true, reason: "DEAD_LETTER_MESSAGE_ID_CONFLICT" };
+      }
+      sql.exec(
+        "INSERT INTO orchestrator_outbox_dead_letters (source_queue, message_id, message_attempts, message_timestamp, body_sha256, body_json, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        queueName, messageId, messageAttempts, messageTimestamp, bodySha256, bodyJson, now,
+      );
+      return { recorded: true, messageId };
     });
   }
 

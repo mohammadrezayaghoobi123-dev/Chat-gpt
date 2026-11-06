@@ -422,7 +422,7 @@ export class OrchestratorLedger extends DurableObject {
         sql.exec(
           "INSERT INTO orchestrator_consumed_assertions (jti, subject, role, operation, key_id, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
           verifiedAssertion.jti, verifiedAssertion.subject, verifiedAssertion.role, verifiedAssertion.operation,
-          verifiedAssertion.kid, nowSeconds, nowSeconds + 60, nowSeconds,
+          verifiedAssertion.kid, verifiedAssertion.issuedAt, verifiedAssertion.expiresAt, nowSeconds,
         );
         if (lease) {
           sql.exec(

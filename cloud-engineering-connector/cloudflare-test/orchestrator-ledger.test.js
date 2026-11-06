@@ -23,7 +23,7 @@ const TEST_ASSERTION_KEY = Uint8Array.from(
 function base64Url(bytes) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/=/g, "").replace(/\\+/g, "-").replace(/\\//g, "_");
+  return btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 async function createWorkerAssertion({ subject, role, operation, nowMs, jti }) {
   const issuedAt = Math.floor(nowMs / 1000);

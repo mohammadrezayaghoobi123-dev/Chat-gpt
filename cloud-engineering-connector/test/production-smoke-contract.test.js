@@ -71,5 +71,5 @@ test("Production release verifies both isolated DLQ archive consumers", () => {
   assert.match(release, /stagingDlqConsumer/);
   assert.match(release, /DLQ archive consumer must be attached/);
   assert.match(release, /max_retries, 100/);
-  assert.match(release, /retry_delay, 60/);
+  assert.match(release, /retry_delay, 3600/);
 });

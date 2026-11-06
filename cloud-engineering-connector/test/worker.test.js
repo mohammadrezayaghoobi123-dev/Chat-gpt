@@ -31,11 +31,11 @@ function createKnowledgeStoreBinding(){
 const knowledgeStore=createKnowledgeStoreBinding();
 function createOrchestratorLedgerBinding(){
  const calls=[];
- const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:4}}};
+ const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:5}}};
  return{calls,binding:{idFromName(name){calls.push({method:"idFromName",name});return name},get(id){calls.push({method:"get",id});return stub}}};
 }
 const orchestratorLedger=createOrchestratorLedgerBinding();
-const env={ORCHESTRATOR_LEDGER:orchestratorLedger.binding,ORCHESTRATOR_OUTBOX_QUEUE:{send:async()=>{}},LEDGER_WORKER_ASSERTION_KEYS:JSON.stringify({"worker-v1":randomBytes(32).toString("hex")}),LEDGER_WORKER_ASSERTION_ACTIVE_KID:"worker-v1",MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_READONLY_TOKEN:"read-only-test-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding(),KNOWLEDGE_STORE:knowledgeStore.binding};
+const env={ORCHESTRATOR_LEDGER:orchestratorLedger.binding,ORCHESTRATOR_OUTBOX_QUEUE:{send:async()=>{}},ORCHESTRATOR_OUTBOX_QUEUE_NAME:"chat-gpt111-orchestrator-outbox",ORCHESTRATOR_OUTBOX_DLQ_QUEUE:"chat-gpt111-orchestrator-outbox-dlq",LEDGER_WORKER_ASSERTION_KEYS:JSON.stringify({"worker-v1":randomBytes(32).toString("hex")}),LEDGER_WORKER_ASSERTION_ACTIVE_KID:"worker-v1",MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_READONLY_TOKEN:"read-only-test-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding(),KNOWLEDGE_STORE:knowledgeStore.binding};
 const req=(path,options={})=>{const headers=new Headers(options.headers);if(!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
 const rpc=(method,params={},id=1)=>{if(method==="tools/call"&&params.name==="create_change_pr"&&params.arguments&&!params.arguments.idempotency_key)params={...params,arguments:{...params.arguments,idempotency_key:"worker-test-idempotency-key-"+String(++idempotencyCounter).padStart(8,"0")}};return req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})})};
 const anonymousRpc=(method,params={},id=1)=>{const request=rpc(method,params,id);const headers=new Headers(request.headers);headers.delete("authorization");return new Request(request,{headers})};

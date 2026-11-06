@@ -111,3 +111,12 @@ test("Staging Queue provisioning is manual, explicitly confirmed, MFA-gated, and
   assert.match(workflow, /method: "POST"/);
   assert.match(workflow, /"\/queues"/);
 });
+
+
+test("Staging release preflights the non-secret active Ledger signer key identifier before deployment", () => {
+  const release = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  assert.match(release, /LEDGER_WORKER_ASSERTION_ACTIVE_KID/);
+  assert.match(release, /activeSignerKid\?\.type, "plain_text"/);
+  assert.match(release, /activeSignerKid\.text/);
+  assert.match(release, /bounded identifier/);
+});

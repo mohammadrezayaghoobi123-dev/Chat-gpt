@@ -74,3 +74,38 @@ The account-level Queue list endpoint returned zero Queues.
 ## Release decision
 
 **NO-GO.** Current live Production and Staging settings do not contain the bindings or schedules required by the current Orchestrator source. This audit is read-only evidence; no deployment or configuration mutation was performed.
+
+
+## Follow-up read-only inventory and release-preflight hardening — 2026-11-06 20:12 UTC
+
+A second read-only Cloudflare inventory was performed after the source remediation. No API mutation was issued and no secret values were requested or exposed.
+
+| Resource / binding | Production `chat-gpt111` | Staging `chat-gpt111-staging` |
+|---|---|---|
+| `GITHUB_WEBHOOK_SECRET` | absent | absent |
+| `LEDGER_WORKER_ASSERTION_KEYS` | absent | absent |
+| `LEDGER_WORKER_ASSERTION_ACTIVE_KID` | absent | absent |
+| `ORCHESTRATOR_LEDGER` | absent | absent |
+| `KNOWLEDGE_STORE` | absent | absent |
+| `ORCHESTRATOR_OUTBOX_QUEUE` | absent | absent |
+| Cron schedule | absent | absent |
+| Queue resources in account inventory | none | none |
+
+The existing Staging `WRITE_CONTROL` and rate-limit bindings remain present. Production has its rate-limit binding but lacks the current source's Durable Object namespaces. Existing dashboard secrets were checked by binding name/type only; values were not read.
+
+### Source remediation
+
+- Staging release preflight now requires `LEDGER_WORKER_ASSERTION_ACTIVE_KID` as a non-secret `plain_text` binding and validates its bounded identifier syntax before any deployment step.
+- Production release preflight applies the same check independently to both Production and Staging bindings before permitting the Production release path.
+- This closes a preflight gap: the Worker readiness endpoint already rejected a missing active key ID, but the release workflow previously did not fail until after deployment/readiness.
+- Contract tests were added for both workflow gates, and release-preflight fixtures now model the active key identifier explicitly.
+
+### CI evidence
+
+Head at verification: `8a19b949e406e9ecf2ec38f22300e31cbd35d749`.
+- Cloud Engineering Connector CI run `42286058473`: success; Node tests 384/384, Durable Object tests 100/100, syntax checks and Wrangler production/staging dry-runs passed.
+- Full History Secret Scan run `42286058445`: success.
+- Orchestrator GitHub Intake Contract run `42286058372`: success.
+- Post-deploy Staging smoke: skipped; no live release was performed.
+
+**Release decision remains NO-GO.** The new preflight makes the active signer key ID requirement explicit but does not provision or alter any live binding. Staging runtime activation and end-to-end Queue delivery remain unverified.

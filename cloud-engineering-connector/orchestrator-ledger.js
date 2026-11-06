@@ -890,9 +890,16 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  async recordOutboxReceipt({ eventId, eventType, schemaVersion, envelopeSha256, consumerId, workerAssertion, now } = {}) {
+  async recordOutboxReceipt({
+    eventId, eventType, idempotencyKey, taskId, payload, createdAt,
+    schemaVersion, envelopeSha256, consumerId, workerAssertion, now,
+  } = {}) {
     identifier(eventId, "eventId");
     identifier(eventType, "eventType");
+    identifier(idempotencyKey, "idempotencyKey");
+    identifier(taskId, "taskId");
+    const payloadJson = serializeBounded(payload, "outbox receipt payload");
+    timestamp(createdAt, "createdAt");
     hash(envelopeSha256, "envelopeSha256");
     timestamp(now);
     if (schemaVersion !== 1 || consumerId !== "orchestrator-outbox-consumer") {
@@ -910,6 +917,15 @@ export class OrchestratorLedger extends DurableObject {
     return this.ctx.storage.transactionSync(() => {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      const source = sql.exec(
+        "SELECT event_type, idempotency_key, task_id, payload_json, created_at FROM orchestrator_outbox_events WHERE event_id = ?",
+        eventId,
+      ).toArray()[0];
+      if (!source || source.event_type !== eventType ||
+          source.idempotency_key !== idempotencyKey || source.task_id !== taskId ||
+          source.payload_json !== payloadJson || source.created_at !== createdAt) {
+        return { recorded: false, reason: "OUTBOX_SOURCE_NOT_FOUND" };
       }
       const existing = sql.exec(
         "SELECT * FROM orchestrator_outbox_receipts WHERE event_id = ?",

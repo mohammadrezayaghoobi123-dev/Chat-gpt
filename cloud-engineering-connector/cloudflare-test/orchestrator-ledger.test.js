@@ -85,8 +85,76 @@ describe("OrchestratorLedger durable coordination contract", () => {
     })).resolves.toMatchObject({ released: false, reason: "LEASE_FENCE_MISMATCH" });
     await expect(ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
-      actor: agent, evidence, now: now + 102, workerId: "agent:worker-1", leaseGeneration: first.leaseGeneration,
+      actor: agent, evidence, now: now + 102, workerId: "agent:worker-1",
+      authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseGeneration: first.leaseGeneration,
     })).resolves.toMatchObject({ updated: false, reason: "LEASE_FENCE_MISMATCH" });
+  });
+
+  it("rejects an expired lease even when its generation is still current", async () => {
+    const ledger = ledgerFor("ledger-expired-current-generation");
+    await ledger.createTask({ task: task(), idempotencyKey: "task-expired-current-generation", inputHash: "a".repeat(64), now });
+    const lease = await ledger.claimTask({
+      workerId: "agent:worker-1", authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseMs: 100, now,
+    });
+    expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+    await expect(ledger.transitionTask({
+      taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
+      actor: agent, evidence, now: now + 101, workerId: "agent:worker-1",
+      authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseGeneration: lease.leaseGeneration,
+    })).resolves.toMatchObject({ updated: false, reason: "LEASE_FENCE_MISMATCH" });
+    await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
+  });
+
+  it("rejects a transition when the supplied worker does not own the current lease", async () => {
+    const ledger = ledgerFor("ledger-lease-owner-mismatch");
+    await ledger.createTask({ task: task(), idempotencyKey: "task-lease-owner-mismatch", inputHash: "b".repeat(64), now });
+    const lease = await ledger.claimTask({
+      workerId: "agent:worker-1", authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseMs: 30_000, now,
+    });
+    await expect(ledger.transitionTask({
+      taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
+      actor: { ...agent, id: "agent:worker-2" }, evidence, now: now + 1, workerId: "agent:worker-2",
+      authenticatedWorker: authenticatedWorker("agent:worker-2"), leaseGeneration: lease.leaseGeneration,
+    })).resolves.toMatchObject({ updated: false, reason: "LEASE_FENCE_MISMATCH" });
+  });
+
+  it("rejects forged authenticated worker identity or role despite a valid lease owner", async () => {
+    const ledger = ledgerFor("ledger-forged-authenticated-worker");
+    await ledger.createTask({ task: task(), idempotencyKey: "task-forged-authenticated-worker", inputHash: "c".repeat(64), now });
+    const lease = await ledger.claimTask({
+      workerId: "agent:worker-1", authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseMs: 30_000, now,
+    });
+    for (const forged of [
+      { id: "agent:worker-2", authenticated: true, identityVerified: true, role: "agent" },
+      { id: "agent:worker-1", authenticated: true, identityVerified: true, role: "owner" },
+      { id: "agent:worker-1", authenticated: true, identityVerified: false, role: "agent" },
+      { id: "agent:worker-1", authenticated: false, identityVerified: true, role: "agent" },
+    ]) {
+      await expect(ledger.transitionTask({
+        taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
+        actor: agent, evidence, now: now + 1, workerId: "agent:worker-1",
+        authenticatedWorker: forged, leaseGeneration: lease.leaseGeneration,
+      })).resolves.toMatchObject({ updated: false, reason: "LEASE_FENCE_MISMATCH" });
+    }
+    await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
+  });
+
+  it("serializes concurrent transitions so only one can consume the same live lease and task version", async () => {
+    const ledger = ledgerFor("ledger-concurrent-transition-fence");
+    await ledger.createTask({ task: task(), idempotencyKey: "task-concurrent-transition-fence", inputHash: "d".repeat(64), now });
+    const lease = await ledger.claimTask({
+      workerId: "agent:worker-1", authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseMs: 30_000, now,
+    });
+    const transition = () => ledger.transitionTask({
+      taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
+      actor: agent, evidence, now: now + 1, workerId: "agent:worker-1",
+      authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseGeneration: lease.leaseGeneration,
+    });
+    const results = await Promise.all([transition(), transition()]);
+    expect(results.filter(result => result.updated)).toHaveLength(1);
+    expect(results.filter(result => !result.updated)).toHaveLength(1);
+    expect(results.find(result => !result.updated).reason).toBe("VERSION_OR_STATE_CONFLICT");
+    await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "RUNNING", version: 2 });
   });
 
   it("rejects stale task version or expected-state compare-and-set writes", async () => {
@@ -312,9 +380,6 @@ describe("OrchestratorLedger durable coordination contract", () => {
       ]));
     });
   });
-});
-
-
   it("requires a live task lease for every state transition regardless of caller-declared actor role", async () => {
     const ledger = ledgerFor("ledger-transition-role-bypass");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-role-bypass", inputHash: "e".repeat(64), now });
@@ -333,3 +398,4 @@ describe("OrchestratorLedger durable coordination contract", () => {
     expect(agentWithoutLease).toMatchObject({ updated: false, reason: "LEASE_FENCE_MISMATCH" });
     await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
   });
+});

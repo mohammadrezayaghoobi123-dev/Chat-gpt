@@ -109,3 +109,26 @@ Head at verification: `8a19b949e406e9ecf2ec38f22300e31cbd35d749`.
 - Post-deploy Staging smoke: skipped; no live release was performed.
 
 **Release decision remains NO-GO.** The new preflight makes the active signer key ID requirement explicit but does not provision or alter any live binding. Staging runtime activation and end-to-end Queue delivery remain unverified.
+
+
+## Fresh read-only runtime recheck — 2026-11-06 20:43 UTC
+
+A further Cloudflare API read-only check was performed after the source-level publisher/consumer integration test. The check read only script settings, binding metadata, schedule metadata, and account Queue inventory. It did not request secret values or issue any mutation.
+
+Observed state remained unchanged:
+
+| Resource / binding | Production `chat-gpt111` | Staging `chat-gpt111-staging` |
+|---|---|---|
+| OrchestratorLedger Durable Object binding | absent | absent |
+| KnowledgeStore Durable Object binding | absent | absent |
+| Outbox Queue producer binding | absent | absent |
+| Ledger signer keyset binding | absent | absent |
+| Active signer key ID binding | absent | absent |
+| Cron schedule | absent | absent |
+| Queue resources in account inventory | none | none |
+
+Staging still exposes only the previously observed `WRITE_CONTROL` Durable Object and rate-limit binding among the infrastructure bindings relevant to this release. Production still lacks the Durable Object bindings required by the current source. The primary Staging/Production Outbox Queues have not been provisioned.
+
+The repository's Staging and Production release workflows are prepared to preflight the missing resources and fail closed; neither release workflow was dispatched. The manual Staging Queue provisioning workflow also remains undispatched.
+
+**Runtime conclusion: NO-GO.** The new integration test is source-level evidence using the actual Durable Object implementation and a test Queue transport. It does not substitute for a live Cloudflare Queue, deployed Worker bindings, Cron activation, or a Staging runtime smoke test. No live resource, Worker, secret, schedule, or Production configuration was changed.

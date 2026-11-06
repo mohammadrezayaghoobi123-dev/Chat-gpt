@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { transitionTask as transitionTaskCore, TASK_STATES } from "./orchestrator-core.js";
 import { assertAgentRoundLimit } from "./orchestrator-protocol.js";
 import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orchestrator-protocol.js";
+import { verifyWorkerAssertion } from "./orchestrator-worker-identity.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
@@ -136,6 +137,7 @@ function enqueueOutboxInTransaction(sql, input) {
 export class OrchestratorLedger extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
+    this.env = env;
     this.ctx.blockConcurrencyWhile(async () => this.ensureSchema());
   }
 
@@ -193,6 +195,18 @@ export class OrchestratorLedger extends DurableObject {
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_by_status ON orchestrator_outbox_events(status, created_at)");
     sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_consumed_assertions (
+        jti TEXT PRIMARY KEY,
+        subject TEXT NOT NULL,
+        role TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        key_id TEXT NOT NULL,
+        issued_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at INTEGER NOT NULL
+      )
+    `);
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_audit_events (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
         event_id TEXT NOT NULL UNIQUE,
@@ -215,7 +229,7 @@ export class OrchestratorLedger extends DurableObject {
 
   ping() {
     const result = this.ctx.storage.sql.exec("SELECT 1 AS ok").one();
-    return { ok: Number(result.ok) === 1, schemaVersion: 1 };
+    return { ok: Number(result.ok) === 1, schemaVersion: 2 };
   }
 
   createTask({ task, idempotencyKey, inputHash, now }) {
@@ -356,11 +370,16 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  claimTask({ workerId, authenticatedWorker, leaseMs, now, taskId, reconciliationEvidence } = {}) {
+  async claimTask({ workerId, workerAssertion, leaseMs, now, taskId, reconciliationEvidence } = {}) {
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);
     timestamp(now);
-    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"])) {
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "agent", operation: "claimTask", nowMs: now,
+      });
+    } catch {
       return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     if (taskId !== undefined) identifier(taskId, "taskId");
@@ -403,6 +422,17 @@ export class OrchestratorLedger extends DurableObject {
             row.task_id, workerId, now + leaseMs, now,
           );
         }
+        const assertionReplay = sql.exec(
+          "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
+          verifiedAssertion.jti,
+        ).toArray()[0];
+        if (assertionReplay) return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+        const nowSeconds = Math.floor(now / 1000);
+        sql.exec(
+          "INSERT INTO orchestrator_consumed_assertions (jti, subject, role, operation, key_id, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          verifiedAssertion.jti, verifiedAssertion.subject, verifiedAssertion.role, verifiedAssertion.operation,
+          verifiedAssertion.kid, nowSeconds, nowSeconds + 60, nowSeconds,
+        );
         return {
           claimed: true,
           task: taskProjection,

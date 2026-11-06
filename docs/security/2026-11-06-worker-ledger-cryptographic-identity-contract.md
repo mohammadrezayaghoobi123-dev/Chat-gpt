@@ -130,3 +130,30 @@ No runtime activation until:
 - Do not merge KnowledgeStore and OrchestratorLedger.
 - Do not deploy, migrate, change traffic, configure secrets, or rotate keys as part of source implementation.
 - Production remains NO-GO until all gates are evidenced.
+
+
+## 10. Source implementation update — 2026-11-06
+
+The following source-level controls have now been implemented on the isolated branch
+`remediation/orchestrator-production-hardening`; this does not authorize runtime activation:
+
+- `createScheduledWorkerAssertion` signs HMAC-SHA-256 assertions using the server-only key-set binding and an explicit active `kid`. Its policy is deliberately restricted to the fixed `orchestrator-scheduler` / `system` / `createTask` tuple and the fixed `orchestrator-outbox-publisher` / `publisher` / `claimOutbox|failOutbox|completeOutbox` tuples. It cannot mint an agent assertion or accept a caller-selected principal.
+- The Worker scheduled handler invokes a bounded `processOrchestratorOutbox` publisher. It requires both the `ORCHESTRATOR_LEDGER` Durable Object and an `ORCHESTRATOR_OUTBOX_QUEUE` producer binding before claiming any event.
+- The publisher uses a fresh operation-bound assertion for each claim, failure, and completion; uses a 120-second lease; limits each scheduled batch to 5 events by default and 20 maximum; publishes a versioned envelope carrying the stable `eventId`; and records retryable queue-send failures through the Ledger's existing retry/DLQ state machine.
+- If queue send succeeds but Ledger completion is uncertain, the publisher does not mark the event failed. It leaves the lease to expire and reports completion pending. This is at-least-once delivery: a future Queue consumer MUST atomically deduplicate by `eventId` before any side effect.
+
+### 10.1 Deliberately inactive configuration
+
+At this source revision, `ORCHESTRATOR_OUTBOX_QUEUE` is not declared in `wrangler.toml`, and no Queue consumer exists in this repository. The publisher therefore returns `orchestrator_outbox_queue_unavailable` before calling `claimOutbox`. This is intentional fail-closed behavior, not a completed production pipeline.
+
+The following remain mandatory before activation:
+1. Provision separate Staging and Production Cloudflare Queues and configure the corresponding producer bindings through a reviewed configuration change.
+2. Configure `LEDGER_WORKER_ASSERTION_KEYS` as a Cloudflare secret and `LEDGER_WORKER_ASSERTION_ACTIVE_KID` as the matching non-secret active key identifier in each environment. Verify presence and key compatibility without reading or logging secret values.
+3. Implement and test a Queue consumer with durable `eventId` deduplication, bounded retries, poison-message handling, and explicit event-type policy. No task execution may be inferred from arbitrary outbox payloads.
+4. Add a staging end-to-end test covering claim → publish → consume → deduplicate → completion/recovery, including the send-success/complete-failure duplicate window.
+5. Establish a separate trusted Agent identity channel before any Agent assertion can be minted. The shared MCP bearer remains insufficient.
+6. Complete backup/restore, independent review, branch governance, and operator-approved deployment gates.
+
+### 10.2 Verification boundary
+
+The source implementation and its tests are CI-verified only at their exact recorded commit SHA. The Cloudflare Queue binding, signing secret, consumer, and live Durable Object behavior have not been verified in Staging or Production. Production remains NO-GO.

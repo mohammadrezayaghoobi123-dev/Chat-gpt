@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolveCandidateRef } from "./candidate-ref.js";
 
 const smoke = readFileSync(new URL("./staging-smoke.mjs", import.meta.url), "utf8");
+const worker = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
 
 test("Staging smoke resolves the exact immutable release branch and commit", () => {
   const sha = "a".repeat(40);

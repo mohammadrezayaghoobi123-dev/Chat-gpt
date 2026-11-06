@@ -1,0 +1,75 @@
+name: Provision Staging Orchestrator Outbox Queue
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_staging_outbox_queue:
+        description: "Create only the dedicated Staging Orchestrator Outbox Queue"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: connector-staging-queue-provision
+  cancel-in-progress: false
+
+jobs:
+  provision-staging-queue:
+    if: inputs.create_staging_outbox_queue == true
+    name: Create or verify Staging-only Outbox Queue
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment:
+      name: staging
+    steps:
+      - name: Validate Cloudflare account and MFA
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          const account = process.env.CLOUDFLARE_ACCOUNT_ID;
+          const token = process.env.CLOUDFLARE_API_TOKEN;
+          assert.match(account || "", /^[a-f0-9]{32}$/i, "CLOUDFLARE_ACCOUNT_ID must be configured");
+          assert.ok(typeof token === "string" && token.length > 20, "CLOUDFLARE_API_TOKEN must be configured");
+          const base = "https://api.cloudflare.com/client/v4/accounts/" + account;
+          async function request(path, init = {}) {
+            const response = await fetch(base + path, {
+              ...init,
+              headers: {
+                authorization: "Bearer " + token,
+                accept: "application/json",
+                ...(init.body ? { "content-type": "application/json" } : {}),
+                ...init.headers,
+              },
+              signal: AbortSignal.timeout(15000),
+            });
+            const body = await response.json();
+            assert.equal(response.ok && body.success, true, "Cloudflare API request failed: " + response.status);
+            return body;
+          }
+          const accountInfo = await request("");
+          assert.equal(accountInfo.result?.settings?.enforce_twofactor, true, "Account-level MFA enforcement is required");
+          const queueName = "chat-gpt111-staging-orchestrator-outbox";
+          const inventory = await request("/queues?per_page=100&page=1");
+          const existing = (inventory.result || []).find((queue) => queue.queue_name === queueName);
+          if (existing) {
+            assert.ok(existing.queue_id, "Existing Staging Queue must have a stable resource ID");
+            console.log("Staging Outbox Queue already exists; no mutation was required.");
+          } else {
+            await request("/queues", {
+              method: "POST",
+              body: JSON.stringify({ queue_name: queueName }),
+            });
+            const verification = await request("/queues?per_page=100&page=1");
+            const created = (verification.result || []).find((queue) => queue.queue_name === queueName);
+            assert.ok(created?.queue_id, "New Staging Outbox Queue could not be verified after creation");
+            console.log("Dedicated Staging Outbox Queue created and verified.");
+          }
+          console.log("Only the Staging primary Queue is managed. The Staging DLQ is created by Wrangler when its consumer is attached.");
+          NODE

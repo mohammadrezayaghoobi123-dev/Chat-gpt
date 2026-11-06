@@ -121,3 +121,15 @@ This refresh supersedes the earlier CI identifiers and Node test count in this s
 - No resource was created, modified, deployed, or deleted. No secret value was read.
 
 **Release decision remains NO-GO.** Source configuration and release gates are CI-verified; Queue provisioning, Staging signer configuration, Durable Object activation/migration, live delivery/recovery, and Production remain unverified.
+
+
+## Staging Queue provisioning workflow — 2026-11-06 20:03 UTC
+
+- Source HEAD: `9bf874fb61efc0ad46004f27105191ff40b1574d`.
+- Added `.github/workflows/connector-staging-queue-provision.yml`, a manual `workflow_dispatch` workflow. The required boolean confirmation defaults to false; the job is skipped unless the operator explicitly enables it and the protected `staging` GitHub Environment permits execution.
+- The workflow is restricted to the exact primary Staging Queue name, checks account-level MFA, performs an idempotent inventory-before-create operation, and verifies the resource after creation. It does not create, alter, or delete Production resources, secrets, Workers, or the DLQ. The DLQ is provisioned by Wrangler when the consumer is attached.
+- Cloud Engineering Connector CI #42285022235: success. Node tests: 382 passed, 0 failed. Durable Object tests: 6 files, 100 passed, 0 failed. JavaScript syntax checks and Wrangler Production/Staging dry-runs: success.
+- Full History Secret Scan #42285022180: success. Orchestrator GitHub Intake Contract #42285022159: success.
+- Post-deploy Staging smoke: skipped. The provisioning workflow was not dispatched; no live Queue was created.
+
+**Release remains NO-GO.** The manual Staging provisioning path is prepared and CI-verified, but the live account still has zero Queues and no Staging end-to-end test has run.

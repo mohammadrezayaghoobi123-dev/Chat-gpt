@@ -80,29 +80,36 @@ Parser requirements:
 
 ## 6. Assertion and Ledger transaction design
 
-Add a separate Owner assertion contract rather than expanding the Agent assertion policy. The Worker verifies transport, identity, freshness and grammar before minting; the Ledger verifies the assertion and executes the command. Assertions must be:
-- HMAC-SHA-256 signed with the existing versioned key set, key ID and short expiry.
+Add a separate Owner assertion contract rather than expanding the Agent assertion policy. The Worker verifies transport, identity, freshness and grammar before minting; the Ledger independently verifies the assertion signature and claims before any durable mutation. Assertions must be:
+- HMAC-SHA-256 signed with a dedicated, versioned Owner key and key ID; do not reuse Agent/Publisher signing authority. The key has a short expiry and is available only to the trusted webhook control path.
 - Role `owner`, issuer/audience specific to the OrchestratorLedger.
 - Bound to `repositoryId`, `actorId`, `taskId`, operation, GitHub delivery ID, comment ID, and canonical command hash.
 - Single-use via atomic JTI consumption in the same Durable Object transaction as task transition and audit append.
 - Rejected on expiry, future issue time, wrong repository, actor mismatch, task/operation mismatch, replay, malformed claims, unknown key ID, or key misconfiguration.
 
-The Worker may mint this assertion only after successful stateless validation: raw-body HMAC verification, immutable repository and Owner ID checks, event/action and issue-comment checks, freshness validation, strict command parsing, and bounded input validation. It must not commit a delivery claim before minting. The assertion and verified delivery metadata are passed to the dedicated Ledger entry point, which atomically claims the delivery/comment receipt, consumes the assertion JTI, checks task version/state, applies the transition, appends audit, and stores the command receipt. If that transaction fails, all durable effects roll back and GitHub redelivery can retry safely. No assertion-minting MCP tool or Agent API is added.
+The Worker may mint this assertion only after successful stateless validation: raw-body HMAC verification, immutable repository and Owner ID checks, event/action and issue-comment checks, freshness validation, strict command parsing, and bounded input validation. It must not commit a delivery claim before minting. The assertion and verified delivery metadata are passed to the dedicated Ledger entry point. No assertion-minting MCP tool or Agent API is added.
 
-Dedicated Ledger methods (`ownerCancelTask`, `ownerQuarantineTask`, `ownerReleaseQuarantinedTask`) must verify the assertion themselves. They must not trust caller-supplied actor role, `authenticated`, `identityVerified`, or a free-form resolution flag.
+The Ledger entry point MUST verify the assertion cryptographically and validate its complete context before attempting a durable write. WebCrypto verification is asynchronous; it must not be awaited inside `ctx.storage.transactionSync()`. The same applies to `sha256Canonical()`. The pre-transaction phase must be side-effect-free: verify signature/claims, validate bounded inputs, read a snapshot of the task version and audit-chain head, and compute the canonical command/body/audit hash material from that snapshot. It must not claim a delivery, consume a JTI, or mutate task/audit/receipt state.
+
+Dedicated Ledger methods (`ownerCancelTask`, `ownerQuarantineTask`, `ownerReleaseQuarantinedTask`) must perform this verification themselves. They must not trust caller-supplied actor role, `authenticated`, `identityVerified`, or a free-form resolution flag.
 
 Use a dedicated `executeOwnerCommand` Ledger entry point (or equivalent narrowly scoped methods) that owns the entire delivery/command transaction. Do not call `claimGitHubDelivery` in a separate committed transaction before executing the Owner command: that would consume the delivery if a later task/audit write failed, preventing GitHub redelivery from completing the command.
 
-Within one synchronous Durable Object transaction:
-1. check/claim the GitHub delivery ID and comment ID against a dedicated Owner-command receipt table;
-2. return the stored result for an exact replay; reject delivery/comment ID reuse with a different body/command hash;
-3. verify and consume the context-bound assertion JTI exactly once (the assertion is minted after stateless Worker validation, not after a separately committed delivery claim);
-4. load task and check expected version/current state;
-5. apply the specific allowed transition if valid;
-6. append the hash-chained audit event with provenance and bounded reason;
-7. persist the task projection and a durable command receipt containing the bounded result code/result JSON.
+### Atomic commit protocol
 
-The receipt is committed for deterministic policy outcomes (for example, version/state conflict) so a redelivery returns the same outcome without re-execution. Unexpected SQL/storage failures abort the transaction, rolling back delivery claim, assertion consumption, task mutation, audit append and receipt together; GitHub may then retry safely. If any mutation fails, no partial task or audit write is committed. Audit data excludes secrets and raw webhook payloads; store body/command hashes and minimal provenance only.
+Use a short `transactionSync()` callback containing synchronous SQL operations only. No `await`, WebCrypto, network I/O, or asynchronous callback is permitted inside it. The transaction MUST:
+
+1. Check the delivery ID and comment ID in the dedicated Owner-command receipt table. Return the stored result for an exact replay; reject identifier reuse with a different body/command hash.
+2. Compare the current task version/state and current audit-chain head with the snapshot used to precompute the audit hash. If either changed, abort without consuming the JTI or delivery; the entry point may re-read/recompute and retry a strictly bounded number of times. If the task's expected version/state is now invalid, persist a deterministic conflict receipt atomically and do not apply the requested transition.
+3. Insert/consume the assertion JTI under a unique constraint, bound to the assertion hash and command context. A duplicate JTI must fail closed.
+4. Claim the delivery ID and comment ID with their body/command hashes.
+5. Apply the dedicated allowed task transition and version increment.
+6. Append the precomputed hash-chained audit event, whose previous-hash value was checked against the current audit head in step 2.
+7. Persist the bounded command result receipt.
+
+All writes in steps 3–7 MUST commit or roll back together. Any SQL/storage exception aborts the transaction, leaving the JTI, delivery/comment receipt, task projection, audit chain and command receipt unchanged so GitHub redelivery can retry. The pre-transaction snapshot/hash phase is not itself authoritative: the in-transaction version and audit-head comparisons are the compare-and-swap fence that prevents stale hashes or concurrent commands from committing. Do not hold a transaction open across network I/O.
+
+The receipt is committed for deterministic policy outcomes (for example, a task version/state conflict) so a redelivery returns the same outcome without re-execution. Define explicitly whether rejected commands produce a separate audit event; if they do, that event must use the same audit-head compare-and-swap and atomic commit protocol. Audit data excludes secrets and raw webhook payloads; store body/command hashes and minimal provenance only.
 
 ## 7. Replay, ordering, and failure behavior
 

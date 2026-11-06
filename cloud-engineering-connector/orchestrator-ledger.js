@@ -70,11 +70,6 @@ function validLeaseMs(value) {
   }
 }
 
-function hasVerifiedWorkerIdentity(worker, workerId, allowedRoles) {
-  return worker !== null && typeof worker === "object" && !Array.isArray(worker) &&
-    worker.authenticated === true && worker.identityVerified === true &&
-    worker.id === workerId && allowedRoles.includes(worker.role);
-}
 
 function consumeWorkerAssertion(sql, assertion, nowMs) {
   const existing = sql.exec(
@@ -693,17 +688,25 @@ export class OrchestratorLedger extends DurableObject {
     };
   }
 
-  async appendAuditEvent({ eventId, taskId, actor, eventType, details, now }) {
+  async appendAuditEvent({ eventId, taskId, actor, workerId, workerAssertion, eventType, details, now }) {
     identifier(eventId, "eventId");
     identifier(taskId, "taskId");
-    if (!actor || typeof actor !== "object" || actor.authenticated !== true ||
-        actor.identityVerified !== true || !["agent", "reviewer", "owner", "system"].includes(actor.role)) {
-      throw fail("Audit events require an authenticated actor identity.", "AUTHENTICATED_ACTOR_REQUIRED");
-    }
-    const actorId = identifier(actor.id, "actor.id");
-    const actorRole = identifier(actor.role, "actor.role");
+    identifier(workerId, "workerId");
     identifier(eventType, "eventType");
     timestamp(now);
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "agent", operation: "appendAuditEvent", nowMs: now,
+      });
+    } catch {
+      return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+    }
+    if (!actor || typeof actor !== "object" || actor.id !== verifiedAssertion.subject || actor.role !== verifiedAssertion.role) {
+      return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+    }
+    const actorId = verifiedAssertion.subject;
+    const actorRole = verifiedAssertion.role;
     const detailsJson = serializeBounded(details, "audit details");
     const sql = this.ctx.storage.sql;
     if (!sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0]) {
@@ -726,27 +729,24 @@ export class OrchestratorLedger extends DurableObject {
         eventId, taskId, actorId, actorRole, eventType, details: JSON.parse(detailsJson), occurredAt: now, previousHash,
       });
       const inserted = this.ctx.storage.transactionSync(() => {
+        if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return "replay";
         const latest = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
-        if ((latest?.event_hash ?? null) !== previousHash) return false;
+        if ((latest?.event_hash ?? null) !== previousHash) return "retry";
         const duplicate = sql.exec("SELECT * FROM orchestrator_audit_events WHERE event_id = ?", eventId).toArray()[0];
-        if (duplicate) return false;
+        if (duplicate) return "retry";
         sql.exec(
           "INSERT INTO orchestrator_audit_events (event_id, task_id, actor_id, actor_role, event_type, details_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
           eventId, taskId, actorId, actorRole, eventType, detailsJson, previousHash, eventHash, now,
         );
-        return true;
+        return "inserted";
       });
-      if (inserted) {
-        return {
-          appended: true,
-          event: this.auditFromRow({
-            event_id: eventId, task_id: taskId, actor_id: actorId, actor_role: actorRole,
-            event_type: eventType, details_json: detailsJson, previous_hash: previousHash,
-            event_hash: eventHash, created_at: now,
-          }),
-        };
-      }
+      if (inserted === "replay") return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+      if (inserted === "retry") continue;
+      return { appended: true, event: {
+        eventId, taskId, actorId, actorRole, eventType, details: JSON.parse(detailsJson),
+        previousHash, eventHash, createdAt: now,
+      } };
     }
-    throw fail("Audit append could not acquire a stable chain head.", "AUDIT_APPEND_CONTENTION");
+    throw fail("Audit chain changed too frequently; retry the append.", "AUDIT_CHAIN_CONTENTION");
   }
 }

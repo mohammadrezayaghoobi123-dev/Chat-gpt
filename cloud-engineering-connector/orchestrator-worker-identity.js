@@ -129,3 +129,13 @@ export async function createScheduledWorkerAssertion(keySet, activeKid, expected
     throw reject();
   }
 }
+
+export function validateWorkerAssertionSigningConfig(keySet, activeKid) {
+  try {
+    if (typeof activeKid !== "string" || !KID.test(activeKid)) throw reject();
+    loadKey(keySet, activeKid);
+    return true;
+  } catch {
+    return false;
+  }
+}

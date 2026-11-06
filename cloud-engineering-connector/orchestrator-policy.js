@@ -1,4 +1,4 @@
-import { isProtectedAgentTargetBranch } from "./orchestrator-branch-policy.js";
+import { isAllowedAgentTargetBranch, isProtectedAgentTargetBranch } from "./orchestrator-branch-policy.js";
 
 export const POLICY_DECISIONS = Object.freeze(["ALLOW", "DENY", "QUARANTINE"]);
 
@@ -148,6 +148,11 @@ export function evaluateOrchestratorPolicy({
   if (protectedSet.has(baseBranch) || protectedSet.has(targetBranch) ||
       isProtectedAgentTargetBranch(targetBranch)) {
     return deny("PROTECTED_BRANCH", context);
+  }
+  // Agent write targets are restricted to task/ and ops/ namespaces. The
+  // caller-supplied baseBranch is context only; it cannot grant target authority.
+  if (BRANCH_WRITE_ACTIONS.has(action) && !isAllowedAgentTargetBranch(targetBranch)) {
+    return deny("AGENT_TARGET_BRANCH_NOT_ALLOWLISTED", context);
   }
   // A branch-writing action may never target the branch it is based on (direct write to the base);
   // stacked work must use a distinct task/ops branch. Read-only actions are unaffected.

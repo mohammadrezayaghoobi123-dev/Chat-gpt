@@ -333,3 +333,16 @@ describe("OrchestratorLedger durable coordination contract", () => {
     expect(agentWithoutLease).toMatchObject({ updated: false, reason: "LEASE_FENCE_MISMATCH" });
     await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
   });
+
+
+it("rejects a caller-forged legacy worker identity before creating a lease", async () => {
+  const ledger = ledgerFor("ledger-forged-legacy-worker-identity");
+  await ledger.createTask({ task: task(), idempotencyKey: "task-create-forged-identity", inputHash: "a".repeat(64), now });
+  const forged = { id: "agent:worker-1", authenticated: true, identityVerified: true, role: "agent" };
+  await expect(ledger.claimTask({
+    workerId: "agent:worker-1", authenticatedWorker: forged, leaseMs: 30_000, now,
+  })).resolves.toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_execution_leases").one().count).toBe(0);
+  });
+});

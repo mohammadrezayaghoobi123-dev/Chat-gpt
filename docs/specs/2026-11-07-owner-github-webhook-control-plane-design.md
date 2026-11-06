@@ -17,8 +17,9 @@ Owner authority is granted only when all of the following hold:
 4. Payload repository full name and numeric repository ID match the immutable configured repository identity.
 5. `sender.id` and `comment.user.id` both equal the configured Owner GitHub numeric ID `335530603`; sender and comment author must agree.
 6. Comment timestamp is within the configured bounded freshness window; future timestamps beyond allowed clock skew are rejected.
-7. Command grammar, operation, task ID, task state/version and required reason/resolution are valid.
-8. The command is atomically applied with a one-time, context-bound Owner assertion and an append-only audit event.
+7. Only a newly created issue comment (not a pull-request review comment) is eligible; `comment.user.id` must equal `sender.id`, the author must not be a Bot, and freshness is derived from `comment.created_at` (not `issue.updated_at`).
+8. Command grammar, operation, task ID, task state/version and required reason/resolution are valid.
+9. The command is atomically applied with a one-time, context-bound Owner assertion and an append-only audit event.
 
 No Owner operation is exposed as an MCP tool. The MCP bearer is not an Owner credential.
 
@@ -61,7 +62,7 @@ Parser requirements:
 - Exact command prefix and operation allowlist; no shell evaluation, interpolation, aliases, or free-form subcommands.
 - Task ID grammar and reason length are bounded; control characters and sensitive-field patterns are rejected.
 - Only `issue_comment.created` is eligible; edits, deletes, PR review comments, workflow_dispatch, issue text, and MCP arguments are not.
-- The command's issue/comment metadata is provenance, not authority; authority is derived from verified webhook sender and configured immutable IDs.
+- The command's issue/comment metadata is provenance, not authority; authority is derived from verified webhook sender and configured immutable IDs. Reject payloads containing `issue.pull_request`; only issue comments are accepted.
 - The Owner comment ID and delivery ID are recorded; repeated delivery is a no-op, and a second distinct comment repeating a terminal operation returns a deterministic conflict/no-op according to task state.
 
 ## 5. Privileged operations and state rules
@@ -79,7 +80,7 @@ Parser requirements:
 
 ## 6. Assertion and Ledger transaction design
 
-Add a separate Owner assertion contract rather than expanding the Agent assertion policy. Assertions must be:
+Add a separate Owner assertion contract rather than expanding the Agent assertion policy. The Worker verifies transport, identity, freshness and grammar before minting; the Ledger verifies the assertion and executes the command. Assertions must be:
 - HMAC-SHA-256 signed with the existing versioned key set, key ID and short expiry.
 - Role `owner`, issuer/audience specific to the OrchestratorLedger.
 - Bound to `repositoryId`, `actorId`, `taskId`, operation, GitHub delivery ID, comment ID, and canonical command hash.
@@ -90,14 +91,18 @@ The Worker may mint this assertion only after successful raw-body HMAC verificat
 
 Dedicated Ledger methods (`ownerCancelTask`, `ownerQuarantineTask`, `ownerReleaseQuarantinedTask`) must verify the assertion themselves. They must not trust caller-supplied actor role, `authenticated`, `identityVerified`, or a free-form resolution flag.
 
-Each method performs, in one synchronous Durable Object transaction:
-1. consume the context-bound assertion JTI exactly once;
-2. load task and check expected version/current state;
-3. apply the specific allowed transition;
-4. append the hash-chained audit event with provenance and bounded reason;
-5. persist task projection and audit event atomically.
+Use a dedicated `executeOwnerCommand` Ledger entry point (or equivalent narrowly scoped methods) that owns the entire delivery/command transaction. Do not call `claimGitHubDelivery` in a separate committed transaction before executing the Owner command: that would consume the delivery if a later task/audit write failed, preventing GitHub redelivery from completing the command.
 
-If any step fails, no partial task or audit write is committed. Audit data excludes secrets and raw webhook payloads; store body/command hashes and minimal provenance only.
+Within one synchronous Durable Object transaction:
+1. check/claim the GitHub delivery ID and comment ID against a dedicated Owner-command receipt table;
+2. return the stored result for an exact replay; reject delivery/comment ID reuse with a different body/command hash;
+3. consume the context-bound assertion JTI exactly once;
+4. load task and check expected version/current state;
+5. apply the specific allowed transition if valid;
+6. append the hash-chained audit event with provenance and bounded reason;
+7. persist the task projection and a durable command receipt containing the bounded result code/result JSON.
+
+The receipt is committed for deterministic policy outcomes (for example, version/state conflict) so a redelivery returns the same outcome without re-execution. Unexpected SQL/storage failures abort the transaction, rolling back delivery claim, assertion consumption, task mutation, audit append and receipt together; GitHub may then retry safely. If any mutation fails, no partial task or audit write is committed. Audit data excludes secrets and raw webhook payloads; store body/command hashes and minimal provenance only.
 
 ## 7. Replay, ordering, and failure behavior
 
@@ -122,7 +127,11 @@ Required secret:
 
 The existing general `GITHUB_WEBHOOK_AUTHORIZED_ACTOR_IDS` remains separate and cannot broaden Owner authority. The Owner ID and repository ID are configuration invariants and should be validated at startup/readiness without logging secret values.
 
-## 9. Audit schema
+## 9. Durable command receipt and migration
+
+Add an additive, idempotent OrchestratorLedger schema migration for a dedicated Owner-command receipt table keyed by GitHub delivery ID and comment ID. Store command/body hashes, task ID, operation, bounded result code/result JSON, and timestamps; never store raw payloads, secrets or signed assertions. A matching duplicate returns the persisted result. A hash mismatch is a conflict. Migration must preserve existing Ledger data and be covered by fresh-install and upgrade-from-current-schema tests.
+
+## 10. Audit schema
 
 Owner audit event must include:
 - immutable event ID and task ID;
@@ -136,7 +145,7 @@ Owner audit event must include:
 
 Do not store raw webhook body, comment body beyond the bounded reason, HMAC secret, signed assertion, or access token.
 
-## 10. Test and acceptance plan (test-first)
+## 11. Test and acceptance plan (test-first)
 
 ### Unit tests — command and identity policy
 - Accept exact Owner ID + exact repository ID + `issue_comment.created` + valid command.
@@ -160,8 +169,8 @@ Do not store raw webhook body, comment body beyond the bounded reason, HMAC secr
 
 ### Worker integration tests
 - Exercise `POST /webhooks/github` with real HMAC-signed fixture bodies and mock Durable Object binding.
-- Verify exact sender/repository/action/freshness/replay checks before any Owner assertion is minted.
-- Verify duplicate webhook causes no second Ledger mutation.
+- Verify exact sender/comment-author/repository/action/freshness/replay checks before any Owner assertion is minted; reject PR review comments and bot authors.
+- Verify exact redelivery returns the stored result; body/command hash mismatch conflicts; injected storage failure rolls back receipt, JTI consumption, task and audit so a retry can safely succeed.
 - Verify malformed or unauthorized commands are rejected without state change.
 - Verify normal P2-B intake behavior is unchanged.
 
@@ -171,7 +180,7 @@ Do not store raw webhook body, comment body beyond the bounded reason, HMAC secr
 - Wrangler dry-run is configuration validation only; no live deploy.
 - No staging smoke or production action is performed without separate explicit authorization.
 
-## 11. Rollout and safety boundary
+## 12. Rollout and safety boundary
 
 This design and its implementation do not authorize deployment. Before any activation:
 1. Configure and verify the Owner ID, repository ID and webhook event subscription in Staging.

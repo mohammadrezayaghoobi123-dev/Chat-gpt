@@ -7,7 +7,7 @@ let idempotencyCounter=0;
 function createKnowledgeStoreBinding(){
  const calls=[];
  const stub={
-  ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:4}},
+  ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:3}},
   getEntity:async input=>{calls.push({method:"getEntity",input});return{...input,entityType:"service",name:"API",properties:{},version:1}},
   upsertEntity:async input=>{calls.push({method:"upsertEntity",input});return input},
   createRelationship:async input=>{calls.push({method:"createRelationship",input});return input},

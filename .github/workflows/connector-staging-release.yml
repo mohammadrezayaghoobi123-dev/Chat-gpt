@@ -182,7 +182,16 @@ jobs:
             assert.equal(response.ok && body.success, true, "Cloudflare verification failed: HTTP " + response.status);
             return body.result;
           }
-          const [settings, schedules] = await Promise.all([api("/settings"), api("/schedules")]);
+          async function queueInventory() {
+            const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/queues?per_page=100`, {
+              headers: { authorization: "Bearer " + token, accept: "application/json" },
+              signal: AbortSignal.timeout(15000),
+            });
+            const body = await response.json();
+            assert.equal(response.ok && body.success, true, "Cloudflare Queue verification failed: HTTP " + response.status);
+            return body.result || [];
+          }
+          const [settings, schedules, queues] = await Promise.all([api("/settings"), api("/schedules"), queueInventory()]);
           const bindings = new Map((settings.bindings || []).map((binding) => [binding.name, binding]));
           const knowledgeStore = bindings.get("KNOWLEDGE_STORE");
           assert.equal(knowledgeStore?.type, "durable_object_namespace", "Staging KNOWLEDGE_STORE Durable Object binding is required");
@@ -194,7 +203,18 @@ jobs:
             (schedules.schedules || []).some((schedule) => schedule.cron === "*/5 * * * *"),
             "Staging five-minute Knowledge Store reconciliation Cron must be active",
           );
-          console.log("Staging KnowledgeStore binding and five-minute reconciliation Cron are verified.");
+          const outboxQueue = queues.find((queue) => queue.queue_name === "chat-gpt111-staging-orchestrator-outbox");
+          const outboxDlq = queues.find((queue) => queue.queue_name === "chat-gpt111-staging-orchestrator-outbox-dlq");
+          assert.ok(outboxQueue?.queue_id, "Staging Orchestrator Outbox Queue must exist after deployment");
+          assert.ok(outboxDlq?.queue_id, "Staging Orchestrator Outbox DLQ must exist after deployment");
+          const consumer = (outboxQueue.consumers || []).find((item) => item.script_name === "chat-gpt111-staging");
+          assert.ok(consumer?.consumer_id, "Staging Queue consumer must be attached to the intended Worker");
+          assert.equal(consumer.dead_letter_queue, "chat-gpt111-staging-orchestrator-outbox-dlq", "Staging Queue consumer must use its isolated DLQ");
+          assert.equal(consumer.settings?.batch_size, 5, "Staging Queue batch size must remain bounded at 5");
+          assert.equal(consumer.settings?.max_concurrency, 5, "Staging Queue consumer concurrency must remain bounded at 5");
+          assert.equal(consumer.settings?.max_retries, 5, "Staging Queue retry count must remain bounded at 5");
+          assert.equal(consumer.settings?.retry_delay, 30, "Staging Queue retry delay must remain 30 seconds");
+          console.log("Staging Durable Object, Queue consumer, isolated DLQ, retry policy, and Cron are verified.");
           NODE
 
       - name: Run live Staging acceptance

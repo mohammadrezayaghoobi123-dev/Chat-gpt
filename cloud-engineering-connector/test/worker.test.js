@@ -31,7 +31,7 @@ function createKnowledgeStoreBinding(){
 const knowledgeStore=createKnowledgeStoreBinding();
 function createOrchestratorLedgerBinding(){
  const calls=[];
- const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:3}}};
+ const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:4}}};
  return{calls,binding:{idFromName(name){calls.push({method:"idFromName",name});return name},get(id){calls.push({method:"get",id});return stub}}};
 }
 const orchestratorLedger=createOrchestratorLedgerBinding();
@@ -1494,7 +1494,7 @@ test("Queue consumer durably acknowledges first delivery and identical redeliver
   LEDGER_WORKER_ASSERTION_ACTIVE_KID:env.LEDGER_WORKER_ASSERTION_ACTIVE_KID
  };
  const body={
-  schemaVersion:1,eventId:"evt-consumer-00000001",idempotencyKey:"idem-consumer-0001",
+  schemaVersion:1,eventId:"queue-event-test-0001",idempotencyKey:"queue-idempotency-test-0001",
   taskId:"task-consumer-0001",eventType:"task.transitioned",
   payload:{taskId:"task-consumer-0001",from:"SCHEDULED",to:"RUNNING"},
   attempts:1,createdAt:Date.now()
@@ -1514,7 +1514,7 @@ test("Queue consumer durably acknowledges first delivery and identical redeliver
 test("Queue consumer retries unknown event types without invoking durable receipt",async()=>{
  let receiptCalls=0,retried=0,acked=0;
  const result=await consumeOrchestratorOutbox({messages:[{
-  body:{schemaVersion:1,eventId:"evt-unknown-00000001",idempotencyKey:"idem-unknown-0001",taskId:"task-unknown-0001",eventType:"task.execute",payload:{command:"run"},attempts:1,createdAt:Date.now()},
+  body:{schemaVersion:1,eventId:"queue-event-unknown-0001",idempotencyKey:"queue-idempotency-unknown-0001",taskId:"task-unknown-0001",eventType:"task.execute",payload:{command:"run"},attempts:1,createdAt:Date.now()},
   ack(){acked++},retry(){retried++}
  }]},{
   ORCHESTRATOR_LEDGER:{idFromName:name=>name,get:()=>({recordOutboxReceipt:async()=>{receiptCalls++;return{recorded:true}}})},

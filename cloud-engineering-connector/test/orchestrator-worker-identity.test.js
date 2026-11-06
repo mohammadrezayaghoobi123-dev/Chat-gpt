@@ -88,3 +88,25 @@ test("scheduled signer issues a consumer assertion only for durable receipt reco
     error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
   );
 });
+
+
+test("scheduled signer authorizes only the dedicated DLQ archiver principal and operation", async () => {
+  const expected = {
+    subject: "orchestrator-outbox-dlq-archiver",
+    role: "consumer",
+    operation: "recordOutboxDeadLetter",
+    nowMs,
+  };
+  const token = await createScheduledWorkerAssertion(keySet, "worker-v1", expected);
+  const verified = await verifyWorkerAssertion(keySet, token, expected);
+  assert.equal(verified.subject, expected.subject);
+  assert.equal(verified.role, "consumer");
+  assert.equal(verified.operation, "recordOutboxDeadLetter");
+  await assert.rejects(
+    createScheduledWorkerAssertion(keySet, "worker-v1", {
+      ...expected,
+      operation: "recordOutboxReceipt",
+    }),
+    error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
+  );
+});

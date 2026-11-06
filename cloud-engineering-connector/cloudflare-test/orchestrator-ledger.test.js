@@ -594,3 +594,19 @@ it("rejects unauthenticated and caller-forged task creation", async () => {
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count).toBe(0);
   });
 });
+
+it("prunes consumed assertion IDs only after expiry plus the retention margin", async () => {
+  const ledger = ledgerFor("ledger-assertion-retention");
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-retention-1", inputHash: "2".repeat(64), now });
+  const assertion = await createWorkerAssertion({
+    subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+    jti: "jti-claim-retention-000000000001",
+  });
+  await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: assertion, leaseMs: 30_000, now });
+  const later = now + 12 * 60 * 1000;
+  await createTask(ledger, { task: task("task-0002"), idempotencyKey: "task-create-retention-2", inputHash: "3".repeat(64), now: later });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti='jti-claim-retention-000000000001'").one().count).toBe(0);
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(1);
+  });
+});

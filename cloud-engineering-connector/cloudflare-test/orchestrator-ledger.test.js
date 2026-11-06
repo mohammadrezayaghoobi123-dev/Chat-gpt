@@ -721,3 +721,66 @@ it("prunes consumed assertion IDs only after expiry plus the retention margin", 
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(1);
   });
 });
+
+
+it("moves an expired final-attempt outbox lease to a lease-free dead-letter state", async () => {
+  const ledger = ledgerFor("ledger-outbox-final-attempt-crash");
+  await createTask(ledger, {
+    task: task(), idempotencyKey: "task-create-final-attempt-crash", inputHash: "f".repeat(64), now,
+  });
+  await ledger.enqueueOutbox({
+    eventId: "event-final-attempt-crash", idempotencyKey: "outbox-final-attempt-crash",
+    taskId: "task-0001", eventType: "task.created", payload: { taskId: "task-0001" },
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now,
+    }),
+    now,
+  });
+
+  let finalAttempt;
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    const attemptNow = now + (attempt - 1) * 101;
+    finalAttempt = await ledger.claimOutbox({
+      workerId: "publisher-" + attempt,
+      workerAssertion: await createWorkerAssertion({
+        subject: "publisher-" + attempt, role: "publisher", operation: "claimOutbox", nowMs: attemptNow,
+      }),
+      leaseMs: 100, now: attemptNow,
+    });
+    expect(finalAttempt).toMatchObject({ claimed: true, event: { attempts: attempt } });
+  }
+
+  const afterLeaseExpiry = now + 8 * 101;
+  const exhausted = await ledger.claimOutbox({
+    workerId: "publisher-recovery",
+    workerAssertion: await createWorkerAssertion({
+      subject: "publisher-recovery", role: "publisher", operation: "claimOutbox", nowMs: afterLeaseExpiry,
+    }),
+    leaseMs: 100, now: afterLeaseExpiry,
+  });
+  expect(exhausted).toMatchObject({
+    claimed: false,
+    deadLettered: true,
+    reason: "OUTBOX_MAX_ATTEMPTS",
+    event: {
+      status: "PENDING",
+      retryState: "DEAD_LETTER",
+      leaseWorkerId: null,
+      leaseUntil: 0,
+      attempts: 8,
+    },
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT status, retry_state, lease_worker_id, lease_until, dead_lettered_at FROM orchestrator_outbox_events WHERE event_id = ?",
+      "event-final-attempt-crash",
+    ).one()).toMatchObject({
+      status: "PENDING",
+      retry_state: "DEAD_LETTER",
+      lease_worker_id: null,
+      lease_until: 0,
+      dead_lettered_at: afterLeaseExpiry,
+    });
+  });
+});

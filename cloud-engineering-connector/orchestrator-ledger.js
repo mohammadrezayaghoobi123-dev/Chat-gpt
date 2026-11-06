@@ -452,11 +452,16 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  advanceAgentRound({ taskId, expectedVersion, expectedRound, nextRound, workerId, authenticatedWorker, leaseGeneration, now }) {
+  async advanceAgentRound({ taskId, expectedVersion, expectedRound, nextRound, workerId, workerAssertion, leaseGeneration, now }) {
     identifier(taskId, "taskId");
     identifier(workerId, "workerId");
     timestamp(now);
-    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"])) {
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "agent", operation: "advanceAgentRound", nowMs: now,
+      });
+    } catch {
       return { advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1 ||
@@ -488,6 +493,9 @@ export class OrchestratorLedger extends DurableObject {
       if (assignedAgentId !== workerId || !lease || lease.worker_id !== workerId ||
           lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { advanced: false, reason: "LEASE_FENCE_MISMATCH", task: current };
+      }
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       const next = {
         ...current,

@@ -1328,7 +1328,13 @@ export async function consumeOrchestratorDeadLetters(batch, env) {
     totals.retried += 1;
     continue;
    }
-   const bodySha256 = await sha256Hex(stableStringify(message.body));
+   const bodySha256 = await sha256Hex(stableStringify({
+    queueName: expectedQueue,
+    messageId: message.id,
+    messageAttempts: message.attempts,
+    messageTimestamp,
+    body: message.body,
+   }));
    const now = Date.now();
    const workerAssertion = await createScheduledWorkerAssertion(
     env.LEDGER_WORKER_ASSERTION_KEYS,

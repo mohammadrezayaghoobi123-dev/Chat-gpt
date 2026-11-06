@@ -138,3 +138,12 @@ test("Staging release paginates every Cloudflare Queue inventory page in preflig
   assert.equal((release.match(/result_info\?\.total_pages/g) || []).length, 2);
   assert.equal((release.match(/page <= 1000/g) || []).length, 2);
 });
+
+
+test("Staging release verifies the DLQ archive consumer and its bounded retry policy", () => {
+  const release = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  assert.match(release, /const dlqConsumer = \(outboxDlq\.consumers \|\| \[\]\)\.find/);
+  assert.match(release, /Staging DLQ archive consumer must be attached/);
+  assert.match(release, /dlqConsumer\.settings\?\.max_retries, 100/);
+  assert.match(release, /dlqConsumer\.settings\?\.retry_delay, 60/);
+});

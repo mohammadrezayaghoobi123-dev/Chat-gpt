@@ -97,3 +97,17 @@ test("Staging release preflights its Queue resource and verifies the deployed co
   assert.match(release, /consumer\.settings\?\.retry_delay, 30/);
   assert.match(release, /consumer\.dead_letter_queue/);
 });
+
+
+test("Staging Queue provisioning is manual, explicitly confirmed, MFA-gated, and cannot target Production", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/connector-staging-queue-provision.yml", import.meta.url), "utf8");
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /create_staging_outbox_queue:/);
+  assert.match(workflow, /default: false/);
+  assert.match(workflow, /if: inputs\.create_staging_outbox_queue == true/);
+  assert.match(workflow, /enforce_twofactor, true/);
+  assert.match(workflow, /chat-gpt111-staging-orchestrator-outbox/);
+  assert.doesNotMatch(workflow, /chat-gpt111-orchestrator-outbox/);
+  assert.match(workflow, /method: "POST"/);
+  assert.match(workflow, /"\/queues"/);
+});

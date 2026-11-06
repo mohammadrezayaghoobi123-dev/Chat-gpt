@@ -1182,7 +1182,10 @@ it("integrates the DLQ consumer with Durable Object archival before message ackn
   const messageTimestamp = Date.now() - 1000;
   const consumerEnv = {
     ORCHESTRATOR_OUTBOX_DLQ_QUEUE: queueName,
-    ORCHESTRATOR_LEDGER: env.ORCHESTRATOR_LEDGER,
+    ORCHESTRATOR_LEDGER: {
+      idFromName: name => name,
+      get: () => ledger,
+    },
     LEDGER_WORKER_ASSERTION_KEYS: JSON.stringify({
       [TEST_ASSERTION_KID]: "3031323334353637383961626364656630313233343536373839616263646566",
     }),

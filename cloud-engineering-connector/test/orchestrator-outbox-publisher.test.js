@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
+import { consumeOrchestratorDeadLetters, consumeOrchestratorOutbox, handleOrchestratorQueue, processOrchestratorOutbox } from "../worker.js";
 
 const now = Date.now();
 const key = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
@@ -168,4 +168,90 @@ test("emits redacted structured consumer metrics for retry outcomes", async () =
   } finally {
     console.error = originalError;
   }
+});
+
+
+test("archives DLQ deliveries idempotently before acknowledging them", async () => {
+  const archived = new Map();
+  const calls = [];
+  const queueName = "chat-gpt111-staging-orchestrator-outbox-dlq";
+  const consumerEnv = {
+    ORCHESTRATOR_OUTBOX_DLQ_QUEUE: queueName,
+    ORCHESTRATOR_OUTBOX_QUEUE_NAME: "chat-gpt111-staging-orchestrator-outbox",
+    ORCHESTRATOR_LEDGER: {
+      idFromName: name => name,
+      get: () => ({
+        recordOutboxDeadLetter: async input => {
+          calls.push(input);
+          const existing = archived.get(input.messageId);
+          if (existing) return existing === input.bodySha256
+            ? { recorded: false, replay: true, messageId: input.messageId }
+            : { recorded: false, conflict: true, reason: "DEAD_LETTER_MESSAGE_ID_CONFLICT" };
+          archived.set(input.messageId, input.bodySha256);
+          return { recorded: true, messageId: input.messageId };
+        },
+      }),
+    },
+    LEDGER_WORKER_ASSERTION_KEYS: keySet,
+    LEDGER_WORKER_ASSERTION_ACTIVE_KID: "worker-v1",
+  };
+  const body = { ...event, schemaVersion: 1 };
+  const deliver = () => ({
+    id: "cf-message-0001",
+    timestamp: new Date(now),
+    attempts: 5,
+    body,
+    acknowledged: false,
+    retried: false,
+    ack() { this.acknowledged = true; },
+    retry() { this.retried = true; },
+  });
+  const first = deliver();
+  const firstResult = await consumeOrchestratorDeadLetters({ queue: queueName, messages: [first] }, consumerEnv);
+  const duplicate = deliver();
+  const duplicateResult = await handleOrchestratorQueue({ queue: queueName, messages: [duplicate] }, consumerEnv);
+  assert.deepEqual(firstResult, { received: 1, archived: 1, duplicates: 0, retried: 0 });
+  assert.deepEqual(duplicateResult, { received: 1, archived: 1, duplicates: 1, retried: 0 });
+  assert.equal(first.acknowledged, true);
+  assert.equal(duplicate.acknowledged, true);
+  assert.equal(archived.size, 1);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].queueName, queueName);
+  assert.equal(calls[0].messageAttempts, 5);
+  assert.equal(typeof calls[0].workerAssertion, "string");
+  assert.equal(calls[0].archiverId, "orchestrator-outbox-dlq-archiver");
+});
+
+test("retries DLQ messages when durable archival is unavailable and refuses an unexpected queue", async () => {
+  const queueName = "chat-gpt111-staging-orchestrator-outbox-dlq";
+  const message = {
+    id: "cf-message-0002",
+    timestamp: new Date(now),
+    attempts: 6,
+    body: { safe: true },
+    retried: false,
+    retry() { this.retried = true; },
+    ack() { throw new Error("must not acknowledge unarchived DLQ data"); },
+  };
+  const unavailable = await consumeOrchestratorDeadLetters(
+    { queue: queueName, messages: [message] },
+    { ORCHESTRATOR_OUTBOX_DLQ_QUEUE: queueName },
+  );
+  assert.deepEqual(unavailable, { received: 1, archived: 0, duplicates: 0, retried: 1 });
+  assert.equal(message.retried, true);
+
+  const wrongQueue = {
+    id: "cf-message-0003",
+    timestamp: new Date(now),
+    attempts: 1,
+    body: { safe: true },
+    retried: false,
+    retry() { this.retried = true; },
+  };
+  const rejected = await consumeOrchestratorDeadLetters(
+    { queue: "unexpected-queue", messages: [wrongQueue] },
+    { ORCHESTRATOR_OUTBOX_DLQ_QUEUE: queueName },
+  );
+  assert.equal(rejected.retried, 1);
+  assert.equal(wrongQueue.retried, true);
 });

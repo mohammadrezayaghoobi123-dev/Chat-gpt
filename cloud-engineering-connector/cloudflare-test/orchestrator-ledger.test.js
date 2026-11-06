@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { canonicalJson } from "../orchestrator-protocol.js";
 import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
@@ -954,4 +954,108 @@ it("integrates the real Durable Object Ledger with publisher and Queue consumer 
       "evt-queue-e2e-0001",
     ).one().status).toBe("COMPLETED");
   });
+});
+
+
+it("acknowledges a republished event after an uncertain send even when the publisher attempt counter changes", async () => {
+  const integrationNow = Date.now();
+  let clockNow = integrationNow;
+  const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+  try {
+    const ledger = ledgerFor("orchestrator-ledger-republish-e2e");
+    const taskId = "task-queue-republish-e2e";
+    const created = await createTask(ledger, {
+      task: task(taskId),
+      idempotencyKey: "task-create-queue-republish-e2e",
+      inputHash: "b".repeat(64),
+      now: integrationNow,
+    });
+    expect(created).toMatchObject({ created: true, task: { taskId } });
+
+    const payload = { taskId, transition: "created", source: "uncertain-send-replay-test" };
+    const enqueued = await ledger.enqueueOutbox({
+      eventId: "evt-queue-republish-e2e",
+      idempotencyKey: "outbox-queue-republish-e2e",
+      taskId,
+      eventType: "task.created",
+      payload,
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: integrationNow,
+      }),
+      now: integrationNow,
+    });
+    expect(enqueued).toMatchObject({ enqueued: true });
+
+    const queued = [];
+    let completionCalls = 0;
+    const binding = {
+      idFromName: () => "orchestrator-ledger-republish-e2e",
+      get: () => ({
+        claimOutbox: input => ledger.claimOutbox(input),
+        failOutbox: input => ledger.failOutbox(input),
+        completeOutbox: input => {
+          completionCalls += 1;
+          if (completionCalls === 1) return Promise.resolve({ completed: false, reason: "LEASE_FENCE_MISMATCH" });
+          return ledger.completeOutbox(input);
+        },
+        recordOutboxReceipt: input => ledger.recordOutboxReceipt(input),
+      }),
+    };
+    const runtimeEnv = {
+      ORCHESTRATOR_LEDGER: binding,
+      ORCHESTRATOR_OUTBOX_QUEUE: {
+        send: async (message, options) => queued.push({ message: structuredClone(message), options }),
+      },
+      LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: TEST_ASSERTION_KID,
+    };
+
+    const firstPublish = await processOrchestratorOutbox(runtimeEnv, { maxEvents: 1 });
+    expect(firstPublish.completionPending).toBe(1);
+    expect(queued).toHaveLength(1);
+    expect(queued[0].message.attempts).toBe(1);
+
+    clockNow += 120_001;
+    const recoveryPublish = await processOrchestratorOutbox(runtimeEnv, { maxEvents: 1 });
+    expect(recoveryPublish).toMatchObject({ processed: 1, published: 1, completionPending: 0 });
+    expect(queued).toHaveLength(2);
+    expect(queued[1].message.eventId).toBe(queued[0].message.eventId);
+    expect(queued[1].message.attempts).toBe(2);
+
+    const consumerEnv = {
+      ORCHESTRATOR_LEDGER: binding,
+      LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: TEST_ASSERTION_KID,
+    };
+    const deliver = message => ({
+      body: structuredClone(message),
+      acknowledged: false,
+      retried: false,
+      ack() { this.acknowledged = true; },
+      retry() { this.retried = true; },
+    });
+    const firstDelivery = deliver(queued[0].message);
+    const firstResult = await consumeOrchestratorOutbox({ messages: [firstDelivery] }, consumerEnv);
+    expect(firstResult).toEqual({ received: 1, acknowledged: 1, retried: 0, duplicates: 0 });
+
+    const replayDelivery = deliver(queued[1].message);
+    const replayResult = await consumeOrchestratorOutbox({ messages: [replayDelivery] }, consumerEnv);
+    expect(replayResult).toEqual({ received: 1, acknowledged: 1, retried: 0, duplicates: 1 });
+    expect(replayDelivery.acknowledged).toBe(true);
+    expect(replayDelivery.retried).toBe(false);
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        "evt-queue-republish-e2e",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT status FROM orchestrator_outbox_events WHERE event_id = ?",
+        "evt-queue-republish-e2e",
+      ).one().status).toBe("COMPLETED");
+    });
+  } finally {
+    dateNow.mockRestore();
+  }
 });

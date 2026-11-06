@@ -122,14 +122,14 @@ regexTarget = "line"
 regexes = ['''eventId:"evt-consumer-00000001",idempotencyKey:"idem-consumer-0001"''']
 
 [[allowlists]]
-description = "Synthetic HMAC signing key used only by the historical worker-identity unit test; exact commit, path, and declaration."
+description = "Suppress generic-api-key findings only in this exact historical worker-identity test file and commit; this entry is commit/path scoped, not line scoped."
 targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["d5ffafb6df54e26189d8494548f7693fdcfdf108"]
 paths = ['''^cloud-engineering-connector/test/orchestrator-worker-identity\.test\.js$''']
 
 [[allowlists]]
-description = "Synthetic HMAC signing key used only by the historical outbox-publisher unit test; exact commit, path, and declaration."
+description = "Suppress generic-api-key findings only in this exact historical outbox-publisher test file and commit; this entry is commit/path scoped, not line scoped."
 targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["a5c36d1c2e7461e38578a688133c797f541b4b46"]

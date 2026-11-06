@@ -232,6 +232,12 @@ jobs:
           assert.equal(consumer.settings?.max_concurrency, 5, "Staging Queue consumer concurrency must remain bounded at 5");
           assert.equal(consumer.settings?.max_retries, 5, "Staging Queue retry count must remain bounded at 5");
           assert.equal(consumer.settings?.retry_delay, 30, "Staging Queue retry delay must remain 30 seconds");
+          const dlqConsumer = (outboxDlq.consumers || []).find((item) => item.script_name === "chat-gpt111-staging");
+          assert.ok(dlqConsumer?.consumer_id, "Staging DLQ archive consumer must be attached to the intended Worker");
+          assert.equal(dlqConsumer.settings?.batch_size, 5, "Staging DLQ archive batch size must be 5");
+          assert.equal(dlqConsumer.settings?.max_concurrency, 2, "Staging DLQ archive concurrency must be bounded at 2");
+          assert.equal(dlqConsumer.settings?.max_retries, 100, "Staging DLQ archive retries must be bounded at 100");
+          assert.equal(dlqConsumer.settings?.retry_delay, 60, "Staging DLQ archive retry delay must be 60 seconds");
           console.log("Staging Durable Object, Queue consumer, isolated DLQ, retry policy, and Cron are verified.");
           NODE
 

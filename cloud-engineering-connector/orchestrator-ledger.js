@@ -206,7 +206,6 @@ export class OrchestratorLedger extends DurableObject {
       )
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_by_status ON orchestrator_outbox_events(status, created_at)");
-    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_consumed_assertions_by_expiry ON orchestrator_consumed_assertions(expires_at)");
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_consumed_assertions (
         jti TEXT PRIMARY KEY,
@@ -219,6 +218,7 @@ export class OrchestratorLedger extends DurableObject {
         consumed_at INTEGER NOT NULL
       )
     `);
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_consumed_assertions_by_expiry ON orchestrator_consumed_assertions(expires_at)");
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_audit_events (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,

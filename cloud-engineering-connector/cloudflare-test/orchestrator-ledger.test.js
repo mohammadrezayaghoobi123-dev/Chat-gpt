@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
-import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
+import { consumeOrchestratorDeadLetters, consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
@@ -1155,6 +1155,57 @@ it("archives DLQ messages durably with signature validation, content integrity, 
     expect(state.storage.sql.exec(
       "SELECT COUNT(*) AS count FROM orchestrator_outbox_dead_letters WHERE source_queue = ? AND message_id = ?",
       queueName, messageId,
+    ).one().count).toBe(1);
+  });
+});
+
+
+it("integrates the DLQ consumer with Durable Object archival before message acknowledgement", async () => {
+  const queueName = "chat-gpt111-staging-orchestrator-outbox-dlq";
+  const ledger = ledgerFor("ledger-outbox-dlq-consumer-integration");
+  const body = {
+    schemaVersion: 1,
+    eventId: "evt-dlq-consumer-integration",
+    idempotencyKey: "idem-dlq-consumer-integration",
+    taskId: "task-0001",
+    eventType: "task.created",
+    payload: { taskId: "task-0001" },
+    attempts: 1,
+    createdAt: now,
+  };
+  const messageTimestamp = Date.now() - 1000;
+  const consumerEnv = {
+    ORCHESTRATOR_OUTBOX_DLQ_QUEUE: queueName,
+    ORCHESTRATOR_LEDGER: env.ORCHESTRATOR_LEDGER,
+    LEDGER_WORKER_ASSERTION_KEYS: JSON.stringify({
+      [TEST_ASSERTION_KID]: "3031323334353637383961626364656630313233343536373839616263646566",
+    }),
+    LEDGER_WORKER_ASSERTION_ACTIVE_KID: TEST_ASSERTION_KID,
+  };
+  const deliver = () => ({
+    id: "cf-message-integration-0001",
+    timestamp: new Date(messageTimestamp),
+    attempts: 5,
+    body,
+    acknowledged: false,
+    retried: false,
+    ack() { this.acknowledged = true; },
+    retry() { this.retried = true; },
+  });
+  const first = deliver();
+  await expect(consumeOrchestratorDeadLetters(
+    { queue: queueName, messages: [first] }, consumerEnv,
+  )).resolves.toMatchObject({ received: 1, archived: 1, duplicates: 0, retried: 0 });
+  expect(first.acknowledged).toBe(true);
+  const duplicate = deliver();
+  await expect(consumeOrchestratorDeadLetters(
+    { queue: queueName, messages: [duplicate] }, consumerEnv,
+  )).resolves.toMatchObject({ received: 1, archived: 1, duplicates: 1, retried: 0 });
+  expect(duplicate.acknowledged).toBe(true);
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_dead_letters WHERE source_queue = ? AND message_id = ?",
+      queueName, "cf-message-integration-0001",
     ).one().count).toBe(1);
   });
 });

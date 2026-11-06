@@ -284,20 +284,19 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("persists the four-round ceiling so retries cannot reset agent coordination rounds", async () => {
     const ledger = ledgerFor("ledger-agent-round-limit");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-agent-rounds", inputHash: "c".repeat(64), now });
-    const worker = authenticatedWorker("agent:worker-1");
     const lease = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 30_000, now });
     let version = 1;
     for (let round = 1; round <= 4; round += 1) {
       const result = await ledger.advanceAgentRound({
         taskId: "task-0001", expectedVersion: version, expectedRound: round - 1,
-        nextRound: round, workerId: "agent:worker-1", authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseGeneration: lease.leaseGeneration, now: now + round,
+        nextRound: round, workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "advanceAgentRound", nowMs: now + round }), leaseGeneration: lease.leaseGeneration, now: now + round,
       });
       expect(result).toMatchObject({ advanced: true, task: { agentRound: round, version: version + 1 } });
       version += 1;
     }
     await expect(ledger.advanceAgentRound({
       taskId: "task-0001", expectedVersion: version, expectedRound: 4,
-      nextRound: 5, workerId: "agent:worker-1", authenticatedWorker: worker, leaseGeneration: lease.leaseGeneration, now: now + 5,
+      nextRound: 5, workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "advanceAgentRound", nowMs: now + 5 }), leaseGeneration: lease.leaseGeneration, now: now + 5,
     })).resolves.toMatchObject({ advanced: false, reason: "AGENT_ROUND_LIMIT" });
     await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ agentRound: 4, version: 5 });
   });
@@ -487,4 +486,20 @@ it("rejects caller-supplied boolean identity for lease renewal", async () => {
     expect(state.storage.sql.exec("SELECT lease_until FROM orchestrator_execution_leases WHERE task_id='task-0001'").one().lease_until)
       .toBe(now + 30_000);
   });
+});
+
+
+it("rejects legacy boolean identity for agent-round mutation", async () => {
+  const ledger = ledgerFor("ledger-agent-round-forged-identity");
+  await ledger.createTask({ task: task(), idempotencyKey: "task-create-round-forged", inputHash: "9".repeat(64), now });
+  const lease = await ledger.claimTask({
+    workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"),
+    leaseMs: 30_000, now,
+  });
+  await expect(ledger.advanceAgentRound({
+    taskId: "task-0001", expectedVersion: 1, expectedRound: 0, nextRound: 1,
+    workerId: "agent:worker-1", authenticatedWorker: authenticatedWorker("agent:worker-1"),
+    leaseGeneration: lease.leaseGeneration, now: now + 1,
+  })).resolves.toMatchObject({ advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+  await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ agentRound: 0, version: 1 });
 });

@@ -79,8 +79,8 @@ If Web Crypto verification is asynchronous, the implementation must not split au
 | `releaseLease` | `agent` | assertion sub = workerId |
 | `transitionTask` | `agent` | assertion sub = workerId = actor.id |
 | `advanceAgentRound` | `agent` | assertion sub = workerId |
-| `claimOutbox` | `publisher`, `system` | assertion sub = workerId |
-| `completeOutbox` | `publisher`, `system` | assertion sub = workerId |
+| `claimOutbox` | `publisher` | assertion sub = workerId |
+| `completeOutbox` | `publisher` | assertion sub = workerId |
 | `enqueueOutbox` | `agent` | assertion sub = workerId; consumed atomically with enqueue |
 | `appendAuditEvent` | `agent` | assertion sub = workerId = actor.id; actor role is derived from the assertion |
 | `recordMessage` | `agent` | assertion sub = workerId = envelope.senderId |

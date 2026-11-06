@@ -1478,3 +1478,51 @@ test("Queue consumer rejects unsupported schema and event types without invoking
  assert.equal(acked,0);
  assert.equal(ledgerCalls,0);
 });
+
+
+test("Queue consumer durably acknowledges first delivery and identical redelivery",async()=>{
+ const calls=[];
+ const ledger={
+  recordOutboxReceipt:async input=>{
+   calls.push(input);
+   return calls.length===1?{recorded:true,eventId:input.eventId}:{recorded:false,replay:true,eventId:input.eventId};
+  }
+ };
+ const queueEnv={
+  ORCHESTRATOR_LEDGER:{idFromName:name=>name,get:()=>ledger},
+  LEDGER_WORKER_ASSERTION_KEYS:env.LEDGER_WORKER_ASSERTION_KEYS,
+  LEDGER_WORKER_ASSERTION_ACTIVE_KID:env.LEDGER_WORKER_ASSERTION_ACTIVE_KID
+ };
+ const body={
+  schemaVersion:1,eventId:"evt-consumer-00000001",idempotencyKey:"idem-consumer-0001",
+  taskId:"task-consumer-0001",eventType:"task.transitioned",
+  payload:{taskId:"task-consumer-0001",from:"SCHEDULED",to:"RUNNING"},
+  attempts:1,createdAt:Date.now()
+ };
+ const makeMessage=()=>({body,acked:0,retried:0,ack(){this.acked++},retry(){this.retried++}});
+ const first=makeMessage(),duplicate=makeMessage();
+ assert.deepEqual(await consumeOrchestratorOutbox({messages:[first]},queueEnv),{received:1,acknowledged:1,retried:0,duplicates:0});
+ assert.deepEqual(await consumeOrchestratorOutbox({messages:[duplicate]},queueEnv),{received:1,acknowledged:1,retried:0,duplicates:1});
+ assert.equal(first.acked,1);
+ assert.equal(duplicate.acked,1);
+ assert.equal(calls.length,2);
+ assert.equal(calls[0].consumerId,"orchestrator-outbox-consumer");
+ assert.match(calls[0].envelopeSha256,/^[a-f0-9]{64}$/);
+ assert.equal(typeof calls[0].workerAssertion,"string");
+});
+
+test("Queue consumer retries unknown event types without invoking durable receipt",async()=>{
+ let receiptCalls=0,retried=0,acked=0;
+ const result=await consumeOrchestratorOutbox({messages:[{
+  body:{schemaVersion:1,eventId:"evt-unknown-00000001",idempotencyKey:"idem-unknown-0001",taskId:"task-unknown-0001",eventType:"task.execute",payload:{command:"run"},attempts:1,createdAt:Date.now()},
+  ack(){acked++},retry(){retried++}
+ }]},{
+  ORCHESTRATOR_LEDGER:{idFromName:name=>name,get:()=>({recordOutboxReceipt:async()=>{receiptCalls++;return{recorded:true}}})},
+  LEDGER_WORKER_ASSERTION_KEYS:env.LEDGER_WORKER_ASSERTION_KEYS,
+  LEDGER_WORKER_ASSERTION_ACTIVE_KID:env.LEDGER_WORKER_ASSERTION_ACTIVE_KID
+ });
+ assert.deepEqual(result,{received:1,acknowledged:0,retried:1,duplicates:0});
+ assert.equal(receiptCalls,0);
+ assert.equal(retried,1);
+ assert.equal(acked,0);
+});

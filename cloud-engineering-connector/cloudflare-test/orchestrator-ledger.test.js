@@ -171,11 +171,11 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0008", inputHash: "6".repeat(64), now });
     const input = {
       eventId: "event-0001", idempotencyKey: "outbox-key-0001", taskId: "task-0001",
-      eventType: "task.created", payload: { taskId: "task-0001" }, now,
+      eventType: "task.created", payload: { taskId: "task-0001" }, workerId: "agent:worker-1", now,
     };
-    expect(await ledger.enqueueOutbox(input)).toMatchObject({ enqueued: true });
-    expect(await ledger.enqueueOutbox(input)).toMatchObject({ enqueued: false, replay: true });
-    expect(await ledger.enqueueOutbox({ ...input, payload: { taskId: "task-0001", changed: true } }))
+    expect(await ledger.enqueueOutbox({ ...input, workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now }) })).toMatchObject({ enqueued: true });
+    expect(await ledger.enqueueOutbox({ ...input, workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now }) })).toMatchObject({ enqueued: false, replay: true });
+    expect(await ledger.enqueueOutbox({ ...input, payload: { taskId: "task-0001", changed: true }, workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now }) }))
       .toMatchObject({ enqueued: false, conflict: true });
   });
 
@@ -184,7 +184,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0009", inputHash: "7".repeat(64), now });
     await ledger.enqueueOutbox({
       eventId: "event-0002", idempotencyKey: "outbox-key-0002", taskId: "task-0001",
-      eventType: "task.created", payload: { taskId: "task-0001" }, now,
+      eventType: "task.created", payload: { taskId: "task-0001" }, workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now }), now,
     });
     await expect(ledger.claimOutbox({ workerId: "publisher-1", leaseMs: 100, now }))
       .resolves.toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
@@ -527,7 +527,7 @@ it("rejects caller-forged publisher booleans before claiming an outbox event", a
   await ledger.createTask({ task: task(), idempotencyKey: "task-create-outbox-forged", inputHash: "7".repeat(64), now });
   await ledger.enqueueOutbox({
     eventId: "event-forged-publisher", idempotencyKey: "outbox-forged-publisher",
-    taskId: "task-0001", eventType: "task.created", payload: { taskId: "task-0001" }, now,
+    taskId: "task-0001", eventType: "task.created", payload: { taskId: "task-0001" }, workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now }), now,
   });
   await expect(ledger.claimOutbox({
     workerId: "publisher-1", authenticatedWorker: authenticatedWorker("publisher-1", "publisher"),
@@ -562,5 +562,17 @@ it("rejects legacy caller-supplied actor booleans for audit append", async () =>
   })).resolves.toMatchObject({ appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" });
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_audit_events").one().count).toBe(0);
+  });
+});
+
+it("rejects unauthenticated direct outbox enqueue", async () => {
+  const ledger = ledgerFor("ledger-outbox-forged-enqueue");
+  await ledger.createTask({ task: task(), idempotencyKey: "task-create-outbox-enqueue-forged", inputHash: "4".repeat(64), now });
+  await expect(ledger.enqueueOutbox({
+    eventId: "event-unauth-enqueue", idempotencyKey: "outbox-unauth-enqueue",
+    taskId: "task-0001", eventType: "task.created", payload: { taskId: "task-0001" }, now,
+  })).resolves.toMatchObject({ enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_outbox_events").one().count).toBe(0);
   });
 });

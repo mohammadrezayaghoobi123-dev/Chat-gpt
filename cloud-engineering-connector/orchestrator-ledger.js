@@ -230,6 +230,16 @@ export class OrchestratorLedger extends DurableObject {
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_github_deliveries_by_expiry ON orchestrator_github_webhook_deliveries(expires_at)");
     sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_github_business_idempotency (
+        idempotency_key TEXT PRIMARY KEY,
+        input_hash TEXT NOT NULL CHECK(length(input_hash) = 64),
+        first_delivery_id TEXT NOT NULL,
+        first_seen_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      )
+    `);
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_github_business_idempotency_by_expiry ON orchestrator_github_business_idempotency(expires_at)");
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_audit_events (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
         event_id TEXT NOT NULL UNIQUE,
@@ -255,12 +265,16 @@ export class OrchestratorLedger extends DurableObject {
     return { ok: Number(result.ok) === 1, schemaVersion: 2 };
   }
 
-  claimGitHubDelivery({ deliveryId, bodySha256, eventName, receivedAt } = {}) {
+  claimGitHubDelivery({ deliveryId, bodySha256, eventName, receivedAt, idempotencyKey, inputHash } = {}) {
     const validDeliveryId = typeof deliveryId === "string" &&
       /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(deliveryId);
-    const validDigest = typeof bodySha256 === "string" && /^[a-f0-9]{64}$/.test(bodySha256);
+    const validDigest = typeof bodySha256 === "string" && SHA256.test(bodySha256);
     const validEvent = typeof eventName === "string" && /^[a-z_]{2,32}$/.test(eventName);
-    if (!validDeliveryId || !validDigest || !validEvent ||
+    const hasBusinessKey = idempotencyKey !== undefined || inputHash !== undefined;
+    const validBusinessKey = !hasBusinessKey ||
+      (typeof idempotencyKey === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(idempotencyKey) &&
+       typeof inputHash === "string" && SHA256.test(inputHash));
+    if (!validDeliveryId || !validDigest || !validEvent || !validBusinessKey ||
         !Number.isSafeInteger(receivedAt) || receivedAt < 1) {
       return { claimed: false, replay: false, reason: "INVALID_DELIVERY" };
     }
@@ -273,20 +287,48 @@ export class OrchestratorLedger extends DurableObject {
         "DELETE FROM orchestrator_github_webhook_deliveries WHERE delivery_id IN (SELECT delivery_id FROM orchestrator_github_webhook_deliveries WHERE expires_at <= ? ORDER BY expires_at LIMIT 500)",
         now,
       );
-      const existing = sql.exec(
+      sql.exec(
+        "DELETE FROM orchestrator_github_business_idempotency WHERE idempotency_key IN (SELECT idempotency_key FROM orchestrator_github_business_idempotency WHERE expires_at <= ? ORDER BY expires_at LIMIT 500)",
+        now,
+      );
+      const existingDelivery = sql.exec(
         "SELECT * FROM orchestrator_github_webhook_deliveries WHERE delivery_id = ?",
         deliveryId,
       ).toArray()[0];
-      if (existing) {
-        if (existing.body_sha256 === bodySha256 && existing.event_name === eventName) {
-          return { claimed: false, replay: true, deliveryId, bodySha256 };
+      if (existingDelivery) {
+        if (existingDelivery.body_sha256 === bodySha256 && existingDelivery.event_name === eventName) {
+          return { claimed: false, replay: true, deliveryId, bodySha256, reason: "DELIVERY_REPLAY" };
         }
         return { claimed: false, replay: false, conflict: true, reason: "DELIVERY_ID_CONFLICT" };
       }
+
+      if (hasBusinessKey) {
+        const existingBusiness = sql.exec(
+          "SELECT * FROM orchestrator_github_business_idempotency WHERE idempotency_key = ?",
+          idempotencyKey,
+        ).toArray()[0];
+        if (existingBusiness) {
+          sql.exec(
+            "INSERT INTO orchestrator_github_webhook_deliveries (delivery_id, body_sha256, event_name, received_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+            deliveryId, bodySha256, eventName, receivedAt, expiresAt,
+          );
+          if (existingBusiness.input_hash === inputHash) {
+            return { claimed: false, replay: true, deliveryId, bodySha256, reason: "BUSINESS_REPLAY" };
+          }
+          return { claimed: false, replay: false, conflict: true, deliveryId, reason: "BUSINESS_IDEMPOTENCY_CONFLICT" };
+        }
+      }
+
       sql.exec(
         "INSERT INTO orchestrator_github_webhook_deliveries (delivery_id, body_sha256, event_name, received_at, expires_at) VALUES (?, ?, ?, ?, ?)",
         deliveryId, bodySha256, eventName, receivedAt, expiresAt,
       );
+      if (hasBusinessKey) {
+        sql.exec(
+          "INSERT INTO orchestrator_github_business_idempotency (idempotency_key, input_hash, first_delivery_id, first_seen_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+          idempotencyKey, inputHash, deliveryId, receivedAt, expiresAt,
+        );
+      }
       return { claimed: true, replay: false, deliveryId, bodySha256 };
     });
   }

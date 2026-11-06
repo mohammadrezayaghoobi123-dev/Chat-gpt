@@ -353,6 +353,9 @@ export class OrchestratorLedger extends DurableObject {
     hash(inputHash, "inputHash");
     timestamp(now);
     serializeBounded(envelope, "message envelope");
+    if (typeof workerId !== "string" || workerId.length === 0) {
+      return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
+    }
     identifier(workerId, "workerId");
     let verifiedAssertion;
     try {

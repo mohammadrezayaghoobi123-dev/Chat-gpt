@@ -130,6 +130,9 @@ jobs:
           if (missing.length) {
             throw new Error("Staging deployment blocked; missing Worker secret binding(s): " + missing.join(", ") + ". Add them in Cloudflare Workers > chat-gpt111-staging > Settings > Variables and Secrets. Secret values are never read.");
           }
+          const activeSignerKid = bindings.get("LEDGER_WORKER_ASSERTION_ACTIVE_KID");
+          assert.equal(activeSignerKid?.type, "plain_text", "Staging LEDGER_WORKER_ASSERTION_ACTIVE_KID must be a non-secret plain-text binding");
+          assert.match(activeSignerKid.text || "", /^[A-Za-z0-9._-]{1,64}$/, "Staging active signer key ID must be a bounded identifier");
           assert.equal(bindings.get("PUBLIC_READ_ONLY")?.text, "true", "PUBLIC_READ_ONLY must be explicitly true in Staging");
           assert.ok(bindings.get("WRITE_CONTROL")?.namespace_id, "Staging WRITE_CONTROL namespace is required");
           assert.ok(bindings.get("MCP_RATE_LIMITER")?.namespace_id, "Staging MCP_RATE_LIMITER namespace is required");

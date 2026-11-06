@@ -891,7 +891,7 @@ async function handleGitHubWebhook(request, env) {
   return json({ error: "webhook_replay_store_unavailable" }, 503);
  }
  const replayStore = {
-  async claim({ deliveryId }) {
+  async claim({ deliveryId, idempotencyKey, inputHash }) {
    let result;
    try {
     result = await ledger.claimGitHubDelivery({
@@ -899,13 +899,15 @@ async function handleGitHubWebhook(request, env) {
      bodySha256: authenticated.bodySha256,
      eventName: authenticated.eventName,
      receivedAt: Date.now(),
+     idempotencyKey,
+     inputHash,
     });
    } catch {
     return { status: "DENIED" };
    }
    if (result?.claimed === true) return { status: "CLAIMED" };
-   if (result?.replay === true) return { status: "REPLAY" };
-   if (result?.conflict === true) return { status: "CONFLICT" };
+   if (result?.replay === true) return { status: "REPLAY", reason: result.reason };
+   if (result?.conflict === true) return { status: "CONFLICT", reason: result.reason };
    return { status: "DENIED" };
   },
  };

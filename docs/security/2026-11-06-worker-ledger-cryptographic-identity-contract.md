@@ -142,15 +142,17 @@ The following source-level controls have now been implemented on the isolated br
 - The publisher uses a fresh operation-bound assertion for each claim, failure, and completion; uses a 120-second lease; limits each scheduled batch to 5 events by default and 20 maximum; publishes a versioned envelope carrying the stable `eventId`; and records retryable queue-send failures through the Ledger's existing retry/DLQ state machine.
 - If queue send succeeds but Ledger completion is uncertain, the publisher does not mark the event failed. It leaves the lease to expire and reports completion pending. This is at-least-once delivery: a future Queue consumer MUST atomically deduplicate by `eventId` before any side effect.
 
-### 10.1 Deliberately inactive configuration
+### 10.1 Queue integration and activation boundary
 
-At this source revision, `ORCHESTRATOR_OUTBOX_QUEUE` is not declared in `wrangler.toml`, and no Queue consumer exists in this repository. The publisher therefore returns `orchestrator_outbox_queue_unavailable` before calling `claimOutbox`. This is intentional fail-closed behavior, not a completed production pipeline.
+At this source revision, `wrangler.toml` declares the `ORCHESTRATOR_OUTBOX_QUEUE` producer binding and a Queue consumer handler is present in `worker.js`. The consumer currently records a durable receipt / deduplication outcome; it does **not** dispatch task execution, invoke task lifecycle transitions, or perform task business side effects. Therefore, the presence of a producer binding and receipt consumer must not be described as a completed Orchestrator execution pipeline.
+
+The source configuration is not evidence that the corresponding Cloudflare Queue resources exist. The Cloudflare account inventory reviewed on 2026-11-07 contained no Queues, and no Staging or Production Queue provisioning was verified. The publisher must remain fail-closed when its binding/resource is unavailable.
 
 The following remain mandatory before activation:
-1. Provision separate Staging and Production Cloudflare Queues and configure the corresponding producer bindings through a reviewed configuration change.
+1. Provision separate Staging and Production primary Queues and DLQs, then verify the producer/consumer bindings against the intended environment without deploying as part of this documentation change.
 2. Configure `LEDGER_WORKER_ASSERTION_KEYS` as a Cloudflare secret and `LEDGER_WORKER_ASSERTION_ACTIVE_KID` as the matching non-secret active key identifier in each environment. Verify presence and key compatibility without reading or logging secret values.
-3. Implement and test a Queue consumer with durable `eventId` deduplication, bounded retries, poison-message handling, and explicit event-type policy. No task execution may be inferred from arbitrary outbox payloads.
-4. Add a staging end-to-end test covering claim → publish → consume → deduplicate → completion/recovery, including the send-success/complete-failure duplicate window.
+3. Implement a distinct task-execution consumer with explicit event-type allowlisting, authenticated worker identity, durable `eventId` deduplication, bounded retries, poison-message handling, idempotent side effects, and lease-generation fencing. The existing receipt consumer is not a substitute.
+4. Add Staging end-to-end tests covering claim → publish → receipt → task dispatch → side-effect completion → deduplication/recovery, including the send-success/complete-failure duplicate window. Do not infer task execution from arbitrary outbox payloads.
 5. Establish a separate trusted Agent identity channel before any Agent assertion can be minted. The shared MCP bearer remains insufficient.
 6. Complete backup/restore, independent review, branch governance, and operator-approved deployment gates.
 

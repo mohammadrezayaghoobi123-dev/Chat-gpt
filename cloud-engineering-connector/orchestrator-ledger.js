@@ -593,10 +593,25 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  enqueueOutbox(input) {
+  async enqueueOutbox(input) {
     const normalized = validateOutboxInput(input);
+    if (typeof input.workerId !== "string" || input.workerId.length === 0) {
+      return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
+    identifier(input.workerId, "workerId");
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, input.workerAssertion, {
+        subject: input.workerId, role: "agent", operation: "enqueueOutbox", nowMs: normalized.now,
+      });
+    } catch {
+      return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, normalized.now)) {
+        return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
       if (!sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", normalized.taskId).toArray()[0]) {
         return { enqueued: false, reason: "TASK_NOT_FOUND" };
       }

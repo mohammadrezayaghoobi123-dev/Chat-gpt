@@ -279,6 +279,8 @@ jobs:
           assert.ok(stagingQueue?.queue_id && stagingDlq?.queue_id, "Staging Orchestrator Outbox Queue and DLQ must exist");
           const productionConsumer = (productionQueue.consumers || []).find((item) => item.script_name === "chat-gpt111");
           const stagingConsumer = (stagingQueue.consumers || []).find((item) => item.script_name === "chat-gpt111-staging");
+          const productionDlqConsumer = (productionDlq.consumers || []).find((item) => item.script_name === "chat-gpt111");
+          const stagingDlqConsumer = (stagingDlq.consumers || []).find((item) => item.script_name === "chat-gpt111-staging");
           for (const [label, consumer, dlqName] of [
             ["Production", productionConsumer, "chat-gpt111-orchestrator-outbox-dlq"],
             ["Staging", stagingConsumer, "chat-gpt111-staging-orchestrator-outbox-dlq"],
@@ -290,7 +292,17 @@ jobs:
             assert.equal(consumer.settings?.max_retries, 5, label + " Queue max retries must be 5");
             assert.equal(consumer.settings?.retry_delay, 30, label + " Queue retry delay must be 30 seconds");
           }
-          console.log("Production and Staging observability, Durable Object isolation, Cron, Queue consumers, and DLQs are verified.");
+          for (const [label, consumer] of [
+            ["Production", productionDlqConsumer],
+            ["Staging", stagingDlqConsumer],
+          ]) {
+            assert.ok(consumer?.consumer_id, label + " DLQ archive consumer must be attached");
+            assert.equal(consumer.settings?.batch_size, 5, label + " DLQ archive batch size must be 5");
+            assert.equal(consumer.settings?.max_concurrency, 2, label + " DLQ archive concurrency must be bounded at 2");
+            assert.equal(consumer.settings?.max_retries, 100, label + " DLQ archive retries must be bounded at 100");
+            assert.equal(consumer.settings?.retry_delay, 60, label + " DLQ archive retry delay must be 60 seconds");
+          }
+          console.log("Production and Staging observability, Durable Object isolation, Cron, Queue consumers, and DLQ archive consumers are verified.");
           NODE
 
       - name: Run live Production acceptance

@@ -347,17 +347,22 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  recordMessage({ messageId, taskId, inputHash, envelope, authenticatedSender, now }) {
+  async recordMessage({ messageId, taskId, inputHash, envelope, workerId, workerAssertion, now }) {
     identifier(messageId, "messageId");
     identifier(taskId, "taskId");
     hash(inputHash, "inputHash");
     timestamp(now);
     serializeBounded(envelope, "message envelope");
-    if (!authenticatedSender || authenticatedSender.authenticated !== true ||
-        authenticatedSender.identityVerified !== true ||
-        typeof authenticatedSender.id !== "string" || authenticatedSender.id.length === 0) {
+    identifier(workerId, "workerId");
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "agent", operation: "recordMessage", nowMs: now,
+      });
+    } catch {
       return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
     }
+    const authenticatedSender = { id: verifiedAssertion.subject, authenticated: true, identityVerified: true };
     if (!envelope || typeof envelope !== "object" || envelope.senderId !== authenticatedSender.id) {
       return { accepted: false, reason: "SENDER_IDENTITY_MISMATCH" };
     }
@@ -376,6 +381,9 @@ export class OrchestratorLedger extends DurableObject {
     const envelopeJson = serializeBounded(validatedEnvelope, "validated message envelope");
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
+      }
       const task = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
       if (!task) return { accepted: false, reason: "TASK_NOT_FOUND" };
       const existing = sql.exec("SELECT * FROM orchestrator_processed_messages WHERE message_id = ?", messageId).toArray()[0];

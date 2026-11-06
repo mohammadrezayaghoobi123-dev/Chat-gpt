@@ -55,9 +55,19 @@ jobs:
           }
           const accountInfo = await request("");
           assert.equal(accountInfo.result?.settings?.enforce_twofactor, true, "Account-level MFA enforcement is required");
+          async function listAllQueues() {
+            const queues = [];
+            for (let page = 1; page <= 1000; page += 1) {
+              const inventory = await request("/queues?per_page=100&page=" + page);
+              queues.push(...(inventory.result || []));
+              const totalPages = Number(inventory.result_info?.total_pages ?? 1);
+              assert.ok(Number.isSafeInteger(totalPages) && totalPages >= 1 && totalPages <= 1000, "Cloudflare Queue pagination metadata is invalid");
+              if (page >= totalPages) return queues;
+            }
+            throw new Error("Cloudflare Queue inventory exceeded the 1000-page safety limit");
+          }
           const queueName = "chat-gpt111-staging-orchestrator-outbox";
-          const inventory = await request("/queues?per_page=100&page=1");
-          const existing = (inventory.result || []).find((queue) => queue.queue_name === queueName);
+          const existing = (await listAllQueues()).find((queue) => queue.queue_name === queueName);
           if (existing) {
             assert.ok(existing.queue_id, "Existing Staging Queue must have a stable resource ID");
             console.log("Staging Outbox Queue already exists; no mutation was required.");
@@ -66,8 +76,7 @@ jobs:
               method: "POST",
               body: JSON.stringify({ queue_name: queueName }),
             });
-            const verification = await request("/queues?per_page=100&page=1");
-            const created = (verification.result || []).find((queue) => queue.queue_name === queueName);
+            const created = (await listAllQueues()).find((queue) => queue.queue_name === queueName);
             assert.ok(created?.queue_id, "New Staging Outbox Queue could not be verified after creation");
             console.log("Dedicated Staging Outbox Queue created and verified.");
           }

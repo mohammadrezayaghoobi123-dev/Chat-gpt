@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { createWorkerAssertion } from "../orchestrator-worker-identity.js";
 
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
@@ -14,6 +15,10 @@ const task = (taskId = "task-0001") => ({
 const agent = { id: "agent:worker-1", authenticated: true, identityVerified: true, role: "agent" };
 const authenticatedSender = { id: "agent:worker-1", authenticated: true, identityVerified: true };
 const authenticatedWorker = (id, role = "agent") => ({ id, authenticated: true, identityVerified: true, role });
+const claimAssertion = (subject, issuedAt = now) => createWorkerAssertion({
+  keySet: env.LEDGER_WORKER_ASSERTION_KEYS, kid: "test-v1", subject, role: "agent",
+  operation: "claimTask", nowMs: issuedAt,
+});
 const protocolEnvelope = (messageId, taskId, inputHash, payload, createdAt = now) => ({
   protocolVersion: 1, messageId, taskId, correlationId: "corr-0001",
   senderId: "agent:worker-1", recipientId: "agent:worker-2", type: "PROGRESS",
@@ -60,8 +65,8 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const ledger = ledgerFor("ledger-concurrent-claim");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0003", inputHash: "e".repeat(64), now });
     const results = await Promise.all([
-      ledger.claimTask({ workerId: "agent:worker-1", authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseMs: 30_000, now }),
-      ledger.claimTask({ workerId: "agent:worker-2", authenticatedWorker: authenticatedWorker("agent:worker-2"), leaseMs: 30_000, now }),
+      ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 30_000, now }),
+      ledger.claimTask({ workerId: "agent:worker-2", workerAssertion: await claimAssertion("agent:worker-2"), leaseMs: 30_000, now }),
     ]);
     expect(results.filter(result => result.claimed)).toHaveLength(1);
     expect(results.filter(result => !result.claimed)).toHaveLength(1);
@@ -71,9 +76,9 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("rejects stale lease generations on renew, release, and worker-driven state transitions", async () => {
     const ledger = ledgerFor("ledger-stale-fence");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0004", inputHash: "f".repeat(64), now });
-    const first = await ledger.claimTask({ workerId: "agent:worker-1", authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseMs: 100, now });
+    const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
     const reclaimed = await ledger.claimTask({
-      workerId: "agent:worker-1", authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseMs: 100, now: now + 101,
+      workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101,
       reconciliationEvidence: { checked: true, priorGeneration: 1, evidenceRef: "github://audit/reconcile/1" },
     });
     expect(reclaimed.leaseGeneration).toBe(2);
@@ -118,7 +123,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("commits a task transition and its outbox intent atomically", async () => {
     const ledger = ledgerFor("ledger-transition-outbox-atomic");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0007", inputHash: "5".repeat(64), now });
-    const lease = await ledger.claimTask({ workerId: "agent:worker-1", authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseMs: 30_000, now });
+    const lease = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 30_000, now });
     expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
     const result = await ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
@@ -218,11 +223,11 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const ledger = ledgerFor("ledger-expired-lease-reconciliation");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0012", inputHash: "b".repeat(64), now });
     const worker = authenticatedWorker("agent:worker-1");
-    const first = await ledger.claimTask({ workerId: "agent:worker-1", authenticatedWorker: worker, leaseMs: 100, now });
-    await expect(ledger.claimTask({ workerId: "agent:worker-1", authenticatedWorker: worker, leaseMs: 100, now: now + 101 }))
+    const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
+    await expect(ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101 }))
       .resolves.toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
     const reclaimed = await ledger.claimTask({
-      workerId: "agent:worker-1", authenticatedWorker: worker, leaseMs: 100, now: now + 101,
+      workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101,
       reconciliationEvidence: { checked: true, priorGeneration: first.leaseGeneration, evidenceRef: "github://audit/reconcile/12" },
     });
     expect(reclaimed).toMatchObject({ claimed: true, leaseGeneration: 2, reconciliationRequired: true });
@@ -287,9 +292,9 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("does not allow an unassigned worker identity to claim a task assigned to another executor", async () => {
     const ledger = ledgerFor("ledger-assignee-enforcement");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-assignee", inputHash: "b".repeat(64), now });
-    await expect(ledger.claimTask({ workerId: "agent:unassigned", authenticatedWorker: authenticatedWorker("agent:unassigned"), leaseMs: 30_000, now }))
+    await expect(ledger.claimTask({ workerId: "agent:unassigned", workerAssertion: await claimAssertion("agent:unassigned"), leaseMs: 30_000, now }))
       .resolves.toMatchObject({ claimed: false, reason: "ASSIGNEE_MISMATCH" });
-    await expect(ledger.claimTask({ workerId: "agent:worker-1", authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseMs: 30_000, now }))
+    await expect(ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 30_000, now }))
       .resolves.toMatchObject({ claimed: true, leaseGeneration: 1 });
   });
 

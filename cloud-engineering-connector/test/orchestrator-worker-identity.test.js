@@ -66,3 +66,25 @@ test("scheduled signer rejects missing active key, weak key material, and invali
     error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
   );
 });
+
+
+test("scheduled signer issues a consumer assertion only for durable receipt recording", async () => {
+  const expected = {
+    subject: "orchestrator-outbox-consumer",
+    role: "consumer",
+    operation: "recordOutboxReceipt",
+    nowMs,
+  };
+  const token = await createScheduledWorkerAssertion(keySet, "worker-v1", expected);
+  const verified = await verifyWorkerAssertion(keySet, token, expected);
+  assert.equal(verified.subject, expected.subject);
+  assert.equal(verified.role, "consumer");
+  assert.equal(verified.operation, "recordOutboxReceipt");
+  await assert.rejects(
+    createScheduledWorkerAssertion(keySet, "worker-v1", {
+      ...expected,
+      operation: "claimTask",
+    }),
+    error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
+  );
+});

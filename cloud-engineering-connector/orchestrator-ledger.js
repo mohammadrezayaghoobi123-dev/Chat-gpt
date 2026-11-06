@@ -76,6 +76,20 @@ function hasVerifiedWorkerIdentity(worker, workerId, allowedRoles) {
     worker.id === workerId && allowedRoles.includes(worker.role);
 }
 
+function consumeWorkerAssertion(sql, assertion, nowMs) {
+  const existing = sql.exec(
+    "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
+    assertion.jti,
+  ).toArray()[0];
+  if (existing) return false;
+  sql.exec(
+    "INSERT INTO orchestrator_consumed_assertions (jti, subject, role, operation, key_id, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    assertion.jti, assertion.subject, assertion.role, assertion.operation,
+    assertion.kid, assertion.issuedAt, assertion.expiresAt, Math.floor(nowMs / 1000),
+  );
+  return true;
+}
+
 function taskFromRow(row) {
   return row ? parseJson(row.task_json, "task") : null;
 }
@@ -413,17 +427,7 @@ export class OrchestratorLedger extends DurableObject {
             }
           }
         }
-        const assertionReplay = sql.exec(
-          "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
-          verifiedAssertion.jti,
-        ).toArray()[0];
-        if (assertionReplay) return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
-        const nowSeconds = Math.floor(now / 1000);
-        sql.exec(
-          "INSERT INTO orchestrator_consumed_assertions (jti, subject, role, operation, key_id, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-          verifiedAssertion.jti, verifiedAssertion.subject, verifiedAssertion.role, verifiedAssertion.operation,
-          verifiedAssertion.kid, verifiedAssertion.issuedAt, verifiedAssertion.expiresAt, nowSeconds,
-        );
+        if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
         if (lease) {
           sql.exec(
             "UPDATE orchestrator_execution_leases SET worker_id = ?, lease_generation = ?, lease_until = ?, updated_at = ? WHERE task_id = ? AND lease_generation = ?",
@@ -527,19 +531,27 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  releaseLease({ taskId, workerId, authenticatedWorker, leaseGeneration, now }) {
+  async releaseLease({ taskId, workerId, workerAssertion, leaseGeneration, now }) {
     identifier(taskId, "taskId");
     identifier(workerId, "workerId");
-    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"])) {
-      return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
-    }
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw fail("leaseGeneration must be positive.");
     timestamp(now);
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "agent", operation: "releaseLease", nowMs: now,
+      });
+    } catch {
+      return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { released: false, reason: "LEASE_FENCE_MISMATCH" };
+      }
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       sql.exec(
         "UPDATE orchestrator_execution_leases SET worker_id = NULL, lease_until = 0, updated_at = ? WHERE task_id = ? AND worker_id = ? AND lease_generation = ?",

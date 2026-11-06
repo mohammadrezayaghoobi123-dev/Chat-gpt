@@ -113,9 +113,9 @@ jobs:
           async function queueInventory() {
             const queues = [];
             for (let page = 1; page <= 1000; page += 1) {
-              const url = `https://api.cloudflare.com/client/v4/accounts/${account}/queues?per_page=100&page=${page}`;
+              const url = "https://api.cloudflare.com/client/v4/accounts/" + account + "/queues?per_page=100&page=" + page;
               const response = await fetch(url, {
-                headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+                headers: { authorization: "Bearer " + token, accept: "application/json" },
                 signal: AbortSignal.timeout(15000),
               });
               const body = await response.json();
@@ -126,12 +126,7 @@ jobs:
               if (page >= totalPages) return queues;
             }
             throw new Error("Cloudflare Queue inventory exceeded the 1000-page safety limit");
-          });
-            const body = await response.json();
-            assert.equal(response.ok && body.success, true, `Cloudflare Queue inventory preflight failed: HTTP ${response.status}`);
-            return body.result || [];
           }
-
           const [settings, deploymentData, accountSecurity, queues] = await Promise.all([
             api("/settings"), api("/deployments?per_page=1&page=1"), accountSecuritySettings(), queueInventory(),
           ]);
@@ -200,9 +195,9 @@ jobs:
           async function queueInventory() {
             const queues = [];
             for (let page = 1; page <= 1000; page += 1) {
-              const url = `https://api.cloudflare.com/client/v4/accounts/${account}/queues?per_page=100&page=${page}`;
+              const url = "https://api.cloudflare.com/client/v4/accounts/" + account + "/queues?per_page=100&page=" + page;
               const response = await fetch(url, {
-                headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+                headers: { authorization: "Bearer " + token, accept: "application/json" },
                 signal: AbortSignal.timeout(15000),
               });
               const body = await response.json();
@@ -213,10 +208,6 @@ jobs:
               if (page >= totalPages) return queues;
             }
             throw new Error("Cloudflare Queue inventory exceeded the 1000-page safety limit");
-          });
-            const body = await response.json();
-            assert.equal(response.ok && body.success, true, "Cloudflare Queue verification failed: HTTP " + response.status);
-            return body.result || [];
           }
           const [settings, schedules, queues] = await Promise.all([api("/settings"), api("/schedules"), queueInventory()]);
           const bindings = new Map((settings.bindings || []).map((binding) => [binding.name, binding]));

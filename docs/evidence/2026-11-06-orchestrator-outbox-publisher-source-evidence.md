@@ -133,3 +133,21 @@ This refresh supersedes the earlier CI identifiers and Node test count in this s
 - Post-deploy Staging smoke: skipped. The provisioning workflow was not dispatched; no live Queue was created.
 
 **Release remains NO-GO.** The manual Staging provisioning path is prepared and CI-verified, but the live account still has zero Queues and no Staging end-to-end test has run.
+
+
+## Real Ledger → Publisher → Queue → Consumer integration regression — 2026-11-06 20:47 UTC
+
+- Source HEAD verified: `35bb5df763b8040111649ef14fac18e87edbbc27`.
+- Added a Cloudflare Vitest integration test that uses the actual `OrchestratorLedger` Durable Object binding and the production `processOrchestratorOutbox` / `consumeOrchestratorOutbox` functions. Only the Cloudflare Queue transport is an in-memory test double; persistence, worker assertion verification, lease claim/completion, source-row comparison, and receipt insertion use the real Durable Object implementation.
+- The test seeds a real task and Outbox row in the canonical `orchestrator-ledger-global` Durable Object, invokes the publisher, passes its emitted envelope to the consumer, redelivers the identical envelope, and verifies:
+  - Publisher claims and completes the durable Outbox lease.
+  - Consumer acknowledges the first delivery.
+  - Consumer acknowledges the duplicate as a replay.
+  - Exactly one durable receipt row exists for the event.
+  - The source Outbox row is `COMPLETED`.
+- The initial test fixture seeded a non-canonical Durable Object name while the publisher correctly resolves `orchestrator-ledger-global`; the red test exposed the fixture topology error. The fixture was corrected to use the canonical object identity and the complete CI run then passed.
+- Cloud Engineering Connector CI #42291159573: success. Node tests: 384 passed, 0 failed. Durable Object tests: 6 files, 101 passed, 0 failed. JavaScript syntax checks and Wrangler Production/Staging dry-runs: success.
+- Full History Secret Scan #42291159733: success. Orchestrator GitHub Intake Contract #42291159643: success.
+- Post-deploy Staging smoke: skipped. No Cloudflare resource, Worker deployment, secret, or live binding was changed in this cycle.
+
+**This closes the source-level integration-test gap only.** Queue transport was simulated in the test; live Cloudflare Queue delivery, deployed Staging Durable Object state, and production operation are still unverified. **Release remains NO-GO.**

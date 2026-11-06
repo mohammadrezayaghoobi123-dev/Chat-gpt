@@ -1149,6 +1149,16 @@ it("archives DLQ messages durably with signature validation, content integrity, 
     }),
   })).resolves.toMatchObject({ recorded: false, reason: "DEAD_LETTER_HASH_MISMATCH" });
 
+  const unauthenticatedSensitivePayloadResult = await ledger.recordOutboxDeadLetter({
+    ...input,
+    body: { ...body, payload: { apiKey: "must-not-be-inspected-before-authentication" } },
+    workerAssertion: null,
+  });
+  expect(unauthenticatedSensitivePayloadResult).toEqual({
+    recorded: false,
+    reason: "AUTHENTICATED_WORKER_REQUIRED",
+  });
+
   const sensitivePayloadResult = await ledger.recordOutboxDeadLetter({
     ...input,
     body: { ...body, payload: { apiKey: "must-not-be-persisted" } },

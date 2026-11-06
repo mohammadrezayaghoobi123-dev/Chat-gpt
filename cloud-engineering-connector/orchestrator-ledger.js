@@ -241,10 +241,21 @@ export class OrchestratorLedger extends DurableObject {
     return { ok: Number(result.ok) === 1, schemaVersion: 2 };
   }
 
-  createTask({ task, idempotencyKey, inputHash, now }) {
+  async createTask({ task, idempotencyKey, inputHash, now, workerId, workerAssertion }) {
     identifier(idempotencyKey, "idempotencyKey");
     hash(inputHash, "inputHash");
     timestamp(now);
+    if (workerId !== "orchestrator-scheduler") {
+      return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: "orchestrator-scheduler", role: "system", operation: "createTask", nowMs: now,
+      });
+    } catch {
+      return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
     if (!task || typeof task !== "object" || Array.isArray(task)) throw fail("task must be an object.");
     identifier(task.taskId, "taskId");
     if (!TASK_STATES.includes(task.state) || !Number.isSafeInteger(task.version) || task.version < 1 ||
@@ -259,6 +270,9 @@ export class OrchestratorLedger extends DurableObject {
     const taskJson = serializeBounded(normalizedTask, "task");
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
       const existing = sql.exec("SELECT * FROM orchestrator_tasks WHERE idempotency_key = ?", idempotencyKey).toArray()[0];
       if (existing) {
         if (existing.input_hash !== inputHash || existing.task_id !== normalizedTask.taskId) {

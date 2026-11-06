@@ -1114,7 +1114,7 @@ it("archives DLQ messages durably with signature validation, content integrity, 
     queueName, messageId, messageAttempts: 5, messageTimestamp, body, bodySha256,
     archiverId: "orchestrator-outbox-dlq-archiver", now,
   };
-  const record = () => ledger.recordOutboxDeadLetter({
+  const record = async () => ledger.recordOutboxDeadLetter({
     ...input,
     workerAssertion: await createWorkerAssertion({
       subject: input.archiverId, role: "consumer", operation: "recordOutboxDeadLetter", nowMs: now,

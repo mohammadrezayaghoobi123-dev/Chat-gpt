@@ -763,11 +763,11 @@ export class OrchestratorLedger extends DurableObject {
         eventId, taskId, actorId, actorRole, eventType, details: JSON.parse(detailsJson), occurredAt: now, previousHash,
       });
       const inserted = this.ctx.storage.transactionSync(() => {
-        if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return "replay";
         const latest = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
         if ((latest?.event_hash ?? null) !== previousHash) return "retry";
         const duplicate = sql.exec("SELECT * FROM orchestrator_audit_events WHERE event_id = ?", eventId).toArray()[0];
         if (duplicate) return "retry";
+        if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return "replay";
         sql.exec(
           "INSERT INTO orchestrator_audit_events (event_id, task_id, actor_id, actor_role, event_type, details_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
           eventId, taskId, actorId, actorRole, eventType, detailsJson, previousHash, eventHash, now,

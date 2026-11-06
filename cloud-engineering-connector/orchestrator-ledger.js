@@ -598,11 +598,16 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  claimOutbox({ workerId, authenticatedWorker, leaseMs, now } = {}) {
+  async claimOutbox({ workerId, workerAssertion, leaseMs, now } = {}) {
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);
     timestamp(now);
-    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["publisher", "system"])) {
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "publisher", operation: "claimOutbox", nowMs: now,
+      });
+    } catch {
       return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     const sql = this.ctx.storage.sql;
@@ -612,6 +617,7 @@ export class OrchestratorLedger extends DurableObject {
         now,
       ).toArray();
       for (const row of rows) {
+        if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
         const reclaimed = row.status === "IN_PROGRESS";
         const generation = row.lease_generation + 1;
         sql.exec(
@@ -632,10 +638,15 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  completeOutbox({ eventId, workerId, authenticatedWorker, leaseGeneration, now }) {
+  async completeOutbox({ eventId, workerId, workerAssertion, leaseGeneration, now }) {
     identifier(eventId, "eventId");
     identifier(workerId, "workerId");
-    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["publisher", "system"])) {
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "publisher", operation: "completeOutbox", nowMs: now,
+      });
+    } catch {
       return { completed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw fail("leaseGeneration must be positive.");
@@ -647,6 +658,7 @@ export class OrchestratorLedger extends DurableObject {
           row.lease_generation !== leaseGeneration || row.lease_until <= now) {
         return { completed: false, reason: "LEASE_FENCE_MISMATCH" };
       }
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return { completed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       sql.exec(
         "UPDATE orchestrator_outbox_events SET status = 'COMPLETED', lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND status = 'IN_PROGRESS' AND lease_worker_id = ? AND lease_generation = ?",
         now, eventId, workerId, leaseGeneration,

@@ -1,3 +1,10 @@
+> **Historical evidence snapshot — superseded.** This document records findings against
+> `edcebf33a3673ee4a5c705449869f6880e5480af` on
+> `remediation/production-readiness-2026-11-06`. Its negative findings below are
+> not assertions about the later `remediation/orchestrator-production-hardening`
+> branch. For current source state, use the addendum at the end and verify the
+> exact commit and CI runs before making a release decision.
+
 # Security Integration Gate — Webhook and Ledger Identity
 
 - Date: 2026-11-06
@@ -42,3 +49,35 @@ The current CI result validates the isolated authenticator and existing suites; 
 ## Release decision
 
 Webhook-driven task execution and Production remain **NO-GO**. The successful CI run is necessary but insufficient evidence for runtime security.
+
+
+## Addendum — subsequent source remediation (2026-11-06)
+
+This addendum is deliberately separate from the historical assessment above.
+
+- Current remediation branch: `remediation/orchestrator-production-hardening`
+- Current inspected head at addendum authoring: `d541ac8979f06d12446a8707e50f63d9e84ef753`
+- The Worker source now contains the `/webhooks/github` route, calls
+  `authenticateGitHubWebhook` before passing verified transport metadata to
+  `OrchestratorLedger.claimGitHubDelivery`, and propagates the business
+  `idempotencyKey` and semantic `inputHash`.
+- The Ledger source now contains durable webhook-delivery and business
+  idempotency tables and an atomic `claimGitHubDelivery` transaction.
+- The intake semantic hash was corrected to include issue identity/content and
+  the required policy label, while excluding unrelated mutable triage labels.
+- A focused regression test now verifies that an unrelated label change does
+  not create a second business operation.
+- Durable Object tests were added for distinct delivery IDs replaying the same
+  business key/hash and for conflicting semantic hashes being rejected.
+
+**Verification state:** the intake contract workflow for
+`1176acdad43502a7fc293a1be75e52a8d18c3476` passed. Full CI and secret-scan
+runs for `d541ac8979f06d12446a8707e50f63d9e84ef753` were queued/in progress
+when this addendum was written; do not treat them as passing evidence until
+their terminal conclusions are inspected. The Staging smoke job remained
+skipped on the preceding run. No live Cloudflare runtime verification or
+Production deployment is claimed.
+
+**Release decision remains NO-GO** until the exact current head has green CI,
+live Staging end-to-end verification, independent review, and the remaining
+runtime signer/publisher/scheduler and recovery controls are proven.

@@ -349,7 +349,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const ownerBypass = await ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
       actor: { id: "owner:one", authenticated: true, identityVerified: true, role: "owner" },
-      evidence, now: now + 1,
+      evidence, now: now + 1, workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "transitionTask", nowMs: now + 1 }),
     });
     expect(ownerBypass).toMatchObject({ updated: false, reason: "LEASE_FENCE_MISMATCH" });
 

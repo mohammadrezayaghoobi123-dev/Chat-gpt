@@ -283,7 +283,7 @@ export class OrchestratorLedger extends DurableObject {
 
   ping() {
     const result = this.ctx.storage.sql.exec("SELECT 1 AS ok").one();
-    return { ok: Number(result.ok) === 1, schemaVersion: 2 };
+    return { ok: Number(result.ok) === 1, schemaVersion: 3 };
   }
 
   claimGitHubDelivery({ deliveryId, bodySha256, eventName, receivedAt, idempotencyKey, inputHash } = {}) {

@@ -110,3 +110,10 @@ commits = ["4cb3f9b9a2a64ccacb704066de1974a9af134c49"]
 paths = ['''^cloud-engineering-connector/test/orchestrator-preflight\.test\.js$''']
 regexTarget = "line"
 regexes = ['''eyJhbGciOiJIUzI1NiJ9.*eyJzdWIiOiJ1c2VyIn0.*signaturepayloadlongenough123456''']
+
+[[allowlists]]
+description = "Synthetic ephemeral HMAC test-key fixture from one historical identity test commit; restricted to that exact commit, file, and generic-api-key rule."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["d5ffafb6df54e26189d8494548f7693fdcfdf108"]
+paths = ['''^cloud-engineering-connector/test/orchestrator-worker-identity\.test\.js$''']

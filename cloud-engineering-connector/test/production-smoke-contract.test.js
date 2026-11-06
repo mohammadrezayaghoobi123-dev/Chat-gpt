@@ -48,3 +48,11 @@ test("Production post-deploy gate verifies both Queue consumers, retry bounds, a
   assert.match(releaseWorkflow, /consumer\.settings\?\.max_retries, 5/);
   assert.match(releaseWorkflow, /consumer\.settings\?\.retry_delay, 30/);
 });
+
+
+test("Production release preflights distinct environment-scoped active Ledger signer key identifiers", () => {
+  assert.match(releaseWorkflow, /for \(const \[label, bindings\] of \[\["Production", productionBindings\], \["Staging", stagingBindings\]\]\)/);
+  assert.match(releaseWorkflow, /LEDGER_WORKER_ASSERTION_ACTIVE_KID/);
+  assert.match(releaseWorkflow, /activeSignerKid\?\.type, "plain_text"/);
+  assert.match(releaseWorkflow, /activeSignerKid\.text/);
+});

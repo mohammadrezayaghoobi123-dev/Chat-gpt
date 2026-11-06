@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { canonicalJson } from "../orchestrator-protocol.js";
+import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
@@ -863,4 +864,92 @@ it("records a receipt only when every immutable Queue field matches the durable 
     now: now + 1,
   });
   expect(tampered).toMatchObject({ recorded: false, reason: "OUTBOX_SOURCE_NOT_FOUND" });
+});
+
+
+it("integrates the real Durable Object Ledger with publisher and Queue consumer across duplicate delivery", async () => {
+  const ledger = ledgerFor("ledger-outbox-publisher-consumer-e2e");
+  const integrationNow = Date.now();
+  const taskId = "task-queue-e2e-0001";
+  await createTask(ledger, {
+    task: task(taskId),
+    idempotencyKey: "task-create-queue-e2e-0001",
+    inputHash: "a".repeat(64),
+    now: integrationNow,
+  });
+  const payload = { taskId, transition: "created", source: "integration-test" };
+  await ledger.enqueueOutbox({
+    eventId: "evt-queue-e2e-0001",
+    idempotencyKey: "outbox-queue-e2e-0001",
+    taskId,
+    eventType: "task.created",
+    payload,
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: integrationNow,
+    }),
+    now: integrationNow,
+  });
+
+  const queued = [];
+  const runtimeEnv = {
+    ORCHESTRATOR_LEDGER: env.ORCHESTRATOR_LEDGER,
+    ORCHESTRATOR_OUTBOX_QUEUE: {
+      send: async (message, options) => {
+        queued.push({ message: structuredClone(message), options });
+      },
+    },
+    LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+    LEDGER_WORKER_ASSERTION_ACTIVE_KID: TEST_ASSERTION_KID,
+  };
+  const published = await processOrchestratorOutbox(runtimeEnv, { maxEvents: 1 });
+  expect(published).toEqual({
+    processed: 1, published: 1, failed: 0, deadLettered: 0, completionPending: 0,
+  });
+  expect(queued).toHaveLength(1);
+  expect(queued[0].options).toEqual({ contentType: "json" });
+  expect(queued[0].message).toMatchObject({
+    schemaVersion: 1,
+    eventId: "evt-queue-e2e-0001",
+    idempotencyKey: "outbox-queue-e2e-0001",
+    taskId,
+    eventType: "task.created",
+    payload,
+    createdAt: integrationNow,
+  });
+
+  const delivered = () => ({
+    body: structuredClone(queued[0].message),
+    acknowledged: false,
+    retried: false,
+    ack() { this.acknowledged = true; },
+    retry() { this.retried = true; },
+  });
+  const consumerEnv = {
+    ORCHESTRATOR_LEDGER: env.ORCHESTRATOR_LEDGER,
+    LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+    LEDGER_WORKER_ASSERTION_ACTIVE_KID: TEST_ASSERTION_KID,
+  };
+  const first = delivered();
+  const firstResult = await consumeOrchestratorOutbox({ messages: [first] }, consumerEnv);
+  expect(firstResult).toEqual({ received: 1, acknowledged: 1, retried: 0, duplicates: 0 });
+  expect(first.acknowledged).toBe(true);
+  expect(first.retried).toBe(false);
+
+  const duplicate = delivered();
+  const duplicateResult = await consumeOrchestratorOutbox({ messages: [duplicate] }, consumerEnv);
+  expect(duplicateResult).toEqual({ received: 1, acknowledged: 1, retried: 0, duplicates: 1 });
+  expect(duplicate.acknowledged).toBe(true);
+  expect(duplicate.retried).toBe(false);
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+      "evt-queue-e2e-0001",
+    ).one().count).toBe(1);
+    expect(state.storage.sql.exec(
+      "SELECT status FROM orchestrator_outbox_events WHERE event_id = ?",
+      "evt-queue-e2e-0001",
+    ).one().status).toBe("COMPLETED");
+  });
 });

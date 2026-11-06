@@ -412,15 +412,6 @@ export class OrchestratorLedger extends DurableObject {
               return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
             }
           }
-          sql.exec(
-            "UPDATE orchestrator_execution_leases SET worker_id = ?, lease_generation = ?, lease_until = ?, updated_at = ? WHERE task_id = ? AND lease_generation = ?",
-            workerId, generation, now + leaseMs, now, row.task_id, lease.lease_generation,
-          );
-        } else {
-          sql.exec(
-            "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
-            row.task_id, workerId, now + leaseMs, now,
-          );
         }
         const assertionReplay = sql.exec(
           "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
@@ -433,6 +424,17 @@ export class OrchestratorLedger extends DurableObject {
           verifiedAssertion.jti, verifiedAssertion.subject, verifiedAssertion.role, verifiedAssertion.operation,
           verifiedAssertion.kid, nowSeconds, nowSeconds + 60, nowSeconds,
         );
+        if (lease) {
+          sql.exec(
+            "UPDATE orchestrator_execution_leases SET worker_id = ?, lease_generation = ?, lease_until = ?, updated_at = ? WHERE task_id = ? AND lease_generation = ?",
+            workerId, generation, now + leaseMs, now, row.task_id, lease.lease_generation,
+          );
+        } else {
+          sql.exec(
+            "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
+            row.task_id, workerId, now + leaseMs, now,
+          );
+        }
         return {
           claimed: true,
           task: taskProjection,

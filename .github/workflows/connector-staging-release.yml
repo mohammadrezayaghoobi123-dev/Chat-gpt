@@ -237,7 +237,7 @@ jobs:
           assert.equal(dlqConsumer.settings?.batch_size, 5, "Staging DLQ archive batch size must be 5");
           assert.equal(dlqConsumer.settings?.max_concurrency, 2, "Staging DLQ archive concurrency must be bounded at 2");
           assert.equal(dlqConsumer.settings?.max_retries, 100, "Staging DLQ archive retries must be bounded at 100");
-          assert.equal(dlqConsumer.settings?.retry_delay, 60, "Staging DLQ archive retry delay must be 60 seconds");
+          assert.equal(dlqConsumer.settings?.retry_delay, 3600, "Staging DLQ archive retry delay must be 3600 seconds");
           console.log("Staging Durable Object, Queue consumer, isolated DLQ, retry policy, and Cron are verified.");
           NODE
 

@@ -41,6 +41,12 @@ async function createWorkerAssertion({ subject, role, operation, nowMs, jti }) {
 const claimAssertion = (subject, issuedAt = now) => createWorkerAssertion({
   subject, role: "agent", operation: "claimTask", nowMs: issuedAt,
 });
+const createTask = (ledger, input) => ledger.createTask({
+  ...input, workerId: "orchestrator-scheduler",
+  workerAssertion: createWorkerAssertion({
+    subject: "orchestrator-scheduler", role: "system", operation: "createTask", nowMs: input.now,
+  }),
+});
 const protocolEnvelope = (messageId, taskId, inputHash, payload, createdAt = now) => ({
   protocolVersion: 1, messageId, taskId, correlationId: "corr-0001",
   senderId: "agent:worker-1", recipientId: "agent:worker-2", type: "PROGRESS",
@@ -66,8 +72,8 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("creates a task once and replays the original task for the same idempotency key and input hash", async () => {
     const ledger = ledgerFor("ledger-task-idempotency");
-    const first = await ledger.createTask({ task: task(), idempotencyKey: "task-create-0001", inputHash: "b".repeat(64), now });
-    const replay = await ledger.createTask({ task: task(), idempotencyKey: "task-create-0001", inputHash: "b".repeat(64), now: now + 1 });
+    const first = await createTask(ledger, { task: task(), idempotencyKey: "task-create-0001", inputHash: "b".repeat(64), now });
+    const replay = await createTask(ledger, { task: task(), idempotencyKey: "task-create-0001", inputHash: "b".repeat(64), now: now + 1 });
     expect(first).toMatchObject({ created: true, task: { taskId: "task-0001", version: 1 } });
     expect(replay).toMatchObject({ created: false, replay: true, task: { taskId: "task-0001", version: 1 } });
     await runInDurableObject(ledger, async (_instance, state) => {
@@ -77,8 +83,8 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("rejects idempotency-key reuse with a different input hash without changing the original task", async () => {
     const ledger = ledgerFor("ledger-task-idempotency-conflict");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-0002", inputHash: "c".repeat(64), now });
-    await expect(ledger.createTask({
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-0002", inputHash: "c".repeat(64), now });
+    await expect(createTask(ledger, {
       task: { ...task(), objective: "different" }, idempotencyKey: "task-create-0002", inputHash: "d".repeat(64), now: now + 1,
     })).resolves.toMatchObject({ created: false, conflict: true, reason: "IDEMPOTENCY_CONFLICT" });
     await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ objective: "bounded task", version: 1 });
@@ -86,7 +92,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("allows at most one concurrent task lease claimant", async () => {
     const ledger = ledgerFor("ledger-concurrent-claim");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-0003", inputHash: "e".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-0003", inputHash: "e".repeat(64), now });
     const results = await Promise.all([
       ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 30_000, now }),
       ledger.claimTask({ workerId: "agent:worker-2", workerAssertion: await claimAssertion("agent:worker-2"), leaseMs: 30_000, now }),
@@ -98,7 +104,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("rejects stale lease generations on renew, release, and worker-driven state transitions", async () => {
     const ledger = ledgerFor("ledger-stale-fence");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-0004", inputHash: "f".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-0004", inputHash: "f".repeat(64), now });
     const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
     const reclaimed = await ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101,
@@ -119,7 +125,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("rejects stale task version or expected-state compare-and-set writes", async () => {
     const ledger = ledgerFor("ledger-task-cas");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-0005", inputHash: "1".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-0005", inputHash: "1".repeat(64), now });
     await expect(ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 2, expectedState: "SCHEDULED", nextState: "RUNNING",
       actor: { id: "owner:one", authenticated: true, identityVerified: true, role: "owner" }, evidence, now: now + 1, workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "transitionTask", nowMs: now + 1 }),
@@ -128,7 +134,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("deduplicates repeated messages and rejects the same message ID with a different input hash", async () => {
     const ledger = ledgerFor("ledger-message-dedup");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-0006", inputHash: "2".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-0006", inputHash: "2".repeat(64), now });
     const input = { messageId: "msg-0001", taskId: "task-0001", inputHash: "3".repeat(64), envelope: protocolEnvelope("msg-0001", "task-0001", "3".repeat(64), { step: 1 }), workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now }), now };
     expect(await ledger.recordMessage(input)).toMatchObject({ accepted: true });
     expect(await ledger.recordMessage({ ...input, workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now }) })).toMatchObject({ accepted: false, replay: true });
@@ -145,7 +151,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("commits a task transition and its outbox intent atomically", async () => {
     const ledger = ledgerFor("ledger-transition-outbox-atomic");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-0007", inputHash: "5".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-0007", inputHash: "5".repeat(64), now });
     const lease = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 30_000, now });
     expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
     const result = await ledger.transitionTask({
@@ -168,7 +174,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("makes outbox enqueue idempotent and detects changed payload conflicts", async () => {
     const ledger = ledgerFor("ledger-outbox-idempotency");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-0008", inputHash: "6".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-0008", inputHash: "6".repeat(64), now });
     const input = {
       eventId: "event-0001", idempotencyKey: "outbox-key-0001", taskId: "task-0001",
       eventType: "task.created", payload: { taskId: "task-0001" }, workerId: "agent:worker-1", now,
@@ -181,7 +187,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("uses monotonically increasing outbox fencing generations and rejects stale completion", async () => {
     const ledger = ledgerFor("ledger-outbox-fencing");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-0009", inputHash: "7".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-0009", inputHash: "7".repeat(64), now });
     await ledger.enqueueOutbox({
       eventId: "event-0002", idempotencyKey: "outbox-key-0002", taskId: "task-0001",
       eventType: "task.created", payload: { taskId: "task-0001" }, workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now }), now,
@@ -199,7 +205,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("appends immutable hash-linked audit events and rejects event ID rebinding", async () => {
     const ledger = ledgerFor("ledger-audit-chain");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-0010", inputHash: "8".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-0010", inputHash: "8".repeat(64), now });
     const input = {
       eventId: "audit-0001", taskId: "task-0001", actor: agent, workerId: "agent:worker-1",
       workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "appendAuditEvent", nowMs: now }),
@@ -230,7 +236,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("one hundred duplicate deliveries produce exactly one effective message record", async () => {
     const ledger = ledgerFor("ledger-message-100-duplicates");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-0011", inputHash: "9".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-0011", inputHash: "9".repeat(64), now });
     const input = {
       messageId: "msg-100-duplicates", taskId: "task-0001", inputHash: "a".repeat(64),
       envelope: protocolEnvelope("msg-100-duplicates", "task-0001", "a".repeat(64), { accepted: true }), workerId: "agent:worker-1", now,
@@ -245,7 +251,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("requires reconciliation evidence before reclaiming an expired lease and preserves task state", async () => {
     const ledger = ledgerFor("ledger-expired-lease-reconciliation");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-0012", inputHash: "b".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-0012", inputHash: "b".repeat(64), now });
     const worker = authenticatedWorker("agent:worker-1");
     const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
     await expect(ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101 }))
@@ -260,7 +266,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("refuses to persist a protocol message without a verified authenticated sender context", async () => {
     const ledger = ledgerFor("ledger-message-authentication");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-auth-message", inputHash: "c".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-auth-message", inputHash: "c".repeat(64), now });
     const envelope = protocolEnvelope("msg-auth-required", "task-0001", "d".repeat(64), { step: 1 });
     await expect(ledger.recordMessage({
       messageId: "msg-auth-required", taskId: "task-0001", inputHash: "d".repeat(64), envelope, now,
@@ -273,7 +279,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("requires verified worker identities before task or outbox lease side effects", async () => {
     const ledger = ledgerFor("ledger-worker-authentication");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-worker-auth", inputHash: "c".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-worker-auth", inputHash: "c".repeat(64), now });
     await expect(ledger.claimTask({ workerId: "agent:worker-1", leaseMs: 30_000, now }))
       .resolves.toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
     await expect(ledger.claimTask({
@@ -284,7 +290,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("persists the four-round ceiling so retries cannot reset agent coordination rounds", async () => {
     const ledger = ledgerFor("ledger-agent-round-limit");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-agent-rounds", inputHash: "c".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-agent-rounds", inputHash: "c".repeat(64), now });
     const lease = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 30_000, now });
     let version = 1;
     for (let round = 1; round <= 4; round += 1) {
@@ -304,7 +310,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("rejects a message whose envelope identifiers do not match the durable deduplication key", async () => {
     const ledger = ledgerFor("ledger-message-envelope-binding");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-envelope-binding", inputHash: "f".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-envelope-binding", inputHash: "f".repeat(64), now });
     const result = await ledger.recordMessage({
       messageId: "msg-indexed-as-one", taskId: "task-0001", inputHash: "a".repeat(64),
       envelope: protocolEnvelope("msg-claimed-as-two", "task-0001", "a".repeat(64), {}), workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now }), now,
@@ -314,7 +320,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("does not allow an unassigned worker identity to claim a task assigned to another executor", async () => {
     const ledger = ledgerFor("ledger-assignee-enforcement");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-assignee", inputHash: "b".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-assignee", inputHash: "b".repeat(64), now });
     await expect(ledger.claimTask({ workerId: "agent:unassigned", workerAssertion: await claimAssertion("agent:unassigned"), leaseMs: 30_000, now }))
       .resolves.toMatchObject({ claimed: false, reason: "ASSIGNEE_MISMATCH" });
     await expect(ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 30_000, now }))
@@ -323,10 +329,10 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("rejects secret-bearing fields and never creates or writes KnowledgeStore tables", async () => {
     const ledger = ledgerFor("ledger-secret-isolation");
-    await expect(Promise.resolve().then(() => ledger.createTask({
+    await expect(Promise.resolve().then(() => createTask(ledger, {
       task: { ...task(), apiKey: "must-not-persist" }, idempotencyKey: "task-secret-0001", inputHash: "c".repeat(64), now,
     }))).rejects.toThrow(/sensitive field/);
-    await ledger.createTask({ task: task(), idempotencyKey: "task-safe-0001", inputHash: "d".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-safe-0001", inputHash: "d".repeat(64), now });
     await expect(Promise.resolve().then(() => ledger.recordMessage({
       messageId: "msg-secret-0001", taskId: "task-0001", inputHash: "e".repeat(64),
       envelope: { token: "must-not-persist" }, now,
@@ -345,7 +351,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("requires a live task lease for every state transition regardless of caller-declared actor role", async () => {
     const ledger = ledgerFor("ledger-transition-role-bypass");
-    await ledger.createTask({ task: task(), idempotencyKey: "task-create-role-bypass", inputHash: "e".repeat(64), now });
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-role-bypass", inputHash: "e".repeat(64), now });
 
     const ownerBypass = await ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
@@ -365,7 +371,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
 it("rejects a caller-forged legacy worker identity before creating a lease", async () => {
   const ledger = ledgerFor("ledger-forged-legacy-worker-identity");
-  await ledger.createTask({ task: task(), idempotencyKey: "task-create-forged-identity", inputHash: "a".repeat(64), now });
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-forged-identity", inputHash: "a".repeat(64), now });
   const forged = { id: "agent:worker-1", authenticated: true, identityVerified: true, role: "agent" };
   await expect(ledger.claimTask({
     workerId: "agent:worker-1", authenticatedWorker: forged, leaseMs: 30_000, now,
@@ -378,7 +384,7 @@ it("rejects a caller-forged legacy worker identity before creating a lease", asy
 
 it("accepts one signed claim assertion once and atomically rejects its replay", async () => {
   const ledger = ledgerFor("ledger-claim-assertion-replay");
-  await ledger.createTask({ task: task(), idempotencyKey: "task-create-assertion-replay", inputHash: "b".repeat(64), now });
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-assertion-replay", inputHash: "b".repeat(64), now });
   const assertion = await createWorkerAssertion({
     subject: "agent:worker-1", role: "agent", operation: "claimTask",
     nowMs: now, jti: "jti-claim-once-000000000001",
@@ -402,7 +408,7 @@ it("accepts one signed claim assertion once and atomically rejects its replay", 
 
 it("rejects a signed assertion bound to another operation or a modified MAC", async () => {
   const ledger = ledgerFor("ledger-claim-assertion-binding");
-  await ledger.createTask({ task: task(), idempotencyKey: "task-create-assertion-binding", inputHash: "c".repeat(64), now });
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-assertion-binding", inputHash: "c".repeat(64), now });
   const wrongOperation = await createWorkerAssertion({
     subject: "agent:worker-1", role: "agent", operation: "releaseLease", nowMs: now,
   });
@@ -426,7 +432,7 @@ it("rejects a signed assertion bound to another operation or a modified MAC", as
 
 it("rejects legacy boolean identity for lease release without mutating lease state", async () => {
   const ledger = ledgerFor("ledger-release-forged-identity");
-  await ledger.createTask({ task: task(), idempotencyKey: "task-create-release-forged", inputHash: "d".repeat(64), now });
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-release-forged", inputHash: "d".repeat(64), now });
   const claimed = await ledger.claimTask({
     workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"),
     leaseMs: 30_000, now,
@@ -446,7 +452,7 @@ it("rejects legacy boolean identity for lease release without mutating lease sta
 
 it("consumes a signed lease-renewal assertion once and rejects replay", async () => {
   const ledger = ledgerFor("ledger-renew-assertion-replay");
-  await ledger.createTask({ task: task(), idempotencyKey: "task-create-renew-replay", inputHash: "e".repeat(64), now });
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-renew-replay", inputHash: "e".repeat(64), now });
   const claimed = await ledger.claimTask({
     workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"),
     leaseMs: 30_000, now,
@@ -473,7 +479,7 @@ it("consumes a signed lease-renewal assertion once and rejects replay", async ()
 
 it("rejects caller-supplied boolean identity for lease renewal", async () => {
   const ledger = ledgerFor("ledger-renew-forged-identity");
-  await ledger.createTask({ task: task(), idempotencyKey: "task-create-renew-forged", inputHash: "f".repeat(64), now });
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-renew-forged", inputHash: "f".repeat(64), now });
   const claimed = await ledger.claimTask({
     workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"),
     leaseMs: 30_000, now,
@@ -492,7 +498,7 @@ it("rejects caller-supplied boolean identity for lease renewal", async () => {
 
 it("rejects legacy boolean identity for agent-round mutation", async () => {
   const ledger = ledgerFor("ledger-agent-round-forged-identity");
-  await ledger.createTask({ task: task(), idempotencyKey: "task-create-round-forged", inputHash: "9".repeat(64), now });
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-round-forged", inputHash: "9".repeat(64), now });
   const lease = await ledger.claimTask({
     workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"),
     leaseMs: 30_000, now,
@@ -508,7 +514,7 @@ it("rejects legacy boolean identity for agent-round mutation", async () => {
 
 it("rejects legacy boolean identity for state transitions even with a live lease", async () => {
   const ledger = ledgerFor("ledger-transition-forged-identity");
-  await ledger.createTask({ task: task(), idempotencyKey: "task-create-transition-forged", inputHash: "8".repeat(64), now });
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-transition-forged", inputHash: "8".repeat(64), now });
   const lease = await ledger.claimTask({
     workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"),
     leaseMs: 30_000, now,
@@ -524,7 +530,7 @@ it("rejects legacy boolean identity for state transitions even with a live lease
 
 it("rejects caller-forged publisher booleans before claiming an outbox event", async () => {
   const ledger = ledgerFor("ledger-outbox-forged-publisher");
-  await ledger.createTask({ task: task(), idempotencyKey: "task-create-outbox-forged", inputHash: "7".repeat(64), now });
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-outbox-forged", inputHash: "7".repeat(64), now });
   await ledger.enqueueOutbox({
     eventId: "event-forged-publisher", idempotencyKey: "outbox-forged-publisher",
     taskId: "task-0001", eventType: "task.created", payload: { taskId: "task-0001" }, workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now }), now,
@@ -541,7 +547,7 @@ it("rejects caller-forged publisher booleans before claiming an outbox event", a
 
 it("rejects legacy boolean sender identity for message intake without persisting data", async () => {
   const ledger = ledgerFor("ledger-message-forged-sender");
-  await ledger.createTask({ task: task(), idempotencyKey: "task-create-message-forged", inputHash: "6".repeat(64), now });
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-message-forged", inputHash: "6".repeat(64), now });
   const envelope = protocolEnvelope("msg-forged-sender", "task-0001", "b".repeat(64), { forged: true });
   await expect(ledger.recordMessage({
     messageId: "msg-forged-sender", taskId: "task-0001", inputHash: "b".repeat(64), envelope,
@@ -554,7 +560,7 @@ it("rejects legacy boolean sender identity for message intake without persisting
 
 it("rejects legacy caller-supplied actor booleans for audit append", async () => {
   const ledger = ledgerFor("ledger-audit-forged-actor");
-  await ledger.createTask({ task: task(), idempotencyKey: "task-create-audit-forged", inputHash: "5".repeat(64), now });
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-audit-forged", inputHash: "5".repeat(64), now });
   await expect(ledger.appendAuditEvent({
     eventId: "audit-forged-actor", taskId: "task-0001",
     actor: { id: "agent:worker-1", authenticated: true, identityVerified: true, role: "agent" },
@@ -567,12 +573,24 @@ it("rejects legacy caller-supplied actor booleans for audit append", async () =>
 
 it("rejects unauthenticated direct outbox enqueue", async () => {
   const ledger = ledgerFor("ledger-outbox-forged-enqueue");
-  await ledger.createTask({ task: task(), idempotencyKey: "task-create-outbox-enqueue-forged", inputHash: "4".repeat(64), now });
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-outbox-enqueue-forged", inputHash: "4".repeat(64), now });
   await expect(ledger.enqueueOutbox({
     eventId: "event-unauth-enqueue", idempotencyKey: "outbox-unauth-enqueue",
     taskId: "task-0001", eventType: "task.created", payload: { taskId: "task-0001" }, now,
   })).resolves.toMatchObject({ enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_outbox_events").one().count).toBe(0);
+  });
+});
+
+it("rejects unauthenticated and caller-forged task creation", async () => {
+  const ledger = ledgerFor("ledger-create-task-forged");
+  await expect(ledger.createTask({
+    task: task(), idempotencyKey: "task-create-forged", inputHash: "3".repeat(64), now,
+    workerId: "orchestrator-scheduler",
+    authenticatedWorker: { id: "orchestrator-scheduler", authenticated: true, identityVerified: true, role: "system" },
+  })).resolves.toMatchObject({ created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count).toBe(0);
   });
 });

@@ -74,7 +74,7 @@ max_batch_size = 5
 max_batch_timeout = 5
 max_concurrency = 2
 max_retries = 100
-retry_delay = 60
+retry_delay = 3600
 
 [env.staging]
 

@@ -1116,15 +1116,11 @@ export async function processOrchestratorOutbox(env, options = {}) {
   const event = claim.event;
   const leaseGeneration = claim.leaseGeneration ?? event?.leaseGeneration;
   if (!event || typeof event.eventId !== "string" || typeof event.eventType !== "string" ||
-      typeof event.taskId !== "string" || !Number.isSafeInteger(leaseGeneration) ||
-      leaseGeneration < 1) {
-   try {
-    await stub.failOutbox({
-     eventId: event?.eventId ?? "invalid-outbox-event",
-     workerId, workerAssertion: await assertion("failOutbox"),
-     leaseGeneration, retryable: false, errorCode: "INVALID_OUTBOX_EVENT", now: Date.now(),
-    });
-   } catch {}
+      typeof event.taskId !== "string" || typeof event.idempotencyKey !== "string" ||
+      !Number.isSafeInteger(event.attempts) || !Number.isSafeInteger(event.createdAt) ||
+      !Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) {
+   // A malformed claimed row cannot be safely fenced without its persisted event ID
+   // and lease generation. Leave it leased for expiry/reconciliation; never invent IDs.
    totals.failed += 1;
    continue;
   }

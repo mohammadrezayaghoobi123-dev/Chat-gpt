@@ -1273,6 +1273,114 @@ export async function consumeOrchestratorOutbox(batch, env) {
  return totals;
 }
 
+function logOrchestratorDeadLetterTotals(totals, reason) {
+ const record = {
+  event: "orchestrator_outbox_dlq_archive",
+  severity: totals.retried > 0 || reason ? "warning" : "info",
+  observed_at: new Date().toISOString(),
+  ...totals,
+  ...(reason ? { reason } : {}),
+ };
+ const serialized = JSON.stringify(record);
+ if (record.severity === "warning") console.error(serialized);
+ else console.log(serialized);
+}
+
+export async function consumeOrchestratorDeadLetters(batch, env) {
+ const messages = Array.isArray(batch?.messages) ? batch.messages : [];
+ const totals = { received: messages.length, archived: 0, duplicates: 0, retried: 0 };
+ const expectedQueue = env?.ORCHESTRATOR_OUTBOX_DLQ_QUEUE;
+ if (typeof expectedQueue !== "string" || batch?.queue !== expectedQueue) {
+  for (const message of messages) {
+   try { message.retry({ delaySeconds: 60 }); totals.retried += 1; } catch {}
+  }
+  logOrchestratorDeadLetterTotals(totals, "unexpected_dlq_queue");
+  return totals;
+ }
+ const binding = env?.ORCHESTRATOR_LEDGER;
+ if (!binding || typeof binding.idFromName !== "function" || typeof binding.get !== "function" ||
+     typeof env?.LEDGER_WORKER_ASSERTION_KEYS !== "string" ||
+     typeof env?.LEDGER_WORKER_ASSERTION_ACTIVE_KID !== "string") {
+  for (const message of messages) {
+   try { message.retry({ delaySeconds: 60 }); totals.retried += 1; } catch {}
+  }
+  logOrchestratorDeadLetterTotals(totals, "ledger_binding_or_signing_unavailable");
+  return totals;
+ }
+ const stub = binding.get(binding.idFromName("orchestrator-ledger-global"));
+ if (!stub || typeof stub.recordOutboxDeadLetter !== "function") {
+  for (const message of messages) {
+   try { message.retry({ delaySeconds: 60 }); totals.retried += 1; } catch {}
+  }
+  logOrchestratorDeadLetterTotals(totals, "dead_letter_archive_rpc_unavailable");
+  return totals;
+ }
+ const archiverId = "orchestrator-outbox-dlq-archiver";
+ for (const message of messages) {
+  try {
+   const messageTimestamp = message?.timestamp instanceof Date ? message.timestamp.getTime() : NaN;
+   if (!message || typeof message.id !== "string" ||
+       !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(message.id) ||
+       !Number.isSafeInteger(message.attempts) || message.attempts < 1 || message.attempts > 100 ||
+       !Number.isSafeInteger(messageTimestamp) || messageTimestamp < 1 ||
+       message.body === undefined) {
+    message.retry({ delaySeconds: 60 });
+    totals.retried += 1;
+    continue;
+   }
+   const bodySha256 = await sha256Hex(stableStringify(message.body));
+   const now = Date.now();
+   const workerAssertion = await createScheduledWorkerAssertion(
+    env.LEDGER_WORKER_ASSERTION_KEYS,
+    env.LEDGER_WORKER_ASSERTION_ACTIVE_KID,
+    { subject: archiverId, role: "consumer", operation: "recordOutboxDeadLetter", nowMs: now },
+   );
+   const archived = await stub.recordOutboxDeadLetter({
+    queueName: expectedQueue,
+    messageId: message.id,
+    messageAttempts: message.attempts,
+    messageTimestamp,
+    body: message.body,
+    bodySha256,
+    archiverId,
+    workerAssertion,
+    now,
+   });
+   if (archived?.recorded === true) {
+    message.ack();
+    totals.archived += 1;
+   } else if (archived?.replay === true) {
+    message.ack();
+    totals.archived += 1;
+    totals.duplicates += 1;
+   } else {
+    message.retry({ delaySeconds: 60 });
+    totals.retried += 1;
+   }
+  } catch {
+   try { message.retry({ delaySeconds: 60 }); totals.retried += 1; } catch {}
+  }
+ }
+ logOrchestratorDeadLetterTotals(totals);
+ return totals;
+}
+
+export async function handleOrchestratorQueue(batch, env) {
+ if (batch?.queue === env?.ORCHESTRATOR_OUTBOX_DLQ_QUEUE) {
+  return consumeOrchestratorDeadLetters(batch, env);
+ }
+ if (batch?.queue && batch.queue !== env?.ORCHESTRATOR_OUTBOX_QUEUE_NAME) {
+  const messages = Array.isArray(batch.messages) ? batch.messages : [];
+  const totals = { received: messages.length, retried: 0 };
+  for (const message of messages) {
+   try { message.retry({ delaySeconds: 60 }); totals.retried += 1; } catch {}
+  }
+  logOrchestratorDeadLetterTotals(totals, "unrecognized_queue");
+  return totals;
+ }
+ return consumeOrchestratorOutbox(batch, env);
+}
+
 async function handleScheduled(controller,env,ctx){
  const task=processKnowledgeOutbox(env).then(result=>{
   const summary={observed_at:new Date().toISOString(),...result};
@@ -1311,4 +1419,4 @@ function applySecurityHeaders(request,response){
  if(!headers.has("cache-control"))headers.set("cache-control","no-store");
  return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
 }
-export default{async fetch(request,env){let response;try{response=await handleRequest(request,env)}catch{response=json({error:"internal_error"},500)}return applySecurityHeaders(request,applyCors(request,env,response))},scheduled:handleScheduled,queue:consumeOrchestratorOutbox};
+export default{async fetch(request,env){let response;try{response=await handleRequest(request,env)}catch{response=json({error:"internal_error"},500)}return applySecurityHeaders(request,applyCors(request,env,response))},scheduled:handleScheduled,queue:handleOrchestratorQueue};

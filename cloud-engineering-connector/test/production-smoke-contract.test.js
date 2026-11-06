@@ -37,3 +37,14 @@ test("Production release refuses deployment unless both isolated outbox Queue/DL
     "chat-gpt111-staging-orchestrator-outbox",
   ]) assert.ok(releaseWorkflow.includes(name), "missing Queue preflight for " + name);
 });
+
+
+test("Production post-deploy gate verifies both Queue consumers, retry bounds, and isolated DLQs", () => {
+  assert.match(releaseWorkflow, /accounts\/\" \+ account \+ \"\/queues\?per_page=100/);
+  assert.match(releaseWorkflow, /chat-gpt111-orchestrator-outbox-dlq/);
+  assert.match(releaseWorkflow, /chat-gpt111-staging-orchestrator-outbox-dlq/);
+  assert.match(releaseWorkflow, /consumer\.settings\?\.batch_size, 5/);
+  assert.match(releaseWorkflow, /consumer\.settings\?\.max_concurrency, 5/);
+  assert.match(releaseWorkflow, /consumer\.settings\?\.max_retries, 5/);
+  assert.match(releaseWorkflow, /consumer\.settings\?\.retry_delay, 30/);
+});

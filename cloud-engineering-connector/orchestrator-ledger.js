@@ -228,6 +228,16 @@ export class OrchestratorLedger extends DurableObject {
     }
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_retry_schedule ON orchestrator_outbox_events(status, retry_state, next_attempt_at, created_at)");
     sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_outbox_receipts (
+        event_id TEXT PRIMARY KEY,
+        event_type TEXT NOT NULL,
+        schema_version INTEGER NOT NULL CHECK(schema_version = 1),
+        envelope_sha256 TEXT NOT NULL CHECK(length(envelope_sha256) = 64),
+        consumer_id TEXT NOT NULL,
+        received_at INTEGER NOT NULL
+      )
+    `);
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_consumed_assertions (
         jti TEXT PRIMARY KEY,
         subject TEXT NOT NULL,
@@ -877,6 +887,46 @@ export class OrchestratorLedger extends DurableObject {
         now, eventId, workerId, leaseGeneration,
       );
       return { completed: true, eventId, leaseGeneration };
+    });
+  }
+
+  async recordOutboxReceipt({ eventId, eventType, schemaVersion, envelopeSha256, consumerId, workerAssertion, now } = {}) {
+    identifier(eventId, "eventId");
+    identifier(eventType, "eventType");
+    hash(envelopeSha256, "envelopeSha256");
+    timestamp(now);
+    if (schemaVersion !== 1 || consumerId !== "orchestrator-outbox-consumer") {
+      return { recorded: false, reason: "INVALID_OUTBOX_RECEIPT" };
+    }
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: consumerId, role: "consumer", operation: "recordOutboxReceipt", nowMs: now,
+      });
+    } catch {
+      return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
+    const sql = this.ctx.storage.sql;
+    return this.ctx.storage.transactionSync(() => {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      const existing = sql.exec(
+        "SELECT * FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).toArray()[0];
+      if (existing) {
+        if (existing.event_type === eventType && existing.schema_version === schemaVersion &&
+            existing.envelope_sha256 === envelopeSha256) {
+          return { recorded: false, replay: true, eventId };
+        }
+        return { recorded: false, conflict: true, reason: "OUTBOX_EVENT_ID_CONFLICT" };
+      }
+      sql.exec(
+        "INSERT INTO orchestrator_outbox_receipts (event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+        eventId, eventType, schemaVersion, envelopeSha256, consumerId, now,
+      );
+      return { recorded: true, eventId };
     });
   }
 

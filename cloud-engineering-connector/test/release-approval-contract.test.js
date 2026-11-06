@@ -137,6 +137,12 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
     observability: observabilityOverride,
   };
   const deploymentData = { deployments: [{ versions: [{ version_id: "previous-version", percentage: 100 }] }] };
+  const queueData = [
+    { queue_name: "chat-gpt111-orchestrator-outbox", queue_id: "production-outbox" },
+    { queue_name: "chat-gpt111-orchestrator-outbox-dlq", queue_id: "production-outbox-dlq" },
+    { queue_name: "chat-gpt111-staging-orchestrator-outbox", queue_id: "staging-outbox" },
+    { queue_name: "chat-gpt111-staging-orchestrator-outbox-dlq", queue_id: "staging-outbox-dlq" },
+  ];
   const scheduleData = { schedules: [{ cron: "*/5 * * * *" }] };
   const accountData = { settings: { enforce_twofactor: true } };
   const prelude = [
@@ -147,6 +153,7 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
     "  else if (url.includes('/chat-gpt111-staging/settings')) result = " + JSON.stringify(stagingSettings) + ";",
     "  else if (url.includes('/chat-gpt111/settings')) result = " + JSON.stringify(productionSettings) + ";",
     "  else if (url.includes('/schedules')) result = " + JSON.stringify(scheduleData) + ";",
+    "  else if (url.includes('/queues?')) result = " + JSON.stringify(queueData) + ";",
     "  else if (url.includes('/deployments?')) result = " + JSON.stringify(deploymentData) + ";",
     "  else throw new Error('Unexpected Cloudflare API request: ' + url);",
     "  return new Response(JSON.stringify({ success: true, result }), { status: 200, headers: { 'content-type': 'application/json' } });",
@@ -221,6 +228,12 @@ function runPreflightWithMfaDisabled(source, stepName, production) {
     observability,
   };
   const deploymentData = { deployments: [{ versions: [{ version_id: "previous-version", percentage: 100 }] }] };
+  const queueData = [
+    { queue_name: "chat-gpt111-orchestrator-outbox", queue_id: "production-outbox" },
+    { queue_name: "chat-gpt111-orchestrator-outbox-dlq", queue_id: "production-outbox-dlq" },
+    { queue_name: "chat-gpt111-staging-orchestrator-outbox", queue_id: "staging-outbox" },
+    { queue_name: "chat-gpt111-staging-orchestrator-outbox-dlq", queue_id: "staging-outbox-dlq" },
+  ];
   const accountData = { settings: { enforce_twofactor: false } };
   const prelude = [
     "globalThis.fetch = async (input) => {",
@@ -229,6 +242,7 @@ function runPreflightWithMfaDisabled(source, stepName, production) {
     "  if (url.endsWith('/accounts/test-account')) result = " + JSON.stringify(accountData) + ";",
     "  else if (url.includes('/chat-gpt111-staging/settings')) result = " + JSON.stringify(stagingSettings) + ";",
     "  else if (url.includes('/chat-gpt111/settings')) result = " + JSON.stringify(productionSettings) + ";",
+    "  else if (url.includes('/queues?')) result = " + JSON.stringify(queueData) + ";",
     "  else if (url.includes('/deployments?')) result = " + JSON.stringify(deploymentData) + ";",
     "  else throw new Error('Unexpected Cloudflare API request: ' + url);",
     "  return new Response(JSON.stringify({ success: true, result }), { status: 200, headers: { 'content-type': 'application/json' } });",

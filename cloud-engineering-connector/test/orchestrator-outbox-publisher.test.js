@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { processOrchestratorOutbox } from "../worker.js";
 
 const now = Date.now();
-const key = "3031323334353637383961626364656630313233343536373839616263646566";
+const key = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
 const keySet = JSON.stringify({ "worker-v1": key });
 const event = {
   eventId: "outbox-event-0001",

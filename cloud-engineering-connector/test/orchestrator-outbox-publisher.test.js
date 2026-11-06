@@ -133,3 +133,39 @@ test("send-success plus uncertain completion survives duplicate Queue delivery t
   assert.equal(first.acknowledged, true);
   assert.equal(duplicate.acknowledged, true);
 });
+
+
+test("emits redacted structured consumer metrics for retry outcomes", async () => {
+  const lines = [];
+  const originalError = console.error;
+  console.error = line => lines.push(String(line));
+  try {
+    const consumerEnv = {
+      ORCHESTRATOR_LEDGER: {
+        idFromName: name => name,
+        get: () => ({ recordOutboxReceipt: async () => ({ recorded: false, reason: "OUTBOX_SOURCE_NOT_FOUND" }) }),
+      },
+      LEDGER_WORKER_ASSERTION_KEYS: keySet,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: "worker-v1",
+    };
+    const body = { ...event, schemaVersion: 1 };
+    const message = {
+      body,
+      ack() { throw new Error("unexpected ack"); },
+      retry() { this.retried = true; },
+    };
+    const result = await consumeOrchestratorOutbox({ messages: [message] }, consumerEnv);
+    assert.deepEqual(result, { received: 1, acknowledged: 0, retried: 1, duplicates: 0 });
+    assert.equal(message.retried, true);
+    assert.equal(lines.length, 1);
+    const record = JSON.parse(lines[0]);
+    assert.deepEqual(
+      { event: record.event, severity: record.severity, received: record.received, acknowledged: record.acknowledged, retried: record.retried, duplicates: record.duplicates },
+      { event: "orchestrator_outbox_consume", severity: "warning", received: 1, acknowledged: 0, retried: 1, duplicates: 0 },
+    );
+    assert.equal(lines[0].includes(JSON.stringify(body)), false, "consumer telemetry must not contain message payloads");
+    assert.equal(lines[0].includes(key), false, "consumer telemetry must not contain signing material");
+  } finally {
+    console.error = originalError;
+  }
+});

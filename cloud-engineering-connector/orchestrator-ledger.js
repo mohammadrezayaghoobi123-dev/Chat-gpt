@@ -970,6 +970,19 @@ export class OrchestratorLedger extends DurableObject {
     }
     timestamp(messageTimestamp, "messageTimestamp");
     timestamp(now);
+    if (archiverId !== "orchestrator-outbox-dlq-archiver") {
+      return { recorded: false, reason: "INVALID_DEAD_LETTER_ARCHIVER" };
+    }
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: archiverId, role: "consumer", operation: "recordOutboxDeadLetter", nowMs: now,
+      });
+    } catch {
+      return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
+    // Authenticate the archiver before inspecting untrusted payload content.
+    // This prevents unauthenticated callers from probing sensitive-field policy.
     let bodyJson;
     try {
       bodyJson = serializeBounded(body, "dead-letter body");
@@ -987,17 +1000,6 @@ export class OrchestratorLedger extends DurableObject {
     });
     if (expectedSha256 !== bodySha256) {
       return { recorded: false, reason: "DEAD_LETTER_HASH_MISMATCH" };
-    }
-    if (archiverId !== "orchestrator-outbox-dlq-archiver") {
-      return { recorded: false, reason: "INVALID_DEAD_LETTER_ARCHIVER" };
-    }
-    let verifiedAssertion;
-    try {
-      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: archiverId, role: "consumer", operation: "recordOutboxDeadLetter", nowMs: now,
-      });
-    } catch {
-      return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {

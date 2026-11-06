@@ -2,9 +2,9 @@
 
 - Evidence date: 2026-11-06
 - Branch: `remediation/orchestrator-production-hardening`
-- Source implementation commit: `07bd7a6d108666e0b1cc1f2dd8b60d143eae9937`
-- CI run: [Cloud Engineering Connector CI #42260745352](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/42260745352)
-- Secret scan: [Full History Secret Scan #42260745365](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/42260745365)
+- Source implementation commit: `46a4e58b3babbb7ca83288f3592df85bc4c52672`
+- CI run: [Cloud Engineering Connector CI #42280584167](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/42260745352)
+- Secret scan: [Full History Secret Scan #42280584212](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/42260745365)
 
 ## Source-confirmed
 
@@ -24,7 +24,7 @@
 
 ## CI-confirmed at source implementation commit
 
-- Node test suite: 370 passed, 0 failed.
+- Node test suite: 372 passed, 0 failed.
 - Durable Object suite: 98 passed across 6 test files.
 - JavaScript syntax and Wrangler configuration checks: success.
 - Full-history Secret Scan: success.
@@ -50,3 +50,16 @@ The CI job's `post-deploy-staging-smoke` was skipped. CI success is not live run
 6. Complete backup/restore evidence, independent review, and operator-approved deployment.
 
 **Release decision: NO-GO.** This snapshot proves source and CI state only. It does not establish that the runtime is activated or production-ready.
+
+
+## Verification refresh — 2026-11-06 19:33 UTC
+
+- Branch HEAD: `46a4e58b3babbb7ca83288f3592df85bc4c52672`.
+- Cloud Engineering Connector CI: run `42280584167`, completed `success`.
+- Full History Secret Scan: run `42280584212`, completed `success`.
+- Node test runner: 372 passed, 0 failed.
+- Vitest Durable Object suite: 6 files, 98 tests passed.
+- `post-deploy-staging-smoke`: skipped. No live Staging smoke was performed by this workflow.
+- The test suite includes fail-closed readiness coverage for missing Queue and invalid/missing signer key configuration. The readiness fixture in the credential matrix was updated to provide ephemeral signing material and a test Queue; no real secret is committed.
+
+This refresh supersedes the earlier CI identifiers and Node test count in this snapshot. It does not change the runtime-unknown findings above.

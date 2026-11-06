@@ -716,6 +716,8 @@ export class OrchestratorLedger extends DurableObject {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const existing = sql.exec("SELECT * FROM orchestrator_audit_events WHERE event_id = ?", eventId).toArray()[0];
       if (existing) {
+        const consumed = this.ctx.storage.transactionSync(() => consumeWorkerAssertion(sql, verifiedAssertion, now));
+        if (!consumed) return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
         if (existing.task_id === taskId && existing.actor_id === actorId &&
             existing.actor_role === actorRole && existing.event_type === eventType &&
             existing.details_json === detailsJson && existing.created_at === now) {

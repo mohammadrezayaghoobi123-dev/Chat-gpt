@@ -53,6 +53,18 @@ class_name = "OrchestratorLedger"
 tag = "v3"
 new_sqlite_classes = ["OrchestratorLedger"]
 
+[[queues.producers]]
+binding = "ORCHESTRATOR_OUTBOX_QUEUE"
+queue = "chat-gpt111-orchestrator-outbox"
+
+[[queues.consumers]]
+queue = "chat-gpt111-orchestrator-outbox"
+max_batch_size = 5
+max_batch_timeout = 5
+max_retries = 5
+retry_delay = 30
+dead_letter_queue = "chat-gpt111-orchestrator-outbox-dlq"
+
 [env.staging]
 
 [env.staging.triggers]
@@ -103,3 +115,16 @@ class_name = "OrchestratorLedger"
 [[env.staging.migrations]]
 tag = "v3"
 new_sqlite_classes = ["OrchestratorLedger"]
+
+
+[[env.staging.queues.producers]]
+binding = "ORCHESTRATOR_OUTBOX_QUEUE"
+queue = "chat-gpt111-staging-orchestrator-outbox"
+
+[[env.staging.queues.consumers]]
+queue = "chat-gpt111-staging-orchestrator-outbox"
+max_batch_size = 5
+max_batch_timeout = 5
+max_retries = 5
+retry_delay = 30
+dead_letter_queue = "chat-gpt111-staging-orchestrator-outbox-dlq"

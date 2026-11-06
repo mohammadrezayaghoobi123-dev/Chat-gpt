@@ -14,7 +14,7 @@ test("validates raw body HMAC and returns trusted transport metadata",async()=>{
 });
 test("rejects one-byte body mutation",async()=>{
  const b=Buffer.from(body); b[b.length-2]^=1;
- assert.equal((await authenticateGitHubWebhook(req(b),{secret})).reasonCode,"SIGNATURE_INVALID");
+ assert.equal((await authenticateGitHubWebhook(req(b,{"x-hub-signature-256":sig(body)}),{secret})).reasonCode,"SIGNATURE_INVALID");
 });
 test("rejects wrong key, malformed signature, and missing transport headers",async()=>{
  assert.equal((await authenticateGitHubWebhook(req(),{secret:"wrong-secret-that-is-also-long-enough"})).reasonCode,"SIGNATURE_INVALID");

@@ -351,3 +351,52 @@ it("rejects a caller-forged legacy worker identity before creating a lease", asy
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_execution_leases").one().count).toBe(0);
   });
 });
+
+
+it("accepts one signed claim assertion once and atomically rejects its replay", async () => {
+  const ledger = ledgerFor("ledger-claim-assertion-replay");
+  await ledger.createTask({ task: task(), idempotencyKey: "task-create-assertion-replay", inputHash: "b".repeat(64), now });
+  const assertion = await createWorkerAssertion({
+    keySet: env.LEDGER_WORKER_ASSERTION_KEYS, kid: "test-v1",
+    subject: "agent:worker-1", role: "agent", operation: "claimTask",
+    nowMs: now, jti: "jti-claim-once-000000000001",
+  });
+  const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: assertion, leaseMs: 30_000, now });
+  expect(first).toMatchObject({ claimed: true, leaseGeneration: 1 });
+  await expect(ledger.releaseLease({
+    taskId: "task-0001", workerId: "agent:worker-1",
+    authenticatedWorker: authenticatedWorker("agent:worker-1"),
+    leaseGeneration: first.leaseGeneration, now: now + 1,
+  })).resolves.toMatchObject({ released: true });
+  await expect(ledger.claimTask({
+    workerId: "agent:worker-1", workerAssertion: assertion, leaseMs: 30_000, now: now + 2,
+  })).resolves.toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec("SELECT worker_id, lease_generation FROM orchestrator_execution_leases WHERE task_id='task-0001'").one())
+      .toMatchObject({ worker_id: null, lease_generation: 1 });
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti='jti-claim-once-000000000001'").one().count).toBe(1);
+  });
+});
+
+it("rejects a signed assertion bound to another operation or a modified MAC", async () => {
+  const ledger = ledgerFor("ledger-claim-assertion-binding");
+  await ledger.createTask({ task: task(), idempotencyKey: "task-create-assertion-binding", inputHash: "c".repeat(64), now });
+  const wrongOperation = await createWorkerAssertion({
+    keySet: env.LEDGER_WORKER_ASSERTION_KEYS, kid: "test-v1",
+    subject: "agent:worker-1", role: "agent", operation: "releaseLease", nowMs: now,
+  });
+  const valid = await createWorkerAssertion({
+    keySet: env.LEDGER_WORKER_ASSERTION_KEYS, kid: "test-v1",
+    subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+  });
+  const modified = valid.slice(0, -1) + (valid.endsWith("A") ? "B" : "A");
+  for (const workerAssertion of [wrongOperation, modified]) {
+    await expect(ledger.claimTask({
+      workerId: "agent:worker-1", workerAssertion, leaseMs: 30_000, now,
+    })).resolves.toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+  }
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_execution_leases").one().count).toBe(0);
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(0);
+  });
+});

@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
-import { canonicalJson } from "../orchestrator-protocol.js";
+import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
 function ledgerFor(name) {
@@ -1091,4 +1091,70 @@ it("acknowledges a republished event after an uncertain send even when the publi
   } finally {
     dateNow.mockRestore();
   }
+});
+
+
+it("archives DLQ messages durably with signature validation, content integrity, and idempotent replay", async () => {
+  const ledger = ledgerFor("ledger-outbox-dlq-archive");
+  const queueName = "chat-gpt111-staging-orchestrator-outbox-dlq";
+  const messageId = "cf-message-archive-0001";
+  const body = {
+    schemaVersion: 1,
+    eventId: "evt-dlq-archive-0001",
+    idempotencyKey: "idem-dlq-archive-0001",
+    taskId: "task-0001",
+    eventType: "task.transitioned",
+    payload: { taskId: "task-0001", transition: "SCHEDULED_TO_RUNNING" },
+    attempts: 1,
+    createdAt: now,
+  };
+  const messageTimestamp = now - 10_000;
+  const bodySha256 = await sha256Canonical({ queueName, messageId, messageAttempts: 5, messageTimestamp, body });
+  const input = {
+    queueName, messageId, messageAttempts: 5, messageTimestamp, body, bodySha256,
+    archiverId: "orchestrator-outbox-dlq-archiver", now,
+  };
+  const record = () => ledger.recordOutboxDeadLetter({
+    ...input,
+    workerAssertion: await createWorkerAssertion({
+      subject: input.archiverId, role: "consumer", operation: "recordOutboxDeadLetter", nowMs: now,
+    }),
+  });
+  await expect(record()).resolves.toMatchObject({ recorded: true, messageId });
+  await expect(record()).resolves.toMatchObject({ recorded: false, replay: true, messageId });
+  const tamperedBody = { ...body, payload: { taskId: "task-0001", transition: "TAMPERED" } };
+  const tamperedSha = await sha256Canonical({
+    queueName, messageId, messageAttempts: 5, messageTimestamp, body: tamperedBody,
+  });
+  await expect(ledger.recordOutboxDeadLetter({
+    ...input,
+    body: tamperedBody,
+    bodySha256: tamperedSha,
+    workerAssertion: await createWorkerAssertion({
+      subject: input.archiverId, role: "consumer", operation: "recordOutboxDeadLetter", nowMs: now,
+    }),
+  })).resolves.toMatchObject({ recorded: false, conflict: true, reason: "DEAD_LETTER_MESSAGE_ID_CONFLICT" });
+
+  await expect(ledger.recordOutboxDeadLetter({
+    ...input,
+    bodySha256: "0".repeat(64),
+    workerAssertion: await createWorkerAssertion({
+      subject: input.archiverId, role: "consumer", operation: "recordOutboxDeadLetter", nowMs: now,
+    }),
+  })).resolves.toMatchObject({ recorded: false, reason: "DEAD_LETTER_HASH_MISMATCH" });
+
+  await expect(ledger.recordOutboxDeadLetter({
+    ...input,
+    body: { ...body, payload: { apiKey: "must-not-be-persisted" } },
+    workerAssertion: await createWorkerAssertion({
+      subject: input.archiverId, role: "consumer", operation: "recordOutboxDeadLetter", nowMs: now,
+    }),
+  })).rejects.toMatchObject({ code: "SENSITIVE_FIELD_REJECTED" });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_dead_letters WHERE source_queue = ? AND message_id = ?",
+      queueName, messageId,
+    ).one().count).toBe(1);
+  });
 });

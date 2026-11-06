@@ -28,3 +28,14 @@ test("Production release verifies an isolated OrchestratorLedger namespace after
   assert.match(releaseWorkflow, /Production and Staging OrchestratorLedger namespaces must differ/);
   assert.match(smoke, /staging-smoke\.mjs/);
 });
+
+
+test("Production release refuses deployment unless both isolated outbox Queue/DLQ pairs exist", () => {
+  assert.match(releaseWorkflow, /accounts\/\$\{account\}\/queues\?per_page=100/);
+  for (const name of [
+    "chat-gpt111-orchestrator-outbox",
+    "chat-gpt111-orchestrator-outbox-dlq",
+    "chat-gpt111-staging-orchestrator-outbox",
+    "chat-gpt111-staging-orchestrator-outbox-dlq",
+  ]) assert.ok(releaseWorkflow.includes(name), "missing Queue preflight for " + name);
+});

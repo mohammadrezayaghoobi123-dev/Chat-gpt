@@ -770,7 +770,7 @@ export class OrchestratorLedger extends DurableObject {
       }
       if (row.attempts >= MAX_OUTBOX_ATTEMPTS) {
         sql.exec(
-          "UPDATE orchestrator_outbox_events SET retry_state = 'DEAD_LETTER', dead_lettered_at = ?, lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND lease_generation = ?",
+          "UPDATE orchestrator_outbox_events SET status = 'PENDING', retry_state = 'DEAD_LETTER', dead_lettered_at = ?, lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND lease_generation = ?",
           now, now, row.event_id, row.lease_generation,
         );
         const deadLetter = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", row.event_id).toArray()[0];

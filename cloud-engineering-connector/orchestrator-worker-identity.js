@@ -20,11 +20,6 @@ function decodeBase64Url(value) {
   return Uint8Array.from(binary, character => character.charCodeAt(0));
 }
 
-function encodeBase64Url(bytes) {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-}
 
 function loadKey(keySet, kid) {
   if (typeof keySet !== "string" || keySet.length > 4096 || !KID.test(kid)) throw reject();
@@ -57,33 +52,11 @@ function validClaims(claims, expected) {
       claims.exp < nowSeconds - CLOCK_SKEW_SECONDS) throw reject();
 }
 
-async function mac(keyBytes, input) {
-  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
-  return new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(input)));
+async function verifyMac(keyBytes, input, signature) {
+  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  return crypto.subtle.verify("HMAC", key, signature, new TextEncoder().encode(input));
 }
 
-function constantTimeEqual(left, right) {
-  if (left.byteLength !== right.byteLength) return false;
-  let difference = 0;
-  for (let index = 0; index < left.byteLength; index += 1) difference |= left[index] ^ right[index];
-  return difference === 0;
-}
-
-export async function createWorkerAssertion({ keySet, kid, subject, role, operation, nowMs, jti }) {
-  if (!ID.test(subject) || !ID.test(operation) || !ID.test(jti ?? "assertion-placeholder-000000")) throw reject();
-  const key = loadKey(keySet, kid);
-  const iat = Math.floor(nowMs / 1000);
-  const claims = {
-    v: 1, iss: ISSUER, aud: AUDIENCE, sub: subject, role, op: operation,
-    iat, exp: iat + MAX_LIFETIME_SECONDS,
-    jti: jti ?? "jti-" + encodeBase64Url(crypto.getRandomValues(new Uint8Array(16))),
-  };
-  if (claims.jti.length < 22) throw reject();
-  const payload = encodeBase64Url(new TextEncoder().encode(canonicalJson(claims)));
-  const signingInput = "v1." + kid + "." + payload;
-  const signature = encodeBase64Url(await mac(key, signingInput));
-  return signingInput + "." + signature;
-}
 
 export async function verifyWorkerAssertion(keySet, token, expected) {
   try {
@@ -101,8 +74,7 @@ export async function verifyWorkerAssertion(keySet, token, expected) {
     if (canonicalJson(claims) !== payloadText) throw reject();
     validClaims(claims, expected);
     const supplied = decodeBase64Url(parts[3]);
-    const calculated = await mac(key, parts.slice(0, 3).join("."));
-    if (!constantTimeEqual(supplied, calculated)) throw reject();
+    if (supplied.byteLength !== 32 || !(await verifyMac(key, parts.slice(0, 3).join("."), supplied))) throw reject();
     return Object.freeze({ jti: claims.jti, subject: claims.sub, role: claims.role, operation: claims.op, kid: parts[1], issuedAt: claims.iat, expiresAt: claims.exp });
   } catch {
     throw reject();

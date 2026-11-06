@@ -62,7 +62,7 @@ export async function verifyWorkerAssertion(keySet, token, expected) {
   try {
     if (typeof token !== "string" || token.length > 4096 ||
         !expected || !ID.test(expected.subject) || !ID.test(expected.operation) ||
-        !["agent", "publisher", "system"].includes(expected.role) ||
+        !["agent", "publisher", "system", "consumer"].includes(expected.role) ||
         !Number.isSafeInteger(expected.nowMs)) throw reject();
     const parts = token.split(".");
     if (parts.length !== 4 || parts[0] !== "v1" || !KID.test(parts[1])) throw reject();

@@ -73,7 +73,7 @@ Parser requirements:
 | quarantine | Any non-terminal state | `QUARANTINED` | Owner reason + source comment/delivery provenance |
 | release | `QUARANTINED` only | `VALIDATING` | Owner resolution reason + unique resolution event ID |
 
-- Owner actions bypass Agent lease ownership only through dedicated Ledger methods; they do not bypass task version checks, transition legality, terminal-state immutability, or audit persistence.
+- Owner actions bypass Agent lease ownership only through dedicated Ledger methods; they do not bypass task version checks, transition legality, terminal-state immutability, or audit persistence. Cancel and quarantine MUST atomically increment the task's lease/fencing generation (or equivalent monotonic fence) so every previously issued Agent lease becomes stale. All Agent transition, outbox publication, Queue-consumer and side-effect execution paths MUST re-check current task state/version/fence immediately before committing an effect; cancelled or quarantined tasks must not produce new business side effects. Tests must prove a stale Agent/outbox message cannot revive or execute work after Owner cancel/quarantine.
 - Owner release is not a generic transition API. It is a dedicated method requiring current state `QUARANTINED`, expected version, and a new Owner resolution event.
 - No resurrection from `COMPLETED`, `FAILED`, or `CANCELLED`.
 - No global kill switch is included in this scope; it requires a separate design with defined blast radius and recovery semantics.
@@ -124,13 +124,15 @@ The receipt is committed for deterministic policy outcomes (for example, a task 
 ## 8. Configuration
 
 Required non-secret configuration:
+- `LEDGER_OWNER_ASSERTION_ACTIVE_KID` — bounded identifier selecting the active Owner-only signing key.
 - `GITHUB_WEBHOOK_REPOSITORY=mohammadrezayaghoobi123-dev/Chat-gpt`
 - `GITHUB_WEBHOOK_REPOSITORY_ID=1398846697`
 - `GITHUB_WEBHOOK_OWNER_ID=335530603`
 - bounded command freshness window and reason length limits.
 
-Required secret:
+Required secrets:
 - Existing `GITHUB_WEBHOOK_SECRET` (minimum 32 bytes); value is never read back, logged, or placed in source.
+- `LEDGER_OWNER_ASSERTION_KEYS` — dedicated versioned Owner assertion keyset, separate from Agent/Publisher assertion keys; values are never read back, logged, or placed in source. Rotation must support a bounded overlap window and reject unknown/retired KIDs.
 
 The existing general `GITHUB_WEBHOOK_AUTHORIZED_ACTOR_IDS` remains separate and cannot broaden Owner authority. The Owner ID and repository ID are configuration invariants and should be validated at startup/readiness without logging secret values.
 

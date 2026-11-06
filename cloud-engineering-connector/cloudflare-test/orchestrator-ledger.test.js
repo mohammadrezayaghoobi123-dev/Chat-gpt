@@ -871,14 +871,15 @@ it("integrates the real Durable Object Ledger with publisher and Queue consumer 
   const ledger = ledgerFor("ledger-outbox-publisher-consumer-e2e");
   const integrationNow = Date.now();
   const taskId = "task-queue-e2e-0001";
-  await createTask(ledger, {
+  const created = await createTask(ledger, {
     task: task(taskId),
     idempotencyKey: "task-create-queue-e2e-0001",
     inputHash: "a".repeat(64),
     now: integrationNow,
   });
+  expect(created).toMatchObject({ created: true, task: { taskId } });
   const payload = { taskId, transition: "created", source: "integration-test" };
-  await ledger.enqueueOutbox({
+  const enqueued = await ledger.enqueueOutbox({
     eventId: "evt-queue-e2e-0001",
     idempotencyKey: "outbox-queue-e2e-0001",
     taskId,
@@ -890,6 +891,7 @@ it("integrates the real Durable Object Ledger with publisher and Queue consumer 
     }),
     now: integrationNow,
   });
+  expect(enqueued).toMatchObject({ enqueued: true, event: { eventId: "evt-queue-e2e-0001" } });
 
   const queued = [];
   const runtimeEnv = {

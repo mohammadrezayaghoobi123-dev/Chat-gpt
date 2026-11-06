@@ -188,12 +188,12 @@ describe("OrchestratorLedger durable coordination contract", () => {
     });
     await expect(ledger.claimOutbox({ workerId: "publisher-1", leaseMs: 100, now }))
       .resolves.toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
-    const first = await ledger.claimOutbox({ workerId: "publisher-1", authenticatedWorker: authenticatedWorker("publisher-1", "publisher"), leaseMs: 100, now });
-    const second = await ledger.claimOutbox({ workerId: "publisher-2", authenticatedWorker: authenticatedWorker("publisher-2", "publisher"), leaseMs: 100, now: now + 101 });
+    const first = await ledger.claimOutbox({ workerId: "publisher-1", workerAssertion: await createWorkerAssertion({ subject: "publisher-1", role: "publisher", operation: "claimOutbox", nowMs: now }), leaseMs: 100, now });
+    const second = await ledger.claimOutbox({ workerId: "publisher-2", workerAssertion: await createWorkerAssertion({ subject: "publisher-2", role: "publisher", operation: "claimOutbox", nowMs: now + 101 }), leaseMs: 100, now: now + 101 });
     expect(second.leaseGeneration).toBe(first.leaseGeneration + 1);
-    await expect(ledger.completeOutbox({ eventId: "event-0002", workerId: "publisher-1", authenticatedWorker: authenticatedWorker("publisher-1", "publisher"), leaseGeneration: first.leaseGeneration, now: now + 102 }))
+    await expect(ledger.completeOutbox({ eventId: "event-0002", workerId: "publisher-1", workerAssertion: await createWorkerAssertion({ subject: "publisher-1", role: "publisher", operation: "completeOutbox", nowMs: now + 102 }), leaseGeneration: first.leaseGeneration, now: now + 102 }))
       .resolves.toMatchObject({ completed: false, reason: "LEASE_FENCE_MISMATCH" });
-    await expect(ledger.completeOutbox({ eventId: "event-0002", workerId: "publisher-2", authenticatedWorker: authenticatedWorker("publisher-2", "publisher"), leaseGeneration: second.leaseGeneration, now: now + 103 }))
+    await expect(ledger.completeOutbox({ eventId: "event-0002", workerId: "publisher-2", workerAssertion: await createWorkerAssertion({ subject: "publisher-2", role: "publisher", operation: "completeOutbox", nowMs: now + 103 }), leaseGeneration: second.leaseGeneration, now: now + 103 }))
       .resolves.toMatchObject({ completed: true });
   });
 
@@ -518,4 +518,22 @@ it("rejects legacy boolean identity for state transitions even with a live lease
     authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseGeneration: lease.leaseGeneration,
   })).resolves.toMatchObject({ updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
   await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
+});
+
+
+it("rejects caller-forged publisher booleans before claiming an outbox event", async () => {
+  const ledger = ledgerFor("ledger-outbox-forged-publisher");
+  await ledger.createTask({ task: task(), idempotencyKey: "task-create-outbox-forged", inputHash: "7".repeat(64), now });
+  await ledger.enqueueOutbox({
+    eventId: "event-forged-publisher", idempotencyKey: "outbox-forged-publisher",
+    taskId: "task-0001", eventType: "task.created", payload: { taskId: "task-0001" }, now,
+  });
+  await expect(ledger.claimOutbox({
+    workerId: "publisher-1", authenticatedWorker: authenticatedWorker("publisher-1", "publisher"),
+    leaseMs: 30_000, now,
+  })).resolves.toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec("SELECT status, attempts FROM orchestrator_outbox_events WHERE event_id='event-forged-publisher'").one())
+      .toMatchObject({ status: "PENDING", attempts: 0 });
+  });
 });

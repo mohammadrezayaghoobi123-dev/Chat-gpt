@@ -80,7 +80,8 @@ If Web Crypto verification is asynchronous, the implementation must not split au
 | `advanceAgentRound` | `agent` | assertion sub = workerId |
 | `claimOutbox` | `publisher`, `system` | assertion sub = workerId |
 | `completeOutbox` | `publisher`, `system` | assertion sub = workerId |
-| `recordMessage` | Explicit sender policy only | assertion sub = authenticatedSender.id |
+| `appendAuditEvent` | `agent` | assertion sub = workerId = actor.id; actor role is derived from the assertion |
+| `recordMessage` | `agent` | assertion sub = workerId = envelope.senderId |
 | `appendAuditEvent` | Explicit actor policy only | assertion sub = actor.id |
 
 The exact operation string is included in the signature. A token minted for `claimTask` cannot authorize `completeOutbox`. Roles are derived by the Worker from trusted server-side policy and a verified principal class; the caller cannot choose a role. The existing shared `MCP_AUTH_TOKEN` is not sufficient evidence for agent, publisher, or system identity.
@@ -90,6 +91,7 @@ Read-only methods do not gain write authority by possessing a worker assertion. 
 ## 6. API migration
 
 - Replace `authenticatedWorker` and `authenticatedSender` object parameters with a signed assertion string.
+- `appendAuditEvent` accepts only a verified `agent` assertion in the current implementation; caller-provided `owner`, `reviewer`, or `system` actor labels do not grant audit authority.
 - Remove `authenticated` and `identityVerified` as authorization inputs.
 - Reject legacy object-shaped identity values, even if both booleans are true.
 - Ensure all lease mutations, `claimOutbox`, `completeOutbox`, message acceptance, and audit append paths use the same verifier contract. Keep `enqueueOutbox` internal to already-authorized transactions or add an explicit trusted system operation; it must not become an unauthenticated public mutation.

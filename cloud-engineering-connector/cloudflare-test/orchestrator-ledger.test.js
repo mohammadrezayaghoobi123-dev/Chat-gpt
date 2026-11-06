@@ -129,14 +129,14 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("deduplicates repeated messages and rejects the same message ID with a different input hash", async () => {
     const ledger = ledgerFor("ledger-message-dedup");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0006", inputHash: "2".repeat(64), now });
-    const input = { messageId: "msg-0001", taskId: "task-0001", inputHash: "3".repeat(64), envelope: protocolEnvelope("msg-0001", "task-0001", "3".repeat(64), { step: 1 }), authenticatedSender, now };
+    const input = { messageId: "msg-0001", taskId: "task-0001", inputHash: "3".repeat(64), envelope: protocolEnvelope("msg-0001", "task-0001", "3".repeat(64), { step: 1 }), workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now }), now };
     expect(await ledger.recordMessage(input)).toMatchObject({ accepted: true });
-    expect(await ledger.recordMessage(input)).toMatchObject({ accepted: false, replay: true });
-    await expect(ledger.recordMessage({ ...input, authenticatedSender: undefined }))
+    expect(await ledger.recordMessage({ ...input, workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now }) })).toMatchObject({ accepted: false, replay: true });
+    await expect(ledger.recordMessage({ ...input, workerAssertion: undefined }))
       .resolves.toMatchObject({ accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" });
     const changedHash = "4".repeat(64);
     const changedEnvelope = protocolEnvelope("msg-0001", "task-0001", changedHash, { step: 1 });
-    expect(await ledger.recordMessage({ ...input, inputHash: changedHash, envelope: changedEnvelope }))
+    expect(await ledger.recordMessage({ ...input, inputHash: changedHash, envelope: changedEnvelope, workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now }) }))
       .toMatchObject({ accepted: false, conflict: true });
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_processed_messages").one().count).toBe(1);
@@ -232,9 +232,9 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0011", inputHash: "9".repeat(64), now });
     const input = {
       messageId: "msg-100-duplicates", taskId: "task-0001", inputHash: "a".repeat(64),
-      envelope: protocolEnvelope("msg-100-duplicates", "task-0001", "a".repeat(64), { accepted: true }), authenticatedSender, now,
+      envelope: protocolEnvelope("msg-100-duplicates", "task-0001", "a".repeat(64), { accepted: true }), workerId: "agent:worker-1", now,
     };
-    const results = await Promise.all(Array.from({ length: 100 }, () => ledger.recordMessage(input)));
+    const results = await Promise.all(Array.from({ length: 100 }, async () => ledger.recordMessage({ ...input, workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now }) })));
     expect(results.filter(result => result.accepted)).toHaveLength(1);
     expect(results.filter(result => result.replay)).toHaveLength(99);
     await runInDurableObject(ledger, async (_instance, state) => {
@@ -266,7 +266,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     })).resolves.toMatchObject({ accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" });
     await expect(ledger.recordMessage({
       messageId: "msg-auth-required", taskId: "task-0001", inputHash: "d".repeat(64), envelope,
-      authenticatedSender: { id: "agent:worker-1", authenticated: true, identityVerified: false }, now,
+      workerId: "agent:worker-1", authenticatedSender: { id: "agent:worker-1", authenticated: true, identityVerified: true }, now,
     })).resolves.toMatchObject({ accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" });
   });
 
@@ -306,7 +306,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-envelope-binding", inputHash: "f".repeat(64), now });
     const result = await ledger.recordMessage({
       messageId: "msg-indexed-as-one", taskId: "task-0001", inputHash: "a".repeat(64),
-      envelope: protocolEnvelope("msg-claimed-as-two", "task-0001", "a".repeat(64), {}), authenticatedSender, now,
+      envelope: protocolEnvelope("msg-claimed-as-two", "task-0001", "a".repeat(64), {}), workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now }), now,
     });
     expect(result).toMatchObject({ accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" });
   });
@@ -535,5 +535,18 @@ it("rejects caller-forged publisher booleans before claiming an outbox event", a
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec("SELECT status, attempts FROM orchestrator_outbox_events WHERE event_id='event-forged-publisher'").one())
       .toMatchObject({ status: "PENDING", attempts: 0 });
+  });
+});
+
+it("rejects legacy boolean sender identity for message intake without persisting data", async () => {
+  const ledger = ledgerFor("ledger-message-forged-sender");
+  await ledger.createTask({ task: task(), idempotencyKey: "task-create-message-forged", inputHash: "6".repeat(64), now });
+  const envelope = protocolEnvelope("msg-forged-sender", "task-0001", "b".repeat(64), { forged: true });
+  await expect(ledger.recordMessage({
+    messageId: "msg-forged-sender", taskId: "task-0001", inputHash: "b".repeat(64), envelope,
+    workerId: "agent:worker-1", authenticatedSender: authenticatedSender, now,
+  })).resolves.toMatchObject({ accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_processed_messages").one().count).toBe(0);
   });
 });

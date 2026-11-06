@@ -691,6 +691,9 @@ export class OrchestratorLedger extends DurableObject {
   async appendAuditEvent({ eventId, taskId, actor, workerId, workerAssertion, eventType, details, now }) {
     identifier(eventId, "eventId");
     identifier(taskId, "taskId");
+    if (typeof workerId !== "string" || workerId.length === 0) {
+      return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+    }
     identifier(workerId, "workerId");
     identifier(eventType, "eventType");
     timestamp(now);

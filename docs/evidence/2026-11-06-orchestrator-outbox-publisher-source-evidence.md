@@ -38,7 +38,7 @@
 - Cloud Engineering Connector CI #42281844106: success.
 - Full History Secret Scan #42281844124: success.
 - Orchestrator GitHub Intake Contract #42281844172: success.
-- Node test suite: 376 passed, 0 failed.
+- Node test suite: 377 passed, 0 failed.
 - Durable Object suite: 100 passed across 6 test files.
 - JavaScript syntax and Wrangler configuration checks: success.
 - `post-deploy-staging-smoke`: skipped. CI success is not live runtime evidence.
@@ -83,7 +83,8 @@ This refresh supersedes the earlier CI identifiers and Node test count in this s
 - Durable receipt schema and transaction are present in `orchestrator-ledger.js`; Ledger ping reports schema version 4.
 - The fixed consumer signer policy permits only `recordOutboxReceipt`; it cannot mint Agent assertions or authorize task execution.
 - Unit coverage verifies unknown event rejection, supported event receipt, identical redelivery, eventId rebinding conflict, and signed consumer identity.
-- CI at exact HEAD `35f29867f0c144de023269997dbd57386ed9ff6f`: 376/376 Node tests and 100/100 Durable Object tests passed; syntax/config checks passed; full-history Secret Scan passed.
+- Failure-injection coverage joins the publisher and consumer paths: Queue send succeeds, Ledger completion becomes uncertain, and duplicate Queue delivery is safely acknowledged through durable receipt deduplication.
+- CI at exact HEAD `35f29867f0c144de023269997dbd57386ed9ff6f`: 377/377 Node tests and 100/100 Durable Object tests passed; syntax/config checks passed; full-history Secret Scan passed.
 - The workflow's post-deploy Staging smoke remains skipped. No Queue was provisioned, no Wrangler Queue binding was activated, and no Cloudflare deployment or live runtime test was performed.
 
 **Updated release decision: NO-GO.** Source and CI gates for the consumer pass; Queue infrastructure, Staging configuration, and live end-to-end delivery/recovery remain unverified.

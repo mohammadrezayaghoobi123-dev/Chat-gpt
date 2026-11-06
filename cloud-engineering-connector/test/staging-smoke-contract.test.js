@@ -120,3 +120,13 @@ test("Staging release preflights the non-secret active Ledger signer key identif
   assert.match(release, /activeSignerKid\.text/);
   assert.match(release, /bounded identifier/);
 });
+
+
+test("Staging Queue provisioning paginates the complete Cloudflare inventory before create and verify", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/connector-staging-queue-provision.yml", import.meta.url), "utf8");
+  assert.match(workflow, /async function listAllQueues\(\)/);
+  assert.match(workflow, /result_info\?\.total_pages/);
+  assert.match(workflow, /page <= 1000/);
+  assert.match(workflow, /await listAllQueues\(\)/);
+  assert.doesNotMatch(workflow, /request\("\/queues\?per_page=100&page=1"\)/);
+});

@@ -56,3 +56,10 @@ test("Production release preflights environment-scoped active Ledger signer key 
   assert.match(releaseWorkflow, /activeSignerKid\?\.type, "plain_text"/);
   assert.match(releaseWorkflow, /activeSignerKid\.text/);
 });
+
+
+test("Production release paginates every Cloudflare Queue inventory page in preflight and post-deploy verification", () => {
+  assert.equal((releaseWorkflow.match(/async function queueInventory\(\)/g) || []).length, 2);
+  assert.equal((releaseWorkflow.match(/result_info\?\.total_pages/g) || []).length, 2);
+  assert.equal((releaseWorkflow.match(/page <= 1000/g) || []).length, 2);
+});

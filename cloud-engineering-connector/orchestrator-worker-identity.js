@@ -35,7 +35,9 @@ function loadKey(keySet, kid) {
       Object.keys(keys).some(key => !KID.test(key))) throw reject();
   const encoded = keys[kid];
   if (typeof encoded !== "string") throw reject();
-  const raw = decodeBase64Url(encoded);
+  const raw = /^[a-f0-9]{64,128}$/.test(encoded)
+    ? Uint8Array.from(encoded.match(/.{2}/g), pair => Number.parseInt(pair, 16))
+    : decodeBase64Url(encoded);
   if (raw.byteLength < 32 || raw.byteLength > 64) throw reject();
   return raw;
 }
@@ -74,7 +76,7 @@ export async function createWorkerAssertion({ keySet, kid, subject, role, operat
   const claims = {
     v: 1, iss: ISSUER, aud: AUDIENCE, sub: subject, role, op: operation,
     iat, exp: iat + MAX_LIFETIME_SECONDS,
-    jti: jti ?? encodeBase64Url(crypto.getRandomValues(new Uint8Array(16))),
+    jti: jti ?? "jti-" + encodeBase64Url(crypto.getRandomValues(new Uint8Array(16))),
   };
   if (claims.jti.length < 22) throw reject();
   const payload = encodeBase64Url(new TextEncoder().encode(canonicalJson(claims)));

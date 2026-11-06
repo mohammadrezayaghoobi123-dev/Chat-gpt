@@ -1464,3 +1464,17 @@ test("scheduled handler emits an alert-level structured event for dead-lettered 
   });
   assert.equal(JSON.stringify(alert).includes("evt-alert-0001"), false, "alert logs must not expose event payload identifiers");
 });
+
+
+test("Queue consumer rejects unsupported schema and event types without invoking a ledger",async()=>{
+ let retried=0,acked=0,ledgerCalls=0;
+ const message={body:{schemaVersion:999,eventId:"evt-unsupported-0001",eventType:"task.execute",taskId:"task-0001",idempotencyKey:"idem-unsupported"},retry(){retried++},ack(){acked++}};
+ const queueWorker=worker.queue;
+ assert.equal(typeof queueWorker,"function","Worker must expose a Cloudflare Queue consumer");
+ await queueWorker({messages:[message]},{
+  ORCHESTRATOR_LEDGER:{idFromName(){ledgerCalls++;throw new Error("ledger must not be reached")},get(){ledgerCalls++;throw new Error("ledger must not be reached")}}
+ },{});
+ assert.equal(retried,1);
+ assert.equal(acked,0);
+ assert.equal(ledgerCalls,0);
+});

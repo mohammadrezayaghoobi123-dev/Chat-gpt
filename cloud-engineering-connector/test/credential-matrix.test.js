@@ -3,6 +3,7 @@
 // tests can prove that nothing reaches api.github.com when credentials are missing.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import worker from "../worker.js";
 
 const SECRET = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
@@ -155,7 +156,10 @@ test("readyz uses a lightweight Durable Object ping rather than a full storage s
     ORCHESTRATOR_LEDGER: {
       idFromName: name => name,
       get: () => ({ ping: async () => ({ ok: true, schemaVersion: 3 }) })
-    }
+    },
+    ORCHESTRATOR_OUTBOX_QUEUE: { send: async () => {} },
+    LEDGER_WORKER_ASSERTION_KEYS: JSON.stringify({ "worker-v1": randomBytes(32).toString("hex") }),
+    LEDGER_WORKER_ASSERTION_ACTIVE_KID: "worker-v1"
   });
   const body = await response.json();
   assert.equal(response.status, 200);
@@ -163,6 +167,7 @@ test("readyz uses a lightweight Durable Object ping rather than a full storage s
   assert.equal(body.durable_objects, "ok");
   assert.equal(body.knowledge_store, "ok");
   assert.equal(body.orchestrator_ledger, "ok");
+  assert.equal(body.orchestrator_outbox_publisher, "ok");
 });
 
 test("readyz is rate limited before it touches the shared write-control Durable Object (DEF-0012)", async () => {

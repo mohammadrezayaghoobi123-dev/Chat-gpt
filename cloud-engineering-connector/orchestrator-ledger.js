@@ -213,6 +213,20 @@ export class OrchestratorLedger extends DurableObject {
       )
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_by_status ON orchestrator_outbox_events(status, created_at)");
+    const outboxColumns = sql.exec("PRAGMA table_info(orchestrator_outbox_events)").toArray().map(column => column.name);
+    if (!outboxColumns.includes("retry_state")) {
+      sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN retry_state TEXT NOT NULL DEFAULT 'READY' CHECK(retry_state IN ('READY','RETRY_WAIT','DEAD_LETTER'))");
+    }
+    if (!outboxColumns.includes("next_attempt_at")) {
+      sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0 CHECK(next_attempt_at >= 0)");
+    }
+    if (!outboxColumns.includes("last_error_code")) {
+      sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN last_error_code TEXT");
+    }
+    if (!outboxColumns.includes("dead_lettered_at")) {
+      sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN dead_lettered_at INTEGER");
+    }
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_retry_schedule ON orchestrator_outbox_events(status, retry_state, next_attempt_at, created_at)");
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_consumed_assertions (
         jti TEXT PRIMARY KEY,

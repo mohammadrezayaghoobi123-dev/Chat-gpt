@@ -1045,6 +1045,16 @@ it("acknowledges a republished event after an uncertain send even when the publi
     expect(replayDelivery.acknowledged).toBe(true);
     expect(replayDelivery.retried).toBe(false);
 
+    // A replay may vary only in delivery metadata. Rebinding the same event ID
+    // to altered semantic content must be rejected and must not create a receipt.
+    const tamperedEnvelope = structuredClone(queued[1].message);
+    tamperedEnvelope.payload = { ...tamperedEnvelope.payload, transition: "privilege-escalation" };
+    const tamperedDelivery = deliver(tamperedEnvelope);
+    const tamperedResult = await consumeOrchestratorOutbox({ messages: [tamperedDelivery] }, consumerEnv);
+    expect(tamperedResult).toEqual({ received: 1, acknowledged: 0, retried: 1, duplicates: 0 });
+    expect(tamperedDelivery.acknowledged).toBe(false);
+    expect(tamperedDelivery.retried).toBe(true);
+
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",

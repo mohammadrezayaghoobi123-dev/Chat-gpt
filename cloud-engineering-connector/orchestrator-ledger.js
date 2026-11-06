@@ -287,14 +287,22 @@ export class OrchestratorLedger extends DurableObject {
     return taskFromRow(row);
   }
 
-  transitionTask(input) {
+  async transitionTask(input) {
     if (!input || typeof input !== "object") throw fail("transition input must be an object.");
     const {
       taskId, expectedVersion, expectedState, nextState, actor, evidence, now,
-      workerId, authenticatedWorker, leaseGeneration, outboxEvent,
+      workerId, workerAssertion, leaseGeneration, outboxEvent,
     } = input;
     identifier(taskId, "taskId");
     timestamp(now);
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "agent", operation: "transitionTask", nowMs: now,
+      });
+    } catch {
+      return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
@@ -306,13 +314,15 @@ export class OrchestratorLedger extends DurableObject {
       // changing the self-declared actor role from "agent" to "owner"/"system".
       if (actor?.role !== "agent" || typeof workerId !== "string" ||
           workerId !== actor?.id ||
-          !hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"]) ||
           !Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
+      }
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       const current = taskFromRow(row);
       const next = transitionTaskCore({

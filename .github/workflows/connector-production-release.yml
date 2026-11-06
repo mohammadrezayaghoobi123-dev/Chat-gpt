@@ -126,12 +126,7 @@ jobs:
               if (page >= totalPages) return queues;
             }
             throw new Error("Cloudflare Queue inventory exceeded the 1000-page safety limit");
-          });
-            const body = await response.json();
-            assert.equal(response.ok && body.success, true, `Cloudflare Queue preflight failed: HTTP ${response.status}`);
-            return body.result || [];
           }
-
           const [productionSettings, stagingSettings, deploymentData, accountSecurity, queues] = await Promise.all([
             api("chat-gpt111", "/settings"),
             api("chat-gpt111-staging", "/settings"),
@@ -238,10 +233,6 @@ jobs:
               if (page >= totalPages) return queues;
             }
             throw new Error("Cloudflare Queue inventory exceeded the 1000-page safety limit");
-          });
-            const body = await response.json();
-            assert.equal(response.ok && body.success, true, "Could not inspect Cloudflare Queue inventory");
-            return body.result || [];
           }
           const [productionSettings, stagingSettings, productionSchedules, stagingSchedules, queues] = await Promise.all([
             settings("chat-gpt111"),

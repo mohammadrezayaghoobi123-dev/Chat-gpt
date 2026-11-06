@@ -134,7 +134,14 @@ export async function validateGitHubIntakeEvent({
   // metadata and must not make an otherwise identical operation appear new.
   const semanticInput = {
     eventName, eventAction, repository, repositoryId, actorId,
-    issue: { number: issue.number, title: issue.title, body: issue.body, labels: issue.labels },
+    // Only the policy-required label authorizes this operation. Other labels are
+    // mutable triage metadata and must not create a second business operation.
+    issue: {
+      number: issue.number,
+      title: issue.title,
+      body: issue.body,
+      requiredLabel: config.requiredLabel,
+    },
   };
   const inputHash = await sha256(semanticInput);
   const idempotencyKey = `repo:${repositoryId}:${eventName}:${eventAction}:issue:${issue.number}:actor:${actorId}`;

@@ -970,7 +970,17 @@ export class OrchestratorLedger extends DurableObject {
     }
     timestamp(messageTimestamp, "messageTimestamp");
     timestamp(now);
-    const bodyJson = serializeBounded(body, "dead-letter body");
+    let bodyJson;
+    try {
+      bodyJson = serializeBounded(body, "dead-letter body");
+    } catch (error) {
+      // Sensitive data is rejected before persistence. Return a bounded domain
+      // result rather than throwing across the Durable Object RPC boundary.
+      if (error?.code === "SENSITIVE_FIELD_REJECTED") {
+        return { recorded: false, reason: "SENSITIVE_FIELD_REJECTED" };
+      }
+      throw error;
+    }
     hash(bodySha256, "bodySha256");
     const expectedSha256 = await sha256Canonical({
       queueName, messageId, messageAttempts, messageTimestamp, body: JSON.parse(bodyJson),

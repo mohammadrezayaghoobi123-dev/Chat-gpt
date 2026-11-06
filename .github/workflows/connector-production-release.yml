@@ -121,7 +121,7 @@ jobs:
           const productionBindings = new Map((productionSettings.bindings || []).map((binding) => [binding.name, binding]));
           const stagingBindings = new Map((stagingSettings.bindings || []).map((binding) => [binding.name, binding]));
 
-          const requiredSecrets = ["GITHUB_READONLY_TOKEN", "GITHUB_TOKEN", "MCP_AUTH_TOKEN", "MCP_ALLOWED_ORIGINS"];
+          const requiredSecrets = ["GITHUB_READONLY_TOKEN", "GITHUB_TOKEN", "MCP_AUTH_TOKEN", "MCP_ALLOWED_ORIGINS", "GITHUB_WEBHOOK_SECRET", "LEDGER_WORKER_ASSERTION_KEYS"];
           const missing = requiredSecrets.filter((name) => productionBindings.get(name)?.type !== "secret_text");
           if (missing.length) {
             throw new Error("Production deployment blocked; missing Worker secret binding(s): " + missing.join(", ") + ". Add them in Cloudflare Workers > chat-gpt111 > Settings > Variables and Secrets. Secret values are never read.");

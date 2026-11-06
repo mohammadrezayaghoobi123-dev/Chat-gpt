@@ -220,6 +220,16 @@ export class OrchestratorLedger extends DurableObject {
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_consumed_assertions_by_expiry ON orchestrator_consumed_assertions(expires_at)");
     sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_github_webhook_deliveries (
+        delivery_id TEXT PRIMARY KEY,
+        body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
+        event_name TEXT NOT NULL,
+        received_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      )
+    `);
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_github_deliveries_by_expiry ON orchestrator_github_webhook_deliveries(expires_at)");
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_audit_events (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
         event_id TEXT NOT NULL UNIQUE,
@@ -243,6 +253,42 @@ export class OrchestratorLedger extends DurableObject {
   ping() {
     const result = this.ctx.storage.sql.exec("SELECT 1 AS ok").one();
     return { ok: Number(result.ok) === 1, schemaVersion: 2 };
+  }
+
+  claimGitHubDelivery({ deliveryId, bodySha256, eventName, receivedAt } = {}) {
+    const validDeliveryId = typeof deliveryId === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(deliveryId);
+    const validDigest = typeof bodySha256 === "string" && /^[a-f0-9]{64}$/.test(bodySha256);
+    const validEvent = typeof eventName === "string" && /^[a-z_]{2,32}$/.test(eventName);
+    if (!validDeliveryId || !validDigest || !validEvent ||
+        !Number.isSafeInteger(receivedAt) || receivedAt < 1) {
+      return { claimed: false, replay: false, reason: "INVALID_DELIVERY" };
+    }
+
+    const sql = this.ctx.storage.sql;
+    const now = Date.now();
+    const expiresAt = now + 30 * 24 * 60 * 60 * 1000;
+    return this.ctx.storage.transactionSync(() => {
+      sql.exec(
+        "DELETE FROM orchestrator_github_webhook_deliveries WHERE delivery_id IN (SELECT delivery_id FROM orchestrator_github_webhook_deliveries WHERE expires_at <= ? ORDER BY expires_at LIMIT 500)",
+        now,
+      );
+      const existing = sql.exec(
+        "SELECT * FROM orchestrator_github_webhook_deliveries WHERE delivery_id = ?",
+        deliveryId,
+      ).toArray()[0];
+      if (existing) {
+        if (existing.body_sha256 === bodySha256 && existing.event_name === eventName) {
+          return { claimed: false, replay: true, deliveryId, bodySha256 };
+        }
+        return { claimed: false, replay: false, conflict: true, reason: "DELIVERY_ID_CONFLICT" };
+      }
+      sql.exec(
+        "INSERT INTO orchestrator_github_webhook_deliveries (delivery_id, body_sha256, event_name, received_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+        deliveryId, bodySha256, eventName, receivedAt, expiresAt,
+      );
+      return { claimed: true, replay: false, deliveryId, bodySha256 };
+    });
   }
 
   async createTask({ task, idempotencyKey, inputHash, now, workerId, workerAssertion }) {

@@ -87,6 +87,15 @@ describe("GitHub webhook Worker route", () => {
     const changedBody = JSON.stringify(payload({
       issue: { ...payload().issue, title: "Changed signed payload" },
     }));
+    const businessConflict = await worker.fetch(
+      await signedRequest(changedBody, "gh-worker-delivery-0003"), testEnv(),
+    );
+    expect(businessConflict.status).toBe(409);
+    await expect(businessConflict.json()).resolves.toMatchObject({
+      error: "webhook_delivery_conflict",
+      reason: "IDEMPOTENCY_CONFLICT",
+    });
+
     const conflict = await worker.fetch(await signedRequest(changedBody, deliveryId), testEnv());
     expect(conflict.status).toBe(409);
     await expect(conflict.json()).resolves.toMatchObject({ error: "webhook_delivery_conflict" });

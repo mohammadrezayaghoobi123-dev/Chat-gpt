@@ -300,7 +300,7 @@ jobs:
             assert.equal(consumer.settings?.batch_size, 5, label + " DLQ archive batch size must be 5");
             assert.equal(consumer.settings?.max_concurrency, 2, label + " DLQ archive concurrency must be bounded at 2");
             assert.equal(consumer.settings?.max_retries, 100, label + " DLQ archive retries must be bounded at 100");
-            assert.equal(consumer.settings?.retry_delay, 60, label + " DLQ archive retry delay must be 60 seconds");
+            assert.equal(consumer.settings?.retry_delay, 3600, label + " DLQ archive retry delay must be 3600 seconds");
           }
           console.log("Production and Staging observability, Durable Object isolation, Cron, Queue consumers, and DLQ archive consumers are verified.");
           NODE

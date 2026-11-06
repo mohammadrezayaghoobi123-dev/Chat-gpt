@@ -86,6 +86,9 @@ const SCHEDULED_SIGNER_POLICY = Object.freeze({
   "orchestrator-outbox-publisher": Object.freeze({
     publisher: Object.freeze(["claimOutbox", "failOutbox", "completeOutbox"]),
   }),
+  "orchestrator-outbox-consumer": Object.freeze({
+    consumer: Object.freeze(["recordOutboxReceipt"]),
+  }),
 });
 
 function encodeBase64Url(bytes) {

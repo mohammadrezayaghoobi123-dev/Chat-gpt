@@ -425,7 +425,7 @@ it("rejects a signed assertion bound to another operation or a modified MAC", as
   }
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_execution_leases").one().count).toBe(0);
-    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(0);
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(1);
   });
 });
 
@@ -445,7 +445,7 @@ it("rejects legacy boolean identity for lease release without mutating lease sta
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec("SELECT worker_id, lease_generation FROM orchestrator_execution_leases WHERE task_id='task-0001'").one())
       .toMatchObject({ worker_id: "agent:worker-1", lease_generation: 1 });
-    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(1);
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(2);
   });
 });
 

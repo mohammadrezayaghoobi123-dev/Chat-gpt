@@ -201,12 +201,13 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const ledger = ledgerFor("ledger-audit-chain");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0010", inputHash: "8".repeat(64), now });
     const input = {
-      eventId: "audit-0001", taskId: "task-0001", actor: agent,
+      eventId: "audit-0001", taskId: "task-0001", actor: agent, workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "appendAuditEvent", nowMs: now }),
       eventType: "task.created", details: { version: 1 }, now,
     };
     const first = await ledger.appendAuditEvent(input);
-    const replay = await ledger.appendAuditEvent(input);
-    const second = await ledger.appendAuditEvent({ ...input, eventId: "audit-0002", eventType: "task.scheduled", now: now + 1 });
+    const replay = await ledger.appendAuditEvent({ ...input, workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "appendAuditEvent", nowMs: now }) });
+    const second = await ledger.appendAuditEvent({ ...input, eventId: "audit-0002", eventType: "task.scheduled", now: now + 1, workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "appendAuditEvent", nowMs: now + 1 }) });
     expect(first).toMatchObject({
       appended: true,
       event: { eventId: "audit-0001", actorId: "agent:worker-1", actorRole: "agent", previousHash: null },
@@ -215,10 +216,10 @@ describe("OrchestratorLedger durable coordination contract", () => {
     expect(second.event.previousHash).toBe(first.event.eventHash);
     await runInDurableObject(ledger, async instance => {
       await expect(instance.appendAuditEvent({
-        ...input, actor: { ...agent, identityVerified: false },
-      })).rejects.toMatchObject({ code: "AUTHENTICATED_ACTOR_REQUIRED" });
+        ...input, actor: { ...agent, identityVerified: false }, workerAssertion: undefined,
+      })).resolves.toMatchObject({ appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" });
     });
-    await expect(ledger.appendAuditEvent({ ...input, details: { version: 99 } }))
+    await expect(ledger.appendAuditEvent({ ...input, details: { version: 99 }, workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "appendAuditEvent", nowMs: now }) }))
       .resolves.toMatchObject({ appended: false, conflict: true });
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_audit_events").one().count).toBe(2);
@@ -548,5 +549,18 @@ it("rejects legacy boolean sender identity for message intake without persisting
   })).resolves.toMatchObject({ accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" });
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_processed_messages").one().count).toBe(0);
+  });
+});
+
+it("rejects legacy caller-supplied actor booleans for audit append", async () => {
+  const ledger = ledgerFor("ledger-audit-forged-actor");
+  await ledger.createTask({ task: task(), idempotencyKey: "task-create-audit-forged", inputHash: "5".repeat(64), now });
+  await expect(ledger.appendAuditEvent({
+    eventId: "audit-forged-actor", taskId: "task-0001",
+    actor: { id: "agent:worker-1", authenticated: true, identityVerified: true, role: "agent" },
+    eventType: "task.created", details: { forged: true }, now,
+  })).resolves.toMatchObject({ appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_audit_events").one().count).toBe(0);
   });
 });

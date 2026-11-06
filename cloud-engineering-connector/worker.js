@@ -1163,6 +1163,86 @@ export async function processOrchestratorOutbox(env, options = {}) {
  return totals;
 }
 
+const ORCHESTRATOR_QUEUE_EVENT_TYPES = new Set([
+ "task.created",
+ "task.transitioned",
+ "vault.document.proposed",
+]);
+const ORCHESTRATOR_QUEUE_ENVELOPE_KEYS = [
+ "attempts","createdAt","eventId","eventType","idempotencyKey","payload","schemaVersion","taskId",
+];
+
+export async function consumeOrchestratorOutbox(batch, env) {
+ const messages = Array.isArray(batch?.messages) ? batch.messages : [];
+ const totals = { received: messages.length, acknowledged: 0, retried: 0, duplicates: 0 };
+ const binding = env?.ORCHESTRATOR_LEDGER;
+ if (!binding || typeof binding.idFromName !== "function" || typeof binding.get !== "function" ||
+     typeof env?.LEDGER_WORKER_ASSERTION_KEYS !== "string" ||
+     typeof env?.LEDGER_WORKER_ASSERTION_ACTIVE_KID !== "string") {
+  for (const message of messages) {
+   try { message.retry({ delaySeconds: 30 }); totals.retried += 1; } catch {}
+  }
+  return totals;
+ }
+ const stub = binding.get(binding.idFromName("orchestrator-ledger-global"));
+ if (!stub || typeof stub.recordOutboxReceipt !== "function") {
+  for (const message of messages) {
+   try { message.retry({ delaySeconds: 30 }); totals.retried += 1; } catch {}
+  }
+  return totals;
+ }
+ for (const message of messages) {
+  try {
+   const body = message?.body;
+   if (!body || typeof body !== "object" || Array.isArray(body) ||
+       Object.keys(body).sort().join("|") !== ORCHESTRATOR_QUEUE_ENVELOPE_KEYS.join("|") ||
+       body.schemaVersion !== 1 ||
+       typeof body.eventId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(body.eventId) ||
+       typeof body.idempotencyKey !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(body.idempotencyKey) ||
+       typeof body.taskId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(body.taskId) ||
+       typeof body.eventType !== "string" || !ORCHESTRATOR_QUEUE_EVENT_TYPES.has(body.eventType) ||
+       !body.payload || typeof body.payload !== "object" || Array.isArray(body.payload) ||
+       !Number.isSafeInteger(body.attempts) || body.attempts < 1 || body.attempts > 8 ||
+       !Number.isSafeInteger(body.createdAt) || body.createdAt < 1 ||
+       new TextEncoder().encode(stableStringify(body)).byteLength > 32_768) {
+    message.retry({ delaySeconds: 30 });
+    totals.retried += 1;
+    continue;
+   }
+   const now = Date.now();
+   const consumerId = "orchestrator-outbox-consumer";
+   const workerAssertion = await createScheduledWorkerAssertion(
+    env.LEDGER_WORKER_ASSERTION_KEYS,
+    env.LEDGER_WORKER_ASSERTION_ACTIVE_KID,
+    { subject: consumerId, role: "consumer", operation: "recordOutboxReceipt", nowMs: now },
+   );
+   const receipt = await stub.recordOutboxReceipt({
+    eventId: body.eventId,
+    eventType: body.eventType,
+    schemaVersion: body.schemaVersion,
+    envelopeSha256: await sha256Hex(stableStringify(body)),
+    consumerId,
+    workerAssertion,
+    now,
+   });
+   if (receipt?.recorded === true) {
+    message.ack();
+    totals.acknowledged += 1;
+   } else if (receipt?.replay === true) {
+    message.ack();
+    totals.acknowledged += 1;
+    totals.duplicates += 1;
+   } else {
+    message.retry({ delaySeconds: 30 });
+    totals.retried += 1;
+   }
+  } catch {
+   try { message.retry({ delaySeconds: 30 }); totals.retried += 1; } catch {}
+  }
+ }
+ return totals;
+}
+
 async function handleScheduled(controller,env,ctx){
  const task=processKnowledgeOutbox(env).then(result=>{
   const summary={observed_at:new Date().toISOString(),...result};
@@ -1201,4 +1281,4 @@ function applySecurityHeaders(request,response){
  if(!headers.has("cache-control"))headers.set("cache-control","no-store");
  return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
 }
-export default{async fetch(request,env){let response;try{response=await handleRequest(request,env)}catch{response=json({error:"internal_error"},500)}return applySecurityHeaders(request,applyCors(request,env,response))},scheduled:handleScheduled};
+export default{async fetch(request,env){let response;try{response=await handleRequest(request,env)}catch{response=json({error:"internal_error"},500)}return applySecurityHeaders(request,applyCors(request,env,response))},scheduled:handleScheduled,queue:consumeOrchestratorOutbox};

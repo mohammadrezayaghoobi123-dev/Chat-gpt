@@ -41,9 +41,9 @@ async function createWorkerAssertion({ subject, role, operation, nowMs, jti }) {
 const claimAssertion = (subject, issuedAt = now) => createWorkerAssertion({
   subject, role: "agent", operation: "claimTask", nowMs: issuedAt,
 });
-const createTask = (ledger, input) => ledger.createTask({
+const createTask = async (ledger, input) => ledger.createTask({
   ...input, workerId: "orchestrator-scheduler",
-  workerAssertion: createWorkerAssertion({
+  workerAssertion: await createWorkerAssertion({
     subject: "orchestrator-scheduler", role: "system", operation: "createTask", nowMs: input.now,
   }),
 });

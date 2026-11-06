@@ -101,6 +101,30 @@ describe("GitHub webhook Worker route", () => {
     await expect(conflict.json()).resolves.toMatchObject({ error: "webhook_delivery_conflict" });
   });
 
+  it("treats the same semantic GitHub issue event as a replay when provider timestamps differ", async () => {
+    const firstPayload = payload();
+    const firstBody = JSON.stringify(firstPayload);
+    const first = await worker.fetch(
+      await signedRequest(firstBody, "gh-worker-semantic-0001"), testEnv(),
+    );
+    expect(first.status).toBe(202);
+
+    const replayPayload = payload({
+      issue: {
+        ...firstPayload.issue,
+        updated_at: new Date(Date.parse(firstPayload.issue.updated_at) + 5_000).toISOString(),
+      },
+    });
+    const replay = await worker.fetch(
+      await signedRequest(JSON.stringify(replayPayload), "gh-worker-semantic-0002"), testEnv(),
+    );
+    expect(replay.status).toBe(202);
+    await expect(replay.json()).resolves.toMatchObject({
+      status: "duplicate",
+      deliveryId: "gh-worker-semantic-0002",
+    });
+  });
+
   it("rejects a bad signature before intake or replay-store mutation", async () => {
     const body = JSON.stringify(payload());
     const request = await signedRequest(body, "gh-worker-delivery-0002", "sha256=" + "0".repeat(64));

@@ -1224,7 +1224,17 @@ export async function consumeOrchestratorOutbox(batch, env) {
     payload: body.payload,
     createdAt: body.createdAt,
     schemaVersion: body.schemaVersion,
-    envelopeSha256: await sha256Hex(stableStringify(body)),
+    // The attempt counter is delivery metadata, not event identity. A republish
+    // after an uncertain Queue send must deduplicate against the first delivery.
+    envelopeSha256: await sha256Hex(stableStringify({
+     schemaVersion: body.schemaVersion,
+     eventId: body.eventId,
+     idempotencyKey: body.idempotencyKey,
+     taskId: body.taskId,
+     eventType: body.eventType,
+     payload: body.payload,
+     createdAt: body.createdAt,
+    })),
     consumerId,
     workerAssertion,
     now,

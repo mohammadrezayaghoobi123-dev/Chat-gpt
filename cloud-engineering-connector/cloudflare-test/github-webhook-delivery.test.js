@@ -63,4 +63,28 @@ describe("durable GitHub webhook delivery replay contract", () => {
     await expect(ledger.claimGitHubDelivery(delivery({ receivedAt: 0 })))
       .resolves.toMatchObject({ claimed: false, reason: "INVALID_DELIVERY" });
   });
+
+  it("deduplicates distinct provider deliveries by durable business key and semantic input hash", async () => {
+    const ledger = ledgerFor("github-delivery-business-idempotency");
+    const business = {
+      idempotencyKey: "repo:123:issues:opened:issue:42:actor:7",
+      inputHash: "c".repeat(64),
+    };
+    await expect(ledger.claimGitHubDelivery(delivery({
+      deliveryId: "gh-business-first-0001",
+      ...business,
+    }))).resolves.toMatchObject({ claimed: true, replay: false });
+    await expect(ledger.claimGitHubDelivery(delivery({
+      deliveryId: "gh-business-second-0002",
+      bodySha256: "b".repeat(64),
+      ...business,
+    }))).resolves.toMatchObject({ claimed: false, replay: true, reason: "BUSINESS_REPLAY" });
+    await expect(ledger.claimGitHubDelivery(delivery({
+      deliveryId: "gh-business-conflict-0003",
+      bodySha256: "d".repeat(64),
+      ...business,
+      inputHash: "e".repeat(64),
+    }))).resolves.toMatchObject({ claimed: false, conflict: true, reason: "BUSINESS_IDEMPOTENCY_CONFLICT" });
+  });
+
 });

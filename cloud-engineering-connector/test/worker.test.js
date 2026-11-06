@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import worker, { processKnowledgeOutbox } from "../worker.js";
+import worker, { consumeOrchestratorOutbox, processKnowledgeOutbox } from "../worker.js";
 import { createWriteControlBinding, createGitHubWriteMock } from "./helpers/write-control-mocks.js";
 let idempotencyCounter=0;
 function createKnowledgeStoreBinding(){

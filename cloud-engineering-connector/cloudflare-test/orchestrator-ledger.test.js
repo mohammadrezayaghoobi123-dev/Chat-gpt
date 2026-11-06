@@ -404,11 +404,9 @@ it("rejects a signed assertion bound to another operation or a modified MAC", as
   const ledger = ledgerFor("ledger-claim-assertion-binding");
   await ledger.createTask({ task: task(), idempotencyKey: "task-create-assertion-binding", inputHash: "c".repeat(64), now });
   const wrongOperation = await createWorkerAssertion({
-    keySet: env.LEDGER_WORKER_ASSERTION_KEYS, kid: "test-v1",
     subject: "agent:worker-1", role: "agent", operation: "releaseLease", nowMs: now,
   });
   const valid = await createWorkerAssertion({
-    keySet: env.LEDGER_WORKER_ASSERTION_KEYS, kid: "test-v1",
     subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
   });
   const modifiedParts = valid.split(".");

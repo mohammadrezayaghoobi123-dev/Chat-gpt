@@ -1149,13 +1149,17 @@ it("archives DLQ messages durably with signature validation, content integrity, 
     }),
   })).resolves.toMatchObject({ recorded: false, reason: "DEAD_LETTER_HASH_MISMATCH" });
 
-  await expect(ledger.recordOutboxDeadLetter({
+  const sensitivePayloadResult = await ledger.recordOutboxDeadLetter({
     ...input,
     body: { ...body, payload: { apiKey: "must-not-be-persisted" } },
     workerAssertion: await createWorkerAssertion({
       subject: input.archiverId, role: "consumer", operation: "recordOutboxDeadLetter", nowMs: now,
     }),
-  })).rejects.toMatchObject({ code: "SENSITIVE_FIELD_REJECTED" });
+  });
+  expect(sensitivePayloadResult).toEqual({
+    recorded: false,
+    reason: "SENSITIVE_FIELD_REJECTED",
+  });
 
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec(

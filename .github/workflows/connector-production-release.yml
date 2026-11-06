@@ -137,6 +137,12 @@ jobs:
             throw new Error("Production deployment blocked; missing Worker secret binding(s): " + missing.join(", ") + ". Add them in Cloudflare Workers > chat-gpt111 > Settings > Variables and Secrets. Secret values are never read.");
           }
 
+          for (const [label, bindings] of [["Production", productionBindings], ["Staging", stagingBindings]]) {
+            const activeSignerKid = bindings.get("LEDGER_WORKER_ASSERTION_ACTIVE_KID");
+            assert.equal(activeSignerKid?.type, "plain_text", label + " LEDGER_WORKER_ASSERTION_ACTIVE_KID must be a non-secret plain-text binding");
+            assert.match(activeSignerKid.text || "", /^[A-Za-z0-9._-]{1,64}$/, label + " active signer key ID must be a bounded identifier");
+          }
+
           const productionLimiter = productionBindings.get("MCP_RATE_LIMITER");
           const stagingLimiter = stagingBindings.get("MCP_RATE_LIMITER");
           assert.ok(productionLimiter?.namespace_id && stagingLimiter?.namespace_id, "Both Production and Staging MCP_RATE_LIMITER namespaces are required");

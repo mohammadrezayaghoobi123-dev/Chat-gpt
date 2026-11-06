@@ -117,3 +117,10 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["d5ffafb6df54e26189d8494548f7693fdcfdf108"]
 paths = ['''^cloud-engineering-connector/test/orchestrator-worker-identity\.test\.js$''']
+
+[[allowlists]]
+description = "Synthetic ephemeral HMAC test-key fixture from one historical outbox publisher test commit; restricted to that exact commit, file, and generic-api-key rule."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["a5c36d1c2e7461e38578a688133c797f541b4b46"]
+paths = ['''^cloud-engineering-connector/test/orchestrator-outbox-publisher\.test\.js$''']

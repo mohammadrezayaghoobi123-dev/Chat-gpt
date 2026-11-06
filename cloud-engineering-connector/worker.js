@@ -1,6 +1,7 @@
 import { consoleResponse } from "./console.js";
 import { authenticateGitHubWebhook } from "./github-webhook-auth.js";
 import { validateGitHubIntakeEvent } from "./orchestrator-github-intake.js";
+import { createScheduledWorkerAssertion } from "./orchestrator-worker-identity.js";
 const VERSION = "0.1.0";
 const MAX_FILES = 12;
 const MAX_FILE_BYTES = 100_000;
@@ -1069,6 +1070,103 @@ export async function processKnowledgeOutbox(env,options={}){
  return totals;
 }
 
+export async function processOrchestratorOutbox(env, options = {}) {
+ const maxEvents = options.maxEvents === undefined ? 5 : options.maxEvents;
+ if (!Number.isSafeInteger(maxEvents) || maxEvents < 1 || maxEvents > 20) {
+  throw new TypeError("maxEvents must be between 1 and 20.");
+ }
+ const queue = env?.ORCHESTRATOR_OUTBOX_QUEUE;
+ if (!queue || typeof queue.send !== "function") {
+  return { processed: 0, published: 0, failed: 0, deadLettered: 0, completionPending: 0, reason: "orchestrator_outbox_queue_unavailable" };
+ }
+ const binding = env?.ORCHESTRATOR_LEDGER;
+ if (!binding || typeof binding.idFromName !== "function" || typeof binding.get !== "function") {
+  return { processed: 0, published: 0, failed: 0, deadLettered: 0, completionPending: 0, reason: "orchestrator_ledger_unavailable" };
+ }
+ if (typeof env.LEDGER_WORKER_ASSERTION_KEYS !== "string" ||
+     typeof env.LEDGER_WORKER_ASSERTION_ACTIVE_KID !== "string") {
+  return { processed: 0, published: 0, failed: 0, deadLettered: 0, completionPending: 0, reason: "worker_assertion_signing_unavailable" };
+ }
+ const workerId = "orchestrator-outbox-publisher";
+ const stub = binding.get(binding.idFromName("orchestrator-ledger-global"));
+ if (!stub || typeof stub.claimOutbox !== "function" ||
+     typeof stub.completeOutbox !== "function" || typeof stub.failOutbox !== "function") {
+  return { processed: 0, published: 0, failed: 0, deadLettered: 0, completionPending: 0, reason: "orchestrator_outbox_rpc_unavailable" };
+ }
+ const totals = { processed: 0, published: 0, failed: 0, deadLettered: 0, completionPending: 0 };
+ const assertion = operation => createScheduledWorkerAssertion(
+  env.LEDGER_WORKER_ASSERTION_KEYS,
+  env.LEDGER_WORKER_ASSERTION_ACTIVE_KID,
+  { subject: workerId, role: "publisher", operation, nowMs: Date.now() },
+ );
+ for (let index = 0; index < maxEvents; index += 1) {
+  const claimNow = Date.now();
+  let claim;
+  try {
+   claim = await stub.claimOutbox({
+    workerId, workerAssertion: await assertion("claimOutbox"),
+    leaseMs: 120_000, now: claimNow,
+   });
+  } catch {
+   return { ...totals, reason: "orchestrator_outbox_claim_failed" };
+  }
+  if (claim?.deadLettered === true) totals.deadLettered += 1;
+  if (claim?.claimed !== true) break;
+  totals.processed += 1;
+  const event = claim.event;
+  const leaseGeneration = claim.leaseGeneration ?? event?.leaseGeneration;
+  if (!event || typeof event.eventId !== "string" || typeof event.eventType !== "string" ||
+      typeof event.taskId !== "string" || !Number.isSafeInteger(leaseGeneration) ||
+      leaseGeneration < 1) {
+   try {
+    await stub.failOutbox({
+     eventId: event?.eventId ?? "invalid-outbox-event",
+     workerId, workerAssertion: await assertion("failOutbox"),
+     leaseGeneration, retryable: false, errorCode: "INVALID_OUTBOX_EVENT", now: Date.now(),
+    });
+   } catch {}
+   totals.failed += 1;
+   continue;
+  }
+  const message = {
+   schemaVersion: 1,
+   eventId: event.eventId,
+   idempotencyKey: event.idempotencyKey,
+   taskId: event.taskId,
+   eventType: event.eventType,
+   payload: event.payload,
+   attempts: event.attempts,
+   createdAt: event.createdAt,
+  };
+  try {
+   await queue.send(message, { contentType: "json" });
+  } catch {
+   try {
+    const failed = await stub.failOutbox({
+     eventId: event.eventId, workerId, workerAssertion: await assertion("failOutbox"),
+     leaseGeneration, retryable: true, errorCode: "OUTBOX_QUEUE_PUBLISH_FAILED", now: Date.now(),
+    });
+    if (failed?.deadLettered === true) totals.deadLettered += 1;
+   } catch {}
+   totals.failed += 1;
+   continue;
+  }
+  totals.published += 1;
+  try {
+   const completed = await stub.completeOutbox({
+    eventId: event.eventId, workerId, workerAssertion: await assertion("completeOutbox"),
+    leaseGeneration, now: Date.now(),
+   });
+   if (completed?.completed !== true) totals.completionPending += 1;
+  } catch {
+   // Queue delivery may already have succeeded. Leave the lease to expire and
+   // rely on eventId deduplication downstream; never mark an uncertain send failed.
+   totals.completionPending += 1;
+  }
+ }
+ return totals;
+}
+
 async function handleScheduled(controller,env,ctx){
  const task=processKnowledgeOutbox(env).then(result=>{
   const summary={observed_at:new Date().toISOString(),...result};
@@ -1082,8 +1180,20 @@ async function handleScheduled(controller,env,ctx){
   console.error(JSON.stringify({event:"knowledge_outbox_reconciliation_failed",severity:"error",observed_at:new Date().toISOString(),code}));
   return null;
  });
- if(ctx&&typeof ctx.waitUntil==="function")ctx.waitUntil(task);
- else await task;
+ const orchestratorTask=processOrchestratorOutbox(env).then(result=>{
+  const summary={observed_at:new Date().toISOString(),...result};
+  console.log(JSON.stringify({event:"orchestrator_outbox_publish",...summary}));
+  if(result&&(result.failed>0||result.deadLettered>0||result.reason)){
+   console.error(JSON.stringify({event:"orchestrator_outbox_publish_alert",severity:"error",...summary}));
+  }
+  return result;
+ }).catch(error=>{
+  const code=typeof error?.code==="string"&&/^[A-Z0-9_]{1,64}$/.test(error.code)?error.code:"UNEXPECTED";
+  console.error(JSON.stringify({event:"orchestrator_outbox_publish_failed",severity:"error",observed_at:new Date().toISOString(),code}));
+  return null;
+ });
+ if(ctx&&typeof ctx.waitUntil==="function"){ctx.waitUntil(task);ctx.waitUntil(orchestratorTask);}
+ else await Promise.all([task,orchestratorTask]);
 }
 
 function applySecurityHeaders(request,response){

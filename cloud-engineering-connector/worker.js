@@ -1188,7 +1188,7 @@ async function handleScheduled(controller,env,ctx){
   console.error(JSON.stringify({event:"orchestrator_outbox_publish_failed",severity:"error",observed_at:new Date().toISOString(),code}));
   return null;
  });
- if(ctx&&typeof ctx.waitUntil==="function"){ctx.waitUntil(task);ctx.waitUntil(orchestratorTask);}
+ if(ctx&&typeof ctx.waitUntil==="function")ctx.waitUntil(Promise.all([task,orchestratorTask]));
  else await Promise.all([task,orchestratorTask]);
 }
 

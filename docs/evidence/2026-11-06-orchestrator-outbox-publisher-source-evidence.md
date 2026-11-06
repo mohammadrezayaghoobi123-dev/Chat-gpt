@@ -2,8 +2,8 @@
 
 - Evidence date: 2026-11-06
 - Branch: `remediation/orchestrator-production-hardening`
-- Source implementation commit: `46a4e58b3babbb7ca83288f3592df85bc4c52672`
-- CI run: [Cloud Engineering Connector CI #42280584167](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/42260745352)
+- Current source implementation head: `35f29867f0c144de023269997dbd57386ed9ff6f`
+- CI run: [Cloud Engineering Connector CI #42281844106](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/42281844106)
 - Secret scan: [Full History Secret Scan #42280584212](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/42260745365)
 
 ## Source-confirmed
@@ -22,19 +22,31 @@
 3. The scheduled handler attaches both Knowledge Store reconciliation and Orchestrator outbox publishing to one `waitUntil(Promise.all(...))` lifecycle.
 4. A missing optional Queue binding returns `orchestrator_outbox_queue_unavailable` before any Ledger claim. This configuration state is not emitted as an alert-level error.
 
-## CI-confirmed at source implementation commit
+5. The Worker exports `consumeOrchestratorOutbox` as its Cloudflare Queue handler.
+   - It accepts only schema version 1 and the explicit event types `task.created`, `task.transitioned`, and `vault.document.proposed`.
+   - It validates the exact envelope key set, identifiers, timestamps, attempt bounds, object payload, and 32 KiB serialized size before touching the Ledger.
+   - Unknown event types and malformed envelopes are retried; no payload-driven Task execution or repository mutation occurs.
+6. The consumer uses the fixed `orchestrator-outbox-consumer` principal and the operation-bound `recordOutboxReceipt` assertion.
+7. OrchestratorLedger schema v4 creates `orchestrator_outbox_receipts`, with `event_id` as a primary key and the envelope SHA-256, event type, schema version, consumer ID, and receive time recorded atomically.
+   - An identical eventId/envelope replay is acknowledged as a duplicate.
+   - Rebinding an eventId to a different event type, schema version, or envelope hash returns a conflict.
+   - The receipt table stores no arbitrary payload and triggers no business side effect.
 
-- Node test suite: 372 passed, 0 failed.
-- Durable Object suite: 98 passed across 6 test files.
+## CI-confirmed at current source head
+
+- Branch HEAD: `35f29867f0c144de023269997dbd57386ed9ff6f`.
+- Cloud Engineering Connector CI #42281844106: success.
+- Full History Secret Scan #42281844124: success.
+- Orchestrator GitHub Intake Contract #42281844172: success.
+- Node test suite: 376 passed, 0 failed.
+- Durable Object suite: 100 passed across 6 test files.
 - JavaScript syntax and Wrangler configuration checks: success.
-- Full-history Secret Scan: success.
-
-The CI job's `post-deploy-staging-smoke` was skipped. CI success is not live runtime evidence.
+- `post-deploy-staging-smoke`: skipped. CI success is not live runtime evidence.
 
 ## Runtime-unknown / not activated
 
 - `ORCHESTRATOR_OUTBOX_QUEUE` is not yet configured in `wrangler.toml`.
-- No Queue consumer is implemented in this repository.
+- The Queue consumer is implemented and CI-tested, but is not activated: no Queue resource or `ORCHESTRATOR_OUTBOX_QUEUE` producer/consumer binding is configured in Wrangler or live Cloudflare.
 - No live Staging or Production Queue binding has been inspected.
 - Presence and compatibility of `LEDGER_WORKER_ASSERTION_KEYS` and `LEDGER_WORKER_ASSERTION_ACTIVE_KID` in Cloudflare have not been verified.
 - No end-to-end live claim → publish → consume → deduplicate → complete test has run.
@@ -43,8 +55,8 @@ The CI job's `post-deploy-staging-smoke` was skipped. CI success is not live run
 ## Required next controls
 
 1. Provision separate Staging and Production Queues and configure reviewed producer bindings.
-2. Implement a Queue consumer with durable `eventId` deduplication and explicit allowlisted event handlers.
-3. Add failure-injection coverage for duplicate delivery after send-success / completion-failure.
+2. Provision separate Staging and Production Queues; configure the reviewed Queue producer/consumer bindings and retry/DLQ policy only after the Staging deployment plan is approved.
+3. Add live Staging failure-injection coverage for duplicate delivery after send-success / completion-failure, receipt persistence, and Queue redelivery.
 4. Configure and verify signer secret/key ID presence without exposing values.
 5. Run full Staging end-to-end smoke and recovery tests.
 6. Complete backup/restore evidence, independent review, and operator-approved deployment.
@@ -52,7 +64,7 @@ The CI job's `post-deploy-staging-smoke` was skipped. CI success is not live run
 **Release decision: NO-GO.** This snapshot proves source and CI state only. It does not establish that the runtime is activated or production-ready.
 
 
-## Verification refresh — 2026-11-06 19:33 UTC
+## Historical verification refresh — 2026-11-06 19:33 UTC
 
 - Branch HEAD: `46a4e58b3babbb7ca83288f3592df85bc4c52672`.
 - Cloud Engineering Connector CI: run `42280584167`, completed `success`.
@@ -63,3 +75,15 @@ The CI job's `post-deploy-staging-smoke` was skipped. CI success is not live run
 - The test suite includes fail-closed readiness coverage for missing Queue and invalid/missing signer key configuration. The readiness fixture in the credential matrix was updated to provide ephemeral signing material and a test Queue; no real secret is committed.
 
 This refresh supersedes the earlier CI identifiers and Node test count in this snapshot. It does not change the runtime-unknown findings above.
+
+
+## Queue consumer implementation and verification — 2026-11-06
+
+- Consumer implementation is present in `worker.js` and exported as the Worker's `queue` handler.
+- Durable receipt schema and transaction are present in `orchestrator-ledger.js`; Ledger ping reports schema version 4.
+- The fixed consumer signer policy permits only `recordOutboxReceipt`; it cannot mint Agent assertions or authorize task execution.
+- Unit coverage verifies unknown event rejection, supported event receipt, identical redelivery, eventId rebinding conflict, and signed consumer identity.
+- CI at exact HEAD `35f29867f0c144de023269997dbd57386ed9ff6f`: 376/376 Node tests and 100/100 Durable Object tests passed; syntax/config checks passed; full-history Secret Scan passed.
+- The workflow's post-deploy Staging smoke remains skipped. No Queue was provisioned, no Wrangler Queue binding was activated, and no Cloudflare deployment or live runtime test was performed.
+
+**Updated release decision: NO-GO.** Source and CI gates for the consumer pass; Queue infrastructure, Staging configuration, and live end-to-end delivery/recovery remain unverified.

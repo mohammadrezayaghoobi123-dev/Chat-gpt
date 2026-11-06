@@ -113,7 +113,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     })).resolves.toMatchObject({ released: false, reason: "LEASE_FENCE_MISMATCH" });
     await expect(ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
-      actor: agent, evidence, now: now + 102, workerId: "agent:worker-1", leaseGeneration: first.leaseGeneration,
+      actor: agent, evidence, now: now + 102, workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "transitionTask", nowMs: now + 102 }), leaseGeneration: first.leaseGeneration,
     })).resolves.toMatchObject({ updated: false, reason: "LEASE_FENCE_MISMATCH" });
   });
 
@@ -122,7 +122,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-0005", inputHash: "1".repeat(64), now });
     await expect(ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 2, expectedState: "SCHEDULED", nextState: "RUNNING",
-      actor: { id: "owner:one", authenticated: true, identityVerified: true, role: "owner" }, evidence, now: now + 1,
+      actor: { id: "owner:one", authenticated: true, identityVerified: true, role: "owner" }, evidence, now: now + 1, workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "transitionTask", nowMs: now + 1 }),
     })).resolves.toMatchObject({ updated: false, reason: "VERSION_OR_STATE_CONFLICT" });
   });
 
@@ -151,7 +151,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const result = await ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
       actor: agent, evidence, now: now + 1, workerId: "agent:worker-1",
-      authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseGeneration: lease.leaseGeneration,
+      workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "transitionTask", nowMs: now + 1 }), leaseGeneration: lease.leaseGeneration,
       outboxEvent: {
         eventId: "event-transition-1", idempotencyKey: "task-running-1", eventType: "task.running",
         payload: { taskId: "task-0001", version: 2 },
@@ -355,7 +355,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
     const agentWithoutLease = await ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
-      actor: agent, evidence, now: now + 1,
+      actor: agent, evidence, now: now + 1, workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "transitionTask", nowMs: now + 1 }),
     });
     expect(agentWithoutLease).toMatchObject({ updated: false, reason: "LEASE_FENCE_MISMATCH" });
     await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
@@ -502,4 +502,20 @@ it("rejects legacy boolean identity for agent-round mutation", async () => {
     leaseGeneration: lease.leaseGeneration, now: now + 1,
   })).resolves.toMatchObject({ advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
   await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ agentRound: 0, version: 1 });
+});
+
+
+it("rejects legacy boolean identity for state transitions even with a live lease", async () => {
+  const ledger = ledgerFor("ledger-transition-forged-identity");
+  await ledger.createTask({ task: task(), idempotencyKey: "task-create-transition-forged", inputHash: "8".repeat(64), now });
+  const lease = await ledger.claimTask({
+    workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"),
+    leaseMs: 30_000, now,
+  });
+  await expect(ledger.transitionTask({
+    taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
+    actor: agent, evidence, now: now + 1, workerId: "agent:worker-1",
+    authenticatedWorker: authenticatedWorker("agent:worker-1"), leaseGeneration: lease.leaseGeneration,
+  })).resolves.toMatchObject({ updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+  await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
 });

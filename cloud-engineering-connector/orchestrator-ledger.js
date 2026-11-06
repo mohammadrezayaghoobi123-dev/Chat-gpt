@@ -110,6 +110,10 @@ function outboxFromRow(row) {
     leaseUntil: row.lease_until,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    retryState: row.retry_state ?? "READY",
+    nextAttemptAt: row.next_attempt_at ?? 0,
+    lastErrorCode: row.last_error_code ?? null,
+    deadLetteredAt: row.dead_lettered_at ?? null,
   };
 }
 

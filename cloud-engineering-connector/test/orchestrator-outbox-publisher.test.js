@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { processOrchestratorOutbox } from "../worker.js";
+import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
 const now = Date.now();
 const key = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
@@ -79,4 +79,57 @@ test("fails closed before claiming when signing configuration is absent", async 
   const result = await processOrchestratorOutbox(env);
   assert.equal(result.reason, "worker_assertion_signing_unavailable");
   assert.equal(calls.filter(call => call.method === "claimOutbox").length, 0);
+});
+
+
+test("send-success plus uncertain completion survives duplicate Queue delivery through durable receipt deduplication", async () => {
+  const queued = [];
+  const { env, calls } = fixture({
+    send: async message => { queued.push(message); },
+    complete: async () => ({ completed: false, reason: "LEASE_FENCE_MISMATCH" }),
+  });
+  const published = await processOrchestratorOutbox(env, { maxEvents: 1 });
+  assert.equal(published.completionPending, 1);
+  assert.equal(queued.length, 1);
+  assert.equal(calls.some(call => call.method === "failOutbox"), false);
+
+  const receipts = new Map();
+  const receiptCalls = [];
+  const consumerEnv = {
+    ORCHESTRATOR_LEDGER: {
+      idFromName: name => name,
+      get: () => ({
+        recordOutboxReceipt: async input => {
+          receiptCalls.push(input);
+          const existing = receipts.get(input.eventId);
+          if (existing) {
+            return existing === input.envelopeSha256
+              ? { recorded: false, replay: true, eventId: input.eventId }
+              : { recorded: false, conflict: true, reason: "OUTBOX_EVENT_ID_CONFLICT" };
+          }
+          receipts.set(input.eventId, input.envelopeSha256);
+          return { recorded: true, eventId: input.eventId };
+        },
+      }),
+    },
+    LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+    LEDGER_WORKER_ASSERTION_ACTIVE_KID: env.LEDGER_WORKER_ASSERTION_ACTIVE_KID,
+  };
+  const delivered = () => ({
+    body: queued[0],
+    acknowledged: false,
+    retried: false,
+    ack() { this.acknowledged = true; },
+    retry() { this.retried = true; },
+  });
+  const first = delivered();
+  const duplicate = delivered();
+  const firstResult = await consumeOrchestratorOutbox({ messages: [first] }, consumerEnv);
+  const duplicateResult = await consumeOrchestratorOutbox({ messages: [duplicate] }, consumerEnv);
+  assert.deepEqual(firstResult, { received: 1, acknowledged: 1, retried: 0, duplicates: 0 });
+  assert.deepEqual(duplicateResult, { received: 1, acknowledged: 1, retried: 0, duplicates: 1 });
+  assert.equal(receiptCalls.length, 2);
+  assert.equal(receipts.size, 1);
+  assert.equal(first.acknowledged, true);
+  assert.equal(duplicate.acknowledged, true);
 });

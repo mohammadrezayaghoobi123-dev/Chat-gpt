@@ -99,17 +99,19 @@ Use a dedicated `executeOwnerCommand` Ledger entry point (or equivalent narrowly
 
 Use a short `transactionSync()` callback containing synchronous SQL operations only. No `await`, WebCrypto, network I/O, or asynchronous callback is permitted inside it. The transaction MUST:
 
-1. Check the delivery ID and comment ID in the dedicated Owner-command receipt table. Return the stored result for an exact replay; reject identifier reuse with a different body/command hash.
-2. Compare the current task version/state and current audit-chain head with the snapshot used to precompute the audit hash. If either changed, abort without consuming the JTI or delivery; the entry point may re-read/recompute and retry a strictly bounded number of times. If the task's expected version/state is now invalid, persist a deterministic conflict receipt atomically and do not apply the requested transition.
-3. Insert/consume the assertion JTI under a unique constraint, bound to the assertion hash and command context. A duplicate JTI must fail closed.
+1. Check the delivery ID and comment ID in the dedicated Owner-command receipt table. Return the stored result for an exact replay; reject identifier reuse with a different body/command hash. This read-only replay check occurs before attempting to consume a new JTI.
+2. Compare the current task version/state and current audit-chain head with the snapshot used to precompute the audit hash. If the audit head changed, abort without consuming the JTI or delivery; re-read/recompute and retry a strictly bounded number of times. If the task's expected version/state is no longer valid, take the deterministic-conflict branch below rather than returning from a partially committed operation.
+3. For an executable command, insert/consume the assertion JTI under a unique constraint, bound to the assertion hash and command context. A duplicate JTI must fail closed.
 4. Claim the delivery ID and comment ID with their body/command hashes.
 5. Apply the dedicated allowed task transition and version increment.
-6. Append the precomputed hash-chained audit event, whose previous-hash value was checked against the current audit head in step 2.
-7. Persist the bounded command result receipt.
+6. Append the precomputed hash-chained audit event, whose previous-hash value was checked against the current audit head in the same transaction.
+7. Persist the bounded successful command result receipt.
 
-All writes in steps 3–7 MUST commit or roll back together. Any SQL/storage exception aborts the transaction, leaving the JTI, delivery/comment receipt, task projection, audit chain and command receipt unchanged so GitHub redelivery can retry. The pre-transaction snapshot/hash phase is not itself authoritative: the in-transaction version and audit-head comparisons are the compare-and-swap fence that prevents stale hashes or concurrent commands from committing. Do not hold a transaction open across network I/O.
+**Deterministic conflict branch:** when the current task version/state fails the command's expected-version or allowed-source-state precondition, the transaction MUST atomically consume the valid assertion JTI, claim the delivery and comment IDs, and persist a bounded conflict result receipt. It MUST NOT mutate the task or append a successful-transition audit event. It MUST append a distinct `OWNER_COMMAND_REJECTED` audit event containing only the task ID, operation, expected/current version and state, actor/repository IDs, delivery/comment IDs, command hash, and a bounded conflict reason. The rejected-event hash must be precomputed from the observed audit head and revalidated against the current audit head inside the transaction; if the head changed, abort and retry the whole preflight/transaction a bounded number of times. This makes an authenticated Owner command attempt auditable without representing it as a successful task transition.
 
-The receipt is committed for deterministic policy outcomes (for example, a task version/state conflict) so a redelivery returns the same outcome without re-execution. Define explicitly whether rejected commands produce a separate audit event; if they do, that event must use the same audit-head compare-and-swap and atomic commit protocol. Audit data excludes secrets and raw webhook payloads; store body/command hashes and minimal provenance only.
+All writes in the executable-command path (steps 3–7) or deterministic-conflict path MUST commit or roll back together. Any SQL/storage exception aborts the transaction, leaving the JTI, delivery/comment receipt, task projection, audit chain and command receipt unchanged so GitHub redelivery can retry. The pre-transaction snapshot/hash phase is not itself authoritative: in-transaction task-version/state and audit-head comparisons are the compare-and-swap fences that prevent stale hashes or concurrent commands from committing. Do not hold a transaction open across network I/O.
+
+The receipt is committed for deterministic policy outcomes so a redelivery returns the same outcome without re-execution. Exact replays return the stored result; identifier reuse with a different hash is a security conflict and must not overwrite the original receipt. Audit data excludes secrets and raw webhook payloads; store body/command hashes and minimal provenance only.
 
 ## 7. Replay, ordering, and failure behavior
 

@@ -37,6 +37,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       expect(tables).toEqual(expect.arrayContaining([
         "orchestrator_tasks", "orchestrator_processed_messages",
         "orchestrator_execution_leases", "orchestrator_outbox_events", "orchestrator_audit_events",
+        "orchestrator_consumed_assertions",
       ]));
     });
   });

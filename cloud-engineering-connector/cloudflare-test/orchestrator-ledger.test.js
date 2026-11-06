@@ -390,7 +390,9 @@ it("rejects a signed assertion bound to another operation or a modified MAC", as
     keySet: env.LEDGER_WORKER_ASSERTION_KEYS, kid: "test-v1",
     subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
   });
-  const modified = valid.slice(0, -1) + (valid.endsWith("A") ? "B" : "A");
+  const modifiedParts = valid.split(".");
+  modifiedParts[3] = (modifiedParts[3][0] === "A" ? "B" : "A") + modifiedParts[3].slice(1);
+  const modified = modifiedParts.join(".");
   for (const workerAssertion of [wrongOperation, modified]) {
     await expect(ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion, leaseMs: 30_000, now,

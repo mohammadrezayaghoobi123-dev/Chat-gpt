@@ -147,3 +147,12 @@ test("Staging release verifies the DLQ archive consumer and its bounded retry po
   assert.match(release, /dlqConsumer\.settings\?\.max_retries, 100/);
   assert.match(release, /dlqConsumer\.settings\?\.retry_delay, 60/);
 });
+
+
+test("readyz fails closed unless DLQ archive routing is configured", () => {
+  assert.match(worker, /orchestrator_outbox_dlq_archiver:"unavailable"/);
+  assert.match(worker, /typeof env\.ORCHESTRATOR_OUTBOX_DLQ_QUEUE!=="string"/);
+  assert.match(worker, /readinessState\.orchestrator_outbox_dlq_archiver="ok"/);
+  const smoke = readFileSync(new URL("./staging-smoke.mjs", import.meta.url), "utf8");
+  assert.match(smoke, /readinessBody\.orchestrator_outbox_dlq_archiver, "ok"/);
+});

@@ -130,3 +130,11 @@ test("Staging Queue provisioning paginates the complete Cloudflare inventory bef
   assert.match(workflow, /await listAllQueues\(\)/);
   assert.doesNotMatch(workflow, /request\("\/queues\?per_page=100&page=1"\)/);
 });
+
+
+test("Staging release paginates every Cloudflare Queue inventory page in preflight and post-deploy verification", () => {
+  const release = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  assert.equal((release.match(/async function queueInventory\(\)/g) || []).length, 2);
+  assert.equal((release.match(/result_info\?\.total_pages/g) || []).length, 2);
+  assert.equal((release.match(/page <= 1000/g) || []).length, 2);
+});

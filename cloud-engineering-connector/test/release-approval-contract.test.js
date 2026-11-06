@@ -138,9 +138,25 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
   };
   const deploymentData = { deployments: [{ versions: [{ version_id: "previous-version", percentage: 100 }] }] };
   const queueData = [
-    { queue_name: "chat-gpt111-orchestrator-outbox", queue_id: "production-outbox" },
+    {
+      queue_name: "chat-gpt111-orchestrator-outbox",
+      queue_id: "production-outbox",
+      consumers: [{
+        script_name: "chat-gpt111", consumer_id: "production-consumer",
+        dead_letter_queue: "chat-gpt111-orchestrator-outbox-dlq",
+        settings: { batch_size: 5, max_concurrency: 5, max_retries: 5, retry_delay: 30 },
+      }],
+    },
     { queue_name: "chat-gpt111-orchestrator-outbox-dlq", queue_id: "production-outbox-dlq" },
-    { queue_name: "chat-gpt111-staging-orchestrator-outbox", queue_id: "staging-outbox" },
+    {
+      queue_name: "chat-gpt111-staging-orchestrator-outbox",
+      queue_id: "staging-outbox",
+      consumers: [{
+        script_name: "chat-gpt111-staging", consumer_id: "staging-consumer",
+        dead_letter_queue: "chat-gpt111-staging-orchestrator-outbox-dlq",
+        settings: { batch_size: 5, max_concurrency: 5, max_retries: 5, retry_delay: 30 },
+      }],
+    },
     { queue_name: "chat-gpt111-staging-orchestrator-outbox-dlq", queue_id: "staging-outbox-dlq" },
   ];
   const scheduleData = { schedules: [{ cron: "*/5 * * * *" }] };
@@ -230,9 +246,25 @@ function runPreflightWithMfaDisabled(source, stepName, production) {
   };
   const deploymentData = { deployments: [{ versions: [{ version_id: "previous-version", percentage: 100 }] }] };
   const queueData = [
-    { queue_name: "chat-gpt111-orchestrator-outbox", queue_id: "production-outbox" },
+    {
+      queue_name: "chat-gpt111-orchestrator-outbox",
+      queue_id: "production-outbox",
+      consumers: [{
+        script_name: "chat-gpt111", consumer_id: "production-consumer",
+        dead_letter_queue: "chat-gpt111-orchestrator-outbox-dlq",
+        settings: { batch_size: 5, max_concurrency: 5, max_retries: 5, retry_delay: 30 },
+      }],
+    },
     { queue_name: "chat-gpt111-orchestrator-outbox-dlq", queue_id: "production-outbox-dlq" },
-    { queue_name: "chat-gpt111-staging-orchestrator-outbox", queue_id: "staging-outbox" },
+    {
+      queue_name: "chat-gpt111-staging-orchestrator-outbox",
+      queue_id: "staging-outbox",
+      consumers: [{
+        script_name: "chat-gpt111-staging", consumer_id: "staging-consumer",
+        dead_letter_queue: "chat-gpt111-staging-orchestrator-outbox-dlq",
+        settings: { batch_size: 5, max_concurrency: 5, max_retries: 5, retry_delay: 30 },
+      }],
+    },
     { queue_name: "chat-gpt111-staging-orchestrator-outbox-dlq", queue_id: "staging-outbox-dlq" },
   ];
   const accountData = { settings: { enforce_twofactor: false } };

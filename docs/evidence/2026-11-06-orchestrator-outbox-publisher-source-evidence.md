@@ -88,3 +88,17 @@ This refresh supersedes the earlier CI identifiers and Node test count in this s
 - The workflow's post-deploy Staging smoke remains skipped. No Queue was provisioned, no Wrangler Queue binding was activated, and no Cloudflare deployment or live runtime test was performed.
 
 **Updated release decision: NO-GO.** Source and CI gates for the consumer pass; Queue infrastructure, Staging configuration, and live end-to-end delivery/recovery remain unverified.
+
+
+## Receipt source-binding hardening — 2026-11-06 19:54 UTC
+
+- Source HEAD: `42068ad0482d78811d50bf6cacecf999232519bf`.
+- `OrchestratorLedger.recordOutboxReceipt` now verifies, inside the same Durable Object transaction that writes the receipt, that the event ID resolves to a persisted Outbox row and that event type, idempotency key, task ID, canonical payload JSON, and creation timestamp exactly match the source row.
+- The Queue consumer passes those immutable envelope fields to the Ledger. An authenticated but unbound or altered envelope is rejected before receipt insertion; duplicate receipt handling remains keyed by the event ID and envelope hash.
+- No task execution, repository write, or business side effect was added to the consumer.
+- Regression coverage verifies rejection of a receipt with no source Outbox row, successful receipt of a matching source event, and rejection of a payload altered after publication.
+- Cloud Engineering Connector CI run `42283608598`: success. Node tests: 377 passed, 0 failed. Durable Object tests: 6 files, 100 passed, 0 failed. Wrangler production/staging dry-run and JavaScript syntax checks: success.
+- Full History Secret Scan run `42283608888`: success. Orchestrator GitHub Intake Contract run `42283608740`: success.
+- `post-deploy-staging-smoke` was skipped. These results are source/CI evidence only; live Queue, Durable Object bindings, signer configuration, Staging end-to-end delivery, and Production remain unverified.
+
+**Release decision remains NO-GO.**

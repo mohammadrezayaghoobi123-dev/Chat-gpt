@@ -508,20 +508,28 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  renewLease({ taskId, workerId, authenticatedWorker, leaseGeneration, leaseMs, now }) {
+  async renewLease({ taskId, workerId, workerAssertion, leaseGeneration, leaseMs, now }) {
     identifier(taskId, "taskId");
     identifier(workerId, "workerId");
-    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"])) {
-      return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
-    }
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw fail("leaseGeneration must be positive.");
     validLeaseMs(leaseMs);
     timestamp(now);
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "agent", operation: "renewLease", nowMs: now,
+      });
+    } catch {
+      return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { renewed: false, reason: "LEASE_FENCE_MISMATCH" };
+      }
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       sql.exec(
         "UPDATE orchestrator_execution_leases SET lease_until = ?, updated_at = ? WHERE task_id = ? AND worker_id = ? AND lease_generation = ?",

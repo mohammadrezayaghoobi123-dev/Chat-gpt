@@ -34,7 +34,7 @@ The current Worker assertion verifier supports fixed Agent/publisher/system/cons
 ## 3. Alternatives
 
 ### A. Extend the existing webhook intake handler (recommended)
-Reuse the verified raw-body authentication and durable delivery claim, then route only the exact `issue_comment.created` event into a dedicated Owner command parser and service. Keep ordinary issue intake on its current path.
+Reuse the verified raw-body authentication and existing Ledger binding, then route only the exact `issue_comment.created` event into a dedicated Owner command parser and service. Keep ordinary issue intake on its current path. Owner-command delivery claiming must occur inside the same Ledger transaction as assertion consumption, task mutation, audit append and command receipt; do not pre-claim it in the ordinary intake path.
 
 - Pros: one webhook secret, one transport endpoint, existing replay store and rate limit.
 - Cons: handler requires a strict dispatch boundary and additional tests to prevent cross-policy confusion.
@@ -87,7 +87,7 @@ Add a separate Owner assertion contract rather than expanding the Agent assertio
 - Single-use via atomic JTI consumption in the same Durable Object transaction as task transition and audit append.
 - Rejected on expiry, future issue time, wrong repository, actor mismatch, task/operation mismatch, replay, malformed claims, unknown key ID, or key misconfiguration.
 
-The Worker may mint this assertion only after successful raw-body HMAC verification, immutable repository and Owner ID checks, freshness validation, strict command parsing, and durable delivery claim. No assertion-minting MCP tool or Agent API is added.
+The Worker may mint this assertion only after successful stateless validation: raw-body HMAC verification, immutable repository and Owner ID checks, event/action and issue-comment checks, freshness validation, strict command parsing, and bounded input validation. It must not commit a delivery claim before minting. The assertion and verified delivery metadata are passed to the dedicated Ledger entry point, which atomically claims the delivery/comment receipt, consumes the assertion JTI, checks task version/state, applies the transition, appends audit, and stores the command receipt. If that transaction fails, all durable effects roll back and GitHub redelivery can retry safely. No assertion-minting MCP tool or Agent API is added.
 
 Dedicated Ledger methods (`ownerCancelTask`, `ownerQuarantineTask`, `ownerReleaseQuarantinedTask`) must verify the assertion themselves. They must not trust caller-supplied actor role, `authenticated`, `identityVerified`, or a free-form resolution flag.
 
@@ -96,7 +96,7 @@ Use a dedicated `executeOwnerCommand` Ledger entry point (or equivalent narrowly
 Within one synchronous Durable Object transaction:
 1. check/claim the GitHub delivery ID and comment ID against a dedicated Owner-command receipt table;
 2. return the stored result for an exact replay; reject delivery/comment ID reuse with a different body/command hash;
-3. consume the context-bound assertion JTI exactly once;
+3. verify and consume the context-bound assertion JTI exactly once (the assertion is minted after stateless Worker validation, not after a separately committed delivery claim);
 4. load task and check expected version/current state;
 5. apply the specific allowed transition if valid;
 6. append the hash-chained audit event with provenance and bounded reason;

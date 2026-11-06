@@ -31,7 +31,7 @@ const evidence = { kind: "test-evidence", reference: "ci://run/123" };
 describe("OrchestratorLedger durable coordination contract", () => {
   it("initializes its own SQLite schema and reports the schema version", async () => {
     const ledger = ledgerFor("ledger-schema-ping");
-    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 1 });
+    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 2 });
     await runInDurableObject(ledger, async (instance, state) => {
       const tables = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row => row.name);
       expect(tables).toEqual(expect.arrayContaining([
@@ -262,7 +262,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const ledger = ledgerFor("ledger-agent-round-limit");
     await ledger.createTask({ task: task(), idempotencyKey: "task-create-agent-rounds", inputHash: "c".repeat(64), now });
     const worker = authenticatedWorker("agent:worker-1");
-    const lease = await ledger.claimTask({ workerId: "agent:worker-1", authenticatedWorker: worker, leaseMs: 30_000, now });
+    const lease = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 30_000, now });
     let version = 1;
     for (let round = 1; round <= 4; round += 1) {
       const result = await ledger.advanceAgentRound({

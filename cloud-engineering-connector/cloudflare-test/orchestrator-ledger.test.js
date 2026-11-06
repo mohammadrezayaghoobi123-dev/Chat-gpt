@@ -895,7 +895,10 @@ it("integrates the real Durable Object Ledger with publisher and Queue consumer 
 
   const queued = [];
   const runtimeEnv = {
-    ORCHESTRATOR_LEDGER: env.ORCHESTRATOR_LEDGER,
+    ORCHESTRATOR_LEDGER: {
+      idFromName: name => name,
+      get: name => name === "orchestrator-ledger-global" ? ledger : null,
+    },
     ORCHESTRATOR_OUTBOX_QUEUE: {
       send: async (message, options) => {
         queued.push({ message: structuredClone(message), options });

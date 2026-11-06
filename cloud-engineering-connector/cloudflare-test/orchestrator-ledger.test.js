@@ -814,3 +814,53 @@ it("rejects an authenticated Queue receipt when no matching durable Outbox event
     ).one().count).toBe(0);
   });
 });
+
+
+it("records a receipt only when every immutable Queue field matches the durable Outbox row", async () => {
+  const ledger = ledgerFor("ledger-outbox-receipt-source-match");
+  const payload = { taskId: "task-0001", version: 1 };
+  await createTask(ledger, {
+    task: task(), idempotencyKey: "task-create-receipt-source", inputHash: "f".repeat(64), now,
+  });
+  await ledger.enqueueOutbox({
+    eventId: "evt-receipt-source-0001",
+    idempotencyKey: "outbox-receipt-source-0001",
+    taskId: "task-0001",
+    eventType: "task.created",
+    payload,
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now,
+    }),
+    now,
+  });
+  const common = {
+    eventId: "evt-receipt-source-0001",
+    eventType: "task.created",
+    idempotencyKey: "outbox-receipt-source-0001",
+    taskId: "task-0001",
+    payload,
+    createdAt: now,
+    schemaVersion: 1,
+    envelopeSha256: "e".repeat(64),
+    consumerId: "orchestrator-outbox-consumer",
+    now,
+  };
+  const accepted = await ledger.recordOutboxReceipt({
+    ...common,
+    workerAssertion: await createWorkerAssertion({
+      subject: common.consumerId, role: "consumer", operation: "recordOutboxReceipt", nowMs: now,
+    }),
+  });
+  expect(accepted).toMatchObject({ recorded: true, eventId: common.eventId });
+  const tampered = await ledger.recordOutboxReceipt({
+    ...common,
+    payload: { ...payload, version: 999 },
+    envelopeSha256: "f".repeat(64),
+    workerAssertion: await createWorkerAssertion({
+      subject: common.consumerId, role: "consumer", operation: "recordOutboxReceipt", nowMs: now + 1,
+    }),
+    now: now + 1,
+  });
+  expect(tampered).toMatchObject({ recorded: false, reason: "OUTBOX_SOURCE_NOT_FOUND" });
+});

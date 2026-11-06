@@ -124,3 +124,16 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["a5c36d1c2e7461e38578a688133c797f541b4b46"]
 paths = ['''^cloud-engineering-connector/test/orchestrator-outbox-publisher\.test\.js$''']
+
+
+[[allowlists]]
+description = "Synthetic Queue-consumer event and idempotency identifiers in one historical unit-test commit; exact commit, file, and literals only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["6dd3ef5270b89a8b76efaecf0f5c519d4dfe8eae"]
+paths = ['''^cloud-engineering-connector/test/worker\.test\.js$''']
+regexTarget = "line"
+regexes = [
+  '''eventId\s*:\s*["']evt-consumer-00000001["']''',
+  '''idempotencyKey\s*:\s*["']idem-consumer-0001["']'''
+]

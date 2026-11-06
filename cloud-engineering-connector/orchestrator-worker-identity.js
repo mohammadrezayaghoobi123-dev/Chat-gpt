@@ -103,7 +103,7 @@ export async function verifyWorkerAssertion(keySet, token, expected) {
     const supplied = decodeBase64Url(parts[3]);
     const calculated = await mac(key, parts.slice(0, 3).join("."));
     if (!constantTimeEqual(supplied, calculated)) throw reject();
-    return Object.freeze({ jti: claims.jti, subject: claims.sub, role: claims.role, operation: claims.op, kid: parts[1] });
+    return Object.freeze({ jti: claims.jti, subject: claims.sub, role: claims.role, operation: claims.op, kid: parts[1], issuedAt: claims.iat, expiresAt: claims.exp });
   } catch {
     throw reject();
   }

@@ -149,15 +149,15 @@ export function evaluateOrchestratorPolicy({
       isProtectedAgentTargetBranch(targetBranch)) {
     return deny("PROTECTED_BRANCH", context);
   }
-  // Agent write targets are restricted to task/ and ops/ namespaces. The
-  // caller-supplied baseBranch is context only; it cannot grant target authority.
-  if (BRANCH_WRITE_ACTIONS.has(action) && !isAllowedAgentTargetBranch(targetBranch)) {
-    return deny("AGENT_TARGET_BRANCH_NOT_ALLOWLISTED", context);
-  }
   // A branch-writing action may never target the branch it is based on (direct write to the base);
   // stacked work must use a distinct task/ops branch. Read-only actions are unaffected.
   if (BRANCH_WRITE_ACTIONS.has(action) && baseBranch.toLowerCase() === targetBranch.toLowerCase()) {
     return deny("BASE_BRANCH_WRITE", context);
+  }
+  // Agent write targets are restricted to task/ and ops/ namespaces. The
+  // caller-supplied baseBranch is context only; it cannot grant target authority.
+  if (BRANCH_WRITE_ACTIONS.has(action) && !isAllowedAgentTargetBranch(targetBranch)) {
+    return deny("AGENT_TARGET_BRANCH_NOT_ALLOWLISTED", context);
   }
 
   if (APPROVAL_ACTIONS.has(action) && !validApproval(approval, actor, scope)) {

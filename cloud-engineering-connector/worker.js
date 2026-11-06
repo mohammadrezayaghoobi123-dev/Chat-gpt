@@ -1172,6 +1172,19 @@ const ORCHESTRATOR_QUEUE_ENVELOPE_KEYS = [
  "attempts","createdAt","eventId","eventType","idempotencyKey","payload","schemaVersion","taskId",
 ];
 
+function logOrchestratorConsumerTotals(totals, reason) {
+ const record = {
+  event: "orchestrator_outbox_consume",
+  severity: totals.retried > 0 || reason ? "warning" : "info",
+  observed_at: new Date().toISOString(),
+  ...totals,
+  ...(reason ? { reason } : {}),
+ };
+ const serialized = JSON.stringify(record);
+ if (record.severity === "warning") console.error(serialized);
+ else console.log(serialized);
+}
+
 export async function consumeOrchestratorOutbox(batch, env) {
  const messages = Array.isArray(batch?.messages) ? batch.messages : [];
  const totals = { received: messages.length, acknowledged: 0, retried: 0, duplicates: 0 };
@@ -1182,6 +1195,7 @@ export async function consumeOrchestratorOutbox(batch, env) {
   for (const message of messages) {
    try { message.retry({ delaySeconds: 30 }); totals.retried += 1; } catch {}
   }
+  logOrchestratorConsumerTotals(totals, "ledger_binding_or_signing_unavailable");
   return totals;
  }
  const stub = binding.get(binding.idFromName("orchestrator-ledger-global"));
@@ -1189,6 +1203,7 @@ export async function consumeOrchestratorOutbox(batch, env) {
   for (const message of messages) {
    try { message.retry({ delaySeconds: 30 }); totals.retried += 1; } catch {}
   }
+  logOrchestratorConsumerTotals(totals, "ledger_receipt_rpc_unavailable");
   return totals;
  }
  for (const message of messages) {
@@ -1254,6 +1269,7 @@ export async function consumeOrchestratorOutbox(batch, env) {
    try { message.retry({ delaySeconds: 30 }); totals.retried += 1; } catch {}
   }
  }
+ logOrchestratorConsumerTotals(totals);
  return totals;
 }
 

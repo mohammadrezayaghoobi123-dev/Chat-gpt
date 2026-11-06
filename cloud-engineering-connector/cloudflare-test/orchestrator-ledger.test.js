@@ -60,7 +60,7 @@ const evidence = { kind: "test-evidence", reference: "ci://run/123" };
 describe("OrchestratorLedger durable coordination contract", () => {
   it("initializes its own SQLite schema and reports the schema version", async () => {
     const ledger = ledgerFor("ledger-schema-ping");
-    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 4 });
+    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 5 });
     await runInDurableObject(ledger, async (instance, state) => {
       const tables = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row => row.name);
       expect(tables).toEqual(expect.arrayContaining([
@@ -931,7 +931,10 @@ it("integrates the real Durable Object Ledger with publisher and Queue consumer 
     retry() { this.retried = true; },
   });
   const consumerEnv = {
-    ORCHESTRATOR_LEDGER: env.ORCHESTRATOR_LEDGER,
+    ORCHESTRATOR_LEDGER: {
+      idFromName: name => name,
+      get: () => ledger,
+    },
     LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
     LEDGER_WORKER_ASSERTION_ACTIVE_KID: TEST_ASSERTION_KID,
   };

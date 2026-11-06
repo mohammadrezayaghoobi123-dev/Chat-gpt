@@ -65,7 +65,7 @@ The assertion must be consumed in the same `transactionSync` transaction as the 
 - Previously consumed `jti`: reject with a generic authorization failure and perform no mutation.
 - Unique-key conflict: reject; do not treat as success.
 - Storage/transaction error: fail closed and roll back the protected mutation.
-- Cleanup may remove expired assertion records only after expiry plus the clock-skew and operational margin; cleanup must never make a still-valid assertion replayable.
+- Cleanup may remove expired assertion records only after expiry plus the clock-skew and operational margin; cleanup must never make a still-valid assertion replayable. The current implementation retains consumed IDs for at least 10 minutes after expiry before pruning and indexes `expires_at` for bounded cleanup.
 
 If Web Crypto verification is asynchronous, the implementation must not split authorization from the mutation. Verify the MAC and claims before entering the transaction; then atomically consume the verified `jti` and perform the operation inside the same transaction. The verified result must be an internal, non-serializable value created by the verifier, not a caller-supplied object. Do not expose an API that lets request code construct this value.
 

@@ -146,7 +146,7 @@ test("Staging release verifies the DLQ archive consumer and its bounded retry po
   assert.match(release, /const dlqConsumer = \(outboxDlq\.consumers \|\| \[\]\)\.find/);
   assert.match(release, /Staging DLQ archive consumer must be attached/);
   assert.match(release, /dlqConsumer\.settings\?\.max_retries, 100/);
-  assert.match(release, /dlqConsumer\.settings\?\.retry_delay, 60/);
+  assert.match(release, /dlqConsumer\.settings\?\.retry_delay, 3600/);
 });
 
 

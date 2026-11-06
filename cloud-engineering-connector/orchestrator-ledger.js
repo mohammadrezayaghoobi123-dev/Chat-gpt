@@ -72,6 +72,9 @@ function validLeaseMs(value) {
 
 
 function consumeWorkerAssertion(sql, assertion, nowMs) {
+  const nowSeconds = Math.floor(nowMs / 1000);
+  // Keep consumed IDs beyond expiry, clock skew, and an additional 10-minute margin.
+  sql.exec("DELETE FROM orchestrator_consumed_assertions WHERE expires_at < ?", nowSeconds - 600);
   const existing = sql.exec(
     "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
     assertion.jti,
@@ -203,6 +206,7 @@ export class OrchestratorLedger extends DurableObject {
       )
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_by_status ON orchestrator_outbox_events(status, created_at)");
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_consumed_assertions_by_expiry ON orchestrator_consumed_assertions(expires_at)");
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_consumed_assertions (
         jti TEXT PRIMARY KEY,

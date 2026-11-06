@@ -1055,6 +1055,29 @@ it("acknowledges a republished event after an uncertain send even when the publi
     expect(tamperedDelivery.acknowledged).toBe(false);
     expect(tamperedDelivery.retried).toBe(true);
 
+    // A consumer with a mismatched signing key must not be able to persist a
+    // receipt, even when the Queue envelope itself is otherwise legitimate.
+    const invalidSignatureDelivery = deliver(queued[1].message);
+    const invalidSignatureResult = await consumeOrchestratorOutbox(
+      { messages: [invalidSignatureDelivery] },
+      {
+        ...consumerEnv,
+        LEDGER_WORKER_ASSERTION_KEYS: JSON.stringify({
+          [TEST_ASSERTION_KID]: "3031323334353637383961626364656630313233343536373839616263646567",
+        }),
+      },
+    );
+    expect(invalidSignatureResult).toEqual({ received: 1, acknowledged: 0, retried: 1, duplicates: 0 });
+    expect(invalidSignatureDelivery.acknowledged).toBe(false);
+    expect(invalidSignatureDelivery.retried).toBe(true);
+
+    // Malformed envelopes are retried without reaching the durable receipt API.
+    const malformedDelivery = deliver({ ...queued[1].message, attempts: 0 });
+    const malformedResult = await consumeOrchestratorOutbox({ messages: [malformedDelivery] }, consumerEnv);
+    expect(malformedResult).toEqual({ received: 1, acknowledged: 0, retried: 1, duplicates: 0 });
+    expect(malformedDelivery.acknowledged).toBe(false);
+    expect(malformedDelivery.retried).toBe(true);
+
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",

@@ -74,6 +74,43 @@ describe("OrchestratorLedger durable coordination contract", () => {
     });
   });
 
+  it("enforces durable business idempotency across distinct GitHub delivery IDs", async () => {
+    const ledger = ledgerFor("ledger-github-business-idempotency");
+    const common = {
+      bodySha256: "a".repeat(64), eventName: "issues", receivedAt: now,
+      idempotencyKey: "repo:123:issues:labeled:issue:42:actor:7",
+      inputHash: "b".repeat(64),
+    };
+    const first = await ledger.claimGitHubDelivery({ ...common, deliveryId: "delivery-00000001" });
+    const replay = await ledger.claimGitHubDelivery({ ...common, deliveryId: "delivery-00000002" });
+    expect(first).toMatchObject({ claimed: true, replay: false });
+    expect(replay).toMatchObject({ claimed: false, replay: true, reason: "BUSINESS_REPLAY" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_github_business_idempotency").one().count).toBe(1);
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries").one().count).toBe(2);
+    });
+  });
+
+  it("quarantines a different semantic payload under an existing GitHub business key", async () => {
+    const ledger = ledgerFor("ledger-github-business-idempotency-conflict");
+    const common = {
+      bodySha256: "c".repeat(64), eventName: "issues", receivedAt: now,
+      idempotencyKey: "repo:123:issues:labeled:issue:42:actor:7",
+    };
+    const first = await ledger.claimGitHubDelivery({
+      ...common, deliveryId: "delivery-00000003", inputHash: "d".repeat(64),
+    });
+    const conflict = await ledger.claimGitHubDelivery({
+      ...common, deliveryId: "delivery-00000004", inputHash: "e".repeat(64),
+    });
+    expect(first).toMatchObject({ claimed: true });
+    expect(conflict).toMatchObject({ claimed: false, replay: false, conflict: true, reason: "BUSINESS_IDEMPOTENCY_CONFLICT" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_github_business_idempotency").one().count).toBe(1);
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries").one().count).toBe(2);
+    });
+  });
+
   it("creates a task once and replays the original task for the same idempotency key and input hash", async () => {
     const ledger = ledgerFor("ledger-task-idempotency");
     const first = await createTask(ledger, { task: task(), idempotencyKey: "task-create-0001", inputHash: "b".repeat(64), now });

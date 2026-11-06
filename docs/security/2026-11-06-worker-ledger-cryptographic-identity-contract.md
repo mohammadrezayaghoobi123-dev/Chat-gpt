@@ -73,6 +73,9 @@ If Web Crypto verification is asynchronous, the implementation must not split au
 
 | Operation | Allowed role | Subject binding |
 |---|---|---|
+| `createTask` | `system` | assertion sub = fixed `orchestrator-scheduler` principal |
+| Operation | Allowed role | Subject binding |
+|---|---|---|
 | `claimTask` | `agent` | assertion sub = workerId |
 | `renewLease` | `agent` | assertion sub = workerId |
 | `releaseLease` | `agent` | assertion sub = workerId |

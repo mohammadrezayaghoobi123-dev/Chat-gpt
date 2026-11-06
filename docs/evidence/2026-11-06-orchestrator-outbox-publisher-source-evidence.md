@@ -102,3 +102,22 @@ This refresh supersedes the earlier CI identifiers and Node test count in this s
 - `post-deploy-staging-smoke` was skipped. These results are source/CI evidence only; live Queue, Durable Object bindings, signer configuration, Staging end-to-end delivery, and Production remain unverified.
 
 **Release decision remains NO-GO.**
+
+
+## Queue activation configuration and release gates — 2026-11-06 20:02 UTC
+
+- Current source HEAD: `569921f48eb13b1338d6928db145cd22542134b2`.
+- `wrangler.toml` now declares separate Producer and Consumer bindings for Production and Staging. The Queue names are `chat-gpt111-orchestrator-outbox` and `chat-gpt111-staging-orchestrator-outbox`; each Consumer uses a dedicated environment-specific DLQ.
+- Queue delivery is bounded: batch size 5, max concurrency 5, max retries 5, retry delay 30 seconds, batch timeout 5 seconds. The primary queues are preflighted before release; the release workflow verifies the deployed consumer attachment, retry settings, and DLQ after deployment. Cloudflare creates a referenced DLQ if it does not already exist when the consumer is configured.
+- Production release preflight requires both Production and Staging primary Queue resources to exist. Production post-deploy verification checks that both Queue/DLQ pairs and consumer configurations are present and isolated.
+- Cloud Engineering Connector CI #42284792185: success. Node tests: 381 passed, 0 failed. Durable Object tests: 6 files, 100 passed, 0 failed. JavaScript syntax checks and Wrangler Production/Staging dry-runs: success.
+- Full History Secret Scan #42284792176: success. Orchestrator GitHub Intake Contract #42284792243: success.
+- Post-deploy Staging smoke: skipped; no runtime deployment was performed by PR CI.
+
+### Live runtime recheck (read-only)
+
+- Cloudflare account Queue inventory returned zero Queues.
+- Staging Worker binding inventory still lacks `KNOWLEDGE_STORE`, `ORCHESTRATOR_LEDGER`, `ORCHESTRATOR_OUTBOX_QUEUE`, `LEDGER_WORKER_ASSERTION_KEYS`, and `LEDGER_WORKER_ASSERTION_ACTIVE_KID`; only the earlier `WRITE_CONTROL` namespace is present among the Durable Object bindings inspected.
+- No resource was created, modified, deployed, or deleted. No secret value was read.
+
+**Release decision remains NO-GO.** Source configuration and release gates are CI-verified; Queue provisioning, Staging signer configuration, Durable Object activation/migration, live delivery/recovery, and Production remain unverified.

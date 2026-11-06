@@ -21,6 +21,7 @@ assert.equal(readinessBody.status, "ready");
 assert.equal(readinessBody.durable_objects, "ok", "readyz must execute the Durable Object SQLite schema probe");
 assert.equal(readinessBody.knowledge_store, "ok", "readyz must prove the KnowledgeStore SQLite schema is ready");
 assert.equal(readinessBody.orchestrator_ledger, "ok", "readyz must prove the independent OrchestratorLedger SQLite schema is ready");
+assert.equal(readinessBody.orchestrator_outbox_dlq_archiver, "ok", "readyz must prove DLQ archive routing is configured");
 console.log("PASS: Worker liveness, Durable Object readiness, and security headers");
 for (const [header, expected] of [
   ["x-content-type-options", "nosniff"],

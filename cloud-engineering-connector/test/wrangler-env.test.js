@@ -85,19 +85,18 @@ test("Production and Staging both declare the five-minute reconciliation Cron", 
 test("Production and Staging bind isolated Orchestrator Outbox Queues with bounded retries and DLQs", () => {
   const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
   const sections = [
-    { name: "Production", text: production, queue: "chat-gpt111-orchestrator-outbox", dlq: "chat-gpt111-orchestrator-outbox-dlq", prefix: "" },
-    { name: "Staging", text: staging, queue: "chat-gpt111-staging-orchestrator-outbox", dlq: "chat-gpt111-staging-orchestrator-outbox-dlq", prefix: "env.staging." },
+    { text: production, queue: "chat-gpt111-orchestrator-outbox", dlq: "chat-gpt111-orchestrator-outbox-dlq", producer: "[[queues.producers]]", consumer: "[[queues.consumers]]" },
+    { text: staging, queue: "chat-gpt111-staging-orchestrator-outbox", dlq: "chat-gpt111-staging-orchestrator-outbox-dlq", producer: "[[env.staging.queues.producers]]", consumer: "[[env.staging.queues.consumers]]" },
   ];
   for (const section of sections) {
-    assert.match(section.text, new RegExp("\\[\\[" + section.prefix.replaceAll(".", "\\\\.") + "queues\\.producers\\]\\]"));
-    assert.match(section.text, new RegExp('binding\\s*=\\s*"ORCHESTRATOR_OUTBOX_QUEUE"'));
-    assert.match(section.text, new RegExp('queue\\s*=\\s*"' + section.queue + '"'));
-    assert.match(section.text, new RegExp("\\[\\[" + section.prefix.replaceAll(".", "\\\\.") + "queues\\.consumers\\]\\]"));
-    assert.match(section.text, new RegExp('queue\\s*=\\s*"' + section.queue + '"'));
+    assert.ok(section.text.includes(section.producer));
+    assert.ok(section.text.includes(section.consumer));
+    assert.ok(section.text.includes('binding = "ORCHESTRATOR_OUTBOX_QUEUE"'));
+    assert.ok(section.text.includes('queue = "' + section.queue + '"'));
     assert.match(section.text, /max_batch_size\s*=\s*5/);
     assert.match(section.text, /max_concurrency\s*=\s*5/);
     assert.match(section.text, /max_retries\s*=\s*5/);
-    assert.match(section.text, new RegExp('dead_letter_queue\\s*=\\s*"' + section.dlq + '"'));
+    assert.ok(section.text.includes('dead_letter_queue = "' + section.dlq + '"'));
     assert.match(section.text, /retry_delay\s*=\s*30/);
   }
   assert.notEqual(sections[0].queue, sections[1].queue);

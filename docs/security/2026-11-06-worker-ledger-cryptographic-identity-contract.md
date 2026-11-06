@@ -80,6 +80,7 @@ If Web Crypto verification is asynchronous, the implementation must not split au
 | `advanceAgentRound` | `agent` | assertion sub = workerId |
 | `claimOutbox` | `publisher`, `system` | assertion sub = workerId |
 | `completeOutbox` | `publisher`, `system` | assertion sub = workerId |
+| `enqueueOutbox` | `agent` | assertion sub = workerId; consumed atomically with enqueue |
 | `appendAuditEvent` | `agent` | assertion sub = workerId = actor.id; actor role is derived from the assertion |
 | `recordMessage` | `agent` | assertion sub = workerId = envelope.senderId |
 | `appendAuditEvent` | Explicit actor policy only | assertion sub = actor.id |
@@ -94,7 +95,7 @@ Read-only methods do not gain write authority by possessing a worker assertion. 
 - `appendAuditEvent` accepts only a verified `agent` assertion in the current implementation; caller-provided `owner`, `reviewer`, or `system` actor labels do not grant audit authority.
 - Remove `authenticated` and `identityVerified` as authorization inputs.
 - Reject legacy object-shaped identity values, even if both booleans are true.
-- Ensure all lease mutations, `claimOutbox`, `completeOutbox`, message acceptance, and audit append paths use the same verifier contract. Keep `enqueueOutbox` internal to already-authorized transactions or add an explicit trusted system operation; it must not become an unauthenticated public mutation.
+- Ensure all lease mutations, direct `enqueueOutbox`, `claimOutbox`, `completeOutbox`, message acceptance, and audit append paths use the same verifier contract. Keep `enqueueOutbox` internal to already-authorized transactions or add an explicit trusted system operation; it must not become an unauthenticated public mutation.
 - Do not add a fallback mode that accepts legacy booleans when a secret is missing.
 - Do not introduce an environment default secret or a test secret into `wrangler.toml`.
 

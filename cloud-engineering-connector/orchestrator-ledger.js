@@ -794,6 +794,63 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
+  async failOutbox({ eventId, workerId, workerAssertion, leaseGeneration, retryable = true, errorCode, now }) {
+    identifier(eventId, "eventId");
+    identifier(workerId, "workerId");
+    timestamp(now);
+    if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) {
+      throw fail("leaseGeneration must be positive.");
+    }
+    if (typeof retryable !== "boolean" || typeof errorCode !== "string" ||
+        !/^[A-Z0-9_]{1,64}$/.test(errorCode)) {
+      throw fail("retryable and errorCode are invalid.");
+    }
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "publisher", operation: "failOutbox", nowMs: now,
+      });
+    } catch {
+      return { failed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
+    const sql = this.ctx.storage.sql;
+    return this.ctx.storage.transactionSync(() => {
+      const row = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", eventId).toArray()[0];
+      if (!row || row.status !== "IN_PROGRESS" || row.lease_worker_id !== workerId ||
+          row.lease_generation !== leaseGeneration || row.lease_until <= now) {
+        return { failed: false, reason: "LEASE_FENCE_MISMATCH" };
+      }
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { failed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      const deadLettered = !retryable || row.attempts >= MAX_OUTBOX_ATTEMPTS;
+      const retryScheduled = !deadLettered;
+      const delay = retryScheduled
+        ? Math.min(OUTBOX_RETRY_MAX_MS, OUTBOX_RETRY_BASE_MS * (2 ** Math.max(0, row.attempts - 1)))
+        : 0;
+      const nextAttemptAt = retryScheduled ? now + delay : 0;
+      sql.exec(
+        "UPDATE orchestrator_outbox_events SET status = 'PENDING', retry_state = ?, next_attempt_at = ?, last_error_code = ?, dead_lettered_at = ?, lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND status = 'IN_PROGRESS' AND lease_worker_id = ? AND lease_generation = ?",
+        deadLettered ? "DEAD_LETTER" : "RETRY_WAIT",
+        nextAttemptAt,
+        errorCode,
+        deadLettered ? now : null,
+        now,
+        eventId,
+        workerId,
+        leaseGeneration,
+      );
+      const updated = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", eventId).toArray()[0];
+      return {
+        failed: true,
+        retryScheduled,
+        deadLettered,
+        nextAttemptAt: retryScheduled ? nextAttemptAt : null,
+        event: outboxFromRow(updated),
+      };
+    });
+  }
+
   async completeOutbox({ eventId, workerId, workerAssertion, leaseGeneration, now }) {
     identifier(eventId, "eventId");
     identifier(workerId, "workerId");

@@ -110,6 +110,6 @@ test("Production and Staging declare isolated DLQ consumers and queue routing na
   assert.match(production, /ORCHESTRATOR_OUTBOX_DLQ_QUEUE = "chat-gpt111-orchestrator-outbox-dlq"/);
   assert.match(staging, /ORCHESTRATOR_OUTBOX_QUEUE_NAME = "chat-gpt111-staging-orchestrator-outbox"/);
   assert.match(staging, /ORCHESTRATOR_OUTBOX_DLQ_QUEUE = "chat-gpt111-staging-orchestrator-outbox-dlq"/);
-  assert.match(production, /\[\[queues\.consumers\]\]\s*\nqueue = "chat-gpt111-orchestrator-outbox-dlq"[\s\S]*?max_retries = 100[\s\S]*?retry_delay = 60/);
-  assert.match(staging, /\[\[env\.staging\.queues\.consumers\]\]\s*\nqueue = "chat-gpt111-staging-orchestrator-outbox-dlq"[\s\S]*?max_retries = 100[\s\S]*?retry_delay = 60/);
+  assert.match(production, /\[\[queues\.consumers\]\]\s*\nqueue = "chat-gpt111-orchestrator-outbox-dlq"[\s\S]*?max_retries = 100[\s\S]*?retry_delay = 3600/);
+  assert.match(staging, /\[\[env\.staging\.queues\.consumers\]\]\s*\nqueue = "chat-gpt111-staging-orchestrator-outbox-dlq"[\s\S]*?max_retries = 100[\s\S]*?retry_delay = 3600/);
 });

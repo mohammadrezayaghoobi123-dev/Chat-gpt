@@ -760,29 +760,37 @@ export class OrchestratorLedger extends DurableObject {
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      const rows = sql.exec(
-        "SELECT * FROM orchestrator_outbox_events WHERE status = 'PENDING' OR (status = 'IN_PROGRESS' AND lease_until <= ?) ORDER BY created_at LIMIT 100",
-        now,
-      ).toArray();
-      for (const row of rows) {
-        if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
-        const reclaimed = row.status === "IN_PROGRESS";
-        const generation = row.lease_generation + 1;
-        sql.exec(
-          "UPDATE orchestrator_outbox_events SET status = 'IN_PROGRESS', attempts = attempts + 1, lease_worker_id = ?, lease_generation = ?, lease_until = ?, updated_at = ? WHERE event_id = ? AND lease_generation = ?",
-          workerId, generation, now + leaseMs, now, row.event_id, row.lease_generation,
-        );
-        const updated = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", row.event_id).toArray()[0];
-        return {
-          claimed: true,
-          event: outboxFromRow(updated),
-          workerId,
-          leaseGeneration: generation,
-          leaseUntil: now + leaseMs,
-          reconciliationRequired: reclaimed,
-        };
+      const row = sql.exec(
+        "SELECT * FROM orchestrator_outbox_events WHERE (status = 'PENDING' AND retry_state != 'DEAD_LETTER' AND next_attempt_at <= ?) OR (status = 'IN_PROGRESS' AND lease_until <= ?) ORDER BY created_at LIMIT 1",
+        now, now,
+      ).toArray()[0];
+      if (!row) return { claimed: false, reason: "NO_OUTBOX_AVAILABLE" };
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
-      return { claimed: false, reason: "NO_OUTBOX_AVAILABLE" };
+      if (row.attempts >= MAX_OUTBOX_ATTEMPTS) {
+        sql.exec(
+          "UPDATE orchestrator_outbox_events SET retry_state = 'DEAD_LETTER', dead_lettered_at = ?, lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND lease_generation = ?",
+          now, now, row.event_id, row.lease_generation,
+        );
+        const deadLetter = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", row.event_id).toArray()[0];
+        return { claimed: false, deadLettered: true, reason: "OUTBOX_MAX_ATTEMPTS", event: outboxFromRow(deadLetter) };
+      }
+      const reclaimed = row.status === "IN_PROGRESS";
+      const generation = row.lease_generation + 1;
+      sql.exec(
+        "UPDATE orchestrator_outbox_events SET status = 'IN_PROGRESS', retry_state = 'READY', next_attempt_at = 0, attempts = attempts + 1, lease_worker_id = ?, lease_generation = ?, lease_until = ?, updated_at = ? WHERE event_id = ? AND lease_generation = ?",
+        workerId, generation, now + leaseMs, now, row.event_id, row.lease_generation,
+      );
+      const updated = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", row.event_id).toArray()[0];
+      return {
+        claimed: true,
+        event: outboxFromRow(updated),
+        workerId,
+        leaseGeneration: generation,
+        leaseUntil: now + leaseMs,
+        reconciliationRequired: reclaimed,
+      };
     });
   }
 

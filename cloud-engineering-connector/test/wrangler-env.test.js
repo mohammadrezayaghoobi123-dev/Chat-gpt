@@ -94,10 +94,10 @@ test("Production and Staging bind isolated Orchestrator Outbox Queues with bound
     assert.match(section.text, new RegExp('queue\\s*=\\s*"' + section.queue + '"'));
     assert.match(section.text, new RegExp("\\[\\[" + section.prefix.replaceAll(".", "\\\\.") + "queues\\.consumers\\]\\]"));
     assert.match(section.text, new RegExp('queue\\s*=\\s*"' + section.queue + '"'));
-    assert.match(section.text, /max_batch_size\\s*=\\s*5/);
-    assert.match(section.text, /max_retries\\s*=\\s*5/);
+    assert.match(section.text, /max_batch_size\s*=\s*5/);
+    assert.match(section.text, /max_retries\s*=\s*5/);
     assert.match(section.text, new RegExp('dead_letter_queue\\s*=\\s*"' + section.dlq + '"'));
-    assert.match(section.text, /retry_delay\\s*=\\s*30/);
+    assert.match(section.text, /retry_delay\s*=\s*30/);
   }
   assert.notEqual(sections[0].queue, sections[1].queue);
   assert.notEqual(sections[0].dlq, sections[1].dlq);

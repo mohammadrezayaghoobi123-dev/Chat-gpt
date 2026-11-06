@@ -75,6 +75,15 @@ describe("GitHub webhook Worker route", () => {
     expect(replay.status).toBe(202);
     await expect(replay.json()).resolves.toMatchObject({ status: "duplicate", deliveryId });
 
+    const distinctDeliveryReplay = await worker.fetch(
+      await signedRequest(body, "gh-worker-delivery-0002"), testEnv(),
+    );
+    expect(distinctDeliveryReplay.status).toBe(202);
+    await expect(distinctDeliveryReplay.json()).resolves.toMatchObject({
+      status: "duplicate",
+      deliveryId: "gh-worker-delivery-0002",
+    });
+
     const changedBody = JSON.stringify(payload({
       issue: { ...payload().issue, title: "Changed signed payload" },
     }));

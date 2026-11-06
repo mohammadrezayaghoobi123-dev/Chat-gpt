@@ -88,7 +88,7 @@ test("Staging release verifies the OrchestratorLedger binding after applying the
 
 test("Staging release preflights its Queue resource and verifies the deployed consumer retry/DLQ contract", () => {
   const release = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
-  assert.match(release, /\/queues\\?per_page=100&page=/);
+  assert.match(release, /\/queues\?per_page=100&page=/);
   assert.match(release, /chat-gpt111-staging-orchestrator-outbox/);
   assert.match(release, /chat-gpt111-staging-orchestrator-outbox-dlq/);
   assert.match(release, /consumer\.settings\?\.batch_size, 5/);

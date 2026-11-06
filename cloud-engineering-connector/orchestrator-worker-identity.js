@@ -80,3 +80,52 @@ export async function verifyWorkerAssertion(keySet, token, expected) {
     throw reject();
   }
 }
+
+const SCHEDULED_SIGNER_POLICY = Object.freeze({
+  "orchestrator-scheduler": Object.freeze({ system: Object.freeze(["createTask"]) }),
+  "orchestrator-outbox-publisher": Object.freeze({
+    publisher: Object.freeze(["claimOutbox", "failOutbox", "completeOutbox"]),
+  }),
+});
+
+function encodeBase64Url(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/=/g, "").replace(/\\+/g, "-").replace(/\\//g, "_");
+}
+
+/**
+ * Mint assertions only for fixed principals whose authority comes from the
+ * Cloudflare scheduled-event execution path. This deliberately cannot mint
+ * agent assertions from MCP arguments or webhook payloads.
+ */
+export async function createScheduledWorkerAssertion(keySet, activeKid, expected) {
+  try {
+    if (!expected || !Number.isSafeInteger(expected.nowMs) || expected.nowMs < 1 ||
+        !ID.test(expected.subject) || !ID.test(expected.operation) || !KID.test(activeKid)) {
+      throw reject();
+    }
+    const permittedOperations = SCHEDULED_SIGNER_POLICY[expected.subject]?.[expected.role];
+    if (!permittedOperations || !permittedOperations.includes(expected.operation)) throw reject();
+    const keyBytes = loadKey(keySet, activeKid);
+    const issuedAt = Math.floor(expected.nowMs / 1000);
+    const claims = {
+      v: 1,
+      iss: ISSUER,
+      aud: AUDIENCE,
+      sub: expected.subject,
+      role: expected.role,
+      op: expected.operation,
+      iat: issuedAt,
+      exp: issuedAt + MAX_LIFETIME_SECONDS,
+      jti: "jti-" + encodeBase64Url(crypto.getRandomValues(new Uint8Array(16))),
+    };
+    const payload = encodeBase64Url(new TextEncoder().encode(canonicalJson(claims)));
+    const signingInput = "v1." + activeKid + "." + payload;
+    const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signingInput)));
+    return signingInput + "." + encodeBase64Url(signature);
+  } catch {
+    throw reject();
+  }
+}

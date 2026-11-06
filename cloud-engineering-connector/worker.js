@@ -1219,6 +1219,10 @@ export async function consumeOrchestratorOutbox(batch, env) {
    const receipt = await stub.recordOutboxReceipt({
     eventId: body.eventId,
     eventType: body.eventType,
+    idempotencyKey: body.idempotencyKey,
+    taskId: body.taskId,
+    payload: body.payload,
+    createdAt: body.createdAt,
     schemaVersion: body.schemaVersion,
     envelopeSha256: await sha256Hex(stableStringify(body)),
     consumerId,

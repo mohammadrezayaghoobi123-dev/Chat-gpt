@@ -111,10 +111,22 @@ jobs:
             return body.result?.settings || {};
           }
           async function queueInventory() {
-            const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/queues?per_page=100`, {
-              headers: { authorization: `Bearer ${token}`, accept: "application/json" },
-              signal: AbortSignal.timeout(15000),
-            });
+            const queues = [];
+            for (let page = 1; page <= 1000; page += 1) {
+              const url = `https://api.cloudflare.com/client/v4/accounts/${account}/queues?per_page=100&page=${page}`;
+              const response = await fetch(url, {
+                headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+                signal: AbortSignal.timeout(15000),
+              });
+              const body = await response.json();
+              assert.equal(response.ok && body.success, true, "Cloudflare Queue inventory failed: HTTP " + response.status);
+              queues.push(...(body.result || []));
+              const totalPages = Number(body.result_info?.total_pages ?? 1);
+              assert.ok(Number.isSafeInteger(totalPages) && totalPages >= 1 && totalPages <= 1000, "Cloudflare Queue pagination metadata is invalid");
+              if (page >= totalPages) return queues;
+            }
+            throw new Error("Cloudflare Queue inventory exceeded the 1000-page safety limit");
+          });
             const body = await response.json();
             assert.equal(response.ok && body.success, true, `Cloudflare Queue inventory preflight failed: HTTP ${response.status}`);
             return body.result || [];
@@ -186,10 +198,22 @@ jobs:
             return body.result;
           }
           async function queueInventory() {
-            const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/queues?per_page=100`, {
-              headers: { authorization: "Bearer " + token, accept: "application/json" },
-              signal: AbortSignal.timeout(15000),
-            });
+            const queues = [];
+            for (let page = 1; page <= 1000; page += 1) {
+              const url = `https://api.cloudflare.com/client/v4/accounts/${account}/queues?per_page=100&page=${page}`;
+              const response = await fetch(url, {
+                headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+                signal: AbortSignal.timeout(15000),
+              });
+              const body = await response.json();
+              assert.equal(response.ok && body.success, true, "Cloudflare Queue inventory failed: HTTP " + response.status);
+              queues.push(...(body.result || []));
+              const totalPages = Number(body.result_info?.total_pages ?? 1);
+              assert.ok(Number.isSafeInteger(totalPages) && totalPages >= 1 && totalPages <= 1000, "Cloudflare Queue pagination metadata is invalid");
+              if (page >= totalPages) return queues;
+            }
+            throw new Error("Cloudflare Queue inventory exceeded the 1000-page safety limit");
+          });
             const body = await response.json();
             assert.equal(response.ok && body.success, true, "Cloudflare Queue verification failed: HTTP " + response.status);
             return body.result || [];

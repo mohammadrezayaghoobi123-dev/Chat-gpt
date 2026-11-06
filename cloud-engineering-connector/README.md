@@ -64,7 +64,7 @@ The repository source and a live Worker deployment are separate states. A GitHub
 - The same Worker has a dedicated DLQ consumer. It routes batches by the Cloudflare `MessageBatch.queue` name and fails closed for unknown queue names.
 - A DLQ message is acknowledged only after an authenticated, idempotent archive write to the environment's `OrchestratorLedger` Durable Object succeeds. The archive is keyed by source queue and Cloudflare message ID, stores a canonical SHA-256 digest and delivery metadata, and rejects conflicting replays.
 - Archive writes reject sensitive field names and records larger than 32 KiB. Logs contain aggregate counters and fixed reason codes, not message payloads or signing material.
-- Staging and Production have separate primary/DLQ queue names and independent Durable Object namespaces. Release verification checks that both DLQ consumers are attached with bounded concurrency and retry settings.
+- Staging and Production have separate primary/DLQ queue names and independent Durable Object namespaces. Release verification checks that both DLQ consumers are attached with bounded concurrency and a one-hour retry delay on archive failures.
 - The Durable Object archive is durable application storage, not an off-account backup. A user-facing/operator redrive workflow, retention/compaction policy, and independent off-platform backup are not yet implemented. Do not claim complete disaster recovery or Production readiness until those controls and live failure-injection tests are accepted.
 - If the archive Durable Object is unavailable, the DLQ consumer retries instead of acknowledging the message. Cloudflare's queue retention and retry limits still apply; monitor the DLQ backlog and archive error counters.
 

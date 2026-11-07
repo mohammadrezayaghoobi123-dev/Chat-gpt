@@ -146,6 +146,71 @@ describe("OrchestratorLedger durable coordination contract", () => {
     expect(results.find(result => result.claimed).leaseGeneration).toBe(1);
   });
 
+  it("continues to later tasks when an earlier task has an expired lease requiring reconciliation", async () => {
+    const ledger = ledgerFor("ledger-claim-skip-expired-lease");
+    await createTask(ledger, {
+      task: task("task-expired-first"), idempotencyKey: "claim-skip-expired-first",
+      inputHash: "a".repeat(64), now,
+    });
+    const first = await ledger.claimTask({
+      workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"),
+      leaseMs: 100, now,
+    });
+    expect(first).toMatchObject({ claimed: true, task: { taskId: "task-expired-first" } });
+    await createTask(ledger, {
+      task: { ...task("task-claim-second"), createdAt: now + 1, updatedAt: now + 1 },
+      idempotencyKey: "claim-skip-expired-second", inputHash: "b".repeat(64), now: now + 1,
+    });
+
+    const result = await ledger.claimTask({
+      workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101),
+      leaseMs: 30_000, now: now + 101,
+    });
+    expect(result).toMatchObject({ claimed: true, task: { taskId: "task-claim-second" }, leaseGeneration: 1 });
+    await expect(ledger.getTask({ taskId: "task-expired-first" })).resolves.toMatchObject({
+      state: "SCHEDULED", version: 1,
+    });
+  });
+
+  it("filters the bounded task scan by executor before applying its limit", async () => {
+    const ledger = ledgerFor("ledger-claim-filter-before-limit");
+    for (let index = 0; index < 100; index += 1) {
+      const createdAt = now + index;
+      const suffix = String(index).padStart(3, "0");
+      await createTask(ledger, {
+        task: {
+          ...task("task-other-" + suffix),
+          executorId: "agent:other",
+          createdAt,
+          updatedAt: createdAt,
+        },
+        idempotencyKey: "claim-scan-other-" + suffix,
+        inputHash: index.toString(16).padStart(64, "0"),
+        now: createdAt,
+      });
+    }
+    await createTask(ledger, {
+      task: {
+        ...task("task-worker-1-after-100"),
+        createdAt: now + 100,
+        updatedAt: now + 100,
+      },
+      idempotencyKey: "claim-scan-worker-1",
+      inputHash: "f".repeat(64),
+      now: now + 100,
+    });
+
+    const result = await ledger.claimTask({
+      workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101),
+      leaseMs: 30_000, now: now + 101,
+    });
+    expect(result).toMatchObject({
+      claimed: true,
+      task: { taskId: "task-worker-1-after-100" },
+      leaseGeneration: 1,
+    });
+  });
+
   it("rejects stale lease generations on renew, release, and worker-driven state transitions", async () => {
     const ledger = ledgerFor("ledger-stale-fence");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0004", inputHash: "f".repeat(64), now });

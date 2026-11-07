@@ -609,7 +609,9 @@ it("prunes consumed assertion IDs only after expiry plus the retention margin", 
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti='jti-claim-retention-000000000001'").one().count).toBe(0);
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(1);
   });
-  it("rejects an expired lease even when its generation is still current", async () => {
+});
+
+it("rejects an expired lease even when its generation is still current", async () => {
     const ledger = ledgerFor("ledger-expired-current-generation");
     await createTask(ledger, {
       task: task(), idempotencyKey: "task-expired-current-generation", inputHash: "a".repeat(64), now,

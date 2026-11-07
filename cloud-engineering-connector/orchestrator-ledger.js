@@ -510,18 +510,15 @@ export class OrchestratorLedger extends DurableObject {
       return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
     }
     // Authenticate the sender before inspecting the untrusted message envelope.
-    let sensitivePayloadRejected = false;
+    // Any bounded-envelope rejection consumes the authenticated one-time assertion.
+    let payloadRejectionReason = null;
     let envelopeJson;
     try {
       serializeBounded(envelope, "message envelope");
     } catch (error) {
-      if (error?.code === "SENSITIVE_FIELD_REJECTED") {
-        sensitivePayloadRejected = true;
-      } else {
-        throw error;
-      }
+      payloadRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_MESSAGE";
     }
-    if (!sensitivePayloadRejected) {
+    if (!payloadRejectionReason) {
       const authenticatedSender = { id: verifiedAssertion.subject, authenticated: true, identityVerified: true };
       if (!envelope || typeof envelope !== "object" || envelope.senderId !== authenticatedSender.id) {
         return { accepted: false, reason: "SENDER_IDENTITY_MISMATCH" };
@@ -534,23 +531,19 @@ export class OrchestratorLedger extends DurableObject {
         validatedEnvelope = validateMessageEnvelope(envelope, { now, authenticatedSender });
       } catch (error) {
         if (error?.code === "SENSITIVE_FIELD_REJECTED") {
-          sensitivePayloadRejected = true;
+          payloadRejectionReason = error.code;
         } else {
           return { accepted: false, reason: typeof error?.code === "string" ? error.code : "INVALID_MESSAGE" };
         }
       }
-      if (!sensitivePayloadRejected && validatedEnvelope.inputHash !== inputHash) {
+      if (!payloadRejectionReason && validatedEnvelope.inputHash !== inputHash) {
         return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
       }
-      if (!sensitivePayloadRejected) {
+      if (!payloadRejectionReason) {
         try {
           envelopeJson = serializeBounded(validatedEnvelope, "validated message envelope");
         } catch (error) {
-          if (error?.code === "SENSITIVE_FIELD_REJECTED") {
-            sensitivePayloadRejected = true;
-          } else {
-            throw error;
-          }
+          payloadRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_MESSAGE";
         }
       }
     }
@@ -559,8 +552,8 @@ export class OrchestratorLedger extends DurableObject {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
       }
-      if (sensitivePayloadRejected) {
-        return { accepted: false, reason: "SENSITIVE_FIELD_REJECTED" };
+      if (payloadRejectionReason) {
+        return { accepted: false, reason: payloadRejectionReason };
       }
       const task = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
       if (!task) return { accepted: false, reason: "TASK_NOT_FOUND" };

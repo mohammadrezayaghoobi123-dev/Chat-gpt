@@ -39,6 +39,44 @@ const env={ORCHESTRATOR_LEDGER:orchestratorLedger.binding,ORCHESTRATOR_OUTBOX_QU
 const req=(path,options={})=>{const headers=new Headers(options.headers);if(!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
 const rpc=(method,params={},id=1)=>{if(method==="tools/call"&&params.name==="create_change_pr"&&params.arguments&&!params.arguments.idempotency_key)params={...params,arguments:{...params.arguments,idempotency_key:"worker-test-idempotency-key-"+String(++idempotencyCounter).padStart(8,"0")}};return req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})})};
 const anonymousRpc=(method,params={},id=1)=>{const request=rpc(method,params,id);const headers=new Headers(request.headers);headers.delete("authorization");return new Request(request,{headers})};
+test("MCP tool calls emit privacy-safe structured outcome, principal, duration, and inference-usage availability", async () => {
+  const lines = [];
+  const originalLog = console.log;
+  try {
+    console.log = (...args) => lines.push(args.join(" "));
+    const response = await worker.fetch(rpc("tools/call", {
+      name: "engineering_standards", arguments: {}
+    }, 981), env);
+    assert.equal(response.status, 200);
+  } finally {
+    console.log = originalLog;
+  }
+  const event = lines.map(line => { try { return JSON.parse(line); } catch { return null; } })
+    .find(value => value?.event === "mcp_tool_call");
+  assert.ok(event, "a structured tool outcome event must be emitted");
+  assert.equal(event.tool_name, "engineering_standards");
+  assert.equal(event.outcome, "success");
+  assert.equal(event.principal_type, "shared_bearer");
+  assert.equal(typeof event.duration_ms, "number");
+  assert.ok(event.duration_ms >= 0);
+  assert.deepEqual(event.model_usage, {
+    available: false,
+    source: "client_side_inference",
+    input_tokens: null,
+    output_tokens: null,
+    total_tokens: null
+  });
+  assert.equal(JSON.stringify(event).includes(env.MCP_AUTH_TOKEN), false);
+});
+
+test("readyz explicitly identifies model inference as client-side and does not require a Worker AI binding", async () => {
+  const response = await worker.fetch(req("/readyz"), env);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.model_inference, "external_client");
+  assert.equal(body.ai_binding, "not_required");
+});
+
 test("healthz is a liveness endpoint independent of credentials and Durable Object availability",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.service,"cloud-engineering-connector");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers");assert.equal(Object.hasOwn(b,"durable_objects"),false);assert.equal(Object.hasOwn(b,"mcp"),false)});
 test("readyz reports Durable Object schema readiness using the lightweight ping",async()=>{const r=await worker.fetch(req("/readyz"),env);assert.equal(r.status,200,JSON.stringify(await r.clone().json()));const b=await r.json();assert.equal(b.status,"ready");assert.equal(b.durable_objects,"ok");assert.equal(env.WRITE_CONTROL.__test.events.some(event=>event.type==="ping"),true);assert.equal(b.knowledge_store,"ok");assert.equal(knowledgeStore.calls.some(call=>call.method==="ping"),true);assert.equal(b.orchestrator_ledger,"ok");assert.equal(b.orchestrator_outbox_publisher,"ok");assert.equal(orchestratorLedger.calls.some(call=>call.method==="ping"),true)});
 test("readyz fails closed when the Orchestrator outbox Queue binding is unavailable",async()=>{

@@ -4,6 +4,7 @@ import { verifyReleaseApproval } from "../release-approval.js";
 
 const sha = "a".repeat(40);
 const headSha = "b".repeat(40);
+const baseSha = "c".repeat(40);
 const author = "candidate-author";
 const reviewer = "independent-reviewer";
 const repo = "mohammadrezayaghoobi123-dev/Chat-gpt";
@@ -21,7 +22,9 @@ function stagingPull(overrides = {}) {
     html_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/129",
     user: { login: author },
     head: { sha },
-    base: { ref: "integration/unify-main-and-integrated-2026-11-02" },
+    base: { ref: "integration/unify-main-and-integrated-2026-11-02", sha: baseSha },
+    mergeable: true,
+    mergeable_state: "clean",
     ...overrides,
   };
 }
@@ -35,11 +38,22 @@ function approval(commitId = sha, login = reviewer, state = "APPROVED", submitte
   };
 }
 
-function fakeFetch(pulls, reviews, onRequest = () => {}) {
+function fakeFetch(
+  pulls,
+  reviews,
+  onRequest = () => {},
+  compareResult = { behind_by: 0, merge_base_commit: { sha: baseSha } },
+) {
   return async (url, options) => {
-    onRequest(String(url), options);
-    if (String(url).includes("/commits/")) return response(pulls);
-    if (String(url).includes("/reviews?")) return response(reviews);
+    const value = String(url);
+    onRequest(value, options);
+    if (value.includes("/git/ref/heads/")) return response({ object: { sha: baseSha } });
+    if (value.includes("/compare/")) return response(compareResult);
+    if (value.endsWith("/pulls/129")) return response(pulls.find(pull => pull.number === 129) ?? pulls[0]);
+    if (value.includes("/commits/")) {
+      return response(pulls.map(({ mergeable, mergeable_state, ...pull }) => pull));
+    }
+    if (value.includes("/reviews?")) return response(reviews);
     return response({ message: "not found" }, 404);
   };
 }
@@ -76,6 +90,39 @@ test("Staging rejects draft or wrong-head PRs before checking reviews", async ()
       fetchImpl: fakeFetch([stagingPull({ head: { sha: headSha } })], [approval()]),
     }),
     /open, non-draft PR/,
+  );
+});
+
+
+test("Staging rejects non-mergeable or behind candidates before checking reviews", async () => {
+  for (const pull of [
+    stagingPull({ mergeable: false, mergeable_state: "dirty" }),
+    stagingPull({ mergeable: true, mergeable_state: "behind" }),
+    stagingPull({ mergeable: null, mergeable_state: "unknown" }),
+  ]) {
+    await assert.rejects(
+      verifyReleaseApproval({
+        ...input({}),
+        fetchImpl: fakeFetch([pull], [approval()]),
+      }),
+      /mergeable, current-base PR/,
+    );
+  }
+});
+
+
+test("Staging rejects a candidate whose head does not descend from the current integration head", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch(
+        [stagingPull()],
+        [approval()],
+        undefined,
+        { behind_by: 1, merge_base_commit: { sha: "d".repeat(40) } },
+      ),
+    }),
+    /current integration head/,
   );
 });
 
@@ -119,7 +166,7 @@ test("Staging uses a scoped GitHub token and never places it in the URL", async 
       assert.equal(options.headers.authorization, "Bearer " + token);
     }),
   });
-  assert.equal(urls.length, 2);
+  assert.equal(urls.length, 5);
   assert.ok(urls.every(url => !url.includes(token)));
 });
 
@@ -192,6 +239,13 @@ test("release approval paginates associated PRs and all reviews before accepting
   const fetchImpl = async (url, options) => {
     const parsed = new URL(String(url));
     requestedUrls.push(parsed.pathname + parsed.search);
+    if (parsed.pathname.endsWith("/git/ref/heads/integration/unify-main-and-integrated-2026-11-02")) {
+      return response({ object: { sha: baseSha } });
+    }
+    if (parsed.pathname.endsWith("/pulls/129")) return response(stagingPull());
+    if (parsed.pathname.includes("/compare/")) {
+      return response({ behind_by: 0, merge_base_commit: { sha: baseSha } });
+    }
     if (parsed.pathname.endsWith("/commits/" + sha + "/pulls")) {
       if (parsed.searchParams.get("page") === "1") return response(decoys);
       if (parsed.searchParams.get("page") === "2") return response([stagingPull()]);

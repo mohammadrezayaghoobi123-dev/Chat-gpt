@@ -130,11 +130,21 @@ export async function validateGitHubIntakeEvent({
   if (eventBytes > MAX_EVENT_BYTES) return fail("EVENT_TOO_LARGE");
   if (!issue.labels.some(label => label.name === config.requiredLabel)) return fail("REQUIRED_LABEL_MISSING");
 
-  const inputHash = await sha256({
-    eventName, eventAction, repository, repositoryId, actorId, occurredAt,
-    issue: { number: issue.number, title: issue.title, body: issue.body, labels: issue.labels },
-  });
-  const idempotencyKey = `${repositoryId}:issue:${issue.number}:actor:${actorId}`;
+  // Business identity is semantic: provider timestamps and delivery IDs are transport
+  // metadata and must not make an otherwise identical operation appear new.
+  const semanticInput = {
+    eventName, eventAction, repository, repositoryId, actorId,
+    // Only the policy-required label authorizes this operation. Other labels are
+    // mutable triage metadata and must not create a second business operation.
+    issue: {
+      number: issue.number,
+      title: issue.title,
+      body: issue.body,
+      requiredLabel: config.requiredLabel,
+    },
+  };
+  const inputHash = await sha256(semanticInput);
+  const idempotencyKey = `repo:${repositoryId}:${eventName}:${eventAction}:issue:${issue.number}:actor:${actorId}`;
   let claim;
   try {
     claim = await replayStore.claim({ deliveryId, idempotencyKey, inputHash });

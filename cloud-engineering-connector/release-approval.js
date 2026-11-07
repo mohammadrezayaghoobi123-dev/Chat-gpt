@@ -91,7 +91,7 @@ export async function verifyReleaseApproval({
   );
   if (!Array.isArray(associated)) throw new Error("GitHub returned an invalid associated-PR list.");
 
-  const pull = associated.find(item => {
+  let pull = associated.find(item => {
     if (!item || item.head?.sha === undefined || item.base?.ref === undefined) return false;
     if (releaseEnvironment === "staging") {
       return item.state === "open" &&
@@ -109,6 +109,45 @@ export async function verifyReleaseApproval({
       ? "an open, non-draft PR whose exact head is this SHA and whose base is the approved integration branch"
       : "a merged PR to main whose merge commit is this exact SHA";
     throw new Error("Release blocked: candidate must belong to " + requirement + ".");
+  }
+
+  if (releaseEnvironment === "staging") {
+    pull = await getJson(
+      fetchImpl,
+      API_ROOT + "/repos/" + repoPath + "/pulls/" + pull.number,
+      token,
+    );
+    if (
+      pull.state !== "open" ||
+      pull.draft !== false ||
+      pull.head?.sha !== candidateSha ||
+      pull.base?.ref !== STAGING_BASE
+    ) {
+      throw new Error("Release blocked: staging candidate must remain an open, non-draft PR for this exact head.");
+    }
+    if (pull.mergeable !== true || pull.mergeable_state !== "clean") {
+      throw new Error("Release blocked: staging candidate must be a mergeable, current-base PR.");
+    }
+    const currentBase = await getJson(
+      fetchImpl,
+      API_ROOT + "/repos/" + repoPath + "/git/ref/heads/" + STAGING_BASE,
+      token,
+    );
+    const currentBaseSha = currentBase?.object?.sha;
+    if (typeof currentBaseSha !== "string") {
+      throw new Error("Release blocked: current integration head could not be verified.");
+    }
+    const comparison = await getJson(
+      fetchImpl,
+      API_ROOT + "/repos/" + repoPath + "/compare/" + currentBaseSha + "..." + candidateSha,
+      token,
+    );
+    if (
+      comparison?.behind_by !== 0 ||
+      comparison?.merge_base_commit?.sha !== currentBaseSha
+    ) {
+      throw new Error("Release blocked: staging candidate PR must descend from the current integration head.");
+    }
   }
 
   const reviewCommitSha = pull.head.sha;

@@ -2,11 +2,15 @@ import { DurableObject } from "cloudflare:workers";
 import { transitionTask as transitionTaskCore, TASK_STATES } from "./orchestrator-core.js";
 import { assertAgentRoundLimit } from "./orchestrator-protocol.js";
 import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orchestrator-protocol.js";
+import { verifyWorkerAssertion } from "./orchestrator-worker-identity.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const MAX_RECORD_BYTES = 32_768;
 const MAX_LEASE_MS = 86_400_000;
+const MAX_OUTBOX_ATTEMPTS = 8;
+const OUTBOX_RETRY_BASE_MS = 1_000;
+const OUTBOX_RETRY_MAX_MS = 900_000;
 const SECRET_FIELD = /(?:secret|token|password|credential|api[_-]?key|private[_-]?key)/i;
 
 function fail(message, code = "INVALID_INPUT") {
@@ -69,14 +73,46 @@ function validLeaseMs(value) {
   }
 }
 
-function hasVerifiedWorkerIdentity(worker, workerId, allowedRoles) {
-  return worker !== null && typeof worker === "object" && !Array.isArray(worker) &&
-    worker.authenticated === true && worker.identityVerified === true &&
-    worker.id === workerId && allowedRoles.includes(worker.role);
+
+function consumeWorkerAssertion(sql, assertion, nowMs) {
+  const nowSeconds = Math.floor(nowMs / 1000);
+  // Keep consumed IDs beyond expiry, clock skew, and an additional 10-minute margin.
+  sql.exec("DELETE FROM orchestrator_consumed_assertions WHERE expires_at < ?", nowSeconds - 600);
+  const existing = sql.exec(
+    "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
+    assertion.jti,
+  ).toArray()[0];
+  if (existing) return false;
+  sql.exec(
+    "INSERT INTO orchestrator_consumed_assertions (jti, subject, role, operation, key_id, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    assertion.jti, assertion.subject, assertion.role, assertion.operation,
+    assertion.kid, assertion.issuedAt, assertion.expiresAt, Math.floor(nowMs / 1000),
+  );
+  return true;
 }
 
 function taskFromRow(row) {
   return row ? parseJson(row.task_json, "task") : null;
+}
+
+function hasCurrentAgentLease(sql, taskRow, workerId, leaseGeneration, now) {
+  if (!taskRow || !Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) return false;
+  const task = taskFromRow(taskRow);
+  const assignedAgentId = task?.executorId ?? task?.assignedAgentId;
+  if (assignedAgentId !== workerId ||
+      !["SCHEDULED", "RUNNING", "VERIFYING"].includes(task?.state)) {
+    return false;
+  }
+  const lease = sql.exec(
+    "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+    taskRow.task_id,
+  ).toArray()[0];
+  return Boolean(
+    lease &&
+    lease.worker_id === workerId &&
+    lease.lease_generation === leaseGeneration &&
+    lease.lease_until > now
+  );
 }
 
 function outboxFromRow(row) {
@@ -94,6 +130,10 @@ function outboxFromRow(row) {
     leaseUntil: row.lease_until,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    retryState: row.retry_state ?? "READY",
+    nextAttemptAt: row.next_attempt_at ?? 0,
+    lastErrorCode: row.last_error_code ?? null,
+    deadLetteredAt: row.dead_lettered_at ?? null,
   };
 }
 
@@ -136,6 +176,7 @@ function enqueueOutboxInTransaction(sql, input) {
 export class OrchestratorLedger extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
+    this.env = env;
     this.ctx.blockConcurrencyWhile(async () => this.ensureSchema());
   }
 
@@ -192,6 +233,76 @@ export class OrchestratorLedger extends DurableObject {
       )
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_by_status ON orchestrator_outbox_events(status, created_at)");
+    const outboxColumns = sql.exec("PRAGMA table_info(orchestrator_outbox_events)").toArray().map(column => column.name);
+    if (!outboxColumns.includes("retry_state")) {
+      sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN retry_state TEXT NOT NULL DEFAULT 'READY' CHECK(retry_state IN ('READY','RETRY_WAIT','DEAD_LETTER'))");
+    }
+    if (!outboxColumns.includes("next_attempt_at")) {
+      sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0 CHECK(next_attempt_at >= 0)");
+    }
+    if (!outboxColumns.includes("last_error_code")) {
+      sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN last_error_code TEXT");
+    }
+    if (!outboxColumns.includes("dead_lettered_at")) {
+      sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN dead_lettered_at INTEGER");
+    }
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_retry_schedule ON orchestrator_outbox_events(status, retry_state, next_attempt_at, created_at)");
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_outbox_receipts (
+        event_id TEXT PRIMARY KEY,
+        event_type TEXT NOT NULL,
+        schema_version INTEGER NOT NULL CHECK(schema_version = 1),
+        envelope_sha256 TEXT NOT NULL CHECK(length(envelope_sha256) = 64),
+        consumer_id TEXT NOT NULL,
+        received_at INTEGER NOT NULL
+      )
+    `);
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_outbox_dead_letters (
+        source_queue TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        message_attempts INTEGER NOT NULL CHECK(message_attempts BETWEEN 1 AND 100),
+        message_timestamp INTEGER NOT NULL,
+        body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
+        body_json TEXT NOT NULL CHECK(json_valid(body_json)),
+        archived_at INTEGER NOT NULL,
+        PRIMARY KEY (source_queue, message_id)
+      )
+    `);
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_dead_letters_by_time ON orchestrator_outbox_dead_letters(archived_at)");
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_consumed_assertions (
+        jti TEXT PRIMARY KEY,
+        subject TEXT NOT NULL,
+        role TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        key_id TEXT NOT NULL,
+        issued_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at INTEGER NOT NULL
+      )
+    `);
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_consumed_assertions_by_expiry ON orchestrator_consumed_assertions(expires_at)");
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_github_webhook_deliveries (
+        delivery_id TEXT PRIMARY KEY,
+        body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
+        event_name TEXT NOT NULL,
+        received_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      )
+    `);
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_github_deliveries_by_expiry ON orchestrator_github_webhook_deliveries(expires_at)");
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_github_business_idempotency (
+        idempotency_key TEXT PRIMARY KEY,
+        input_hash TEXT NOT NULL CHECK(length(input_hash) = 64),
+        first_delivery_id TEXT NOT NULL,
+        first_seen_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      )
+    `);
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_github_business_idempotency_by_expiry ON orchestrator_github_business_idempotency(expires_at)");
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_audit_events (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -215,27 +326,119 @@ export class OrchestratorLedger extends DurableObject {
 
   ping() {
     const result = this.ctx.storage.sql.exec("SELECT 1 AS ok").one();
-    return { ok: Number(result.ok) === 1, schemaVersion: 1 };
+    return { ok: Number(result.ok) === 1, schemaVersion: 5 };
   }
 
-  createTask({ task, idempotencyKey, inputHash, now }) {
+  claimGitHubDelivery({ deliveryId, bodySha256, eventName, receivedAt, idempotencyKey, inputHash } = {}) {
+    const validDeliveryId = typeof deliveryId === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(deliveryId);
+    const validDigest = typeof bodySha256 === "string" && SHA256.test(bodySha256);
+    const validEvent = typeof eventName === "string" && /^[a-z_]{2,32}$/.test(eventName);
+    const hasBusinessKey = idempotencyKey !== undefined || inputHash !== undefined;
+    const validBusinessKey = !hasBusinessKey ||
+      (typeof idempotencyKey === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(idempotencyKey) &&
+       typeof inputHash === "string" && SHA256.test(inputHash));
+    if (!validDeliveryId || !validDigest || !validEvent || !validBusinessKey ||
+        !Number.isSafeInteger(receivedAt) || receivedAt < 1) {
+      return { claimed: false, replay: false, reason: "INVALID_DELIVERY" };
+    }
+
+    const sql = this.ctx.storage.sql;
+    const now = Date.now();
+    const expiresAt = now + 30 * 24 * 60 * 60 * 1000;
+    return this.ctx.storage.transactionSync(() => {
+      sql.exec(
+        "DELETE FROM orchestrator_github_webhook_deliveries WHERE delivery_id IN (SELECT delivery_id FROM orchestrator_github_webhook_deliveries WHERE expires_at <= ? ORDER BY expires_at LIMIT 500)",
+        now,
+      );
+      sql.exec(
+        "DELETE FROM orchestrator_github_business_idempotency WHERE idempotency_key IN (SELECT idempotency_key FROM orchestrator_github_business_idempotency WHERE expires_at <= ? ORDER BY expires_at LIMIT 500)",
+        now,
+      );
+      const existingDelivery = sql.exec(
+        "SELECT * FROM orchestrator_github_webhook_deliveries WHERE delivery_id = ?",
+        deliveryId,
+      ).toArray()[0];
+      if (existingDelivery) {
+        if (existingDelivery.body_sha256 === bodySha256 && existingDelivery.event_name === eventName) {
+          return { claimed: false, replay: true, deliveryId, bodySha256, reason: "DELIVERY_REPLAY" };
+        }
+        return { claimed: false, replay: false, conflict: true, reason: "DELIVERY_ID_CONFLICT" };
+      }
+
+      if (hasBusinessKey) {
+        const existingBusiness = sql.exec(
+          "SELECT * FROM orchestrator_github_business_idempotency WHERE idempotency_key = ?",
+          idempotencyKey,
+        ).toArray()[0];
+        if (existingBusiness) {
+          sql.exec(
+            "INSERT INTO orchestrator_github_webhook_deliveries (delivery_id, body_sha256, event_name, received_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+            deliveryId, bodySha256, eventName, receivedAt, expiresAt,
+          );
+          if (existingBusiness.input_hash === inputHash) {
+            return { claimed: false, replay: true, deliveryId, bodySha256, reason: "BUSINESS_REPLAY" };
+          }
+          return { claimed: false, replay: false, conflict: true, deliveryId, reason: "BUSINESS_IDEMPOTENCY_CONFLICT" };
+        }
+      }
+
+      sql.exec(
+        "INSERT INTO orchestrator_github_webhook_deliveries (delivery_id, body_sha256, event_name, received_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+        deliveryId, bodySha256, eventName, receivedAt, expiresAt,
+      );
+      if (hasBusinessKey) {
+        sql.exec(
+          "INSERT INTO orchestrator_github_business_idempotency (idempotency_key, input_hash, first_delivery_id, first_seen_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+          idempotencyKey, inputHash, deliveryId, receivedAt, expiresAt,
+        );
+      }
+      return { claimed: true, replay: false, deliveryId, bodySha256 };
+    });
+  }
+
+  async createTask({ task, idempotencyKey, inputHash, now, workerId, workerAssertion }) {
     identifier(idempotencyKey, "idempotencyKey");
     hash(inputHash, "inputHash");
     timestamp(now);
-    if (!task || typeof task !== "object" || Array.isArray(task)) throw fail("task must be an object.");
-    identifier(task.taskId, "taskId");
-    if (!TASK_STATES.includes(task.state) || !Number.isSafeInteger(task.version) || task.version < 1 ||
-        !Number.isSafeInteger(task.createdAt) || !Number.isSafeInteger(task.updatedAt) ||
-        task.createdAt < 1 || task.updatedAt < task.createdAt) {
-      throw fail("task projection is invalid.");
+    if (workerId !== "orchestrator-scheduler") {
+      return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
-    const normalizedTask = { ...task, agentRound: task.agentRound ?? 0 };
-    if (!Number.isSafeInteger(normalizedTask.agentRound) || normalizedTask.agentRound < 0 || normalizedTask.agentRound > 4) {
-      throw fail("agentRound must be an integer from zero through four.", "INVALID_AGENT_ROUND");
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: "orchestrator-scheduler", role: "system", operation: "createTask", nowMs: now,
+      });
+    } catch {
+      return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
-    const taskJson = serializeBounded(normalizedTask, "task");
+    let normalizedTask;
+    let taskJson;
+    let taskRejectionReason = null;
+    try {
+      if (!task || typeof task !== "object" || Array.isArray(task)) throw fail("task must be an object.");
+      identifier(task.taskId, "taskId");
+      if (!TASK_STATES.includes(task.state) || !Number.isSafeInteger(task.version) || task.version < 1 ||
+          !Number.isSafeInteger(task.createdAt) || !Number.isSafeInteger(task.updatedAt) ||
+          task.createdAt < 1 || task.updatedAt < task.createdAt) {
+        throw fail("task projection is invalid.");
+      }
+      normalizedTask = { ...task, agentRound: task.agentRound ?? 0 };
+      if (!Number.isSafeInteger(normalizedTask.agentRound) || normalizedTask.agentRound < 0 || normalizedTask.agentRound > 4) {
+        throw fail("agentRound must be an integer from zero through four.", "INVALID_AGENT_ROUND");
+      }
+      taskJson = serializeBounded(normalizedTask, "task");
+    } catch (error) {
+      taskRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_TASK";
+    }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      if (taskRejectionReason) {
+        return { created: false, reason: taskRejectionReason };
+      }
       const existing = sql.exec("SELECT * FROM orchestrator_tasks WHERE idempotency_key = ?", idempotencyKey).toArray()[0];
       if (existing) {
         if (existing.input_hash !== inputHash || existing.task_id !== normalizedTask.taskId) {
@@ -259,16 +462,36 @@ export class OrchestratorLedger extends DurableObject {
     return taskFromRow(row);
   }
 
-  transitionTask(input) {
+  async transitionTask(input) {
     if (!input || typeof input !== "object") throw fail("transition input must be an object.");
     const {
       taskId, expectedVersion, expectedState, nextState, actor, evidence, now,
-      workerId, authenticatedWorker, leaseGeneration, outboxEvent,
+      workerId, workerAssertion, leaseGeneration, outboxEvent,
     } = input;
     identifier(taskId, "taskId");
     timestamp(now);
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "agent", operation: "transitionTask", nowMs: now,
+      });
+    } catch {
+      return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
+    let normalizedOutboxInput = null;
+    let outboxRejectionReason = null;
+    if (outboxEvent !== undefined) {
+      try {
+        normalizedOutboxInput = validateOutboxInput({ ...outboxEvent, taskId, now });
+      } catch (error) {
+        outboxRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_OUTBOX_EVENT";
+      }
+    }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
       const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
       if (!row) return { updated: false, reason: "NOT_FOUND" };
       if (row.version !== expectedVersion || row.state !== expectedState) {
@@ -278,7 +501,6 @@ export class OrchestratorLedger extends DurableObject {
       // changing the self-declared actor role from "agent" to "owner"/"system".
       if (actor?.role !== "agent" || typeof workerId !== "string" ||
           workerId !== actor?.id ||
-          !hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"]) ||
           !Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
@@ -286,13 +508,27 @@ export class OrchestratorLedger extends DurableObject {
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
+      if (outboxRejectionReason) {
+        return { updated: false, reason: outboxRejectionReason };
+      }
       const current = taskFromRow(row);
-      const next = transitionTaskCore({
-        task: current, expectedVersion, nextState, actor, evidence, now,
-      });
+      let next;
+      let nextTaskJson;
+      try {
+        next = transitionTaskCore({
+          task: current, expectedVersion, nextState, actor, evidence, now,
+        });
+        nextTaskJson = serializeBounded(next, "task");
+      } catch (error) {
+        // The verified assertion has already been consumed in this transaction.
+        // Convert known domain/payload validation failures into a return value so
+        // the JTI consumption commits while task and outbox state remain unchanged.
+        if (typeof error?.code !== "string") throw error;
+        return { updated: false, reason: error.code };
+      }
       sql.exec(
         "UPDATE orchestrator_tasks SET state = ?, version = ?, task_json = ?, updated_at = ? WHERE task_id = ? AND version = ? AND state = ?",
-        next.state, next.version, serializeBounded(next, "task"), next.updatedAt, taskId, expectedVersion, expectedState,
+        next.state, next.version, nextTaskJson, next.updatedAt, taskId, expectedVersion, expectedState,
       );
       const persisted = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
       if (!persisted || persisted.version !== next.version || persisted.state !== next.state ||
@@ -300,46 +536,77 @@ export class OrchestratorLedger extends DurableObject {
         throw fail("Task transition persistence verification failed; transaction rolled back.", "PERSISTENCE_VERIFICATION_FAILED");
       }
       let outboxResult = null;
-      if (outboxEvent !== undefined) {
-        const outboxInput = validateOutboxInput({ ...outboxEvent, taskId, now });
-        outboxResult = enqueueOutboxInTransaction(sql, outboxInput);
+      if (normalizedOutboxInput !== null) {
+        outboxResult = enqueueOutboxInTransaction(sql, normalizedOutboxInput);
         if (outboxResult.conflict) throw fail("Outbox idempotency conflict; task transition rolled back.", "OUTBOX_CONFLICT");
       }
       return { updated: true, task: next, outbox: outboxResult };
     });
   }
 
-  recordMessage({ messageId, taskId, inputHash, envelope, authenticatedSender, now }) {
+  async recordMessage({ messageId, taskId, inputHash, envelope, workerId, workerAssertion, leaseGeneration, now }) {
     identifier(messageId, "messageId");
     identifier(taskId, "taskId");
     hash(inputHash, "inputHash");
     timestamp(now);
-    serializeBounded(envelope, "message envelope");
-    if (!authenticatedSender || authenticatedSender.authenticated !== true ||
-        authenticatedSender.identityVerified !== true ||
-        typeof authenticatedSender.id !== "string" || authenticatedSender.id.length === 0) {
+    if (typeof workerId !== "string" || workerId.length === 0) {
       return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
     }
-    if (!envelope || typeof envelope !== "object" || envelope.senderId !== authenticatedSender.id) {
-      return { accepted: false, reason: "SENDER_IDENTITY_MISMATCH" };
-    }
-    if (envelope.messageId !== messageId || envelope.taskId !== taskId) {
-      return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
-    }
-    let validatedEnvelope;
+    identifier(workerId, "workerId");
+    let verifiedAssertion;
     try {
-      validatedEnvelope = validateMessageEnvelope(envelope, { now, authenticatedSender });
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "agent", operation: "recordMessage", nowMs: now,
+      });
+    } catch {
+      return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
+    }
+    // Authenticate before inspecting the untrusted envelope; consume the assertion on every authenticated rejection.
+    let payloadRejectionReason = null;
+    let envelopeJson;
+    try {
+      serializeBounded(envelope, "message envelope");
     } catch (error) {
-      return { accepted: false, reason: typeof error?.code === "string" ? error.code : "INVALID_MESSAGE" };
+      payloadRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_MESSAGE";
     }
-    if (validatedEnvelope.inputHash !== inputHash) {
-      return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
+    if (!payloadRejectionReason) {
+      const authenticatedSender = { id: verifiedAssertion.subject, authenticated: true, identityVerified: true };
+      if (!envelope || typeof envelope !== "object" || envelope.senderId !== authenticatedSender.id) {
+        payloadRejectionReason = "SENDER_IDENTITY_MISMATCH";
+      } else if (envelope.messageId !== messageId || envelope.taskId !== taskId) {
+        payloadRejectionReason = "MESSAGE_ENVELOPE_MISMATCH";
+      } else {
+        let validatedEnvelope;
+        try {
+          validatedEnvelope = validateMessageEnvelope(envelope, { now, authenticatedSender });
+        } catch (error) {
+          payloadRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_MESSAGE";
+        }
+        if (!payloadRejectionReason && validatedEnvelope.inputHash !== inputHash) {
+          payloadRejectionReason = "MESSAGE_ENVELOPE_MISMATCH";
+        }
+        if (!payloadRejectionReason) {
+          try {
+            envelopeJson = serializeBounded(validatedEnvelope, "validated message envelope");
+          } catch (error) {
+            payloadRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_MESSAGE";
+          }
+        }
+      }
     }
-    const envelopeJson = serializeBounded(validatedEnvelope, "validated message envelope");
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      const task = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
-      if (!task) return { accepted: false, reason: "TASK_NOT_FOUND" };
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
+      }
+      if (payloadRejectionReason) {
+        return { accepted: false, reason: payloadRejectionReason };
+      }
+      const taskRow = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
+      if (!taskRow) return { accepted: false, reason: "TASK_NOT_FOUND" };
+      if (!hasCurrentAgentLease(sql, taskRow, workerId, leaseGeneration, now)) {
+        return { accepted: false, reason: "LEASE_FENCE_MISMATCH" };
+      }
       const existing = sql.exec("SELECT * FROM orchestrator_processed_messages WHERE message_id = ?", messageId).toArray()[0];
       if (existing) {
         if (existing.task_id === taskId && existing.input_hash === inputHash &&
@@ -355,21 +622,32 @@ export class OrchestratorLedger extends DurableObject {
       return { accepted: true, messageId, taskId };
     });
   }
-
-  claimTask({ workerId, authenticatedWorker, leaseMs, now, taskId, reconciliationEvidence } = {}) {
+  async claimTask({ workerId, workerAssertion, leaseMs, now, taskId } = {}) {
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);
     timestamp(now);
-    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"])) {
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "agent", operation: "claimTask", nowMs: now,
+      });
+    } catch {
       return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     if (taskId !== undefined) identifier(taskId, "taskId");
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      // A verified claim token is single-use even when the claim is rejected.
+      // Consume it before inspecting task/lease state so caller-controlled
+      // reconciliation metadata cannot make the same authorization reusable.
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
       const rows = taskId
         ? sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ? AND state IN ('SCHEDULED','RUNNING','VERIFYING') ORDER BY created_at LIMIT 1", taskId).toArray()
         : sql.exec("SELECT * FROM orchestrator_tasks WHERE state IN ('SCHEDULED','RUNNING','VERIFYING') ORDER BY created_at LIMIT 100").toArray();
       let assigneeMismatch = false;
+      let reconciliationBlocked = false;
       for (const row of rows) {
         const taskProjection = taskFromRow(row);
         const assignedAgentId = taskProjection.executorId ?? taskProjection.assignedAgentId;
@@ -379,20 +657,20 @@ export class OrchestratorLedger extends DurableObject {
         }
         const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", row.task_id).toArray()[0];
         let generation = 1;
-        let reconciliationRequired = false;
         if (lease) {
           if (lease.worker_id !== null && lease.lease_until > now) continue;
           generation = lease.lease_generation + 1;
           if (lease.worker_id !== null && lease.lease_until <= now) {
-            reconciliationRequired = true;
-            if (!reconciliationEvidence || reconciliationEvidence.checked !== true ||
-                reconciliationEvidence.priorGeneration !== lease.lease_generation ||
-                typeof reconciliationEvidence.evidenceRef !== "string" ||
-                reconciliationEvidence.evidenceRef.length === 0 ||
-                reconciliationEvidence.evidenceRef.length > 512) {
-              return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
-            }
+            // An arbitrary evidence reference or caller-supplied boolean is not
+            // proof of independent reconciliation. Until a separately
+            // authenticated recovery authority is implemented, fail closed
+            // for this task only: it stays unclaimable and untouched, but it
+            // must not starve later tasks assigned to the same Agent.
+            reconciliationBlocked = true;
+            continue;
           }
+        }
+        if (lease) {
           sql.exec(
             "UPDATE orchestrator_execution_leases SET worker_id = ?, lease_generation = ?, lease_until = ?, updated_at = ? WHERE task_id = ? AND lease_generation = ?",
             workerId, generation, now + leaseMs, now, row.task_id, lease.lease_generation,
@@ -409,18 +687,24 @@ export class OrchestratorLedger extends DurableObject {
           workerId,
           leaseGeneration: generation,
           leaseUntil: now + leaseMs,
-          reconciliationRequired,
+          reconciliationRequired: false,
         };
       }
+      if (reconciliationBlocked) return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
       return { claimed: false, reason: assigneeMismatch ? "ASSIGNEE_MISMATCH" : "NO_TASK_AVAILABLE" };
     });
   }
 
-  advanceAgentRound({ taskId, expectedVersion, expectedRound, nextRound, workerId, authenticatedWorker, leaseGeneration, now }) {
+  async advanceAgentRound({ taskId, expectedVersion, expectedRound, nextRound, workerId, workerAssertion, leaseGeneration, now }) {
     identifier(taskId, "taskId");
     identifier(workerId, "workerId");
     timestamp(now);
-    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"])) {
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "agent", operation: "advanceAgentRound", nowMs: now,
+      });
+    } catch {
       return { advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1 ||
@@ -432,6 +716,9 @@ export class OrchestratorLedger extends DurableObject {
     if (nextRound > 4) return { advanced: false, reason: "AGENT_ROUND_LIMIT" };
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
       const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
       if (!row) return { advanced: false, reason: "NOT_FOUND" };
       const current = taskFromRow(row);
@@ -472,17 +759,25 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  renewLease({ taskId, workerId, authenticatedWorker, leaseGeneration, leaseMs, now }) {
+  async renewLease({ taskId, workerId, workerAssertion, leaseGeneration, leaseMs, now }) {
     identifier(taskId, "taskId");
     identifier(workerId, "workerId");
-    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"])) {
-      return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
-    }
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw fail("leaseGeneration must be positive.");
     validLeaseMs(leaseMs);
     timestamp(now);
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "agent", operation: "renewLease", nowMs: now,
+      });
+    } catch {
+      return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { renewed: false, reason: "LEASE_FENCE_MISMATCH" };
@@ -495,16 +790,24 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  releaseLease({ taskId, workerId, authenticatedWorker, leaseGeneration, now }) {
+  async releaseLease({ taskId, workerId, workerAssertion, leaseGeneration, now }) {
     identifier(taskId, "taskId");
     identifier(workerId, "workerId");
-    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["agent"])) {
-      return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
-    }
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw fail("leaseGeneration must be positive.");
     timestamp(now);
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "agent", operation: "releaseLease", nowMs: now,
+      });
+    } catch {
+      return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { released: false, reason: "LEASE_FENCE_MISMATCH" };
@@ -517,55 +820,161 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  enqueueOutbox(input) {
-    const normalized = validateOutboxInput(input);
+  async enqueueOutbox(input) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw fail("outbox input must be an object.");
+    }
+    const now = timestamp(input.now);
+    if (typeof input.workerId !== "string" || input.workerId.length === 0) {
+      return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
+    identifier(input.workerId, "workerId");
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, input.workerAssertion, {
+        subject: input.workerId, role: "agent", operation: "enqueueOutbox", nowMs: now,
+      });
+    } catch {
+      return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
+    // Validate and serialize only after authentication; consume the assertion even on rejection.
+    let normalized;
+    let payloadRejectionReason = null;
+    try {
+      normalized = validateOutboxInput(input);
+    } catch (error) {
+      payloadRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_OUTBOX_EVENT";
+    }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      if (!sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", normalized.taskId).toArray()[0]) {
-        return { enqueued: false, reason: "TASK_NOT_FOUND" };
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      if (payloadRejectionReason) {
+        return { enqueued: false, reason: payloadRejectionReason };
+      }
+      const taskRow = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", normalized.taskId).toArray()[0];
+      if (!taskRow) return { enqueued: false, reason: "TASK_NOT_FOUND" };
+      if (!hasCurrentAgentLease(sql, taskRow, input.workerId, input.leaseGeneration, normalized.now)) {
+        return { enqueued: false, reason: "LEASE_FENCE_MISMATCH" };
       }
       return enqueueOutboxInTransaction(sql, normalized);
     });
   }
-
-  claimOutbox({ workerId, authenticatedWorker, leaseMs, now } = {}) {
+  async claimOutbox({ workerId, workerAssertion, leaseMs, now } = {}) {
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);
     timestamp(now);
-    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["publisher", "system"])) {
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "publisher", operation: "claimOutbox", nowMs: now,
+      });
+    } catch {
       return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      const rows = sql.exec(
-        "SELECT * FROM orchestrator_outbox_events WHERE status = 'PENDING' OR (status = 'IN_PROGRESS' AND lease_until <= ?) ORDER BY created_at LIMIT 100",
-        now,
-      ).toArray();
-      for (const row of rows) {
-        const reclaimed = row.status === "IN_PROGRESS";
-        const generation = row.lease_generation + 1;
-        sql.exec(
-          "UPDATE orchestrator_outbox_events SET status = 'IN_PROGRESS', attempts = attempts + 1, lease_worker_id = ?, lease_generation = ?, lease_until = ?, updated_at = ? WHERE event_id = ? AND lease_generation = ?",
-          workerId, generation, now + leaseMs, now, row.event_id, row.lease_generation,
-        );
-        const updated = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", row.event_id).toArray()[0];
-        return {
-          claimed: true,
-          event: outboxFromRow(updated),
-          workerId,
-          leaseGeneration: generation,
-          leaseUntil: now + leaseMs,
-          reconciliationRequired: reclaimed,
-        };
+      const row = sql.exec(
+        "SELECT * FROM orchestrator_outbox_events WHERE (status = 'PENDING' AND retry_state != 'DEAD_LETTER' AND next_attempt_at <= ?) OR (status = 'IN_PROGRESS' AND lease_until <= ?) ORDER BY created_at LIMIT 1",
+        now, now,
+      ).toArray()[0];
+      if (!row) return { claimed: false, reason: "NO_OUTBOX_AVAILABLE" };
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
-      return { claimed: false, reason: "NO_OUTBOX_AVAILABLE" };
+      if (row.attempts >= MAX_OUTBOX_ATTEMPTS) {
+        sql.exec(
+          "UPDATE orchestrator_outbox_events SET status = 'PENDING', retry_state = 'DEAD_LETTER', dead_lettered_at = ?, lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND lease_generation = ?",
+          now, now, row.event_id, row.lease_generation,
+        );
+        const deadLetter = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", row.event_id).toArray()[0];
+        return { claimed: false, deadLettered: true, reason: "OUTBOX_MAX_ATTEMPTS", event: outboxFromRow(deadLetter) };
+      }
+      const reclaimed = row.status === "IN_PROGRESS";
+      const generation = row.lease_generation + 1;
+      sql.exec(
+        "UPDATE orchestrator_outbox_events SET status = 'IN_PROGRESS', retry_state = 'READY', next_attempt_at = 0, attempts = attempts + 1, lease_worker_id = ?, lease_generation = ?, lease_until = ?, updated_at = ? WHERE event_id = ? AND lease_generation = ?",
+        workerId, generation, now + leaseMs, now, row.event_id, row.lease_generation,
+      );
+      const updated = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", row.event_id).toArray()[0];
+      return {
+        claimed: true,
+        event: outboxFromRow(updated),
+        workerId,
+        leaseGeneration: generation,
+        leaseUntil: now + leaseMs,
+        reconciliationRequired: reclaimed,
+      };
     });
   }
 
-  completeOutbox({ eventId, workerId, authenticatedWorker, leaseGeneration, now }) {
+  async failOutbox({ eventId, workerId, workerAssertion, leaseGeneration, retryable = true, errorCode, now }) {
     identifier(eventId, "eventId");
     identifier(workerId, "workerId");
-    if (!hasVerifiedWorkerIdentity(authenticatedWorker, workerId, ["publisher", "system"])) {
+    timestamp(now);
+    if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) {
+      throw fail("leaseGeneration must be positive.");
+    }
+    if (typeof retryable !== "boolean" || typeof errorCode !== "string" ||
+        !/^[A-Z0-9_]{1,64}$/.test(errorCode)) {
+      throw fail("retryable and errorCode are invalid.");
+    }
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "publisher", operation: "failOutbox", nowMs: now,
+      });
+    } catch {
+      return { failed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
+    const sql = this.ctx.storage.sql;
+    return this.ctx.storage.transactionSync(() => {
+      const row = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", eventId).toArray()[0];
+      if (!row || row.status !== "IN_PROGRESS" || row.lease_worker_id !== workerId ||
+          row.lease_generation !== leaseGeneration || row.lease_until <= now) {
+        return { failed: false, reason: "LEASE_FENCE_MISMATCH" };
+      }
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { failed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      const deadLettered = !retryable || row.attempts >= MAX_OUTBOX_ATTEMPTS;
+      const retryScheduled = !deadLettered;
+      const delay = retryScheduled
+        ? Math.min(OUTBOX_RETRY_MAX_MS, OUTBOX_RETRY_BASE_MS * (2 ** Math.max(0, row.attempts - 1)))
+        : 0;
+      const nextAttemptAt = retryScheduled ? now + delay : 0;
+      sql.exec(
+        "UPDATE orchestrator_outbox_events SET status = 'PENDING', retry_state = ?, next_attempt_at = ?, last_error_code = ?, dead_lettered_at = ?, lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND status = 'IN_PROGRESS' AND lease_worker_id = ? AND lease_generation = ?",
+        deadLettered ? "DEAD_LETTER" : "RETRY_WAIT",
+        nextAttemptAt,
+        errorCode,
+        deadLettered ? now : null,
+        now,
+        eventId,
+        workerId,
+        leaseGeneration,
+      );
+      const updated = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", eventId).toArray()[0];
+      return {
+        failed: true,
+        retryScheduled,
+        deadLettered,
+        nextAttemptAt: retryScheduled ? nextAttemptAt : null,
+        event: outboxFromRow(updated),
+      };
+    });
+  }
+
+  async completeOutbox({ eventId, workerId, workerAssertion, leaseGeneration, now }) {
+    identifier(eventId, "eventId");
+    identifier(workerId, "workerId");
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "publisher", operation: "completeOutbox", nowMs: now,
+      });
+    } catch {
       return { completed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw fail("leaseGeneration must be positive.");
@@ -577,11 +986,147 @@ export class OrchestratorLedger extends DurableObject {
           row.lease_generation !== leaseGeneration || row.lease_until <= now) {
         return { completed: false, reason: "LEASE_FENCE_MISMATCH" };
       }
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return { completed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       sql.exec(
         "UPDATE orchestrator_outbox_events SET status = 'COMPLETED', lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND status = 'IN_PROGRESS' AND lease_worker_id = ? AND lease_generation = ?",
         now, eventId, workerId, leaseGeneration,
       );
       return { completed: true, eventId, leaseGeneration };
+    });
+  }
+
+  async recordOutboxReceipt({
+    eventId, eventType, idempotencyKey, taskId, payload, createdAt,
+    schemaVersion, envelopeSha256, consumerId, workerAssertion, now,
+  } = {}) {
+    identifier(eventId, "eventId");
+    identifier(eventType, "eventType");
+    identifier(idempotencyKey, "idempotencyKey");
+    identifier(taskId, "taskId");
+    timestamp(createdAt, "createdAt");
+    hash(envelopeSha256, "envelopeSha256");
+    timestamp(now);
+    if (schemaVersion !== 1 || consumerId !== "orchestrator-outbox-consumer") {
+      return { recorded: false, reason: "INVALID_OUTBOX_RECEIPT" };
+    }
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: consumerId, role: "consumer", operation: "recordOutboxReceipt", nowMs: now,
+      });
+    } catch {
+      return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
+    // Authenticate the consumer before inspecting the untrusted receipt payload.
+    // Consume its one-time assertion even when the authenticated payload is rejected.
+    let payloadJson;
+    let payloadRejectionReason = null;
+    try {
+      payloadJson = serializeBounded(payload, "outbox receipt payload");
+    } catch (error) {
+      payloadRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_OUTBOX_RECEIPT";
+    }
+    const sql = this.ctx.storage.sql;
+    return this.ctx.storage.transactionSync(() => {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      if (payloadRejectionReason) {
+        return { recorded: false, reason: payloadRejectionReason };
+      }
+      const source = sql.exec(
+        "SELECT event_type, idempotency_key, task_id, payload_json, created_at FROM orchestrator_outbox_events WHERE event_id = ?",
+        eventId,
+      ).toArray()[0];
+      if (!source || source.event_type !== eventType ||
+          source.idempotency_key !== idempotencyKey || source.task_id !== taskId ||
+          source.payload_json !== payloadJson || source.created_at !== createdAt) {
+        return { recorded: false, reason: "OUTBOX_SOURCE_NOT_FOUND" };
+      }
+      const existing = sql.exec(
+        "SELECT * FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).toArray()[0];
+      if (existing) {
+        if (existing.event_type === eventType && existing.schema_version === schemaVersion &&
+            existing.envelope_sha256 === envelopeSha256) {
+          return { recorded: false, replay: true, eventId };
+        }
+        return { recorded: false, conflict: true, reason: "OUTBOX_EVENT_ID_CONFLICT" };
+      }
+      sql.exec(
+        "INSERT INTO orchestrator_outbox_receipts (event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+        eventId, eventType, schemaVersion, envelopeSha256, consumerId, now,
+      );
+      return { recorded: true, eventId };
+    });
+  }
+
+  async recordOutboxDeadLetter({
+    queueName, messageId, messageAttempts, messageTimestamp, body,
+    bodySha256, archiverId, workerAssertion, now,
+  } = {}) {
+    identifier(queueName, "queueName");
+    identifier(messageId, "messageId");
+    if (!Number.isSafeInteger(messageAttempts) || messageAttempts < 1 || messageAttempts > 100) {
+      throw fail("messageAttempts must be an integer between 1 and 100.");
+    }
+    timestamp(messageTimestamp, "messageTimestamp");
+    timestamp(now);
+    if (archiverId !== "orchestrator-outbox-dlq-archiver") {
+      return { recorded: false, reason: "INVALID_DEAD_LETTER_ARCHIVER" };
+    }
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: archiverId, role: "consumer", operation: "recordOutboxDeadLetter", nowMs: now,
+      });
+    } catch {
+      return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
+    // Authenticate the archiver before inspecting untrusted payload content.
+    // Consume its one-time assertion even when the authenticated body is rejected.
+    let bodyJson;
+    let bodyRejectionReason = null;
+    let bodyHashMatches = false;
+    try {
+      bodyJson = serializeBounded(body, "dead-letter body");
+      hash(bodySha256, "bodySha256");
+      const expectedSha256 = await sha256Canonical({
+        queueName, messageId, messageAttempts, messageTimestamp, body: JSON.parse(bodyJson),
+      });
+      bodyHashMatches = expectedSha256 === bodySha256;
+      if (!bodyHashMatches) {
+        bodyRejectionReason = "DEAD_LETTER_HASH_MISMATCH";
+      }
+    } catch (error) {
+      bodyRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_DEAD_LETTER";
+    }
+    const sql = this.ctx.storage.sql;
+    return this.ctx.storage.transactionSync(() => {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      if (bodyRejectionReason) {
+        return { recorded: false, reason: bodyRejectionReason };
+      }
+      const existing = sql.exec(
+        "SELECT * FROM orchestrator_outbox_dead_letters WHERE source_queue = ? AND message_id = ?",
+        queueName, messageId,
+      ).toArray()[0];
+      if (existing) {
+        if (existing.message_attempts === messageAttempts &&
+            existing.message_timestamp === messageTimestamp &&
+            existing.body_sha256 === bodySha256 && existing.body_json === bodyJson) {
+          return { recorded: false, replay: true, messageId };
+        }
+        return { recorded: false, conflict: true, reason: "DEAD_LETTER_MESSAGE_ID_CONFLICT" };
+      }
+      sql.exec(
+        "INSERT INTO orchestrator_outbox_dead_letters (source_queue, message_id, message_attempts, message_timestamp, body_sha256, body_json, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        queueName, messageId, messageAttempts, messageTimestamp, bodySha256, bodyJson, now,
+      );
+      return { recorded: true, messageId };
     });
   }
 
@@ -600,19 +1145,41 @@ export class OrchestratorLedger extends DurableObject {
     };
   }
 
-  async appendAuditEvent({ eventId, taskId, actor, eventType, details, now }) {
+  async appendAuditEvent({ eventId, taskId, actor, workerId, workerAssertion, eventType, details, now }) {
     identifier(eventId, "eventId");
     identifier(taskId, "taskId");
-    if (!actor || typeof actor !== "object" || actor.authenticated !== true ||
-        actor.identityVerified !== true || !["agent", "reviewer", "owner", "system"].includes(actor.role)) {
-      throw fail("Audit events require an authenticated actor identity.", "AUTHENTICATED_ACTOR_REQUIRED");
+    if (typeof workerId !== "string" || workerId.length === 0) {
+      return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
     }
-    const actorId = identifier(actor.id, "actor.id");
-    const actorRole = identifier(actor.role, "actor.role");
+    identifier(workerId, "workerId");
     identifier(eventType, "eventType");
     timestamp(now);
-    const detailsJson = serializeBounded(details, "audit details");
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+        subject: workerId, role: "agent", operation: "appendAuditEvent", nowMs: now,
+      });
+    } catch {
+      return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+    }
+    if (!actor || typeof actor !== "object" || actor.id !== verifiedAssertion.subject || actor.role !== verifiedAssertion.role) {
+      return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+    }
+    const actorId = verifiedAssertion.subject;
+    const actorRole = verifiedAssertion.role;
+    let detailsJson;
+    let detailsRejectionReason = null;
+    try {
+      detailsJson = serializeBounded(details, "audit details");
+    } catch (error) {
+      detailsRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_AUDIT_DETAILS";
+    }
     const sql = this.ctx.storage.sql;
+    if (detailsRejectionReason) {
+      const consumed = this.ctx.storage.transactionSync(() => consumeWorkerAssertion(sql, verifiedAssertion, now));
+      if (!consumed) return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+      return { appended: false, reason: detailsRejectionReason };
+    }
     if (!sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0]) {
       return { appended: false, reason: "TASK_NOT_FOUND" };
     }
@@ -620,6 +1187,8 @@ export class OrchestratorLedger extends DurableObject {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const existing = sql.exec("SELECT * FROM orchestrator_audit_events WHERE event_id = ?", eventId).toArray()[0];
       if (existing) {
+        const consumed = this.ctx.storage.transactionSync(() => consumeWorkerAssertion(sql, verifiedAssertion, now));
+        if (!consumed) return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
         if (existing.task_id === taskId && existing.actor_id === actorId &&
             existing.actor_role === actorRole && existing.event_type === eventType &&
             existing.details_json === detailsJson && existing.created_at === now) {
@@ -634,26 +1203,23 @@ export class OrchestratorLedger extends DurableObject {
       });
       const inserted = this.ctx.storage.transactionSync(() => {
         const latest = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
-        if ((latest?.event_hash ?? null) !== previousHash) return false;
+        if ((latest?.event_hash ?? null) !== previousHash) return "retry";
         const duplicate = sql.exec("SELECT * FROM orchestrator_audit_events WHERE event_id = ?", eventId).toArray()[0];
-        if (duplicate) return false;
+        if (duplicate) return "retry";
+        if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return "replay";
         sql.exec(
           "INSERT INTO orchestrator_audit_events (event_id, task_id, actor_id, actor_role, event_type, details_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
           eventId, taskId, actorId, actorRole, eventType, detailsJson, previousHash, eventHash, now,
         );
-        return true;
+        return "inserted";
       });
-      if (inserted) {
-        return {
-          appended: true,
-          event: this.auditFromRow({
-            event_id: eventId, task_id: taskId, actor_id: actorId, actor_role: actorRole,
-            event_type: eventType, details_json: detailsJson, previous_hash: previousHash,
-            event_hash: eventHash, created_at: now,
-          }),
-        };
-      }
+      if (inserted === "replay") return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+      if (inserted === "retry") continue;
+      return { appended: true, event: {
+        eventId, taskId, actorId, actorRole, eventType, details: JSON.parse(detailsJson),
+        previousHash, eventHash, createdAt: now,
+      } };
     }
-    throw fail("Audit append could not acquire a stable chain head.", "AUDIT_APPEND_CONTENTION");
+    throw fail("Audit chain changed too frequently; retry the append.", "AUDIT_CHAIN_CONTENTION");
   }
 }

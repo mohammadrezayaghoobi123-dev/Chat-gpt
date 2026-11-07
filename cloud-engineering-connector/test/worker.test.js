@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import worker, { processKnowledgeOutbox } from "../worker.js";
+import { createHash, randomBytes } from "node:crypto";
+import worker, { consumeOrchestratorOutbox, processKnowledgeOutbox } from "../worker.js";
 import { createWriteControlBinding, createGitHubWriteMock } from "./helpers/write-control-mocks.js";
 let idempotencyCounter=0;
 function createKnowledgeStoreBinding(){
@@ -31,16 +31,31 @@ function createKnowledgeStoreBinding(){
 const knowledgeStore=createKnowledgeStoreBinding();
 function createOrchestratorLedgerBinding(){
  const calls=[];
- const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:1}}};
+ const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:5}}};
  return{calls,binding:{idFromName(name){calls.push({method:"idFromName",name});return name},get(id){calls.push({method:"get",id});return stub}}};
 }
 const orchestratorLedger=createOrchestratorLedgerBinding();
-const env={ORCHESTRATOR_LEDGER:orchestratorLedger.binding,MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_READONLY_TOKEN:"read-only-test-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding(),KNOWLEDGE_STORE:knowledgeStore.binding};
+const env={ORCHESTRATOR_LEDGER:orchestratorLedger.binding,ORCHESTRATOR_OUTBOX_QUEUE:{send:async()=>{}},ORCHESTRATOR_OUTBOX_QUEUE_NAME:"chat-gpt111-orchestrator-outbox",ORCHESTRATOR_OUTBOX_DLQ_QUEUE:"chat-gpt111-orchestrator-outbox-dlq",LEDGER_WORKER_ASSERTION_KEYS:JSON.stringify({"worker-v1":randomBytes(32).toString("hex")}),LEDGER_WORKER_ASSERTION_ACTIVE_KID:"worker-v1",MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_READONLY_TOKEN:"read-only-test-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding(),KNOWLEDGE_STORE:knowledgeStore.binding};
 const req=(path,options={})=>{const headers=new Headers(options.headers);if(!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
 const rpc=(method,params={},id=1)=>{if(method==="tools/call"&&params.name==="create_change_pr"&&params.arguments&&!params.arguments.idempotency_key)params={...params,arguments:{...params.arguments,idempotency_key:"worker-test-idempotency-key-"+String(++idempotencyCounter).padStart(8,"0")}};return req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})})};
 const anonymousRpc=(method,params={},id=1)=>{const request=rpc(method,params,id);const headers=new Headers(request.headers);headers.delete("authorization");return new Request(request,{headers})};
 test("healthz is a liveness endpoint independent of credentials and Durable Object availability",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.service,"cloud-engineering-connector");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers");assert.equal(Object.hasOwn(b,"durable_objects"),false);assert.equal(Object.hasOwn(b,"mcp"),false)});
-test("readyz reports Durable Object schema readiness using the lightweight ping",async()=>{const r=await worker.fetch(req("/readyz"),env);assert.equal(r.status,200,JSON.stringify(await r.clone().json()));const b=await r.json();assert.equal(b.status,"ready");assert.equal(b.durable_objects,"ok");assert.equal(env.WRITE_CONTROL.__test.events.some(event=>event.type==="ping"),true);assert.equal(b.knowledge_store,"ok");assert.equal(knowledgeStore.calls.some(call=>call.method==="ping"),true);assert.equal(b.orchestrator_ledger,"ok");assert.equal(orchestratorLedger.calls.some(call=>call.method==="ping"),true)});
+test("readyz reports Durable Object schema readiness using the lightweight ping",async()=>{const r=await worker.fetch(req("/readyz"),env);assert.equal(r.status,200,JSON.stringify(await r.clone().json()));const b=await r.json();assert.equal(b.status,"ready");assert.equal(b.durable_objects,"ok");assert.equal(env.WRITE_CONTROL.__test.events.some(event=>event.type==="ping"),true);assert.equal(b.knowledge_store,"ok");assert.equal(knowledgeStore.calls.some(call=>call.method==="ping"),true);assert.equal(b.orchestrator_ledger,"ok");assert.equal(b.orchestrator_outbox_publisher,"ok");assert.equal(orchestratorLedger.calls.some(call=>call.method==="ping"),true)});
+test("readyz fails closed when the Orchestrator outbox Queue binding is unavailable",async()=>{
+ const r=await worker.fetch(req("/readyz"),{...env,ORCHESTRATOR_OUTBOX_QUEUE:undefined});
+ assert.equal(r.status,503);
+ const b=await r.json();
+ assert.equal(b.status,"not_ready");
+ assert.equal(b.orchestrator_ledger,"ok");
+ assert.equal(b.orchestrator_outbox_publisher,"unavailable");
+});
+test("readyz fails closed when the Ledger signing key set does not contain the active key",async()=>{
+ const r=await worker.fetch(req("/readyz"),{...env,LEDGER_WORKER_ASSERTION_KEYS:JSON.stringify({"retired-key":"weak"})});
+ assert.equal(r.status,503);
+ const b=await r.json();
+ assert.equal(b.status,"not_ready");
+ assert.equal(b.orchestrator_outbox_publisher,"unavailable");
+});
 test("readyz fails closed when the OrchestratorLedger binding is unavailable",async()=>{const r=await worker.fetch(req("/readyz"),{...env,ORCHESTRATOR_LEDGER:undefined});assert.equal(r.status,503);const b=await r.json();assert.equal(b.status,"not_ready");assert.equal(b.orchestrator_ledger,"unavailable")});
 test("readyz fails closed when the Durable Object binding is unavailable",async()=>{const r=await worker.fetch(req("/readyz"),{MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,503);const b=await r.json();assert.equal(b.status,"not_ready");assert.equal(b.durable_objects,"unavailable")});
 test("JSON API responses carry restrictive browser security headers",async()=>{
@@ -1448,4 +1463,66 @@ test("scheduled handler emits an alert-level structured event for dead-lettered 
     deadLetter: 1,
   });
   assert.equal(JSON.stringify(alert).includes("evt-alert-0001"), false, "alert logs must not expose event payload identifiers");
+});
+
+
+test("Queue consumer rejects unsupported schema and event types without invoking a ledger",async()=>{
+ let retried=0,acked=0,ledgerCalls=0;
+ const message={body:{schemaVersion:999,eventId:"evt-unsupported-0001",eventType:"task.execute",taskId:"task-0001",idempotencyKey:"idem-unsupported"},retry(){retried++},ack(){acked++}};
+ const queueWorker=worker.queue;
+ assert.equal(typeof queueWorker,"function","Worker must expose a Cloudflare Queue consumer");
+ await queueWorker({messages:[message]},{
+  ORCHESTRATOR_LEDGER:{idFromName(){ledgerCalls++;throw new Error("ledger must not be reached")},get(){ledgerCalls++;throw new Error("ledger must not be reached")}}
+ },{});
+ assert.equal(retried,1);
+ assert.equal(acked,0);
+ assert.equal(ledgerCalls,0);
+});
+
+
+test("Queue consumer durably acknowledges first delivery and identical redelivery",async()=>{
+ const calls=[];
+ const ledger={
+  recordOutboxReceipt:async input=>{
+   calls.push(input);
+   return calls.length===1?{recorded:true,eventId:input.eventId}:{recorded:false,replay:true,eventId:input.eventId};
+  }
+ };
+ const queueEnv={
+  ORCHESTRATOR_LEDGER:{idFromName:name=>name,get:()=>ledger},
+  LEDGER_WORKER_ASSERTION_KEYS:env.LEDGER_WORKER_ASSERTION_KEYS,
+  LEDGER_WORKER_ASSERTION_ACTIVE_KID:env.LEDGER_WORKER_ASSERTION_ACTIVE_KID
+ };
+ const body={
+  schemaVersion:1,eventId:"queue-event-test-0001",idempotencyKey:"queue-idempotency-test-0001",
+  taskId:"task-consumer-0001",eventType:"task.transitioned",
+  payload:{taskId:"task-consumer-0001",from:"SCHEDULED",to:"RUNNING"},
+  attempts:1,createdAt:Date.now()
+ };
+ const makeMessage=()=>({body,acked:0,retried:0,ack(){this.acked++},retry(){this.retried++}});
+ const first=makeMessage(),duplicate=makeMessage();
+ assert.deepEqual(await consumeOrchestratorOutbox({messages:[first]},queueEnv),{received:1,acknowledged:1,retried:0,duplicates:0});
+ assert.deepEqual(await consumeOrchestratorOutbox({messages:[duplicate]},queueEnv),{received:1,acknowledged:1,retried:0,duplicates:1});
+ assert.equal(first.acked,1);
+ assert.equal(duplicate.acked,1);
+ assert.equal(calls.length,2);
+ assert.equal(calls[0].consumerId,"orchestrator-outbox-consumer");
+ assert.match(calls[0].envelopeSha256,/^[a-f0-9]{64}$/);
+ assert.equal(typeof calls[0].workerAssertion,"string");
+});
+
+test("Queue consumer retries unknown event types without invoking durable receipt",async()=>{
+ let receiptCalls=0,retried=0,acked=0;
+ const result=await consumeOrchestratorOutbox({messages:[{
+  body:{schemaVersion:1,eventId:"queue-event-unknown-0001",idempotencyKey:"queue-idempotency-unknown-0001",taskId:"task-unknown-0001",eventType:"task.execute",payload:{command:"run"},attempts:1,createdAt:Date.now()},
+  ack(){acked++},retry(){retried++}
+ }]},{
+  ORCHESTRATOR_LEDGER:{idFromName:name=>name,get:()=>({recordOutboxReceipt:async()=>{receiptCalls++;return{recorded:true}}})},
+  LEDGER_WORKER_ASSERTION_KEYS:env.LEDGER_WORKER_ASSERTION_KEYS,
+  LEDGER_WORKER_ASSERTION_ACTIVE_KID:env.LEDGER_WORKER_ASSERTION_ACTIVE_KID
+ });
+ assert.deepEqual(result,{received:1,acknowledged:0,retried:1,duplicates:0});
+ assert.equal(receiptCalls,0);
+ assert.equal(retried,1);
+ assert.equal(acked,0);
 });

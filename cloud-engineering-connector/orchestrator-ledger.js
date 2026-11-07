@@ -3,6 +3,7 @@ import { transitionTask as transitionTaskCore, TASK_STATES } from "./orchestrato
 import { assertAgentRoundLimit } from "./orchestrator-protocol.js";
 import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orchestrator-protocol.js";
 import { verifyWorkerAssertion } from "./orchestrator-worker-identity.js";
+import { verifyOwnerAssertion } from "./orchestrator-owner-assertion.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
@@ -284,6 +285,46 @@ export class OrchestratorLedger extends DurableObject {
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_github_business_idempotency_by_expiry ON orchestrator_github_business_idempotency(expires_at)");
     sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_owner_consumed_assertions (
+        jti TEXT PRIMARY KEY,
+        assertion_hash TEXT NOT NULL CHECK(length(assertion_hash) = 64),
+        repository_id INTEGER NOT NULL,
+        actor_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        delivery_id TEXT NOT NULL,
+        comment_id TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at INTEGER NOT NULL
+      )
+    `);
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_owner_assertions_by_expiry ON orchestrator_owner_consumed_assertions(expires_at)");
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_owner_command_receipts (
+        delivery_id TEXT PRIMARY KEY,
+        comment_id TEXT NOT NULL UNIQUE,
+        body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
+        command_hash TEXT NOT NULL CHECK(length(command_hash) = 64),
+        assertion_jti TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        repository TEXT NOT NULL,
+        issue_number INTEGER NOT NULL,
+        comment_created_at INTEGER NOT NULL,
+        result_json TEXT NOT NULL CHECK(json_valid(result_json)),
+        created_at INTEGER NOT NULL
+      )
+    `);
+    const ownerReceiptColumns = new Set(
+      sql.exec("PRAGMA table_info(orchestrator_owner_command_receipts)").toArray().map(column => column.name),
+    );
+    if (!ownerReceiptColumns.has("task_id")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN task_id TEXT NOT NULL DEFAULT ''");
+    if (!ownerReceiptColumns.has("operation")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN operation TEXT NOT NULL DEFAULT ''");
+    if (!ownerReceiptColumns.has("repository")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN repository TEXT NOT NULL DEFAULT ''");
+    if (!ownerReceiptColumns.has("issue_number")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN issue_number INTEGER NOT NULL DEFAULT 0");
+    if (!ownerReceiptColumns.has("comment_created_at")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN comment_created_at INTEGER NOT NULL DEFAULT 0");
+
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_audit_events (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
         event_id TEXT NOT NULL UNIQUE,
@@ -306,7 +347,7 @@ export class OrchestratorLedger extends DurableObject {
 
   ping() {
     const result = this.ctx.storage.sql.exec("SELECT 1 AS ok").one();
-    return { ok: Number(result.ok) === 1, schemaVersion: 5 };
+    return { ok: Number(result.ok) === 1, schemaVersion: 6 };
   }
 
   claimGitHubDelivery({ deliveryId, bodySha256, eventName, receivedAt, idempotencyKey, inputHash } = {}) {
@@ -849,7 +890,7 @@ export class OrchestratorLedger extends DurableObject {
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       const row = sql.exec(
-        "SELECT * FROM orchestrator_outbox_events WHERE (status = 'PENDING' AND retry_state != 'DEAD_LETTER' AND next_attempt_at <= ?) OR (status = 'IN_PROGRESS' AND lease_until <= ?) ORDER BY created_at LIMIT 1",
+        "SELECT * FROM orchestrator_outbox_events WHERE (status = 'PENDING' AND retry_state != 'DEAD_LETTER' AND next_attempt_at <= ?) OR (status = 'IN_PROGRESS' AND retry_state != 'DEAD_LETTER' AND lease_until <= ?) ORDER BY created_at LIMIT 1",
         now, now,
       ).toArray()[0];
       if (!row) return { claimed: false, reason: "NO_OUTBOX_AVAILABLE" };
@@ -1027,6 +1068,20 @@ export class OrchestratorLedger extends DurableObject {
         }
         return { recorded: false, conflict: true, reason: "OUTBOX_EVENT_ID_CONFLICT" };
       }
+      if (eventType === "task.created" || eventType === "task.transitioned") {
+        const receiptPayload = parseJson(source.payload_json, "outbox receipt payload");
+        if (!Number.isSafeInteger(receiptPayload?.version) || receiptPayload.version < 1) {
+          return { recorded: false, blocked: true, reason: "OUTBOX_TASK_VERSION_REQUIRED" };
+        }
+        const currentTask = sql.exec(
+          "SELECT state, version FROM orchestrator_tasks WHERE task_id = ?",
+          taskId,
+        ).toArray()[0];
+        if (!currentTask || currentTask.version !== receiptPayload.version ||
+            currentTask.state === "CANCELLED" || currentTask.state === "QUARANTINED") {
+          return { recorded: false, blocked: true, reason: "TASK_VERSION_FENCED" };
+        }
+      }
       sql.exec(
         "INSERT INTO orchestrator_outbox_receipts (event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at) VALUES (?, ?, ?, ?, ?, ?)",
         eventId, eventType, schemaVersion, envelopeSha256, consumerId, now,
@@ -1101,6 +1156,280 @@ export class OrchestratorLedger extends DurableObject {
       );
       return { recorded: true, messageId };
     });
+  }
+
+
+  async executeOwnerCommand(input) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      return { applied: false, reason: "INVALID_OWNER_COMMAND" };
+    }
+    const { assertion, assertionContext, command, bodySha256, provenance, now } = input;
+    try {
+      timestamp(now);
+      if (!command || typeof command !== "object" || Array.isArray(command) ||
+          Object.keys(command).sort().join(",") !== "eventId,operation,reason,taskId" ||
+          !["cancel", "quarantine", "release"].includes(command.operation)) {
+        return { applied: false, reason: "INVALID_OWNER_COMMAND" };
+      }
+      identifier(command.taskId, "taskId");
+      identifier(command.eventId, "eventId");
+      if (command.eventId.length > 140 || typeof command.reason !== "string" ||
+          command.reason.length < 1 || command.reason.length > 240 ||
+          command.reason.trim() !== command.reason ||
+          /[\u0000-\u001f\u007f]/.test(command.reason) ||
+          /\b(?:secret|token|password|credential|api[_-]?key|private[_-]?key)\b\s*[:=]/i.test(command.reason)) {
+        return { applied: false, reason: "INVALID_OWNER_COMMAND" };
+      }
+      hash(bodySha256, "bodySha256");
+      if (!provenance || typeof provenance !== "object" || Array.isArray(provenance) ||
+          provenance.eventName !== "issue_comment.created" ||
+          provenance.repository !== this.env?.GITHUB_WEBHOOK_REPOSITORY ||
+          typeof provenance.repository !== "string" ||
+          !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(provenance.repository) ||
+          !Number.isSafeInteger(provenance.issueNumber) || provenance.issueNumber < 1) {
+        return { applied: false, reason: "INVALID_OWNER_PROVENANCE" };
+      }
+      timestamp(provenance.commentCreatedAt, "commentCreatedAt");
+      if (!assertionContext || typeof assertionContext !== "object" || Array.isArray(assertionContext)) {
+        return { applied: false, reason: "OWNER_ASSERTION_REJECTED" };
+      }
+      const context = {
+        actorId: assertionContext.actorId,
+        repositoryId: assertionContext.repositoryId,
+        taskId: command.taskId,
+        operation: command.operation,
+        deliveryId: assertionContext.deliveryId,
+        commentId: assertionContext.commentId,
+        commandHash: await sha256Canonical({ eventId: command.eventId, operation: command.operation, reason: command.reason, taskId: command.taskId }),
+      };
+      if (assertionContext.commandHash !== context.commandHash ||
+          context.repositoryId !== Number(this.env?.GITHUB_WEBHOOK_REPOSITORY_ID) ||
+          context.actorId !== String(this.env?.GITHUB_WEBHOOK_OWNER_ID ?? "") ||
+          typeof context.deliveryId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(context.deliveryId) ||
+          typeof context.commentId !== "string" || !/^[0-9]{1,20}$/.test(context.commentId)) {
+        return { applied: false, reason: "OWNER_ASSERTION_REJECTED" };
+      }
+      const verified = await verifyOwnerAssertion(
+        this.env?.LEDGER_OWNER_ASSERTION_KEYS,
+        assertion,
+        { ...context, nowMs: now },
+      );
+      const assertionHash = await sha256Canonical({ assertion });
+      const sql = this.ctx.storage.sql;
+      const eventType = {
+        cancel: "OWNER_TASK_CANCELLED",
+        quarantine: "OWNER_TASK_QUARANTINED",
+        release: "OWNER_TASK_RELEASED",
+      }[command.operation];
+      const nextState = {
+        cancel: "CANCELLED",
+        quarantine: "QUARANTINED",
+        release: "VALIDATING",
+      }[command.operation];
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const taskRow = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", command.taskId).toArray()[0] ?? null;
+        const currentTask = taskFromRow(taskRow);
+        const auditHead = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
+        const previousHash = auditHead?.event_hash ?? null;
+        // Expected state/version are derived from this trusted Durable Object
+        // snapshot. Never accept caller-supplied CAS fields for privileged actions.
+        const expectedVersion = currentTask?.version ?? null;
+        const expectedState = currentTask?.state ?? null;
+        const transitionAllowed = currentTask && (
+          command.operation === "release"
+            ? currentTask.state === "QUARANTINED"
+            : !["COMPLETED", "FAILED", "CANCELLED"].includes(currentTask.state) &&
+              (command.operation !== "quarantine" || currentTask.state !== "QUARANTINED")
+        );
+        const conflictReason = !currentTask ? "TASK_NOT_FOUND"
+          : !transitionAllowed ? "ILLEGAL_OWNER_TRANSITION"
+          : null;
+        const resultingTask = conflictReason ? null : {
+          ...currentTask,
+          state: nextState,
+          version: currentTask.version + 1,
+          updatedAt: now,
+        };
+        const auditEventId = conflictReason
+          ? "owner-rejected-" + command.eventId
+          : "owner-" + command.eventId;
+        const auditType = conflictReason ? "OWNER_COMMAND_REJECTED" : eventType;
+        const auditDetails = conflictReason ? {
+          taskId: command.taskId,
+          operation: command.operation,
+          expectedVersion,
+          currentVersion: currentTask?.version ?? null,
+          expectedState,
+          currentState: currentTask?.state ?? null,
+          actorId: context.actorId,
+          repositoryId: context.repositoryId,
+          deliveryId: context.deliveryId,
+          commentId: context.commentId,
+          commandHash: context.commandHash,
+          repository: provenance.repository,
+          issueNumber: provenance.issueNumber,
+          eventName: provenance.eventName,
+          commentCreatedAt: provenance.commentCreatedAt,
+          fromState: currentTask?.state ?? null,
+          toState: null,
+          reason: conflictReason,
+        } : {
+          taskId: command.taskId,
+          operation: command.operation,
+          expectedVersion,
+          expectedState,
+          resultingVersion: resultingTask.version,
+          resultingState: resultingTask.state,
+          actorId: context.actorId,
+          repositoryId: context.repositoryId,
+          deliveryId: context.deliveryId,
+          commentId: context.commentId,
+          commandHash: context.commandHash,
+          repository: provenance.repository,
+          issueNumber: provenance.issueNumber,
+          eventName: provenance.eventName,
+          commentCreatedAt: provenance.commentCreatedAt,
+          fromState: currentTask.state,
+          toState: resultingTask.state,
+          reason: command.reason,
+        };
+        const detailsJson = serializeBounded(auditDetails, "Owner audit details");
+        const eventHash = await sha256Canonical({
+          eventId: auditEventId,
+          taskId: command.taskId,
+          actorId: context.actorId,
+          actorRole: "owner",
+          eventType: auditType,
+          details: auditDetails,
+          occurredAt: now,
+          previousHash,
+        });
+        const successResult = conflictReason
+          ? { applied: false, conflict: true, reason: conflictReason }
+          : {
+              applied: true,
+              operation: command.operation,
+              task: { taskId: resultingTask.taskId, state: resultingTask.state, version: resultingTask.version },
+            };
+        const resultJson = serializeBounded(successResult, "Owner command result");
+        const transactionResult = this.ctx.storage.transactionSync(() => {
+          const priorReceipt = sql.exec(
+            "SELECT * FROM orchestrator_owner_command_receipts WHERE delivery_id = ? OR comment_id = ?",
+            context.deliveryId, context.commentId,
+          ).toArray()[0];
+          if (priorReceipt) {
+            if ((priorReceipt.delivery_id === context.deliveryId ||
+                 priorReceipt.comment_id === context.commentId) &&
+                priorReceipt.body_sha256 === bodySha256 &&
+                priorReceipt.command_hash === context.commandHash) {
+              return { replay: true, result: parseJson(priorReceipt.result_json, "Owner command receipt") };
+            }
+            return { conflict: true, reason: "OWNER_RECEIPT_CONFLICT" };
+          }
+          const currentAuditHead = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
+          if ((currentAuditHead?.event_hash ?? null) !== previousHash) return { retry: true };
+          const currentRow = sql.exec("SELECT state, version FROM orchestrator_tasks WHERE task_id = ?", command.taskId).toArray()[0] ?? null;
+          if ((currentRow?.version ?? null) !== (taskRow?.version ?? null) ||
+              (currentRow?.state ?? null) !== (taskRow?.state ?? null)) return { retry: true };
+          const claimedDelivery = sql.exec(
+            "SELECT * FROM orchestrator_github_webhook_deliveries WHERE delivery_id = ?",
+            context.deliveryId,
+          ).toArray()[0];
+          if (claimedDelivery) return { conflict: true, reason: "DELIVERY_ALREADY_CLAIMED" };
+          const consumed = sql.exec(
+            "SELECT jti FROM orchestrator_owner_consumed_assertions WHERE jti = ?",
+            verified.jti,
+          ).toArray()[0];
+          if (consumed) return { conflict: true, reason: "OWNER_ASSERTION_REPLAY" };
+          sql.exec(
+            "INSERT INTO orchestrator_owner_consumed_assertions (jti, assertion_hash, repository_id, actor_id, task_id, operation, delivery_id, comment_id, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            verified.jti, assertionHash, context.repositoryId, context.actorId, command.taskId,
+            command.operation, context.deliveryId, context.commentId, verified.exp, Math.floor(now / 1000),
+          );
+          const expiresAt = now + 30 * 24 * 60 * 60 * 1000;
+          sql.exec(
+            "INSERT INTO orchestrator_github_webhook_deliveries (delivery_id, body_sha256, event_name, received_at, expires_at) VALUES (?, ?, 'issue_comment', ?, ?)",
+            context.deliveryId, bodySha256, now, expiresAt,
+          );
+          if (!conflictReason) {
+            sql.exec(
+              "UPDATE orchestrator_tasks SET state = ?, version = ?, task_json = ?, updated_at = ? WHERE task_id = ? AND version = ? AND state = ?",
+              resultingTask.state, resultingTask.version, serializeBounded(resultingTask, "task"),
+              now, command.taskId, expectedVersion, expectedState,
+            );
+            const lease = sql.exec("SELECT lease_generation FROM orchestrator_execution_leases WHERE task_id = ?", command.taskId).toArray()[0];
+            const nextGeneration = (lease?.lease_generation ?? 0) + 1;
+            if (lease) {
+              sql.exec(
+                "UPDATE orchestrator_execution_leases SET worker_id = NULL, lease_generation = ?, lease_until = 0, updated_at = ? WHERE task_id = ?",
+                nextGeneration, now, command.taskId,
+              );
+            } else {
+              sql.exec(
+                "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, NULL, ?, 0, ?)",
+                command.taskId, nextGeneration, now,
+              );
+            }
+            if (command.operation === "release") {
+              const releaseEventId = "owner-release-" + command.eventId;
+              const releasePayload = {
+                taskId: command.taskId,
+                version: resultingTask.version,
+                from: currentTask.state,
+                to: resultingTask.state,
+                ownerCommandId: command.eventId,
+                ownerCommentId: context.commentId,
+              };
+              const queued = enqueueOutboxInTransaction(sql, {
+                eventId: releaseEventId,
+                idempotencyKey: releaseEventId,
+                taskId: command.taskId,
+                eventType: "task.transitioned",
+                payloadJson: serializeBounded(releasePayload, "Owner release outbox payload"),
+                now,
+              });
+              if (queued.conflict || !queued.event) {
+                throw new Error("Owner release outbox enqueue failed.");
+              }
+            }
+            if (command.operation === "cancel" || command.operation === "quarantine") {
+              const reasonCode = command.operation === "cancel" ? "OWNER_CANCELLED" : "OWNER_QUARANTINED";
+              sql.exec(
+                "UPDATE orchestrator_outbox_events SET retry_state = 'DEAD_LETTER', last_error_code = ?, dead_lettered_at = ?, lease_worker_id = NULL, lease_generation = lease_generation + 1, lease_until = 0, updated_at = ? WHERE task_id = ? AND status IN ('PENDING','IN_PROGRESS') AND retry_state != 'DEAD_LETTER'",
+                reasonCode, now, now, command.taskId,
+              );
+            }
+          }
+          sql.exec(
+            "INSERT INTO orchestrator_audit_events (event_id, task_id, actor_id, actor_role, event_type, details_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, 'owner', ?, ?, ?, ?, ?)",
+            auditEventId, command.taskId, context.actorId, auditType, detailsJson, previousHash, eventHash, now,
+          );
+          const storedResult = serializeBounded(successResult, "Owner command result");
+          sql.exec(
+            "INSERT INTO orchestrator_owner_command_receipts (delivery_id, comment_id, body_sha256, command_hash, assertion_jti, task_id, operation, repository, issue_number, comment_created_at, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            context.deliveryId, context.commentId, bodySha256, context.commandHash, verified.jti,
+            command.taskId, command.operation, provenance.repository, provenance.issueNumber,
+            provenance.commentCreatedAt, storedResult, now,
+          );
+          return { replay: false, result: successResult };
+        });
+        if (transactionResult.retry) continue;
+        if (transactionResult.conflict) return { applied: false, conflict: true, reason: transactionResult.reason };
+        return { ...transactionResult.result, ...(transactionResult.replay ? { replay: true } : {}) };
+      }
+      return { applied: false, reason: "AUDIT_CHAIN_CONTENTION" };
+    } catch (error) {
+      if (error?.code === "OWNER_ASSERTION_REJECTED") {
+        return { applied: false, reason: "OWNER_ASSERTION_REJECTED" };
+      }
+      if (["INVALID_INPUT", "RECORD_TOO_LARGE"].includes(error?.code)) {
+        return { applied: false, reason: "INVALID_OWNER_COMMAND" };
+      }
+      // Durable Object storage errors roll back transactionSync. Return only a
+      // bounded failure code; never expose SQL details or stack traces to callers.
+      return { applied: false, reason: "LEDGER_TRANSACTION_FAILED" };
+    }
   }
 
   auditFromRow(row) {

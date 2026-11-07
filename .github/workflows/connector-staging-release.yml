@@ -132,7 +132,7 @@ jobs:
           ]);
           assert.equal(accountSecurity.enforce_twofactor, true, "Cloudflare account-level MFA enforcement must be enabled before Staging release");
           const bindings = new Map((settings.bindings || []).map((binding) => [binding.name, binding]));
-          const requiredSecrets = ["GITHUB_READONLY_TOKEN", "GITHUB_TOKEN", "MCP_AUTH_TOKEN", "MCP_ALLOWED_ORIGINS", "GITHUB_WEBHOOK_SECRET", "LEDGER_WORKER_ASSERTION_KEYS"];
+          const requiredSecrets = ["GITHUB_READONLY_TOKEN", "GITHUB_TOKEN", "MCP_AUTH_TOKEN", "MCP_ALLOWED_ORIGINS", "GITHUB_WEBHOOK_SECRET", "LEDGER_WORKER_ASSERTION_KEYS", "LEDGER_OWNER_ASSERTION_KEYS"];
           const missing = requiredSecrets.filter((name) => bindings.get(name)?.type !== "secret_text");
           if (missing.length) {
             throw new Error("Staging deployment blocked; missing Worker secret binding(s): " + missing.join(", ") + ". Add them in Cloudflare Workers > chat-gpt111-staging > Settings > Variables and Secrets. Secret values are never read.");
@@ -140,6 +140,18 @@ jobs:
           const activeSignerKid = bindings.get("LEDGER_WORKER_ASSERTION_ACTIVE_KID");
           assert.equal(activeSignerKid?.type, "plain_text", "Staging LEDGER_WORKER_ASSERTION_ACTIVE_KID must be a non-secret plain-text binding");
           assert.match(activeSignerKid.text || "", /^[A-Za-z0-9._-]{1,64}$/, "Staging active signer key ID must be a bounded identifier");
+          const ownerSignerKid = bindings.get("LEDGER_OWNER_ASSERTION_ACTIVE_KID");
+          assert.equal(ownerSignerKid?.type, "plain_text", "Staging LEDGER_OWNER_ASSERTION_ACTIVE_KID must be a non-secret plain-text binding");
+          assert.match(ownerSignerKid.text || "", /^[A-Za-z0-9._-]{1,32}$/, "Staging Owner assertion key ID must be a bounded identifier");
+          const ownerId = bindings.get("GITHUB_WEBHOOK_OWNER_ID");
+          const repositoryId = bindings.get("GITHUB_WEBHOOK_REPOSITORY_ID");
+          const repositoryName = bindings.get("GITHUB_WEBHOOK_REPOSITORY");
+          assert.equal(ownerId?.type, "plain_text", "Staging GITHUB_WEBHOOK_OWNER_ID must be a plain-text immutable identity binding");
+          assert.match(ownerId.text || "", /^[1-9][0-9]{0,19}$/, "Staging Owner numeric ID must be valid");
+          assert.equal(repositoryId?.type, "plain_text", "Staging GITHUB_WEBHOOK_REPOSITORY_ID must be a plain-text immutable identity binding");
+          assert.match(repositoryId.text || "", /^[1-9][0-9]{0,19}$/, "Staging repository numeric ID must be valid");
+          assert.equal(repositoryName?.type, "plain_text", "Staging GITHUB_WEBHOOK_REPOSITORY must be a plain-text immutable identity binding");
+          assert.match(repositoryName.text || "", /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "Staging repository name must be canonical");
           assert.equal(bindings.get("PUBLIC_READ_ONLY")?.text, "true", "PUBLIC_READ_ONLY must be explicitly true in Staging");
           assert.ok(bindings.get("WRITE_CONTROL")?.namespace_id, "Staging WRITE_CONTROL namespace is required");
           assert.ok(bindings.get("MCP_RATE_LIMITER")?.namespace_id, "Staging MCP_RATE_LIMITER namespace is required");

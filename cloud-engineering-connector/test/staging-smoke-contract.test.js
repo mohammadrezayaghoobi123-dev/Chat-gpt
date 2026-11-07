@@ -69,7 +69,7 @@ test("readiness requires the independent OrchestratorLedger SQLite probe", () =>
   const worker = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
   assert.match(worker, /env\.ORCHESTRATOR_LEDGER/, "readyz must fail closed when the Ledger binding is absent");
   assert.match(worker, /orchestratorLedgerStub\.ping\(\)/, "readyz must execute the Ledger SQLite probe");
-  assert.match(worker, /orchestratorLedgerProbe\.schemaVersion\s*!==\s*5/, "readyz must enforce the Ledger schema version");
+  assert.match(worker, /orchestratorLedgerProbe\.schemaVersion\s*!==\s*6/, "readyz must enforce the Ledger schema version");
   assert.match(worker, /readinessState\.orchestrator_ledger\s*=\s*"ok"/, "readyz must report Ledger readiness separately");
 });
 
@@ -78,6 +78,17 @@ test("Staging release requires the webhook and Ledger assertion secret bindings"
   const stagingWorkflow = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
   assert.match(stagingWorkflow, /"GITHUB_WEBHOOK_SECRET"/);
   assert.match(stagingWorkflow, /"LEDGER_WORKER_ASSERTION_KEYS"/);
+});
+
+test("Staging release requires Owner assertion secret and immutable Owner/repository identity bindings", () => {
+  const release = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  assert.match(release, /"LEDGER_OWNER_ASSERTION_KEYS"/);
+  assert.match(release, /LEDGER_OWNER_ASSERTION_ACTIVE_KID/);
+  assert.match(release, /GITHUB_WEBHOOK_OWNER_ID/);
+  assert.match(release, /GITHUB_WEBHOOK_REPOSITORY_ID/);
+  assert.match(release, /GITHUB_WEBHOOK_REPOSITORY/);
+  assert.match(release, /ownerSignerKid\?\.type, "plain_text"/);
+  assert.match(release, /GITHUB_WEBHOOK_OWNER_ID.*plain_text/s);
 });
 
 test("Staging release verifies the OrchestratorLedger binding after applying the migration", () => {

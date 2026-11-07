@@ -31,7 +31,7 @@ function createKnowledgeStoreBinding(){
 const knowledgeStore=createKnowledgeStoreBinding();
 function createOrchestratorLedgerBinding(){
  const calls=[];
- const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:5}}};
+ const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:6}}};
  return{calls,binding:{idFromName(name){calls.push({method:"idFromName",name});return name},get(id){calls.push({method:"get",id});return stub}}};
 }
 const orchestratorLedger=createOrchestratorLedgerBinding();
@@ -1496,7 +1496,7 @@ test("Queue consumer durably acknowledges first delivery and identical redeliver
  const body={
   schemaVersion:1,eventId:"queue-event-test-0001",idempotencyKey:"queue-idempotency-test-0001",
   taskId:"task-consumer-0001",eventType:"task.transitioned",
-  payload:{taskId:"task-consumer-0001",from:"SCHEDULED",to:"RUNNING"},
+  payload:{taskId:"task-consumer-0001",version:2,from:"SCHEDULED",to:"RUNNING"},
   attempts:1,createdAt:Date.now()
  };
  const makeMessage=()=>({body,acked:0,retried:0,ack(){this.acked++},retry(){this.retried++}});
@@ -1509,6 +1509,26 @@ test("Queue consumer durably acknowledges first delivery and identical redeliver
  assert.equal(calls[0].consumerId,"orchestrator-outbox-consumer");
  assert.match(calls[0].envelopeSha256,/^[a-f0-9]{64}$/);
  assert.equal(typeof calls[0].workerAssertion,"string");
+});
+
+test("Queue consumer acknowledges a deterministically fenced task event without retry",async()=>{
+ let retried=0,acked=0,receiptCalls=0;
+ const result=await consumeOrchestratorOutbox({messages:[{
+  body:{
+   schemaVersion:1,eventId:"queue-event-fenced-0001",idempotencyKey:"queue-idempotency-fenced-0001",
+   taskId:"task-fenced-0001",eventType:"task.transitioned",
+   payload:{taskId:"task-fenced-0001",version:1},attempts:1,createdAt:Date.now()
+  },
+  ack(){acked++},retry(){retried++}
+ }]},{
+  ORCHESTRATOR_LEDGER:{idFromName:name=>name,get:()=>({recordOutboxReceipt:async()=>{receiptCalls++;return{recorded:false,blocked:true,reason:"TASK_VERSION_FENCED"}}})},
+  LEDGER_WORKER_ASSERTION_KEYS:env.LEDGER_WORKER_ASSERTION_KEYS,
+  LEDGER_WORKER_ASSERTION_ACTIVE_KID:env.LEDGER_WORKER_ASSERTION_ACTIVE_KID
+ });
+ assert.deepEqual(result,{received:1,acknowledged:1,retried:0,duplicates:0});
+ assert.equal(receiptCalls,1);
+ assert.equal(retried,0);
+ assert.equal(acked,1);
 });
 
 test("Queue consumer retries unknown event types without invoking durable receipt",async()=>{

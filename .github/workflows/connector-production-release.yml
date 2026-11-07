@@ -138,7 +138,7 @@ jobs:
           const productionBindings = new Map((productionSettings.bindings || []).map((binding) => [binding.name, binding]));
           const stagingBindings = new Map((stagingSettings.bindings || []).map((binding) => [binding.name, binding]));
 
-          const requiredSecrets = ["GITHUB_READONLY_TOKEN", "GITHUB_TOKEN", "MCP_AUTH_TOKEN", "MCP_ALLOWED_ORIGINS", "GITHUB_WEBHOOK_SECRET", "LEDGER_WORKER_ASSERTION_KEYS"];
+          const requiredSecrets = ["GITHUB_READONLY_TOKEN", "GITHUB_TOKEN", "MCP_AUTH_TOKEN", "MCP_ALLOWED_ORIGINS", "GITHUB_WEBHOOK_SECRET", "LEDGER_WORKER_ASSERTION_KEYS", "LEDGER_OWNER_ASSERTION_KEYS"];
           const missing = requiredSecrets.filter((name) => productionBindings.get(name)?.type !== "secret_text");
           if (missing.length) {
             throw new Error("Production deployment blocked; missing Worker secret binding(s): " + missing.join(", ") + ". Add them in Cloudflare Workers > chat-gpt111 > Settings > Variables and Secrets. Secret values are never read.");
@@ -148,6 +148,19 @@ jobs:
             const activeSignerKid = bindings.get("LEDGER_WORKER_ASSERTION_ACTIVE_KID");
             assert.equal(activeSignerKid?.type, "plain_text", label + " LEDGER_WORKER_ASSERTION_ACTIVE_KID must be a non-secret plain-text binding");
             assert.match(activeSignerKid.text || "", /^[A-Za-z0-9._-]{1,64}$/, label + " active signer key ID must be a bounded identifier");
+            const ownerSignerKid = bindings.get("LEDGER_OWNER_ASSERTION_ACTIVE_KID");
+            assert.equal(ownerSignerKid?.type, "plain_text", label + " LEDGER_OWNER_ASSERTION_ACTIVE_KID must be a non-secret plain-text binding");
+            assert.match(ownerSignerKid.text || "", /^[A-Za-z0-9._-]{1,32}$/, label + " Owner assertion key ID must be a bounded identifier");
+            assert.equal(bindings.get("LEDGER_OWNER_ASSERTION_KEYS")?.type, "secret_text", label + " Owner assertion keyset secret is required");
+            const ownerId = bindings.get("GITHUB_WEBHOOK_OWNER_ID");
+            const repositoryId = bindings.get("GITHUB_WEBHOOK_REPOSITORY_ID");
+            const repositoryName = bindings.get("GITHUB_WEBHOOK_REPOSITORY");
+            assert.equal(ownerId?.type, "plain_text", label + " GITHUB_WEBHOOK_OWNER_ID must be a plain-text immutable identity binding");
+            assert.match(ownerId.text || "", /^[1-9][0-9]{0,19}$/, label + " Owner numeric ID must be valid");
+            assert.equal(repositoryId?.type, "plain_text", label + " GITHUB_WEBHOOK_REPOSITORY_ID must be a plain-text immutable identity binding");
+            assert.match(repositoryId.text || "", /^[1-9][0-9]{0,19}$/, label + " repository numeric ID must be valid");
+            assert.equal(repositoryName?.type, "plain_text", label + " GITHUB_WEBHOOK_REPOSITORY must be a plain-text immutable identity binding");
+            assert.match(repositoryName.text || "", /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, label + " repository name must be canonical");
           }
 
           const productionLimiter = productionBindings.get("MCP_RATE_LIMITER");

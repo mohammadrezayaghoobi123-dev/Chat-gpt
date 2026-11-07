@@ -60,13 +60,15 @@ const evidence = { kind: "test-evidence", reference: "ci://run/123" };
 describe("OrchestratorLedger durable coordination contract", () => {
   it("initializes its own SQLite schema and reports the schema version", async () => {
     const ledger = ledgerFor("ledger-schema-ping");
-    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 5 });
+    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 6 });
     await runInDurableObject(ledger, async (instance, state) => {
       const tables = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row => row.name);
       expect(tables).toEqual(expect.arrayContaining([
         "orchestrator_tasks", "orchestrator_processed_messages",
         "orchestrator_execution_leases", "orchestrator_outbox_events", "orchestrator_outbox_receipts", "orchestrator_audit_events",
         "orchestrator_consumed_assertions",
+        "orchestrator_owner_consumed_assertions",
+        "orchestrator_owner_command_receipts",
       ]));
       const outboxColumns = state.storage.sql.exec("PRAGMA table_info(orchestrator_outbox_events)").toArray().map(row => row.name);
       expect(outboxColumns).toEqual(expect.arrayContaining([
@@ -1196,7 +1198,7 @@ it("integrates the real Durable Object Ledger with publisher and Queue consumer 
     now: integrationNow,
   });
   expect(created).toMatchObject({ created: true, task: { taskId } });
-  const payload = { taskId, transition: "created", source: "integration-test" };
+  const payload = { taskId, version: 1, transition: "created", source: "integration-test" };
   const enqueued = await ledger.enqueueOutbox({
     eventId: "evt-queue-e2e-0001",
     idempotencyKey: "outbox-queue-e2e-0001",
@@ -1296,7 +1298,7 @@ it("acknowledges a republished event after an uncertain send even when the publi
     });
     expect(created).toMatchObject({ created: true, task: { taskId } });
 
-    const payload = { taskId, transition: "created", source: "uncertain-send-replay-test" };
+    const payload = { taskId, version: 1, transition: "created", source: "uncertain-send-replay-test" };
     const enqueued = await ledger.enqueueOutbox({
       eventId: "evt-queue-republish-e2e",
       idempotencyKey: "outbox-queue-republish-e2e",

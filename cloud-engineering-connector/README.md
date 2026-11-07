@@ -117,6 +117,8 @@ The live audit found that Staging has `PUBLIC_READ_ONLY=true` as a plain-text bi
 
 The latest live Production deployment is dated 2026-11-03 and was triggered by an API upload; the latest Staging deployment is dated 2026-11-02 and was triggered from the dashboard. The deployment metadata does not expose a Git commit SHA. Therefore the active Worker versions cannot currently be proven to correspond to a reviewed GitHub commit. Do not treat a green GitHub workflow or a successful dashboard upload as deployment provenance.
 
+Staging release approval now requires the exact candidate head to belong to an open, non-draft PR targeting the approved integration branch; the full PR must be mergeable with a clean merge state, and a GitHub compare against the live integration ref must prove the candidate descends from the current integration head with zero commits behind. A stale or conflicted candidate is rejected before review acceptance. Production release requires a merged PR to `main` whose merge commit SHA is exactly the candidate SHA. Both release workflows run the repository checks and Wrangler dry-runs before deployment; no automatic promotion from Staging to Production is assumed.
+
 Workers Logs are already enabled in both live environments with custom log persistence, query-string redaction, and invocation logs disabled. This captures explicit storage telemetry without persisting full invocation request/response logs. Confirm that these settings remain intact after the next Staging deployment. Cloudflare Workers Logs retention is limited; use it as deployment evidence, not as a durable audit archive.
 
 

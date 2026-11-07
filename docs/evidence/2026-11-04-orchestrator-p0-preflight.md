@@ -1,3 +1,5 @@
+> **Historical snapshot:** This assessment was generated on 2026-11-04 and is superseded for current runtime inventory by [the 2026-11-07 read-only preflight](2026-11-07-orchestrator-p0-preflight.md). Do not use the Queue count or branch SHAs below as current evidence.
+
 # Orchestrator P0 — Read-only feasibility and repository preflight
 
 **Assessment date:** 2026-11-04  

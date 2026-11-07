@@ -1,0 +1,196 @@
+{
+  "generatedAt": "2026-11-07T12:30:09.078Z",
+  "repo": {
+    "name": "mohammadrezayaghoobi123-dev/Chat-gpt",
+    "visibility": "public",
+    "defaultBranch": "main",
+    "mainSha": "f2cae91de818385ec48daafc43c621b9e2cc0675",
+    "baseBranch": "integration/unify-main-and-integrated-2026-11-02",
+    "baseSha": "de1059a7bf6f276fb2998b4c304c9469c4880c53"
+  },
+  "github": {
+    "standardPublicRunnerFree": true,
+    "workflowPermissions": [
+      "contents:read",
+      "pull-requests:read",
+      "actions:read"
+    ],
+    "protectedBranchPolicyVerified": false,
+    "taskScopedWriteCredentialVerified": false,
+    "pullRequests": [
+      {
+        "number": 145,
+        "state": "open",
+        "draft": false,
+        "merged": false,
+        "headSha": "bc747dd84fb1fbcb8c8311412825779c4f66052f",
+        "base": "integration/unify-main-and-integrated-2026-11-02",
+        "baseSha": "de1059a7bf6f276fb2998b4c304c9469c4880c53",
+        "mergeable": false,
+        "mergeableState": "dirty",
+        "behindBy": 204
+      },
+      {
+        "number": 148,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "81aff6a38844adb6befdfc315e50835831df6e1a",
+        "base": "integration/unify-main-and-integrated-2026-11-02",
+        "baseSha": "de1059a7bf6f276fb2998b4c304c9469c4880c53",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "behindBy": 0
+      },
+      {
+        "number": 149,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "409c3321820c4ada9bcc8ffd305704f37852d07d",
+        "base": "integration/unify-main-and-integrated-2026-11-02",
+        "baseSha": "de1059a7bf6f276fb2998b4c304c9469c4880c53",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "behindBy": 0
+      }
+    ],
+    "mainRuleset": {
+      "active": true,
+      "requiredApprovals": 1,
+      "requiredStatusChecks": [],
+      "staleReviewsDismissed": true
+    }
+  },
+  "cloudflareInventory": {
+    "planVerified": false,
+    "workers": [
+      "chat-gpt111",
+      "chat-gpt111-staging",
+      "master-brain-cloud-agent"
+    ],
+    "durableObjectNamespaces": [
+      {
+        "script": "master-brain-cloud-agent",
+        "className": "AgentBudget",
+        "name": "master-brain-cloud-agent_AgentBudget"
+      },
+      {
+        "script": "master-brain-cloud-agent",
+        "className": "AgentSession",
+        "name": "master-brain-cloud-agent_AgentSession"
+      },
+      {
+        "script": "chat-gpt111-staging",
+        "className": "WriteControl",
+        "name": "chat-gpt111-staging_WriteControl"
+      }
+    ],
+    "knowledgeStoreSourceDeclared": true,
+    "knowledgeStoreNamespacePresent": false,
+    "d1Databases": [],
+    "queues": [
+      {
+        "name": "chat-gpt111-orchestrator-outbox",
+        "consumerCount": 0
+      },
+      {
+        "name": "chat-gpt111-orchestrator-outbox-dlq",
+        "consumerCount": 0
+      },
+      {
+        "name": "chat-gpt111-staging-orchestrator-outbox",
+        "consumerCount": 0
+      },
+      {
+        "name": "chat-gpt111-staging-orchestrator-outbox-dlq",
+        "consumerCount": 0
+      }
+    ],
+    "workerBindings": [
+      {
+        "worker": "chat-gpt111",
+        "durableObjectBindings": []
+      },
+      {
+        "worker": "chat-gpt111-staging",
+        "durableObjectBindings": [
+          "WRITE_CONTROL"
+        ]
+      },
+      {
+        "worker": "master-brain-cloud-agent",
+        "durableObjectBindings": [
+          "AgentBudget",
+          "AgentSession"
+        ]
+      }
+    ],
+    "queueConsumersAttached": false,
+    "quarantineQueuesPresent": false,
+    "missingQuarantineQueues": [
+      "chat-gpt111-orchestrator-outbox-dlq-quarantine",
+      "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine"
+    ],
+    "accountMfaEnforced": true,
+    "observability": {
+      "enabled": true,
+      "logsPersist": true,
+      "redactQueryString": true,
+      "invocationLogs": false,
+      "tracesEnabled": false
+    },
+    "cronSchedules": {
+      "production": [],
+      "staging": []
+    },
+    "releaseBindings": {
+      "productionPublicReadOnlyType": "secret_text",
+      "stagingPublicReadOnly": {
+        "type": "plain_text",
+        "value": "true"
+      },
+      "missing": [
+        "GITHUB_WEBHOOK_SECRET",
+        "LEDGER_WORKER_ASSERTION_KEYS",
+        "LEDGER_WORKER_ASSERTION_ACTIVE_KID"
+      ]
+    },
+    "deploymentProvenance": {
+      "production": {
+        "date": "2026-11-03",
+        "source": "api upload",
+        "gitSha": null
+      },
+      "staging": {
+        "date": "2026-11-02",
+        "source": "dashboard deployment",
+        "gitSha": null
+      }
+    }
+  },
+  "agentEligibility": {
+    "openai": "UNAVAILABLE",
+    "anthropic": "UNAVAILABLE"
+  },
+  "independentReviewer": {
+    "verified": false
+  },
+  "backupRestore": {
+    "verified": false,
+    "externalCheckpoint": false
+  },
+  "baseline": {
+    "status": "PASS",
+    "commitSha": "de1059a7bf6f276fb2998b4c304c9469c4880c53",
+    "runId": "42364664617"
+  },
+  "evidenceRefs": [
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/commit/de1059a7bf6f276fb2998b4c304c9469c4880c53",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/commit/f2cae91de818385ec48daafc43c621b9e2cc0675",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/145",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/148",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/149",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/42364664617"
+  ]
+}

@@ -272,7 +272,7 @@ function toMarkdown(report) {
 async function main() {
   const args = process.argv.slice(2);
   const inputPath = args.find(arg => !arg.startsWith("--")) ??
-    "../docs/evidence/2026-11-04-orchestrator-p0-preflight-input.json";
+    "../docs/evidence/2026-11-07-orchestrator-p0-preflight-input.json";
   const input = JSON.parse(await readFile(resolve(process.cwd(), inputPath), "utf8"));
   const report = buildPreflightReport(input);
   console.log(args.includes("--summary") ? toMarkdown(report) : JSON.stringify(report, null, 2));

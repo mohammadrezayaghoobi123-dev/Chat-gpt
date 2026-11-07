@@ -618,7 +618,7 @@ it("requires verified worker identities before task or outbox lease side effects
     });
     const input = {
       eventId: "audit-sensitive-0001",
-      taskId: "task-0001",
+      taskId: "missing-task-0001",
       actor: agent,
       workerId: "agent:worker-1",
       workerAssertion: assertion,
@@ -631,7 +631,7 @@ it("requires verified worker identities before task or outbox lease side effects
       appended: false, reason: "SENSITIVE_FIELD_REJECTED",
     });
     await expect(ledger.appendAuditEvent({
-      ...input, details: { safe: true },
+      ...input, taskId: "task-0001", details: { safe: true },
     })).resolves.toEqual({
       appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED",
     });

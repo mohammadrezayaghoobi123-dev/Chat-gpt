@@ -515,7 +515,7 @@ it("requires verified worker identities before task or outbox lease side effects
     });
     const rejected = await ledger.createTask({
       task: { ...task(), apiKey: "must-not-be-persisted" },
-      idempotencyKey: "create-task-sensitive-001",
+      idempotencyKey: "a",
       inputHash: "a".repeat(64),
       now,
       workerId: "orchestrator-scheduler",
@@ -547,7 +547,7 @@ it("requires verified worker identities before task or outbox lease side effects
   it("consumes a transitionTask assertion when its authenticated outbox payload is rejected", async () => {
     const ledger = ledgerFor("ledger-transition-outbox-sensitive-assertion-consumption");
     await createTask(ledger, {
-      task: task(), idempotencyKey: "transition-outbox-sensitive-task", inputHash: "b".repeat(64), now,
+      task: task(), idempotencyKey: "b", inputHash: "b".repeat(64), now,
     });
     const lease = await ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"),
@@ -610,7 +610,7 @@ it("requires verified worker identities before task or outbox lease side effects
   it("consumes an appendAuditEvent assertion when authenticated audit details are rejected", async () => {
     const ledger = ledgerFor("ledger-audit-sensitive-assertion-consumption");
     await createTask(ledger, {
-      task: task(), idempotencyKey: "audit-sensitive-task", inputHash: "c".repeat(64), now,
+      task: task(), idempotencyKey: "c", inputHash: "c".repeat(64), now,
     });
     const assertion = await createWorkerAssertion({
       subject: "agent:worker-1", role: "agent", operation: "appendAuditEvent",
@@ -650,9 +650,9 @@ it("requires verified worker identities before task or outbox lease side effects
 
   it("rejects secret-bearing fields and never creates or writes KnowledgeStore tables", async () => {
     const ledger = ledgerFor("ledger-secret-isolation");
-    await expect(Promise.resolve().then(() => createTask(ledger, {
+    await expect(createTask(ledger, {
       task: { ...task(), apiKey: "must-not-persist" }, idempotencyKey: "task-secret-0001", inputHash: "c".repeat(64), now,
-    }))).rejects.toThrow(/sensitive field/);
+    })).resolves.toEqual({ created: false, reason: "SENSITIVE_FIELD_REJECTED" });
     await createTask(ledger, { task: task(), idempotencyKey: "task-safe-0001", inputHash: "d".repeat(64), now });
     const unauthenticatedMessage = await ledger.recordMessage({
       messageId: "msg-secret-0001", taskId: "task-0001", inputHash: "e".repeat(64),

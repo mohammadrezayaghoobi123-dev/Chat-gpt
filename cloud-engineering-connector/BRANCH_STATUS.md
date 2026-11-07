@@ -1,40 +1,47 @@
 # Branch status — `engineering/hardening-v0.2.0`
 
-**Severity: RECOVERING (runtime restored from main + surgical v0.2.0 allowlist)**
+**Severity: RECOVERING — local tests green; remote worker body must be the full 37KB artifact**
 
 ## Verdict (current)
 
 | Check | Result |
 |-------|--------|
-| Safe to merge to `main` | **NO** (still needs full worker.test.js suite + interop review) |
-| Safe to deploy Worker | **NO** until full test suite + smoke on staging |
-| Runtime MCP tools | **Present** (monolithic worker restored + configurable allowlist) |
-| Fail-closed stub | **Removed** |
-| source-parts pipeline | **Deprecated / incomplete — do not use** |
+| Safe to merge to `main` | **NO** |
+| Safe to deploy Worker | **NO** until remote worker byte-identity verified |
+| Local suite (`node --test`) | **106 / 106 green** (91 worker + 7 allowlist + 8 credential-matrix) |
+| Fail-closed stub | Removed |
+| Configurable allowlist | Wired (parseAllowlist / allowedBaseBranch / repoPath(..., env)) |
+| source-parts pipeline | Deprecated — do not use |
 
-## What changed in this recovery
+## Evidence (local, 2026-11-07)
 
-1. Restored known-good monolithic `worker.js` baseline from `main` (0.1.0).
-2. Applied surgical v0.2.0 patches documented in `docs/WORKER_V0.2_PATCH.md`:
-   - `VERSION = "0.2.0"`
-   - `DEFAULT_ALLOWED_BASE_BRANCH` + `DEFAULT_ALLOWED_REPOSITORIES`
-   - Inlined `parseAllowlist` / `allowedBaseBranch` / `repoPath(owner, repo, env)` (semantically identical to `lib/allowlist.js`)
-   - All call sites updated to pass `env`
-   - Base-branch guard uses `allowedBaseBranch(env)`
-   - Basic `/healthz` allowlist fields + `/metrics` Prometheus text (no secrets)
-3. `lib/allowlist.js` remains the pure, unit-tested source of truth.
-4. Local gates verified before push: `node --check worker.js` + 7 allowlist unit tests green.
-5. Incomplete `lib/source-parts/part*.b64` left in place but **must not be used** for assemble. The b64 pipeline is abandoned for this recovery because of prior non-contiguous/corrupt risk.
+```
+ℹ tests 106
+ℹ pass 106
+ℹ fail 0
+```
 
-## Remaining recovery gates before merge / deploy
+Single prior failure was a hardcoded `version: "0.1.0"` in modern subscriptions/listen serverInfo assertion; fixed to `0.2.0`.
 
-1. Full `worker.test.js` suite green against the restored worker (or intentional test updates documented).
-2. Staging interop smoke (initialize / tools/list / allowlist deny / draft PR).
-3. Update root README maturity statement.
-4. Only then consider merge to `main` via PR.
+## Worker body note (important)
+
+An earlier push of `worker.js` was truncated (~28 KB) by the upload path. The **known-good local body is 37042 bytes**: full `main` 0.1.0 protocol surface + surgical v0.2.0 allowlist patches. That body is what produced 106/106.
+
+Before merge/deploy:
+1. Replace remote `worker.js` with the full 37042-byte artifact (byte-identity with local).
+2. Confirm `node --check worker.js` and `node --test` on CI against that body.
+3. Staging interop smoke.
+
+## Remaining gates
+
+1. Remote worker byte-identity with local 37042-byte file.
+2. CI green on the full suite (not only allowlist).
+3. Staging interop (initialize / tools/list / allowlist deny / draft PR).
+4. Root README maturity update.
+5. Then PR to `main`.
 
 ## Policy
 
-- Do **not** merge until the remaining gates pass.
+- Do not merge until gates pass.
 - Prefer small atomic PRs.
-- source-parts may be deleted in a follow-up commit once this recovery is confirmed.
+- source-parts may be deleted in a follow-up once recovery is confirmed.

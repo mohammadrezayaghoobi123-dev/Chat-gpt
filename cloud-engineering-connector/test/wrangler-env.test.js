@@ -80,3 +80,44 @@ test("Production and Staging both declare the five-minute reconciliation Cron", 
   assert.match(production, /\[triggers\][\s\S]*?crons\s*=\s*\["\*\/5 \* \* \* \*"\]/);
   assert.match(staging, /\[env\.staging\.triggers\][\s\S]*?crons\s*=\s*\["\*\/5 \* \* \* \*"\]/);
 });
+
+
+test("Production and Staging bind isolated Orchestrator Outbox Queues with bounded retries and DLQs", () => {
+  const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
+  const sections = [
+    { text: production, queue: "chat-gpt111-orchestrator-outbox", dlq: "chat-gpt111-orchestrator-outbox-dlq", producer: "[[queues.producers]]", consumer: "[[queues.consumers]]" },
+    { text: staging, queue: "chat-gpt111-staging-orchestrator-outbox", dlq: "chat-gpt111-staging-orchestrator-outbox-dlq", producer: "[[env.staging.queues.producers]]", consumer: "[[env.staging.queues.consumers]]" },
+  ];
+  for (const section of sections) {
+    assert.ok(section.text.includes(section.producer));
+    assert.ok(section.text.includes(section.consumer));
+    assert.ok(section.text.includes('binding = "ORCHESTRATOR_OUTBOX_QUEUE"'));
+    assert.ok(section.text.includes('queue = "' + section.queue + '"'));
+    assert.match(section.text, /max_batch_size\s*=\s*5/);
+    assert.match(section.text, /max_concurrency\s*=\s*5/);
+    assert.match(section.text, /max_retries\s*=\s*5/);
+    assert.ok(section.text.includes('dead_letter_queue = "' + section.dlq + '"'));
+    assert.match(section.text, /retry_delay\s*=\s*30/);
+  }
+  assert.notEqual(sections[0].queue, sections[1].queue);
+  assert.notEqual(sections[0].dlq, sections[1].dlq);
+});
+
+
+test("Production and Staging declare isolated DLQ consumers and queue routing names", () => {
+  const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
+  assert.match(production, /ORCHESTRATOR_OUTBOX_QUEUE_NAME = "chat-gpt111-orchestrator-outbox"/);
+  assert.match(production, /ORCHESTRATOR_OUTBOX_DLQ_QUEUE = "chat-gpt111-orchestrator-outbox-dlq"/);
+  assert.match(staging, /ORCHESTRATOR_OUTBOX_QUEUE_NAME = "chat-gpt111-staging-orchestrator-outbox"/);
+  assert.match(staging, /ORCHESTRATOR_OUTBOX_DLQ_QUEUE = "chat-gpt111-staging-orchestrator-outbox-dlq"/);
+  assert.match(production, /\[\[queues\.consumers\]\]\s*\nqueue = "chat-gpt111-orchestrator-outbox-dlq"[\s\S]*?max_retries = 100[\s\S]*?retry_delay = 3600/);
+  assert.match(staging, /\[\[env\.staging\.queues\.consumers\]\]\s*\nqueue = "chat-gpt111-staging-orchestrator-outbox-dlq"[\s\S]*?max_retries = 100[\s\S]*?retry_delay = 3600/);
+});
+
+
+test("Production and Staging DLQ archivers route repeated archival failures to isolated quarantine queues", () => {
+  const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
+  assert.match(production, /\[\[queues\.consumers\]\]\s*\nqueue = "chat-gpt111-orchestrator-outbox-dlq"[\s\S]*?dead_letter_queue = "chat-gpt111-orchestrator-outbox-dlq-quarantine"/);
+  assert.match(staging, /\[\[env\.staging\.queues\.consumers\]\]\s*\nqueue = "chat-gpt111-staging-orchestrator-outbox-dlq"[\s\S]*?dead_letter_queue = "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine"/);
+  assert.notEqual("chat-gpt111-orchestrator-outbox-dlq-quarantine", "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine");
+});

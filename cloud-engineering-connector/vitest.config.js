@@ -5,6 +5,12 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.toml" },
+      miniflare: {
+        bindings: {
+          // Test-only deterministic key. Never copied into Wrangler or Cloudflare secrets.
+          LEDGER_WORKER_ASSERTION_KEYS: JSON.stringify({ "test-v1": "3031323334353637383961626364656630313233343536373839616263646566" }),
+        },
+      },
     }),
   ],
   test: {

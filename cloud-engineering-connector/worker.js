@@ -1,4 +1,7 @@
 import { consoleResponse } from "./console.js";
+import { authenticateGitHubWebhook } from "./github-webhook-auth.js";
+import { validateGitHubIntakeEvent } from "./orchestrator-github-intake.js";
+import { createScheduledWorkerAssertion, validateWorkerAssertionSigningConfig } from "./orchestrator-worker-identity.js";
 const VERSION = "0.1.0";
 const MAX_FILES = 12;
 const MAX_FILE_BYTES = 100_000;
@@ -829,7 +832,125 @@ default:throw new Error("Unknown tool: "+name)
 async function enforceRateLimit(request,env,keyPrefix){const limiter=env.MCP_RATE_LIMITER;if(!limiter||typeof limiter.limit!=="function")return json({error:"rate_limiter_unavailable"},503);const clientIp=request.headers.get("cf-connecting-ip");const clientKey=clientIp&&clientIp.length<=128?rateLimitClientKey(clientIp):null;if(!clientKey)return json({error:"client_identity_unavailable"},503);let limitResult;try{limitResult=await limiter.limit({key:keyPrefix+clientKey})}catch{return json({error:"rate_limiter_unavailable"},503)}if(!limitResult||typeof limitResult.success!=="boolean")return json({error:"rate_limiter_unavailable"},503);if(limitResult.success===false)return json({error:"rate_limited"},429,{"retry-after":"60"});return null}
 const MAX_AUTHORIZATION_LENGTH=519;
 function constantTimeEqual(left,right){if(typeof left!=="string"||typeof right!=="string"||left.length>MAX_AUTHORIZATION_LENGTH||right.length>MAX_AUTHORIZATION_LENGTH)return false;let difference=left.length^right.length;for(let i=0;i<MAX_AUTHORIZATION_LENGTH;i++)difference|=(left.charCodeAt(i)||0)^(right.charCodeAt(i)||0);return difference===0}
-async function handleRequest(request,env){const url=new URL(request.url);if(request.method==="GET"&&url.pathname==="/"){return consoleResponse()}if(request.method==="GET"&&url.pathname==="/healthz")return json({status:"ok",service:"cloud-engineering-connector",version:VERSION,execution:"cloudflare-workers",laptop_dependency:false});if(request.method==="GET"&&url.pathname==="/readyz"){const readyzLimited=await enforceRateLimit(request,env,"readyz:");if(readyzLimited)return readyzLimited;const readinessState={durable_objects:"unavailable",knowledge_store:"unavailable",orchestrator_ledger:"unavailable"};try{const binding=env.WRITE_CONTROL;if(!binding||typeof binding.idFromName!=="function"||typeof binding.get!=="function")throw new Error("missing WriteControl binding");const stub=binding.get(binding.idFromName("create-change-pr-global"));if(!stub||typeof stub.ping!=="function")throw new Error("missing WriteControl readiness probe");const probe=await stub.ping();if(!probe||probe.ok!==true||probe.schemaVersion!==1)throw new Error("WriteControl readiness probe failed");readinessState.durable_objects="ok";const knowledgeBinding=env.KNOWLEDGE_STORE;if(!knowledgeBinding||typeof knowledgeBinding.idFromName!=="function"||typeof knowledgeBinding.get!=="function")throw new Error("missing KnowledgeStore binding");const knowledgeStub=knowledgeBinding.get(knowledgeBinding.idFromName("tenant:owner"));if(!knowledgeStub||typeof knowledgeStub.ping!=="function")throw new Error("missing KnowledgeStore readiness probe");const knowledgeProbe=await knowledgeStub.ping();if(!knowledgeProbe||knowledgeProbe.ok!==true||knowledgeProbe.schemaVersion!==3)throw new Error("KnowledgeStore readiness probe failed");readinessState.knowledge_store="ok";const ledgerBinding=env.ORCHESTRATOR_LEDGER;if(!ledgerBinding||typeof ledgerBinding.idFromName!=="function"||typeof ledgerBinding.get!=="function")throw new Error("missing OrchestratorLedger binding");const orchestratorLedgerStub=ledgerBinding.get(ledgerBinding.idFromName("orchestrator-ledger-global"));if(!orchestratorLedgerStub||typeof orchestratorLedgerStub.ping!=="function")throw new Error("missing OrchestratorLedger readiness probe");const orchestratorLedgerProbe=await orchestratorLedgerStub.ping();if(!orchestratorLedgerProbe||orchestratorLedgerProbe.ok!==true||orchestratorLedgerProbe.schemaVersion!==1)throw new Error("OrchestratorLedger readiness probe failed");readinessState.orchestrator_ledger="ok";return json({status:"ready",service:"cloud-engineering-connector",version:VERSION,execution:"cloudflare-workers",laptop_dependency:false,...readinessState})}catch{return json({status:"not_ready",service:"cloud-engineering-connector",version:VERSION,execution:"cloudflare-workers",laptop_dependency:false,...readinessState},503)}}if(url.pathname!=="/mcp")return json({error:"not_found",message:"Use POST /mcp or GET /healthz."},404);if(request.method==="OPTIONS"){const origin=request.headers.get("origin");if(!origin||!originAllowed(request,env))return json({error:"forbidden_origin"},403);if(request.headers.get("access-control-request-method")!=="POST")return json({error:"method_not_allowed"},405,{"allow":"POST, OPTIONS"});const allowedHeaders=new Set(["accept","authorization","content-type","mcp-protocol-version","mcp-method","mcp-name"]);const requestedHeaders=(request.headers.get("access-control-request-headers")||"").split(",").map(value=>value.trim().toLowerCase()).filter(Boolean);if(requestedHeaders.some(value=>!allowedHeaders.has(value)))return json({error:"forbidden_preflight_header"},400);return new Response(null,{status:204,headers:{...SECURITY_HEADERS,"access-control-allow-origin":origin,"access-control-allow-methods":"POST, OPTIONS","access-control-allow-headers":"Accept, Authorization, Content-Type, MCP-Protocol-Version, Mcp-Method, Mcp-Name","access-control-max-age":"600","vary":"Origin"}})}if(!originAllowed(request,env))return json({error:"forbidden_origin"},403);if(request.method!=="POST")return json({error:"method_not_allowed",message:"The MCP endpoint accepts POST requests only."},405,{"allow":"POST"});const publicReadOnly=env.PUBLIC_READ_ONLY==="true";const authToken=env.MCP_AUTH_TOKEN;const authConfigured=typeof authToken==="string"&&authToken.length>=32&&authToken.length<=512;if(authToken!==undefined&&!authConfigured){const message=typeof authToken!=="string"?"MCP_AUTH_TOKEN must be a string.":authToken.length<32?"MCP_AUTH_TOKEN must be at least 32 characters.":"MCP_AUTH_TOKEN must be at most 512 characters.";return json({error:"server_misconfigured",message},503);}const authHeader=request.headers.get("authorization");const authenticated=authConfigured&&constantTimeEqual(authHeader||"","Bearer "+authToken);if(authConfigured&&!authenticated&&!(publicReadOnly&&authHeader===null)){const rateLimitResponse=await enforceRateLimit(request,env,"auth-failure:");if(rateLimitResponse)return rateLimitResponse;return json({error:"unauthorized"},401,{"www-authenticate":"Bearer"})}if(!env.MCP_AUTH_TOKEN&&!publicReadOnly)return json({error:"server_misconfigured",message:"MCP_AUTH_TOKEN is required unless PUBLIC_READ_ONLY=true is explicitly enabled."},503);if(authenticated){const rateLimitResponse=await enforceRateLimit(request,env,"authenticated-mcp:");if(rateLimitResponse)return rateLimitResponse;}else if(publicReadOnly){const rateLimitResponse=await enforceRateLimit(request,env,"public-mcp:");if(rateLimitResponse)return rateLimitResponse;}const contentType=(request.headers.get("content-type")||"").split(";",1)[0].trim().toLowerCase();if(contentType!=="application/json")return json({error:"unsupported_media_type"},415);const accept=(request.headers.get("accept")||"").split(",").map(part=>{const [type,...parameters]=part.trim().toLowerCase().split(";");const qualityParameters=parameters.map(p=>p.trim()).filter(p=>/^q(?:\s*=|\s*$)/i.test(p)).map(p=>p.replace(/\s*=\s*/,"=").toLowerCase());const validQuality=qualityParameters.length<=1&&(!qualityParameters.length||/^q=(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(qualityParameters[0]));const quality=qualityParameters.length?validQuality?Number(qualityParameters[0].slice(2)):Number.NaN:1;return{type:type.trim(),quality}});if(!["application/json","text/event-stream"].every(type=>accept.some(item=>item.type===type&&Number.isFinite(item.quality)&&item.quality>0)))return json({error:"invalid_accept_header",required:["application/json","text/event-stream"]},400);let rpc;try{rpc=await readJsonLimited(request)}catch(error){if(error?.status===413)return json({error:"payload_too_large"},413);return json({jsonrpc:"2.0",id:null,error:{code:-32700,message:"Parse error"}},400)}const rpcObject=rpc!==null&&typeof rpc==="object"&&!Array.isArray(rpc);const hasId=rpcObject&&Object.prototype.hasOwnProperty.call(rpc,"id");const validRpcId=value=>typeof value==="string"||(typeof value==="number"&&Number.isSafeInteger(value));const responseId=hasId&&validRpcId(rpc.id)?rpc.id:null;if(!rpcObject||rpc.jsonrpc!=="2.0"||typeof rpc.method!=="string"||!rpc.method||Object.prototype.hasOwnProperty.call(rpc,"params")&&(!rpc.params||typeof rpc.params!=="object"||Array.isArray(rpc.params)))return json({jsonrpc:"2.0",id:responseId,error:{code:-32600,message:"Invalid Request"}},400);if(hasId&&!validRpcId(rpc.id))return json({jsonrpc:"2.0",id:null,error:{code:-32600,message:"Invalid Request: id must be a string or safe integer"}},400);if(!hasId&&rpc.method.startsWith("notifications/")){const notificationMeta=rpc.params&&typeof rpc.params==="object"?rpc.params._meta:null;const headerNotificationVersion=request.headers.get("MCP-Protocol-Version");const hasModernNotificationClaim=Boolean(notificationMeta&&typeof notificationMeta==="object"&&!Array.isArray(notificationMeta)&&Object.prototype.hasOwnProperty.call(notificationMeta,"io.modelcontextprotocol/protocolVersion"));if(headerNotificationVersion&&!["2026-07-28","2025-11-25","2025-06-18","2025-03-26"].includes(headerNotificationVersion))return json({error:"unsupported_protocol_version",message:"The notification protocol-version header is unsupported.",supported:["2026-07-28","2025-11-25","2025-06-18","2025-03-26"],requested:headerNotificationVersion},400);if(headerNotificationVersion==="2026-07-28"||hasModernNotificationClaim)return json({error:"unsupported_notification",message:"Client-to-server notifications are not supported over modern Streamable HTTP; close the response stream to cancel the request."},400);return new Response(null,{status:202})}if(!hasId)return json({error:"invalid_notification",message:"Only protocol notification methods may omit the JSON-RPC id."},400);const modernMeta=rpc.params&&typeof rpc.params==="object"?rpc.params._meta:null;const modernVersion=modernMeta&&typeof modernMeta==="object"?modernMeta["io.modelcontextprotocol/protocolVersion"]:null;const clientInfo=modernMeta&&typeof modernMeta==="object"?modernMeta["io.modelcontextprotocol/clientInfo"]:null;const versionHeader=request.headers.get("MCP-Protocol-Version");const hasModernVersionClaim=Boolean(modernMeta&&typeof modernMeta==="object"&&!Array.isArray(modernMeta)&&Object.prototype.hasOwnProperty.call(modernMeta,"io.modelcontextprotocol/protocolVersion"));const modern=versionHeader==="2026-07-28"||hasModernVersionClaim;const id=hasId?rpc.id:null;const modernSupportedVersions=["2026-07-28"];const allSupportedVersions=["2026-07-28","2025-11-25","2025-06-18","2025-03-26"];const legacySupportedVersions=["2025-11-25","2025-06-18","2025-03-26"];const unsupportedVersion=(requested)=>json({jsonrpc:"2.0",id,error:{code:-32022,message:"Unsupported protocol version",data:{supported:modern?modernSupportedVersions:legacySupportedVersions,requested}}},400);if(modern){const methodHeader=request.headers.get("Mcp-Method");const clientCapabilities=modernMeta&&modernMeta["io.modelcontextprotocol/clientCapabilities"];const mismatch=(message)=>json({jsonrpc:"2.0",id,error:{code:-32020,message:"Header mismatch: "+message}},400);if(!modernMeta||typeof modernMeta!=="object"||Array.isArray(modernMeta)||typeof modernVersion!=="string"||(!clientCapabilities||typeof clientCapabilities!=="object"||Array.isArray(clientCapabilities))||(clientInfo!==undefined&&(!clientInfo||typeof clientInfo!=="object"||Array.isArray(clientInfo)||typeof clientInfo.name!=="string"||typeof clientInfo.version!=="string")))return json({jsonrpc:"2.0",id,error:{code:-32602,message:"Invalid params: required per-request _meta fields are missing or malformed"}},400);if(!versionHeader||!methodHeader)return mismatch("MCP-Protocol-Version and Mcp-Method headers are required");if(versionHeader!==modernVersion)return mismatch("MCP-Protocol-Version does not match _meta protocolVersion");if(versionHeader!=="2026-07-28")return unsupportedVersion(versionHeader);if(methodHeader!==rpc.method)return mismatch("Mcp-Method does not match JSON-RPC method");const nameRequired=rpc.method==="tools/call"||rpc.method==="resources/read"||rpc.method==="prompts/get";if(nameRequired){const source=rpc.method==="resources/read"?rpc.params?.uri:rpc.params?.name;const header=request.headers.get("Mcp-Name");if(typeof source!=="string"||!header)return mismatch("Mcp-Name header and matching body value are required");let decoded=header;const encoded=/^=\?base64\?([A-Za-z0-9+/]*={0,2})\?=$/.exec(header);if(encoded){try{decoded=new TextDecoder("utf-8",{fatal:true}).decode(Uint8Array.from(atob(encoded[1]),ch=>ch.charCodeAt(0)))}catch{return mismatch("Mcp-Name base64 encoding is invalid")}}else if(/[^\x20-\x7e]/.test(header)||/^\s|\s$/.test(header)||/^=\?base64\?.*\?=$/.test(header))return mismatch("Mcp-Name must use Base64 sentinel encoding for non-ASCII or unsafe values");if(decoded!==source)return mismatch("Mcp-Name does not match JSON-RPC params")}if(!hasId)return json({jsonrpc:"2.0",id:null,error:{code:-32600,message:"Modern Streamable HTTP requires a JSON-RPC request id"}},400);if(rpc.id===null||(typeof rpc.id==="number"&&!Number.isSafeInteger(rpc.id)))return json({jsonrpc:"2.0",id:null,error:{code:-32600,message:"Modern JSON-RPC request id must be a string or safe integer, not null or a fractional number"}},400);if(rpc.method==="initialize")return json({jsonrpc:"2.0",id,error:{code:-32601,message:"Method not found"}},404)}else{if(versionHeader&&!legacySupportedVersions.includes(versionHeader))return unsupportedVersion(versionHeader);if(!hasId&&rpc.method.startsWith("notifications/"))return new Response(null,{status:202})}try{let result;if(modern&&rpc.method==="subscriptions/listen")return subscriptionsListenResponse(request,rpc);else if(modern&&rpc.method==="server/discover")result={resultType:"complete",supportedVersions:allSupportedVersions,capabilities:{tools:{}},_meta:{"io.modelcontextprotocol/serverInfo":{name:"cloud-engineering-connector",version:VERSION}},instructions:"Cloud-hosted engineering tools. Responses are bounded and changes are proposed only through draft pull requests; no automatic merge or deployment.",ttlMs:60000,cacheScope:"private"};else if(rpc.method==="initialize")result={protocolVersion:legacySupportedVersions.includes(rpc.params?.protocolVersion)?rpc.params.protocolVersion:legacySupportedVersions[0],capabilities:{tools:{}},serverInfo:{name:"cloud-engineering-connector",version:VERSION},instructions:"You are a demanding senior software engineer and architect. Follow the engineering_standards tool. Inspect relevant repository context before designing changes; state assumptions and ask one focused question if a blocking requirement is ambiguous. Distinguish facts, assumptions, hypotheses, and recommendations. Prefer primary sources and reproducible tests. Analyze security, failure modes, operability, and rollback. Never claim unrun tests or unverified facts are confirmed. Changes must be reviewable draft PRs; never merge or deploy automatically."};else if(modern&&rpc.method==="ping")return json({jsonrpc:"2.0",id,error:{code:-32601,message:"Method not found"}},404);else if(rpc.method==="ping")result={};else if(rpc.method==="tools/list")result=modern?{tools:publicReadOnly&&!authenticated?TOOLS.filter(tool=>PUBLIC_READ_ONLY_TOOLS.has(tool.name)):TOOLS,ttlMs:60000,cacheScope:"private"}:{tools:publicReadOnly&&!authenticated?TOOLS.filter(tool=>PUBLIC_READ_ONLY_TOOLS.has(tool.name)):TOOLS};else if(rpc.method==="tools/call"){if(!rpc.params||typeof rpc.params.name!=="string")throw new Error("tools/call requires params.name.");try{if(publicReadOnly&&!authenticated&&!PUBLIC_READ_ONLY_TOOLS.has(rpc.params.name))throw new Error("Tool is not in the unauthenticated PUBLIC_READ_ONLY allowlist.");if(rpc.params.name==="create_change_pr"&&(!authenticated||!env.MCP_AUTH_TOKEN||!env.GITHUB_TOKEN))throw new Error("create_change_pr requires configured MCP_AUTH_TOKEN and GITHUB_TOKEN secrets; read-only tools remain available without credentials.");const definition=TOOLS.find(tool=>tool.name===rpc.params.name);if(!definition)throw new Error("Unknown tool: "+rpc.params.name);const toolArgs=Object.prototype.hasOwnProperty.call(rpc.params,"arguments")?rpc.params.arguments:{};if(!toolArgs||typeof toolArgs!=="object"||Array.isArray(toolArgs))return json({jsonrpc:"2.0",id,error:{code:-32602,message:"Invalid params: arguments must be an object."}},200);const validationError=validateToolArguments(toolArgs,definition.inputSchema,"arguments");if(validationError){result=textResult({error:"Invalid tool arguments: "+validationError},true)}else{if(KNOWLEDGE_WRITE_TOOLS.has(rpc.params.name)){const knowledgeWriteLimited=await enforceRateLimit(request,env,"knowledge-write:");if(knowledgeWriteLimited)return knowledgeWriteLimited;}const toolEnv=GITHUB_READ_TOOLS.has(rpc.params.name)?{...env,GITHUB_TOKEN:undefined,READ_ONLY_GITHUB:true,...(authenticated?{PUBLIC_REPOSITORY_VERIFIED:true}:{})}:publicReadOnly&&!authenticated?{...env,GITHUB_TOKEN:undefined,READ_ONLY_GITHUB:true}:env;result={content:[{type:"text",text:JSON.stringify(await callTool(rpc.params.name,toolArgs,toolEnv,authenticated?"owner":null),null,2)}]}}}catch(error){if(error instanceof Error&&error.message.startsWith("Unknown tool:"))return json({jsonrpc:"2.0",id,error:{code:-32602,message:error.message}},200);result=textResult(error instanceof ToolError?{error:error.code,...error.data}:{error:error instanceof Error?error.message:"Tool failed"},true)}}else return json({jsonrpc:"2.0",id,error:{code:-32601,message:"Method not found"}},modern?404:200);if(modern&&result&&typeof result==="object"){if(!("resultType" in result))result={resultType:"complete",...result};if(!("ttlMs" in result))result={...result,ttlMs:0};if(!("cacheScope" in result))result={...result,cacheScope:"private"};result={...result,_meta:{...(result._meta&&typeof result._meta==="object"&&!Array.isArray(result._meta)?result._meta:{}),"io.modelcontextprotocol/serverInfo":{name:"cloud-engineering-connector",version:VERSION}}}}return json({jsonrpc:"2.0",id,result})}catch(error){return json({jsonrpc:"2.0",id,error:{code:-32603,message:error instanceof Error?error.message:"Internal error"}})}};
+function githubWebhookConfiguration(env) {
+ let authorizedActorIds, allowedEventActions;
+ try {
+  authorizedActorIds = JSON.parse(env.GITHUB_WEBHOOK_AUTHORIZED_ACTOR_IDS || "null");
+  allowedEventActions = JSON.parse(env.GITHUB_WEBHOOK_ALLOWED_EVENT_ACTIONS || "null");
+ } catch { return null; }
+ const repositoryId = Number(env.GITHUB_WEBHOOK_REPOSITORY_ID);
+ const config = {
+  schemaVersion: 1,
+  repository: env.GITHUB_WEBHOOK_REPOSITORY,
+  repositoryId,
+  authorizedActorIds,
+  allowedEventActions,
+  requiredLabel: env.GITHUB_WEBHOOK_REQUIRED_LABEL,
+ };
+ if (!Number.isSafeInteger(repositoryId) || repositoryId < 1 ||
+     typeof config.repository !== "string" || !Array.isArray(authorizedActorIds) ||
+     !allowedEventActions || typeof allowedEventActions !== "object" ||
+     typeof config.requiredLabel !== "string") return null;
+ return config;
+}
+
+async function handleGitHubWebhook(request, env) {
+ if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405, { allow: "POST" });
+ const limited = await enforceRateLimit(request, env, "github-webhook:");
+ if (limited) return limited;
+ if (typeof env.GITHUB_WEBHOOK_SECRET !== "string" ||
+     new TextEncoder().encode(env.GITHUB_WEBHOOK_SECRET).byteLength < 32) {
+  return json({ error: "webhook_not_configured" }, 503);
+ }
+ const config = githubWebhookConfiguration(env);
+ if (!config) return json({ error: "webhook_policy_not_configured" }, 503);
+ const binding = env.ORCHESTRATOR_LEDGER;
+ if (!binding || typeof binding.idFromName !== "function" || typeof binding.get !== "function") {
+  return json({ error: "webhook_replay_store_unavailable" }, 503);
+ }
+
+ let authenticated;
+ try {
+  const configuredLimit = Number(env.GITHUB_WEBHOOK_MAX_BODY_BYTES);
+  authenticated = await authenticateGitHubWebhook(request, {
+   secret: env.GITHUB_WEBHOOK_SECRET,
+   ...(Number.isSafeInteger(configuredLimit) && configuredLimit > 0
+     ? { maxBodyBytes: configuredLimit } : {}),
+  });
+ } catch {
+  return json({ error: "webhook_authentication_failed" }, 401);
+ }
+ if (!authenticated.authenticated) {
+  return json({ error: "webhook_unauthorized", reason: authenticated.reasonCode }, 401);
+ }
+
+ const payload = authenticated.payload;
+ const issue = payload.issue;
+ const occurredAt = Date.parse(issue?.updated_at || issue?.created_at || "");
+ const ledger = binding.get(binding.idFromName("orchestrator-ledger-global"));
+ if (!ledger || typeof ledger.claimGitHubDelivery !== "function") {
+  return json({ error: "webhook_replay_store_unavailable" }, 503);
+ }
+ const replayStore = {
+  async claim({ deliveryId, idempotencyKey, inputHash }) {
+   let result;
+   try {
+    result = await ledger.claimGitHubDelivery({
+     deliveryId,
+     bodySha256: authenticated.bodySha256,
+     eventName: authenticated.eventName,
+     receivedAt: Date.now(),
+     idempotencyKey,
+     inputHash,
+    });
+   } catch {
+    return { status: "DENIED" };
+   }
+   if (result?.claimed === true) return { status: "CLAIMED" };
+   if (result?.replay === true) return { status: "REPLAY", reason: result.reason };
+   if (result?.conflict === true) return { status: "CONFLICT", reason: result.reason };
+   return { status: "DENIED" };
+  },
+ };
+ let intake;
+ try {
+  intake = await validateGitHubIntakeEvent({
+   event: payload,
+   eventName: authenticated.eventName,
+   eventAction: payload.action,
+   repository: payload.repository?.full_name,
+   repositoryId: payload.repository?.id,
+   actorId: Number.isSafeInteger(payload.sender?.id) ? String(payload.sender.id) : "",
+   deliveryId: authenticated.deliveryId,
+   occurredAt,
+   now: Date.now(),
+   config,
+   replayStore,
+  });
+ } catch {
+  return json({ error: "webhook_intake_failed" }, 503);
+ }
+ if (intake.accepted) {
+  return json({
+   status: "accepted",
+   decision: intake.decision,
+   reasonCode: intake.reasonCode,
+   deliveryId: intake.deliveryId,
+   inputHash: intake.inputHash,
+   sideEffects: false,
+   taskExecution: false,
+  }, 202);
+ }
+ if (intake.reasonCode === "DELIVERY_REPLAY") {
+  return json({ status: "duplicate", deliveryId: authenticated.deliveryId }, 202);
+ }
+ if (intake.reasonCode === "IDEMPOTENCY_CONFLICT") {
+  return json({ error: "webhook_delivery_conflict", reason: intake.reasonCode }, 409);
+ }
+ return json({ error: "webhook_rejected", reason: intake.reasonCode }, 422);
+}
+
+async function handleRequest(request,env){const url=new URL(request.url);if(url.pathname==="/webhooks/github")return handleGitHubWebhook(request,env);if(request.method==="GET"&&url.pathname==="/"){return consoleResponse()}if(request.method==="GET"&&url.pathname==="/healthz")return json({status:"ok",service:"cloud-engineering-connector",version:VERSION,execution:"cloudflare-workers",laptop_dependency:false});if(request.method==="GET"&&url.pathname==="/readyz"){const readyzLimited=await enforceRateLimit(request,env,"readyz:");if(readyzLimited)return readyzLimited;const readinessState={durable_objects:"unavailable",knowledge_store:"unavailable",orchestrator_ledger:"unavailable",orchestrator_outbox_publisher:"unavailable",orchestrator_outbox_dlq_archiver:"unavailable"};try{const binding=env.WRITE_CONTROL;if(!binding||typeof binding.idFromName!=="function"||typeof binding.get!=="function")throw new Error("missing WriteControl binding");const stub=binding.get(binding.idFromName("create-change-pr-global"));if(!stub||typeof stub.ping!=="function")throw new Error("missing WriteControl readiness probe");const probe=await stub.ping();if(!probe||probe.ok!==true||probe.schemaVersion!==1)throw new Error("WriteControl readiness probe failed");readinessState.durable_objects="ok";const knowledgeBinding=env.KNOWLEDGE_STORE;if(!knowledgeBinding||typeof knowledgeBinding.idFromName!=="function"||typeof knowledgeBinding.get!=="function")throw new Error("missing KnowledgeStore binding");const knowledgeStub=knowledgeBinding.get(knowledgeBinding.idFromName("tenant:owner"));if(!knowledgeStub||typeof knowledgeStub.ping!=="function")throw new Error("missing KnowledgeStore readiness probe");const knowledgeProbe=await knowledgeStub.ping();if(!knowledgeProbe||knowledgeProbe.ok!==true||knowledgeProbe.schemaVersion!==3)throw new Error("KnowledgeStore readiness probe failed");readinessState.knowledge_store="ok";const ledgerBinding=env.ORCHESTRATOR_LEDGER;if(!ledgerBinding||typeof ledgerBinding.idFromName!=="function"||typeof ledgerBinding.get!=="function")throw new Error("missing OrchestratorLedger binding");const orchestratorLedgerStub=ledgerBinding.get(ledgerBinding.idFromName("orchestrator-ledger-global"));if(!orchestratorLedgerStub||typeof orchestratorLedgerStub.ping!=="function")throw new Error("missing OrchestratorLedger readiness probe");const orchestratorLedgerProbe=await orchestratorLedgerStub.ping();if(!orchestratorLedgerProbe||orchestratorLedgerProbe.ok!==true||orchestratorLedgerProbe.schemaVersion!==5)throw new Error("OrchestratorLedger readiness probe failed");readinessState.orchestrator_ledger="ok";const outboxQueue=env.ORCHESTRATOR_OUTBOX_QUEUE;if(!outboxQueue||typeof outboxQueue.send!=="function")throw new Error("missing Orchestrator outbox Queue producer");if(!validateWorkerAssertionSigningConfig(env.LEDGER_WORKER_ASSERTION_KEYS,env.LEDGER_WORKER_ASSERTION_ACTIVE_KID))throw new Error("Orchestrator worker assertion signer is not configured");readinessState.orchestrator_outbox_publisher="ok";if(typeof env.ORCHESTRATOR_OUTBOX_QUEUE_NAME!=="string"||typeof env.ORCHESTRATOR_OUTBOX_DLQ_QUEUE!=="string")throw new Error("Orchestrator Queue routing names are not configured");readinessState.orchestrator_outbox_dlq_archiver="ok";return json({status:"ready",service:"cloud-engineering-connector",version:VERSION,execution:"cloudflare-workers",laptop_dependency:false,...readinessState})}catch{return json({status:"not_ready",service:"cloud-engineering-connector",version:VERSION,execution:"cloudflare-workers",laptop_dependency:false,...readinessState},503)}}if(url.pathname!=="/mcp")return json({error:"not_found",message:"Use POST /mcp or GET /healthz."},404);if(request.method==="OPTIONS"){const origin=request.headers.get("origin");if(!origin||!originAllowed(request,env))return json({error:"forbidden_origin"},403);if(request.headers.get("access-control-request-method")!=="POST")return json({error:"method_not_allowed"},405,{"allow":"POST, OPTIONS"});const allowedHeaders=new Set(["accept","authorization","content-type","mcp-protocol-version","mcp-method","mcp-name"]);const requestedHeaders=(request.headers.get("access-control-request-headers")||"").split(",").map(value=>value.trim().toLowerCase()).filter(Boolean);if(requestedHeaders.some(value=>!allowedHeaders.has(value)))return json({error:"forbidden_preflight_header"},400);return new Response(null,{status:204,headers:{...SECURITY_HEADERS,"access-control-allow-origin":origin,"access-control-allow-methods":"POST, OPTIONS","access-control-allow-headers":"Accept, Authorization, Content-Type, MCP-Protocol-Version, Mcp-Method, Mcp-Name","access-control-max-age":"600","vary":"Origin"}})}if(!originAllowed(request,env))return json({error:"forbidden_origin"},403);if(request.method!=="POST")return json({error:"method_not_allowed",message:"The MCP endpoint accepts POST requests only."},405,{"allow":"POST"});const publicReadOnly=env.PUBLIC_READ_ONLY==="true";const authToken=env.MCP_AUTH_TOKEN;const authConfigured=typeof authToken==="string"&&authToken.length>=32&&authToken.length<=512;if(authToken!==undefined&&!authConfigured){const message=typeof authToken!=="string"?"MCP_AUTH_TOKEN must be a string.":authToken.length<32?"MCP_AUTH_TOKEN must be at least 32 characters.":"MCP_AUTH_TOKEN must be at most 512 characters.";return json({error:"server_misconfigured",message},503);}const authHeader=request.headers.get("authorization");const authenticated=authConfigured&&constantTimeEqual(authHeader||"","Bearer "+authToken);if(authConfigured&&!authenticated&&!(publicReadOnly&&authHeader===null)){const rateLimitResponse=await enforceRateLimit(request,env,"auth-failure:");if(rateLimitResponse)return rateLimitResponse;return json({error:"unauthorized"},401,{"www-authenticate":"Bearer"})}if(!env.MCP_AUTH_TOKEN&&!publicReadOnly)return json({error:"server_misconfigured",message:"MCP_AUTH_TOKEN is required unless PUBLIC_READ_ONLY=true is explicitly enabled."},503);if(authenticated){const rateLimitResponse=await enforceRateLimit(request,env,"authenticated-mcp:");if(rateLimitResponse)return rateLimitResponse;}else if(publicReadOnly){const rateLimitResponse=await enforceRateLimit(request,env,"public-mcp:");if(rateLimitResponse)return rateLimitResponse;}const contentType=(request.headers.get("content-type")||"").split(";",1)[0].trim().toLowerCase();if(contentType!=="application/json")return json({error:"unsupported_media_type"},415);const accept=(request.headers.get("accept")||"").split(",").map(part=>{const [type,...parameters]=part.trim().toLowerCase().split(";");const qualityParameters=parameters.map(p=>p.trim()).filter(p=>/^q(?:\s*=|\s*$)/i.test(p)).map(p=>p.replace(/\s*=\s*/,"=").toLowerCase());const validQuality=qualityParameters.length<=1&&(!qualityParameters.length||/^q=(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(qualityParameters[0]));const quality=qualityParameters.length?validQuality?Number(qualityParameters[0].slice(2)):Number.NaN:1;return{type:type.trim(),quality}});if(!["application/json","text/event-stream"].every(type=>accept.some(item=>item.type===type&&Number.isFinite(item.quality)&&item.quality>0)))return json({error:"invalid_accept_header",required:["application/json","text/event-stream"]},400);let rpc;try{rpc=await readJsonLimited(request)}catch(error){if(error?.status===413)return json({error:"payload_too_large"},413);return json({jsonrpc:"2.0",id:null,error:{code:-32700,message:"Parse error"}},400)}const rpcObject=rpc!==null&&typeof rpc==="object"&&!Array.isArray(rpc);const hasId=rpcObject&&Object.prototype.hasOwnProperty.call(rpc,"id");const validRpcId=value=>typeof value==="string"||(typeof value==="number"&&Number.isSafeInteger(value));const responseId=hasId&&validRpcId(rpc.id)?rpc.id:null;if(!rpcObject||rpc.jsonrpc!=="2.0"||typeof rpc.method!=="string"||!rpc.method||Object.prototype.hasOwnProperty.call(rpc,"params")&&(!rpc.params||typeof rpc.params!=="object"||Array.isArray(rpc.params)))return json({jsonrpc:"2.0",id:responseId,error:{code:-32600,message:"Invalid Request"}},400);if(hasId&&!validRpcId(rpc.id))return json({jsonrpc:"2.0",id:null,error:{code:-32600,message:"Invalid Request: id must be a string or safe integer"}},400);if(!hasId&&rpc.method.startsWith("notifications/")){const notificationMeta=rpc.params&&typeof rpc.params==="object"?rpc.params._meta:null;const headerNotificationVersion=request.headers.get("MCP-Protocol-Version");const hasModernNotificationClaim=Boolean(notificationMeta&&typeof notificationMeta==="object"&&!Array.isArray(notificationMeta)&&Object.prototype.hasOwnProperty.call(notificationMeta,"io.modelcontextprotocol/protocolVersion"));if(headerNotificationVersion&&!["2026-07-28","2025-11-25","2025-06-18","2025-03-26"].includes(headerNotificationVersion))return json({error:"unsupported_protocol_version",message:"The notification protocol-version header is unsupported.",supported:["2026-07-28","2025-11-25","2025-06-18","2025-03-26"],requested:headerNotificationVersion},400);if(headerNotificationVersion==="2026-07-28"||hasModernNotificationClaim)return json({error:"unsupported_notification",message:"Client-to-server notifications are not supported over modern Streamable HTTP; close the response stream to cancel the request."},400);return new Response(null,{status:202})}if(!hasId)return json({error:"invalid_notification",message:"Only protocol notification methods may omit the JSON-RPC id."},400);const modernMeta=rpc.params&&typeof rpc.params==="object"?rpc.params._meta:null;const modernVersion=modernMeta&&typeof modernMeta==="object"?modernMeta["io.modelcontextprotocol/protocolVersion"]:null;const clientInfo=modernMeta&&typeof modernMeta==="object"?modernMeta["io.modelcontextprotocol/clientInfo"]:null;const versionHeader=request.headers.get("MCP-Protocol-Version");const hasModernVersionClaim=Boolean(modernMeta&&typeof modernMeta==="object"&&!Array.isArray(modernMeta)&&Object.prototype.hasOwnProperty.call(modernMeta,"io.modelcontextprotocol/protocolVersion"));const modern=versionHeader==="2026-07-28"||hasModernVersionClaim;const id=hasId?rpc.id:null;const modernSupportedVersions=["2026-07-28"];const allSupportedVersions=["2026-07-28","2025-11-25","2025-06-18","2025-03-26"];const legacySupportedVersions=["2025-11-25","2025-06-18","2025-03-26"];const unsupportedVersion=(requested)=>json({jsonrpc:"2.0",id,error:{code:-32022,message:"Unsupported protocol version",data:{supported:modern?modernSupportedVersions:legacySupportedVersions,requested}}},400);if(modern){const methodHeader=request.headers.get("Mcp-Method");const clientCapabilities=modernMeta&&modernMeta["io.modelcontextprotocol/clientCapabilities"];const mismatch=(message)=>json({jsonrpc:"2.0",id,error:{code:-32020,message:"Header mismatch: "+message}},400);if(!modernMeta||typeof modernMeta!=="object"||Array.isArray(modernMeta)||typeof modernVersion!=="string"||(!clientCapabilities||typeof clientCapabilities!=="object"||Array.isArray(clientCapabilities))||(clientInfo!==undefined&&(!clientInfo||typeof clientInfo!=="object"||Array.isArray(clientInfo)||typeof clientInfo.name!=="string"||typeof clientInfo.version!=="string")))return json({jsonrpc:"2.0",id,error:{code:-32602,message:"Invalid params: required per-request _meta fields are missing or malformed"}},400);if(!versionHeader||!methodHeader)return mismatch("MCP-Protocol-Version and Mcp-Method headers are required");if(versionHeader!==modernVersion)return mismatch("MCP-Protocol-Version does not match _meta protocolVersion");if(versionHeader!=="2026-07-28")return unsupportedVersion(versionHeader);if(methodHeader!==rpc.method)return mismatch("Mcp-Method does not match JSON-RPC method");const nameRequired=rpc.method==="tools/call"||rpc.method==="resources/read"||rpc.method==="prompts/get";if(nameRequired){const source=rpc.method==="resources/read"?rpc.params?.uri:rpc.params?.name;const header=request.headers.get("Mcp-Name");if(typeof source!=="string"||!header)return mismatch("Mcp-Name header and matching body value are required");let decoded=header;const encoded=/^=\?base64\?([A-Za-z0-9+/]*={0,2})\?=$/.exec(header);if(encoded){try{decoded=new TextDecoder("utf-8",{fatal:true}).decode(Uint8Array.from(atob(encoded[1]),ch=>ch.charCodeAt(0)))}catch{return mismatch("Mcp-Name base64 encoding is invalid")}}else if(/[^\x20-\x7e]/.test(header)||/^\s|\s$/.test(header)||/^=\?base64\?.*\?=$/.test(header))return mismatch("Mcp-Name must use Base64 sentinel encoding for non-ASCII or unsafe values");if(decoded!==source)return mismatch("Mcp-Name does not match JSON-RPC params")}if(!hasId)return json({jsonrpc:"2.0",id:null,error:{code:-32600,message:"Modern Streamable HTTP requires a JSON-RPC request id"}},400);if(rpc.id===null||(typeof rpc.id==="number"&&!Number.isSafeInteger(rpc.id)))return json({jsonrpc:"2.0",id:null,error:{code:-32600,message:"Modern JSON-RPC request id must be a string or safe integer, not null or a fractional number"}},400);if(rpc.method==="initialize")return json({jsonrpc:"2.0",id,error:{code:-32601,message:"Method not found"}},404)}else{if(versionHeader&&!legacySupportedVersions.includes(versionHeader))return unsupportedVersion(versionHeader);if(!hasId&&rpc.method.startsWith("notifications/"))return new Response(null,{status:202})}try{let result;if(modern&&rpc.method==="subscriptions/listen")return subscriptionsListenResponse(request,rpc);else if(modern&&rpc.method==="server/discover")result={resultType:"complete",supportedVersions:allSupportedVersions,capabilities:{tools:{}},_meta:{"io.modelcontextprotocol/serverInfo":{name:"cloud-engineering-connector",version:VERSION}},instructions:"Cloud-hosted engineering tools. Responses are bounded and changes are proposed only through draft pull requests; no automatic merge or deployment.",ttlMs:60000,cacheScope:"private"};else if(rpc.method==="initialize")result={protocolVersion:legacySupportedVersions.includes(rpc.params?.protocolVersion)?rpc.params.protocolVersion:legacySupportedVersions[0],capabilities:{tools:{}},serverInfo:{name:"cloud-engineering-connector",version:VERSION},instructions:"You are a demanding senior software engineer and architect. Follow the engineering_standards tool. Inspect relevant repository context before designing changes; state assumptions and ask one focused question if a blocking requirement is ambiguous. Distinguish facts, assumptions, hypotheses, and recommendations. Prefer primary sources and reproducible tests. Analyze security, failure modes, operability, and rollback. Never claim unrun tests or unverified facts are confirmed. Changes must be reviewable draft PRs; never merge or deploy automatically."};else if(modern&&rpc.method==="ping")return json({jsonrpc:"2.0",id,error:{code:-32601,message:"Method not found"}},404);else if(rpc.method==="ping")result={};else if(rpc.method==="tools/list")result=modern?{tools:publicReadOnly&&!authenticated?TOOLS.filter(tool=>PUBLIC_READ_ONLY_TOOLS.has(tool.name)):TOOLS,ttlMs:60000,cacheScope:"private"}:{tools:publicReadOnly&&!authenticated?TOOLS.filter(tool=>PUBLIC_READ_ONLY_TOOLS.has(tool.name)):TOOLS};else if(rpc.method==="tools/call"){if(!rpc.params||typeof rpc.params.name!=="string")throw new Error("tools/call requires params.name.");try{if(publicReadOnly&&!authenticated&&!PUBLIC_READ_ONLY_TOOLS.has(rpc.params.name))throw new Error("Tool is not in the unauthenticated PUBLIC_READ_ONLY allowlist.");if(rpc.params.name==="create_change_pr"&&(!authenticated||!env.MCP_AUTH_TOKEN||!env.GITHUB_TOKEN))throw new Error("create_change_pr requires configured MCP_AUTH_TOKEN and GITHUB_TOKEN secrets; read-only tools remain available without credentials.");const definition=TOOLS.find(tool=>tool.name===rpc.params.name);if(!definition)throw new Error("Unknown tool: "+rpc.params.name);const toolArgs=Object.prototype.hasOwnProperty.call(rpc.params,"arguments")?rpc.params.arguments:{};if(!toolArgs||typeof toolArgs!=="object"||Array.isArray(toolArgs))return json({jsonrpc:"2.0",id,error:{code:-32602,message:"Invalid params: arguments must be an object."}},200);const validationError=validateToolArguments(toolArgs,definition.inputSchema,"arguments");if(validationError){result=textResult({error:"Invalid tool arguments: "+validationError},true)}else{if(KNOWLEDGE_WRITE_TOOLS.has(rpc.params.name)){const knowledgeWriteLimited=await enforceRateLimit(request,env,"knowledge-write:");if(knowledgeWriteLimited)return knowledgeWriteLimited;}const toolEnv=GITHUB_READ_TOOLS.has(rpc.params.name)?{...env,GITHUB_TOKEN:undefined,READ_ONLY_GITHUB:true,...(authenticated?{PUBLIC_REPOSITORY_VERIFIED:true}:{})}:publicReadOnly&&!authenticated?{...env,GITHUB_TOKEN:undefined,READ_ONLY_GITHUB:true}:env;result={content:[{type:"text",text:JSON.stringify(await callTool(rpc.params.name,toolArgs,toolEnv,authenticated?"owner":null),null,2)}]}}}catch(error){if(error instanceof Error&&error.message.startsWith("Unknown tool:"))return json({jsonrpc:"2.0",id,error:{code:-32602,message:error.message}},200);result=textResult(error instanceof ToolError?{error:error.code,...error.data}:{error:error instanceof Error?error.message:"Tool failed"},true)}}else return json({jsonrpc:"2.0",id,error:{code:-32601,message:"Method not found"}},modern?404:200);if(modern&&result&&typeof result==="object"){if(!("resultType" in result))result={resultType:"complete",...result};if(!("ttlMs" in result))result={...result,ttlMs:0};if(!("cacheScope" in result))result={...result,cacheScope:"private"};result={...result,_meta:{...(result._meta&&typeof result._meta==="object"&&!Array.isArray(result._meta)?result._meta:{}),"io.modelcontextprotocol/serverInfo":{name:"cloud-engineering-connector",version:VERSION}}}}return json({jsonrpc:"2.0",id,result})}catch(error){return json({jsonrpc:"2.0",id,error:{code:-32603,message:error instanceof Error?error.message:"Internal error"}})}};
 
 function applyCors(request,env,response){if(new URL(request.url).pathname!=="/mcp")return response;const origin=request.headers.get("origin");if(!origin||!originAllowed(request,env))return response;const headers=new Headers(response.headers);headers.set("access-control-allow-origin",origin);headers.set("access-control-expose-headers","MCP-Protocol-Version");const vary=headers.get("vary");if(!vary)headers.set("vary","Origin");else if(!vary.split(",").some(value=>value.trim().toLowerCase()==="origin"))headers.set("vary",vary+", Origin");return new Response(response.body,{status:response.status,statusText:response.statusText,headers})}
 
@@ -949,6 +1070,323 @@ export async function processKnowledgeOutbox(env,options={}){
  return totals;
 }
 
+export async function processOrchestratorOutbox(env, options = {}) {
+ const maxEvents = options.maxEvents === undefined ? 5 : options.maxEvents;
+ if (!Number.isSafeInteger(maxEvents) || maxEvents < 1 || maxEvents > 20) {
+  throw new TypeError("maxEvents must be between 1 and 20.");
+ }
+ const queue = env?.ORCHESTRATOR_OUTBOX_QUEUE;
+ if (!queue || typeof queue.send !== "function") {
+  return { processed: 0, published: 0, failed: 0, deadLettered: 0, completionPending: 0, reason: "orchestrator_outbox_queue_unavailable" };
+ }
+ const binding = env?.ORCHESTRATOR_LEDGER;
+ if (!binding || typeof binding.idFromName !== "function" || typeof binding.get !== "function") {
+  return { processed: 0, published: 0, failed: 0, deadLettered: 0, completionPending: 0, reason: "orchestrator_ledger_unavailable" };
+ }
+ if (typeof env.LEDGER_WORKER_ASSERTION_KEYS !== "string" ||
+     typeof env.LEDGER_WORKER_ASSERTION_ACTIVE_KID !== "string") {
+  return { processed: 0, published: 0, failed: 0, deadLettered: 0, completionPending: 0, reason: "worker_assertion_signing_unavailable" };
+ }
+ const workerId = "orchestrator-outbox-publisher";
+ const stub = binding.get(binding.idFromName("orchestrator-ledger-global"));
+ if (!stub || typeof stub.claimOutbox !== "function" ||
+     typeof stub.completeOutbox !== "function" || typeof stub.failOutbox !== "function") {
+  return { processed: 0, published: 0, failed: 0, deadLettered: 0, completionPending: 0, reason: "orchestrator_outbox_rpc_unavailable" };
+ }
+ const totals = { processed: 0, published: 0, failed: 0, deadLettered: 0, completionPending: 0 };
+ const assertion = operation => createScheduledWorkerAssertion(
+  env.LEDGER_WORKER_ASSERTION_KEYS,
+  env.LEDGER_WORKER_ASSERTION_ACTIVE_KID,
+  { subject: workerId, role: "publisher", operation, nowMs: Date.now() },
+ );
+ for (let index = 0; index < maxEvents; index += 1) {
+  const claimNow = Date.now();
+  let claim;
+  try {
+   claim = await stub.claimOutbox({
+    workerId, workerAssertion: await assertion("claimOutbox"),
+    leaseMs: 120_000, now: claimNow,
+   });
+  } catch {
+   return { ...totals, reason: "orchestrator_outbox_claim_failed" };
+  }
+  if (claim?.deadLettered === true) totals.deadLettered += 1;
+  if (claim?.claimed !== true) break;
+  totals.processed += 1;
+  const event = claim.event;
+  const leaseGeneration = claim.leaseGeneration ?? event?.leaseGeneration;
+  if (!event || typeof event.eventId !== "string" || typeof event.eventType !== "string" ||
+      typeof event.taskId !== "string" || typeof event.idempotencyKey !== "string" ||
+      !Number.isSafeInteger(event.attempts) || !Number.isSafeInteger(event.createdAt) ||
+      !Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) {
+   // A malformed claimed row cannot be safely fenced without its persisted event ID
+   // and lease generation. Leave it leased for expiry/reconciliation; never invent IDs.
+   totals.failed += 1;
+   continue;
+  }
+  const message = {
+   schemaVersion: 1,
+   eventId: event.eventId,
+   idempotencyKey: event.idempotencyKey,
+   taskId: event.taskId,
+   eventType: event.eventType,
+   payload: event.payload,
+   attempts: event.attempts,
+   createdAt: event.createdAt,
+  };
+  try {
+   await queue.send(message, { contentType: "json" });
+  } catch {
+   try {
+    const failed = await stub.failOutbox({
+     eventId: event.eventId, workerId, workerAssertion: await assertion("failOutbox"),
+     leaseGeneration, retryable: true, errorCode: "OUTBOX_QUEUE_PUBLISH_FAILED", now: Date.now(),
+    });
+    if (failed?.deadLettered === true) totals.deadLettered += 1;
+   } catch {}
+   totals.failed += 1;
+   continue;
+  }
+  totals.published += 1;
+  try {
+   const completed = await stub.completeOutbox({
+    eventId: event.eventId, workerId, workerAssertion: await assertion("completeOutbox"),
+    leaseGeneration, now: Date.now(),
+   });
+   if (completed?.completed !== true) totals.completionPending += 1;
+  } catch {
+   // Queue delivery may already have succeeded. Leave the lease to expire and
+   // rely on eventId deduplication downstream; never mark an uncertain send failed.
+   totals.completionPending += 1;
+  }
+ }
+ return totals;
+}
+
+const ORCHESTRATOR_QUEUE_EVENT_TYPES = new Set([
+ "task.created",
+ "task.transitioned",
+ "vault.document.proposed",
+]);
+const ORCHESTRATOR_QUEUE_ENVELOPE_KEYS = [
+ "attempts","createdAt","eventId","eventType","idempotencyKey","payload","schemaVersion","taskId",
+];
+
+function logOrchestratorConsumerTotals(totals, reason) {
+ const record = {
+  event: "orchestrator_outbox_consume",
+  severity: totals.retried > 0 || reason ? "warning" : "info",
+  observed_at: new Date().toISOString(),
+  ...totals,
+  ...(reason ? { reason } : {}),
+ };
+ const serialized = JSON.stringify(record);
+ if (record.severity === "warning") console.error(serialized);
+ else console.log(serialized);
+}
+
+export async function consumeOrchestratorOutbox(batch, env) {
+ const messages = Array.isArray(batch?.messages) ? batch.messages : [];
+ const totals = { received: messages.length, acknowledged: 0, retried: 0, duplicates: 0 };
+ const binding = env?.ORCHESTRATOR_LEDGER;
+ if (!binding || typeof binding.idFromName !== "function" || typeof binding.get !== "function" ||
+     typeof env?.LEDGER_WORKER_ASSERTION_KEYS !== "string" ||
+     typeof env?.LEDGER_WORKER_ASSERTION_ACTIVE_KID !== "string") {
+  for (const message of messages) {
+   try { message.retry({ delaySeconds: 30 }); totals.retried += 1; } catch {}
+  }
+  logOrchestratorConsumerTotals(totals, "ledger_binding_or_signing_unavailable");
+  return totals;
+ }
+ const stub = binding.get(binding.idFromName("orchestrator-ledger-global"));
+ if (!stub || typeof stub.recordOutboxReceipt !== "function") {
+  for (const message of messages) {
+   try { message.retry({ delaySeconds: 30 }); totals.retried += 1; } catch {}
+  }
+  logOrchestratorConsumerTotals(totals, "ledger_receipt_rpc_unavailable");
+  return totals;
+ }
+ for (const message of messages) {
+  try {
+   const body = message?.body;
+   if (!body || typeof body !== "object" || Array.isArray(body) ||
+       Object.keys(body).sort().join("|") !== ORCHESTRATOR_QUEUE_ENVELOPE_KEYS.join("|") ||
+       body.schemaVersion !== 1 ||
+       typeof body.eventId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(body.eventId) ||
+       typeof body.idempotencyKey !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(body.idempotencyKey) ||
+       typeof body.taskId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(body.taskId) ||
+       typeof body.eventType !== "string" || !ORCHESTRATOR_QUEUE_EVENT_TYPES.has(body.eventType) ||
+       !body.payload || typeof body.payload !== "object" || Array.isArray(body.payload) ||
+       !Number.isSafeInteger(body.attempts) || body.attempts < 1 || body.attempts > 8 ||
+       !Number.isSafeInteger(body.createdAt) || body.createdAt < 1 ||
+       new TextEncoder().encode(stableStringify(body)).byteLength > 32_768) {
+    message.retry({ delaySeconds: 30 });
+    totals.retried += 1;
+    continue;
+   }
+   const now = Date.now();
+   const consumerId = "orchestrator-outbox-consumer";
+   const workerAssertion = await createScheduledWorkerAssertion(
+    env.LEDGER_WORKER_ASSERTION_KEYS,
+    env.LEDGER_WORKER_ASSERTION_ACTIVE_KID,
+    { subject: consumerId, role: "consumer", operation: "recordOutboxReceipt", nowMs: now },
+   );
+   const receipt = await stub.recordOutboxReceipt({
+    eventId: body.eventId,
+    eventType: body.eventType,
+    idempotencyKey: body.idempotencyKey,
+    taskId: body.taskId,
+    payload: body.payload,
+    createdAt: body.createdAt,
+    schemaVersion: body.schemaVersion,
+    // The attempt counter is delivery metadata, not event identity. A republish
+    // after an uncertain Queue send must deduplicate against the first delivery.
+    envelopeSha256: await sha256Hex(stableStringify({
+     schemaVersion: body.schemaVersion,
+     eventId: body.eventId,
+     idempotencyKey: body.idempotencyKey,
+     taskId: body.taskId,
+     eventType: body.eventType,
+     payload: body.payload,
+     createdAt: body.createdAt,
+    })),
+    consumerId,
+    workerAssertion,
+    now,
+   });
+   if (receipt?.recorded === true) {
+    message.ack();
+    totals.acknowledged += 1;
+   } else if (receipt?.replay === true) {
+    message.ack();
+    totals.acknowledged += 1;
+    totals.duplicates += 1;
+   } else {
+    message.retry({ delaySeconds: 30 });
+    totals.retried += 1;
+   }
+  } catch {
+   try { message.retry({ delaySeconds: 30 }); totals.retried += 1; } catch {}
+  }
+ }
+ logOrchestratorConsumerTotals(totals);
+ return totals;
+}
+
+function logOrchestratorDeadLetterTotals(totals, reason) {
+ const record = {
+  event: "orchestrator_outbox_dlq_archive",
+  severity: totals.retried > 0 || reason ? "warning" : "info",
+  observed_at: new Date().toISOString(),
+  ...totals,
+  ...(reason ? { reason } : {}),
+ };
+ const serialized = JSON.stringify(record);
+ if (record.severity === "warning") console.error(serialized);
+ else console.log(serialized);
+}
+
+export async function consumeOrchestratorDeadLetters(batch, env) {
+ const messages = Array.isArray(batch?.messages) ? batch.messages : [];
+ const totals = { received: messages.length, archived: 0, duplicates: 0, retried: 0 };
+ const expectedQueue = env?.ORCHESTRATOR_OUTBOX_DLQ_QUEUE;
+ if (typeof expectedQueue !== "string" || batch?.queue !== expectedQueue) {
+  for (const message of messages) {
+   try { message.retry({ delaySeconds: 60 }); totals.retried += 1; } catch {}
+  }
+  logOrchestratorDeadLetterTotals(totals, "unexpected_dlq_queue");
+  return totals;
+ }
+ const binding = env?.ORCHESTRATOR_LEDGER;
+ if (!binding || typeof binding.idFromName !== "function" || typeof binding.get !== "function" ||
+     typeof env?.LEDGER_WORKER_ASSERTION_KEYS !== "string" ||
+     typeof env?.LEDGER_WORKER_ASSERTION_ACTIVE_KID !== "string") {
+  for (const message of messages) {
+   try { message.retry({ delaySeconds: 60 }); totals.retried += 1; } catch {}
+  }
+  logOrchestratorDeadLetterTotals(totals, "ledger_binding_or_signing_unavailable");
+  return totals;
+ }
+ const stub = binding.get(binding.idFromName("orchestrator-ledger-global"));
+ if (!stub || typeof stub.recordOutboxDeadLetter !== "function") {
+  for (const message of messages) {
+   try { message.retry({ delaySeconds: 60 }); totals.retried += 1; } catch {}
+  }
+  logOrchestratorDeadLetterTotals(totals, "dead_letter_archive_rpc_unavailable");
+  return totals;
+ }
+ const archiverId = "orchestrator-outbox-dlq-archiver";
+ for (const message of messages) {
+  try {
+   const messageTimestamp = message?.timestamp instanceof Date ? message.timestamp.getTime() : NaN;
+   if (!message || typeof message.id !== "string" ||
+       !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(message.id) ||
+       !Number.isSafeInteger(message.attempts) || message.attempts < 1 || message.attempts > 100 ||
+       !Number.isSafeInteger(messageTimestamp) || messageTimestamp < 1 ||
+       message.body === undefined) {
+    message.retry({ delaySeconds: 60 });
+    totals.retried += 1;
+    continue;
+   }
+   const bodySha256 = await sha256Hex(stableStringify({
+    queueName: expectedQueue,
+    messageId: message.id,
+    messageAttempts: message.attempts,
+    messageTimestamp,
+    body: message.body,
+   }));
+   const now = Date.now();
+   const workerAssertion = await createScheduledWorkerAssertion(
+    env.LEDGER_WORKER_ASSERTION_KEYS,
+    env.LEDGER_WORKER_ASSERTION_ACTIVE_KID,
+    { subject: archiverId, role: "consumer", operation: "recordOutboxDeadLetter", nowMs: now },
+   );
+   const archived = await stub.recordOutboxDeadLetter({
+    queueName: expectedQueue,
+    messageId: message.id,
+    messageAttempts: message.attempts,
+    messageTimestamp,
+    body: message.body,
+    bodySha256,
+    archiverId,
+    workerAssertion,
+    now,
+   });
+   if (archived?.recorded === true) {
+    message.ack();
+    totals.archived += 1;
+   } else if (archived?.replay === true) {
+    message.ack();
+    totals.archived += 1;
+    totals.duplicates += 1;
+   } else {
+    message.retry({ delaySeconds: 60 });
+    totals.retried += 1;
+   }
+  } catch {
+   try { message.retry({ delaySeconds: 60 }); totals.retried += 1; } catch {}
+  }
+ }
+ logOrchestratorDeadLetterTotals(totals);
+ return totals;
+}
+
+export async function handleOrchestratorQueue(batch, env) {
+ if (batch?.queue === env?.ORCHESTRATOR_OUTBOX_DLQ_QUEUE) {
+  return consumeOrchestratorDeadLetters(batch, env);
+ }
+ if (batch?.queue && batch.queue !== env?.ORCHESTRATOR_OUTBOX_QUEUE_NAME) {
+  const messages = Array.isArray(batch.messages) ? batch.messages : [];
+  const totals = { received: messages.length, retried: 0 };
+  for (const message of messages) {
+   try { message.retry({ delaySeconds: 60 }); totals.retried += 1; } catch {}
+  }
+  logOrchestratorDeadLetterTotals(totals, "unrecognized_queue");
+  return totals;
+ }
+ return consumeOrchestratorOutbox(batch, env);
+}
+
 async function handleScheduled(controller,env,ctx){
  const task=processKnowledgeOutbox(env).then(result=>{
   const summary={observed_at:new Date().toISOString(),...result};
@@ -962,8 +1400,21 @@ async function handleScheduled(controller,env,ctx){
   console.error(JSON.stringify({event:"knowledge_outbox_reconciliation_failed",severity:"error",observed_at:new Date().toISOString(),code}));
   return null;
  });
- if(ctx&&typeof ctx.waitUntil==="function")ctx.waitUntil(task);
- else await task;
+ const orchestratorTask=processOrchestratorOutbox(env).then(result=>{
+  const summary={observed_at:new Date().toISOString(),...result};
+  console.log(JSON.stringify({event:"orchestrator_outbox_publish",...summary}));
+  if(result&&(result.failed>0||result.deadLettered>0||
+      (result.reason&&result.reason!=="orchestrator_outbox_queue_unavailable"))){
+   console.error(JSON.stringify({event:"orchestrator_outbox_publish_alert",severity:"error",...summary}));
+  }
+  return result;
+ }).catch(error=>{
+  const code=typeof error?.code==="string"&&/^[A-Z0-9_]{1,64}$/.test(error.code)?error.code:"UNEXPECTED";
+  console.error(JSON.stringify({event:"orchestrator_outbox_publish_failed",severity:"error",observed_at:new Date().toISOString(),code}));
+  return null;
+ });
+ if(ctx&&typeof ctx.waitUntil==="function")ctx.waitUntil(Promise.all([task,orchestratorTask]));
+ else await Promise.all([task,orchestratorTask]);
 }
 
 function applySecurityHeaders(request,response){
@@ -974,4 +1425,4 @@ function applySecurityHeaders(request,response){
  if(!headers.has("cache-control"))headers.set("cache-control","no-store");
  return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
 }
-export default{async fetch(request,env){let response;try{response=await handleRequest(request,env)}catch{response=json({error:"internal_error"},500)}return applySecurityHeaders(request,applyCors(request,env,response))},scheduled:handleScheduled};
+export default{async fetch(request,env){let response;try{response=await handleRequest(request,env)}catch{response=json({error:"internal_error"},500)}return applySecurityHeaders(request,applyCors(request,env,response))},scheduled:handleScheduled,queue:handleOrchestratorQueue};

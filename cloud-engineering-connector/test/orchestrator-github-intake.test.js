@@ -66,6 +66,24 @@ test("accepts only a configured, authorized, labeled GitHub issue event in dry-r
   assert.equal(Object.hasOwn(result, "title"), false);
 });
 
+test("treats unrelated label changes as the same business intake operation", async () => {
+  const replayStore = makeStore();
+  const first = await validateGitHubIntakeEvent(input({ replayStore }));
+  const secondEvent = baseEvent();
+  secondEvent.issue.labels = [
+    { name: "orchestrator:request" },
+    { name: "triage:reviewed" },
+  ];
+  const replay = await validateGitHubIntakeEvent(input({
+    event: secondEvent,
+    deliveryId: "delivery-00000002",
+    replayStore,
+  }));
+  assert.equal(first.accepted, true);
+  assert.equal(replay.accepted, false);
+  assert.equal(replay.reasonCode, "DELIVERY_REPLAY");
+});
+
 test("fails closed when actor allowlist, label policy, or event policy is absent", async () => {
   for (const badConfig of [
     undefined,

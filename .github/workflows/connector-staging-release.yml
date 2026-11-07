@@ -110,20 +110,43 @@ jobs:
             assert.equal(response.ok && body.success, true, `Cloudflare account security preflight failed: HTTP ${response.status}`);
             return body.result?.settings || {};
           }
-
-          const [settings, deploymentData, accountSecurity] = await Promise.all([
-            api("/settings"), api("/deployments?per_page=1&page=1"), accountSecuritySettings(),
+          async function queueInventory() {
+            const queues = [];
+            for (let page = 1; page <= 1000; page += 1) {
+              const url = "https://api.cloudflare.com/client/v4/accounts/" + account + "/queues?per_page=100&page=" + page;
+              const response = await fetch(url, {
+                headers: { authorization: "Bearer " + token, accept: "application/json" },
+                signal: AbortSignal.timeout(15000),
+              });
+              const body = await response.json();
+              assert.equal(response.ok && body.success, true, "Cloudflare Queue inventory failed: HTTP " + response.status);
+              queues.push(...(body.result || []));
+              const totalPages = Number(body.result_info?.total_pages ?? 1);
+              assert.ok(Number.isSafeInteger(totalPages) && totalPages >= 1 && totalPages <= 1000, "Cloudflare Queue pagination metadata is invalid");
+              if (page >= totalPages) return queues;
+            }
+            throw new Error("Cloudflare Queue inventory exceeded the 1000-page safety limit");
+          }
+          const [settings, deploymentData, accountSecurity, queues] = await Promise.all([
+            api("/settings"), api("/deployments?per_page=1&page=1"), accountSecuritySettings(), queueInventory(),
           ]);
           assert.equal(accountSecurity.enforce_twofactor, true, "Cloudflare account-level MFA enforcement must be enabled before Staging release");
           const bindings = new Map((settings.bindings || []).map((binding) => [binding.name, binding]));
-          const requiredSecrets = ["GITHUB_READONLY_TOKEN", "GITHUB_TOKEN", "MCP_AUTH_TOKEN", "MCP_ALLOWED_ORIGINS"];
+          const requiredSecrets = ["GITHUB_READONLY_TOKEN", "GITHUB_TOKEN", "MCP_AUTH_TOKEN", "MCP_ALLOWED_ORIGINS", "GITHUB_WEBHOOK_SECRET", "LEDGER_WORKER_ASSERTION_KEYS"];
           const missing = requiredSecrets.filter((name) => bindings.get(name)?.type !== "secret_text");
           if (missing.length) {
             throw new Error("Staging deployment blocked; missing Worker secret binding(s): " + missing.join(", ") + ". Add them in Cloudflare Workers > chat-gpt111-staging > Settings > Variables and Secrets. Secret values are never read.");
           }
+          const activeSignerKid = bindings.get("LEDGER_WORKER_ASSERTION_ACTIVE_KID");
+          assert.equal(activeSignerKid?.type, "plain_text", "Staging LEDGER_WORKER_ASSERTION_ACTIVE_KID must be a non-secret plain-text binding");
+          assert.match(activeSignerKid.text || "", /^[A-Za-z0-9._-]{1,64}$/, "Staging active signer key ID must be a bounded identifier");
           assert.equal(bindings.get("PUBLIC_READ_ONLY")?.text, "true", "PUBLIC_READ_ONLY must be explicitly true in Staging");
           assert.ok(bindings.get("WRITE_CONTROL")?.namespace_id, "Staging WRITE_CONTROL namespace is required");
           assert.ok(bindings.get("MCP_RATE_LIMITER")?.namespace_id, "Staging MCP_RATE_LIMITER namespace is required");
+          const stagingQueue = queues.find((queue) => queue.queue_name === "chat-gpt111-staging-orchestrator-outbox");
+          assert.ok(stagingQueue?.queue_id, "Dedicated Staging Orchestrator Outbox Queue must exist before deployment");
+          // Cloudflare automatically creates the DLQ and its quarantine Queue when
+          // the consumer configuration is deployed. Verify both after deployment.
 
           const observability = settings.observability;
           assert.equal(observability?.enabled, true, "Staging Worker observability must be enabled");
@@ -143,6 +166,11 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `previous_version_id=${previous.version_id}\n`);
           console.log("Staging binding preflight passed; rollback target captured by immutable version ID.");
           NODE
+
+      - name: Revalidate the exact Staging candidate immediately before deployment
+        run: node scripts/verify-release-approval.mjs
+        env:
+          RELEASE_GITHUB_TOKEN: ${{ github.token }}
 
       - name: Deploy candidate to Staging
         id: deploy
@@ -171,7 +199,24 @@ jobs:
             assert.equal(response.ok && body.success, true, "Cloudflare verification failed: HTTP " + response.status);
             return body.result;
           }
-          const [settings, schedules] = await Promise.all([api("/settings"), api("/schedules")]);
+          async function queueInventory() {
+            const queues = [];
+            for (let page = 1; page <= 1000; page += 1) {
+              const url = "https://api.cloudflare.com/client/v4/accounts/" + account + "/queues?per_page=100&page=" + page;
+              const response = await fetch(url, {
+                headers: { authorization: "Bearer " + token, accept: "application/json" },
+                signal: AbortSignal.timeout(15000),
+              });
+              const body = await response.json();
+              assert.equal(response.ok && body.success, true, "Cloudflare Queue inventory failed: HTTP " + response.status);
+              queues.push(...(body.result || []));
+              const totalPages = Number(body.result_info?.total_pages ?? 1);
+              assert.ok(Number.isSafeInteger(totalPages) && totalPages >= 1 && totalPages <= 1000, "Cloudflare Queue pagination metadata is invalid");
+              if (page >= totalPages) return queues;
+            }
+            throw new Error("Cloudflare Queue inventory exceeded the 1000-page safety limit");
+          }
+          const [settings, schedules, queues] = await Promise.all([api("/settings"), api("/schedules"), queueInventory()]);
           const bindings = new Map((settings.bindings || []).map((binding) => [binding.name, binding]));
           const knowledgeStore = bindings.get("KNOWLEDGE_STORE");
           assert.equal(knowledgeStore?.type, "durable_object_namespace", "Staging KNOWLEDGE_STORE Durable Object binding is required");
@@ -183,7 +228,27 @@ jobs:
             (schedules.schedules || []).some((schedule) => schedule.cron === "*/5 * * * *"),
             "Staging five-minute Knowledge Store reconciliation Cron must be active",
           );
-          console.log("Staging KnowledgeStore binding and five-minute reconciliation Cron are verified.");
+          const outboxQueue = queues.find((queue) => queue.queue_name === "chat-gpt111-staging-orchestrator-outbox");
+          const outboxDlq = queues.find((queue) => queue.queue_name === "chat-gpt111-staging-orchestrator-outbox-dlq");
+          const outboxDlqQuarantine = queues.find((queue) => queue.queue_name === "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine");
+          assert.ok(outboxQueue?.queue_id, "Staging Orchestrator Outbox Queue must exist after deployment");
+          assert.ok(outboxDlq?.queue_id, "Staging Orchestrator Outbox DLQ must exist after deployment");
+          assert.ok(outboxDlqQuarantine?.queue_id, "Staging DLQ quarantine Queue must exist after deployment");
+          const consumer = (outboxQueue.consumers || []).find((item) => item.script_name === "chat-gpt111-staging");
+          assert.ok(consumer?.consumer_id, "Staging Queue consumer must be attached to the intended Worker");
+          assert.equal(consumer.dead_letter_queue, "chat-gpt111-staging-orchestrator-outbox-dlq", "Staging Queue consumer must use its isolated DLQ");
+          assert.equal(consumer.settings?.batch_size, 5, "Staging Queue batch size must remain bounded at 5");
+          assert.equal(consumer.settings?.max_concurrency, 5, "Staging Queue consumer concurrency must remain bounded at 5");
+          assert.equal(consumer.settings?.max_retries, 5, "Staging Queue retry count must remain bounded at 5");
+          assert.equal(consumer.settings?.retry_delay, 30, "Staging Queue retry delay must remain 30 seconds");
+          const dlqConsumer = (outboxDlq.consumers || []).find((item) => item.script_name === "chat-gpt111-staging");
+          assert.ok(dlqConsumer?.consumer_id, "Staging DLQ archive consumer must be attached to the intended Worker");
+          assert.equal(dlqConsumer.dead_letter_queue, "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine", "Staging DLQ archiver must quarantine repeated archival failures");
+          assert.equal(dlqConsumer.settings?.batch_size, 5, "Staging DLQ archive batch size must be 5");
+          assert.equal(dlqConsumer.settings?.max_concurrency, 2, "Staging DLQ archive concurrency must be bounded at 2");
+          assert.equal(dlqConsumer.settings?.max_retries, 100, "Staging DLQ archive retries must be bounded at 100");
+          assert.equal(dlqConsumer.settings?.retry_delay, 3600, "Staging DLQ archive retry delay must be 3600 seconds");
+          console.log("Staging Durable Object, Queue consumer, isolated DLQ, retry policy, and Cron are verified.");
           NODE
 
       - name: Run live Staging acceptance

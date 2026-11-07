@@ -635,12 +635,10 @@ export class OrchestratorLedger extends DurableObject {
         }
         const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", row.task_id).toArray()[0];
         let generation = 1;
-        let reconciliationRequired = false;
         if (lease) {
           if (lease.worker_id !== null && lease.lease_until > now) continue;
           generation = lease.lease_generation + 1;
           if (lease.worker_id !== null && lease.lease_until <= now) {
-            reconciliationRequired = true;
             // An arbitrary evidence reference or caller-supplied boolean is not
             // proof of independent reconciliation. Until a separately
             // authenticated recovery authority is implemented, fail closed.
@@ -664,7 +662,7 @@ export class OrchestratorLedger extends DurableObject {
           workerId,
           leaseGeneration: generation,
           leaseUntil: now + leaseMs,
-          reconciliationRequired,
+          reconciliationRequired: false,
         };
       }
       return { claimed: false, reason: assigneeMismatch ? "ASSIGNEE_MISMATCH" : "NO_TASK_AVAILABLE" };

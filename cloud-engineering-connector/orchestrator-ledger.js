@@ -601,7 +601,7 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  async claimTask({ workerId, workerAssertion, leaseMs, now, taskId, reconciliationEvidence } = {}) {
+  async claimTask({ workerId, workerAssertion, leaseMs, now, taskId } = {}) {
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);
     timestamp(now);
@@ -629,19 +629,16 @@ export class OrchestratorLedger extends DurableObject {
         }
         const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", row.task_id).toArray()[0];
         let generation = 1;
-        let reconciliationRequired = false;
         if (lease) {
           if (lease.worker_id !== null && lease.lease_until > now) continue;
           generation = lease.lease_generation + 1;
+          // An expired lease is not proof that the previous worker stopped or
+          // that its external side effects were reconciled. Caller-supplied
+          // booleans/references cannot establish that trust boundary. Keep the
+          // task unavailable until a separately authenticated reconciliation
+          // authority is implemented.
           if (lease.worker_id !== null && lease.lease_until <= now) {
-            reconciliationRequired = true;
-            if (!reconciliationEvidence || reconciliationEvidence.checked !== true ||
-                reconciliationEvidence.priorGeneration !== lease.lease_generation ||
-                typeof reconciliationEvidence.evidenceRef !== "string" ||
-                reconciliationEvidence.evidenceRef.length === 0 ||
-                reconciliationEvidence.evidenceRef.length > 512) {
-              return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
-            }
+            return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
           }
         }
         if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
@@ -653,7 +650,7 @@ export class OrchestratorLedger extends DurableObject {
         } else {
           sql.exec(
             "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
-            row.task_id, workerId, now + leaseMs, now,
+            workerId, now + leaseMs, now,
           );
         }
         return {
@@ -662,7 +659,7 @@ export class OrchestratorLedger extends DurableObject {
           workerId,
           leaseGeneration: generation,
           leaseUntil: now + leaseMs,
-          reconciliationRequired,
+          reconciliationRequired: false,
         };
       }
       return { claimed: false, reason: assigneeMismatch ? "ASSIGNEE_MISMATCH" : "NO_TASK_AVAILABLE" };

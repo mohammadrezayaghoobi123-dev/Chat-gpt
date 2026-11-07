@@ -157,3 +157,17 @@ test("readyz fails closed unless DLQ archive routing is configured", () => {
   const smoke = readFileSync(new URL("./staging-smoke.mjs", import.meta.url), "utf8");
   assert.match(smoke, /readinessBody\.orchestrator_outbox_dlq_archiver, "ok"/);
 });
+
+
+test("Staging preflight requires only the primary Queue; DLQ and quarantine are auto-created by deploy and verified afterwards", () => {
+  const release = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  const start = release.indexOf("      - name: Preflight Staging bindings and capture rollback target");
+  const end = release.indexOf("      - name: Deploy candidate to Staging", start);
+  assert.ok(start >= 0 && end > start, "Staging preflight must be bounded before the deploy step");
+  const preflight = release.slice(start, end);
+  assert.match(preflight, /chat-gpt111-staging-orchestrator-outbox\"/);
+  assert.doesNotMatch(preflight, /outbox-dlq/, "Wrangler creates the DLQ and quarantine Queues at deploy; requiring them first deadlocks the first release");
+  const post = release.slice(end);
+  assert.match(post, /outboxDlq\?\.queue_id/);
+  assert.match(post, /outboxDlqQuarantine\?\.queue_id/);
+});

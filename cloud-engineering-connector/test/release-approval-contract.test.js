@@ -682,3 +682,20 @@ test("Production preflight blocks when its dedicated outbox DLQ is missing", () 
     "chat-gpt111-orchestrator-outbox-dlq",
   );
 });
+
+
+test("Staging revalidates exact candidate approval after preflight and immediately before deployment", () => {
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url),
+    "utf8",
+  );
+  const firstApproval = workflow.indexOf("Verify independent approval of the exact Staging candidate");
+  const preflight = workflow.indexOf("Preflight Staging bindings and capture rollback target");
+  const finalApproval = workflow.indexOf("Revalidate the exact Staging candidate immediately before deployment");
+  const deploy = workflow.indexOf("Deploy candidate to Staging");
+  assert.ok(firstApproval >= 0, "initial approval gate must exist");
+  assert.ok(preflight > firstApproval, "Cloudflare preflight must follow initial approval");
+  assert.ok(finalApproval > preflight, "final approval gate must follow Cloudflare preflight");
+  assert.ok(deploy > finalApproval, "deployment must follow final approval gate");
+  assert.match(workflow.slice(finalApproval, deploy), /node scripts\/verify-release-approval\.mjs/);
+});

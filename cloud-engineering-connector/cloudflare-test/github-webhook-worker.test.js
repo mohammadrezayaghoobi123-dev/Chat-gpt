@@ -126,21 +126,32 @@ describe("GitHub webhook Worker route", () => {
         { subject: "orchestrator-scheduler", role: "system", operation: "createTask", nowMs: createdAt },
       ),
     });
+    const ownerEnv = {
+      ...testEnv(),
+      GITHUB_WEBHOOK_REPOSITORY: "mohammadrezayaghoobi123-dev/Chat-gpt",
+      GITHUB_WEBHOOK_REPOSITORY_ID: "1398846697",
+      GITHUB_WEBHOOK_OWNER_ID: "335530603",
+    };
     const event = payload({
       action: "created",
+      repository: { id: 1398846697, full_name: "mohammadrezayaghoobi123-dev/Chat-gpt" },
+      issue: {
+        ...payload().issue,
+        html_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/issues/7",
+      },
       comment: {
         id: 900001,
         body: `/orchestrator cancel ${taskId} --reason "Owner requested cancellation"`,
         created_at: new Date(createdAt).toISOString(),
-        user: { id: 42, type: "User" },
+        user: { id: 335530603, type: "User" },
       },
-      sender: { id: 42, type: "User" },
+      sender: { id: 335530603, type: "User" },
     });
     const body = JSON.stringify(event);
     const deliveryId = "gh-owner-delivery-0000001";
     const first = await worker.fetch(
       await signedRequest(body, deliveryId, undefined, "issue_comment"),
-      testEnv(),
+      ownerEnv,
     );
     expect(first.status).toBe(202);
     await expect(first.json()).resolves.toMatchObject({
@@ -152,14 +163,14 @@ describe("GitHub webhook Worker route", () => {
 
     const replay = await worker.fetch(
       await signedRequest(body, deliveryId, undefined, "issue_comment"),
-      testEnv(),
+      ownerEnv,
     );
     expect(replay.status).toBe(202);
     await expect(replay.json()).resolves.toMatchObject({ status: "duplicate", deliveryId });
 
     const differentDeliverySameComment = await worker.fetch(
       await signedRequest(body, "gh-owner-delivery-0000002", undefined, "issue_comment"),
-      testEnv(),
+      ownerEnv,
     );
     expect(differentDeliverySameComment.status).toBe(202);
     await expect(differentDeliverySameComment.json()).resolves.toMatchObject({

@@ -1371,3 +1371,53 @@ it("integrates the DLQ consumer with Durable Object archival before message ackn
     ).one().count).toBe(1);
   });
 });
+
+
+it("consumes a verified receipt assertion even when the authenticated payload is rejected", async () => {
+  const ledger = ledgerFor("ledger-receipt-sensitive-assertion-consumption");
+  const input = {
+    eventId: "evt-receipt-sensitive-jti-0001",
+    eventType: "task.created",
+    idempotencyKey: "outbox-receipt-sensitive-jti-0001",
+    taskId: "task-0001",
+    payload: { taskId: "task-0001", apiKey: "must-not-be-persisted" },
+    createdAt: now,
+    schemaVersion: 1,
+    envelopeSha256: "c".repeat(64),
+    consumerId: "orchestrator-outbox-consumer",
+    now,
+  };
+  const workerAssertion = await createWorkerAssertion({
+    subject: input.consumerId,
+    role: "consumer",
+    operation: "recordOutboxReceipt",
+    nowMs: now,
+    jti: "jti-receipt-sensitive-consume-00000001",
+  });
+
+  await expect(ledger.recordOutboxReceipt({ ...input, workerAssertion }))
+    .resolves.toMatchObject({
+      recorded: false,
+      reason: "SENSITIVE_FIELD_REJECTED",
+    });
+
+  await expect(ledger.recordOutboxReceipt({
+    ...input,
+    payload: { taskId: "task-0001", version: 1 },
+    workerAssertion,
+  })).resolves.toMatchObject({
+    recorded: false,
+    reason: "AUTHENTICATED_WORKER_REQUIRED",
+  });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+      input.eventId,
+    ).one().count).toBe(0);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      "jti-receipt-sensitive-consume-00000001",
+    ).one().count).toBe(1);
+  });
+});

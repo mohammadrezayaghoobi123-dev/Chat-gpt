@@ -731,5 +731,3 @@ it("rejects an expired lease even when its generation is still current", async (
     await expect(ledger.getTask({ taskId: "task-0001" }))
       .resolves.toMatchObject({ state: "RUNNING", version: 2 });
   });
-
-});

@@ -73,3 +73,13 @@ test("Production release verifies both isolated DLQ archive consumers", () => {
   assert.match(release, /max_retries, 100/);
   assert.match(release, /retry_delay, 3600/);
 });
+
+test("Production preflight rejects a legacy secret-text PUBLIC_READ_ONLY binding before deployment", () => {
+  const start = releaseWorkflow.indexOf("      - name: Preflight Production credentials, namespace isolation, and rollback target");
+  const end = releaseWorkflow.indexOf("      - name: Deploy candidate to Production", start);
+  assert.ok(start >= 0 && end > start, "Production preflight must be bounded before the deploy step");
+  const preflight = releaseWorkflow.slice(start, end);
+  assert.match(preflight, /const publicReadOnly = productionBindings\.get\(["']PUBLIC_READ_ONLY["']\)/);
+  assert.match(preflight, /assert\.equal\(publicReadOnly\?\.type,\s*["']plain_text["']/);
+  assert.match(preflight, /assert\.equal\(publicReadOnly\.text,\s*["']true["']/);
+});

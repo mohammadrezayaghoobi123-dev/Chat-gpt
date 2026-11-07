@@ -1,1 +1,3 @@
-// Owner webhook command policy. Implemented test-first in subsequent commits.
+export function parseOwnerCommand(_commentBody) {
+  return null;
+}

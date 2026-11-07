@@ -419,7 +419,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
 });
 
 
-it("consumes the assertion and returns a bounded rejection for oversized message envelopes", async () => {
+it("consumes the assertion and returns a bounded rejection for an oversized message envelope", async () => {
   const ledger = ledgerFor("ledger-message-oversized-envelope-rejection");
   await createTask(ledger, {
     task: task(), idempotencyKey: "task-create-oversized-envelope", inputHash: "b".repeat(64), now,

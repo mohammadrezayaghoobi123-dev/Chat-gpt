@@ -80,6 +80,17 @@ test("Staging release requires the webhook and Ledger assertion secret bindings"
   assert.match(stagingWorkflow, /"LEDGER_WORKER_ASSERTION_KEYS"/);
 });
 
+test("Staging release requires Owner assertion secret and immutable Owner/repository identity bindings", () => {
+  const release = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  assert.match(release, /"LEDGER_OWNER_ASSERTION_KEYS"/);
+  assert.match(release, /LEDGER_OWNER_ASSERTION_ACTIVE_KID/);
+  assert.match(release, /GITHUB_WEBHOOK_OWNER_ID/);
+  assert.match(release, /GITHUB_WEBHOOK_REPOSITORY_ID/);
+  assert.match(release, /GITHUB_WEBHOOK_REPOSITORY/);
+  assert.match(release, /ownerSignerKid\?\.type, "plain_text"/);
+  assert.match(release, /GITHUB_WEBHOOK_OWNER_ID.*plain_text/s);
+});
+
 test("Staging release verifies the OrchestratorLedger binding after applying the migration", () => {
   const stagingWorkflow = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
   assert.match(stagingWorkflow, /bindings\.get\(["']ORCHESTRATOR_LEDGER["']\)/);

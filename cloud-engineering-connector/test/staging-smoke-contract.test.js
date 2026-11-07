@@ -69,7 +69,7 @@ test("readiness requires the independent OrchestratorLedger SQLite probe", () =>
   const worker = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
   assert.match(worker, /env\.ORCHESTRATOR_LEDGER/, "readyz must fail closed when the Ledger binding is absent");
   assert.match(worker, /orchestratorLedgerStub\.ping\(\)/, "readyz must execute the Ledger SQLite probe");
-  assert.match(worker, /orchestratorLedgerProbe\.schemaVersion\s*!==\s*5/, "readyz must enforce the Ledger schema version");
+  assert.match(worker, /orchestratorLedgerProbe\.schemaVersion\s*!==\s*6/, "readyz must enforce the Ledger schema version");
   assert.match(worker, /readinessState\.orchestrator_ledger\s*=\s*"ok"/, "readyz must report Ledger readiness separately");
 });
 

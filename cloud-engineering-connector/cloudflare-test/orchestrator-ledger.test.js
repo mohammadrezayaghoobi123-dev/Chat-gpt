@@ -787,6 +787,37 @@ it("moves an expired final-attempt outbox lease to a lease-free dead-letter stat
 });
 
 
+it("authenticates the Queue consumer before inspecting an untrusted receipt payload", async () => {
+  const ledger = ledgerFor("ledger-outbox-receipt-auth-before-inspection");
+  const input = {
+    eventId: "evt-receipt-auth-order-0001",
+    idempotencyKey: "outbox-receipt-auth-order-0001",
+    taskId: "task-0001",
+    eventType: "task.created",
+    payload: { apiKey: "must-not-be-inspected-before-authentication" },
+    createdAt: now,
+    schemaVersion: 1,
+    envelopeSha256: "a".repeat(64),
+    consumerId: "orchestrator-outbox-consumer",
+    now,
+    workerAssertion: null,
+  };
+
+  const result = await ledger.recordOutboxReceipt(input);
+  expect(result).toEqual({
+    recorded: false,
+    reason: "AUTHENTICATED_WORKER_REQUIRED",
+  });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+      input.eventId,
+    ).one().count).toBe(0);
+  });
+});
+
+
 it("rejects an authenticated Queue receipt when no matching durable Outbox event exists", async () => {
   const ledger = ledgerFor("ledger-outbox-receipt-source-binding");
   const input = {

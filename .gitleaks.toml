@@ -111,15 +111,25 @@ paths = ['''^cloud-engineering-connector/test/orchestrator-preflight\.test\.js$'
 regexTarget = "line"
 regexes = ['''eyJhbGciOiJIUzI1NiJ9.*eyJzdWIiOiJ1c2VyIn0.*signaturepayloadlongenough123456''']
 
+
 [[allowlists]]
-description = "Synthetic ephemeral HMAC test-key fixture from one historical identity test commit; restricted to that exact commit, file, and generic-api-key rule."
+description = "Synthetic outbox event and idempotency identifiers in one historical worker test; restricted to the exact commit, path, and fixture line."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["6dd3ef5270b89a8b76efaecf0f5c519d4dfe8eae"]
+paths = ['''^cloud-engineering-connector/test/worker\.test\.js$''']
+regexTarget = "line"
+regexes = ['''eventId:"evt-consumer-00000001",idempotencyKey:"idem-consumer-0001"''']
+
+[[allowlists]]
+description = "Suppress generic-api-key findings only in this exact historical worker-identity test file and commit; this entry is commit/path scoped, not line scoped."
 targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["d5ffafb6df54e26189d8494548f7693fdcfdf108"]
 paths = ['''^cloud-engineering-connector/test/orchestrator-worker-identity\.test\.js$''']
 
 [[allowlists]]
-description = "Synthetic ephemeral HMAC test-key fixture from one historical outbox publisher test commit; restricted to that exact commit, file, and generic-api-key rule."
+description = "Suppress generic-api-key findings only in this exact historical outbox-publisher test file and commit; this entry is commit/path scoped, not line scoped."
 targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["a5c36d1c2e7461e38578a688133c797f541b4b46"]
@@ -127,19 +137,7 @@ paths = ['''^cloud-engineering-connector/test/orchestrator-outbox-publisher\.tes
 
 
 [[allowlists]]
-description = "Synthetic Queue-consumer event and idempotency identifiers in one historical unit-test commit; exact commit, file, and literals only."
-targetRules = ["generic-api-key"]
-condition = "AND"
-commits = ["6dd3ef5270b89a8b76efaecf0f5c519d4dfe8eae"]
-paths = ['''^cloud-engineering-connector/test/worker\.test\.js$''']
-regexTarget = "line"
-regexes = [
-  '''eventId\s*:\s*["']evt-consumer-00000001["']''',
-  '''idempotencyKey\s*:\s*["']idem-consumer-0001["']'''
-]
-
-[[allowlists]]
-description = "Synthetic non-credential idempotency fixture in one historical assertion-consumption regression test commit; restricted to the exact commit, test file, and literal."
+description = "Synthetic idempotency identifier in a historical OrchestratorLedger negative test; exact commit, file, rule, and literal line only."
 targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["916436f86dc076916bc5588a61b92e710a6680f9"]

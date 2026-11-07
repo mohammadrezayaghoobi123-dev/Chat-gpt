@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import worker from "../worker.js";
 import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.js";
 
@@ -177,6 +177,20 @@ describe("GitHub webhook Worker route", () => {
       status: "duplicate",
       operation: "cancel",
     });
+
+    const realNow = Date.now();
+    vi.setSystemTime(new Date(createdAt + 6 * 60 * 1000));
+    try {
+      const delayedReplay = await worker.fetch(
+        await signedRequest(body, deliveryId, undefined, "issue_comment"),
+        ownerEnv,
+      );
+      expect(delayedReplay.status).toBe(202);
+      await expect(delayedReplay.json()).resolves.toMatchObject({ status: "duplicate", deliveryId });
+      await expect(ledger.getTask({ taskId })).resolves.toMatchObject({ state: "CANCELLED", version: 2 });
+    } finally {
+      vi.setSystemTime(new Date(realNow));
+    }
 
     const changedBody = JSON.stringify({
       ...event,

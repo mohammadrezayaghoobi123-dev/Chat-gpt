@@ -495,6 +495,12 @@ it("requires verified worker identities before task or outbox lease side effects
       accepted: false, reason: "SENSITIVE_FIELD_REJECTED",
     });
     await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_processed_messages WHERE message_id = ?",
+        "msg-secret-0001",
+      ).one().count).toBe(0);
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
       const tables = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row => row.name);
       expect(tables.some(name => name.startsWith("knowledge_"))).toBe(false);
       expect(tables).toEqual(expect.arrayContaining([
@@ -777,8 +783,9 @@ it("authenticates an outbox writer before inspecting an untrusted event payload"
 
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec(
-      "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE event_id = ?",
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE event_id IN (?, ?)",
       "evt-outbox-auth-order-0001",
+      "evt-outbox-auth-order-authenticated-0001",
     ).one().count).toBe(0);
   });
 });

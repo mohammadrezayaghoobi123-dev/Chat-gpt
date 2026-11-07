@@ -510,7 +510,14 @@ export class OrchestratorLedger extends DurableObject {
       return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
     }
     // Authenticate the sender before inspecting the untrusted message envelope.
-    serializeBounded(envelope, "message envelope");
+    try {
+      serializeBounded(envelope, "message envelope");
+    } catch (error) {
+      if (error?.code === "SENSITIVE_FIELD_REJECTED") {
+        return { accepted: false, reason: "SENSITIVE_FIELD_REJECTED" };
+      }
+      throw error;
+    }
     const authenticatedSender = { id: verifiedAssertion.subject, authenticated: true, identityVerified: true };
     if (!envelope || typeof envelope !== "object" || envelope.senderId !== authenticatedSender.id) {
       return { accepted: false, reason: "SENDER_IDENTITY_MISMATCH" };
@@ -527,7 +534,15 @@ export class OrchestratorLedger extends DurableObject {
     if (validatedEnvelope.inputHash !== inputHash) {
       return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
     }
-    const envelopeJson = serializeBounded(validatedEnvelope, "validated message envelope");
+    let envelopeJson;
+    try {
+      envelopeJson = serializeBounded(validatedEnvelope, "validated message envelope");
+    } catch (error) {
+      if (error?.code === "SENSITIVE_FIELD_REJECTED") {
+        return { accepted: false, reason: "SENSITIVE_FIELD_REJECTED" };
+      }
+      throw error;
+    }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
@@ -762,7 +777,15 @@ export class OrchestratorLedger extends DurableObject {
       return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     // Validate and serialize the untrusted payload only after worker authentication.
-    const normalized = validateOutboxInput(input);
+    let normalized;
+    try {
+      normalized = validateOutboxInput(input);
+    } catch (error) {
+      if (error?.code === "SENSITIVE_FIELD_REJECTED") {
+        return { enqueued: false, reason: "SENSITIVE_FIELD_REJECTED" };
+      }
+      throw error;
+    }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, normalized.now)) {
@@ -932,7 +955,15 @@ export class OrchestratorLedger extends DurableObject {
       return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     // Authenticate the consumer before inspecting the untrusted receipt payload.
-    const payloadJson = serializeBounded(payload, "outbox receipt payload");
+    let payloadJson;
+    try {
+      payloadJson = serializeBounded(payload, "outbox receipt payload");
+    } catch (error) {
+      if (error?.code === "SENSITIVE_FIELD_REJECTED") {
+        return { recorded: false, reason: "SENSITIVE_FIELD_REJECTED" };
+      }
+      throw error;
+    }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {

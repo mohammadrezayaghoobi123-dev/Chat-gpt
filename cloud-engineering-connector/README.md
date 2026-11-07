@@ -102,3 +102,24 @@ The configured 1 GiB planning ceiling is deliberately conservative for the Worke
 
 
 Health probes: `GET /healthz` is a liveness endpoint and stays independent of credentials and Durable Object availability. `GET /readyz` performs a lightweight `WRITE_CONTROL.ping()` probe and returns 503 until the Durable Object binding/schema is available. The readiness probe does not scan the full operation ledger.
+
+
+## Architecture analysis tool
+
+The read-only `architecture_analyze` tool accepts 1–8 explicit repository paths and applies bounded deterministic checks for unbounded `fetch` calls and dynamic code execution primitives. Findings include exact file/line evidence, redacted snippets, rationale, and remediation guidance. Results are capped at 100 findings. Every finding is marked `not_run`: this is a triage aid, not semantic analysis, taint analysis, exploitability proof, or a substitute for tests and human review.
+
+## Secure MCP console and client compatibility
+
+`GET /` serves a same-origin engineering console with a nonce-based Content Security Policy, no browser storage, and no embedded credentials. `/healthz` is liveness only; `/readyz` performs a lightweight Durable Object `ping()` and returns 503 until the storage binding/schema is ready. MCP protocol discovery remains a separate authenticated or explicitly public-read-only request.
+
+Every advertised tool carries a title and explicit `readOnlyHint` and `destructiveHint`. The public read-only allowlist includes `project_inspect`, `read_project_file`, `engineering_standards`, `architecture_review`, and `architecture_analyze`. `create_change_pr` is never advertised anonymously.
+
+Claude Free supports one custom remote connector. Add the HTTPS endpoint in **Customize → Connectors → Add custom connector**. For a public-read-only Staging endpoint, no client bearer token is needed; the Worker authenticates its GitHub read calls using its server-side read-only token. Actual Claude-account acceptance still requires connecting the endpoint in the user's Claude account and executing a read-only repository inspection.
+
+## Least-privilege GitHub credentials
+
+- `GITHUB_READONLY_TOKEN`: required for anonymous public read-only repository access. Use a fine-grained PAT restricted to `mohammadrezayaghoobi123-dev/Chat-gpt` with **Metadata: Read-only** and **Contents: Read-only** only. This token is used only when `READ_ONLY_GITHUB=true`; upstream methods other than GET are rejected.
+- `GITHUB_TOKEN`: separate credential reserved for authenticated draft-PR creation. Grant only the repository permissions needed for Contents and Pull requests. It is explicitly removed from the environment used by anonymous public read-only calls.
+- `MCP_AUTH_TOKEN`: high-entropy bearer credential for authenticated MCP operations. Keep it in Cloudflare Worker secrets and in the Claude connector's encrypted fixed-header field only when authenticated tools are required.
+
+Missing `GITHUB_READONLY_TOKEN` fails closed before a GitHub API request. The Worker does not fall back to an unauthenticated shared-egress quota or the write-capable `GITHUB_TOKEN`. Never paste any credential into chat, source files, tests, logs, or PR descriptions.

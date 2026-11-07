@@ -4,6 +4,7 @@ import { verifyReleaseApproval } from "../release-approval.js";
 
 const sha = "a".repeat(40);
 const headSha = "b".repeat(40);
+const baseSha = "c".repeat(40);
 const author = "candidate-author";
 const reviewer = "independent-reviewer";
 const repo = "mohammadrezayaghoobi123-dev/Chat-gpt";
@@ -21,7 +22,7 @@ function stagingPull(overrides = {}) {
     html_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/129",
     user: { login: author },
     head: { sha },
-    base: { ref: "integration/unify-main-and-integrated-2026-11-02" },
+    base: { ref: "integration/unify-main-and-integrated-2026-11-02", sha: baseSha },
     mergeable: true,
     mergeable_state: "clean",
     ...overrides,
@@ -40,6 +41,7 @@ function approval(commitId = sha, login = reviewer, state = "APPROVED", submitte
 function fakeFetch(pulls, reviews, onRequest = () => {}) {
   return async (url, options) => {
     onRequest(String(url), options);
+    if (String(url).includes("/git/ref/heads/")) return response({ object: { sha: baseSha } });
     if (String(url).includes("/commits/")) return response(pulls);
     if (String(url).includes("/reviews?")) return response(reviews);
     return response({ message: "not found" }, 404);
@@ -98,6 +100,19 @@ test("Staging rejects non-mergeable or behind candidates before checking reviews
   }
 });
 
+
+test("Staging rejects a candidate whose PR base SHA is not the current integration head", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch([stagingPull({
+        base: { ref: "integration/unify-main-and-integrated-2026-11-02", sha: "d".repeat(40) },
+      })], [approval()]),
+    }),
+    /current integration head/,
+  );
+});
+
 test("Staging rejects author self-approval and stale approvals", async () => {
   await assert.rejects(
     verifyReleaseApproval({
@@ -138,7 +153,7 @@ test("Staging uses a scoped GitHub token and never places it in the URL", async 
       assert.equal(options.headers.authorization, "Bearer " + token);
     }),
   });
-  assert.equal(urls.length, 2);
+  assert.equal(urls.length, 3);
   assert.ok(urls.every(url => !url.includes(token)));
 });
 
@@ -211,6 +226,9 @@ test("release approval paginates associated PRs and all reviews before accepting
   const fetchImpl = async (url, options) => {
     const parsed = new URL(String(url));
     requestedUrls.push(parsed.pathname + parsed.search);
+    if (parsed.pathname.endsWith("/git/ref/heads/integration/unify-main-and-integrated-2026-11-02")) {
+      return response({ object: { sha: baseSha } });
+    }
     if (parsed.pathname.endsWith("/commits/" + sha + "/pulls")) {
       if (parsed.searchParams.get("page") === "1") return response(decoys);
       if (parsed.searchParams.get("page") === "2") return response([stagingPull()]);

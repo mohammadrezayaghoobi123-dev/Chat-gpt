@@ -182,6 +182,18 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+  it("derives task state and version from its own Ledger snapshot, not caller-supplied CAS fields", async () => {
+    const ledger = ledgerFor("owner-command-ledger-derived-cas");
+    await createTask(ledger);
+    const input = await ownerInput();
+    const { expectedState: _expectedState, expectedVersion: _expectedVersion, ...semanticCommand } = input.command;
+    const result = await ledger.executeOwnerCommand({ ...input, command: semanticCommand });
+    expect(result).toMatchObject({
+      applied: true, operation: "cancel",
+      task: { taskId: "task-owner-0001", state: "CANCELLED", version: 2 },
+    });
+  });
+
   it("returns the exact stored result for a replay without a second transition or audit event", async () => {
     const ledger = ledgerFor("owner-command-replay");
     await createTask(ledger);

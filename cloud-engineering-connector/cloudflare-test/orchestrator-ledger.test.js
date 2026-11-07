@@ -48,6 +48,28 @@ const createTask = async (ledger, input) => ledger.createTask({
     subject: "orchestrator-scheduler", role: "system", operation: "createTask", nowMs: input.now,
   }),
 });
+async function ensureAgentLease(ledger, { taskId = "task-0001", workerId = "agent:worker-1", now: at = now } = {}) {
+  const existing = await runInDurableObject(ledger, async (_instance, state) => (
+    state.storage.sql.exec(
+      "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+      taskId,
+    ).toArray()[0] ?? null
+  ));
+  if (existing && existing.worker_id === workerId && existing.lease_until > at) {
+    return existing.lease_generation;
+  }
+  const claimed = await ledger.claimTask({
+    workerId,
+    workerAssertion: await claimAssertion(workerId, at),
+    leaseMs: 30_000,
+    now: at,
+    taskId,
+  });
+  if (claimed?.claimed !== true) {
+    throw new Error("Unable to establish test Agent lease: " + String(claimed?.reason ?? "unknown"));
+  }
+  return claimed.leaseGeneration;
+}
 const protocolEnvelope = (messageId, taskId, inputHash, payload, createdAt = now) => ({
   protocolVersion: 1, messageId, taskId, correlationId: "corr-0001",
   senderId: "agent:worker-1", recipientId: "agent:worker-2", type: "PROGRESS",
@@ -177,7 +199,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("deduplicates repeated messages and rejects the same message ID with a different input hash", async () => {
     const ledger = ledgerFor("ledger-message-dedup");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0006", inputHash: "2".repeat(64), now });
-    const input = { messageId: "msg-0001", taskId: "task-0001", inputHash: "3".repeat(64), envelope: protocolEnvelope("msg-0001", "task-0001", "3".repeat(64), { step: 1 }), workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now }), now };
+    const input = { messageId: "msg-0001", taskId: "task-0001", inputHash: "3".repeat(64), envelope: protocolEnvelope("msg-0001", "task-0001", "3".repeat(64), { step: 1 }), workerId: "agent:worker-1", leaseGeneration: await ensureAgentLease(ledger), workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now }), now };
     expect(await ledger.recordMessage(input)).toMatchObject({ accepted: true });
     expect(await ledger.recordMessage({ ...input, workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now }) })).toMatchObject({ accepted: false, replay: true });
     await expect(ledger.recordMessage({ ...input, workerAssertion: undefined }))
@@ -219,7 +241,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0008", inputHash: "6".repeat(64), now });
     const input = {
       eventId: "event-0001", idempotencyKey: "outbox-key-0001", taskId: "task-0001",
-      eventType: "task.created", payload: { taskId: "task-0001" }, workerId: "agent:worker-1", now,
+      eventType: "task.created", payload: { taskId: "task-0001" }, workerId: "agent:worker-1", leaseGeneration: await ensureAgentLease(ledger), now,
     };
     expect(await ledger.enqueueOutbox({ ...input, workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now }) })).toMatchObject({ enqueued: true });
     expect(await ledger.enqueueOutbox({ ...input, workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now }) })).toMatchObject({ enqueued: false, replay: true });
@@ -232,7 +254,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0009", inputHash: "7".repeat(64), now });
     await ledger.enqueueOutbox({
       eventId: "event-0002", idempotencyKey: "outbox-key-0002", taskId: "task-0001",
-      eventType: "task.created", payload: { taskId: "task-0001" }, workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now }), now,
+      eventType: "task.created", payload: { taskId: "task-0001" }, workerId: "agent:worker-1", leaseGeneration: await ensureAgentLease(ledger), workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now }), now,
     });
     await expect(ledger.claimOutbox({ workerId: "publisher-1", leaseMs: 100, now }))
       .resolves.toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
@@ -254,6 +276,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       eventId: "event-outbox-retry", idempotencyKey: "outbox-retry-key",
       taskId: "task-0001", eventType: "task.created", payload: { taskId: "task-0001" },
       workerId: "agent:worker-1",
+      leaseGeneration: await ensureAgentLease(ledger),
       workerAssertion: await createWorkerAssertion({
         subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now,
       }),
@@ -351,7 +374,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0011", inputHash: "9".repeat(64), now });
     const input = {
       messageId: "msg-100-duplicates", taskId: "task-0001", inputHash: "a".repeat(64),
-      envelope: protocolEnvelope("msg-100-duplicates", "task-0001", "a".repeat(64), { accepted: true }), workerId: "agent:worker-1", now,
+      envelope: protocolEnvelope("msg-100-duplicates", "task-0001", "a".repeat(64), { accepted: true }), workerId: "agent:worker-1", leaseGeneration: await ensureAgentLease(ledger), now,
     };
     const results = await Promise.all(Array.from({ length: 100 }, async () => ledger.recordMessage({ ...input, workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now }) })));
     expect(results.filter(result => result.accepted)).toHaveLength(1);
@@ -593,7 +616,7 @@ it("requires verified worker identities before task or outbox lease side effects
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-envelope-binding", inputHash: "f".repeat(64), now });
     const result = await ledger.recordMessage({
       messageId: "msg-indexed-as-one", taskId: "task-0001", inputHash: "a".repeat(64),
-      envelope: protocolEnvelope("msg-claimed-as-two", "task-0001", "a".repeat(64), {}), workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now }), now,
+      envelope: protocolEnvelope("msg-claimed-as-two", "task-0001", "a".repeat(64), {}), workerId: "agent:worker-1", leaseGeneration: await ensureAgentLease(ledger), workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now }), now,
     });
     expect(result).toMatchObject({ accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" });
   });
@@ -834,7 +857,7 @@ it("rejects caller-forged publisher booleans before claiming an outbox event", a
   await createTask(ledger, { task: task(), idempotencyKey: "task-create-outbox-forged", inputHash: "7".repeat(64), now });
   await ledger.enqueueOutbox({
     eventId: "event-forged-publisher", idempotencyKey: "outbox-forged-publisher",
-    taskId: "task-0001", eventType: "task.created", payload: { taskId: "task-0001" }, workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now }), now,
+    taskId: "task-0001", eventType: "task.created", payload: { taskId: "task-0001" }, workerId: "agent:worker-1", leaseGeneration: await ensureAgentLease(ledger), workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now }), now,
   });
   await expect(ledger.claimOutbox({
     workerId: "publisher-1", authenticatedWorker: authenticatedWorker("publisher-1", "publisher"),
@@ -967,6 +990,7 @@ it("moves an expired final-attempt outbox lease to a lease-free dead-letter stat
     eventId: "event-final-attempt-crash", idempotencyKey: "outbox-final-attempt-crash",
     taskId: "task-0001", eventType: "task.created", payload: { taskId: "task-0001" },
     workerId: "agent:worker-1",
+    leaseGeneration: await ensureAgentLease(ledger),
     workerAssertion: await createWorkerAssertion({
       subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now,
     }),
@@ -1163,6 +1187,7 @@ it("integrates the real Durable Object Ledger with publisher and Queue consumer 
     eventType: "task.created",
     payload,
     workerId: "agent:worker-1",
+    leaseGeneration: await ensureAgentLease(ledger, { taskId, now: integrationNow }),
     workerAssertion: await createWorkerAssertion({
       subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: integrationNow,
     }),
@@ -1263,6 +1288,7 @@ it("acknowledges a republished event after an uncertain send even when the publi
       eventType: "task.created",
       payload,
       workerId: "agent:worker-1",
+      leaseGeneration: await ensureAgentLease(ledger, { taskId, now: integrationNow }),
       workerAssertion: await createWorkerAssertion({
         subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: integrationNow,
       }),

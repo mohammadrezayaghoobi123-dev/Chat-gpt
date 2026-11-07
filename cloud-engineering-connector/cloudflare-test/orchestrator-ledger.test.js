@@ -144,25 +144,37 @@ describe("OrchestratorLedger durable coordination contract", () => {
     expect(results.find(result => result.claimed).leaseGeneration).toBe(1);
   });
 
-  it("rejects stale lease generations on renew, release, and worker-driven state transitions", async () => {
+  it("rejects caller-asserted expired-lease reconciliation and consumes its signed assertion", async () => {
     const ledger = ledgerFor("ledger-stale-fence");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0004", inputHash: "f".repeat(64), now });
     const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
-    const reclaimed = await ledger.claimTask({
-      workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101,
+    const reconciliationJti = "jti-expired-lease-reconciliation-00000001";
+    const attemptedTakeover = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask",
+        nowMs: now + 101, jti: reconciliationJti,
+      }),
+      leaseMs: 100, now: now + 101,
       reconciliationEvidence: { checked: true, priorGeneration: 1, evidenceRef: "github://audit/reconcile/1" },
     });
-    expect(reclaimed.leaseGeneration).toBe(2);
+    expect(attemptedTakeover).toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-0001",
+      ).one()).toMatchObject({
+        worker_id: "agent:worker-1", lease_generation: 1, lease_until: now + 100,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?", reconciliationJti,
+      ).one().count).toBe(1);
+    });
     await expect(ledger.renewLease({
-      taskId: "task-0001", workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "renewLease", nowMs: now + 102 }), leaseGeneration: first.leaseGeneration, leaseMs: 100, now: now + 102,
+      taskId: "task-0001", workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "renewLease", nowMs: now + 102 }),
+      leaseGeneration: first.leaseGeneration, leaseMs: 100, now: now + 102,
     })).resolves.toMatchObject({ renewed: false, reason: "LEASE_FENCE_MISMATCH" });
-    await expect(ledger.releaseLease({
-      taskId: "task-0001", workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "releaseLease", nowMs: now + 102 }), leaseGeneration: first.leaseGeneration, now: now + 102,
-    })).resolves.toMatchObject({ released: false, reason: "LEASE_FENCE_MISMATCH" });
-    await expect(ledger.transitionTask({
-      taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
-      actor: agent, evidence, now: now + 102, workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "transitionTask", nowMs: now + 102 }), leaseGeneration: first.leaseGeneration,
-    })).resolves.toMatchObject({ updated: false, reason: "LEASE_FENCE_MISMATCH" });
   });
 
   it("rejects stale task version or expected-state compare-and-set writes", async () => {

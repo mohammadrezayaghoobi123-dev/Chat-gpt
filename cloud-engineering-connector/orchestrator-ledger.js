@@ -1167,10 +1167,8 @@ export class OrchestratorLedger extends DurableObject {
     try {
       timestamp(now);
       if (!command || typeof command !== "object" || Array.isArray(command) ||
-          Object.keys(command).sort().join(",") !== "eventId,expectedState,expectedVersion,operation,reason,taskId" ||
-          !["cancel", "quarantine", "release"].includes(command.operation) ||
-          !TASK_STATES.includes(command.expectedState) ||
-          !Number.isSafeInteger(command.expectedVersion) || command.expectedVersion < 1) {
+          Object.keys(command).sort().join(",") !== "eventId,operation,reason,taskId" ||
+          !["cancel", "quarantine", "release"].includes(command.operation)) {
         return { applied: false, reason: "INVALID_OWNER_COMMAND" };
       }
       identifier(command.taskId, "taskId");
@@ -1234,9 +1232,10 @@ export class OrchestratorLedger extends DurableObject {
         const currentTask = taskFromRow(taskRow);
         const auditHead = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
         const previousHash = auditHead?.event_hash ?? null;
-        const expectedMatches = currentTask &&
-          currentTask.version === command.expectedVersion &&
-          currentTask.state === command.expectedState;
+        // Expected state/version are derived from this trusted Durable Object
+        // snapshot. Never accept caller-supplied CAS fields for privileged actions.
+        const expectedVersion = currentTask?.version ?? null;
+        const expectedState = currentTask?.state ?? null;
         const transitionAllowed = currentTask && (
           command.operation === "release"
             ? currentTask.state === "QUARANTINED"
@@ -1244,7 +1243,6 @@ export class OrchestratorLedger extends DurableObject {
               (command.operation !== "quarantine" || currentTask.state !== "QUARANTINED")
         );
         const conflictReason = !currentTask ? "TASK_NOT_FOUND"
-          : !expectedMatches ? "VERSION_OR_STATE_CONFLICT"
           : !transitionAllowed ? "ILLEGAL_OWNER_TRANSITION"
           : null;
         const resultingTask = conflictReason ? null : {
@@ -1260,9 +1258,9 @@ export class OrchestratorLedger extends DurableObject {
         const auditDetails = conflictReason ? {
           taskId: command.taskId,
           operation: command.operation,
-          expectedVersion: command.expectedVersion,
+          expectedVersion,
           currentVersion: currentTask?.version ?? null,
-          expectedState: command.expectedState,
+          expectedState,
           currentState: currentTask?.state ?? null,
           actorId: context.actorId,
           repositoryId: context.repositoryId,
@@ -1279,8 +1277,8 @@ export class OrchestratorLedger extends DurableObject {
         } : {
           taskId: command.taskId,
           operation: command.operation,
-          expectedVersion: command.expectedVersion,
-          expectedState: command.expectedState,
+          expectedVersion,
+          expectedState,
           resultingVersion: resultingTask.version,
           resultingState: resultingTask.state,
           actorId: context.actorId,
@@ -1358,7 +1356,7 @@ export class OrchestratorLedger extends DurableObject {
             sql.exec(
               "UPDATE orchestrator_tasks SET state = ?, version = ?, task_json = ?, updated_at = ? WHERE task_id = ? AND version = ? AND state = ?",
               resultingTask.state, resultingTask.version, serializeBounded(resultingTask, "task"),
-              now, command.taskId, command.expectedVersion, command.expectedState,
+              now, command.taskId, expectedVersion, expectedState,
             );
             const lease = sql.exec("SELECT lease_generation FROM orchestrator_execution_leases WHERE task_id = ?", command.taskId).toArray()[0];
             const nextGeneration = (lease?.lease_generation ?? 0) + 1;

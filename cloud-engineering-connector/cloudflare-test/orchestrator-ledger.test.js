@@ -2001,3 +2001,132 @@ it("consumes a transition assertion when authenticated transition evidence is in
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_outbox_events").one().count).toBe(0);
   });
 });
+
+
+it("fences Agent message and Outbox writes by task assignment and current lease generation", async () => {
+  const ledger = ledgerFor("ledger-agent-rpc-lease-fencing");
+  await createTask(ledger, {
+    task: task(),
+    idempotencyKey: "task-create-agent-rpc-lease-fencing",
+    inputHash: "a".repeat(64),
+    now,
+  });
+
+  const firstLease = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(firstLease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+  await expect(ledger.releaseLease({
+    taskId: "task-0001",
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "releaseLease", nowMs: now + 1,
+    }),
+    leaseGeneration: firstLease.leaseGeneration,
+    now: now + 1,
+  })).resolves.toMatchObject({ released: true });
+
+  const currentLease = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now + 2),
+    leaseMs: 30_000,
+    now: now + 2,
+  });
+  expect(currentLease).toMatchObject({ claimed: true, leaseGeneration: 2 });
+
+  const staleMessageJti = "jti-stale-agent-message-lease-0001";
+  const staleMessageAssertion = await createWorkerAssertion({
+    subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now + 3, jti: staleMessageJti,
+  });
+  await expect(ledger.recordMessage({
+    messageId: "msg-stale-agent-lease-0001",
+    taskId: "task-0001",
+    inputHash: "b".repeat(64),
+    envelope: protocolEnvelope("msg-stale-agent-lease-0001", "task-0001", "b".repeat(64), { step: 1 }),
+    workerId: "agent:worker-1",
+    leaseGeneration: firstLease.leaseGeneration,
+    workerAssertion: staleMessageAssertion,
+    now: now + 3,
+  })).resolves.toMatchObject({ accepted: false, reason: "LEASE_FENCE_MISMATCH" });
+  await expect(ledger.recordMessage({
+    messageId: "msg-stale-agent-lease-0001",
+    taskId: "task-0001",
+    inputHash: "b".repeat(64),
+    envelope: protocolEnvelope("msg-stale-agent-lease-0001", "task-0001", "b".repeat(64), { step: 1 }),
+    workerId: "agent:worker-1",
+    leaseGeneration: currentLease.leaseGeneration,
+    workerAssertion: staleMessageAssertion,
+    now: now + 3,
+  })).resolves.toMatchObject({ accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" });
+
+  await expect(ledger.recordMessage({
+    messageId: "msg-current-agent-lease-0001",
+    taskId: "task-0001",
+    inputHash: "c".repeat(64),
+    envelope: protocolEnvelope("msg-current-agent-lease-0001", "task-0001", "c".repeat(64), { step: 2 }),
+    workerId: "agent:worker-1",
+    leaseGeneration: currentLease.leaseGeneration,
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now + 3,
+    }),
+    now: now + 3,
+  })).resolves.toMatchObject({ accepted: true });
+
+  const staleOutboxJti = "jti-stale-agent-outbox-lease-0001";
+  const staleOutboxAssertion = await createWorkerAssertion({
+    subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now + 3, jti: staleOutboxJti,
+  });
+  const outboxInput = {
+    eventId: "evt-stale-agent-lease-0001",
+    idempotencyKey: "idem-stale-agent-lease-0001",
+    taskId: "task-0001",
+    eventType: "task.created",
+    payload: { taskId: "task-0001", version: 1 },
+    workerId: "agent:worker-1",
+    leaseGeneration: firstLease.leaseGeneration,
+    workerAssertion: staleOutboxAssertion,
+    now: now + 3,
+  };
+  await expect(ledger.enqueueOutbox(outboxInput)).resolves.toMatchObject({
+    enqueued: false, reason: "LEASE_FENCE_MISMATCH",
+  });
+  await expect(ledger.enqueueOutbox({
+    ...outboxInput,
+    leaseGeneration: currentLease.leaseGeneration,
+  })).resolves.toMatchObject({
+    enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED",
+  });
+
+  await expect(ledger.enqueueOutbox({
+    ...outboxInput,
+    eventId: "evt-current-agent-lease-0001",
+    idempotencyKey: "idem-current-agent-lease-0001",
+    leaseGeneration: currentLease.leaseGeneration,
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now + 3,
+    }),
+  })).resolves.toMatchObject({ enqueued: true });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      staleMessageJti,
+    ).one().count).toBe(1);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      staleOutboxJti,
+    ).one().count).toBe(1);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_processed_messages WHERE message_id = ?",
+      "msg-stale-agent-lease-0001",
+    ).one().count).toBe(0);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE event_id = ?",
+      "evt-stale-agent-lease-0001",
+    ).one().count).toBe(0);
+  });
+});

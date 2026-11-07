@@ -2157,3 +2157,132 @@ it("fences Agent message and Outbox writes by task assignment and current lease 
     ).one().count).toBe(0);
   });
 });
+
+
+it("rejects Agent writes when the authenticated worker does not own the task assignment", async () => {
+  const ledger = ledgerFor("ledger-agent-assignment-fencing");
+  await createTask(ledger, {
+    task: task(),
+    idempotencyKey: "task-create-agent-assignment-fencing",
+    inputHash: "a".repeat(64),
+    now,
+  });
+  const lease = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+  const messageJti = "jti-unassigned-agent-message-0001";
+  await expect(ledger.recordMessage({
+    messageId: "msg-unassigned-agent-0001",
+    taskId: "task-0001",
+    inputHash: "b".repeat(64),
+    envelope: {
+      ...protocolEnvelope("msg-unassigned-agent-0001", "task-0001", "b".repeat(64), { step: 1 }),
+      senderId: "agent:worker-2",
+    },
+    workerId: "agent:worker-2",
+    leaseGeneration: lease.leaseGeneration,
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-2", role: "agent", operation: "recordMessage", nowMs: now, jti: messageJti,
+    }),
+    now,
+  })).resolves.toMatchObject({ accepted: false, reason: "LEASE_FENCE_MISMATCH" });
+
+  const outboxJti = "jti-unassigned-agent-outbox-0001";
+  await expect(ledger.enqueueOutbox({
+    eventId: "evt-unassigned-agent-0001",
+    idempotencyKey: "idem-unassigned-agent-0001",
+    taskId: "task-0001",
+    eventType: "task.created",
+    payload: { taskId: "task-0001", version: 1 },
+    workerId: "agent:worker-2",
+    leaseGeneration: lease.leaseGeneration,
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-2", role: "agent", operation: "enqueueOutbox", nowMs: now, jti: outboxJti,
+    }),
+    now,
+  })).resolves.toMatchObject({ enqueued: false, reason: "LEASE_FENCE_MISMATCH" });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    for (const jti of [messageJti, outboxJti]) {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?", jti,
+      ).one().count).toBe(1);
+    }
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_processed_messages WHERE message_id = ?",
+      "msg-unassigned-agent-0001",
+    ).one().count).toBe(0);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE event_id = ?",
+      "evt-unassigned-agent-0001",
+    ).one().count).toBe(0);
+  });
+});
+
+it("rejects Agent writes after lease expiry even when the generation still matches", async () => {
+  const ledger = ledgerFor("ledger-agent-expired-lease-fencing");
+  await createTask(ledger, {
+    task: task(),
+    idempotencyKey: "task-create-agent-expired-lease-fencing",
+    inputHash: "c".repeat(64),
+    now,
+  });
+  const lease = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 10,
+    now,
+  });
+  expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+  const expiredAt = now + 11;
+  const messageJti = "jti-expired-agent-message-0001";
+  await expect(ledger.recordMessage({
+    messageId: "msg-expired-agent-0001",
+    taskId: "task-0001",
+    inputHash: "d".repeat(64),
+    envelope: protocolEnvelope("msg-expired-agent-0001", "task-0001", "d".repeat(64), { step: 1 }),
+    workerId: "agent:worker-1",
+    leaseGeneration: lease.leaseGeneration,
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: expiredAt, jti: messageJti,
+    }),
+    now: expiredAt,
+  })).resolves.toMatchObject({ accepted: false, reason: "LEASE_FENCE_MISMATCH" });
+
+  const outboxJti = "jti-expired-agent-outbox-0001";
+  await expect(ledger.enqueueOutbox({
+    eventId: "evt-expired-agent-0001",
+    idempotencyKey: "idem-expired-agent-0001",
+    taskId: "task-0001",
+    eventType: "task.created",
+    payload: { taskId: "task-0001", version: 1 },
+    workerId: "agent:worker-1",
+    leaseGeneration: lease.leaseGeneration,
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: expiredAt, jti: outboxJti,
+    }),
+    now: expiredAt,
+  })).resolves.toMatchObject({ enqueued: false, reason: "LEASE_FENCE_MISMATCH" });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    for (const jti of [messageJti, outboxJti]) {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?", jti,
+      ).one().count).toBe(1);
+    }
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_processed_messages WHERE message_id = ?",
+      "msg-expired-agent-0001",
+    ).one().count).toBe(0);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE event_id = ?",
+      "evt-expired-agent-0001",
+    ).one().count).toBe(0);
+  });
+});

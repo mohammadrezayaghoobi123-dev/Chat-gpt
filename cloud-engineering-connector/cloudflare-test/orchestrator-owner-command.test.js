@@ -109,7 +109,7 @@ describe("Owner command atomic Ledger contract", () => {
 
   it("releases only a quarantined task into VALIDATING with a new version", async () => {
     const ledger = ledgerFor("owner-command-release");
-    await createTask(ledger, task("task-owner-0001") && { ...task(), state: "QUARANTINED" });
+    await createTask(ledger, { ...task(), state: "QUARANTINED" });
     const result = await ledger.executeOwnerCommand(await ownerInput({
       command: {
         operation: "release", expectedState: "QUARANTINED",

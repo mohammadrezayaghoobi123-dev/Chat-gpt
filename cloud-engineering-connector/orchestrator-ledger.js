@@ -877,7 +877,7 @@ export class OrchestratorLedger extends DurableObject {
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       const row = sql.exec(
-        "SELECT * FROM orchestrator_outbox_events WHERE (status = 'PENDING' AND retry_state != 'DEAD_LETTER' AND next_attempt_at <= ?) OR (status = 'IN_PROGRESS' AND lease_until <= ?) ORDER BY created_at LIMIT 1",
+        "SELECT * FROM orchestrator_outbox_events WHERE (status = 'PENDING' AND retry_state != 'DEAD_LETTER' AND next_attempt_at <= ?) OR (status = 'IN_PROGRESS' AND retry_state != 'DEAD_LETTER' AND lease_until <= ?) ORDER BY created_at LIMIT 1",
         now, now,
       ).toArray()[0];
       if (!row) return { claimed: false, reason: "NO_OUTBOX_AVAILABLE" };

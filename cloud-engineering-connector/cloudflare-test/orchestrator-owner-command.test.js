@@ -46,7 +46,7 @@ async function createTask(ledger, taskValue = task()) {
 }
 async function ownerInput(overrides = {}) {
   const command = {
-    operation: "cancel", taskId: "task-owner-0001", expectedVersion: 1,
+    operation: "cancel", taskId: "task-owner-0001", expectedVersion: 1, expectedState: "SCHEDULED",
     reason: "Owner requested cancellation", eventId: "owner-event-0001",
   };
   Object.assign(command, overrides.command);
@@ -123,13 +123,21 @@ describe("Owner command atomic Ledger contract", () => {
     })).resolves.toMatchObject({ applied: false, reason: "OWNER_ASSERTION_REJECTED" });
   });
 
-  it("rolls back delivery, JTI, task, and audit when durable command processing throws", async () => {
+  it("rolls back delivery, JTI, task, and receipt when the audit insert fails", async () => {
     const ledger = ledgerFor("owner-command-atomic-rollback");
     await createTask(ledger);
     const input = await ownerInput();
-    await expect(ledger.executeOwnerCommand({
-      ...input, command: { ...input.command, reason: "x".repeat(40_000) },
-    })).resolves.toMatchObject({ applied: false });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(`
+        CREATE TRIGGER fail_owner_audit_insert
+        BEFORE INSERT ON orchestrator_audit_events
+        WHEN NEW.event_type LIKE 'OWNER_%'
+        BEGIN
+          SELECT RAISE(ABORT, 'injected owner audit failure');
+        END
+      `);
+    });
+    await expect(ledger.executeOwnerCommand(input)).rejects.toThrow("injected owner audit failure");
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries").one().count).toBe(0);
       expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions").one().count).toBe(0);

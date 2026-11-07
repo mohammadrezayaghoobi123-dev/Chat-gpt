@@ -1380,6 +1380,7 @@ it("acknowledges a republished event after an uncertain send even when the publi
       eventType: "task.created",
       payload,
       workerId: "agent:worker-1",
+      leaseGeneration: await ensureAgentLease(ledger, { taskId, now: integrationNow }),
       workerAssertion: await createWorkerAssertion({
         subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: integrationNow,
       }),

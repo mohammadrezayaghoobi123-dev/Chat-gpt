@@ -320,7 +320,7 @@ test("Production post-deploy verification blocks when secure persistent observab
   runPreflightWithMissingObservability(source, "Verify Production Durable Object namespace isolation", true);
 });
 
-test("Production preflight permits migration from legacy dashboard settings before post-deploy verification", () => {
+test("Production preflight blocks legacy secret-text PUBLIC_READ_ONLY before deployment", () => {
   const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
   runPreflightWithMissingObservability(
     source,

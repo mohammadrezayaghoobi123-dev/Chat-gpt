@@ -144,6 +144,21 @@ jobs:
             throw new Error("Production deployment blocked; missing Worker secret binding(s): " + missing.join(", ") + ". Add them in Cloudflare Workers > chat-gpt111 > Settings > Variables and Secrets. Secret values are never read.");
           }
 
+          // Fail before any Production deployment if a legacy encrypted secret
+          // still occupies the PUBLIC_READ_ONLY binding name. Wrangler preserves
+          // existing secrets and cannot be relied on to convert their binding type.
+          const publicReadOnly = productionBindings.get("PUBLIC_READ_ONLY");
+          assert.equal(
+            publicReadOnly?.type,
+            "plain_text",
+            "Production PUBLIC_READ_ONLY must be a plain-text Worker variable before deployment; convert the legacy secret binding explicitly first",
+          );
+          assert.equal(
+            publicReadOnly.text,
+            "true",
+            "Production PUBLIC_READ_ONLY must equal true before deployment",
+          );
+
           for (const [label, bindings] of [["Production", productionBindings], ["Staging", stagingBindings]]) {
             const activeSignerKid = bindings.get("LEDGER_WORKER_ASSERTION_ACTIVE_KID");
             assert.equal(activeSignerKid?.type, "plain_text", label + " LEDGER_WORKER_ASSERTION_ACTIVE_KID must be a non-secret plain-text binding");

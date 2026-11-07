@@ -1916,3 +1916,38 @@ it("consumes a DLQ archiver assertion when an authenticated dead-letter body con
     ).one().count).toBe(0);
   });
 });
+
+
+it("consumes a transition assertion when authenticated transition evidence is invalid", async () => {
+  const ledger = ledgerFor("ledger-transition-invalid-evidence-consumes-jti");
+  await createTask(ledger, { task: task(), idempotencyKey: "transition-invalid-evidence-task", inputHash: "d".repeat(64), now });
+  const lease = await ledger.claimTask({
+    workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"),
+    leaseMs: 30_000, now,
+  });
+  const jti = "jti-transition-invalid-evidence-0001";
+  const workerAssertion = await createWorkerAssertion({
+    subject: "agent:worker-1", role: "agent", operation: "transitionTask", nowMs: now + 1, jti,
+  });
+  const input = {
+    taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
+    actor: agent, evidence: null, now: now + 1, workerId: "agent:worker-1",
+    workerAssertion, leaseGeneration: lease.leaseGeneration,
+  };
+
+  await expect(ledger.transitionTask(input)).resolves.toEqual({
+    updated: false, reason: "INVALID_EVIDENCE",
+  });
+  await expect(ledger.transitionTask({ ...input, evidence })).resolves.toEqual({
+    updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED",
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?", jti,
+    ).one().count).toBe(1);
+    expect(state.storage.sql.exec(
+      "SELECT state, version FROM orchestrator_tasks WHERE task_id = ?", "task-0001",
+    ).one()).toMatchObject({ state: "SCHEDULED", version: 1 });
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_outbox_events").one().count).toBe(0);
+  });
+});

@@ -145,6 +145,8 @@ jobs:
           assert.ok(bindings.get("MCP_RATE_LIMITER")?.namespace_id, "Staging MCP_RATE_LIMITER namespace is required");
           const stagingQueue = queues.find((queue) => queue.queue_name === "chat-gpt111-staging-orchestrator-outbox");
           assert.ok(stagingQueue?.queue_id, "Dedicated Staging Orchestrator Outbox Queue must exist before deployment");
+          const stagingDlq = queues.find((queue) => queue.queue_name === "chat-gpt111-staging-orchestrator-outbox-dlq");
+          assert.ok(stagingDlq?.queue_id, "Dedicated Staging Orchestrator Outbox DLQ must exist before deployment");
 
           const observability = settings.observability;
           assert.equal(observability?.enabled, true, "Staging Worker observability must be enabled");

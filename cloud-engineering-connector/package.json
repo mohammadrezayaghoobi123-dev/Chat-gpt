@@ -8,7 +8,8 @@
     "build": "node scripts/apply-v0.2-allowlist.mjs ${BASE_WORKER_PATH:?set BASE_WORKER_PATH to a 0.1.0 worker.js}",
     "test": "node --test test/allowlist.test.js",
     "test:full": "node --test",
-    "check": "node --check worker.js && node --check lib/allowlist.js && node --check test/allowlist.test.js && node --check test/credential-matrix.test.js"
+    "smoke": "node scripts/smoke-protocol.mjs",
+    "check": "node --check worker.js && node --check lib/allowlist.js && node --check test/allowlist.test.js && node --check test/credential-matrix.test.js && node --check scripts/smoke-protocol.mjs"
   },
   "engines": {
     "node": ">=22"

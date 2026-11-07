@@ -1,6 +1,6 @@
 # Branch status — `engineering/hardening-v0.2.0`
 
-**Severity: HARDENING — full bodies on branch; merge/deploy still gated**
+**Severity: HARDENING — local/CI gates closed; live staging + human auth still open**
 
 ## Governing policy (binding)
 
@@ -10,33 +10,34 @@
 4. Changes must be atomic, reviewable, regression-tested, and traceable.
 5. Production release is blocked until infrastructure readiness, security, recovery, and exact code provenance are proven.
 
-## Verdict (current)
+## Gate board
 
-| Check | Result |
-|-------|--------|
-| Safe to merge to `main` | **NO** |
-| Safe for production cutover | **NO** |
-| Committed `worker.js` | Full **v0.2.0** (37042 bytes) — byte-identical to `main`+patch |
-| Committed `worker.test.js` | Full suite (64199 bytes), `version:"0.2.0"` |
-| Local/CI suite | **106/106** (verified) |
+| Gate | Status |
+|------|--------|
+| CI + byte-identity | **PASS** |
+| Full suite 106 | **PASS** |
+| Local protocol smoke | **PASS** (`npm run smoke`) |
+| Conflict map vs `main` | **PASS** — see `docs/CONFLICT_AND_GATES.md` |
+| Live Cloudflare staging smoke | **OPEN** |
+| Live MCP client interop | **OPEN** (not claimed) |
+| Independent merge authorization | **OPEN** (owner only) |
+| Production | **BLOCKED** |
+
+## Artifact state
+
+| File | State |
+|------|-------|
+| `worker.js` | Full **0.2.0** (37042 B), == main+patch |
+| `worker.test.js` | Full suite, version 0.2.0 |
 | Impact on `main` | **None** |
 
-## Provenance
+## Next actions
 
-```
-main worker 0.1.0  →  apply-v0.2-allowlist.mjs  →  worker.js 0.2.0
-```
+1. Optional: open **draft** PR for human review (do not merge).
+2. When Cloudflare secrets exist: deploy staging → record Worker version ID → run live smoke against URL.
+3. Owner grants independent authorization → merge under branch protection.
 
-CI asserts **byte identity** between the committed worker and a fresh build from current `main` + the committed patch script. Drift fails the job.
+## Non-claims
 
-## Remaining gates before merge
-
-1. Staging smoke: `/healthz`, authenticated `initialize` / `tools/list`, allowlist deny, draft-PR path.
-2. Conflict check vs tip of `main` at PR open time.
-3. Independent authorization to merge.
-4. Record Cloudflare Worker version ID if any staging deploy occurs.
-
-## Explicit non-claims
-
-- CI green ≠ live ChatGPT/Claude interop certified.
-- Full body on branch ≠ production release.
+- Local smoke is not live interop.
+- Draft PR is not merge permission.

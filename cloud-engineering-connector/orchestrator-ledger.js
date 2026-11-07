@@ -589,7 +589,7 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  async claimTask({ workerId, workerAssertion, leaseMs, now, taskId, reconciliationEvidence } = {}) {
+  async claimTask({ workerId, workerAssertion, leaseMs, now, taskId } = {}) {
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);
     timestamp(now);
@@ -617,20 +617,14 @@ export class OrchestratorLedger extends DurableObject {
         }
         const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", row.task_id).toArray()[0];
         let generation = 1;
-        let reconciliationRequired = false;
         if (lease) {
           if (lease.worker_id !== null && lease.lease_until > now) continue;
-          generation = lease.lease_generation + 1;
           if (lease.worker_id !== null && lease.lease_until <= now) {
-            reconciliationRequired = true;
-            if (!reconciliationEvidence || reconciliationEvidence.checked !== true ||
-                reconciliationEvidence.priorGeneration !== lease.lease_generation ||
-                typeof reconciliationEvidence.evidenceRef !== "string" ||
-                reconciliationEvidence.evidenceRef.length === 0 ||
-                reconciliationEvidence.evidenceRef.length > 512) {
-              return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
-            }
+            // Caller-supplied booleans or references are not authoritative reconciliation.
+            // Keep the task fenced until a separately authenticated reconciler is implemented.
+            return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
           }
+          generation = lease.lease_generation + 1;
         }
         if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
         if (lease) {
@@ -650,7 +644,7 @@ export class OrchestratorLedger extends DurableObject {
           workerId,
           leaseGeneration: generation,
           leaseUntil: now + leaseMs,
-          reconciliationRequired,
+          reconciliationRequired: false,
         };
       }
       return { claimed: false, reason: assigneeMismatch ? "ASSIGNEE_MISMATCH" : "NO_TASK_AVAILABLE" };

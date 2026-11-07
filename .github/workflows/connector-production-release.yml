@@ -141,7 +141,10 @@ jobs:
           }
           // First Production deployment creates WRITE_CONTROL through the checked-in SQLite migration.
           const active = deploymentData.deployments?.[0];
-          const previous = active?.versions?.find((version) => version.percentage === 100) || active?.versions?.[0];
+          const versions = active?.versions || [];
+          assert.equal(versions.length, 1, "Production rollback target must have exactly one active version");
+          const previous = versions[0];
+          assert.equal(previous?.percentage, 100, "Production rollback target must receive exactly 100% traffic");
           assert.ok(previous?.version_id, "Could not identify the current 100% Production version for rollback");
           appendFileSync(process.env.GITHUB_OUTPUT, `previous_version_id=${previous.version_id}\n`);
           console.log("Production preflight passed; isolated namespace checks passed; immutable rollback target captured.");
@@ -211,6 +214,12 @@ jobs:
           assert.equal(stagingKnowledgeStore?.type, "durable_object_namespace", "Staging KNOWLEDGE_STORE binding is required");
           assert.ok(productionKnowledgeStore.namespace_id && stagingKnowledgeStore.namespace_id, "Both KnowledgeStore namespace IDs must be present");
           assert.notEqual(productionKnowledgeStore.namespace_id, stagingKnowledgeStore.namespace_id, "Production and Staging KnowledgeStore namespaces must differ");
+          const productionLedger = production.get("ORCHESTRATOR_LEDGER");
+          const stagingLedger = staging.get("ORCHESTRATOR_LEDGER");
+          assert.equal(productionLedger?.type, "durable_object_namespace", "Production ORCHESTRATOR_LEDGER binding is required");
+          assert.equal(stagingLedger?.type, "durable_object_namespace", "Staging ORCHESTRATOR_LEDGER binding is required");
+          assert.ok(productionLedger.namespace_id && stagingLedger.namespace_id, "Both OrchestratorLedger namespace IDs must be present");
+          assert.notEqual(productionLedger.namespace_id, stagingLedger.namespace_id, "Production and Staging OrchestratorLedger namespaces must differ");
           assert.ok((productionSchedules.schedules || []).some((schedule) => schedule.cron === "*/5 * * * *"), "Production five-minute Knowledge Store reconciliation Cron must be active");
           assert.ok((stagingSchedules.schedules || []).some((schedule) => schedule.cron === "*/5 * * * *"), "Staging five-minute Knowledge Store reconciliation Cron must be active");
           assert.notEqual(production.get("MCP_RATE_LIMITER")?.namespace_id, staging.get("MCP_RATE_LIMITER")?.namespace_id, "Production and Staging rate-limit namespaces must differ");
@@ -218,11 +227,12 @@ jobs:
           NODE
 
       - name: Run live Production acceptance
+        id: acceptance
         run: node test/production-smoke.mjs
         env:
           MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
 
-      - name: Confirm deployed version and write release evidence
+      - name: Verify deployed version before finalizing release
         if: success()
         shell: bash
         env:
@@ -233,16 +243,19 @@ jobs:
           const account = process.env.CLOUDFLARE_ACCOUNT_ID;
           const token = process.env.CLOUDFLARE_API_TOKEN;
           const url = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/chat-gpt111/deployments?per_page=1&page=1`;
-          const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+          const response = await fetch(url, { headers: { authorization: `Bearer ${token}`, accept: "application/json" }, signal: AbortSignal.timeout(15000) });
           const body = await response.json();
           if (!response.ok || !body.success) throw new Error("Could not verify final Production deployment.");
           const active = body.result.deployments?.[0];
-          const version = active?.versions?.find((item) => item.percentage === 100);
-          if (!version?.version_id) throw new Error("Production does not have one active 100% version.");
-          console.log(`Production deployment verified. Candidate=${process.env.GITHUB_SHA}; Version=${version.version_id}; Deployment=${active.id}`);
+          const versions = active?.versions || [];
+          if (versions.length !== 1 || versions[0]?.percentage !== 100 || !versions[0]?.version_id) {
+            throw new Error("Production must have exactly one active version receiving 100% traffic.");
+          }
+          console.log(`Production active deployment verified. Version=${versions[0].version_id}; Deployment=${active.id}`);
           NODE
 
       - name: Roll back Production if post-deploy acceptance fails
+        id: rollback
         if: failure() && steps.deploy.outcome == 'success' && steps.preflight.outputs.previous_version_id != ''
         shell: bash
         run: |
@@ -263,6 +276,24 @@ jobs:
           });
           const body = await response.json();
           if (!response.ok || !body.success) throw new Error("Automatic Production rollback failed; manual rollback is required.");
+          const verificationUrl = url + "?per_page=1&page=1";
+          const verificationResponse = await fetch(verificationUrl, {
+            headers: { authorization: "Bearer " + token, accept: "application/json" },
+            signal: AbortSignal.timeout(15000),
+          });
+          const verificationBody = await verificationResponse.json();
+          if (!verificationResponse.ok || !verificationBody.success) {
+            throw new Error("Production rollback was requested, but the active deployment could not be verified.");
+          }
+          const activeDeployment = verificationBody.result?.deployments?.[0];
+          const activeVersions = activeDeployment?.versions || [];
+          if (
+            activeVersions.length !== 1 ||
+            activeVersions[0]?.version_id !== previous ||
+            activeVersions[0]?.percentage !== 100
+          ) {
+            throw new Error("Production rollback was requested, but 100% traffic is not routed to the captured previous version.");
+          }
           // The pre-release Production Worker may predate /readyz and the Durable Object migration.
           const health = await fetch(new URL("/healthz", process.env.PRODUCTION_MCP_URL), { signal: AbortSignal.timeout(15000) });
           if (!health.ok) throw new Error("Rollback was requested but Production liveness did not recover.");
@@ -272,3 +303,25 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           PREVIOUS_VERSION_ID: ${{ steps.preflight.outputs.previous_version_id }}
+
+      - name: Write release evidence manifest
+        if: always()
+        run: node scripts/write-release-evidence.mjs
+        env:
+          RELEASE_ENV: production
+          WORKER_NAME: chat-gpt111
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIOUS_VERSION_ID: ${{ steps.preflight.outputs.previous_version_id }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          ACCEPTANCE_OUTCOME: ${{ steps.acceptance.outcome }}
+          ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
+
+      - name: Upload release evidence artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: connector-production-release-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: cloud-engineering-connector/release-evidence.json
+          if-no-files-found: error
+          retention-days: 90

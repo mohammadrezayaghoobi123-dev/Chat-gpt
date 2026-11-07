@@ -15,3 +15,11 @@ test("Production release preflight requires a verifiable PUBLIC_READ_ONLY=true f
   assert.match(releaseWorkflow, /assert\.equal\(publicReadOnly\?\.type,\s*"plain_text"/);
   assert.match(releaseWorkflow, /assert\.equal\(publicReadOnly\.text,\s*"true"/);
 });
+
+
+test("Production release verifies an isolated OrchestratorLedger namespace after deployment", () => {
+  assert.match(releaseWorkflow, /production\.get\(["']ORCHESTRATOR_LEDGER["']\)/);
+  assert.match(releaseWorkflow, /staging\.get\(["']ORCHESTRATOR_LEDGER["']\)/);
+  assert.match(releaseWorkflow, /Production and Staging OrchestratorLedger namespaces must differ/);
+  assert.match(smoke, /staging-smoke\.mjs/);
+});

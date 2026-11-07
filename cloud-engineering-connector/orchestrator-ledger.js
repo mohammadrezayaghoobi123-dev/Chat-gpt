@@ -392,22 +392,32 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
-    if (!task || typeof task !== "object" || Array.isArray(task)) throw fail("task must be an object.");
-    identifier(task.taskId, "taskId");
-    if (!TASK_STATES.includes(task.state) || !Number.isSafeInteger(task.version) || task.version < 1 ||
-        !Number.isSafeInteger(task.createdAt) || !Number.isSafeInteger(task.updatedAt) ||
-        task.createdAt < 1 || task.updatedAt < task.createdAt) {
-      throw fail("task projection is invalid.");
+    let normalizedTask;
+    let taskJson;
+    let taskRejectionReason = null;
+    try {
+      if (!task || typeof task !== "object" || Array.isArray(task)) throw fail("task must be an object.");
+      identifier(task.taskId, "taskId");
+      if (!TASK_STATES.includes(task.state) || !Number.isSafeInteger(task.version) || task.version < 1 ||
+          !Number.isSafeInteger(task.createdAt) || !Number.isSafeInteger(task.updatedAt) ||
+          task.createdAt < 1 || task.updatedAt < task.createdAt) {
+        throw fail("task projection is invalid.");
+      }
+      normalizedTask = { ...task, agentRound: task.agentRound ?? 0 };
+      if (!Number.isSafeInteger(normalizedTask.agentRound) || normalizedTask.agentRound < 0 || normalizedTask.agentRound > 4) {
+        throw fail("agentRound must be an integer from zero through four.", "INVALID_AGENT_ROUND");
+      }
+      taskJson = serializeBounded(normalizedTask, "task");
+    } catch (error) {
+      taskRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_TASK";
     }
-    const normalizedTask = { ...task, agentRound: task.agentRound ?? 0 };
-    if (!Number.isSafeInteger(normalizedTask.agentRound) || normalizedTask.agentRound < 0 || normalizedTask.agentRound > 4) {
-      throw fail("agentRound must be an integer from zero through four.", "INVALID_AGENT_ROUND");
-    }
-    const taskJson = serializeBounded(normalizedTask, "task");
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      if (taskRejectionReason) {
+        return { created: false, reason: taskRejectionReason };
       }
       const existing = sql.exec("SELECT * FROM orchestrator_tasks WHERE idempotency_key = ?", idempotencyKey).toArray()[0];
       if (existing) {
@@ -448,6 +458,15 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
+    let normalizedOutboxInput = null;
+    let outboxRejectionReason = null;
+    if (outboxEvent !== undefined) {
+      try {
+        normalizedOutboxInput = validateOutboxInput({ ...outboxEvent, taskId, now });
+      } catch (error) {
+        outboxRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_OUTBOX_EVENT";
+      }
+    }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
@@ -469,6 +488,9 @@ export class OrchestratorLedger extends DurableObject {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
+      if (outboxRejectionReason) {
+        return { updated: false, reason: outboxRejectionReason };
+      }
       const current = taskFromRow(row);
       const next = transitionTaskCore({
         task: current, expectedVersion, nextState, actor, evidence, now,
@@ -483,9 +505,8 @@ export class OrchestratorLedger extends DurableObject {
         throw fail("Task transition persistence verification failed; transaction rolled back.", "PERSISTENCE_VERIFICATION_FAILED");
       }
       let outboxResult = null;
-      if (outboxEvent !== undefined) {
-        const outboxInput = validateOutboxInput({ ...outboxEvent, taskId, now });
-        outboxResult = enqueueOutboxInTransaction(sql, outboxInput);
+      if (normalizedOutboxInput !== null) {
+        outboxResult = enqueueOutboxInTransaction(sql, normalizedOutboxInput);
         if (outboxResult.conflict) throw fail("Outbox idempotency conflict; task transition rolled back.", "OUTBOX_CONFLICT");
       }
       return { updated: true, task: next, outbox: outboxResult };
@@ -1108,10 +1129,21 @@ export class OrchestratorLedger extends DurableObject {
     }
     const actorId = verifiedAssertion.subject;
     const actorRole = verifiedAssertion.role;
-    const detailsJson = serializeBounded(details, "audit details");
+    let detailsJson;
+    let detailsRejectionReason = null;
+    try {
+      detailsJson = serializeBounded(details, "audit details");
+    } catch (error) {
+      detailsRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_AUDIT_DETAILS";
+    }
     const sql = this.ctx.storage.sql;
     if (!sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0]) {
       return { appended: false, reason: "TASK_NOT_FOUND" };
+    }
+    if (detailsRejectionReason) {
+      const consumed = this.ctx.storage.transactionSync(() => consumeWorkerAssertion(sql, verifiedAssertion, now));
+      if (!consumed) return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+      return { appended: false, reason: detailsRejectionReason };
     }
 
     for (let attempt = 0; attempt < 5; attempt += 1) {

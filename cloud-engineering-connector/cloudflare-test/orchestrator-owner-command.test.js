@@ -65,9 +65,16 @@ async function ownerInput(overrides = {}) {
 }
 
 describe("Owner command atomic Ledger contract", () => {
-  it("atomically consumes Owner JTI, claims delivery/comment, cancels task, fences leases, and appends audit", async () => {
+  it("atomically consumes Owner JTI, claims delivery/comment, cancels task, fences Agent and outbox leases, and appends audit", async () => {
     const ledger = ledgerFor("owner-atomic-cancel");
     await createTask(ledger);
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_worker_id, lease_generation, lease_until, created_at, updated_at, retry_state, next_attempt_at) VALUES (?, ?, ?, ?, ?, 'IN_PROGRESS', 1, ?, 1, ?, ?, ?, 'READY', 0)",
+        "owner-outbox-0001", "owner-outbox-key-0001", "task-owner-0001", "task.transitioned",
+        JSON.stringify({ state: "SCHEDULED" }), "orchestrator-outbox-publisher", now + 60_000, now, now,
+      );
+    });
     const result = await ledger.executeOwnerCommand(await ownerInput());
     expect(result).toMatchObject({
       applied: true, operation: "cancel",
@@ -81,7 +88,50 @@ describe("Owner command atomic Ledger contract", () => {
         .toMatchObject({ actor_id: ownerId, actor_role: "owner", event_type: "OWNER_TASK_CANCELLED" });
       expect(state.storage.sql.exec("SELECT lease_generation, worker_id, lease_until FROM orchestrator_execution_leases WHERE task_id = ?", "task-owner-0001").one())
         .toMatchObject({ lease_generation: 1, worker_id: null, lease_until: 0 });
+      expect(state.storage.sql.exec("SELECT retry_state, lease_generation, lease_worker_id, lease_until FROM orchestrator_outbox_events WHERE event_id = ?", "owner-outbox-0001").one())
+        .toMatchObject({ retry_state: "DEAD_LETTER", lease_generation: 2, lease_worker_id: null, lease_until: 0 });
     });
+  });
+
+
+  it("quarantines a non-terminal task and invalidates its active Agent lease", async () => {
+    const ledger = ledgerFor("owner-command-quarantine");
+    await createTask(ledger);
+    const result = await ledger.executeOwnerCommand(await ownerInput({
+      command: { operation: "quarantine", eventId: "owner-event-quarantine-01" },
+      deliveryId: "delivery-owner-quarantine-01", commentId: "123456790",
+    }));
+    expect(result).toMatchObject({
+      applied: true, operation: "quarantine",
+      task: { taskId: "task-owner-0001", state: "QUARANTINED", version: 2 },
+    });
+  });
+
+  it("releases only a quarantined task into VALIDATING with a new version", async () => {
+    const ledger = ledgerFor("owner-command-release");
+    await createTask(ledger, task("task-owner-0001") && { ...task(), state: "QUARANTINED" });
+    const result = await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        operation: "release", expectedState: "QUARANTINED",
+        reason: "Owner verified remediation", eventId: "owner-event-release-01",
+      },
+      deliveryId: "delivery-owner-release-01", commentId: "123456791",
+    }));
+    expect(result).toMatchObject({
+      applied: true, operation: "release",
+      task: { taskId: "task-owner-0001", state: "VALIDATING", version: 2 },
+    });
+  });
+
+  it("never resurrects a terminal task through an Owner command", async () => {
+    const ledger = ledgerFor("owner-command-terminal");
+    await createTask(ledger, { ...task(), state: "COMPLETED" });
+    const result = await ledger.executeOwnerCommand(await ownerInput({
+      command: { expectedState: "COMPLETED", eventId: "owner-event-terminal-01" },
+      deliveryId: "delivery-owner-terminal-01", commentId: "123456792",
+    }));
+    expect(result).toMatchObject({ applied: false, conflict: true, reason: "ILLEGAL_OWNER_TRANSITION" });
+    expect(await ledger.getTask({ taskId: "task-owner-0001" })).toMatchObject({ state: "COMPLETED", version: 1 });
   });
 
   it("returns the exact stored result for a replay without a second transition or audit event", async () => {

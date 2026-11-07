@@ -866,7 +866,7 @@ async function handleOwnerGitHubComment(authenticated, payload, ledger, env) {
    ? json({ error: "owner_command_rejected", reason: "EVENT_NOT_ELIGIBLE" }, 422)
    : ignored();
  }
- if (payload.issue?.pull_request !== undefined) {
+ if (Object.hasOwn(payload.issue ?? {}, "pull_request")) {
   return json({ error: "owner_command_rejected", reason: "PULL_REQUEST_COMMENT_NOT_ALLOWED" }, 422);
  }
  const repository = env.GITHUB_WEBHOOK_REPOSITORY;

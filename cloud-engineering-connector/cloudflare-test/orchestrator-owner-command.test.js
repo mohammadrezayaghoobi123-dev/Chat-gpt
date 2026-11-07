@@ -54,7 +54,7 @@ async function ownerInput(overrides = {}) {
     actorId: ownerId, repositoryId, taskId: command.taskId,
     operation: command.operation, deliveryId: overrides.deliveryId ?? "delivery-owner-00000001",
     commentId: overrides.commentId ?? "123456789",
-    commandHash: await sha256Canonical(command),
+    commandHash: await sha256Canonical({ eventId: command.eventId, operation: command.operation, reason: command.reason, taskId: command.taskId }),
   };
   const assertion = await createOwnerAssertion(ownerKeySet, "owner-v1", context, now);
   return {

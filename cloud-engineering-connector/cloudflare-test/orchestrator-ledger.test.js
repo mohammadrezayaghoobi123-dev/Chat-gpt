@@ -570,7 +570,7 @@ it("requires verified worker identities before task or outbox lease side effects
       leaseGeneration: lease.leaseGeneration,
       outboxEvent: {
         eventId: "evt-transition-sensitive-0001",
-        idempotencyKey: "idem-transition-sensitive-0001",
+        idempotencyKey: "b",
         eventType: "task.running",
         payload: { taskId: "task-0001", apiKey: "must-not-persist" },
       },

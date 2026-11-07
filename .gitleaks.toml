@@ -146,3 +146,13 @@ commits = ["916436f86dc076916bc5588a61b92e710a6680f9"]
 paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger\.test\.js$''']
 regexTarget = "line"
 regexes = ['''idempotencyKey\s*:\s*["']idem-transition-sensitive-0001["']''']
+
+
+[[allowlists]]
+description = "Synthetic apiKey field value used only to assert sensitive-field rejection in one historical Durable Object test; exact commit, path, rule, and literal line only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["916436f86dc076916bc5588a61b92e710a6680f9"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger\\.test\\.js$''']
+regexTarget = "line"
+regexes = ['''apiKey\\s*:\\s*["']must-not-persist["']''']

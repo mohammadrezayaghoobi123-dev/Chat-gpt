@@ -5,8 +5,11 @@
   "type": "module",
   "description": "Cloud-hosted MCP connector for rigorous software engineering, architecture, code review, and evidence-aware workflows.",
   "scripts": {
+    "assemble": "node scripts/assemble.js",
+    "pretest": "node scripts/assemble.js",
     "test": "node --test",
-    "check": "node --check worker.js && node --check test/worker.test.js && node --check test/credential-matrix.test.js && node --check test/allowlist.test.js && node --check lib/allowlist.js"
+    "check": "node scripts/assemble.js && node --check worker.generated.js && node --check worker.js && node --check test/worker.test.js && node --check test/credential-matrix.test.js && node --check test/allowlist.test.js",
+    "prepublishOnly": "node scripts/assemble.js"
   },
   "engines": {
     "node": ">=22"

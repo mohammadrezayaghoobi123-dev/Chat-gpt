@@ -167,6 +167,11 @@ jobs:
           console.log("Staging binding preflight passed; rollback target captured by immutable version ID.");
           NODE
 
+      - name: Revalidate the exact Staging candidate immediately before deployment
+        run: node scripts/verify-release-approval.mjs
+        env:
+          RELEASE_GITHUB_TOKEN: ${{ github.token }}
+
       - name: Deploy candidate to Staging
         id: deploy
         run: npx wrangler deploy --env staging

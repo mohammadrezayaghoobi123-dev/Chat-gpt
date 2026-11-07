@@ -99,7 +99,7 @@ test("denies agent write targets that would trigger a Staging or Production rele
 });
 
 test("still allows an ordinary scoped task branch and a stacked integration base", () => {
-  for (const targetBranch of ["task/task-0001", "ops/centralized-office-workflow", "integration-notes/x"]) {
+  for (const targetBranch of ["task/task-0001", "ops/centralized-office-workflow"]) {
     const result = evaluateOrchestratorPolicy(input({
       action: "file.write", targetBranch, scope: { ...scope, targetBranch }, changedPaths: ["src/module.js"],
     }));
@@ -109,6 +109,29 @@ test("still allows an ordinary scoped task branch and a stacked integration base
     action: "file.write", baseBranch: "integration/unify-main-and-integrated-2026-11-02", changedPaths: ["src/module.js"],
   }));
   assert.equal(stacked.decision, "ALLOW");
+});
+
+test("denies agent write targets outside the task and ops allowlist even when baseBranch is caller-selected", () => {
+  const deniedTargets = [
+    "integration/unify-main-and-integrated-2026-11-02",
+    "release-candidate/staging-2026-11-04-c3ebca27",
+    "integration-notes/x",
+    "feature/arbitrary",
+    "release-candidate/production",
+  ];
+  for (const targetBranch of deniedTargets) {
+    for (const action of ["branch.create", "file.write", "pull_request.create"]) {
+      const result = evaluateOrchestratorPolicy(input({
+        action,
+        baseBranch: "task/task-0001",
+        targetBranch,
+        scope: { ...scope, targetBranch },
+        changedPaths: action === "file.write" ? ["src/module.js"] : [],
+      }));
+      assert.equal(result.decision, "DENY", action + " " + targetBranch);
+      assert.equal(result.reasonCode, "AGENT_TARGET_BRANCH_NOT_ALLOWLISTED", action + " " + targetBranch);
+    }
+  }
 });
 
 test("denies any side effect whose target branch is the base branch (direct write to the base)", () => {

@@ -12,6 +12,14 @@ const PROTECTED_PREFIXES = Object.freeze([
   "refs/",
 ]);
 
+const AGENT_WRITABLE_PREFIXES = Object.freeze(["task/", "ops/"]);
+
+export function isAllowedAgentTargetBranch(name) {
+  if (typeof name !== "string" || name.length === 0) return false;
+  const lower = name.toLowerCase();
+  return AGENT_WRITABLE_PREFIXES.some(prefix => lower.startsWith(prefix) && lower.length > prefix.length);
+}
+
 export function isProtectedAgentTargetBranch(name) {
   if (typeof name !== "string" || name.length === 0) return true;
   const lower = name.toLowerCase();

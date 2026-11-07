@@ -955,19 +955,25 @@ export class OrchestratorLedger extends DurableObject {
       return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     // Authenticate the consumer before inspecting the untrusted receipt payload.
+    // Consume its one-time assertion even when the authenticated payload is rejected.
     let payloadJson;
+    let sensitivePayloadRejected = false;
     try {
       payloadJson = serializeBounded(payload, "outbox receipt payload");
     } catch (error) {
       if (error?.code === "SENSITIVE_FIELD_REJECTED") {
-        return { recorded: false, reason: "SENSITIVE_FIELD_REJECTED" };
+        sensitivePayloadRejected = true;
+      } else {
+        throw error;
       }
-      throw error;
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      if (sensitivePayloadRejected) {
+        return { recorded: false, reason: "SENSITIVE_FIELD_REJECTED" };
       }
       const source = sql.exec(
         "SELECT event_type, idempotency_key, task_id, payload_json, created_at FROM orchestrator_outbox_events WHERE event_id = ?",

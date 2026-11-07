@@ -179,6 +179,63 @@ describe("GitHub webhook Worker route", () => {
     });
   });
 
+  it("rejects Owner-like comments with invalid author, repository, PR, action, or freshness before Ledger access", async () => {
+    const repository = "mohammadrezayaghoobi123-dev/Chat-gpt";
+    const ownerId = 335530603;
+    const base = payload({
+      action: "created",
+      repository: { id: 1398846697, full_name: repository },
+      issue: {
+        ...payload().issue,
+        html_url: `https://github.com/${repository}/issues/7`,
+      },
+      comment: {
+        id: 900002,
+        body: '/orchestrator quarantine task-owner-reject-0001 --reason "Owner safety test"',
+        created_at: new Date().toISOString(),
+        user: { id: ownerId, type: "User" },
+      },
+      sender: { id: ownerId, type: "User" },
+    });
+    const cases = [
+      { name: "non-owner sender", expected: 403, patch: { sender: { id: 335530604, type: "User" }, comment: base.comment } },
+      { name: "comment author mismatch", expected: 403, patch: { sender: base.sender, comment: { ...base.comment, user: { id: 335530604, type: "User" } } } },
+      { name: "bot author", expected: 403, patch: { sender: base.sender, comment: { ...base.comment, user: { id: ownerId, type: "Bot" } } } },
+      { name: "wrong repository", expected: 403, patch: { repository: { id: 123456, full_name: "owner/other" } } },
+      { name: "pull request comment", expected: 422, patch: { issue: { ...base.issue, pull_request: { url: "https://api.github.com/repos/example/pulls/7" } } } },
+      { name: "edited comment event", expected: 422, patch: { action: "edited" } },
+      { name: "stale comment timestamp", expected: 422, patch: { comment: { ...base.comment, created_at: new Date(Date.now() - 600_000).toISOString() } } },
+    ];
+    let ledgerRpcCalls = 0;
+    const fakeLedger = {
+      getTask: async () => { ledgerRpcCalls++; return null; },
+      executeOwnerCommand: async () => { ledgerRpcCalls++; return { applied: true }; },
+    };
+    const ownerEnv = {
+      ...testEnv(),
+      GITHUB_WEBHOOK_REPOSITORY: repository,
+      GITHUB_WEBHOOK_REPOSITORY_ID: "1398846697",
+      GITHUB_WEBHOOK_OWNER_ID: String(ownerId),
+      ORCHESTRATOR_LEDGER: { idFromName: name => name, get: () => fakeLedger },
+    };
+    for (const [index, item] of cases.entries()) {
+      const event = {
+        ...base,
+        ...(item.patch || {}),
+        ...(item.patch?.issue ? {} : { issue: base.issue }),
+        ...(item.patch?.comment ? {} : { comment: base.comment }),
+        ...(item.patch?.sender ? {} : { sender: base.sender }),
+        ...(item.patch?.repository ? {} : { repository: base.repository }),
+      };
+      const response = await worker.fetch(
+        await signedRequest(JSON.stringify(event), `gh-owner-reject-${String(index).padStart(8, "0")}`, undefined, "issue_comment"),
+        ownerEnv,
+      );
+      assert.equal(response.status, item.expected, item.name);
+    }
+    expect(ledgerRpcCalls).toBe(0);
+  });
+
   it("treats the same semantic GitHub issue event as a replay when provider timestamps differ", async () => {
     const firstPayload = payload();
     const firstBody = JSON.stringify(firstPayload);

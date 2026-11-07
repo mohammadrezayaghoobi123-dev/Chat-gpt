@@ -697,5 +697,7 @@ test("Staging revalidates exact candidate approval after preflight and immediate
   assert.ok(preflight > firstApproval, "Cloudflare preflight must follow initial approval");
   assert.ok(finalApproval > preflight, "final approval gate must follow Cloudflare preflight");
   assert.ok(deploy > finalApproval, "deployment must follow final approval gate");
-  assert.match(workflow.slice(finalApproval, deploy), /node scripts\/verify-release-approval\.mjs/);
+  const finalGate = workflow.slice(finalApproval, deploy);
+  assert.match(finalGate, /node scripts\/verify-release-approval\.mjs/);
+  assert.match(finalGate, /RELEASE_GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
 });

@@ -15,7 +15,7 @@ on:
       - ".github/workflows/connector-ci.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: connector-ci-${{ github.event.pull_request.number || github.ref }}
@@ -30,19 +30,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
       - name: Restore worker.test.js from last known-good commit
         run: |
-          # Full suite body was truncated in a prior push; restore pinned known-good blob.
-          curl -fsSL \
-            "https://raw.githubusercontent.com/mohammadrezayaghoobi123-dev/Chat-gpt/cc8553701cc04d35211b2a3a9f81280f32156ca5/cloud-engineering-connector/test/worker.test.js" \
-            -o test/worker.test.js
+          # If committed suite is still a marker, restore pinned known-good body.
           bytes=$(wc -c < test/worker.test.js)
-          echo "worker_test_bytes=$bytes"
-          test "$bytes" -ge 60000
+          if [ "$bytes" -lt 60000 ]; then
+            curl -fsSL \
+              "https://raw.githubusercontent.com/mohammadrezayaghoobi123-dev/Chat-gpt/cc8553701cc04d35211b2a3a9f81280f32156ca5/cloud-engineering-connector/test/worker.test.js" \
+              -o test/worker.test.js
+            bytes=$(wc -c < test/worker.test.js)
+            echo "restored_worker_test_bytes=$bytes"
+            test "$bytes" -ge 60000
+          else
+            echo "worker.test.js already full ($bytes bytes)"
+          fi
       - name: Fetch main baseline worker (0.1.0 protocol surface)
         run: |
           curl -fsSL \
@@ -73,3 +80,37 @@ jobs:
         run: npm test
       - name: Full suite
         run: node --test
+      - name: Materialize full files onto branch (once)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/engineering/hardening-v0.2.0'
+        working-directory: .
+        run: |
+          set -euo pipefail
+          msg="${{ github.event.head_commit.message }}"
+          case "$msg" in
+            *"[skip materialize]"*|*'ci: materialize full worker'*)
+              echo "Skip materialize (loop guard)"
+              exit 0
+              ;;
+          esac
+          wbytes=$(wc -c < cloud-engineering-connector/worker.js)
+          tbytes=$(wc -c < cloud-engineering-connector/test/worker.test.js)
+          echo "pre_commit_worker=$wbytes test=$tbytes"
+          # Only commit when we have full bodies in the workspace (post-build)
+          test "$wbytes" -ge 30000
+          test "$tbytes" -ge 60000
+          grep -q 'VERSION = "0.2.0"' cloud-engineering-connector/worker.js
+          grep -q 'parseAllowlist' cloud-engineering-connector/worker.js
+          grep -q 'version:"0.2.0"' cloud-engineering-connector/test/worker.test.js
+          git config user.name "connector-ci"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloud-engineering-connector/worker.js cloud-engineering-connector/test/worker.test.js
+          if git diff --staged --quiet; then
+            echo "Nothing to materialize (already full on branch)"
+            exit 0
+          fi
+          git commit -m "ci: materialize full worker.js + worker.test.js [skip materialize]
+
+Built worker from main baseline + allowlist patch; tests restored and version-aligned.
+Provenance: CI run on engineering/hardening-v0.2.0."
+          git push origin HEAD:engineering/hardening-v0.2.0
+          echo "Materialized full files onto branch"

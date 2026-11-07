@@ -166,7 +166,12 @@ describe("OrchestratorLedger durable coordination contract", () => {
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101),
       leaseMs: 30_000, now: now + 101,
     });
-    expect(result).toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
+    expect(result).toMatchObject({
+      claimed: true,
+      task: { taskId: "task-claim-second" },
+      leaseGeneration: 1,
+      reconciliationRequired: false,
+    });
     await expect(ledger.getTask({ taskId: "task-expired-first" })).resolves.toMatchObject({
       state: "SCHEDULED", version: 1,
     });

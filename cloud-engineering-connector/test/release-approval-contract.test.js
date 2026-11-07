@@ -149,7 +149,8 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
         settings: { batch_size: 5, max_concurrency: 5, max_retries: 5, retry_delay: 30 },
       }],
     },
-    { queue_name: "chat-gpt111-orchestrator-outbox-dlq", queue_id: "production-outbox-dlq", consumers: [{ script_name: "chat-gpt111", consumer_id: "production-dlq-consumer", settings: { batch_size: 5, max_concurrency: 2, max_retries: 100, retry_delay: 3600 } }] },
+    { queue_name: "chat-gpt111-orchestrator-outbox-dlq", queue_id: "production-outbox-dlq", consumers: [{ script_name: "chat-gpt111", consumer_id: "production-dlq-consumer", dead_letter_queue: "chat-gpt111-orchestrator-outbox-dlq-quarantine", settings: { batch_size: 5, max_concurrency: 2, max_retries: 100, retry_delay: 3600 } }] },
+    { queue_name: "chat-gpt111-orchestrator-outbox-dlq-quarantine", queue_id: "production-outbox-dlq-quarantine", consumers: [] },
     {
       queue_name: "chat-gpt111-staging-orchestrator-outbox",
       queue_id: "staging-outbox",
@@ -159,7 +160,8 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
         settings: { batch_size: 5, max_concurrency: 5, max_retries: 5, retry_delay: 30 },
       }],
     },
-    { queue_name: "chat-gpt111-staging-orchestrator-outbox-dlq", queue_id: "staging-outbox-dlq", consumers: [{ script_name: "chat-gpt111-staging", consumer_id: "staging-dlq-consumer", settings: { batch_size: 5, max_concurrency: 2, max_retries: 100, retry_delay: 3600 } }] },
+    { queue_name: "chat-gpt111-staging-orchestrator-outbox-dlq", queue_id: "staging-outbox-dlq", consumers: [{ script_name: "chat-gpt111-staging", consumer_id: "staging-dlq-consumer", dead_letter_queue: "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine", settings: { batch_size: 5, max_concurrency: 2, max_retries: 100, retry_delay: 3600 } }] },
+    { queue_name: "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine", queue_id: "staging-outbox-dlq-quarantine", consumers: [] },
   ];
   const availableQueueData = missingQueueName ? queueData.filter((queue) => queue.queue_name !== missingQueueName) : queueData;
   const scheduleData = { schedules: [{ cron: "*/5 * * * *" }] };

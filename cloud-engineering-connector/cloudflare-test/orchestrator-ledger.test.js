@@ -389,6 +389,144 @@ describe("OrchestratorLedger durable coordination contract", () => {
     })).resolves.toMatchObject({ accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" });
   });
 
+  it("fences Agent message and Outbox writes by task assignment and current lease generation", async () => {
+    const ledger = ledgerFor("ledger-agent-rpc-lease-fencing");
+    await createTask(ledger, {
+      task: task(),
+      idempotencyKey: "task-create-agent-rpc-lease-fencing",
+      inputHash: "a".repeat(64),
+      now,
+    });
+
+    const firstLease = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1", now),
+      leaseMs: 30_000,
+      now,
+    });
+    expect(firstLease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    const released = await ledger.releaseLease({
+      taskId: "task-0001",
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "releaseLease", nowMs: now + 1,
+      }),
+      leaseGeneration: firstLease.leaseGeneration,
+      now: now + 1,
+    });
+    expect(released).toMatchObject({ released: true });
+
+    const currentLease = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1", now + 2),
+      leaseMs: 30_000,
+      now: now + 2,
+    });
+    expect(currentLease).toMatchObject({ claimed: true, leaseGeneration: 2 });
+
+    const staleMessage = await ledger.recordMessage({
+      messageId: "msg-stale-agent-lease-0001",
+      taskId: "task-0001",
+      inputHash: "b".repeat(64),
+      envelope: protocolEnvelope("msg-stale-agent-lease-0001", "task-0001", "b".repeat(64), { stale: true }),
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now + 3,
+      }),
+      leaseGeneration: firstLease.leaseGeneration,
+      now: now + 3,
+    });
+    expect(staleMessage).toEqual({ accepted: false, reason: "LEASE_FENCE_MISMATCH" });
+
+    const wrongAgentEnvelope = {
+      ...protocolEnvelope("msg-wrong-agent-lease-0001", "task-0001", "c".repeat(64), { wrongAgent: true }),
+      senderId: "agent:worker-2",
+    };
+    const wrongAgentMessage = await ledger.recordMessage({
+      messageId: "msg-wrong-agent-lease-0001",
+      taskId: "task-0001",
+      inputHash: "c".repeat(64),
+      envelope: wrongAgentEnvelope,
+      workerId: "agent:worker-2",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-2", role: "agent", operation: "recordMessage", nowMs: now + 3,
+      }),
+      leaseGeneration: currentLease.leaseGeneration,
+      now: now + 3,
+    });
+    expect(wrongAgentMessage).toEqual({ accepted: false, reason: "LEASE_FENCE_MISMATCH" });
+
+    const staleOutbox = await ledger.enqueueOutbox({
+      eventId: "evt-stale-agent-lease-0001",
+      idempotencyKey: "idem-stale-agent-lease-0001",
+      taskId: "task-0001",
+      eventType: "task.created",
+      payload: { stale: true },
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now + 3,
+      }),
+      leaseGeneration: firstLease.leaseGeneration,
+      now: now + 3,
+    });
+    expect(staleOutbox).toEqual({ enqueued: false, reason: "LEASE_FENCE_MISMATCH" });
+
+    const wrongAgentOutbox = await ledger.enqueueOutbox({
+      eventId: "evt-wrong-agent-lease-0001",
+      idempotencyKey: "idem-wrong-agent-lease-0001",
+      taskId: "task-0001",
+      eventType: "task.created",
+      payload: { wrongAgent: true },
+      workerId: "agent:worker-2",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-2", role: "agent", operation: "enqueueOutbox", nowMs: now + 3,
+      }),
+      leaseGeneration: currentLease.leaseGeneration,
+      now: now + 3,
+    });
+    expect(wrongAgentOutbox).toEqual({ enqueued: false, reason: "LEASE_FENCE_MISMATCH" });
+
+    const acceptedMessage = await ledger.recordMessage({
+      messageId: "msg-current-agent-lease-0001",
+      taskId: "task-0001",
+      inputHash: "d".repeat(64),
+      envelope: protocolEnvelope("msg-current-agent-lease-0001", "task-0001", "d".repeat(64), { current: true }),
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now + 3,
+      }),
+      leaseGeneration: currentLease.leaseGeneration,
+      now: now + 3,
+    });
+    expect(acceptedMessage).toMatchObject({ accepted: true });
+
+    const acceptedOutbox = await ledger.enqueueOutbox({
+      eventId: "evt-current-agent-lease-0001",
+      idempotencyKey: "idem-current-agent-lease-0001",
+      taskId: "task-0001",
+      eventType: "task.created",
+      payload: { current: true },
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now + 3,
+      }),
+      leaseGeneration: currentLease.leaseGeneration,
+      now: now + 3,
+    });
+    expect(acceptedOutbox).toMatchObject({ enqueued: true });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_processed_messages",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_events",
+      ).one().count).toBe(1);
+    });
+  });
+
+
   it("authenticates a message sender before inspecting an untrusted protocol envelope", async () => {
   const ledger = ledgerFor("ledger-message-auth-before-inspection");
   await createTask(ledger, { task: task(), idempotencyKey: "task-create-message-auth-order", inputHash: "b".repeat(64), now });

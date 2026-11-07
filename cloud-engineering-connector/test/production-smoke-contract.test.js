@@ -16,6 +16,16 @@ test("Production release requires the webhook and Ledger assertion secret bindin
   assert.match(releaseWorkflow, /"LEDGER_WORKER_ASSERTION_KEYS"/);
 });
 
+test("Production and Staging release require isolated Owner assertion and identity bindings", () => {
+  assert.match(releaseWorkflow, /"LEDGER_OWNER_ASSERTION_KEYS"/);
+  assert.match(releaseWorkflow, /LEDGER_OWNER_ASSERTION_ACTIVE_KID/);
+  assert.match(releaseWorkflow, /GITHUB_WEBHOOK_OWNER_ID/);
+  assert.match(releaseWorkflow, /GITHUB_WEBHOOK_REPOSITORY_ID/);
+  assert.match(releaseWorkflow, /GITHUB_WEBHOOK_REPOSITORY/);
+  assert.match(releaseWorkflow, /ownerSignerKid\?\.type, "plain_text"/);
+  assert.match(releaseWorkflow, /GITHUB_WEBHOOK_OWNER_ID.*plain_text/s);
+});
+
 test("Production release preflight requires a verifiable PUBLIC_READ_ONLY=true flag", () => {
   assert.match(releaseWorkflow, /assert\.equal\(publicReadOnly\?\.type,\s*"plain_text"/);
   assert.match(releaseWorkflow, /assert\.equal\(publicReadOnly\.text,\s*"true"/);

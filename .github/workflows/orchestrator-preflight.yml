@@ -5,7 +5,7 @@ on:
   pull_request:
     paths:
       - "cloud-engineering-connector/**"
-      - "docs/evidence/2026-11-04-orchestrator-p0-preflight-input.json"
+      - "docs/evidence/2026-11-07-orchestrator-p0-preflight-input.json"
       - ".github/workflows/orchestrator-preflight.yml"
 
 permissions:
@@ -41,4 +41,4 @@ jobs:
       - name: Check syntax and Wrangler dry-runs
         run: npm run check
       - name: Render sanitized preflight evidence
-        run: node scripts/orchestrator-preflight.mjs ../docs/evidence/2026-11-04-orchestrator-p0-preflight-input.json --summary >> "$GITHUB_STEP_SUMMARY"
+        run: node scripts/orchestrator-preflight.mjs ../docs/evidence/2026-11-07-orchestrator-p0-preflight-input.json --summary >> "$GITHUB_STEP_SUMMARY"

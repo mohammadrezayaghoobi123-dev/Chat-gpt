@@ -113,3 +113,11 @@ test("Production and Staging declare isolated DLQ consumers and queue routing na
   assert.match(production, /\[\[queues\.consumers\]\]\s*\nqueue = "chat-gpt111-orchestrator-outbox-dlq"[\s\S]*?max_retries = 100[\s\S]*?retry_delay = 3600/);
   assert.match(staging, /\[\[env\.staging\.queues\.consumers\]\]\s*\nqueue = "chat-gpt111-staging-orchestrator-outbox-dlq"[\s\S]*?max_retries = 100[\s\S]*?retry_delay = 3600/);
 });
+
+
+test("Production and Staging DLQ archivers route repeated archival failures to isolated quarantine queues", () => {
+  const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
+  assert.match(production, /\[\[queues\.consumers\]\]\s*\nqueue = "chat-gpt111-orchestrator-outbox-dlq"[\s\S]*?dead_letter_queue = "chat-gpt111-orchestrator-outbox-dlq-quarantine"/);
+  assert.match(staging, /\[\[env\.staging\.queues\.consumers\]\]\s*\nqueue = "chat-gpt111-staging-orchestrator-outbox-dlq"[\s\S]*?dead_letter_queue = "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine"/);
+  assert.notEqual("chat-gpt111-orchestrator-outbox-dlq-quarantine", "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine");
+});

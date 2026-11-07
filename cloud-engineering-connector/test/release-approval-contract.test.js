@@ -37,11 +37,23 @@ for (const workflow of workflows) {
     const source = readFileSync(workflow.path, "utf8");
     assert.match(source, /pull-requests:\s*read/, "release workflow must have read-only PR review access");
     assert.match(source, /node scripts\/verify-release-approval\.mjs/, "approval guard must run before deployment");
-    assert.equal((source.match(/RELEASE_GITHUB_TOKEN:/g) || []).length, 1, "token must be injected only once");
-    const guardPosition = source.indexOf("node scripts/verify-release-approval.mjs");
-    const tokenPosition = source.indexOf("RELEASE_GITHUB_TOKEN:");
+    const tokenCount = (source.match(/RELEASE_GITHUB_TOKEN:/g) || []).length;
+    const guardCount = source.split("node scripts/verify-release-approval.mjs").length - 1;
+    const expectedApprovalChecks = workflow.name === "Staging" ? 2 : 1;
+    assert.equal(guardCount, expectedApprovalChecks, "release must validate the candidate at every required approval boundary");
+    assert.equal(tokenCount, guardCount, "read-only GitHub token must be injected exactly once per approval check");
+    const lines = source.split("\n");
+    const tokenSteps = lines.map((line, index) => ({ line, index })).filter(({ line }) => line.includes("RELEASE_GITHUB_TOKEN:"));
+    for (const token of tokenSteps) {
+      let stepStart = token.index;
+      while (stepStart >= 0 && !lines[stepStart].startsWith("      - name: ")) stepStart -= 1;
+      let stepEnd = token.index + 1;
+      while (stepEnd < lines.length && !lines[stepEnd].startsWith("      - name: ")) stepEnd += 1;
+      const scopedStep = lines.slice(stepStart, stepEnd).join("\n");
+      assert.ok(scopedStep.includes("node scripts/verify-release-approval.mjs"), "read-only GitHub token must exist only in an approval-validation step");
+    }
     const deployPosition = source.indexOf("npx wrangler deploy");
-    assert.ok(tokenPosition > guardPosition && guardPosition < deployPosition, "read-only GitHub token must be scoped to the approval step before deploy");
+    assert.ok(source.indexOf("node scripts/verify-release-approval.mjs") < deployPosition, "approval validation must run before deploy");
     assert.match(source, /RELEASE_ENV:\s*(staging|production)/, "release environment must be explicit");
   });
 }
@@ -102,7 +114,7 @@ function extractPreflightScript(source, stepName) {
   return lines.slice(heredocStart + 1, heredocEnd).map((line) => line.replace(/^ {10}/, "")).join("\n");
 }
 
-function runPreflightWithMissingObservability(source, stepName, production, expectFailure = true, legacyPublicReadOnlySecret = false, observabilityOverride = null) {
+function runPreflightWithMissingObservability(source, stepName, production, expectFailure = true, legacyPublicReadOnlySecret = false, observabilityOverride = null, expectedFailurePattern = /observability|persistent logs|invocation logs|redact_query_string/i, missingQueueName = null) {
   const script = extractPreflightScript(source, stepName);
   const stagingSettings = {
     bindings: [
@@ -149,7 +161,8 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
         settings: { batch_size: 5, max_concurrency: 5, max_retries: 5, retry_delay: 30 },
       }],
     },
-    { queue_name: "chat-gpt111-orchestrator-outbox-dlq", queue_id: "production-outbox-dlq", consumers: [{ script_name: "chat-gpt111", consumer_id: "production-dlq-consumer", settings: { batch_size: 5, max_concurrency: 2, max_retries: 100, retry_delay: 3600 } }] },
+    { queue_name: "chat-gpt111-orchestrator-outbox-dlq", queue_id: "production-outbox-dlq", consumers: [{ script_name: "chat-gpt111", consumer_id: "production-dlq-consumer", dead_letter_queue: "chat-gpt111-orchestrator-outbox-dlq-quarantine", settings: { batch_size: 5, max_concurrency: 2, max_retries: 100, retry_delay: 3600 } }] },
+    { queue_name: "chat-gpt111-orchestrator-outbox-dlq-quarantine", queue_id: "production-outbox-dlq-quarantine", consumers: [] },
     {
       queue_name: "chat-gpt111-staging-orchestrator-outbox",
       queue_id: "staging-outbox",
@@ -159,8 +172,10 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
         settings: { batch_size: 5, max_concurrency: 5, max_retries: 5, retry_delay: 30 },
       }],
     },
-    { queue_name: "chat-gpt111-staging-orchestrator-outbox-dlq", queue_id: "staging-outbox-dlq", consumers: [{ script_name: "chat-gpt111-staging", consumer_id: "staging-dlq-consumer", settings: { batch_size: 5, max_concurrency: 2, max_retries: 100, retry_delay: 3600 } }] },
+    { queue_name: "chat-gpt111-staging-orchestrator-outbox-dlq", queue_id: "staging-outbox-dlq", consumers: [{ script_name: "chat-gpt111-staging", consumer_id: "staging-dlq-consumer", dead_letter_queue: "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine", settings: { batch_size: 5, max_concurrency: 2, max_retries: 100, retry_delay: 3600 } }] },
+    { queue_name: "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine", queue_id: "staging-outbox-dlq-quarantine", consumers: [] },
   ];
+  const availableQueueData = missingQueueName ? queueData.filter((queue) => queue.queue_name !== missingQueueName) : queueData;
   const scheduleData = { schedules: [{ cron: "*/5 * * * *" }] };
   const accountData = { settings: { enforce_twofactor: true } };
   const prelude = [
@@ -171,8 +186,8 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
     "  else if (url.includes('/chat-gpt111-staging/settings')) result = " + JSON.stringify(stagingSettings) + ";",
     "  else if (url.includes('/chat-gpt111/settings')) result = " + JSON.stringify(productionSettings) + ";",
     "  else if (url.includes('/schedules')) result = " + JSON.stringify(scheduleData) + ";",
-    "  else if (url.includes('/queues?')) result = " + JSON.stringify(queueData) + ";",
-    "  else if (url.includes('/queues?')) result = " + JSON.stringify(queueData) + ";",
+    "  else if (url.includes('/queues?')) result = " + JSON.stringify(availableQueueData) + ";",
+    "  else if (url.includes('/queues?')) result = " + JSON.stringify(availableQueueData) + ";",
     "  else if (url.includes('/deployments?')) result = " + JSON.stringify(deploymentData) + ";",
     "  else throw new Error('Unexpected Cloudflare API request: ' + url);",
     "  return new Response(JSON.stringify({ success: true, result }), { status: 200, headers: { 'content-type': 'application/json' } });",
@@ -198,8 +213,8 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
       );
       assert.match(
         result.stderr + result.stdout,
-        /observability|persistent logs|invocation logs|redact_query_string/i,
-        "verification must explain the observability gate that blocked release",
+        expectedFailurePattern,
+        "preflight failure must explain the specific gate that blocked release",
       );
     } else {
       assert.equal(result.status, 0, "Production preflight must allow deployment to remediate legacy dashboard settings; post-deploy verification enforces the final state: " + result.stderr + result.stdout);
@@ -320,14 +335,16 @@ test("Production post-deploy verification blocks when secure persistent observab
   runPreflightWithMissingObservability(source, "Verify Production Durable Object namespace isolation", true);
 });
 
-test("Production preflight permits migration from legacy dashboard settings before post-deploy verification", () => {
+test("Production preflight blocks legacy secret-text PUBLIC_READ_ONLY before deployment", () => {
   const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
   runPreflightWithMissingObservability(
     source,
     "Preflight Production credentials, namespace isolation, and rollback target",
     true,
-    false,
     true,
+    true,
+    null,
+    /Production PUBLIC_READ_ONLY must be a plain-text Worker variable/,
   );
 });
 
@@ -638,3 +655,101 @@ for (const workflow of workflows) {
       "preflight must not fall back to an arbitrary version when the 100% target is ambiguous");
   });
 }
+
+
+test("Staging preflight does not require the DLQ before deployment because Cloudflare creates it with the consumer", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  runPreflightWithMissingObservability(
+    source,
+    "Preflight Staging bindings and capture rollback target",
+    false,
+    false,
+    false,
+    {
+    enabled: true,
+    head_sampling_rate: 1,
+    redact_query_string: true,
+    logs: { enabled: true, persist: true, head_sampling_rate: 1, invocation_logs: false },
+  },
+    /Queue/i,
+    "chat-gpt111-staging-orchestrator-outbox-dlq",
+  );
+});
+
+test("Production preflight does not require the DLQ before deployment because Cloudflare creates it with the consumer", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
+  runPreflightWithMissingObservability(
+    source,
+    "Preflight Production credentials, namespace isolation, and rollback target",
+    true,
+    false,
+    false,
+    {
+    enabled: true,
+    head_sampling_rate: 1,
+    redact_query_string: true,
+    logs: { enabled: true, persist: true, head_sampling_rate: 1, invocation_logs: false },
+  },
+    /Queue/i,
+    "chat-gpt111-orchestrator-outbox-dlq",
+  );
+});
+
+test("Staging preflight still blocks when its primary outbox Queue is missing", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  runPreflightWithMissingObservability(
+    source,
+    "Preflight Staging bindings and capture rollback target",
+    false,
+    true,
+    false,
+    {
+    enabled: true,
+    head_sampling_rate: 1,
+    redact_query_string: true,
+    logs: { enabled: true, persist: true, head_sampling_rate: 1, invocation_logs: false },
+  },
+    /Queue/i,
+    "chat-gpt111-staging-orchestrator-outbox",
+  );
+});
+
+test("Production preflight still blocks when a primary outbox Queue is missing", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
+  for (const missing of ["chat-gpt111-orchestrator-outbox", "chat-gpt111-staging-orchestrator-outbox"]) {
+    runPreflightWithMissingObservability(
+      source,
+      "Preflight Production credentials, namespace isolation, and rollback target",
+      true,
+      true,
+      false,
+      {
+    enabled: true,
+    head_sampling_rate: 1,
+    redact_query_string: true,
+    logs: { enabled: true, persist: true, head_sampling_rate: 1, invocation_logs: false },
+  },
+      /Queue/i,
+      missing,
+    );
+  }
+});
+
+
+test("Staging revalidates exact candidate approval after preflight and immediately before deployment", () => {
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url),
+    "utf8",
+  );
+  const firstApproval = workflow.indexOf("Verify independent approval of the exact Staging candidate");
+  const preflight = workflow.indexOf("Preflight Staging bindings and capture rollback target");
+  const finalApproval = workflow.indexOf("Revalidate the exact Staging candidate immediately before deployment");
+  const deploy = workflow.indexOf("Deploy candidate to Staging");
+  assert.ok(firstApproval >= 0, "initial approval gate must exist");
+  assert.ok(preflight > firstApproval, "Cloudflare preflight must follow initial approval");
+  assert.ok(finalApproval > preflight, "final approval gate must follow Cloudflare preflight");
+  assert.ok(deploy > finalApproval, "deployment must follow final approval gate");
+  const finalGate = workflow.slice(finalApproval, deploy);
+  assert.match(finalGate, /node scripts\/verify-release-approval\.mjs/);
+  assert.match(finalGate, /RELEASE_GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
+});

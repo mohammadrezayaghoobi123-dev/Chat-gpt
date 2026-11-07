@@ -80,5 +80,5 @@ jobs:
             assert.ok(created?.queue_id, "New Staging Outbox Queue could not be verified after creation");
             console.log("Dedicated Staging Outbox Queue created and verified.");
           }
-          console.log("Only the Staging primary Queue is managed. The Staging DLQ is created by Wrangler when its consumer is attached.");
+          console.log("Only the Staging primary Queue is managed. The first-level DLQ and its quarantine DLQ are created by Wrangler when their respective consumers are attached.");
           NODE

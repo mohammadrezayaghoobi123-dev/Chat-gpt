@@ -144,6 +144,21 @@ jobs:
             throw new Error("Production deployment blocked; missing Worker secret binding(s): " + missing.join(", ") + ". Add them in Cloudflare Workers > chat-gpt111 > Settings > Variables and Secrets. Secret values are never read.");
           }
 
+          // Fail before any Production deployment if a legacy encrypted secret
+          // still occupies the PUBLIC_READ_ONLY binding name. Wrangler preserves
+          // existing secrets and cannot be relied on to convert their binding type.
+          const publicReadOnly = productionBindings.get("PUBLIC_READ_ONLY");
+          assert.equal(
+            publicReadOnly?.type,
+            "plain_text",
+            "Production PUBLIC_READ_ONLY must be a plain-text Worker variable before deployment; convert the legacy secret binding explicitly first",
+          );
+          assert.equal(
+            publicReadOnly.text,
+            "true",
+            "Production PUBLIC_READ_ONLY must equal true before deployment",
+          );
+
           for (const [label, bindings] of [["Production", productionBindings], ["Staging", stagingBindings]]) {
             const activeSignerKid = bindings.get("LEDGER_WORKER_ASSERTION_ACTIVE_KID");
             assert.equal(activeSignerKid?.type, "plain_text", label + " LEDGER_WORKER_ASSERTION_ACTIVE_KID must be a non-secret plain-text binding");
@@ -273,14 +288,20 @@ jobs:
           assert.notEqual(production.get("MCP_RATE_LIMITER")?.namespace_id, staging.get("MCP_RATE_LIMITER")?.namespace_id, "Production and Staging rate-limit namespaces must differ");
           const productionQueue = queues.find((queue) => queue.queue_name === "chat-gpt111-orchestrator-outbox");
           const productionDlq = queues.find((queue) => queue.queue_name === "chat-gpt111-orchestrator-outbox-dlq");
+          const productionDlqQuarantine = queues.find((queue) => queue.queue_name === "chat-gpt111-orchestrator-outbox-dlq-quarantine");
           const stagingQueue = queues.find((queue) => queue.queue_name === "chat-gpt111-staging-orchestrator-outbox");
           const stagingDlq = queues.find((queue) => queue.queue_name === "chat-gpt111-staging-orchestrator-outbox-dlq");
+          const stagingDlqQuarantine = queues.find((queue) => queue.queue_name === "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine");
           assert.ok(productionQueue?.queue_id && productionDlq?.queue_id, "Production Orchestrator Outbox Queue and DLQ must exist");
           assert.ok(stagingQueue?.queue_id && stagingDlq?.queue_id, "Staging Orchestrator Outbox Queue and DLQ must exist");
+          assert.ok(productionDlqQuarantine?.queue_id, "Production DLQ quarantine Queue must exist after deployment");
+          assert.ok(stagingDlqQuarantine?.queue_id, "Staging DLQ quarantine Queue must exist after deployment");
           const productionConsumer = (productionQueue.consumers || []).find((item) => item.script_name === "chat-gpt111");
           const stagingConsumer = (stagingQueue.consumers || []).find((item) => item.script_name === "chat-gpt111-staging");
           const productionDlqConsumer = (productionDlq.consumers || []).find((item) => item.script_name === "chat-gpt111");
           const stagingDlqConsumer = (stagingDlq.consumers || []).find((item) => item.script_name === "chat-gpt111-staging");
+          assert.equal(productionDlqConsumer?.dead_letter_queue, "chat-gpt111-orchestrator-outbox-dlq-quarantine", "Production DLQ archiver must quarantine repeated archival failures");
+          assert.equal(stagingDlqConsumer?.dead_letter_queue, "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine", "Staging DLQ archiver must quarantine repeated archival failures");
           for (const [label, consumer, dlqName] of [
             ["Production", productionConsumer, "chat-gpt111-orchestrator-outbox-dlq"],
             ["Staging", stagingConsumer, "chat-gpt111-staging-orchestrator-outbox-dlq"],

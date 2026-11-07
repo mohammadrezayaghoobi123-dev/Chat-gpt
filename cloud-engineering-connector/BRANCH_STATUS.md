@@ -1,47 +1,37 @@
 # Branch status — `engineering/hardening-v0.2.0`
 
-**Severity: RECOVERING — local tests green; remote worker body must be the full 37KB artifact**
+**Severity: RECOVERING — deterministic build path; CI must generate worker before test**
 
 ## Verdict (current)
 
 | Check | Result |
 |-------|--------|
 | Safe to merge to `main` | **NO** |
-| Safe to deploy Worker | **NO** until remote worker byte-identity verified |
-| Local suite (`node --test`) | **106 / 106 green** (91 worker + 7 allowlist + 8 credential-matrix) |
-| Fail-closed stub | Removed |
-| Configurable allowlist | Wired (parseAllowlist / allowedBaseBranch / repoPath(..., env)) |
-| source-parts pipeline | Deprecated — do not use |
+| Safe to deploy Worker | **NO** until CI green + staging smoke |
+| Local suite | **106 / 106 green** |
+| Build path | `scripts/apply-v0.2-allowlist.mjs` on main's `worker.js` → 37042-byte v0.2.0 |
+| Configurable allowlist | Wired |
+| source-parts | Deprecated — do not use |
 
-## Evidence (local, 2026-11-07)
+## How the worker is produced (atomic, reproducible)
 
-```
-ℹ tests 106
-ℹ pass 106
-ℹ fail 0
-```
+1. Take `main` branch `cloud-engineering-connector/worker.js` (0.1.0, full MCP surface).
+2. Run `node scripts/apply-v0.2-allowlist.mjs <path-to-0.1.0-worker>`.
+3. Result: `VERSION=0.2.0`, configurable `ALLOWED_REPOSITORIES` / `ALLOWED_BASE_BRANCH`, all call sites pass `env`.
+4. Verified locally: output is 37042 bytes and yields **106/106** tests green.
 
-Single prior failure was a hardcoded `version: "0.1.0"` in modern subscriptions/listen serverInfo assertion; fixed to `0.2.0`.
-
-## Worker body note (important)
-
-An earlier push of `worker.js` was truncated (~28 KB) by the upload path. The **known-good local body is 37042 bytes**: full `main` 0.1.0 protocol surface + surgical v0.2.0 allowlist patches. That body is what produced 106/106.
-
-Before merge/deploy:
-1. Replace remote `worker.js` with the full 37042-byte artifact (byte-identity with local).
-2. Confirm `node --check worker.js` and `node --test` on CI against that body.
-3. Staging interop smoke.
+CI performs steps 1–4 on every push (curl main baseline → patch → full `node --test`).
 
 ## Remaining gates
 
-1. Remote worker byte-identity with local 37042-byte file.
-2. CI green on the full suite (not only allowlist).
-3. Staging interop (initialize / tools/list / allowlist deny / draft PR).
+1. CI green on this branch (full suite).
+2. Commit or artifact the built `worker.js` for deploy (or run build in deploy pipeline).
+3. Staging interop smoke.
 4. Root README maturity update.
-5. Then PR to `main`.
+5. PR to `main`.
 
 ## Policy
 
 - Do not merge until gates pass.
 - Prefer small atomic PRs.
-- source-parts may be deleted in a follow-up once recovery is confirmed.
+- Do not use incomplete source-parts.

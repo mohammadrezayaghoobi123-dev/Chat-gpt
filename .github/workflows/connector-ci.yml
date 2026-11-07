@@ -34,19 +34,27 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Fetch main baseline worker (0.1.0 protocol surface)
+        run: |
+          curl -fsSL \
+            "https://raw.githubusercontent.com/mohammadrezayaghoobi123-dev/Chat-gpt/main/cloud-engineering-connector/worker.js" \
+            -o /tmp/baseline-worker-0.1.0.js
+          wc -c /tmp/baseline-worker-0.1.0.js
+          head -c 40 /tmp/baseline-worker-0.1.0.js
+          echo
+      - name: Build worker v0.2.0 (baseline + allowlist patch)
+        run: node scripts/apply-v0.2-allowlist.mjs /tmp/baseline-worker-0.1.0.js
+      - name: Align test expectation to VERSION 0.2.0
+        run: |
+          if grep -q 'version:"0.1.0"' test/worker.test.js; then
+            sed -i 's/version:"0.1.0"/version:"0.2.0"/g' test/worker.test.js
+            echo "Aligned serverInfo version expectation to 0.2.0"
+          else
+            echo "Already aligned"
+          fi
       - name: Syntax check
         run: npm run check
       - name: Allowlist unit tests
         run: npm test
-      - name: Full test suite (when present)
-        run: |
-          if [[ -f test/worker.test.js ]]; then
-            echo "Running full suite (worker.test.js present)"
-            node --test || {
-              echo "Full suite reported failures — expected until worker tests are aligned with v0.2.0."
-              echo "Allowlist unit tests already passed; do not treat this as merge-ready."
-              exit 0
-            }
-          else
-            echo "No worker.test.js — allowlist-only surface."
-          fi
+      - name: Full suite
+        run: node --test

@@ -306,10 +306,23 @@ export class OrchestratorLedger extends DurableObject {
         body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
         command_hash TEXT NOT NULL CHECK(length(command_hash) = 64),
         assertion_jti TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        repository TEXT NOT NULL,
+        issue_number INTEGER NOT NULL,
+        comment_created_at INTEGER NOT NULL,
         result_json TEXT NOT NULL CHECK(json_valid(result_json)),
         created_at INTEGER NOT NULL
       )
     `);
+    const ownerReceiptColumns = new Set(
+      sql.exec("PRAGMA table_info(orchestrator_owner_command_receipts)").toArray().map(column => column.name),
+    );
+    if (!ownerReceiptColumns.has("task_id")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN task_id TEXT NOT NULL DEFAULT ''");
+    if (!ownerReceiptColumns.has("operation")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN operation TEXT NOT NULL DEFAULT ''");
+    if (!ownerReceiptColumns.has("repository")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN repository TEXT NOT NULL DEFAULT ''");
+    if (!ownerReceiptColumns.has("issue_number")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN issue_number INTEGER NOT NULL DEFAULT 0");
+    if (!ownerReceiptColumns.has("comment_created_at")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN comment_created_at INTEGER NOT NULL DEFAULT 0");
 
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_audit_events (
@@ -334,7 +347,7 @@ export class OrchestratorLedger extends DurableObject {
 
   ping() {
     const result = this.ctx.storage.sql.exec("SELECT 1 AS ok").one();
-    return { ok: Number(result.ok) === 1, schemaVersion: 5 };
+    return { ok: Number(result.ok) === 1, schemaVersion: 6 };
   }
 
   claimGitHubDelivery({ deliveryId, bodySha256, eventName, receivedAt, idempotencyKey, inputHash } = {}) {
@@ -1150,7 +1163,7 @@ export class OrchestratorLedger extends DurableObject {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       return { applied: false, reason: "INVALID_OWNER_COMMAND" };
     }
-    const { assertion, assertionContext, command, bodySha256, now } = input;
+    const { assertion, assertionContext, command, bodySha256, provenance, now } = input;
     try {
       timestamp(now);
       if (!command || typeof command !== "object" || Array.isArray(command) ||
@@ -1170,6 +1183,15 @@ export class OrchestratorLedger extends DurableObject {
         return { applied: false, reason: "INVALID_OWNER_COMMAND" };
       }
       hash(bodySha256, "bodySha256");
+      if (!provenance || typeof provenance !== "object" || Array.isArray(provenance) ||
+          provenance.eventName !== "issue_comment.created" ||
+          provenance.repository !== this.env?.GITHUB_WEBHOOK_REPOSITORY ||
+          typeof provenance.repository !== "string" ||
+          !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(provenance.repository) ||
+          !Number.isSafeInteger(provenance.issueNumber) || provenance.issueNumber < 1) {
+        return { applied: false, reason: "INVALID_OWNER_PROVENANCE" };
+      }
+      timestamp(provenance.commentCreatedAt, "commentCreatedAt");
       if (!assertionContext || typeof assertionContext !== "object" || Array.isArray(assertionContext)) {
         return { applied: false, reason: "OWNER_ASSERTION_REJECTED" };
       }
@@ -1247,6 +1269,12 @@ export class OrchestratorLedger extends DurableObject {
           deliveryId: context.deliveryId,
           commentId: context.commentId,
           commandHash: context.commandHash,
+          repository: provenance.repository,
+          issueNumber: provenance.issueNumber,
+          eventName: provenance.eventName,
+          commentCreatedAt: provenance.commentCreatedAt,
+          fromState: currentTask?.state ?? null,
+          toState: null,
           reason: conflictReason,
         } : {
           taskId: command.taskId,
@@ -1260,6 +1288,12 @@ export class OrchestratorLedger extends DurableObject {
           deliveryId: context.deliveryId,
           commentId: context.commentId,
           commandHash: context.commandHash,
+          repository: provenance.repository,
+          issueNumber: provenance.issueNumber,
+          eventName: provenance.eventName,
+          commentCreatedAt: provenance.commentCreatedAt,
+          fromState: currentTask.state,
+          toState: resultingTask.state,
           reason: command.reason,
         };
         const detailsJson = serializeBounded(auditDetails, "Owner audit details");
@@ -1275,7 +1309,11 @@ export class OrchestratorLedger extends DurableObject {
         });
         const successResult = conflictReason
           ? { applied: false, conflict: true, reason: conflictReason }
-          : { applied: true, operation: command.operation, task: resultingTask };
+          : {
+              applied: true,
+              operation: command.operation,
+              task: { taskId: resultingTask.taskId, state: resultingTask.state, version: resultingTask.version },
+            };
         const resultJson = serializeBounded(successResult, "Owner command result");
         const transactionResult = this.ctx.storage.transactionSync(() => {
           const priorReceipt = sql.exec(
@@ -1349,8 +1387,10 @@ export class OrchestratorLedger extends DurableObject {
           );
           const storedResult = serializeBounded(successResult, "Owner command result");
           sql.exec(
-            "INSERT INTO orchestrator_owner_command_receipts (delivery_id, comment_id, body_sha256, command_hash, assertion_jti, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            context.deliveryId, context.commentId, bodySha256, context.commandHash, verified.jti, storedResult, now,
+            "INSERT INTO orchestrator_owner_command_receipts (delivery_id, comment_id, body_sha256, command_hash, assertion_jti, task_id, operation, repository, issue_number, comment_created_at, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            context.deliveryId, context.commentId, bodySha256, context.commandHash, verified.jti,
+            command.taskId, command.operation, provenance.repository, provenance.issueNumber,
+            provenance.commentCreatedAt, storedResult, now,
           );
           return { replay: false, result: successResult };
         });

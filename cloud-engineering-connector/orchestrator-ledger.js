@@ -647,6 +647,7 @@ export class OrchestratorLedger extends DurableObject {
         ? sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ? AND state IN ('SCHEDULED','RUNNING','VERIFYING') ORDER BY created_at LIMIT 1", taskId).toArray()
         : sql.exec("SELECT * FROM orchestrator_tasks WHERE state IN ('SCHEDULED','RUNNING','VERIFYING') ORDER BY created_at LIMIT 100").toArray();
       let assigneeMismatch = false;
+      let reconciliationBlocked = false;
       for (const row of rows) {
         const taskProjection = taskFromRow(row);
         const assignedAgentId = taskProjection.executorId ?? taskProjection.assignedAgentId;
@@ -662,8 +663,11 @@ export class OrchestratorLedger extends DurableObject {
           if (lease.worker_id !== null && lease.lease_until <= now) {
             // An arbitrary evidence reference or caller-supplied boolean is not
             // proof of independent reconciliation. Until a separately
-            // authenticated recovery authority is implemented, fail closed.
-            return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
+            // authenticated recovery authority is implemented, fail closed
+            // for this task only: it stays unclaimable and untouched, but it
+            // must not starve later tasks assigned to the same Agent.
+            reconciliationBlocked = true;
+            continue;
           }
         }
         if (lease) {
@@ -686,6 +690,7 @@ export class OrchestratorLedger extends DurableObject {
           reconciliationRequired: false,
         };
       }
+      if (reconciliationBlocked) return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
       return { claimed: false, reason: assigneeMismatch ? "ASSIGNEE_MISMATCH" : "NO_TASK_AVAILABLE" };
     });
   }

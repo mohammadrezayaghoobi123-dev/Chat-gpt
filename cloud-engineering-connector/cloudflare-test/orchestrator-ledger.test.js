@@ -1603,3 +1603,85 @@ it("consumes a valid consumer assertion when a sensitive receipt payload is reje
     ).one().count).toBe(0);
   });
 });
+
+
+it("consumes an Agent message assertion when a sensitive envelope is rejected", async () => {
+  const ledger = ledgerFor("ledger-message-sensitive-payload-single-use");
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-message-sensitive-single-use", inputHash: "d".repeat(64), now });
+  const leaseGeneration = await ensureAgentLease(ledger);
+  const jti = "jti-message-sensitive-payload-single-use-0001";
+  const workerAssertion = await createWorkerAssertion({
+    subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now, jti,
+  });
+  const input = {
+    messageId: "msg-sensitive-single-use-0001",
+    taskId: "task-0001",
+    inputHash: "e".repeat(64),
+    envelope: protocolEnvelope("msg-sensitive-single-use-0001", "task-0001", "e".repeat(64), {
+      apiKey: "synthetic-sensitive-fixture",
+    }),
+    workerId: "agent:worker-1",
+    leaseGeneration,
+    workerAssertion,
+    now,
+  };
+
+  await expect(ledger.recordMessage(input)).resolves.toMatchObject({
+    accepted: false, reason: "SENSITIVE_FIELD_REJECTED",
+  });
+  await expect(ledger.recordMessage({
+    ...input,
+    envelope: protocolEnvelope(input.messageId, input.taskId, input.inputHash, { step: 1 }),
+  })).resolves.toMatchObject({
+    accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED",
+  });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?", jti,
+    ).one().count).toBe(1);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_processed_messages WHERE message_id = ?", input.messageId,
+    ).one().count).toBe(0);
+  });
+});
+
+it("consumes an Agent Outbox assertion when a sensitive payload is rejected", async () => {
+  const ledger = ledgerFor("ledger-outbox-sensitive-payload-single-use");
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-outbox-sensitive-single-use", inputHash: "f".repeat(64), now });
+  const leaseGeneration = await ensureAgentLease(ledger);
+  const jti = "jti-outbox-sensitive-payload-single-use-0001";
+  const workerAssertion = await createWorkerAssertion({
+    subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now, jti,
+  });
+  const input = {
+    eventId: "evt-outbox-sensitive-single-use-0001",
+    idempotencyKey: "idem-outbox-sensitive-single-use-0001",
+    taskId: "task-0001",
+    eventType: "task.created",
+    payload: { taskId: "task-0001", apiKey: "synthetic-sensitive-fixture" },
+    workerId: "agent:worker-1",
+    leaseGeneration,
+    workerAssertion,
+    now,
+  };
+
+  await expect(ledger.enqueueOutbox(input)).resolves.toMatchObject({
+    enqueued: false, reason: "SENSITIVE_FIELD_REJECTED",
+  });
+  await expect(ledger.enqueueOutbox({
+    ...input,
+    payload: { taskId: "task-0001", version: 1 },
+  })).resolves.toMatchObject({
+    enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED",
+  });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?", jti,
+    ).one().count).toBe(1);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE event_id = ?", input.eventId,
+    ).one().count).toBe(0);
+  });
+});

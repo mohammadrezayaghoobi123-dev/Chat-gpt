@@ -326,7 +326,7 @@ test("Production preflight permits migration from legacy dashboard settings befo
     source,
     "Preflight Production credentials, namespace isolation, and rollback target",
     true,
-    false,
+    true,
     true,
   );
 });

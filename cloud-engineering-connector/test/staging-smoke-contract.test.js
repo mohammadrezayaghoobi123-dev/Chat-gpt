@@ -60,4 +60,21 @@ test("live acceptance requires an authenticated Knowledge Store probe, not only 
   assert.match(smoke, /process\.env\.MCP_AUTH_TOKEN/, "release smoke must consume the environment-scoped owner credential");
   assert.match(smoke, /knowledge_search/, "release smoke must call an authenticated Knowledge Store tool");
   assert.match(smoke, /knowledge_store/, "release smoke must assert Knowledge Store readiness");
+  assert.match(smoke, /orchestrator_ledger/, "release smoke must assert OrchestratorLedger readiness");
+});
+
+
+test("readiness requires the independent OrchestratorLedger SQLite probe", () => {
+  const worker = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
+  assert.match(worker, /env\.ORCHESTRATOR_LEDGER/, "readyz must fail closed when the Ledger binding is absent");
+  assert.match(worker, /orchestratorLedgerStub\.ping\(\)/, "readyz must execute the Ledger SQLite probe");
+  assert.match(worker, /orchestratorLedgerProbe\.schemaVersion\s*!==\s*1/, "readyz must enforce the Ledger schema version");
+  assert.match(worker, /readinessState\.orchestrator_ledger\s*=\s*"ok"/, "readyz must report Ledger readiness separately");
+});
+
+
+test("Staging release verifies the OrchestratorLedger binding after applying the migration", () => {
+  const stagingWorkflow = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  assert.match(stagingWorkflow, /bindings\.get\(["']ORCHESTRATOR_LEDGER["']\)/);
+  assert.match(stagingWorkflow, /Staging ORCHESTRATOR_LEDGER namespace ID must be present/);
 });

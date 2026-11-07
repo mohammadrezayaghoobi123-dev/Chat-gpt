@@ -14,10 +14,10 @@ const workerKey = Uint8Array.from(
   "3031323334353637383961626364656630313233343536373839616263646566".match(/../g),
   byte => Number.parseInt(byte, 16),
 );
-async function workerAssertion(subject, operation, at = now) {
+async function workerAssertion(subject, role, operation, at = now) {
   const claims = {
     v: 1, iss: "chat-gpt111-worker", aud: "orchestrator-ledger",
-    sub: subject, role: "system", op: operation, iat: Math.floor(at / 1000),
+    sub: subject, role, op: operation, iat: Math.floor(at / 1000),
     exp: Math.floor(at / 1000) + 60, jti: "worker-jti-" + crypto.randomUUID(),
   };
   const payload = btoa(String.fromCharCode(...new TextEncoder().encode(canonicalJson(claims))))
@@ -41,7 +41,7 @@ async function createTask(ledger, taskValue = task()) {
     task: taskValue, idempotencyKey: "owner-task-create-" + taskValue.taskId,
     inputHash: "b".repeat(64), now,
     workerId: "orchestrator-scheduler",
-    workerAssertion: await workerAssertion("orchestrator-scheduler", "createTask"),
+    workerAssertion: await workerAssertion("orchestrator-scheduler", "system", "createTask"),
   });
 }
 async function ownerInput(overrides = {}) {
@@ -76,6 +76,13 @@ describe("Owner command atomic Ledger contract", () => {
       );
     });
     const result = await ledger.executeOwnerCommand(await ownerInput());
+    const stalePublisherClaim = await ledger.claimOutbox({
+      workerId: "orchestrator-outbox-publisher",
+      workerAssertion: await workerAssertion("orchestrator-outbox-publisher", "publisher", "claimOutbox", now + 1),
+      leaseMs: 30_000,
+      now: now + 1,
+    });
+    expect(stalePublisherClaim).toMatchObject({ claimed: false, reason: "NO_OUTBOX_AVAILABLE" });
     expect(result).toMatchObject({
       applied: true, operation: "cancel",
       task: { taskId: "task-owner-0001", state: "CANCELLED", version: 2 },

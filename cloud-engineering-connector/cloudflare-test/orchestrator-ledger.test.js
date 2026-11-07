@@ -390,74 +390,72 @@ describe("OrchestratorLedger durable coordination contract", () => {
   });
 
   it("authenticates a message sender before inspecting an untrusted protocol envelope", async () => {
-  const ledger = ledgerFor("ledger-message-auth-before-inspection");
-  await createTask(ledger, { task: task(), idempotencyKey: "task-create-message-auth-order", inputHash: "b".repeat(64), now });
-  const envelope = protocolEnvelope("msg-auth-order-0001", "task-0001", "c".repeat(64), {
-    apiKey: "must-not-be-inspected-before-authentication",
+    const ledger = ledgerFor("ledger-message-auth-before-inspection");
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-message-auth-order", inputHash: "b".repeat(64), now });
+    const envelope = protocolEnvelope("msg-auth-order-0001", "task-0001", "c".repeat(64), {
+      apiKey: "must-not-be-inspected-before-authentication",
+    });
+
+    const result = await ledger.recordMessage({
+      messageId: "msg-auth-order-0001",
+      taskId: "task-0001",
+      inputHash: "c".repeat(64),
+      envelope,
+      workerId: "agent:worker-1",
+      workerAssertion: null,
+      now,
+    });
+    expect(result).toEqual({
+      accepted: false,
+      reason: "AUTHENTICATED_SENDER_REQUIRED",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_processed_messages WHERE message_id = ?",
+        "msg-auth-order-0001",
+      ).one().count).toBe(0);
+    });
   });
 
-  const result = await ledger.recordMessage({
-    messageId: "msg-auth-order-0001",
-    taskId: "task-0001",
-    inputHash: "c".repeat(64),
-    envelope,
-    workerId: "agent:worker-1",
-    workerAssertion: null,
-    now,
-  });
-  expect(result).toEqual({
-    accepted: false,
-    reason: "AUTHENTICATED_SENDER_REQUIRED",
-  });
+  it("consumes the assertion and returns a bounded rejection for an oversized message envelope", async () => {
+    const ledger = ledgerFor("ledger-message-oversized-envelope-rejection");
+    await createTask(ledger, {
+      task: task(), idempotencyKey: "task-create-oversized-envelope", inputHash: "b".repeat(64), now,
+    });
+    const input = {
+      messageId: "msg-oversized-envelope-0001",
+      taskId: "task-0001",
+      inputHash: "c".repeat(64),
+    };
+    const envelope = protocolEnvelope(input.messageId, input.taskId, input.inputHash, { step: 1 });
+    envelope.untrustedExtension = "x".repeat(33_000);
+    const workerAssertion = await createWorkerAssertion({
+      subject: "agent:worker-1",
+      role: "agent",
+      operation: "recordMessage",
+      nowMs: now,
+      jti: "jti-message-oversized-envelope-0001",
+    });
 
-  await runInDurableObject(ledger, async (_instance, state) => {
-    expect(state.storage.sql.exec(
-      "SELECT COUNT(*) AS count FROM orchestrator_processed_messages WHERE message_id = ?",
-      "msg-auth-order-0001",
-    ).one().count).toBe(0);
-  });
-});
+    await expect(ledger.recordMessage({
+      ...input, envelope, workerId: "agent:worker-1", workerAssertion, now,
+    })).resolves.toEqual({
+      accepted: false,
+      reason: "RECORD_TOO_LARGE",
+    });
 
-
-it("consumes the assertion and returns a bounded rejection for an oversized message envelope", async () => {
-  const ledger = ledgerFor("ledger-message-oversized-envelope-rejection");
-  await createTask(ledger, {
-    task: task(), idempotencyKey: "task-create-oversized-envelope", inputHash: "b".repeat(64), now,
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        "jti-message-oversized-envelope-0001",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_processed_messages WHERE message_id = ?",
+        input.messageId,
+      ).one().count).toBe(0);
+    });
   });
-  const input = {
-    messageId: "msg-oversized-envelope-0001",
-    taskId: "task-0001",
-    inputHash: "c".repeat(64),
-  };
-  const envelope = protocolEnvelope(input.messageId, input.taskId, input.inputHash, { step: 1 });
-  envelope.untrustedExtension = "x".repeat(33_000);
-  const workerAssertion = await createWorkerAssertion({
-    subject: "agent:worker-1",
-    role: "agent",
-    operation: "recordMessage",
-    nowMs: now,
-    jti: "jti-message-oversized-envelope-0001",
-  });
-
-  await expect(ledger.recordMessage({
-    ...input, envelope, workerId: "agent:worker-1", workerAssertion, now,
-  })).resolves.toEqual({
-    accepted: false,
-    reason: "RECORD_TOO_LARGE",
-  });
-
-  await runInDurableObject(ledger, async (_instance, state) => {
-    expect(state.storage.sql.exec(
-      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
-      "jti-message-oversized-envelope-0001",
-    ).one().count).toBe(1);
-    expect(state.storage.sql.exec(
-      "SELECT COUNT(*) AS count FROM orchestrator_processed_messages WHERE message_id = ?",
-      input.messageId,
-    ).one().count).toBe(0);
-  });
-});
-
 
 it("requires verified worker identities before task or outbox lease side effects", async () => {
     const ledger = ledgerFor("ledger-worker-authentication");

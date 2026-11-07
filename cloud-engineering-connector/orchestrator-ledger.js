@@ -1371,6 +1371,28 @@ export class OrchestratorLedger extends DurableObject {
                 command.taskId, nextGeneration, now,
               );
             }
+            if (command.operation === "release") {
+              const releaseEventId = "owner-release-" + command.eventId;
+              const releasePayload = {
+                taskId: command.taskId,
+                version: resultingTask.version,
+                from: currentTask.state,
+                to: resultingTask.state,
+                ownerCommandId: command.eventId,
+                ownerCommentId: context.commentId,
+              };
+              const queued = enqueueOutboxInTransaction(sql, {
+                eventId: releaseEventId,
+                idempotencyKey: releaseEventId,
+                taskId: command.taskId,
+                eventType: "task.transitioned",
+                payloadJson: serializeBounded(releasePayload, "Owner release outbox payload"),
+                now,
+              });
+              if (queued.conflict || !queued.event) {
+                throw new Error("Owner release outbox enqueue failed.");
+              }
+            }
             if (command.operation === "cancel" || command.operation === "quarantine") {
               const reasonCode = command.operation === "cancel" ? "OWNER_CANCELLED" : "OWNER_QUARANTINED";
               sql.exec(

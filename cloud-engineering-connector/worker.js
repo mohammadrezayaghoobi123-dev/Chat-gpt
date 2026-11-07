@@ -1,5 +1,8 @@
 import { consoleResponse } from "./console.js";
 import { authenticateGitHubWebhook } from "./github-webhook-auth.js";
+import { parseOwnerCommand } from "./orchestrator-owner-command.js";
+import { createOwnerAssertion } from "./orchestrator-owner-assertion.js";
+import { sha256Canonical } from "./orchestrator-protocol.js";
 import { validateGitHubIntakeEvent } from "./orchestrator-github-intake.js";
 import { createScheduledWorkerAssertion, validateWorkerAssertionSigningConfig } from "./orchestrator-worker-identity.js";
 const VERSION = "0.1.0";
@@ -854,6 +857,162 @@ function githubWebhookConfiguration(env) {
  return config;
 }
 
+async function handleOwnerGitHubComment(authenticated, payload, ledger, env) {
+ const ignored = () => json({ status: "ignored", reason: "NOT_AN_OWNER_COMMAND" }, 202);
+ const commandLike = typeof payload?.comment?.body === "string" &&
+  payload.comment.body.startsWith("/orchestrator");
+ if (authenticated.eventName !== "issue_comment" || payload?.action !== "created") {
+  return commandLike
+   ? json({ error: "owner_command_rejected", reason: "EVENT_NOT_ELIGIBLE" }, 422)
+   : ignored();
+ }
+ if (payload.issue?.pull_request !== undefined) {
+  return json({ error: "owner_command_rejected", reason: "PULL_REQUEST_COMMENT_NOT_ALLOWED" }, 422);
+ }
+ const repository = env.GITHUB_WEBHOOK_REPOSITORY;
+ const repositoryIdText = env.GITHUB_WEBHOOK_REPOSITORY_ID;
+ const ownerId = env.GITHUB_WEBHOOK_OWNER_ID;
+ if (typeof repository !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) ||
+     typeof repositoryIdText !== "string" || !/^[1-9][0-9]{0,19}$/.test(repositoryIdText) ||
+     !Number.isSafeInteger(Number(repositoryIdText)) ||
+     typeof ownerId !== "string" || !/^[1-9][0-9]{0,19}$/.test(ownerId) ||
+     !Number.isSafeInteger(Number(ownerId)) ||
+     typeof env.LEDGER_OWNER_ASSERTION_KEYS !== "string" ||
+     typeof env.LEDGER_OWNER_ASSERTION_ACTIVE_KID !== "string") {
+  return json({ error: "owner_webhook_not_configured" }, 503);
+ }
+ if (!payload.repository || payload.repository.full_name !== repository ||
+     !Number.isSafeInteger(payload.repository.id) ||
+     String(payload.repository.id) !== repositoryIdText) {
+  return json({ error: "owner_command_rejected", reason: "REPOSITORY_MISMATCH" }, 403);
+ }
+ const sender = payload.sender;
+ const comment = payload.comment;
+ const commentUser = comment?.user;
+ const senderId = Number.isSafeInteger(sender?.id) && sender.id > 0 ? String(sender.id) : "";
+ const commentUserId = Number.isSafeInteger(commentUser?.id) && commentUser.id > 0
+  ? String(commentUser.id) : "";
+ if (senderId !== ownerId || commentUserId !== ownerId ||
+     senderId !== commentUserId || sender?.type !== "User" || commentUser?.type !== "User") {
+  return commandLike
+   ? json({ error: "owner_command_rejected", reason: "OWNER_IDENTITY_MISMATCH" }, 403)
+   : ignored();
+ }
+ const issue = payload.issue;
+ if (!issue || !Number.isSafeInteger(issue.number) || issue.number < 1 ||
+     issue.html_url !== `https://github.com/${repository}/issues/${issue.number}` ||
+     !Number.isSafeInteger(comment?.id) || comment.id < 1 ||
+     typeof comment.created_at !== "string" || typeof comment.body !== "string") {
+  return json({ error: "owner_command_rejected", reason: "COMMENT_SCHEMA_INVALID" }, 422);
+ }
+ const now = Date.now();
+ const maxAgeMs = env.GITHUB_WEBHOOK_OWNER_MAX_AGE_MS === undefined
+  ? 300_000 : Number(env.GITHUB_WEBHOOK_OWNER_MAX_AGE_MS);
+ const futureSkewMs = env.GITHUB_WEBHOOK_OWNER_FUTURE_SKEW_MS === undefined
+  ? 30_000 : Number(env.GITHUB_WEBHOOK_OWNER_FUTURE_SKEW_MS);
+ const occurredAt = Date.parse(comment.created_at);
+ if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs < 1_000 || maxAgeMs > 900_000 ||
+     !Number.isSafeInteger(futureSkewMs) || futureSkewMs < 0 || futureSkewMs > 60_000 ||
+     !Number.isFinite(occurredAt) || occurredAt < 1 ||
+     occurredAt > now + futureSkewMs || now - occurredAt > maxAgeMs) {
+  return json({ error: "owner_command_rejected", reason: "COMMENT_TIMESTAMP_OUT_OF_RANGE" }, 422);
+ }
+ const parsed = parseOwnerCommand(comment.body);
+ if (!parsed) {
+  return commandLike
+   ? json({ error: "owner_command_rejected", reason: "COMMAND_INVALID" }, 422)
+   : ignored();
+ }
+ if (!ledger || typeof ledger.getTask !== "function" ||
+     typeof ledger.executeOwnerCommand !== "function") {
+  return json({ error: "owner_ledger_unavailable" }, 503);
+ }
+ let currentTask;
+ try {
+  currentTask = await ledger.getTask({ taskId: parsed.taskId });
+ } catch {
+  return json({ error: "owner_ledger_unavailable" }, 503);
+ }
+ if (!currentTask || typeof currentTask !== "object" ||
+     !Number.isSafeInteger(currentTask.version) || currentTask.version < 1 ||
+     typeof currentTask.state !== "string") {
+  return json({ error: "owner_task_not_found" }, 404);
+ }
+ const commentId = String(comment.id);
+ const command = {
+  eventId: "owner-comment-" + commentId,
+  expectedState: currentTask.state,
+  expectedVersion: currentTask.version,
+  operation: parsed.operation,
+  reason: parsed.reason,
+  taskId: parsed.taskId,
+ };
+ const commandHash = await sha256Canonical({
+  eventId: command.eventId,
+  operation: command.operation,
+  reason: command.reason,
+  taskId: command.taskId,
+ });
+ const assertionContext = {
+  actorId: ownerId,
+  repositoryId: Number(repositoryIdText),
+  taskId: command.taskId,
+  operation: command.operation,
+  deliveryId: authenticated.deliveryId,
+  commentId,
+  commandHash,
+ };
+ let assertion;
+ try {
+  assertion = await createOwnerAssertion(
+   env.LEDGER_OWNER_ASSERTION_KEYS,
+   env.LEDGER_OWNER_ASSERTION_ACTIVE_KID,
+   assertionContext,
+   now,
+  );
+ } catch {
+  return json({ error: "owner_assertion_unavailable" }, 503);
+ }
+ let result;
+ try {
+  result = await ledger.executeOwnerCommand({
+   assertion,
+   assertionContext,
+   command,
+   bodySha256: authenticated.bodySha256,
+   now,
+  });
+ } catch {
+  return json({ error: "owner_command_unavailable" }, 503);
+ }
+ if (result?.applied === true) {
+  return json({
+   status: result.replay ? "duplicate" : "applied",
+   operation: command.operation,
+   deliveryId: authenticated.deliveryId,
+   task: result.task,
+  }, 202);
+ }
+ if (result?.conflict === true) {
+  return json({
+   error: "owner_command_conflict",
+   reason: result.reason,
+   deliveryId: authenticated.deliveryId,
+  }, 409);
+ }
+ if (result?.reason === "OWNER_ASSERTION_REJECTED") {
+  return json({ error: "owner_command_rejected", reason: result.reason }, 403);
+ }
+ if (result?.reason === "LEDGER_TRANSACTION_FAILED") {
+  return json({ error: "owner_command_unavailable" }, 503);
+ }
+ return json({
+  error: "owner_command_rejected",
+  reason: result?.reason || "OWNER_COMMAND_DENIED",
+  deliveryId: authenticated.deliveryId,
+ }, 422);
+}
+
 async function handleGitHubWebhook(request, env) {
  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405, { allow: "POST" });
  const limited = await enforceRateLimit(request, env, "github-webhook:");
@@ -862,8 +1021,6 @@ async function handleGitHubWebhook(request, env) {
      new TextEncoder().encode(env.GITHUB_WEBHOOK_SECRET).byteLength < 32) {
   return json({ error: "webhook_not_configured" }, 503);
  }
- const config = githubWebhookConfiguration(env);
- if (!config) return json({ error: "webhook_policy_not_configured" }, 503);
  const binding = env.ORCHESTRATOR_LEDGER;
  if (!binding || typeof binding.idFromName !== "function" || typeof binding.get !== "function") {
   return json({ error: "webhook_replay_store_unavailable" }, 503);
@@ -884,11 +1041,18 @@ async function handleGitHubWebhook(request, env) {
   return json({ error: "webhook_unauthorized", reason: authenticated.reasonCode }, 401);
  }
 
+ const ledger = binding.get(binding.idFromName("orchestrator-ledger-global"));
+ if (!ledger) return json({ error: "webhook_replay_store_unavailable" }, 503);
+ if (authenticated.eventName === "issue_comment") {
+  return handleOwnerGitHubComment(authenticated, authenticated.payload, ledger, env);
+ }
+
+ const config = githubWebhookConfiguration(env);
+ if (!config) return json({ error: "webhook_policy_not_configured" }, 503);
  const payload = authenticated.payload;
  const issue = payload.issue;
  const occurredAt = Date.parse(issue?.updated_at || issue?.created_at || "");
- const ledger = binding.get(binding.idFromName("orchestrator-ledger-global"));
- if (!ledger || typeof ledger.claimGitHubDelivery !== "function") {
+ if (typeof ledger.claimGitHubDelivery !== "function") {
   return json({ error: "webhook_replay_store_unavailable" }, 503);
  }
  const replayStore = {

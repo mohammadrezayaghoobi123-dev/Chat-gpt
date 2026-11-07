@@ -146,7 +146,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     expect(results.find(result => result.claimed).leaseGeneration).toBe(1);
   });
 
-  it("continues to later tasks when an earlier task has an expired lease requiring reconciliation", async () => {
+  it("fails closed when the earliest eligible task has an expired lease without reconciliation evidence", async () => {
     const ledger = ledgerFor("ledger-claim-skip-expired-lease");
     await createTask(ledger, {
       task: task("task-expired-first"), idempotencyKey: "claim-skip-expired-first",
@@ -166,8 +166,11 @@ describe("OrchestratorLedger durable coordination contract", () => {
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101),
       leaseMs: 30_000, now: now + 101,
     });
-    expect(result).toMatchObject({ claimed: true, task: { taskId: "task-claim-second" }, leaseGeneration: 1 });
+    expect(result).toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
     await expect(ledger.getTask({ taskId: "task-expired-first" })).resolves.toMatchObject({
+      state: "SCHEDULED", version: 1,
+    });
+    await expect(ledger.getTask({ taskId: "task-claim-second" })).resolves.toMatchObject({
       state: "SCHEDULED", version: 1,
     });
   });

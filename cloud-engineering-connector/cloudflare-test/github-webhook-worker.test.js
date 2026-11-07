@@ -231,7 +231,7 @@ describe("GitHub webhook Worker route", () => {
         await signedRequest(JSON.stringify(event), `gh-owner-reject-${String(index).padStart(8, "0")}`, undefined, "issue_comment"),
         ownerEnv,
       );
-      assert.equal(response.status, item.expected, item.name);
+      expect(response.status, item.name).toBe(item.expected);
     }
     expect(ledgerRpcCalls).toBe(0);
   });

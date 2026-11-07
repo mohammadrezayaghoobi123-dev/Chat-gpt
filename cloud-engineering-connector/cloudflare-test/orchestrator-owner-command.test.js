@@ -141,6 +141,41 @@ describe("Owner command atomic Ledger contract", () => {
     expect(await ledger.getTask({ taskId: "task-owner-0001" })).toMatchObject({ state: "COMPLETED", version: 1 });
   });
 
+  it("blocks a Queue receipt created before Owner cancellation even if the message was already published", async () => {
+    const ledger = ledgerFor("owner-command-stale-queue-receipt");
+    await createTask(ledger);
+    const payload = { taskId: "task-owner-0001", version: 1 };
+    await ledger.enqueueOutbox({
+      eventId: "owner-queued-before-cancel-01",
+      idempotencyKey: "owner-queued-before-cancel-key-01",
+      taskId: "task-owner-0001",
+      eventType: "task.transitioned",
+      payload,
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox"),
+      now,
+    });
+    await ledger.executeOwnerCommand(await ownerInput());
+    const consumerId = "orchestrator-outbox-consumer";
+    const receipt = await ledger.recordOutboxReceipt({
+      eventId: "owner-queued-before-cancel-01",
+      eventType: "task.transitioned",
+      idempotencyKey: "owner-queued-before-cancel-key-01",
+      taskId: "task-owner-0001",
+      payload,
+      createdAt: now,
+      schemaVersion: 1,
+      envelopeSha256: "d".repeat(64),
+      consumerId,
+      workerAssertion: await workerAssertion(consumerId, "consumer", "recordOutboxReceipt", now + 1),
+      now: now + 1,
+    });
+    expect(receipt).toMatchObject({ recorded: false, blocked: true, reason: "TASK_VERSION_FENCED" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?", "owner-queued-before-cancel-01").one().count).toBe(0);
+    });
+  });
+
   it("returns the exact stored result for a replay without a second transition or audit event", async () => {
     const ledger = ledgerFor("owner-command-replay");
     await createTask(ledger);

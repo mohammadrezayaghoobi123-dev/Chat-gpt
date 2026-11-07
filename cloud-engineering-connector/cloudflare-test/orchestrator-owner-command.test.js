@@ -60,6 +60,12 @@ async function ownerInput(overrides = {}) {
   return {
     assertion, assertionContext: context, command,
     bodySha256: overrides.bodySha256 ?? "c".repeat(64),
+    provenance: {
+      eventName: "issue_comment.created",
+      repository: "mohammadrezayaghoobi123-dev/Chat-gpt",
+      issueNumber: 7,
+      commentCreatedAt: now,
+    },
     now: overrides.now ?? now,
   };
 }

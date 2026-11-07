@@ -1,0 +1,63 @@
+import unittest
+
+from master_brain.archipelago import Island, plan_mission
+
+
+class ArchipelagoPlanningTests(unittest.TestCase):
+    def test_industrial_and_finance_mission_selects_multiple_islands(self):
+        plan = plan_mission(
+            "Compare factory production machines, market demand, investment, and cash flow"
+        )
+        selected = {assignment.island_id for assignment in plan.assignments}
+        self.assertIn("general", selected)
+        self.assertIn("industrial", selected)
+        self.assertIn("economics", selected)
+        self.assertIn("accounting", selected)
+
+    def test_shared_foundations_are_always_present(self):
+        plan = plan_mission("Write software and verify security")
+        self.assertIn("proof_plane", plan.shared_foundations)
+        self.assertIn("security_and_policy", plan.shared_foundations)
+
+    def test_missing_general_is_reported_as_gap(self):
+        plan = plan_mission("Investigate evidence", islands=[
+            Island("science_research", "Research", ("evidence",), "Research")
+        ])
+        self.assertEqual(plan.capability_gaps, ("general",))
+
+    def test_disabled_island_is_not_selected(self):
+        plan = plan_mission("factory production", islands=[
+            Island("general", "General", ("plan",), "General"),
+            Island("industrial", "Industrial", ("factory",), "Industrial", enabled=False),
+        ])
+        self.assertNotIn("industrial", {a.island_id for a in plan.assignments})
+
+    def test_keyword_matching_does_not_match_inside_unrelated_words(self):
+        plan = plan_mission("I need a comfortable chair for my office")
+        selected = {assignment.island_id for assignment in plan.assignments}
+        self.assertNotIn("software_ai", selected)
+
+    def test_non_string_objective_is_rejected_with_clear_error(self):
+        with self.assertRaisesRegex(ValueError, "objective must be a string"):
+            plan_mission(None)
+
+    def test_invalid_island_profile_is_rejected_with_clear_error(self):
+        malformed = Island("industrial", "Industrial", (None,), "Manufacturing")
+        with self.assertRaisesRegex(ValueError, "invalid island profile"):
+            plan_mission("factory production", islands=[malformed])
+
+    def test_duplicate_island_ids_are_rejected(self):
+        islands = [
+            Island("general", "General", ("plan",), "General"),
+            Island("general", "Duplicate", ("decision",), "Duplicate"),
+        ]
+        with self.assertRaisesRegex(ValueError, "duplicate island ID"):
+            plan_mission("make a plan", islands=islands)
+
+    def test_empty_objective_is_non_destructive_and_flagged(self):
+        plan = plan_mission("")
+        self.assertTrue(any("empty" in note.lower() for note in plan.rationale))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,61 @@
+name: Dev Container Security
+
+on:
+  pull_request:
+    paths:
+      - ".devcontainer/**"
+      - ".github/workflows/devcontainer-security.yml"
+  push:
+    branches:
+      - "security/**"
+      - "integration/**"
+    paths:
+      - ".devcontainer/**"
+      - ".github/workflows/devcontainer-security.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: devcontainer-security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  least-privilege:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate Dev Container privilege and Tailscale userspace mode
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(Path(".devcontainer/devcontainer.json").read_text())
+          assert config.get("privileged") is not True, "Dev Container must not run privileged"
+          env = config.get("containerEnv", {})
+          assert env.get("TS_USERSPACE") == "true", "Tailscale must use userspace networking"
+          assert env.get("TS_SOCKET") == "/tmp/tailscaled.sock", "Unexpected Tailscale socket"
+          installer = Path(".devcontainer/install-openclaw.sh").read_text()
+          assert "--tun=userspace-networking" in installer, "Tailscale daemon must use userspace networking"
+          for name in ("install-openclaw.sh", "keep-openclaw-alive.sh", "start-openclaw-gateway.sh"):
+              script = Path(".devcontainer", name).read_text()
+              assert "umask 077" in script, f"{name} must create private files by default"
+          assert "sudo chmod 700 /var/lib/tailscale" in installer
+          assert "sudo chmod 600 /var/lib/tailscale/tailscaled.state" in installer
+          watchdog = Path(".devcontainer/keep-openclaw-alive.sh").read_text()
+          startup = Path(".devcontainer/start-openclaw-gateway.sh").read_text()
+          assert "chmod 700 /tmp/openclaw" in watchdog
+          assert "chmod 600 /tmp/openclaw/watchdog.log" in watchdog
+          assert "chmod 700 /var/tmp/openclaw-compile-cache /tmp/openclaw" in startup
+          assert "chmod 600 /tmp/openclaw/gateway-codespace.log" in startup
+          print("PASS: unprivileged Dev Container, Tailscale userspace, and private state/log permissions")
+          PY
+      - name: Test private Tailscale log permissions
+        run: bash .devcontainer/test-permissions.sh
+      - name: Validate Dev Container shell scripts
+        run: bash -n .devcontainer/*.sh

@@ -1,0 +1,8 @@
+{
+  "constraints": [],
+  "idempotency_key": "idem-key-0001",
+  "objective": "Summarize the report",
+  "requires_approval": false,
+  "risk_tier": "medium",
+  "success_criteria": []
+}

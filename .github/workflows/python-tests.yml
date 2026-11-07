@@ -1,0 +1,49 @@
+name: Python tests
+
+on:
+  push:
+    branches:
+      - "feature/**"
+      - "master-brain/**"
+      - "assistant/**"
+  pull_request:
+    branches:
+      - "master-brain/integrated-mvp"
+      - "integration/unify-main-and-integrated-2026-11-02"
+  workflow_dispatch:
+
+concurrency:
+  group: python-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  MB_REQUIRE_SIGNING_TESTS: "1"
+  MB_REQUIRE_SANDBOX_TESTS: "1"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Allow unprivileged user namespaces (needed by the CTP runner sandbox)
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          unshare --user --map-root-user --net --pid --fork --mount-proc true && echo "::notice::user namespaces usable"
+      - name: Install package and test runner
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[signing]"
+          python -m pip install pytest
+      - name: Run test suite
+        run: python -m pytest -q

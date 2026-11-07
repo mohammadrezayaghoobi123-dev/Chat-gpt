@@ -4,14 +4,24 @@ on:
   pull_request:
     paths:
       - "cloud-engineering-connector/**"
+      - ".github/workflows/orchestrator-github-intake.yml"
+      - "docs/evidence/orchestrator-p2-intake-contract.md"
       - ".github/workflows/connector-ci.yml"
+      - ".github/workflows/connector-staging-release.yml"
+      - ".github/workflows/cloud-engineering-connector.yml"
   push:
     branches:
       - "feature/cloud-engineering-connector"
+      - "release/production"
       - "assistant/**"
+      - "security/**"
+      - "integration/**"
+      - "remediation/**"
+      - "plan/orchestrator-p2-github-intake-2026-11-04"
     paths:
       - "cloud-engineering-connector/**"
       - ".github/workflows/connector-ci.yml"
+      - ".github/workflows/cloud-engineering-connector.yml"
 
 permissions:
   contents: read
@@ -22,20 +32,120 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: cloud-engineering-connector
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
+          package-manager-cache: false
       - name: Install dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Audit npm dependency advisories
+        run: npm audit --audit-level=moderate
       - name: Run tests
         run: npm test
-      - name: Check JavaScript syntax
+      - name: Check JavaScript syntax and Wrangler configurations
         run: npm run check
+
+# This job is an explicit live post-deploy acceptance trigger. PR CI must not probe the
+# previously deployed Worker before the candidate rollout; the Staging release workflow
+# runs its own live smoke immediately after deploying the exact approved candidate.
+  post-deploy-staging-smoke:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/integration/staging-postdeploy-acceptance-')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      STAGING_MCP_URL: https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev
+    steps:
+      - name: Verify deployed Staging HTTP and authentication contract
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+
+          const base = process.env.STAGING_MCP_URL;
+          assert.ok(base?.startsWith('https://'), 'STAGING_MCP_URL must use HTTPS');
+
+          const health = await fetch(new URL('/healthz', base), { signal: AbortSignal.timeout(15000) });
+          assert.equal(health.status, 200, 'GET /healthz must return HTTP 200');
+          const healthBody = await health.json();
+          assert.equal(healthBody.status, 'ok');
+          assert.equal(healthBody.service, 'cloud-engineering-connector');
+          assert.equal(healthBody.execution, 'cloudflare-workers');
+          assert.equal(healthBody.laptop_dependency, false);
+
+          const readiness = await fetch(new URL('/readyz', base), { signal: AbortSignal.timeout(15000) });
+          assert.equal(readiness.status, 200, 'GET /readyz must return HTTP 200');
+          const readinessBody = await readiness.json();
+          assert.equal(readinessBody.status, 'ready');
+          assert.equal(readinessBody.durable_objects, 'ok', 'readyz must execute a live SQLite Durable Object probe');
+          assert.equal(readinessBody.orchestrator_ledger, 'ok', 'readyz must execute the independent OrchestratorLedger SQLite probe');
+          for (const [header, expected] of [
+            ['x-content-type-options', 'nosniff'],
+            ['x-frame-options', 'DENY'],
+            ['referrer-policy', 'no-referrer'],
+            ['cache-control', 'no-store'],
+          ]) assert.equal(health.headers.get(header), expected, `security header ${header}`);
+
+          const getMcp = await fetch(new URL('/mcp', base), { signal: AbortSignal.timeout(15000) });
+          assert.equal(getMcp.status, 405, 'GET /mcp must be rejected');
+          assert.match(getMcp.headers.get('allow') ?? '', /POST/);
+
+          const readOnlyList = await fetch(new URL('/mcp', base), {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              accept: 'application/json, text/event-stream',
+            },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 99000, method: 'tools/list', params: {} }),
+            signal: AbortSignal.timeout(15000),
+          });
+          assert.equal(readOnlyList.status, 200, 'public read-only MCP tools/list must succeed');
+          const readOnlyPayload = await readOnlyList.json();
+          const toolNames = (readOnlyPayload.result?.tools ?? []).map(tool => tool.name);
+          for (const name of ['project_inspect', 'read_project_file', 'engineering_standards', 'architecture_review']) {
+            assert.ok(toolNames.includes(name), 'approved read-only MCP tool must be available: ' + name);
+          }
+          assert.ok(!toolNames.includes('create_change_pr'), 'write tool must remain hidden in public read-only mode');
+
+          const rpc = {
+            jsonrpc: '2.0',
+            id: 99001,
+            method: 'tools/list',
+            params: {},
+          };
+          const denied = await fetch(new URL('/mcp', base), {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              accept: 'application/json, text/event-stream',
+              authorization: 'Bearer deliberately-invalid-post-deploy-probe',
+            },
+            body: JSON.stringify(rpc),
+            signal: AbortSignal.timeout(15000),
+          });
+          assert.equal(denied.status, 401, 'invalid bearer token must be rejected with HTTP 401');
+          assert.equal(denied.headers.get('www-authenticate'), 'Bearer');
+          const denialBody = await denied.json();
+          assert.equal(denialBody.error, 'unauthorized');
+
+          console.log(JSON.stringify({
+            result: 'PASS',
+            staging: new URL(base).host,
+            checks: [
+              'healthz HTTP 200 and cloud-only service metadata',
+              'security response headers',
+              'GET /mcp rejected with HTTP 405',
+              'POST /mcp rejects invalid bearer token with HTTP 401',
+              'public read-only MCP tools/list exposes only approved read tools',
+              'readyz performs a live Durable Object SQLite schema probe',
+            ],
+            credentialMaterialLogged: false,
+          }, null, 2));
+          NODE

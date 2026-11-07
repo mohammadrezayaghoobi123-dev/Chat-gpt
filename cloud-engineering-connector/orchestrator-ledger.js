@@ -650,7 +650,7 @@ export class OrchestratorLedger extends DurableObject {
         } else {
           sql.exec(
             "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
-            workerId, now + leaseMs, now,
+            row.task_id, workerId, now + leaseMs, now,
           );
         }
         return {

@@ -906,24 +906,15 @@ async function handleOwnerGitHubComment(authenticated, payload, ledger, env) {
   return json({ error: "owner_command_rejected", reason: "COMMENT_SCHEMA_INVALID" }, 422);
  }
  const now = Date.now();
- const maxAgeMs = env.GITHUB_WEBHOOK_OWNER_MAX_AGE_MS === undefined
-  ? 300_000 : Number(env.GITHUB_WEBHOOK_OWNER_MAX_AGE_MS);
- const futureSkewMs = env.GITHUB_WEBHOOK_OWNER_FUTURE_SKEW_MS === undefined
-  ? 30_000 : Number(env.GITHUB_WEBHOOK_OWNER_FUTURE_SKEW_MS);
  const occurredAt = Date.parse(comment.created_at);
- if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs < 1_000 || maxAgeMs > 900_000 ||
-     !Number.isSafeInteger(futureSkewMs) || futureSkewMs < 0 || futureSkewMs > 60_000 ||
-     !Number.isFinite(occurredAt) || occurredAt < 1 ||
-     occurredAt > now + futureSkewMs || now - occurredAt > maxAgeMs) {
-  return json({ error: "owner_command_rejected", reason: "COMMENT_TIMESTAMP_OUT_OF_RANGE" }, 422);
- }
  const parsed = parseOwnerCommand(comment.body);
  if (!parsed) {
   return commandLike
    ? json({ error: "owner_command_rejected", reason: "COMMAND_INVALID" }, 422)
    : ignored();
  }
- if (!ledger || typeof ledger.executeOwnerCommand !== "function") {
+ if (!ledger || typeof ledger.lookupOwnerCommandReceipt !== "function" ||
+     typeof ledger.executeOwnerCommand !== "function") {
   return json({ error: "owner_ledger_unavailable" }, 503);
  }
  const commentId = String(comment.id);
@@ -939,6 +930,60 @@ async function handleOwnerGitHubComment(authenticated, payload, ledger, env) {
   reason: command.reason,
   taskId: command.taskId,
  });
+ let priorReceipt;
+ try {
+  priorReceipt = await ledger.lookupOwnerCommandReceipt({
+   deliveryId: authenticated.deliveryId,
+   commentId,
+   bodySha256: authenticated.bodySha256,
+   commandHash,
+  });
+ } catch {
+  return json({ error: "owner_ledger_unavailable" }, 503);
+ }
+ if (priorReceipt?.reason) {
+  return json({ error: "owner_ledger_unavailable" }, 503);
+ }
+ if (priorReceipt?.found) {
+  if (priorReceipt.conflict) {
+   return json({
+    error: "owner_command_conflict",
+    reason: priorReceipt.reason,
+    deliveryId: authenticated.deliveryId,
+   }, 409);
+  }
+  const previousResult = priorReceipt.result;
+  if (previousResult?.applied === true) {
+   return json({
+    status: "duplicate",
+    operation: command.operation,
+    deliveryId: authenticated.deliveryId,
+    task: previousResult.task,
+   }, 202);
+  }
+  if (previousResult?.conflict === true) {
+   return json({
+    error: "owner_command_conflict",
+    reason: previousResult.reason,
+    deliveryId: authenticated.deliveryId,
+   }, 409);
+  }
+  return json({
+   error: "owner_command_rejected",
+   reason: previousResult?.reason || "OWNER_COMMAND_DENIED",
+   deliveryId: authenticated.deliveryId,
+  }, 422);
+ }
+ const maxAgeMs = env.GITHUB_WEBHOOK_OWNER_MAX_AGE_MS === undefined
+  ? 300_000 : Number(env.GITHUB_WEBHOOK_OWNER_MAX_AGE_MS);
+ const futureSkewMs = env.GITHUB_WEBHOOK_OWNER_FUTURE_SKEW_MS === undefined
+  ? 30_000 : Number(env.GITHUB_WEBHOOK_OWNER_FUTURE_SKEW_MS);
+ if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs < 1_000 || maxAgeMs > 900_000 ||
+     !Number.isSafeInteger(futureSkewMs) || futureSkewMs < 0 || futureSkewMs > 60_000 ||
+     !Number.isFinite(occurredAt) || occurredAt < 1 ||
+     occurredAt > now + futureSkewMs || now - occurredAt > maxAgeMs) {
+  return json({ error: "owner_command_rejected", reason: "COMMENT_TIMESTAMP_OUT_OF_RANGE" }, 422);
+ }
  const assertionContext = {
   actorId: ownerId,
   repositoryId: Number(repositoryIdText),

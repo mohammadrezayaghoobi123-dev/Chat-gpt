@@ -1217,6 +1217,8 @@ export async function consumeOrchestratorOutbox(batch, env) {
        typeof body.taskId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(body.taskId) ||
        typeof body.eventType !== "string" || !ORCHESTRATOR_QUEUE_EVENT_TYPES.has(body.eventType) ||
        !body.payload || typeof body.payload !== "object" || Array.isArray(body.payload) ||
+       ((body.eventType === "task.created" || body.eventType === "task.transitioned") &&
+        (!Number.isSafeInteger(body.payload.version) || body.payload.version < 1)) ||
        !Number.isSafeInteger(body.attempts) || body.attempts < 1 || body.attempts > 8 ||
        !Number.isSafeInteger(body.createdAt) || body.createdAt < 1 ||
        new TextEncoder().encode(stableStringify(body)).byteLength > 32_768) {
@@ -1254,7 +1256,11 @@ export async function consumeOrchestratorOutbox(batch, env) {
     workerAssertion,
     now,
    });
-   if (receipt?.recorded === true) {
+   if (receipt?.blocked === true) {
+    // A task event that is stale or fenced is deterministic and must not retry.
+    message.ack();
+    totals.acknowledged += 1;
+   } else if (receipt?.recorded === true) {
     message.ack();
     totals.acknowledged += 1;
    } else if (receipt?.replay === true) {

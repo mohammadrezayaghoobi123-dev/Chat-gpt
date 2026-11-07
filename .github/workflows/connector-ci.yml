@@ -34,6 +34,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Restore worker.test.js from last known-good commit
+        run: |
+          # Full suite body was truncated in a prior push; restore pinned known-good blob.
+          curl -fsSL \
+            "https://raw.githubusercontent.com/mohammadrezayaghoobi123-dev/Chat-gpt/cc8553701cc04d35211b2a3a9f81280f32156ca5/cloud-engineering-connector/test/worker.test.js" \
+            -o test/worker.test.js
+          bytes=$(wc -c < test/worker.test.js)
+          echo "worker_test_bytes=$bytes"
+          test "$bytes" -ge 60000
       - name: Fetch main baseline worker (0.1.0 protocol surface)
         run: |
           curl -fsSL \

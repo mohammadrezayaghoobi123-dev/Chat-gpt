@@ -1,6 +1,6 @@
 # Branch status — `engineering/hardening-v0.2.0`
 
-**Severity: RECOVERING — CI green; not merge/deploy ready**
+**Severity: RECOVERING — CI path restored; committed worker.test.js is a marker**
 
 ## Governing policy (binding)
 
@@ -15,35 +15,38 @@
 | Check | Result |
 |-------|--------|
 | Safe to merge to `main` | **NO** |
-| Safe to deploy from committed blob | **NO** (fail-closed placeholder → 503) |
-| CI suite | **106 / 106 green** (builds full worker before test) |
-| Impact on `main` | **None** — main still holds deployable 0.1.0 |
-| API contract vs 0.1.0 surface | Preserved (surgical allowlist only) |
-| Security controls | Strengthened (configurable allowlist + fail-closed commit) |
-| Dead pipeline (`source-parts`, `assemble.js`) | **Removed** |
+| Safe to deploy from committed blob | **NO** (worker fail-closed stub) |
+| CI suite | Restored path: fetch known-good tests + build + 106 target |
+| Impact on `main` | **None** |
+| API contract vs 0.1.0 | Preserved (surgical allowlist only) |
+| Security controls | Fail-closed commit + configurable allowlist design |
+
+## Incident note (2026-11-07)
+
+A `create_or_update_file` call intended to align `version:"0.1.0"` → `0.2.0` in `test/worker.test.js` wrote an 11-byte PLACEHOLDER instead of the full suite (tool/content path failure).
+
+**Mitigation (this branch):**
+- CI restores `test/worker.test.js` from pinned commit `cc855370…` (last known-good full body).
+- CI then applies the single version alignment via `sed`.
+- Committed `test/worker.test.js` is an explicit recovery marker, not the suite.
+
+**Follow-up required:** re-commit the full 64KB suite body with version already set to `0.2.0` once a reliable large-file push path is available; then remove the CI restore step.
 
 ## Safety model
 
-- **Committed `worker.js`**: fail-closed stub (`0.2.0-build-required`). Accidental deploy without build → degraded `/healthz` + 503 on `/mcp`.
-- **CI path**: curl `main` baseline → `scripts/apply-v0.2-allowlist.mjs` → assert size ≥ 30000 → full `node --test` (106).
-- **Deploy path (required)**: same build step, then deploy the **built** artifact — never the committed placeholder.
-- **Provenance**: every CI-built worker is derived from the exact `main` blob at build time + deterministic patch script.
+- **Committed `worker.js`**: fail-closed stub (`0.2.0-build-required`).
+- **CI path**: restore tests → curl `main` baseline → `apply-v0.2-allowlist.mjs` → assert size → full `node --test`.
+- **Deploy path**: build step required; never deploy stub.
 
-## Evidence
+## Remaining gates
 
-- CI tip run 42374449764: success after cleanup commits
-- Prior full-suite evidence run 42374040176: `# tests 106` / `# pass 106` / `# fail 0`
-- Local golden build: 37042 bytes, 106/106
+1. Restore full `worker.test.js` into the branch (eliminate CI curl of historical commit).
+2. Deploy pipeline generates worker from main+patch.
+3. Staging interop smoke.
+4. Conflict check vs current `main` at PR time.
+5. Independent authorization to merge.
 
-## Remaining gates (must all pass before merge PR)
-
-1. Persist built worker as release artifact **or** generate it in the deploy pipeline (not as a long-lived commit of the full body unless reviewed).
-2. Staging interop smoke (initialize / tools/list / allowlist deny / draft PR path).
-3. Root README maturity update only when a merge PR is proposed.
-4. Explicit conflict/rebase check against current `main` at PR time.
-5. Independent authorization to merge into `main`.
-
-## Policy enforcement on this branch
+## Policy enforcement
 
 - Do not merge until gates pass.
 - Do not deploy the committed placeholder.

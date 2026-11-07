@@ -923,26 +923,12 @@ async function handleOwnerGitHubComment(authenticated, payload, ledger, env) {
    ? json({ error: "owner_command_rejected", reason: "COMMAND_INVALID" }, 422)
    : ignored();
  }
- if (!ledger || typeof ledger.getTask !== "function" ||
-     typeof ledger.executeOwnerCommand !== "function") {
+ if (!ledger || typeof ledger.executeOwnerCommand !== "function") {
   return json({ error: "owner_ledger_unavailable" }, 503);
- }
- let currentTask;
- try {
-  currentTask = await ledger.getTask({ taskId: parsed.taskId });
- } catch {
-  return json({ error: "owner_ledger_unavailable" }, 503);
- }
- if (!currentTask || typeof currentTask !== "object" ||
-     !Number.isSafeInteger(currentTask.version) || currentTask.version < 1 ||
-     typeof currentTask.state !== "string") {
-  return json({ error: "owner_task_not_found" }, 404);
  }
  const commentId = String(comment.id);
  const command = {
   eventId: "owner-comment-" + commentId,
-  expectedState: currentTask.state,
-  expectedVersion: currentTask.version,
   operation: parsed.operation,
   reason: parsed.reason,
   taskId: parsed.taskId,

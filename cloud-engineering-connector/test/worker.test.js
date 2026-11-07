@@ -69,6 +69,25 @@ test("MCP tool calls emit privacy-safe structured outcome, principal, duration, 
   assert.equal(JSON.stringify(event).includes(env.MCP_AUTH_TOKEN), false);
 });
 
+test("MCP tool-call telemetry records rejected unknown tool names as error outcomes", async () => {
+  const lines = [];
+  const originalLog = console.log;
+  try {
+    console.log = (...args) => lines.push(args.join(" "));
+    const response = await worker.fetch(rpc("tools/call", {
+      name: "unknown_engineering_tool", arguments: {}
+    }, 982), env);
+    assert.equal(response.status, 200);
+  } finally {
+    console.log = originalLog;
+  }
+  const event = lines.map(line => { try { return JSON.parse(line); } catch { return null; } })
+    .find(value => value?.event === "mcp_tool_call");
+  assert.ok(event, "rejected tool calls must still produce an outcome event");
+  assert.equal(event.tool_name, "unknown_engineering_tool");
+  assert.equal(event.outcome, "error");
+});
+
 test("readyz explicitly identifies model inference as client-side and does not require a Worker AI binding", async () => {
   const response = await worker.fetch(req("/readyz"), env);
   assert.equal(response.status, 200);

@@ -77,7 +77,6 @@ paths = ['''^cloud-engineering-connector/test/worker\.test\.js$''']
 regexTarget = "line"
 regexes = ['''const\s+token\s*=\s*["']0123456789abcdef0123456789abcdef["']''']
 
-
 [[allowlists]]
 description = "Synthetic MCP bearer value used only in historical architecture-analysis tests; restricted to the exact test literal, file, and commits."
 targetRules = ["generic-api-key"]
@@ -89,3 +88,15 @@ commits = [
 paths = ['''^cloud-engineering-connector/test/architecture-analysis\.test\.js$''']
 regexTarget = "line"
 regexes = ['''MCP_AUTH_TOKEN\s*:\s*["']test-secret-0123456789abcdef012345["']''']
+
+[[allowlists]]
+description = "Synthetic Vault-proposal idempotency test keys (not credentials); restricted to the exact commit, test file, and two literals."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["651dabe22b062a224f911e42ddbe043dcdec5c12"]
+paths = ['''^cloud-engineering-connector/test/write-hardening\.test\.js$''']
+regexTarget = "line"
+regexes = [
+  '''idempotencyKey\s*:\s*["']vault-proposal-stale-0001["']''',
+  '''idempotencyKey\s*:\s*["']vault-proposal-success-0001["']'''
+]

@@ -75,6 +75,7 @@ max_batch_timeout = 5
 max_concurrency = 2
 max_retries = 100
 retry_delay = 3600
+dead_letter_queue = "chat-gpt111-orchestrator-outbox-dlq-quarantine"
 
 [env.staging]
 
@@ -150,3 +151,4 @@ max_batch_timeout = 5
 max_concurrency = 2
 max_retries = 100
 retry_delay = 3600
+dead_letter_queue = "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine"

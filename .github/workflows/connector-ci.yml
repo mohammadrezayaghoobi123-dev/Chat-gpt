@@ -36,6 +36,12 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Snapshot committed worker (pre-build)
+        run: |
+          cp worker.js /tmp/committed-worker.js
+          echo "committed_worker_bytes=$(wc -c < /tmp/committed-worker.js)"
+          sha256sum /tmp/committed-worker.js
+
       - name: Restore worker.test.js if marker
         run: |
           bytes=$(wc -c < test/worker.test.js)
@@ -66,6 +72,17 @@ jobs:
           test "$bytes" -ge 30000
           grep -q 'VERSION = "0.2.0"' worker.js
           grep -q 'parseAllowlist' worker.js
+          sha256sum worker.js
+
+      - name: Assert committed worker matches deterministic build
+        run: |
+          # Fail closed if branch body drifts from main baseline + patch script.
+          if [ "$(wc -c < /tmp/committed-worker.js)" -ge 30000 ]; then
+            cmp -s /tmp/committed-worker.js worker.js
+            echo "byte-identity OK (committed == main+patch)"
+          else
+            echo "committed worker was placeholder; build product will be used for tests"
+          fi
 
       - name: Align test version to 0.2.0
         run: |
@@ -83,7 +100,7 @@ jobs:
       - name: Full suite
         run: node --test
 
-      - name: Materialize full files onto branch
+      - name: Materialize full files onto branch (no-op when already full)
         if: >-
           github.event_name == 'push' &&
           github.ref == 'refs/heads/engineering/hardening-v0.2.0' &&

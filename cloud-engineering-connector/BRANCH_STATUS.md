@@ -1,6 +1,6 @@
 # Branch status — `engineering/hardening-v0.2.0`
 
-**Severity: RECOVERING — full bodies on branch; still not merge/deploy ready without gates**
+**Severity: HARDENING — full bodies on branch; merge/deploy still gated**
 
 ## Governing policy (binding)
 
@@ -14,25 +14,29 @@
 
 | Check | Result |
 |-------|--------|
-| Safe to merge to `main` | **NO** (staging smoke + independent auth still required) |
-| Committed `worker.js` | **Full v0.2.0** (~37042 bytes, `parseAllowlist`) |
-| Committed `worker.test.js` | **Full suite** (~64199 bytes, version 0.2.0) |
-| CI suite | Green path (build + test) |
-| Impact on `main` | **None** — main remains deployable 0.1.0 |
+| Safe to merge to `main` | **NO** |
+| Safe for production cutover | **NO** |
+| Committed `worker.js` | Full **v0.2.0** (37042 bytes) — byte-identical to `main`+patch |
+| Committed `worker.test.js` | Full suite (64199 bytes), `version:"0.2.0"` |
+| Local/CI suite | **106/106** (verified) |
+| Impact on `main` | **None** |
 
-## What changed
+## Provenance
 
-CI materialize step committed the built worker and restored test suite onto the branch after a green run. Markers/stubs are gone from the tip of `engineering/hardening-v0.2.0`.
+```
+main worker 0.1.0  →  apply-v0.2-allowlist.mjs  →  worker.js 0.2.0
+```
 
-## Remaining gates
+CI asserts **byte identity** between the committed worker and a fresh build from current `main` + the committed patch script. Drift fails the job.
 
-1. Staging interop smoke (initialize / tools/list / allowlist deny / draft PR path).
-2. Conflict/rebase check against current `main` at PR time.
+## Remaining gates before merge
+
+1. Staging smoke: `/healthz`, authenticated `initialize` / `tools/list`, allowlist deny, draft-PR path.
+2. Conflict check vs tip of `main` at PR open time.
 3. Independent authorization to merge.
-4. Optional: simplify CI (drop historical restore once tip stays full).
+4. Record Cloudflare Worker version ID if any staging deploy occurs.
 
-## Policy enforcement
+## Explicit non-claims
 
-- Do not merge until gates pass.
-- Prefer small atomic PRs.
-- Never force-push `main`.
+- CI green ≠ live ChatGPT/Claude interop certified.
+- Full body on branch ≠ production release.

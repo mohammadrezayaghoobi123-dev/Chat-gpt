@@ -1,0 +1,21 @@
+{
+  "anomalies": [],
+  "api_version": "1",
+  "approval_required": true,
+  "approval_status": "required",
+  "clarification_questions": [
+    "Which audience?"
+  ],
+  "contract_digest": "3a74f8a2d5ec36ddf14dfdd0d7c19a9c2a3e4b03744b9658a518ba6389908404",
+  "contract_schema_version": "1.0",
+  "execution": "not_started",
+  "mission_id": "mission-api-1",
+  "objective": "Draft the plan",
+  "result_verification": "not_independently_verified",
+  "risk_tier": "high",
+  "selected_islands": [
+    "island-a",
+    "island-b"
+  ],
+  "state": "planned"
+}

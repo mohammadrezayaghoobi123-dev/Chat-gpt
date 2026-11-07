@@ -1,0 +1,217 @@
+import unittest
+
+from master_brain.archipelago import plan_mission
+from master_brain.core import RiskTier, Task
+from master_brain.meta_intelligence import Mission, plan_coordination
+from master_brain.mission_contract import (
+    MissionContract,
+    MissionReviewLevel,
+    MissionRiskTier,
+    from_archipelago_plan,
+    from_coordination_plan,
+    from_core_task,
+    evaluate_execution_gate,
+)
+
+
+class MissionContractTests(unittest.TestCase):
+    def test_same_request_has_stable_cross_planner_identity(self):
+        objective = "Research the factory energy risk"
+        core = from_core_task(Task(objective, risk=RiskTier.MEDIUM))
+        archipelago = from_archipelago_plan(plan_mission(objective))
+        meta = from_coordination_plan(plan_coordination(Mission(objective)))
+
+        self.assertEqual(core.mission_id, archipelago.mission_id)
+        self.assertEqual(core.mission_id, meta.mission_id)
+        self.assertEqual(core.schema_version, "1.0")
+
+    def test_core_mapping_preserves_constraints_risk_and_approval_gate(self):
+        contract = from_core_task(Task(
+            objective="Deploy a production change",
+            constraints=("no downtime", "preserve audit history"),
+            risk=RiskTier.CRITICAL,
+            requires_external_action=True,
+        ))
+        self.assertEqual(contract.constraints, ("no downtime", "preserve audit history"))
+        self.assertEqual(contract.risk_tier, MissionRiskTier.CRITICAL)
+        self.assertTrue(contract.requires_approval)
+        self.assertEqual(contract.review_level, MissionReviewLevel.HUMAN_GATED)
+        self.assertIn("planner=core.route_task", contract.traceability)
+
+    def test_archipelago_mapping_preserves_islands_gaps_and_foundations(self):
+        legacy = plan_mission("Research factory manufacturing risks")
+        contract = from_archipelago_plan(legacy)
+        self.assertEqual(
+            contract.selected_islands,
+            tuple(item.island_id for item in legacy.assignments),
+        )
+        self.assertEqual(contract.dependencies, legacy.shared_foundations)
+        self.assertEqual(contract.capability_gaps, legacy.capability_gaps)
+        self.assertIn("planner=archipelago.plan_mission", contract.traceability)
+
+    def test_meta_mapping_preserves_budget_deadline_and_review_level(self):
+        legacy = plan_coordination(Mission(
+            objective="Research the factory process",
+            constraints=("keep records",),
+            success_criteria=("verified output",),
+            risk_tier="high",
+            irreversible_action=False,
+            budget_units=7,
+            deadline_seconds=90,
+        ))
+        contract = from_coordination_plan(legacy, constraints=("keep records",),
+                                          success_criteria=("verified output",),
+                                          risk_tier=MissionRiskTier.HIGH)
+        self.assertEqual(contract.budget_units, 7)
+        self.assertEqual(contract.deadline_seconds, 90)
+        self.assertEqual(contract.review_level, MissionReviewLevel.STRICT)
+        self.assertTrue(contract.requires_approval)
+        self.assertEqual(contract.success_criteria, ("verified output",))
+
+    def test_contract_rejects_invalid_budget_and_duplicate_islands(self):
+        with self.assertRaisesRegex(ValueError, "budget"):
+            MissionContract(
+                mission_id="mission-test", objective="x",
+                budget_units=-1,
+            )
+        with self.assertRaisesRegex(ValueError, "selected island"):
+            MissionContract(
+                mission_id="mission-test", objective="x",
+                selected_islands=("science_research", "science_research"),
+            )
+
+    def test_contract_rejects_malformed_identity_field_types(self):
+        with self.assertRaisesRegex(ValueError, "mission_id"):
+            MissionContract(mission_id=None, objective="Review change")
+        with self.assertRaisesRegex(TypeError, "objective"):
+            MissionContract(mission_id="mission-test", objective=None)
+        with self.assertRaisesRegex(TypeError, "selected island IDs"):
+            MissionContract(
+                mission_id="mission-test", objective="Review change",
+                selected_islands=(None,),
+            )
+
+    def test_execution_gate_fails_closed_for_high_risk_without_approval(self):
+        contract = from_core_task(Task(
+            objective="Deploy production change",
+            risk=RiskTier.HIGH,
+        ))
+        blocked = evaluate_execution_gate(contract)
+        self.assertFalse(blocked.allowed)
+        self.assertIn(
+            "audited approval receipt is required; boolean approval assertions are not accepted",
+            blocked.reasons,
+        )
+        # A caller-supplied boolean is not an auditable approval credential.
+        still_blocked = evaluate_execution_gate(contract, approval_granted=True)
+        self.assertFalse(still_blocked.allowed)
+        self.assertIn(
+            "audited approval receipt is required; boolean approval assertions are not accepted",
+            still_blocked.reasons,
+        )
+
+    def test_execution_gate_rederives_approval_for_inconsistent_loaded_contract(self):
+        # Simulate a malformed object restored from an untrusted serialized source.
+        contract = object.__new__(MissionContract)
+        object.__setattr__(contract, "objective", "Deploy production change")
+        object.__setattr__(contract, "clarification_questions", ())
+        object.__setattr__(contract, "requires_approval", False)
+        object.__setattr__(contract, "review_level", MissionReviewLevel.STANDARD)
+        object.__setattr__(contract, "risk_tier", MissionRiskTier.CRITICAL)
+
+        result = evaluate_execution_gate(contract)
+        self.assertFalse(result.allowed)
+        self.assertIn(
+            "audited approval receipt is required; boolean approval assertions are not accepted",
+            result.reasons,
+        )
+
+    def test_execution_gate_blocks_unresolved_clarification_even_if_approved(self):
+        contract = from_core_task(Task(objective=""))
+        result = evaluate_execution_gate(contract, approval_granted=True)
+        self.assertFalse(result.allowed)
+        self.assertIn("mission requires clarification before dispatch", result.reasons)
+
+    def test_execution_gate_is_policy_only_and_never_claims_dispatch(self):
+        contract = from_core_task(Task(objective="Summarize a public report"))
+        result = evaluate_execution_gate(contract)
+        self.assertTrue(result.allowed)
+        self.assertFalse(hasattr(result, "dispatch_performed"))
+
+    def test_human_gated_review_level_requires_approval_in_contract(self):
+        with self.assertRaisesRegex(ValueError, "human_gated review requires approval"):
+            MissionContract(
+                mission_id="mission-human-gated", objective="Review production change",
+                risk_tier=MissionRiskTier.MEDIUM,
+                review_level=MissionReviewLevel.HUMAN_GATED,
+                requires_approval=False,
+            )
+
+    def test_direct_blank_contract_cannot_pass_legacy_policy_gate(self):
+        contract = MissionContract(mission_id="mission-direct-empty", objective="")
+        result = evaluate_execution_gate(contract)
+        self.assertFalse(result.allowed)
+        self.assertIn("mission objective is empty and requires clarification", result.reasons)
+
+    def test_empty_objective_is_retained_and_requires_clarification(self):
+        contract = from_core_task(Task(objective=""))
+        self.assertEqual(contract.objective, "")
+        self.assertTrue(contract.unknowns)
+        self.assertTrue(contract.clarification_questions)
+
+
+    def test_contract_rejects_non_integer_budget_and_deadline(self):
+        for value in (True, 1.5, "10"):
+            with self.subTest(budget_units=value):
+                with self.assertRaisesRegex(TypeError, "budget_units must be an integer"):
+                    MissionContract(
+                        mission_id="mission-test", objective="Review change",
+                        budget_units=value,
+                    )
+        for value in (False, 1.5, "120"):
+            with self.subTest(deadline_seconds=value):
+                with self.assertRaisesRegex(TypeError, "deadline_seconds must be an integer"):
+                    MissionContract(
+                        mission_id="mission-test", objective="Review change",
+                        deadline_seconds=value,
+                    )
+
+
+    def test_approval_flag_must_be_a_boolean_at_contract_boundaries(self):
+        with self.assertRaisesRegex(TypeError, "requires_approval must be a boolean"):
+            MissionContract(
+                mission_id="mission-test", objective="Review change",
+                requires_approval="false",
+            )
+        plan = plan_mission("Research factory manufacturing risks")
+        with self.assertRaisesRegex(TypeError, "requires_approval must be a boolean"):
+            from_archipelago_plan(plan, requires_approval="false")
+
+
+    def test_planner_adapter_rejects_scalar_strings_and_mappings_as_sequences(self):
+        plan = plan_mission("Research factory manufacturing risks")
+        for invalid in ("abc", b"abc", {"unexpected": "mapping"}):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(TypeError, "constraints must be an iterable"):
+                    from_archipelago_plan(plan, constraints=invalid)
+
+    def test_contract_rejects_mutable_or_wrong_sequence_fields(self):
+        with self.assertRaisesRegex(TypeError, "selected_islands must be a tuple"):
+            MissionContract(
+                mission_id="mission-test", objective="Review change",
+                selected_islands=["science_research"],
+            )
+        with self.assertRaisesRegex(TypeError, "constraints must be a tuple"):
+            MissionContract(
+                mission_id="mission-test", objective="Review change",
+                constraints=["preserve audit history"],
+            )
+        with self.assertRaisesRegex(TypeError, "success_criteria must be a tuple"):
+            MissionContract(
+                mission_id="mission-test", objective="Review change",
+                success_criteria="verified output",
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

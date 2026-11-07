@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 export TS_SOCKET="/tmp/tailscaled.sock"
 export TS_STATE_DIR="/var/lib/tailscale"
 export OPENCLAW_NO_RESPAWN="1"
 export NODE_COMPILE_CACHE="/var/tmp/openclaw-compile-cache"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/permissions.sh"
 
 if ! command -v tailscale >/dev/null 2>&1; then
   curl -fsSL https://tailscale.com/install.sh | sh
@@ -12,12 +14,17 @@ fi
 
 if command -v tailscaled >/dev/null 2>&1 && [ "${CODESPACES:-false}" = "true" ]; then
   sudo mkdir -p /var/lib/tailscale
+  sudo chmod 700 /var/lib/tailscale
   if [ -f /tmp/tailscaled.state ] && [ ! -f /var/lib/tailscale/tailscaled.state ]; then
     sudo cp -p /tmp/tailscaled.state /var/lib/tailscale/tailscaled.state
+  fi
+  if [ -f /var/lib/tailscale/tailscaled.state ]; then
+    sudo chmod 600 /var/lib/tailscale/tailscaled.state
   fi
   if ! pgrep -x tailscaled >/dev/null 2>&1; then
     sudo nohup /usr/sbin/tailscaled --statedir=/var/lib/tailscale --socket=/tmp/tailscaled.sock --tun=userspace-networking >/tmp/tailscaled.log 2>&1 </dev/null &
   fi
+  secure_tailscale_log /tmp/tailscaled.log
 fi
 
 curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-prompt --no-onboard --verify

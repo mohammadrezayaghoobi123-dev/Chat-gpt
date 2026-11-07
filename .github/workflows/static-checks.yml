@@ -1,0 +1,41 @@
+name: Static checks
+
+# Blocking quality gate: Ruff E9/F and non-strict Mypy must remain clean.
+# The previous baseline debt was remediated and verified at zero findings.
+on:
+  push:
+    branches:
+      - master-brain/integrated
+    paths:
+      - .github/workflows/static-checks.yml
+      - src/**
+  pull_request:
+    branches:
+      - integration/unify-main-and-integrated-2026-11-02
+    paths:
+      - .github/workflows/static-checks.yml
+      - src/**
+      - tests/**
+  workflow_dispatch:
+
+concurrency:
+  group: static-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -e ".[signing]" ruff==0.6.9 mypy==1.11.2
+      - name: Ruff (syntax errors and pyflakes)
+        run: ruff check --select E9,F --output-format=github src tests
+      - name: Mypy (non-strict source typing)
+        run: mypy --ignore-missing-imports --no-error-summary --show-column-numbers src/master_brain

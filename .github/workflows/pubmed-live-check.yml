@@ -1,0 +1,42 @@
+name: PubMed live check
+
+# Read-only, free, unauthenticated NCBI request. No secrets, no inputs.
+# Runs once when THIS file changes on the integrated branch, and on demand (workflow_dispatch works
+# from the default branch only; for the integrated branch push a change to this file to re-run).
+on:
+  push:
+    branches:
+      - master-brain/integrated
+    paths:
+      - .github/workflows/pubmed-live-check.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - name: Real PubMed search through the production adapter
+        run: PYTHONPATH=src python -m master_brain.pubmed "metformin[Title] AND randomized controlled trial[Publication Type]" --max 3
+      - name: Real PubMed search with abstracts (efetch) and structural assertions
+        run: |
+          PYTHONPATH=src python -m master_brain.pubmed "metformin[Title] AND randomized controlled trial[Publication Type]" --max 3 --abstracts > abstracts.json 2> err.txt || { echo "::error::$(cat err.txt)"; exit 2; }
+          python - <<'PY'
+          import json
+          d = json.load(open("abstracts.json"))
+          arts = d["articles"]
+          assert d["source"] == "pubmed" and d["total_count"] > 0, d["total_count"]
+          assert 1 <= len(arts) <= 3, len(arts)
+          assert all(a["pmid"].isdigit() and a["title"] for a in arts), "missing pmid/title"
+          assert any(a["abstract"] for a in arts), "no abstract in any article"
+          print("OK articles=%d with_abstract=%d total_count=%d" % (len(arts), sum(1 for a in arts if a["abstract"]), d["total_count"]))
+          PY

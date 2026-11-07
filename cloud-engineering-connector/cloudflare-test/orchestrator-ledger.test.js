@@ -2286,3 +2286,69 @@ it("rejects Agent writes after lease expiry even when the generation still match
     ).one().count).toBe(0);
   });
 });
+
+
+it("consumes valid Agent assertions on denied lease-fenced mutations", async () => {
+  const operations = ["renewLease", "releaseLease", "transitionTask", "advanceAgentRound"];
+  for (const operation of operations) {
+    const ledger = ledgerFor("ledger-denied-assertion-replay-" + operation);
+    await createTask(ledger, {
+      task: task(),
+      idempotencyKey: "task-create-denied-assertion-" + operation,
+      inputHash: "e".repeat(64),
+      now,
+    });
+    const lease = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1", now),
+      leaseMs: 30_000,
+      now,
+    });
+    expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+    const assertion = await createWorkerAssertion({
+      subject: "agent:worker-1",
+      role: "agent",
+      operation,
+      nowMs: now + 1,
+      jti: "jti-denied-assertion-" + operation,
+    });
+    const invoke = (leaseGeneration) => {
+      if (operation === "renewLease") {
+        return ledger.renewLease({
+          taskId: "task-0001", workerId: "agent:worker-1", workerAssertion: assertion,
+          leaseGeneration, leaseMs: 30_000, now: now + 1,
+        });
+      }
+      if (operation === "releaseLease") {
+        return ledger.releaseLease({
+          taskId: "task-0001", workerId: "agent:worker-1", workerAssertion: assertion,
+          leaseGeneration, now: now + 1,
+        });
+      }
+      if (operation === "transitionTask") {
+        return ledger.transitionTask({
+          taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
+          actor: agent, evidence, now: now + 1, workerId: "agent:worker-1",
+          workerAssertion: assertion, leaseGeneration,
+        });
+      }
+      return ledger.advanceAgentRound({
+        taskId: "task-0001", expectedVersion: 1, expectedRound: 0, nextRound: 1,
+        workerId: "agent:worker-1", workerAssertion: assertion, leaseGeneration, now: now + 1,
+      });
+    };
+    const denied = await invoke(lease.leaseGeneration + 1);
+    const deniedKey = operation === "renewLease" ? "renewed"
+      : operation === "releaseLease" ? "released"
+      : operation === "transitionTask" ? "updated" : "advanced";
+    expect(denied).toMatchObject({ [deniedKey]: false, reason: "LEASE_FENCE_MISMATCH" });
+    const replay = await invoke(lease.leaseGeneration);
+    expect(replay).toMatchObject({ [deniedKey]: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        "jti-denied-assertion-" + operation,
+      ).one().count).toBe(1);
+    });
+  }
+});

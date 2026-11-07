@@ -91,7 +91,7 @@ export async function verifyReleaseApproval({
   );
   if (!Array.isArray(associated)) throw new Error("GitHub returned an invalid associated-PR list.");
 
-  const pull = associated.find(item => {
+  let pull = associated.find(item => {
     if (!item || item.head?.sha === undefined || item.base?.ref === undefined) return false;
     if (releaseEnvironment === "staging") {
       return item.state === "open" &&

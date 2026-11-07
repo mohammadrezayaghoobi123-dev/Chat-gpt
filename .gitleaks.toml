@@ -141,9 +141,9 @@ description = "Synthetic negative-test values in one historical OrchestratorLedg
 targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["916436f86dc076916bc5588a61b92e710a6680f9"]
-paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger\\.test\\.js$''']
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger\.test\.js$''']
 regexTarget = "line"
 regexes = [
-  '''apiKey\\s*:\\s*["']must-not-persist["']''',
-  '''idempotencyKey\\s*:\\s*["']idem-transition-sensitive-0001["']'''
+  '''apiKey\s*:\s*["']must-not-persist["']''',
+  '''idempotencyKey\s*:\s*["']idem-transition-sensitive-0001["']'''
 ]

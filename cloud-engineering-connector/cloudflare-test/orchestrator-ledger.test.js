@@ -1170,6 +1170,16 @@ it("authenticates the Queue consumer before inspecting an untrusted receipt payl
     reason: "SENSITIVE_FIELD_REJECTED",
   });
 
+  const replayedReceiptAssertion = await ledger.recordOutboxReceipt({
+    ...input,
+    payload: { taskId: "task-0001", version: 1 },
+    workerAssertion: authenticatedReceiptAssertion,
+  });
+  expect(replayedReceiptAssertion).toEqual({
+    recorded: false,
+    reason: "AUTHENTICATED_WORKER_REQUIRED",
+  });
+
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec(
       "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",

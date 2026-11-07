@@ -19,7 +19,7 @@ test("rejects command lookalikes, unknown operations, malformed task IDs, and un
     "/orchestrator run task-0001 --reason \"x\"",
     '/orchestrator cancel ../task --reason "x"',
     '/orchestrator cancel task-0001 --reason "token=abc123"',
-    '/orchestrator cancel task-0001 --reason "line one\\nline two"',
+    '/orchestrator cancel task-0001 --reason "line one\nline two"',
     '/orchestrator cancel task-0001 --reason "' + "x".repeat(241) + '"',
     '/orchestrator cancel task-0001 --reason "missing close',
     '/orchestrator cancel task-0001 --reason "x" trailing',

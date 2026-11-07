@@ -609,4 +609,125 @@ it("prunes consumed assertion IDs only after expiry plus the retention margin", 
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti='jti-claim-retention-000000000001'").one().count).toBe(0);
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(1);
   });
+  it("rejects an expired lease even when its generation is still current", async () => {
+    const ledger = ledgerFor("ledger-expired-current-generation");
+    await createTask(ledger, {
+      task: task(), idempotencyKey: "task-expired-current-generation", inputHash: "a".repeat(64), now,
+    });
+    const lease = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1", now),
+      leaseMs: 100,
+      now,
+    });
+    expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+    await expect(ledger.transitionTask({
+      taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
+      actor: agent, evidence, now: now + 101, workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "transitionTask", nowMs: now + 101,
+      }),
+      leaseGeneration: lease.leaseGeneration,
+    })).resolves.toMatchObject({ updated: false, reason: "LEASE_FENCE_MISMATCH" });
+    await expect(ledger.getTask({ taskId: "task-0001" }))
+      .resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
+  });
+
+  it("rejects a transition when the signed worker does not own the current lease", async () => {
+    const ledger = ledgerFor("ledger-lease-owner-mismatch");
+    await createTask(ledger, {
+      task: task(), idempotencyKey: "task-lease-owner-mismatch", inputHash: "b".repeat(64), now,
+    });
+    const lease = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1", now),
+      leaseMs: 30_000,
+      now,
+    });
+    await expect(ledger.transitionTask({
+      taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
+      actor: { ...agent, id: "agent:worker-2" }, evidence, now: now + 1, workerId: "agent:worker-2",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-2", role: "agent", operation: "transitionTask", nowMs: now + 1,
+      }),
+      leaseGeneration: lease.leaseGeneration,
+    })).resolves.toMatchObject({ updated: false, reason: "LEASE_FENCE_MISMATCH" });
+    await expect(ledger.getTask({ taskId: "task-0001" }))
+      .resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
+  });
+
+  it("rejects caller-forged actor identity or role despite a valid signed worker assertion", async () => {
+    const ledger = ledgerFor("ledger-forged-transition-actor");
+    await createTask(ledger, {
+      task: task(), idempotencyKey: "task-forged-transition-actor", inputHash: "c".repeat(64), now,
+    });
+    const lease = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1", now),
+      leaseMs: 30_000,
+      now,
+    });
+    const cases = [
+      {
+        workerId: "agent:worker-1",
+        actor: { ...agent, id: "agent:worker-2" },
+        assertionSubject: "agent:worker-1",
+        expected: "LEASE_FENCE_MISMATCH",
+      },
+      {
+        workerId: "agent:worker-1",
+        actor: { ...agent, role: "owner" },
+        assertionSubject: "agent:worker-1",
+        expected: "LEASE_FENCE_MISMATCH",
+      },
+      {
+        workerId: "agent:worker-2",
+        actor: { ...agent, id: "agent:worker-2" },
+        assertionSubject: "agent:worker-1",
+        expected: "AUTHENTICATED_WORKER_REQUIRED",
+      },
+    ];
+    for (const [index, item] of cases.entries()) {
+      await expect(ledger.transitionTask({
+        taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
+        actor: item.actor, evidence, now: now + index + 1, workerId: item.workerId,
+        workerAssertion: await createWorkerAssertion({
+          subject: item.assertionSubject, role: "agent", operation: "transitionTask", nowMs: now + index + 1,
+        }),
+        leaseGeneration: lease.leaseGeneration,
+      })).resolves.toMatchObject({ updated: false, reason: item.expected });
+    }
+    await expect(ledger.getTask({ taskId: "task-0001" }))
+      .resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
+  });
+
+  it("serializes concurrent signed transitions so only one consumes the live task version", async () => {
+    const ledger = ledgerFor("ledger-concurrent-transition-fence");
+    await createTask(ledger, {
+      task: task(), idempotencyKey: "task-concurrent-transition-fence", inputHash: "d".repeat(64), now,
+    });
+    const lease = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1", now),
+      leaseMs: 30_000,
+      now,
+    });
+    const transition = async () => ledger.transitionTask({
+      taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
+      actor: agent, evidence, now: now + 1, workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "transitionTask", nowMs: now + 1,
+      }),
+      leaseGeneration: lease.leaseGeneration,
+    });
+    const results = await Promise.all([transition(), transition()]);
+    expect(results.filter(result => result.updated)).toHaveLength(1);
+    expect(results.filter(result => !result.updated)).toHaveLength(1);
+    expect(results.find(result => !result.updated)).toMatchObject({
+      updated: false, reason: "VERSION_OR_STATE_CONFLICT",
+    });
+    await expect(ledger.getTask({ taskId: "task-0001" }))
+      .resolves.toMatchObject({ state: "RUNNING", version: 2 });
+  });
+
 });

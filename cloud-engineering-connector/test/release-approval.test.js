@@ -38,12 +38,22 @@ function approval(commitId = sha, login = reviewer, state = "APPROVED", submitte
   };
 }
 
-function fakeFetch(pulls, reviews, onRequest = () => {}) {
+function fakeFetch(
+  pulls,
+  reviews,
+  onRequest = () => {},
+  compareResult = { behind_by: 0, merge_base_commit: { sha: baseSha } },
+) {
   return async (url, options) => {
-    onRequest(String(url), options);
-    if (String(url).includes("/git/ref/heads/")) return response({ object: { sha: baseSha } });
-    if (String(url).includes("/commits/")) return response(pulls);
-    if (String(url).includes("/reviews?")) return response(reviews);
+    const value = String(url);
+    onRequest(value, options);
+    if (value.includes("/git/ref/heads/")) return response({ object: { sha: baseSha } });
+    if (value.includes("/compare/")) return response(compareResult);
+    if (value.endsWith("/pulls/129")) return response(pulls.find(pull => pull.number === 129) ?? pulls[0]);
+    if (value.includes("/commits/")) {
+      return response(pulls.map(({ mergeable, mergeable_state, ...pull }) => pull));
+    }
+    if (value.includes("/reviews?")) return response(reviews);
     return response({ message: "not found" }, 404);
   };
 }
@@ -101,13 +111,16 @@ test("Staging rejects non-mergeable or behind candidates before checking reviews
 });
 
 
-test("Staging rejects a candidate whose PR base SHA is not the current integration head", async () => {
+test("Staging rejects a candidate whose head does not descend from the current integration head", async () => {
   await assert.rejects(
     verifyReleaseApproval({
       ...input({}),
-      fetchImpl: fakeFetch([stagingPull({
-        base: { ref: "integration/unify-main-and-integrated-2026-11-02", sha: "d".repeat(40) },
-      })], [approval()]),
+      fetchImpl: fakeFetch(
+        [stagingPull()],
+        [approval()],
+        undefined,
+        { behind_by: 1, merge_base_commit: { sha: "d".repeat(40) } },
+      ),
     }),
     /current integration head/,
   );
@@ -153,7 +166,7 @@ test("Staging uses a scoped GitHub token and never places it in the URL", async 
       assert.equal(options.headers.authorization, "Bearer " + token);
     }),
   });
-  assert.equal(urls.length, 3);
+  assert.equal(urls.length, 5);
   assert.ok(urls.every(url => !url.includes(token)));
 });
 
@@ -228,6 +241,10 @@ test("release approval paginates associated PRs and all reviews before accepting
     requestedUrls.push(parsed.pathname + parsed.search);
     if (parsed.pathname.endsWith("/git/ref/heads/integration/unify-main-and-integrated-2026-11-02")) {
       return response({ object: { sha: baseSha } });
+    }
+    if (parsed.pathname.endsWith("/pulls/129")) return response(stagingPull());
+    if (parsed.pathname.includes("/compare/")) {
+      return response({ behind_by: 0, merge_base_commit: { sha: baseSha } });
     }
     if (parsed.pathname.endsWith("/commits/" + sha + "/pulls")) {
       if (parsed.searchParams.get("page") === "1") return response(decoys);

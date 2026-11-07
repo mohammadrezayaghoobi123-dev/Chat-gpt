@@ -19,6 +19,7 @@ assert.equal(readiness.status, 200, "GET /readyz must return HTTP 200");
 const readinessBody = await readiness.json();
 assert.equal(readinessBody.status, "ready");
 assert.equal(readinessBody.durable_objects, "ok", "readyz must execute the Durable Object SQLite schema probe");
+assert.equal(readinessBody.knowledge_store, "ok", "readyz must prove the KnowledgeStore SQLite schema is ready");
 console.log("PASS: Worker liveness, Durable Object readiness, and security headers");
 for (const [header, expected] of [
   ["x-content-type-options", "nosniff"],
@@ -188,6 +189,41 @@ for (const tool of listed.body.result.tools) {
   assert.equal(tool.annotations?.destructiveHint, false, `${tool.name} must not be destructive`);
 }
 console.log("PASS: anonymous read-only tool discovery");
+
+const smokeToken = process.env.MCP_AUTH_TOKEN;
+assert.ok(
+  typeof smokeToken === "string" && smokeToken.length >= 32 && smokeToken.length <= 512,
+  "MCP_AUTH_TOKEN must be configured in the active GitHub environment; its value is never logged",
+);
+const anonymousKnowledge = await rpc("tools/call", {
+  name: "knowledge_search",
+  arguments: { query: "release readiness smoke probe", limit: 1 },
+}, 99013);
+assert.equal(anonymousKnowledge.response.status, 200);
+assert.equal(anonymousKnowledge.body.result.isError, true, "anonymous callers must not invoke private Knowledge Store tools");
+assert.match(anonymousKnowledge.body.result.content[0].text, /PUBLIC_READ_ONLY allowlist/);
+console.log("PASS: anonymous Knowledge Store access denied");
+
+const authenticatedTools = await rpc("tools/list", {}, 99014, smokeToken);
+assert.equal(authenticatedTools.response.status, 200, "authenticated MCP tool discovery must succeed");
+assert.equal(authenticatedTools.body.error, undefined, JSON.stringify(authenticatedTools.body));
+const authenticatedToolNames = authenticatedTools.body.result.tools.map((tool) => tool.name);
+assert.ok(authenticatedToolNames.includes("knowledge_search"), "authenticated callers must discover knowledge_search");
+assert.ok(authenticatedToolNames.includes("knowledge_document_refs"), "authenticated callers must discover document reference inspection");
+const knowledgeSearch = await rpc("tools/call", {
+  name: "knowledge_search",
+  arguments: { query: "release readiness smoke probe", limit: 1 },
+}, 99015, smokeToken);
+assert.equal(knowledgeSearch.response.status, 200);
+assert.equal(
+  knowledgeSearch.body.result.isError,
+  undefined,
+  knowledgeSearch.body.result.content?.[0]?.text || JSON.stringify(knowledgeSearch.body),
+);
+const knowledgeResults = JSON.parse(knowledgeSearch.body.result.content[0].text);
+assert.ok(Array.isArray(knowledgeResults), "authenticated knowledge_search must return a result array");
+console.log("PASS: authenticated owner-only Knowledge Store discovery and search");
+
 
 const inspected = await rpc("tools/call", {
   name: "project_inspect",

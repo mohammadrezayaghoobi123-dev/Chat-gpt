@@ -1,14 +1,40 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker from "../worker.js";
+import { createHash } from "node:crypto";
+import worker, { processKnowledgeOutbox } from "../worker.js";
 import { createWriteControlBinding, createGitHubWriteMock } from "./helpers/write-control-mocks.js";
 let idempotencyCounter=0;
-const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_READONLY_TOKEN:"read-only-test-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding()};
+function createKnowledgeStoreBinding(){
+ const calls=[];
+ const stub={
+  ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:3}},
+  getEntity:async input=>{calls.push({method:"getEntity",input});return{...input,entityType:"service",name:"API",properties:{},version:1}},
+  upsertEntity:async input=>{calls.push({method:"upsertEntity",input});return input},
+  createRelationship:async input=>{calls.push({method:"createRelationship",input});return input},
+  putTag:async input=>{calls.push({method:"putTag",input});return{tagId:input.tagId,label:input.label}},
+  attachTag:async input=>{calls.push({method:"attachTag",input});return input},
+  listEntityTags:async input=>{calls.push({method:"listEntityTags",input});return[]},
+  search:async input=>{calls.push({method:"search",input});return[]},
+  listDocumentRefs:async input=>{calls.push({method:"listDocumentRefs",input});return[]},
+  getDocumentSyncState:async input=>{calls.push({method:"getDocumentSyncState",input});return null},
+  putDocumentRef:async input=>{calls.push({method:"putDocumentRef",input});return input},
+  indexDocumentSnapshot:async input=>{calls.push({method:"indexDocumentSnapshot",input});return input},
+  setDocumentSyncState:async input=>{calls.push({method:"setDocumentSyncState",input});return input},
+  recordVaultProposal:async input=>{calls.push({method:"recordVaultProposal",input});return{...input,status:"proposed"}},
+  getVaultProposal:async input=>{calls.push({method:"getVaultProposal",input});return{...input,status:"proposed",pullRequestNumber:987}}
+ };
+ return{calls,binding:{
+  idFromName(name){calls.push({method:"idFromName",name});return name},
+  get(id){calls.push({method:"get",id});return stub}
+ }};
+}
+const knowledgeStore=createKnowledgeStoreBinding();
+const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_READONLY_TOKEN:"read-only-test-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding(),KNOWLEDGE_STORE:knowledgeStore.binding};
 const req=(path,options={})=>{const headers=new Headers(options.headers);if(!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
 const rpc=(method,params={},id=1)=>{if(method==="tools/call"&&params.name==="create_change_pr"&&params.arguments&&!params.arguments.idempotency_key)params={...params,arguments:{...params.arguments,idempotency_key:"worker-test-idempotency-key-"+String(++idempotencyCounter).padStart(8,"0")}};return req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})})};
 const anonymousRpc=(method,params={},id=1)=>{const request=rpc(method,params,id);const headers=new Headers(request.headers);headers.delete("authorization");return new Request(request,{headers})};
 test("healthz is a liveness endpoint independent of credentials and Durable Object availability",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.service,"cloud-engineering-connector");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers");assert.equal(Object.hasOwn(b,"durable_objects"),false);assert.equal(Object.hasOwn(b,"mcp"),false)});
-test("readyz reports Durable Object schema readiness using the lightweight ping",async()=>{const r=await worker.fetch(req("/readyz"),env);assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ready");assert.equal(b.durable_objects,"ok");assert.equal(env.WRITE_CONTROL.__test.events.some(event=>event.type==="ping"),true)});
+test("readyz reports Durable Object schema readiness using the lightweight ping",async()=>{const r=await worker.fetch(req("/readyz"),env);assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ready");assert.equal(b.durable_objects,"ok");assert.equal(env.WRITE_CONTROL.__test.events.some(event=>event.type==="ping"),true);assert.equal(b.knowledge_store,"ok");assert.equal(knowledgeStore.calls.some(call=>call.method==="ping"),true)});
 test("readyz fails closed when the Durable Object binding is unavailable",async()=>{const r=await worker.fetch(req("/readyz"),{MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,503);const b=await r.json();assert.equal(b.status,"not_ready");assert.equal(b.durable_objects,"unavailable")});
 test("JSON API responses carry restrictive browser security headers",async()=>{
  const response=await worker.fetch(req("/healthz"),env);
@@ -54,15 +80,15 @@ test("public read-only mode denies tools not on the allowlist by default",async(
 test("public mode never permits write tools without MCP_AUTH_TOKEN",async()=>{const r=await worker.fetch(anonymousRpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]}},1),{PUBLIC_READ_ONLY:"true",MCP_RATE_LIMITER:{limit:async()=>({success:true})},GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/not in the unauthenticated PUBLIC_READ_ONLY allowlist/)});
 test("MCP rejects missing bearer token",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{"content-type":"application/json","cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize"})}),{...env,MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,401)});
 test("initialize advertises connector identity and tools capability",async()=>{const r=await worker.fetch(rpc("initialize",{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"test",version:"1"}}),env);const b=await r.json();assert.equal(b.result.serverInfo.name,"cloud-engineering-connector");assert.ok(b.result.capabilities.tools)});
-test("tools/list exposes all six declared tools",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();assert.deepEqual(b.result.tools.map(t=>t.name),["project_inspect","read_project_file","engineering_standards","architecture_review","architecture_analyze","create_change_pr"])});
+test("tools/list exposes all declared tools",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();assert.deepEqual(b.result.tools.map(t=>t.name),["project_inspect","read_project_file","engineering_standards","architecture_review","architecture_analyze","knowledge_entity_get","knowledge_entity_upsert","knowledge_relationship_create","knowledge_tag_upsert","knowledge_tag_attach","knowledge_entity_tags","knowledge_search","knowledge_document_sync","knowledge_document_propose","knowledge_document_proposal_status","knowledge_document_refs","knowledge_sync_status","create_change_pr"])});
 test("every MCP tool declares a title and explicit read-only/destructive safety hints",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();for(const tool of b.result.tools){assert.equal(typeof tool.annotations?.title,"string",tool.name);assert.ok(tool.annotations.title.length>0,tool.name);assert.equal(typeof tool.annotations.readOnlyHint,"boolean",tool.name);assert.equal(typeof tool.annotations.destructiveHint,"boolean",tool.name)}assert.equal(b.result.tools.find(t=>t.name==="architecture_analyze").annotations.readOnlyHint,true);assert.equal(b.result.tools.find(t=>t.name==="create_change_pr").annotations.readOnlyHint,false)});
 test("tools/list schema requires base_branch for create_change_pr",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();const tool=b.result.tools.find(t=>t.name==="create_change_pr");assert.ok(tool,"create_change_pr must be listed");assert.ok(Array.isArray(tool.inputSchema.required));assert.ok(tool.inputSchema.required.includes("base_branch"));assert.ok(Object.hasOwn(tool.inputSchema.properties,"base_branch"));assert.ok(tool.inputSchema.required.includes("idempotency_key"));assert.match(tool.inputSchema.properties.idempotency_key.pattern,/Base64URL|A-Za-z0-9/);assert.equal(tool.inputSchema.additionalProperties,false)});
 test("architecture review labels its output unverified",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"architecture_review",arguments:{project_goal:"Example",proposed_change:"Add cache"}}),env);const b=await r.json();const result=JSON.parse(b.result.content[0].text);assert.equal(result.status,"review_framework_generated_not_independently_verified");assert.ok(result.mandatory_output_sections.includes("Verification status"))});
 test("write tool fails closed without GitHub token",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]}}),env);const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/GITHUB_TOKEN/)});
 test("change PR rejects credential filenames before API calls",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"credentials.json",content:"token=should-not-pass"}]}}),{...env,GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/Rejected unsafe or protected file path/)});
-test("missing GITHUB_TOKEN gives an actionable hint when a GitHub read is refused",async()=>{const originalFetch=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({message:"Not Found"}),{status:404,headers:{"content-type":"application/json"}});try{const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}}),env);const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/GITHUB_TOKEN is not configured/);assert.match(b.result.content[0].text,/intended repository/)}finally{globalThis.fetch=originalFetch}});
-test("all GitHub API responses are byte-bounded, including repository metadata",async()=>{const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;const bytes=new TextEncoder().encode(JSON.stringify({message:"x".repeat(2_000_100)}));return new Response(new ReadableStream({start(controller){controller.enqueue(bytes);controller.close()}}),{status:200,headers:{"content-type":"application/json","content-length":String(bytes.byteLength)}})};try{const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}}),{...env,GITHUB_TOKEN:"test-token"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/response exceeds the configured byte limit/);assert.equal(calls,1)}finally{globalThis.fetch=originalFetch}});
-test("read_project_file accepts valid empty text files",async()=>{const originalFetch=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({type:"file",path:"docs/empty.txt",size:0,content:"",encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}});try{const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/empty.txt"}}),{...env,GITHUB_TOKEN:"test-token"});const b=await r.json();assert.equal(b.result.isError,undefined);const value=JSON.parse(b.result.content[0].text);assert.equal(value.content,"");assert.equal(value.size,0)}finally{globalThis.fetch=originalFetch}});
+test("missing GITHUB_READONLY_TOKEN gives an actionable hint when a GitHub read is refused",async()=>{const originalFetch=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({message:"Not Found"}),{status:404,headers:{"content-type":"application/json"}});try{const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}}),{...env,GITHUB_READONLY_TOKEN:undefined});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/GITHUB_READONLY_TOKEN/);assert.match(b.result.content[0].text,/repository-scoped/)}finally{globalThis.fetch=originalFetch}});
+test("all GitHub API responses are byte-bounded, including repository metadata",async()=>{const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;const bytes=new TextEncoder().encode(JSON.stringify({message:"x".repeat(2_000_100)}));return new Response(new ReadableStream({start(controller){controller.enqueue(bytes);controller.close()}}),{status:200,headers:{"content-type":"application/json","content-length":String(bytes.byteLength)}})};try{const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/response exceeds the configured byte limit/);assert.equal(calls,1)}finally{globalThis.fetch=originalFetch}});
+test("read_project_file accepts valid empty text files",async()=>{const originalFetch=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify({type:"file",path:"docs/empty.txt",size:0,content:"",encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}});try{const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/empty.txt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});const b=await r.json();assert.equal(b.result.isError,undefined);const value=JSON.parse(b.result.content[0].text);assert.equal(value.content,"");assert.equal(value.size,0)}finally{globalThis.fetch=originalFetch}});
 test("read_project_file rejects protected paths before any GitHub request",async()=>{const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("GitHub must not be called for protected paths")};try{for(const path of [".env",".envrc",".envrc/secret.txt","nested/.envrc/config",".env/secrets.txt","nested/.env/config",".env.production","nested/.envrc.local/config",".github","docs/.github/workflows/ci.yml","secrets/token.txt","config/credentials/prod.json","keys/private.pem","id_rsa","id_dsa","id_ecdsa","id_ed25519_sk","id_ecdsa_sk",".ssh/id_rsa",".aws/credentials",".azure/accessTokens.json",".config/gcloud/application_default_credentials.json",".config/gh/hosts.yml",".config/containers/auth.json",".config/rclone/rclone.conf",".gitconfig","secrets.json","credentials.yml","config/credentials.json",".kube/config",".docker/config.json",".npmrc",".netrc",".git-credentials","terraform.tfstate","infra/prod.tfvars","keys/known_hosts","keys/authorized_keys"]){const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path}}),env);const b=await r.json();assert.equal(b.result.isError,true,path);assert.match(b.result.content[0].text,/Rejected unsafe or protected file path/,path)}assert.equal(calls,0)}finally{globalThis.fetch=originalFetch}});
 test("unknown RPC methods return method-not-found",async()=>{const r=await worker.fetch(rpc("invalid/method"),env);const b=await r.json();assert.equal(b.error.code,-32601)});
 
@@ -139,7 +165,7 @@ test("create_change_pr rejects disallowed base branches before GitHub calls",asy
  try{for(const base_branch of ["main","valid-but-not-allowed"]){const args={owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch,title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]};const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:args}),{...env,MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/Base branch is not allowed/)}assert.equal(calls,0)}finally{globalThis.fetch=originalFetch}
 });
 test("MCP endpoint returns 405 and Allow: POST for GET and DELETE",async()=>{for(const method of ["GET","DELETE","PUT","PATCH"]){const r=await worker.fetch(req("/mcp",{method}),env);assert.equal(r.status,405,method);assert.equal(r.headers.get("allow"),"POST");assert.deepEqual(await r.json(),{error:"method_not_allowed",message:"The MCP endpoint accepts POST requests only."})}const unknown=await worker.fetch(req("/other",{method:"GET"}),env);assert.equal(unknown.status,404)});
-test("GitHub API response limits enforce streamed bytes with absent or lying Content-Length",async()=>{for(const headers of [{"content-type":"application/json"},{"content-type":"application/json","content-length":"1"}]){const originalFetch=globalThis.fetch;let cancelled=false;globalThis.fetch=async()=>new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode(JSON.stringify({message:"x".repeat(2_000_100)})))},cancel(){cancelled=true}}),{status:200,headers});try{const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}}),{...env,GITHUB_TOKEN:"test-token"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/response exceeds the configured byte limit/i);assert.equal(cancelled,true)}finally{globalThis.fetch=originalFetch}}});
+test("GitHub API response limits enforce streamed bytes with absent or lying Content-Length",async()=>{for(const headers of [{"content-type":"application/json"},{"content-type":"application/json","content-length":"1"}]){const originalFetch=globalThis.fetch;let cancelled=false;globalThis.fetch=async()=>new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode(JSON.stringify({message:"x".repeat(2_000_100)})))},cancel(){cancelled=true}}),{status:200,headers});try{const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/response exceeds the configured byte limit/i);assert.equal(cancelled,true)}finally{globalThis.fetch=originalFetch}}});
 
 test("MCP CORS preflight allows only configured origins and required headers",async()=>{const allowedEnv={...env,MCP_ALLOWED_ORIGINS:"https://client.example"};const good=req("/mcp",{method:"OPTIONS",headers:{origin:"https://client.example","access-control-request-method":"POST","access-control-request-headers":"authorization, content-type, accept, MCP-Protocol-Version, Mcp-Method, Mcp-Name"}});const ok=await worker.fetch(good,allowedEnv);assert.equal(ok.status,204);assert.equal(ok.headers.get("access-control-allow-origin"),"https://client.example");assert.match(ok.headers.get("access-control-allow-headers"),/Mcp-Name/i);const badOrigin=await worker.fetch(req("/mcp",{method:"OPTIONS",headers:{origin:"https://evil.example","access-control-request-method":"POST"}}),allowedEnv);assert.equal(badOrigin.status,403);const badHeader=await worker.fetch(req("/mcp",{method:"OPTIONS",headers:{origin:"https://client.example","access-control-request-method":"POST","access-control-request-headers":"x-evil-header"}}),allowedEnv);assert.equal(badHeader.status,400)});
 
@@ -241,7 +267,7 @@ test("GitHub API calls receive a bounded 10-second abort signal",async()=>{
   throw new Error("Unexpected mocked GitHub URL: "+url);
  };
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"} }),{...env,GITHUB_TOKEN:"test-token"});
+  const r=await worker.fetch(rpc("tools/call",{name:"project_inspect",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt"} }),{...env,GITHUB_READONLY_TOKEN:"test-token"});
   assert.equal(r.status,200);assert.equal(calls,3);assert.deepEqual(timeoutValues,[10_000,10_000,10_000]);
  }finally{globalThis.fetch=originalFetch;AbortSignal.timeout=originalTimeout}
 });
@@ -251,7 +277,7 @@ test("read_project_file rejects files above the explicit read limit before decod
  const originalFetch=globalThis.fetch;let calls=0;
  globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({type:"file",path:"docs/large.txt",size:100_001,content:"",encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}})};
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/large.txt"}}),{...env,GITHUB_TOKEN:"test-token"});
+  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/large.txt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});
   const b=await r.json();assert.equal(r.status,200);assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/maximum readable size/);assert.equal(calls,1);
  }finally{globalThis.fetch=originalFetch}
 });
@@ -260,7 +286,7 @@ test("read_project_file rejects mismatched upstream size metadata",async()=>{
  const originalFetch=globalThis.fetch;
  globalThis.fetch=async()=>new Response(JSON.stringify({type:"file",path:"docs/example.txt",size:1,content:"aGVsbG8=",encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}});
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/example.txt"}}),{...env,GITHUB_TOKEN:"test-token"});
+  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/example.txt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});
   const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/size metadata does not match decoded content/);
  }finally{globalThis.fetch=originalFetch}
 });
@@ -269,7 +295,7 @@ test("read_project_file fails closed when upstream size metadata is missing",asy
  const originalFetch=globalThis.fetch;
  globalThis.fetch=async()=>new Response(JSON.stringify({type:"file",path:"docs/example.txt",content:"aGVsbG8=",encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}});
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/example.txt"}}),{...env,GITHUB_TOKEN:"test-token"});
+  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/example.txt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});
   const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/size metadata is invalid/);
  }finally{globalThis.fetch=originalFetch}
 });
@@ -281,7 +307,7 @@ test("read_project_file accepts a file exactly at the configured byte limit",asy
  const encoded=btoa(content);
  globalThis.fetch=async()=>new Response(JSON.stringify({type:"file",path:"docs/boundary.txt",size:100_000,content:encoded,encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}});
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/boundary.txt"}}),{...env,GITHUB_TOKEN:"test-token"});
+  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/boundary.txt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});
   const b=await r.json();assert.equal(b.result.isError,undefined);
   const value=JSON.parse(b.result.content[0].text);assert.equal(value.size,100_000);assert.equal(value.content.length,100_000);
  }finally{globalThis.fetch=originalFetch}
@@ -291,7 +317,7 @@ test("read_project_file rejects invalid UTF-8 content",async()=>{
  const originalFetch=globalThis.fetch;
  globalThis.fetch=async()=>new Response(JSON.stringify({type:"file",path:"docs/invalid.txt",size:1,content:"/w==",encoding:"base64"}),{status:200,headers:{"content-type":"application/json"}});
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/invalid.txt"}}),{...env,GITHUB_TOKEN:"test-token"});
+  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/invalid.txt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});
   const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/encoded data|UTF-8|encoded/i);
  }finally{globalThis.fetch=originalFetch}
 });
@@ -309,7 +335,7 @@ test("read_project_file streams and rejects oversized GitHub API responses befor
   return new Response(stream,{status:200,headers:{"content-type":"application/json"}});
  };
  try{
-  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/oversized.txt"}}),{...env,GITHUB_TOKEN:"test-token"});
+  const r=await worker.fetch(rpc("tools/call",{name:"read_project_file",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",path:"docs/oversized.txt"}}),{...env,GITHUB_READONLY_TOKEN:"test-token"});
   const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/response exceeds the configured byte limit/i);assert.equal(cancelled,true);
  }finally{globalThis.fetch=originalFetch}
 });
@@ -981,4 +1007,438 @@ test("unresolved operation backlog fails closed before any GitHub write", async 
   assert.match(body.result.content[0].text,/Reconcile quarantined operations/);
   assert.equal(fixture.calls.length,0,"no GitHub side effect may start while the unresolved ledger is saturated");
  } finally { globalThis.fetch=originalFetch; }
+});
+
+test("authenticated tools/list exposes Option C Brain Store tools",async()=>{
+ const r=await worker.fetch(rpc("tools/list",{},11),env);
+ assert.equal(r.status,200);
+ const body=await r.json();
+ const names=new Set(body.result.tools.map(tool=>tool.name));
+ for(const name of ["knowledge_entity_get","knowledge_entity_upsert","knowledge_relationship_create","knowledge_tag_upsert","knowledge_tag_attach","knowledge_entity_tags","knowledge_search","knowledge_document_refs","knowledge_sync_status"])assert.equal(names.has(name),true,name);
+ const entityUpsert=body.result.tools.find(tool=>tool.name==="knowledge_entity_upsert");
+ assert.equal(entityUpsert.inputSchema.properties.tenantId,undefined);
+ assert.equal(entityUpsert.inputSchema.additionalProperties,false);
+});
+test("anonymous PUBLIC_READ_ONLY tools/list never exposes Brain Store tools",async()=>{
+ const r=await worker.fetch(anonymousRpc("tools/list",{},12),{...env,PUBLIC_READ_ONLY:"true"});
+ assert.equal(r.status,200);
+ const body=await r.json();
+ assert.equal(body.result.tools.some(tool=>tool.name.startsWith("knowledge_")),false);
+});
+test("authenticated knowledge writes derive tenant from the bearer principal, not MCP arguments",async()=>{
+ knowledgeStore.calls.length=0;
+ const r=await worker.fetch(rpc("tools/call",{name:"knowledge_entity_upsert",arguments:{entityId:"api",entityType:"service",name:"API",properties:{tier:"core"},expectedVersion:0}},13),env);
+ assert.equal(r.status,200);
+ const body=await r.json();
+ assert.equal(body.result.isError,undefined);
+ const result=JSON.parse(body.result.content[0].text);
+ assert.equal(result.tenantId,"owner");
+ const call=knowledgeStore.calls.find(item=>item.method==="upsertEntity");
+ assert.equal(call.input.tenantId,"owner");
+ assert.equal(knowledgeStore.calls.some(item=>item.method==="idFromName"&&item.name==="tenant:owner"),true);
+});
+test("caller-supplied tenantId is rejected before Brain Store access",async()=>{
+ knowledgeStore.calls.length=0;
+ const r=await worker.fetch(rpc("tools/call",{name:"knowledge_entity_get",arguments:{entityId:"api",tenantId:"tenant-victim"}},14),env);
+ const body=await r.json();
+ assert.equal(body.result.isError,true);
+ assert.match(body.result.content[0].text,/unsupported property tenantId/);
+ assert.equal(knowledgeStore.calls.length,0);
+});
+test("anonymous PUBLIC_READ_ONLY callers cannot invoke Brain Store tools",async()=>{
+ knowledgeStore.calls.length=0;
+ const r=await worker.fetch(anonymousRpc("tools/call",{name:"knowledge_search",arguments:{query:"credentials"}},15),{...env,PUBLIC_READ_ONLY:"true"});
+ const body=await r.json();
+ assert.equal(body.result.isError,true);
+ assert.match(body.result.content[0].text,/PUBLIC_READ_ONLY allowlist/);
+ assert.equal(knowledgeStore.calls.length,0);
+});
+test("readyz fails closed when the Brain Store binding is missing",async()=>{
+ const r=await worker.fetch(req("/readyz"),{...env,KNOWLEDGE_STORE:undefined});
+ assert.equal(r.status,503);
+ const body=await r.json();
+ assert.equal(body.status,"not_ready");
+ assert.equal(body.knowledge_store,"unavailable");
+});
+
+test("Brain Store mutations consume a dedicated rate-limit bucket before Durable Object writes",async()=>{
+ knowledgeStore.calls.length=0;
+ const keys=[];
+ const r=await worker.fetch(rpc("tools/call",{name:"knowledge_entity_upsert",arguments:{entityId:"limited",entityType:"service",name:"Limited",expectedVersion:0}},16),{
+  ...env,
+  MCP_RATE_LIMITER:{limit:async({key})=>{keys.push(key);return{success:key!=="knowledge-write:203.0.113.10"}}}
+ });
+ assert.equal(r.status,429);
+ assert.deepEqual(keys,["authenticated-mcp:203.0.113.10","knowledge-write:203.0.113.10"]);
+ assert.equal(knowledgeStore.calls.length,0);
+});
+
+test("knowledge_document_sync reads an immutable GitHub Vault revision with the read-only token and indexes its digest",async()=>{
+ const originalFetch=globalThis.fetch;
+ const calls=[];
+ const path="knowledge/tenants/owner/architecture.md";
+ const content="# Architecture\\nGitHub Vault is canonical.\\n";
+ const commitSha="a".repeat(40);
+ const blobSha="b".repeat(40);
+ const bytes=new TextEncoder().encode(content).byteLength;
+ globalThis.fetch=async(url,options={})=>{
+  const parsed=new URL(url);
+  calls.push({url:parsed.toString(),method:options.method||"GET",authorization:options.headers?.authorization});
+  let body;
+  if(parsed.pathname.endsWith("/commits")){
+   body=[{sha:commitSha}];
+  }else if(parsed.pathname.endsWith("/contents/"+path)){
+   body={type:"file",encoding:"base64",path,sha:blobSha,size:bytes,content:Buffer.from(content,"utf8").toString("base64")};
+  }else{
+   return new Response(JSON.stringify({message:"not found"}),{status:404,headers:{"content-type":"application/json"}});
+  }
+  return new Response(JSON.stringify(body),{status:200,headers:{"content-type":"application/json"}});
+ };
+ knowledgeStore.calls.length=0;
+ try{
+  const r=await worker.fetch(rpc("tools/call",{name:"knowledge_document_sync",arguments:{path}},17),{
+   ...env,GITHUB_TOKEN:"write-token-must-not-be-used",GITHUB_READONLY_TOKEN:"read-only-token"
+  });
+  assert.equal(r.status,200);
+  const body=await r.json();
+  assert.equal(body.result.isError,undefined);
+  const result=JSON.parse(body.result.content[0].text);
+  assert.equal(result.tenantId,"owner");
+  assert.equal(result.repository,"mohammadrezayaghoobi123-dev/Chat-gpt");
+  assert.equal(result.path,path);
+  assert.equal(result.commitSha,commitSha);
+  assert.equal(result.blobSha,blobSha);
+  assert.equal(result.content,content);
+  assert.equal(result.sourceOfTruth,"GitHub Vault");
+  assert.equal(calls.length,2);
+  assert.ok(calls.every(call=>call.method==="GET"));
+  assert.ok(calls.every(call=>call.authorization==="Bearer read-only-token"));
+  const ref=knowledgeStore.calls.find(call=>call.method==="putDocumentRef");
+  const index=knowledgeStore.calls.find(call=>call.method==="indexDocumentSnapshot");
+  const sync=knowledgeStore.calls.find(call=>call.method==="setDocumentSyncState");
+  assert.equal(ref.input.tenantId,"owner");
+  assert.equal(ref.input.commitSha,commitSha);
+  assert.match(ref.input.contentSha256,/^[a-f0-9]{64}$/);
+  assert.equal(index.input.contentSha256,ref.input.contentSha256);
+  assert.equal(index.input.text,content);
+  assert.equal(sync.input.status,"synced");
+  assert.equal(sync.input.lastSyncedCommit,commitSha);
+ }finally{globalThis.fetch=originalFetch}
+});
+test("knowledge_document_sync rejects another tenant path before GitHub or Brain Store access",async()=>{
+ knowledgeStore.calls.length=0;
+ const originalFetch=globalThis.fetch;let fetchCalls=0;
+ globalThis.fetch=async()=>{fetchCalls++;throw new Error("GitHub must not be called for a cross-tenant path")};
+ try{
+  const r=await worker.fetch(rpc("tools/call",{name:"knowledge_document_sync",arguments:{path:"knowledge/tenants/victim/architecture.md"}},18),{
+   ...env,GITHUB_READONLY_TOKEN:"read-only-token"
+  });
+  const body=await r.json();
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/KNOWLEDGE_VAULT_PATH_FORBIDDEN/);
+  assert.equal(fetchCalls,0);
+  assert.equal(knowledgeStore.calls.length,0);
+ }finally{globalThis.fetch=originalFetch}
+});
+test("knowledge_document_sync does not accept caller-selected Git refs or commit SHAs",async()=>{
+ knowledgeStore.calls.length=0;
+ const originalFetch=globalThis.fetch;let fetchCalls=0;
+ globalThis.fetch=async()=>{fetchCalls++;throw new Error("GitHub must not be called for a caller-selected ref")};
+ try{
+  const r=await worker.fetch(rpc("tools/call",{name:"knowledge_document_sync",arguments:{path:"knowledge/tenants/owner/architecture.md",commitSha:"main"}},19),{
+   ...env,GITHUB_READONLY_TOKEN:"read-only-token"
+  });
+  const body=await r.json();
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/unsupported property commitSha/);
+  assert.equal(fetchCalls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
+
+test("authenticated Vault proposal status is scoped to the owner principal",async()=>{
+ knowledgeStore.calls.length=0;
+ const r=await worker.fetch(rpc("tools/call",{name:"knowledge_document_proposal_status",arguments:{proposalId:"proposal-00000001"}},20),env);
+ const body=await r.json();
+ assert.equal(body.result.isError,undefined);
+ const result=JSON.parse(body.result.content[0].text);
+ assert.equal(result.tenantId,"owner");
+ assert.equal(result.proposalId,"proposal-00000001");
+ const call=knowledgeStore.calls.find(item=>item.method==="getVaultProposal");
+ assert.equal(call.input.tenantId,"owner");
+});
+
+function mergedVaultPullRequest(fixture,overrides={}){
+ const repository="mohammadrezayaghoobi123-dev/Chat-gpt";
+ return {
+  number:fixture.proposal.pullRequestNumber,
+  html_url:fixture.proposal.pullRequestUrl,
+  state:"closed",merged:true,merge_commit_sha:fixture.commitSha,
+  base:{ref:"main",repo:{full_name:repository}},
+  head:{ref:fixture.proposal.branch,sha:fixture.proposal.commitSha,repo:{full_name:repository}},
+  ...overrides
+ };
+}
+function makeVaultOutboxFixture(proposalOverrides={}){
+ const content="# Approved architecture\\n";
+ const commitSha=createHash("sha1").update("merge-commit").digest("hex");
+ const blobSha=createHash("sha1").update("blob-content").digest("hex");
+ const contentSha256=createHash("sha256").update(content).digest("hex");
+ const proposal={
+  tenantId:"owner",proposalId:"proposal-00000001",documentId:"doc_123",
+  repository:"mohammadrezayaghoobi123-dev/Chat-gpt",
+  path:"knowledge/tenants/owner/architecture.md",expectedBlobSha:"ABSENT",
+  proposedContentSha256:contentSha256,pullRequestNumber:987,
+  pullRequestUrl:"https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/987",
+  branch:"assistant/mcp-vault-proposal-01",commitSha:"c".repeat(40),status:"proposed",
+  ...proposalOverrides
+ };
+ const event={tenantId:"owner",eventId:"event-vault-0001",leaseGeneration:1,eventType:"vault.document.proposed",payload:{proposalId:proposal.proposalId,pullRequestNumber:proposal.pullRequestNumber}};
+ const calls=[];
+ let claimed=false;
+ const stub={
+  claimOutbox:async()=>{if(claimed)return null;claimed=true;return event},
+  getVaultProposal:async()=>proposal,
+  deferOutbox:async input=>{calls.push({method:"deferOutbox",input});return input},
+  failOutbox:async input=>{calls.push({method:"failOutbox",input});return{...event,status:input.maxAttempts===1?"dead_letter":"retry"}},
+  completeOutbox:async input=>{calls.push({method:"completeOutbox",input});return input},
+  putDocumentRef:async input=>{calls.push({method:"putDocumentRef",input});return input},
+  indexDocumentSnapshot:async input=>{calls.push({method:"indexDocumentSnapshot",input});return input},
+  setDocumentSyncState:async input=>{calls.push({method:"setDocumentSyncState",input});return input},
+  updateVaultProposal:async input=>{calls.push({method:"updateVaultProposal",input});return{...proposal,...input}}
+ };
+ return{content,commitSha,blobSha,contentSha256,proposal,event,calls,binding:{idFromName:name=>name,get:()=>stub}};
+}
+test("scheduled outbox defers an open Vault PR without consuming failure retries",async()=>{
+ const fixture=makeVaultOutboxFixture();
+ const originalFetch=globalThis.fetch;
+ const auth=[];
+ globalThis.fetch=async(url,options={})=>{
+  auth.push(options.headers?.authorization);
+  return new Response(JSON.stringify({state:"open",merged:false}),{status:200,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const result=await processKnowledgeOutbox({...env,KNOWLEDGE_STORE:fixture.binding,GITHUB_READONLY_TOKEN:"read-only-test-token"});
+  assert.deepEqual(result,{processed:1,completed:0,deferred:1,failed:0,deadLetter:0});
+  const deferred=fixture.calls.find(call=>call.method==="deferOutbox");
+  assert.equal(deferred.input.retryAfterMs,300000);
+  assert.equal(fixture.calls.some(call=>call.method==="completeOutbox"),false);
+  assert.deepEqual(auth,["Bearer read-only-test-token"]);
+ }finally{globalThis.fetch=originalFetch}
+});
+test("scheduled outbox verifies merged Vault content and promotes the exact revision into Brain Store",async()=>{
+ const fixture=makeVaultOutboxFixture();
+ const originalFetch=globalThis.fetch;
+ const auth=[];
+ globalThis.fetch=async(url,options={})=>{
+  const parsed=new URL(url);auth.push(options.headers?.authorization);
+  if(parsed.pathname.endsWith("/pulls/987")){
+   return new Response(JSON.stringify(mergedVaultPullRequest(fixture)),{status:200,headers:{"content-type":"application/json"}});
+  }
+  if(parsed.pathname.endsWith("/contents/"+fixture.proposal.path)){
+   return new Response(JSON.stringify({
+    type:"file",encoding:"base64",path:fixture.proposal.path,sha:fixture.blobSha,
+    size:new TextEncoder().encode(fixture.content).byteLength,
+    content:Buffer.from(fixture.content,"utf8").toString("base64")
+   }),{status:200,headers:{"content-type":"application/json"}});
+  }
+  return new Response(JSON.stringify({message:"not found"}),{status:404,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const result=await processKnowledgeOutbox({...env,KNOWLEDGE_STORE:fixture.binding,GITHUB_READONLY_TOKEN:"read-only-test-token"});
+  assert.deepEqual(result,{processed:1,completed:1,deferred:0,failed:0,deadLetter:0});
+  assert.equal(fixture.calls.some(call=>call.method==="putDocumentRef"&&call.input.commitSha===fixture.commitSha),true);
+  assert.equal(fixture.calls.some(call=>call.method==="indexDocumentSnapshot"&&call.input.contentSha256===fixture.contentSha256),true);
+  assert.equal(fixture.calls.some(call=>call.method==="setDocumentSyncState"&&call.input.status==="synced"),true);
+  assert.equal(fixture.calls.some(call=>call.method==="updateVaultProposal"&&call.input.status==="merged"),true);
+  assert.equal(fixture.calls.some(call=>call.method==="completeOutbox"),true);
+  assert.ok(auth.every(value=>value==="Bearer read-only-test-token"));
+ }finally{globalThis.fetch=originalFetch}
+});
+test("scheduled outbox refuses to index a merged PR whose repository or branch identity differs from the proposal",async()=>{
+ const repository="mohammadrezayaghoobi123-dev/Chat-gpt";
+ const scenarios=[
+  {name:"wrong base branch",override:fixture=>({base:{ref:"integration",repo:{full_name:repository}}})},
+  {name:"wrong head branch",override:fixture=>({head:{ref:"attacker-branch",sha:fixture.proposal.commitSha,repo:{full_name:repository}}})},
+  {name:"changed head commit",override:fixture=>({head:{ref:fixture.proposal.branch,sha:"e".repeat(40),repo:{full_name:repository}}})},
+  {name:"wrong base repository",override:fixture=>({base:{ref:"main",repo:{full_name:"attacker/other"}}})}
+ ];
+ for(const scenario of scenarios){
+  const fixture=makeVaultOutboxFixture();
+  const originalFetch=globalThis.fetch;
+  globalThis.fetch=async(url,options={})=>{
+   const parsed=new URL(url);
+   if(parsed.pathname.endsWith("/pulls/987")){
+    return new Response(JSON.stringify(mergedVaultPullRequest(fixture,scenario.override(fixture))),{status:200,headers:{"content-type":"application/json"}});
+   }
+   if(parsed.pathname.endsWith("/contents/"+fixture.proposal.path)){
+    return new Response(JSON.stringify({
+     type:"file",encoding:"base64",path:fixture.proposal.path,sha:fixture.blobSha,
+     size:new TextEncoder().encode(fixture.content).byteLength,
+     content:Buffer.from(fixture.content,"utf8").toString("base64")
+    }),{status:200,headers:{"content-type":"application/json"}});
+   }
+   return new Response(JSON.stringify({message:"not found"}),{status:404,headers:{"content-type":"application/json"}});
+  };
+  try{
+   const result=await processKnowledgeOutbox({...env,KNOWLEDGE_STORE:fixture.binding,GITHUB_READONLY_TOKEN:"read-only-test-token"});
+   assert.equal(result.completed,0,scenario.name);
+   assert.equal(result.failed,1,scenario.name);
+   assert.equal(result.deadLetter,1,scenario.name);
+   const conflict=fixture.calls.find(call=>call.method==="updateVaultProposal");
+   assert.equal(conflict?.input.status,"conflict",scenario.name);
+   assert.equal(fixture.calls.some(call=>call.method==="putDocumentRef"),false,scenario.name);
+   assert.equal(fixture.calls.some(call=>call.method==="indexDocumentSnapshot"),false,scenario.name);
+   assert.equal(fixture.calls.some(call=>call.method==="setDocumentSyncState"),false,scenario.name);
+   assert.equal(fixture.calls.some(call=>call.method==="completeOutbox"),false,scenario.name);
+  }finally{globalThis.fetch=originalFetch}
+ }
+});
+test("scheduled outbox dead-letters a merged PR when canonical content digest differs from the approved proposal",async()=>{
+ const fixture=makeVaultOutboxFixture({proposedContentSha256:"d".repeat(64)});
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=async(url,options={})=>{
+  const parsed=new URL(url);
+  if(parsed.pathname.endsWith("/pulls/987")){
+   return new Response(JSON.stringify(mergedVaultPullRequest(fixture)),{status:200,headers:{"content-type":"application/json"}});
+  }
+  return new Response(JSON.stringify({
+   type:"file",encoding:"base64",path:fixture.proposal.path,sha:fixture.blobSha,
+   size:new TextEncoder().encode(fixture.content).byteLength,
+   content:Buffer.from(fixture.content,"utf8").toString("base64")
+  }),{status:200,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const result=await processKnowledgeOutbox({...env,KNOWLEDGE_STORE:fixture.binding,GITHUB_READONLY_TOKEN:"read-only-test-token"});
+  assert.deepEqual(result,{processed:1,completed:0,deferred:0,failed:1,deadLetter:1});
+  const conflict=fixture.calls.find(call=>call.method==="updateVaultProposal");
+  assert.equal(conflict.input.status,"conflict");
+  const failed=fixture.calls.find(call=>call.method==="failOutbox");
+  assert.equal(failed.input.maxAttempts,1);
+  assert.equal(fixture.calls.some(call=>call.method==="indexDocumentSnapshot"),false);
+ }finally{globalThis.fetch=originalFetch}
+});
+
+test("Cloudflare scheduled handler attaches reconciliation to waitUntil and emits a structured summary",async()=>{
+ let pending;
+ const logs=[];
+ const originalLog=console.log;
+ const stub={claimOutbox:async()=>null};
+ const binding={idFromName:name=>name,get:()=>stub};
+ try{
+  console.log=(...args)=>logs.push(args.join(" "));
+  await worker.scheduled({cron:"*/5 * * * *"},{...env,KNOWLEDGE_STORE:binding},{
+   waitUntil(promise){pending=promise}
+  });
+  assert.ok(pending instanceof Promise);
+  await pending;
+ }finally{console.log=originalLog}
+ const event=logs.map(line=>{try{return JSON.parse(line)}catch{return null}}).find(value=>value?.event==="knowledge_outbox_reconciliation");
+ assert.deepEqual({
+  processed:event?.processed,completed:event?.completed,deferred:event?.deferred,failed:event?.failed
+ },{processed:0,completed:0,deferred:0,failed:0});
+});
+
+test("authenticated architecture analysis attaches tenant-scoped Vault evidence with immutable source references",async()=>{
+ const originalFetch=globalThis.fetch;
+ const path="knowledge/tenants/owner/README.md";
+ const content="## Owner Vault\\nCanonical architecture evidence.\\n";
+ const commitSha=createHash("sha1").update("vault-commit").digest("hex");
+ const blobSha=createHash("sha1").update("vault-blob").digest("hex");
+ const contentSha256=createHash("sha256").update(content).digest("hex");
+ const calls=[];
+ const stub={
+  search:async input=>{calls.push({method:"search",input});return[{recordType:"document",recordId:"doc_123",commitSha,contentSha256,title:"Owner Vault",snippet:"Canonical architecture evidence",score:1}]},
+  listDocumentRefs:async input=>{calls.push({method:"listDocumentRefs",input});return[{repository:"mohammadrezayaghoobi123-dev/Chat-gpt",path,commitSha,contentSha256}]}
+ };
+ const binding={idFromName:name=>name,get:()=>stub};
+ const fetchCalls=[];
+ globalThis.fetch=async(url,options={})=>{
+  const parsed=new URL(url);fetchCalls.push({url:parsed.toString(),authorization:options.headers?.authorization});
+  return new Response(JSON.stringify({type:"file",encoding:"base64",path,sha:blobSha,size:new TextEncoder().encode(content).byteLength,content:Buffer.from(content,"utf8").toString("base64")}),{status:200,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const r=await worker.fetch(rpc("tools/call",{name:"architecture_analyze",arguments:{
+   owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",ref:"main",paths:[path],knowledge_query:"canonical architecture evidence"
+  }},21),{...env,KNOWLEDGE_STORE:binding,GITHUB_TOKEN:"write-token-must-not-be-used",GITHUB_READONLY_TOKEN:"read-only-token"});
+  const body=await r.json();
+  assert.equal(body.result.isError,undefined);
+  const result=JSON.parse(body.result.content[0].text);
+  assert.equal(result.knowledge_context.status,"retrieved");
+  assert.equal(result.knowledge_context.results[0].sourceRef.path,path);
+  assert.equal(result.knowledge_context.results[0].sourceRef.commitSha,commitSha);
+  assert.equal(result.knowledge_context.results[0].content_trust,"untrusted_evidence");
+  assert.equal(calls.find(call=>call.method==="search").input.tenantId,"owner");
+  assert.equal(calls.find(call=>call.method==="listDocumentRefs").input.tenantId,"owner");
+  assert.equal(fetchCalls.length,1);
+  assert.equal(fetchCalls[0].authorization,"Bearer read-only-token");
+ }finally{globalThis.fetch=originalFetch}
+});
+test("anonymous architecture analysis never queries private Knowledge Store context",async()=>{
+ const originalFetch=globalThis.fetch;
+ const path="knowledge/tenants/owner/README.md";
+ const content="## Public-safe file\\n";
+ let searchCalls=0;
+ const binding={idFromName:name=>name,get:()=>({search:async()=>{searchCalls++;return[]},listDocumentRefs:async()=>[]})};
+ globalThis.fetch=async(url,options={})=>{
+  const parsed=new URL(url);
+  if(parsed.pathname==="/repos/mohammadrezayaghoobi123-dev/Chat-gpt")return new Response(JSON.stringify({private:false,full_name:"mohammadrezayaghoobi123-dev/Chat-gpt",default_branch:"main"}),{status:200,headers:{"content-type":"application/json"}});
+  return new Response(JSON.stringify({type:"file",encoding:"base64",path,sha:createHash("sha1").update("public-file").digest("hex"),size:new TextEncoder().encode(content).byteLength,content:Buffer.from(content,"utf8").toString("base64")}),{status:200,headers:{"content-type":"application/json"}});
+ };
+ try{
+  const r=await worker.fetch(anonymousRpc("tools/call",{name:"architecture_analyze",arguments:{
+   owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",ref:"main",paths:[path],knowledge_query:"private architecture"
+  }},22),{PUBLIC_READ_ONLY:"true",KNOWLEDGE_STORE:binding,GITHUB_READONLY_TOKEN:"read-only-token",GITHUB_TOKEN:"write-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})}});
+  const body=await r.json();
+  assert.equal(body.result.isError,undefined);
+  const result=JSON.parse(body.result.content[0].text);
+  assert.equal(result.knowledge_context.status,"not_available_in_public_read_only_mode");
+  assert.equal(searchCalls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
+
+
+test("scheduled handler emits an alert-level structured event for dead-lettered Knowledge Store work", async () => {
+  let claimed = false;
+  let pending;
+  const logs = [];
+  const errors = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  const stub = {
+    claimOutbox: async () => {
+      if (claimed) return null;
+      claimed = true;
+      return { eventId: "evt-alert-0001", eventType: "unsupported.test.event", leaseGeneration: 1 };
+    },
+    failOutbox: async () => ({ status: "dead_letter" }),
+  };
+  const binding = { idFromName: name => name, get: () => stub };
+  try {
+    console.log = (...args) => logs.push(args.join(" "));
+    console.error = (...args) => errors.push(args.join(" "));
+    await worker.scheduled({ cron: "*/5 * * * *" }, { ...env, KNOWLEDGE_STORE: binding }, {
+      waitUntil(promise) { pending = promise; },
+    });
+    assert.ok(pending instanceof Promise);
+    await pending;
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+  const alert = errors.map(line => { try { return JSON.parse(line); } catch { return null; } })
+    .find(value => value?.event === "knowledge_outbox_reconciliation_alert");
+  assert.deepEqual({
+    severity: alert?.severity,
+    processed: alert?.processed,
+    completed: alert?.completed,
+    failed: alert?.failed,
+    deadLetter: alert?.deadLetter,
+  }, {
+    severity: "error",
+    processed: 1,
+    completed: 0,
+    failed: 1,
+    deadLetter: 1,
+  });
+  assert.equal(JSON.stringify(alert).includes("evt-alert-0001"), false, "alert logs must not expose event payload identifiers");
 });

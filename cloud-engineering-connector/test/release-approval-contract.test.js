@@ -12,6 +12,7 @@ const workflows = [
     allowedCredentialSteps: [
       "Preflight Staging bindings and capture rollback target",
       "Deploy candidate to Staging",
+      "Verify Staging KnowledgeStore binding and scheduled reconciliation",
       "Confirm deployed version and write release evidence",
       "Roll back Staging if post-deploy acceptance fails",
     ],
@@ -99,7 +100,7 @@ function extractPreflightScript(source, stepName) {
   return lines.slice(heredocStart + 1, heredocEnd).map((line) => line.replace(/^ {10}/, "")).join("\n");
 }
 
-function runPreflightWithMissingObservability(source, stepName, production, expectFailure = true, legacyPublicReadOnlySecret = false) {
+function runPreflightWithMissingObservability(source, stepName, production, expectFailure = true, legacyPublicReadOnlySecret = false, observabilityOverride = null) {
   const script = extractPreflightScript(source, stepName);
   const stagingSettings = {
     bindings: [
@@ -110,8 +111,9 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
       { name: "PUBLIC_READ_ONLY", type: "plain_text", text: "true" },
       { name: "MCP_RATE_LIMITER", type: "ratelimit", namespace_id: "staging-rate" },
       { name: "WRITE_CONTROL", type: "durable_object_namespace", namespace_id: "staging-write" },
+      { name: "KNOWLEDGE_STORE", type: "durable_object_namespace", namespace_id: "staging-knowledge" },
     ],
-    observability: null,
+    observability: observabilityOverride,
   };
   const productionSettings = {
     bindings: [
@@ -122,10 +124,12 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
       { name: "PUBLIC_READ_ONLY", type: legacyPublicReadOnlySecret ? "secret_text" : "plain_text", text: "true" },
       { name: "MCP_RATE_LIMITER", type: "ratelimit", namespace_id: "production-rate" },
       { name: "WRITE_CONTROL", type: "durable_object_namespace", namespace_id: "production-write" },
+      { name: "KNOWLEDGE_STORE", type: "durable_object_namespace", namespace_id: "production-knowledge" },
     ],
-    observability: null,
+    observability: observabilityOverride,
   };
   const deploymentData = { deployments: [{ versions: [{ version_id: "previous-version", percentage: 100 }] }] };
+  const scheduleData = { schedules: [{ cron: "*/5 * * * *" }] };
   const accountData = { settings: { enforce_twofactor: true } };
   const prelude = [
     "globalThis.fetch = async (input) => {",
@@ -134,6 +138,7 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
     "  if (url.endsWith('/accounts/test-account')) result = " + JSON.stringify(accountData) + ";",
     "  else if (url.includes('/chat-gpt111-staging/settings')) result = " + JSON.stringify(stagingSettings) + ";",
     "  else if (url.includes('/chat-gpt111/settings')) result = " + JSON.stringify(productionSettings) + ";",
+    "  else if (url.includes('/schedules')) result = " + JSON.stringify(scheduleData) + ";",
     "  else if (url.includes('/deployments?')) result = " + JSON.stringify(deploymentData) + ";",
     "  else throw new Error('Unexpected Cloudflare API request: ' + url);",
     "  return new Response(JSON.stringify({ success: true, result }), { status: 200, headers: { 'content-type': 'application/json' } });",
@@ -276,4 +281,64 @@ test("live Staging smoke is post-deploy only and PR CI does not probe the previo
   assert.doesNotMatch(smokeJob, /github\.event_name == 'pull_request'/);
   const stagingRelease = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
   assert.match(stagingRelease, /- name: Run live Staging acceptance/, "the release workflow must smoke the exact deployed candidate");
+});
+
+
+for (const workflow of workflows) {
+  test(workflow.name + " release validates the smoke credential before deployment and uses it only for live acceptance", () => {
+    const source = readFileSync(workflow.path, "utf8");
+    const deployPosition = source.indexOf("npx wrangler deploy");
+    const credentialPreflightPosition = source.indexOf("- name: Validate MCP smoke credential");
+    assert.ok(credentialPreflightPosition >= 0 && credentialPreflightPosition < deployPosition,
+      "MCP smoke credential must be validated before deployment");
+    assert.ok(source.includes("MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}"),
+      "the environment-scoped MCP_AUTH_TOKEN must be injected into the live smoke step");
+    const smokeName = workflow.name === "Staging" ? "- name: Run live Staging acceptance" : "- name: Run live Production acceptance";
+    const smokeStart = source.indexOf(smokeName);
+    assert.ok(smokeStart >= 0, "live acceptance step must exist");
+    const smokeEnd = source.indexOf("\n      - name:", smokeStart + smokeName.length);
+    const smokeStep = source.slice(smokeStart, smokeEnd >= 0 ? smokeEnd : undefined);
+    assert.match(smokeStep, /MCP_AUTH_TOKEN:/, "live acceptance must receive the authenticated owner credential");
+  });
+}
+
+test("Staging post-deploy gate verifies the Knowledge Store Durable Object and five-minute Cron schedule", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  const start = source.indexOf("- name: Verify Staging KnowledgeStore binding and scheduled reconciliation");
+  const end = source.indexOf("\n      - name:", start + 1);
+  assert.ok(start >= 0 && end > start, "Staging Knowledge Store and Cron verification step must exist");
+  const step = source.slice(start, end);
+  assert.match(step, /KNOWLEDGE_STORE/);
+  assert.match(step, /schedules/);
+  assert.ok(step.includes("*/5 * * * *"));
+});
+
+test("Production post-deploy gate verifies Knowledge Store namespace isolation and five-minute Cron schedule", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
+  const start = source.indexOf("- name: Verify Production Durable Object namespace isolation");
+  const end = source.indexOf("\n      - name:", start + 1);
+  assert.ok(start >= 0 && end > start, "Production Durable Object verification step must exist");
+  const step = source.slice(start, end);
+  assert.match(step, /KNOWLEDGE_STORE/);
+  assert.match(step, /schedules/);
+  assert.ok(step.includes("*/5 * * * *"));
+});
+
+
+test("Production post-deploy verification accepts isolated KnowledgeStore namespaces and active five-minute Cron schedules", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
+  const observability = {
+    enabled: true,
+    head_sampling_rate: 1,
+    redact_query_string: true,
+    logs: { enabled: true, persist: true, head_sampling_rate: 1, invocation_logs: false },
+  };
+  runPreflightWithMissingObservability(
+    source,
+    "Verify Production Durable Object namespace isolation",
+    true,
+    false,
+    false,
+    observability,
+  );
 });

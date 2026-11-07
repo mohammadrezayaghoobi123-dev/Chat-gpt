@@ -55,6 +55,18 @@ jobs:
         env:
           RELEASE_GITHUB_TOKEN: ${{ github.token }}
 
+      - name: Validate MCP smoke credential
+        env:
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          const token = process.env.MCP_AUTH_TOKEN;
+          if (typeof token !== "string" || token.length < 32 || token.length > 512) {
+            throw new Error("Set the MCP_AUTH_TOKEN secret in the Production GitHub environment to the exact Production Worker bearer token. The value is never logged.");
+          }
+          console.log("Production MCP smoke credential is configured.");
+          NODE
+
       - name: Install dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
@@ -153,15 +165,31 @@ jobs:
           const account = process.env.CLOUDFLARE_ACCOUNT_ID;
           const token = process.env.CLOUDFLARE_API_TOKEN;
           async function settings(script) {
-            const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/${script}/settings`, {
-              headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+            const url = "https://api.cloudflare.com/client/v4/accounts/" + account + "/workers/scripts/" + script + "/settings";
+            const response = await fetch(url, {
+              headers: { authorization: "Bearer " + token, accept: "application/json" },
               signal: AbortSignal.timeout(15000),
             });
             const body = await response.json();
-            assert.equal(response.ok && body.success, true, `Could not inspect ${script} settings`);
+            assert.equal(response.ok && body.success, true, "Could not inspect " + script + " settings");
             return body.result;
           }
-          const [productionSettings, stagingSettings] = await Promise.all([settings("chat-gpt111"), settings("chat-gpt111-staging")]);
+          async function schedules(script) {
+            const url = "https://api.cloudflare.com/client/v4/accounts/" + account + "/workers/scripts/" + script + "/schedules";
+            const response = await fetch(url, {
+              headers: { authorization: "Bearer " + token, accept: "application/json" },
+              signal: AbortSignal.timeout(15000),
+            });
+            const body = await response.json();
+            assert.equal(response.ok && body.success, true, "Could not inspect " + script + " Cron schedules");
+            return body.result;
+          }
+          const [productionSettings, stagingSettings, productionSchedules, stagingSchedules] = await Promise.all([
+            settings("chat-gpt111"),
+            settings("chat-gpt111-staging"),
+            schedules("chat-gpt111"),
+            schedules("chat-gpt111-staging"),
+          ]);
           const production = new Map((productionSettings.bindings || []).map((binding) => [binding.name, binding]));
           const staging = new Map((stagingSettings.bindings || []).map((binding) => [binding.name, binding]));
           const publicReadOnly = production.get("PUBLIC_READ_ONLY");
@@ -176,13 +204,23 @@ jobs:
           assert.equal(observability?.logs?.head_sampling_rate, 1, "Production persistent logs must sample 100%");
           assert.equal(observability?.logs?.invocation_logs, false, "Production invocation logs must remain disabled to reduce sensitive-data exposure");
           assert.ok(production.get("WRITE_CONTROL")?.namespace_id, "Production migration did not create WRITE_CONTROL");
-          assert.notEqual(production.get("WRITE_CONTROL").namespace_id, staging.get("WRITE_CONTROL")?.namespace_id, "Production and Staging Durable Object namespaces must differ");
+          assert.notEqual(production.get("WRITE_CONTROL").namespace_id, staging.get("WRITE_CONTROL")?.namespace_id, "Production and Staging WriteControl namespaces must differ");
+          const productionKnowledgeStore = production.get("KNOWLEDGE_STORE");
+          const stagingKnowledgeStore = staging.get("KNOWLEDGE_STORE");
+          assert.equal(productionKnowledgeStore?.type, "durable_object_namespace", "Production KNOWLEDGE_STORE binding is required");
+          assert.equal(stagingKnowledgeStore?.type, "durable_object_namespace", "Staging KNOWLEDGE_STORE binding is required");
+          assert.ok(productionKnowledgeStore.namespace_id && stagingKnowledgeStore.namespace_id, "Both KnowledgeStore namespace IDs must be present");
+          assert.notEqual(productionKnowledgeStore.namespace_id, stagingKnowledgeStore.namespace_id, "Production and Staging KnowledgeStore namespaces must differ");
+          assert.ok((productionSchedules.schedules || []).some((schedule) => schedule.cron === "*/5 * * * *"), "Production five-minute Knowledge Store reconciliation Cron must be active");
+          assert.ok((stagingSchedules.schedules || []).some((schedule) => schedule.cron === "*/5 * * * *"), "Staging five-minute Knowledge Store reconciliation Cron must be active");
           assert.notEqual(production.get("MCP_RATE_LIMITER")?.namespace_id, staging.get("MCP_RATE_LIMITER")?.namespace_id, "Production and Staging rate-limit namespaces must differ");
-          console.log("Production observability and Staging/Production state namespace isolation are verified.");
+          console.log("Production observability, KnowledgeStore isolation, and five-minute Cron schedules are verified.");
           NODE
 
       - name: Run live Production acceptance
         run: node test/production-smoke.mjs
+        env:
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
 
       - name: Confirm deployed version and write release evidence
         if: success()

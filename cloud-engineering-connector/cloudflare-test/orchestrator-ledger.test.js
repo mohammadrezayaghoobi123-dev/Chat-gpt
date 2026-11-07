@@ -507,6 +507,147 @@ it("requires verified worker identities before task or outbox lease side effects
       .resolves.toMatchObject({ claimed: true, leaseGeneration: 1 });
   });
 
+  it("consumes a createTask assertion when the authenticated task payload is rejected", async () => {
+    const ledger = ledgerFor("ledger-create-task-sensitive-assertion-consumption");
+    const assertion = await createWorkerAssertion({
+      subject: "orchestrator-scheduler", role: "system", operation: "createTask",
+      nowMs: now, jti: "jti-create-task-sensitive-000001",
+    });
+    const rejected = await ledger.createTask({
+      task: { ...task(), apiKey: "must-not-be-persisted" },
+      idempotencyKey: "create-task-sensitive-001",
+      inputHash: "a".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: assertion,
+    });
+    expect(rejected).toEqual({ created: false, reason: "SENSITIVE_FIELD_REJECTED" });
+
+    await expect(ledger.createTask({
+      task: task(),
+      idempotencyKey: "create-task-sensitive-001",
+      inputHash: "a".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: assertion,
+    })).resolves.toEqual({ created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        "jti-create-task-sensitive-000001",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+        "task-0001",
+      ).one().count).toBe(0);
+    });
+  });
+
+  it("consumes a transitionTask assertion when its authenticated outbox payload is rejected", async () => {
+    const ledger = ledgerFor("ledger-transition-outbox-sensitive-assertion-consumption");
+    await createTask(ledger, {
+      task: task(), idempotencyKey: "transition-outbox-sensitive-task", inputHash: "b".repeat(64), now,
+    });
+    const lease = await ledger.claimTask({
+      workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"),
+      leaseMs: 30_000, now,
+    });
+    const assertion = await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "transitionTask",
+      nowMs: now + 1, jti: "jti-transition-outbox-sensitive-0001",
+    });
+    const input = {
+      taskId: "task-0001",
+      expectedVersion: 1,
+      expectedState: "SCHEDULED",
+      nextState: "RUNNING",
+      actor: agent,
+      evidence,
+      now: now + 1,
+      workerId: "agent:worker-1",
+      workerAssertion: assertion,
+      leaseGeneration: lease.leaseGeneration,
+      outboxEvent: {
+        eventId: "evt-transition-sensitive-0001",
+        idempotencyKey: "idem-transition-sensitive-0001",
+        eventType: "task.running",
+        payload: { taskId: "task-0001", apiKey: "must-not-persist" },
+      },
+    };
+
+    await expect(ledger.transitionTask(input)).resolves.toEqual({
+      updated: false, reason: "SENSITIVE_FIELD_REJECTED",
+    });
+    await expect(ledger.transitionTask({
+      ...input,
+      outboxEvent: {
+        eventId: "evt-transition-sensitive-0001",
+        idempotencyKey: "idem-transition-sensitive-0001",
+        eventType: "task.running",
+        payload: { taskId: "task-0001" },
+      },
+    })).resolves.toEqual({
+      updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        "jti-transition-outbox-sensitive-0001",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT state, version FROM orchestrator_tasks WHERE task_id = ?",
+        "task-0001",
+      ).one()).toMatchObject({ state: "SCHEDULED", version: 1 });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE event_id = ?",
+        "evt-transition-sensitive-0001",
+      ).one().count).toBe(0);
+    });
+  });
+
+  it("consumes an appendAuditEvent assertion when authenticated audit details are rejected", async () => {
+    const ledger = ledgerFor("ledger-audit-sensitive-assertion-consumption");
+    await createTask(ledger, {
+      task: task(), idempotencyKey: "audit-sensitive-task", inputHash: "c".repeat(64), now,
+    });
+    const assertion = await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "appendAuditEvent",
+      nowMs: now, jti: "jti-audit-sensitive-000001",
+    });
+    const input = {
+      eventId: "audit-sensitive-0001",
+      taskId: "task-0001",
+      actor: agent,
+      workerId: "agent:worker-1",
+      workerAssertion: assertion,
+      eventType: "task.created",
+      details: { apiKey: "must-not-persist" },
+      now,
+    };
+
+    await expect(ledger.appendAuditEvent(input)).resolves.toEqual({
+      appended: false, reason: "SENSITIVE_FIELD_REJECTED",
+    });
+    await expect(ledger.appendAuditEvent({
+      ...input, details: { safe: true },
+    })).resolves.toEqual({
+      appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        "jti-audit-sensitive-000001",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE event_id = ?",
+        "audit-sensitive-0001",
+      ).one().count).toBe(0);
+    });
+  });
+
   it("rejects secret-bearing fields and never creates or writes KnowledgeStore tables", async () => {
     const ledger = ledgerFor("ledger-secret-isolation");
     await expect(Promise.resolve().then(() => createTask(ledger, {

@@ -1,52 +1,39 @@
 # Branch status — `engineering/hardening-v0.2.0`
 
-**Severity: RECOVERING — CI green; not yet merge/deploy ready**
+**Severity: RECOVERING — CI green; committed worker is fail-closed placeholder**
 
 ## Verdict (current)
 
 | Check | Result |
 |-------|--------|
 | Safe to merge to `main` | **NO** |
-| Safe to deploy Worker | **NO** (need committed deployable worker body + staging smoke) |
-| Local suite | **106 / 106 green** |
-| CI suite (Actions) | **106 / 106 green** — [run 42374040176](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/42374040176) |
-| Build path | Deterministic: main `worker.js` → `scripts/apply-v0.2-allowlist.mjs` → 37042-byte v0.2.0 |
-| Configurable allowlist | Wired |
-| source-parts | Deprecated — do not use |
+| Safe to deploy Worker from committed blob | **NO** (placeholder returns 503) |
+| CI suite | **106 / 106 green** (builds full worker before test) |
+| `main` branch impact | **None** — main still has deployable 0.1.0 |
+| Configurable allowlist design | Present (`lib/allowlist.js` + build patch) |
+| Incomplete source-parts | Present but **deprecated / unused by CI** |
+
+## Safety model
+
+- **Committed `worker.js`**: fail-closed stub (`0.2.0-build-required`). Accidental `wrangler deploy` without build yields degraded `/healthz` and 503 on `/mcp`.
+- **CI path**: curl `main` baseline → `scripts/apply-v0.2-allowlist.mjs` → assert size ≥ 30000 → full `node --test` (106).
+- **Deploy path (required)**: same build step, then deploy the **built** `worker.js`, not the committed placeholder.
 
 ## Evidence
 
-Local:
-```
-ℹ tests 106
-ℹ pass 106
-ℹ fail 0
-```
+- CI run 42374040176: `# tests 106` / `# pass 106` / `# fail 0`
+- Local golden build: 37042 bytes, 106/106
 
-CI (`connector-ci.yml` on `engineering/hardening-v0.2.0` @ `d687088`):
-```
-# tests 106
-# pass 106
-# fail 0
-```
+## Remaining gates
 
-All job steps succeeded: fetch baseline → build patch → align version expectation → syntax → allowlist → full suite.
-
-## How the worker is produced
-
-1. `main` branch `cloud-engineering-connector/worker.js` (0.1.0 full MCP surface).
-2. `node scripts/apply-v0.2-allowlist.mjs <baseline>`.
-3. Output: `VERSION=0.2.0`, configurable allowlist, `env` on all `repoPath` / base-branch sites.
-
-## Remaining gates before merge/deploy
-
-1. Persist built `worker.js` on the branch (or generate in deploy pipeline) so Wrangler deploys the 37042-byte body, not a truncated copy.
-2. Staging interop smoke (initialize / tools/list / allowlist deny / draft PR).
-3. Root README maturity update.
-4. PR to `main`.
+1. Optional cleanup: remove `lib/source-parts/*` and `scripts/assemble.js` (dead code).
+2. Persist built worker as release artifact or generate in deploy pipeline.
+3. Staging interop smoke.
+4. Root README maturity (only when merge is proposed).
+5. PR to `main` — never force-push main.
 
 ## Policy
 
 - Do not merge until gates pass.
+- Do not deploy the committed placeholder.
 - Prefer small atomic PRs.
-- Do not use incomplete source-parts.

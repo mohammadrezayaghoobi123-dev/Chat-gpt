@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Cloud-hosted MCP connector — engineering/hardening-v0.2.0: build from main baseline + allowlist patch (see BRANCH_STATUS.md).",
+  "description": "Cloud-hosted MCP connector — engineering/hardening-v0.2.0: build from main baseline + allowlist patch (see BRANCH_STATUS.md). Committed worker.js is a fail-closed placeholder.",
   "scripts": {
     "build": "node scripts/apply-v0.2-allowlist.mjs ${BASE_WORKER_PATH:?set BASE_WORKER_PATH to a 0.1.0 worker.js}",
     "test": "node --test test/allowlist.test.js",

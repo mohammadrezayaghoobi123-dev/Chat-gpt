@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import worker from "../worker.js";
+import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.js";
 
 const secret = "test-github-webhook-secret-at-least-32-bytes";
 const nowIso = () => new Date().toISOString();
@@ -24,7 +25,7 @@ function payload(overrides = {}) {
   };
 }
 
-async function signedRequest(body, deliveryId, signatureOverride) {
+async function signedRequest(body, deliveryId, signatureOverride, eventName = "issues") {
   const bytes = new TextEncoder().encode(body);
   const key = await crypto.subtle.importKey(
     "raw", new TextEncoder().encode(secret),
@@ -38,7 +39,7 @@ async function signedRequest(body, deliveryId, signatureOverride) {
       "content-type": "application/json",
       "x-hub-signature-256": signatureOverride ?? "sha256=" + hex,
       "x-github-delivery": deliveryId,
-      "x-github-event": "issues",
+      "x-github-event": eventName,
       "cf-connecting-ip": "192.0.2.10",
     },
     body,
@@ -55,6 +56,12 @@ function testEnv() {
     GITHUB_WEBHOOK_AUTHORIZED_ACTOR_IDS: '["42"]',
     GITHUB_WEBHOOK_ALLOWED_EVENT_ACTIONS: '{"issues":["opened"]}',
     GITHUB_WEBHOOK_REQUIRED_LABEL: "engineering-intake",
+    GITHUB_WEBHOOK_OWNER_ID: "42",
+    LEDGER_OWNER_ASSERTION_KEYS: env.LEDGER_OWNER_ASSERTION_KEYS,
+    LEDGER_OWNER_ASSERTION_ACTIVE_KID: "owner-v1",
+    LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+    LEDGER_WORKER_ASSERTION_ACTIVE_KID: "test-v1",
+    GITHUB_WEBHOOK_OWNER_MAX_AGE_MS: "300000",
   };
 }
 
@@ -99,6 +106,66 @@ describe("GitHub webhook Worker route", () => {
     const conflict = await worker.fetch(await signedRequest(changedBody, deliveryId), testEnv());
     expect(conflict.status).toBe(409);
     await expect(conflict.json()).resolves.toMatchObject({ error: "webhook_delivery_conflict" });
+  });
+
+
+  it("routes a verified Owner issue comment through the atomic Ledger path without generic pre-claim", async () => {
+    const taskId = "task-webhook-owner-0001";
+    const ledger = env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName("orchestrator-ledger-global"));
+    const createdAt = Date.now();
+    const task = {
+      taskId, state: "SCHEDULED", version: 1, agentRound: 0,
+      createdAt, updatedAt: createdAt, executorId: "agent:worker-1",
+      commitSha: "a".repeat(40), objective: "webhook owner integration test",
+    };
+    await ledger.createTask({
+      task, idempotencyKey: "webhook-owner-create-0001", inputHash: "a".repeat(64),
+      now: createdAt, workerId: "orchestrator-scheduler",
+      workerAssertion: await createScheduledWorkerAssertion(
+        env.LEDGER_WORKER_ASSERTION_KEYS, "test-v1",
+        { subject: "orchestrator-scheduler", role: "system", operation: "createTask", nowMs: createdAt },
+      ),
+    });
+    const event = payload({
+      action: "created",
+      comment: {
+        id: 900001,
+        body: `/orchestrator cancel ${taskId} --reason "Owner requested cancellation"`,
+        created_at: new Date(createdAt).toISOString(),
+        user: { id: 42, type: "User" },
+      },
+      sender: { id: 42, type: "User" },
+    });
+    const body = JSON.stringify(event);
+    const deliveryId = "gh-owner-delivery-0000001";
+    const first = await worker.fetch(
+      await signedRequest(body, deliveryId, undefined, "issue_comment"),
+      testEnv(),
+    );
+    expect(first.status).toBe(202);
+    await expect(first.json()).resolves.toMatchObject({
+      status: "applied",
+      operation: "cancel",
+      task: { taskId, state: "CANCELLED", version: 2 },
+    });
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({ state: "CANCELLED", version: 2 });
+
+    const replay = await worker.fetch(
+      await signedRequest(body, deliveryId, undefined, "issue_comment"),
+      testEnv(),
+    );
+    expect(replay.status).toBe(202);
+    await expect(replay.json()).resolves.toMatchObject({ status: "duplicate", deliveryId });
+
+    const differentDeliverySameComment = await worker.fetch(
+      await signedRequest(body, "gh-owner-delivery-0000002", undefined, "issue_comment"),
+      testEnv(),
+    );
+    expect(differentDeliverySameComment.status).toBe(202);
+    await expect(differentDeliverySameComment.json()).resolves.toMatchObject({
+      status: "duplicate",
+      reason: "OWNER_RECEIPT_CONFLICT",
+    });
   });
 
   it("treats the same semantic GitHub issue event as a replay when provider timestamps differ", async () => {

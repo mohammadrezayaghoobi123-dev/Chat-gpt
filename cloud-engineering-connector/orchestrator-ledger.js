@@ -1283,8 +1283,8 @@ export class OrchestratorLedger extends DurableObject {
             context.deliveryId, context.commentId,
           ).toArray()[0];
           if (priorReceipt) {
-            if (priorReceipt.delivery_id === context.deliveryId &&
-                priorReceipt.comment_id === context.commentId &&
+            if ((priorReceipt.delivery_id === context.deliveryId ||
+                 priorReceipt.comment_id === context.commentId) &&
                 priorReceipt.body_sha256 === bodySha256 &&
                 priorReceipt.command_hash === context.commandHash) {
               return { replay: true, result: parseJson(priorReceipt.result_json, "Owner command receipt") };

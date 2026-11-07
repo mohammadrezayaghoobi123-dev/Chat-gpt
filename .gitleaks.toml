@@ -137,3 +137,12 @@ regexes = [
   '''eventId\s*:\s*["']evt-consumer-00000001["']''',
   '''idempotencyKey\s*:\s*["']idem-consumer-0001["']'''
 ]
+
+[[allowlists]]
+description = "Synthetic non-credential idempotency fixture in one historical assertion-consumption regression test commit; restricted to the exact commit, test file, and literal."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["916436f86dc076916bc5588a61b92e710a6680f9"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger\.test\.js$''']
+regexTarget = "line"
+regexes = ['''idempotencyKey\s*:\s*["']idem-transition-sensitive-0001["']''']

@@ -22,6 +22,8 @@ function stagingPull(overrides = {}) {
     user: { login: author },
     head: { sha },
     base: { ref: "integration/unify-main-and-integrated-2026-11-02" },
+    mergeable: true,
+    mergeable_state: "clean",
     ...overrides,
   };
 }
@@ -77,6 +79,23 @@ test("Staging rejects draft or wrong-head PRs before checking reviews", async ()
     }),
     /open, non-draft PR/,
   );
+});
+
+
+test("Staging rejects non-mergeable or behind candidates before checking reviews", async () => {
+  for (const pull of [
+    stagingPull({ mergeable: false, mergeable_state: "dirty" }),
+    stagingPull({ mergeable: true, mergeable_state: "behind" }),
+    stagingPull({ mergeable: null, mergeable_state: "unknown" }),
+  ]) {
+    await assert.rejects(
+      verifyReleaseApproval({
+        ...input({}),
+        fetchImpl: fakeFetch([pull], [approval()]),
+      }),
+      /mergeable, current-base PR/,
+    );
+  }
 });
 
 test("Staging rejects author self-approval and stale approvals", async () => {

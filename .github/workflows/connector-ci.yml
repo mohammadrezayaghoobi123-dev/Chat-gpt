@@ -30,27 +30,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Restore worker.test.js from last known-good commit
+
+      - name: Restore worker.test.js if marker
         run: |
-          # If committed suite is still a marker, restore pinned known-good body.
           bytes=$(wc -c < test/worker.test.js)
+          echo "committed_test_bytes=$bytes"
           if [ "$bytes" -lt 60000 ]; then
             curl -fsSL \
               "https://raw.githubusercontent.com/mohammadrezayaghoobi123-dev/Chat-gpt/cc8553701cc04d35211b2a3a9f81280f32156ca5/cloud-engineering-connector/test/worker.test.js" \
               -o test/worker.test.js
             bytes=$(wc -c < test/worker.test.js)
-            echo "restored_worker_test_bytes=$bytes"
+            echo "restored_test_bytes=$bytes"
             test "$bytes" -ge 60000
-          else
-            echo "worker.test.js already full ($bytes bytes)"
           fi
-      - name: Fetch main baseline worker (0.1.0 protocol surface)
+
+      - name: Fetch main baseline worker
         run: |
           curl -fsSL \
             "https://raw.githubusercontent.com/mohammadrezayaghoobi123-dev/Chat-gpt/main/cloud-engineering-connector/worker.js" \
@@ -58,7 +57,8 @@ jobs:
           bytes=$(wc -c < /tmp/baseline-worker-0.1.0.js)
           echo "baseline_bytes=$bytes"
           test "$bytes" -ge 30000
-      - name: Build worker v0.2.0 (baseline + allowlist patch)
+
+      - name: Build worker v0.2.0
         run: |
           node scripts/apply-v0.2-allowlist.mjs /tmp/baseline-worker-0.1.0.js
           bytes=$(wc -c < worker.js)
@@ -66,51 +66,42 @@ jobs:
           test "$bytes" -ge 30000
           grep -q 'VERSION = "0.2.0"' worker.js
           grep -q 'parseAllowlist' worker.js
-      - name: Align test expectation to VERSION 0.2.0
+
+      - name: Align test version to 0.2.0
         run: |
           if grep -q 'version:"0.1.0"' test/worker.test.js; then
             sed -i 's/version:"0.1.0"/version:"0.2.0"/g' test/worker.test.js
-            echo "Aligned serverInfo version expectation to 0.2.0"
-          else
-            echo "Already aligned"
+            echo "aligned"
           fi
+
       - name: Syntax check
         run: npm run check
+
       - name: Allowlist unit tests
         run: npm test
+
       - name: Full suite
         run: node --test
-      - name: Materialize full files onto branch (once)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/engineering/hardening-v0.2.0'
-        working-directory: .
+
+      - name: Materialize full files onto branch
+        if: >-
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/engineering/hardening-v0.2.0' &&
+          !contains(github.event.head_commit.message, '[skip materialize]')
+        working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          msg="${{ github.event.head_commit.message }}"
-          case "$msg" in
-            *"[skip materialize]"*|*'ci: materialize full worker'*)
-              echo "Skip materialize (loop guard)"
-              exit 0
-              ;;
-          esac
           wbytes=$(wc -c < cloud-engineering-connector/worker.js)
           tbytes=$(wc -c < cloud-engineering-connector/test/worker.test.js)
-          echo "pre_commit_worker=$wbytes test=$tbytes"
-          # Only commit when we have full bodies in the workspace (post-build)
+          echo "workspace_worker=$wbytes test=$tbytes"
           test "$wbytes" -ge 30000
           test "$tbytes" -ge 60000
-          grep -q 'VERSION = "0.2.0"' cloud-engineering-connector/worker.js
-          grep -q 'parseAllowlist' cloud-engineering-connector/worker.js
-          grep -q 'version:"0.2.0"' cloud-engineering-connector/test/worker.test.js
           git config user.name "connector-ci"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add cloud-engineering-connector/worker.js cloud-engineering-connector/test/worker.test.js
           if git diff --staged --quiet; then
-            echo "Nothing to materialize (already full on branch)"
+            echo "already materialized"
             exit 0
           fi
-          git commit -m "ci: materialize full worker.js + worker.test.js [skip materialize]
-
-Built worker from main baseline + allowlist patch; tests restored and version-aligned.
-Provenance: CI run on engineering/hardening-v0.2.0."
-          git push origin HEAD:engineering/hardening-v0.2.0
-          echo "Materialized full files onto branch"
+          git commit -m "ci: materialize full worker.js + worker.test.js [skip materialize]"
+          git push

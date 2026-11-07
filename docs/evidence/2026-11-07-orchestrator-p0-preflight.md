@@ -15,8 +15,11 @@ The current runtime has four first-level Queue resources, but no consumers are a
 - Repository: **mohammadrezayaghoobi123-dev/Chat-gpt** (public).
 - Main: `f2cae91de818385ec48daafc43c621b9e2cc0675`.
 - Current integration base: `de1059a7bf6f276fb2998b4c304c9469c4880c53`.
+- Integration is **1,320 commits ahead of main**, with 311 changed files in the comparison. The integration-to-main PR #113 remains **draft**; it is mergeable at the Git level but not eligible for merge/release approval.
 - Baseline Cloud Engineering Connector CI passed on the exact integration SHA: [run 42364664617](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/42364664617).
-- Main's active ruleset requires one approval and dismisses stale approvals, but no Required Status Checks are configured. Repository-wide branch-protection verification remains incomplete because the connected identity cannot inspect all legacy settings.
+- Main's active ruleset requires one approval and dismisses stale approvals, but no Required Status Checks are configured. A 1,320-commit integration PR must not be merged on approval alone. Repository-wide branch-protection verification remains incomplete because the connected identity cannot inspect all legacy settings.
+
+**Production dependency:** the Production release verifier requires a merged PR to `main` whose merge commit SHA exactly equals the candidate. Because PR #113 is still draft and the integration branch is 1,320 commits ahead of `main`, the current release stack cannot be promoted to Production. First reconcile and review the integration-to-main change set; do not merge PR #113 as a single unreviewed operation.
 
 ### Relevant open pull requests
 

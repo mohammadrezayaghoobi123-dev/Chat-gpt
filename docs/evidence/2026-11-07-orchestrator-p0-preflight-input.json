@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-07T12:30:09.078Z",
+  "generatedAt": "2026-11-07T12:35:14.009Z",
   "repo": {
     "name": "mohammadrezayaghoobi123-dev/Chat-gpt",
     "visibility": "public",
@@ -18,6 +18,19 @@
     "protectedBranchPolicyVerified": false,
     "taskScopedWriteCredentialVerified": false,
     "pullRequests": [
+      {
+        "number": 113,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "de1059a7bf6f276fb2998b4c304c9469c4880c53",
+        "base": "main",
+        "baseSha": "f2cae91de818385ec48daafc43c621b9e2cc0675",
+        "mergeable": true,
+        "mergeableState": "blocked",
+        "commits": 1320,
+        "changedFiles": 311
+      },
       {
         "number": 145,
         "state": "open",
@@ -60,6 +73,13 @@
       "requiredApprovals": 1,
       "requiredStatusChecks": [],
       "staleReviewsDismissed": true
+    },
+    "integrationVsMain": {
+      "aheadBy": 1320,
+      "behindBy": 0,
+      "changedFiles": 311,
+      "prNumber": 113,
+      "draft": true
     }
   },
   "cloudflareInventory": {

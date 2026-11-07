@@ -1131,6 +1131,7 @@ it("records a receipt only when every immutable Queue field matches the durable 
     eventType: "task.created",
     payload,
     workerId: "agent:worker-1",
+    leaseGeneration: await ensureAgentLease(ledger),
     workerAssertion: await createWorkerAssertion({
       subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now,
     }),

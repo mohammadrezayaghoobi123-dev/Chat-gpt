@@ -95,6 +95,26 @@ function taskFromRow(row) {
   return row ? parseJson(row.task_json, "task") : null;
 }
 
+function hasCurrentAgentLease(sql, taskRow, workerId, leaseGeneration, now) {
+  if (!taskRow || !Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) return false;
+  const task = taskFromRow(taskRow);
+  const assignedAgentId = task?.executorId ?? task?.assignedAgentId;
+  if (assignedAgentId !== workerId ||
+      !["SCHEDULED", "RUNNING", "VERIFYING"].includes(task?.state)) {
+    return false;
+  }
+  const lease = sql.exec(
+    "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+    taskRow.task_id,
+  ).toArray()[0];
+  return Boolean(
+    lease &&
+    lease.worker_id === workerId &&
+    lease.lease_generation === leaseGeneration &&
+    lease.lease_until > now
+  );
+}
+
 function outboxFromRow(row) {
   if (!row) return null;
   return {
@@ -524,7 +544,7 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  async recordMessage({ messageId, taskId, inputHash, envelope, workerId, workerAssertion, now }) {
+  async recordMessage({ messageId, taskId, inputHash, envelope, workerId, workerAssertion, leaseGeneration, now }) {
     identifier(messageId, "messageId");
     identifier(taskId, "taskId");
     hash(inputHash, "inputHash");
@@ -541,8 +561,7 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
     }
-    // Authenticate the sender before inspecting the untrusted message envelope.
-    // Any bounded-envelope rejection consumes the authenticated one-time assertion.
+    // Authenticate before inspecting the untrusted envelope; consume the assertion on every authenticated rejection.
     let payloadRejectionReason = null;
     let envelopeJson;
     try {
@@ -583,8 +602,11 @@ export class OrchestratorLedger extends DurableObject {
       if (payloadRejectionReason) {
         return { accepted: false, reason: payloadRejectionReason };
       }
-      const task = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
-      if (!task) return { accepted: false, reason: "TASK_NOT_FOUND" };
+      const taskRow = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
+      if (!taskRow) return { accepted: false, reason: "TASK_NOT_FOUND" };
+      if (!hasCurrentAgentLease(sql, taskRow, workerId, leaseGeneration, now)) {
+        return { accepted: false, reason: "LEASE_FENCE_MISMATCH" };
+      }
       const existing = sql.exec("SELECT * FROM orchestrator_processed_messages WHERE message_id = ?", messageId).toArray()[0];
       if (existing) {
         if (existing.task_id === taskId && existing.input_hash === inputHash &&
@@ -600,7 +622,6 @@ export class OrchestratorLedger extends DurableObject {
       return { accepted: true, messageId, taskId };
     });
   }
-
   async claimTask({ workerId, workerAssertion, leaseMs, now, taskId } = {}) {
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);
@@ -811,7 +832,7 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
-    // Validate and serialize the untrusted payload only after worker authentication.
+    // Validate and serialize only after authentication; consume the assertion even on rejection.
     let normalized;
     let payloadRejectionReason = null;
     try {
@@ -827,13 +848,14 @@ export class OrchestratorLedger extends DurableObject {
       if (payloadRejectionReason) {
         return { enqueued: false, reason: payloadRejectionReason };
       }
-      if (!sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", normalized.taskId).toArray()[0]) {
-        return { enqueued: false, reason: "TASK_NOT_FOUND" };
+      const taskRow = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", normalized.taskId).toArray()[0];
+      if (!taskRow) return { enqueued: false, reason: "TASK_NOT_FOUND" };
+      if (!hasCurrentAgentLease(sql, taskRow, input.workerId, input.leaseGeneration, normalized.now)) {
+        return { enqueued: false, reason: "LEASE_FENCE_MISMATCH" };
       }
       return enqueueOutboxInTransaction(sql, normalized);
     });
   }
-
   async claimOutbox({ workerId, workerAssertion, leaseMs, now } = {}) {
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);

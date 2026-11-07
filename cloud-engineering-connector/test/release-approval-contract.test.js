@@ -280,8 +280,8 @@ function runPreflightWithMfaDisabled(source, stepName, production) {
     "  if (url.endsWith('/accounts/test-account')) result = " + JSON.stringify(accountData) + ";",
     "  else if (url.includes('/chat-gpt111-staging/settings')) result = " + JSON.stringify(stagingSettings) + ";",
     "  else if (url.includes('/chat-gpt111/settings')) result = " + JSON.stringify(productionSettings) + ";",
-    "  else if (url.includes('/queues?')) result = " + JSON.stringify(availableQueueData) + ";",
-    "  else if (url.includes('/queues?')) result = " + JSON.stringify(availableQueueData) + ";",
+    "  else if (url.includes('/queues?')) result = " + JSON.stringify(queueData) + ";",
+    "  else if (url.includes('/queues?')) result = " + JSON.stringify(queueData) + ";",
     "  else if (url.includes('/deployments?')) result = " + JSON.stringify(deploymentData) + ";",
     "  else throw new Error('Unexpected Cloudflare API request: ' + url);",
     "  return new Response(JSON.stringify({ success: true, result }), { status: 200, headers: { 'content-type': 'application/json' } });",
@@ -651,7 +651,12 @@ test("Staging preflight blocks when its dedicated outbox DLQ is missing", () => 
     false,
     true,
     false,
-    null,
+    {
+    enabled: true,
+    head_sampling_rate: 1,
+    redact_query_string: true,
+    logs: { enabled: true, persist: true, head_sampling_rate: 1, invocation_logs: false },
+  },
     /Queue|DLQ/i,
     "chat-gpt111-staging-orchestrator-outbox-dlq",
   );
@@ -665,7 +670,12 @@ test("Production preflight blocks when its dedicated outbox DLQ is missing", () 
     true,
     true,
     false,
-    null,
+    {
+    enabled: true,
+    head_sampling_rate: 1,
+    redact_query_string: true,
+    logs: { enabled: true, persist: true, head_sampling_rate: 1, invocation_logs: false },
+  },
     /Queue|DLQ/i,
     "chat-gpt111-orchestrator-outbox-dlq",
   );

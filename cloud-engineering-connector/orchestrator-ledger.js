@@ -911,7 +911,6 @@ export class OrchestratorLedger extends DurableObject {
     identifier(eventType, "eventType");
     identifier(idempotencyKey, "idempotencyKey");
     identifier(taskId, "taskId");
-    const payloadJson = serializeBounded(payload, "outbox receipt payload");
     timestamp(createdAt, "createdAt");
     hash(envelopeSha256, "envelopeSha256");
     timestamp(now);
@@ -926,10 +925,26 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
+    // Authenticate before inspecting caller-controlled payload content.
+    let payloadJson;
+    let sensitivePayloadRejected = false;
+    try {
+      payloadJson = serializeBounded(payload, "outbox receipt payload");
+    } catch (error) {
+      if (error?.code === "SENSITIVE_FIELD_REJECTED") {
+        sensitivePayloadRejected = true;
+      } else {
+        throw error;
+      }
+    }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      // Consume the one-time assertion even when the authenticated payload is rejected.
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      if (sensitivePayloadRejected) {
+        return { recorded: false, reason: "SENSITIVE_FIELD_REJECTED" };
       }
       const source = sql.exec(
         "SELECT event_type, idempotency_key, task_id, payload_json, created_at FROM orchestrator_outbox_events WHERE event_id = ?",

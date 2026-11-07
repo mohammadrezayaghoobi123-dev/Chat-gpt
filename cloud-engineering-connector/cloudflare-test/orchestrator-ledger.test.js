@@ -1232,3 +1232,69 @@ it("integrates the DLQ consumer with Durable Object archival before message ackn
     ).one().count).toBe(1);
   });
 });
+
+it("rejects an unauthenticated receipt before inspecting sensitive payload fields", async () => {
+  const ledger = ledgerFor("ledger-outbox-receipt-auth-before-inspection");
+  const input = {
+    eventId: "evt-receipt-auth-order-0001",
+    eventType: "task.created",
+    idempotencyKey: "outbox-receipt-auth-order-0001",
+    taskId: "task-0001",
+    payload: { taskId: "task-0001", apiKey: "must-not-be-inspected-before-auth" },
+    createdAt: now,
+    schemaVersion: 1,
+    envelopeSha256: "a".repeat(64),
+    consumerId: "orchestrator-outbox-consumer",
+    now,
+  };
+
+  await expect(ledger.recordOutboxReceipt(input)).resolves.toMatchObject({
+    recorded: false,
+    reason: "AUTHENTICATED_WORKER_REQUIRED",
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+      input.eventId,
+    ).one().count).toBe(0);
+  });
+});
+
+it("rejects sensitive Receipt payload fields after worker authentication and before persistence", async () => {
+  const ledger = ledgerFor("ledger-outbox-receipt-authenticated-sensitive-payload");
+  const input = {
+    eventId: "evt-receipt-auth-sensitive-0001",
+    eventType: "task.created",
+    idempotencyKey: "outbox-receipt-auth-sensitive-0001",
+    taskId: "task-0001",
+    payload: { taskId: "task-0001", apiKey: "must-not-be-persisted" },
+    createdAt: now,
+    schemaVersion: 1,
+    envelopeSha256: "b".repeat(64),
+    consumerId: "orchestrator-outbox-consumer",
+    now,
+  };
+  const workerAssertion = await createWorkerAssertion({
+    subject: input.consumerId,
+    role: "consumer",
+    operation: "recordOutboxReceipt",
+    nowMs: now,
+  });
+
+  await expect(ledger.recordOutboxReceipt({ ...input, workerAssertion }))
+    .resolves.toMatchObject({ recorded: false, reason: "SENSITIVE_FIELD_REJECTED" });
+  await expect(ledger.recordOutboxReceipt({
+    ...input,
+    payload: { taskId: "task-0001", version: 1 },
+    workerAssertion,
+  })).resolves.toMatchObject({
+    recorded: false,
+    reason: "AUTHENTICATED_WORKER_REQUIRED",
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+      input.eventId,
+    ).one().count).toBe(0);
+  });
+});

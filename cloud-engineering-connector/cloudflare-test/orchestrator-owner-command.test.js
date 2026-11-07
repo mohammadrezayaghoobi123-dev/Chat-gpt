@@ -134,6 +134,17 @@ describe("Owner command atomic Ledger contract", () => {
       applied: true, operation: "release",
       task: { taskId: "task-owner-0001", state: "VALIDATING", version: 2 },
     });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      const event = state.storage.sql.exec(
+        "SELECT status, payload_json, retry_state FROM orchestrator_outbox_events WHERE event_id = ?",
+        "owner-release-owner-event-release-01",
+      ).one();
+      expect(event.status).toBe("PENDING");
+      expect(event.retry_state).toBe("READY");
+      expect(JSON.parse(event.payload_json)).toMatchObject({
+        taskId: "task-owner-0001", version: 2, from: "QUARANTINED", to: "VALIDATING",
+      });
+    });
   });
 
   it("never resurrects a terminal task through an Owner command", async () => {

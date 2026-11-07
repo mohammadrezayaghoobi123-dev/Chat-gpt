@@ -510,43 +510,57 @@ export class OrchestratorLedger extends DurableObject {
       return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
     }
     // Authenticate the sender before inspecting the untrusted message envelope.
+    let sensitivePayloadRejected = false;
+    let envelopeJson;
     try {
       serializeBounded(envelope, "message envelope");
     } catch (error) {
       if (error?.code === "SENSITIVE_FIELD_REJECTED") {
-        return { accepted: false, reason: "SENSITIVE_FIELD_REJECTED" };
+        sensitivePayloadRejected = true;
+      } else {
+        throw error;
       }
-      throw error;
     }
-    const authenticatedSender = { id: verifiedAssertion.subject, authenticated: true, identityVerified: true };
-    if (!envelope || typeof envelope !== "object" || envelope.senderId !== authenticatedSender.id) {
-      return { accepted: false, reason: "SENDER_IDENTITY_MISMATCH" };
-    }
-    if (envelope.messageId !== messageId || envelope.taskId !== taskId) {
-      return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
-    }
-    let validatedEnvelope;
-    try {
-      validatedEnvelope = validateMessageEnvelope(envelope, { now, authenticatedSender });
-    } catch (error) {
-      return { accepted: false, reason: typeof error?.code === "string" ? error.code : "INVALID_MESSAGE" };
-    }
-    if (validatedEnvelope.inputHash !== inputHash) {
-      return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
-    }
-    let envelopeJson;
-    try {
-      envelopeJson = serializeBounded(validatedEnvelope, "validated message envelope");
-    } catch (error) {
-      if (error?.code === "SENSITIVE_FIELD_REJECTED") {
-        return { accepted: false, reason: "SENSITIVE_FIELD_REJECTED" };
+    if (!sensitivePayloadRejected) {
+      const authenticatedSender = { id: verifiedAssertion.subject, authenticated: true, identityVerified: true };
+      if (!envelope || typeof envelope !== "object" || envelope.senderId !== authenticatedSender.id) {
+        return { accepted: false, reason: "SENDER_IDENTITY_MISMATCH" };
       }
-      throw error;
+      if (envelope.messageId !== messageId || envelope.taskId !== taskId) {
+        return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
+      }
+      let validatedEnvelope;
+      try {
+        validatedEnvelope = validateMessageEnvelope(envelope, { now, authenticatedSender });
+      } catch (error) {
+        if (error?.code === "SENSITIVE_FIELD_REJECTED") {
+          sensitivePayloadRejected = true;
+        } else {
+          return { accepted: false, reason: typeof error?.code === "string" ? error.code : "INVALID_MESSAGE" };
+        }
+      }
+      if (!sensitivePayloadRejected && validatedEnvelope.inputHash !== inputHash) {
+        return { accepted: false, reason: "MESSAGE_ENVELOPE_MISMATCH" };
+      }
+      if (!sensitivePayloadRejected) {
+        try {
+          envelopeJson = serializeBounded(validatedEnvelope, "validated message envelope");
+        } catch (error) {
+          if (error?.code === "SENSITIVE_FIELD_REJECTED") {
+            sensitivePayloadRejected = true;
+          } else {
+            throw error;
+          }
+        }
+      }
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
+      }
+      if (sensitivePayloadRejected) {
+        return { accepted: false, reason: "SENSITIVE_FIELD_REJECTED" };
       }
       const task = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
       if (!task) return { accepted: false, reason: "TASK_NOT_FOUND" };
@@ -778,18 +792,23 @@ export class OrchestratorLedger extends DurableObject {
     }
     // Validate and serialize the untrusted payload only after worker authentication.
     let normalized;
+    let sensitivePayloadRejected = false;
     try {
       normalized = validateOutboxInput(input);
     } catch (error) {
       if (error?.code === "SENSITIVE_FIELD_REJECTED") {
-        return { enqueued: false, reason: "SENSITIVE_FIELD_REJECTED" };
+        sensitivePayloadRejected = true;
+      } else {
+        throw error;
       }
-      throw error;
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, normalized.now)) {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      if (sensitivePayloadRejected) {
+        return { enqueued: false, reason: "SENSITIVE_FIELD_REJECTED" };
       }
       if (!sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", normalized.taskId).toArray()[0]) {
         return { enqueued: false, reason: "TASK_NOT_FOUND" };
@@ -1026,29 +1045,36 @@ export class OrchestratorLedger extends DurableObject {
       return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     // Authenticate the archiver before inspecting untrusted payload content.
-    // This prevents unauthenticated callers from probing sensitive-field policy.
+    // Consume its one-time assertion even when the authenticated body is rejected.
     let bodyJson;
+    let sensitiveBodyRejected = false;
+    let bodyHashMatches = false;
     try {
       bodyJson = serializeBounded(body, "dead-letter body");
     } catch (error) {
-      // Sensitive data is rejected before persistence. Return a bounded domain
-      // result rather than throwing across the Durable Object RPC boundary.
       if (error?.code === "SENSITIVE_FIELD_REJECTED") {
-        return { recorded: false, reason: "SENSITIVE_FIELD_REJECTED" };
+        sensitiveBodyRejected = true;
+      } else {
+        throw error;
       }
-      throw error;
     }
-    hash(bodySha256, "bodySha256");
-    const expectedSha256 = await sha256Canonical({
-      queueName, messageId, messageAttempts, messageTimestamp, body: JSON.parse(bodyJson),
-    });
-    if (expectedSha256 !== bodySha256) {
-      return { recorded: false, reason: "DEAD_LETTER_HASH_MISMATCH" };
+    if (!sensitiveBodyRejected) {
+      hash(bodySha256, "bodySha256");
+      const expectedSha256 = await sha256Canonical({
+        queueName, messageId, messageAttempts, messageTimestamp, body: JSON.parse(bodyJson),
+      });
+      bodyHashMatches = expectedSha256 === bodySha256;
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      if (sensitiveBodyRejected) {
+        return { recorded: false, reason: "SENSITIVE_FIELD_REJECTED" };
+      }
+      if (!bodyHashMatches) {
+        return { recorded: false, reason: "DEAD_LETTER_HASH_MISMATCH" };
       }
       const existing = sql.exec(
         "SELECT * FROM orchestrator_outbox_dead_letters WHERE source_queue = ? AND message_id = ?",

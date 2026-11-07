@@ -46,7 +46,7 @@ async function createTask(ledger, taskValue = task()) {
 }
 async function ownerInput(overrides = {}) {
   const command = {
-    operation: "cancel", taskId: "task-owner-0001", expectedVersion: 1, expectedState: "SCHEDULED",
+    operation: "cancel", taskId: "task-owner-0001",
     reason: "Owner requested cancellation", eventId: "owner-event-0001",
   };
   Object.assign(command, overrides.command);
@@ -125,7 +125,7 @@ describe("Owner command atomic Ledger contract", () => {
     await createTask(ledger, { ...task(), state: "QUARANTINED" });
     const result = await ledger.executeOwnerCommand(await ownerInput({
       command: {
-        operation: "release", expectedState: "QUARANTINED",
+        operation: "release",
         reason: "Owner verified remediation", eventId: "owner-event-release-01",
       },
       deliveryId: "delivery-owner-release-01", commentId: "123456791",
@@ -140,7 +140,7 @@ describe("Owner command atomic Ledger contract", () => {
     const ledger = ledgerFor("owner-command-terminal");
     await createTask(ledger, { ...task(), state: "COMPLETED" });
     const result = await ledger.executeOwnerCommand(await ownerInput({
-      command: { expectedState: "COMPLETED", eventId: "owner-event-terminal-01" },
+      command: { eventId: "owner-event-terminal-01" },
       deliveryId: "delivery-owner-terminal-01", commentId: "123456792",
     }));
     expect(result).toMatchObject({ applied: false, conflict: true, reason: "ILLEGAL_OWNER_TRANSITION" });
@@ -208,18 +208,17 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
-  it("rejects a stale expected version atomically and records only a rejected audit event", async () => {
+  it("rejects caller-supplied expected state/version overrides before mutation", async () => {
     const ledger = ledgerFor("owner-command-stale-version");
     await createTask(ledger);
     const input = await ownerInput({ command: { expectedVersion: 99 } });
     const result = await ledger.executeOwnerCommand(input);
-    expect(result).toMatchObject({ applied: false, conflict: true, reason: "VERSION_OR_STATE_CONFLICT" });
+    expect(result).toMatchObject({ applied: false, reason: "INVALID_OWNER_COMMAND" });
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec("SELECT state, version FROM orchestrator_tasks WHERE task_id = ?", "task-owner-0001").one())
         .toMatchObject({ state: "SCHEDULED", version: 1 });
-      expect(state.storage.sql.exec("SELECT event_type, actor_role FROM orchestrator_audit_events").one())
-        .toMatchObject({ event_type: "OWNER_COMMAND_REJECTED", actor_role: "owner" });
-      expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts").one().count).toBe(1);
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_audit_events").one().count).toBe(0);
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts").one().count).toBe(0);
     });
   });
 

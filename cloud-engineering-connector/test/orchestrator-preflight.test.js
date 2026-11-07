@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { buildPreflightReport, sanitizeEvidence } from "../scripts/orchestrator-preflight.mjs";
 
 function input(overrides = {}) {
@@ -167,4 +168,14 @@ test("fails closed on unknown workflow permission scopes", () => {
     }
   }));
   assert.equal(report.checks.find(item => item.id === "workflow_permissions")?.status, "BLOCKED");
+});
+
+
+test("P0 workflow consumes the current 2026-11-07 evidence snapshot", () => {
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/orchestrator-preflight.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(workflow, /2026-11-07-orchestrator-p0-preflight-input\.json/);
+  assert.doesNotMatch(workflow, /2026-11-04-orchestrator-p0-preflight-input\.json/);
 });

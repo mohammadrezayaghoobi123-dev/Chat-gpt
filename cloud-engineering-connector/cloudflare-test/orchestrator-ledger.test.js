@@ -1557,6 +1557,173 @@ it("consumes an outbox assertion when an authenticated event payload contains se
   });
 });
 
+
+it("consumes authenticated message assertions when envelope identity is rejected", async () => {
+  const ledger = ledgerFor("ledger-message-identity-rejection-consumes-jti");
+  await createTask(ledger, {
+    task: task(), idempotencyKey: "message-identity-task", inputHash: "b".repeat(64), now,
+  });
+  const input = {
+    messageId: "msg-identity-rejection-0001",
+    taskId: "task-0001",
+    inputHash: "c".repeat(64),
+    workerId: "agent:worker-1",
+    now,
+  };
+  const workerAssertion = await createWorkerAssertion({
+    subject: input.workerId, role: "agent", operation: "recordMessage", nowMs: now,
+    jti: "jti-message-identity-rejection-0001",
+  });
+  const mismatchedEnvelope = protocolEnvelope(
+    input.messageId, input.taskId, input.inputHash, { step: 1 },
+  );
+  mismatchedEnvelope.senderId = "agent:attacker";
+
+  await expect(ledger.recordMessage({
+    ...input, envelope: mismatchedEnvelope, workerAssertion,
+  })).resolves.toEqual({
+    accepted: false, reason: "SENDER_IDENTITY_MISMATCH",
+  });
+  await expect(ledger.recordMessage({
+    ...input,
+    envelope: protocolEnvelope(input.messageId, input.taskId, input.inputHash, { step: 1 }),
+    workerAssertion,
+  })).resolves.toEqual({
+    accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED",
+  });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      "jti-message-identity-rejection-0001",
+    ).one().count).toBe(1);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_processed_messages WHERE message_id = ?",
+      input.messageId,
+    ).one().count).toBe(0);
+  });
+});
+
+it("consumes an outbox assertion when the authenticated payload exceeds the size limit", async () => {
+  const ledger = ledgerFor("ledger-outbox-oversized-payload-consumes-jti");
+  await createTask(ledger, {
+    task: task(), idempotencyKey: "outbox-oversized-task", inputHash: "d".repeat(64), now,
+  });
+  const workerAssertion = await createWorkerAssertion({
+    subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now,
+    jti: "jti-outbox-oversized-payload-0001",
+  });
+  const input = {
+    eventId: "evt-outbox-oversized-payload-0001",
+    idempotencyKey: "idem-outbox-oversized-payload-0001",
+    taskId: "task-0001",
+    eventType: "task.created",
+    payload: { taskId: "task-0001", extension: "x".repeat(33_000) },
+    workerId: "agent:worker-1",
+    workerAssertion,
+    now,
+  };
+
+  await expect(ledger.enqueueOutbox(input)).resolves.toEqual({
+    enqueued: false, reason: "RECORD_TOO_LARGE",
+  });
+  await expect(ledger.enqueueOutbox(input)).resolves.toEqual({
+    enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED",
+  });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      "jti-outbox-oversized-payload-0001",
+    ).one().count).toBe(1);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE event_id = ?",
+      input.eventId,
+    ).one().count).toBe(0);
+  });
+});
+
+it("consumes a receipt assertion when the authenticated payload exceeds the size limit", async () => {
+  const ledger = ledgerFor("ledger-receipt-oversized-payload-consumes-jti");
+  const input = {
+    eventId: "evt-receipt-oversized-payload-0001",
+    eventType: "task.created",
+    idempotencyKey: "idem-receipt-oversized-payload-0001",
+    taskId: "task-0001",
+    payload: { taskId: "task-0001", extension: "x".repeat(33_000) },
+    createdAt: now,
+    schemaVersion: 1,
+    envelopeSha256: "e".repeat(64),
+    consumerId: "orchestrator-outbox-consumer",
+    now,
+  };
+  const workerAssertion = await createWorkerAssertion({
+    subject: input.consumerId, role: "consumer", operation: "recordOutboxReceipt", nowMs: now,
+    jti: "jti-receipt-oversized-payload-0001",
+  });
+
+  await expect(ledger.recordOutboxReceipt({ ...input, workerAssertion })).resolves.toEqual({
+    recorded: false, reason: "RECORD_TOO_LARGE",
+  });
+  await expect(ledger.recordOutboxReceipt({ ...input, workerAssertion })).resolves.toEqual({
+    recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED",
+  });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      "jti-receipt-oversized-payload-0001",
+    ).one().count).toBe(1);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+      input.eventId,
+    ).one().count).toBe(0);
+  });
+});
+
+it("consumes a DLQ archiver assertion when the authenticated body exceeds the size limit", async () => {
+  const ledger = ledgerFor("ledger-dlq-oversized-body-consumes-jti");
+  const queueName = "chat-gpt111-staging-orchestrator-outbox-dlq";
+  const messageId = "cf-oversized-body-0001";
+  const body = {
+    schemaVersion: 1,
+    eventId: "evt-dlq-oversized-body-0001",
+    idempotencyKey: "idem-dlq-oversized-body-0001",
+    taskId: "task-0001",
+    eventType: "task.created",
+    payload: { taskId: "task-0001", extension: "x".repeat(33_000) },
+    attempts: 1,
+    createdAt: now,
+  };
+  const input = {
+    queueName, messageId, messageAttempts: 5, messageTimestamp: now - 10_000,
+    body, bodySha256: "f".repeat(64),
+    archiverId: "orchestrator-outbox-dlq-archiver", now,
+  };
+  const workerAssertion = await createWorkerAssertion({
+    subject: input.archiverId, role: "consumer", operation: "recordOutboxDeadLetter", nowMs: now,
+    jti: "jti-dlq-oversized-body-0001",
+  });
+
+  await expect(ledger.recordOutboxDeadLetter({ ...input, workerAssertion })).resolves.toEqual({
+    recorded: false, reason: "RECORD_TOO_LARGE",
+  });
+  await expect(ledger.recordOutboxDeadLetter({ ...input, workerAssertion })).resolves.toEqual({
+    recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED",
+  });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      "jti-dlq-oversized-body-0001",
+    ).one().count).toBe(1);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_dead_letters WHERE source_queue = ? AND message_id = ?",
+      queueName, messageId,
+    ).one().count).toBe(0);
+  });
+});
+
 it("consumes a DLQ archiver assertion when an authenticated dead-letter body contains sensitive fields", async () => {
   const ledger = ledgerFor("ledger-dlq-sensitive-assertion-consumption");
   const queueName = "chat-gpt111-staging-orchestrator-outbox-dlq";

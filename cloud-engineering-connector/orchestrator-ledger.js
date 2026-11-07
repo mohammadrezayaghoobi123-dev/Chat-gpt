@@ -601,7 +601,7 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  async claimTask({ workerId, workerAssertion, leaseMs, now, taskId, reconciliationEvidence } = {}) {
+  async claimTask({ workerId, workerAssertion, leaseMs, now, taskId } = {}) {
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);
     timestamp(now);
@@ -616,6 +616,12 @@ export class OrchestratorLedger extends DurableObject {
     if (taskId !== undefined) identifier(taskId, "taskId");
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      // A verified claim token is single-use even when the claim is rejected.
+      // Consume it before inspecting task/lease state so caller-controlled
+      // reconciliation metadata cannot make the same authorization reusable.
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
       const rows = taskId
         ? sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ? AND state IN ('SCHEDULED','RUNNING','VERIFYING') ORDER BY created_at LIMIT 1", taskId).toArray()
         : sql.exec("SELECT * FROM orchestrator_tasks WHERE state IN ('SCHEDULED','RUNNING','VERIFYING') ORDER BY created_at LIMIT 100").toArray();
@@ -635,16 +641,12 @@ export class OrchestratorLedger extends DurableObject {
           generation = lease.lease_generation + 1;
           if (lease.worker_id !== null && lease.lease_until <= now) {
             reconciliationRequired = true;
-            if (!reconciliationEvidence || reconciliationEvidence.checked !== true ||
-                reconciliationEvidence.priorGeneration !== lease.lease_generation ||
-                typeof reconciliationEvidence.evidenceRef !== "string" ||
-                reconciliationEvidence.evidenceRef.length === 0 ||
-                reconciliationEvidence.evidenceRef.length > 512) {
-              return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
-            }
+            // An arbitrary evidence reference or caller-supplied boolean is not
+            // proof of independent reconciliation. Until a separately
+            // authenticated recovery authority is implemented, fail closed.
+            return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
           }
         }
-        if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
         if (lease) {
           sql.exec(
             "UPDATE orchestrator_execution_leases SET worker_id = ?, lease_generation = ?, lease_until = ?, updated_at = ? WHERE task_id = ? AND lease_generation = ?",

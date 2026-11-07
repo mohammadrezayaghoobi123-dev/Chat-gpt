@@ -1137,13 +1137,13 @@ export class OrchestratorLedger extends DurableObject {
       detailsRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_AUDIT_DETAILS";
     }
     const sql = this.ctx.storage.sql;
-    if (!sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0]) {
-      return { appended: false, reason: "TASK_NOT_FOUND" };
-    }
     if (detailsRejectionReason) {
       const consumed = this.ctx.storage.transactionSync(() => consumeWorkerAssertion(sql, verifiedAssertion, now));
       if (!consumed) return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
       return { appended: false, reason: detailsRejectionReason };
+    }
+    if (!sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0]) {
+      return { appended: false, reason: "TASK_NOT_FOUND" };
     }
 
     for (let attempt = 0; attempt < 5; attempt += 1) {

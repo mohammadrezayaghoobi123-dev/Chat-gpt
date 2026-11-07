@@ -1,6 +1,6 @@
 # Branch status — `engineering/hardening-v0.2.0`
 
-**Severity: RECOVERING — CI path restored; committed worker.test.js is a marker**
+**Severity: RECOVERING — full bodies on branch; still not merge/deploy ready without gates**
 
 ## Governing policy (binding)
 
@@ -14,41 +14,25 @@
 
 | Check | Result |
 |-------|--------|
-| Safe to merge to `main` | **NO** |
-| Safe to deploy from committed blob | **NO** (worker fail-closed stub) |
-| CI suite | Restored path: fetch known-good tests + build + 106 target |
-| Impact on `main` | **None** |
-| API contract vs 0.1.0 | Preserved (surgical allowlist only) |
-| Security controls | Fail-closed commit + configurable allowlist design |
+| Safe to merge to `main` | **NO** (staging smoke + independent auth still required) |
+| Committed `worker.js` | **Full v0.2.0** (~37042 bytes, `parseAllowlist`) |
+| Committed `worker.test.js` | **Full suite** (~64199 bytes, version 0.2.0) |
+| CI suite | Green path (build + test) |
+| Impact on `main` | **None** — main remains deployable 0.1.0 |
 
-## Incident note (2026-11-07)
+## What changed
 
-A `create_or_update_file` call intended to align `version:"0.1.0"` → `0.2.0` in `test/worker.test.js` wrote an 11-byte PLACEHOLDER instead of the full suite (tool/content path failure).
-
-**Mitigation (this branch):**
-- CI restores `test/worker.test.js` from pinned commit `cc855370…` (last known-good full body).
-- CI then applies the single version alignment via `sed`.
-- Committed `test/worker.test.js` is an explicit recovery marker, not the suite.
-
-**Follow-up required:** re-commit the full 64KB suite body with version already set to `0.2.0` once a reliable large-file push path is available; then remove the CI restore step.
-
-## Safety model
-
-- **Committed `worker.js`**: fail-closed stub (`0.2.0-build-required`).
-- **CI path**: restore tests → curl `main` baseline → `apply-v0.2-allowlist.mjs` → assert size → full `node --test`.
-- **Deploy path**: build step required; never deploy stub.
+CI materialize step committed the built worker and restored test suite onto the branch after a green run. Markers/stubs are gone from the tip of `engineering/hardening-v0.2.0`.
 
 ## Remaining gates
 
-1. Restore full `worker.test.js` into the branch (eliminate CI curl of historical commit).
-2. Deploy pipeline generates worker from main+patch.
-3. Staging interop smoke.
-4. Conflict check vs current `main` at PR time.
-5. Independent authorization to merge.
+1. Staging interop smoke (initialize / tools/list / allowlist deny / draft PR path).
+2. Conflict/rebase check against current `main` at PR time.
+3. Independent authorization to merge.
+4. Optional: simplify CI (drop historical restore once tip stays full).
 
 ## Policy enforcement
 
 - Do not merge until gates pass.
-- Do not deploy the committed placeholder.
 - Prefer small atomic PRs.
 - Never force-push `main`.

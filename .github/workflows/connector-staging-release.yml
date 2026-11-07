@@ -225,8 +225,10 @@ jobs:
           );
           const outboxQueue = queues.find((queue) => queue.queue_name === "chat-gpt111-staging-orchestrator-outbox");
           const outboxDlq = queues.find((queue) => queue.queue_name === "chat-gpt111-staging-orchestrator-outbox-dlq");
+          const outboxDlqQuarantine = queues.find((queue) => queue.queue_name === "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine");
           assert.ok(outboxQueue?.queue_id, "Staging Orchestrator Outbox Queue must exist after deployment");
           assert.ok(outboxDlq?.queue_id, "Staging Orchestrator Outbox DLQ must exist after deployment");
+          assert.ok(outboxDlqQuarantine?.queue_id, "Staging DLQ quarantine Queue must exist after deployment");
           const consumer = (outboxQueue.consumers || []).find((item) => item.script_name === "chat-gpt111-staging");
           assert.ok(consumer?.consumer_id, "Staging Queue consumer must be attached to the intended Worker");
           assert.equal(consumer.dead_letter_queue, "chat-gpt111-staging-orchestrator-outbox-dlq", "Staging Queue consumer must use its isolated DLQ");
@@ -236,6 +238,7 @@ jobs:
           assert.equal(consumer.settings?.retry_delay, 30, "Staging Queue retry delay must remain 30 seconds");
           const dlqConsumer = (outboxDlq.consumers || []).find((item) => item.script_name === "chat-gpt111-staging");
           assert.ok(dlqConsumer?.consumer_id, "Staging DLQ archive consumer must be attached to the intended Worker");
+          assert.equal(dlqConsumer.dead_letter_queue, "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine", "Staging DLQ archiver must quarantine repeated archival failures");
           assert.equal(dlqConsumer.settings?.batch_size, 5, "Staging DLQ archive batch size must be 5");
           assert.equal(dlqConsumer.settings?.max_concurrency, 2, "Staging DLQ archive concurrency must be bounded at 2");
           assert.equal(dlqConsumer.settings?.max_retries, 100, "Staging DLQ archive retries must be bounded at 100");

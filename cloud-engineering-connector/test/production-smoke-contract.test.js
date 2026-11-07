@@ -83,3 +83,13 @@ test("Production preflight rejects a legacy secret-text PUBLIC_READ_ONLY binding
   assert.match(preflight, /assert\.equal\(\s*publicReadOnly\?\.type,\s*["']plain_text["']/);
   assert.match(preflight, /assert\.equal\(\s*publicReadOnly\.text,\s*["']true["']/);
 });
+
+
+test("Production release verifies isolated second-level DLQ quarantine for both environments", () => {
+  for (const name of [
+    "chat-gpt111-orchestrator-outbox-dlq-quarantine",
+    "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine",
+  ]) assert.ok(releaseWorkflow.includes(name), "missing post-deploy quarantine verification for " + name);
+  assert.match(releaseWorkflow, /productionDlqConsumer\?\.dead_letter_queue/);
+  assert.match(releaseWorkflow, /stagingDlqConsumer\?\.dead_letter_queue/);
+});

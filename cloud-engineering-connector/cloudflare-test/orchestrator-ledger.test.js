@@ -1196,7 +1196,7 @@ it("integrates the real Durable Object Ledger with publisher and Queue consumer 
     now: integrationNow,
   });
   expect(created).toMatchObject({ created: true, task: { taskId } });
-  const payload = { taskId, transition: "created", source: "integration-test" };
+  const payload = { taskId, version: 1, transition: "created", source: "integration-test" };
   const enqueued = await ledger.enqueueOutbox({
     eventId: "evt-queue-e2e-0001",
     idempotencyKey: "outbox-queue-e2e-0001",
@@ -1296,7 +1296,7 @@ it("acknowledges a republished event after an uncertain send even when the publi
     });
     expect(created).toMatchObject({ created: true, task: { taskId } });
 
-    const payload = { taskId, transition: "created", source: "uncertain-send-replay-test" };
+    const payload = { taskId, version: 1, transition: "created", source: "uncertain-send-replay-test" };
     const enqueued = await ledger.enqueueOutbox({
       eventId: "evt-queue-republish-e2e",
       idempotencyKey: "outbox-queue-republish-e2e",

@@ -1159,6 +1159,36 @@ export class OrchestratorLedger extends DurableObject {
   }
 
 
+  lookupOwnerCommandReceipt(input) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      return { found: false, reason: "INVALID_OWNER_RECEIPT_LOOKUP" };
+    }
+    try {
+      const deliveryId = identifier(input.deliveryId, "deliveryId");
+      const commentId = identifier(input.commentId, "commentId");
+      const bodySha256 = hash(input.bodySha256, "bodySha256");
+      const commandHash = hash(input.commandHash, "commandHash");
+      const rows = this.ctx.storage.sql.exec(
+        "SELECT delivery_id, comment_id, body_sha256, command_hash, result_json FROM orchestrator_owner_command_receipts WHERE delivery_id = ? OR comment_id = ?",
+        deliveryId, commentId,
+      ).toArray();
+      if (rows.length === 0) return { found: false };
+      if (rows.length !== 1) return { found: true, conflict: true, reason: "OWNER_RECEIPT_CONFLICT" };
+      const row = rows[0];
+      if ((row.delivery_id === deliveryId || row.comment_id === commentId) &&
+          row.body_sha256 === bodySha256 && row.command_hash === commandHash) {
+        return {
+          found: true,
+          replay: true,
+          result: parseJson(row.result_json, "Owner command receipt"),
+        };
+      }
+      return { found: true, conflict: true, reason: "OWNER_RECEIPT_CONFLICT" };
+    } catch {
+      return { found: false, reason: "LEDGER_TRANSACTION_FAILED" };
+    }
+  }
+
   async executeOwnerCommand(input) {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       return { applied: false, reason: "INVALID_OWNER_COMMAND" };

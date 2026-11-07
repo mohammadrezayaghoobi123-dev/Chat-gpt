@@ -157,3 +157,17 @@ The following remain mandatory before activation:
 ### 10.2 Verification boundary
 
 The source implementation and its tests are CI-verified only at their exact recorded commit SHA. The Cloudflare Queue binding, signing secret, consumer, and live Durable Object behavior have not been verified in Staging or Production. Production remains NO-GO.
+
+## 11. Expired task lease recovery — fail-closed boundary (2026-11-07)
+
+The current Ledger does not possess an independently authenticated reconciliation authority or a durable proof that a prior Agent's external side effects have stopped or been reconciled. Therefore:
+
+- `claimTask` rejects reclamation when an existing lease has a non-null worker and `lease_until <= now`, returning `RECONCILIATION_REQUIRED`.
+- Caller-supplied `reconciliationEvidence.checked`, `priorGeneration`, and `evidenceRef` are not accepted as authorization evidence and cannot override this rejection.
+- The expired lease row (owner, generation, expiry) and task projection remain unchanged on rejection. The cryptographically valid assertion JTI is consumed atomically before task/lease inspection, including when reclamation is denied. A repeated use of the same assertion is rejected as `AUTHENTICATED_WORKER_REQUIRED`.
+- A lease row with no current worker remains reclaimable under the existing generation-fencing rules; a live lease remains unavailable to another claimant.
+- This is intentionally fail-closed and may leave tasks unavailable after worker crashes. Availability must not be restored by trusting caller claims.
+
+Re-enabling reclamation requires a separate reviewed contract and implementation for an authenticated reconciliation authority, proof provenance, binding to task ID and prior lease generation, expiry/replay protection, and atomic persistence. A GitHub URL or caller-provided boolean alone is not proof. No such authority is implemented by this change.
+
+This source-only control does not establish an Agent identity channel, verify external side effects, or authorize runtime activation. Production remains NO-GO.

@@ -492,12 +492,23 @@ export class OrchestratorLedger extends DurableObject {
         return { updated: false, reason: outboxRejectionReason };
       }
       const current = taskFromRow(row);
-      const next = transitionTaskCore({
-        task: current, expectedVersion, nextState, actor, evidence, now,
-      });
+      let next;
+      let nextTaskJson;
+      try {
+        next = transitionTaskCore({
+          task: current, expectedVersion, nextState, actor, evidence, now,
+        });
+        nextTaskJson = serializeBounded(next, "task");
+      } catch (error) {
+        // The verified assertion has already been consumed in this transaction.
+        // Convert known domain/payload validation failures into a return value so
+        // the JTI consumption commits while task and outbox state remain unchanged.
+        if (typeof error?.code !== "string") throw error;
+        return { updated: false, reason: error.code };
+      }
       sql.exec(
         "UPDATE orchestrator_tasks SET state = ?, version = ?, task_json = ?, updated_at = ? WHERE task_id = ? AND version = ? AND state = ?",
-        next.state, next.version, serializeBounded(next, "task"), next.updatedAt, taskId, expectedVersion, expectedState,
+        next.state, next.version, nextTaskJson, next.updatedAt, taskId, expectedVersion, expectedState,
       );
       const persisted = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
       if (!persisted || persisted.version !== next.version || persisted.state !== next.state ||

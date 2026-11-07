@@ -941,7 +941,7 @@ async function handleOwnerGitHubComment(authenticated, payload, ledger, env) {
  } catch {
   return json({ error: "owner_ledger_unavailable" }, 503);
  }
- if (priorReceipt?.reason) {
+ if (priorReceipt?.reason && priorReceipt.found !== true) {
   return json({ error: "owner_ledger_unavailable" }, 503);
  }
  if (priorReceipt?.found) {

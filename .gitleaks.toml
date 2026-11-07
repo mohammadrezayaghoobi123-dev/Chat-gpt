@@ -134,3 +134,16 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["a5c36d1c2e7461e38578a688133c797f541b4b46"]
 paths = ['''^cloud-engineering-connector/test/orchestrator-outbox-publisher\.test\.js$''']
+
+
+[[allowlists]]
+description = "Synthetic negative-test values in one historical OrchestratorLedger Durable Object test; exact commit, file, rule, and two literal lines only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["916436f86dc076916bc5588a61b92e710a6680f9"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger\\.test\\.js$''']
+regexTarget = "line"
+regexes = [
+  '''apiKey\\s*:\\s*["']must-not-persist["']''',
+  '''idempotencyKey\\s*:\\s*["']idem-transition-sensitive-0001["']'''
+]

@@ -1,0 +1,378 @@
+{
+  "generatedAt": "2026-11-07T13:00:40.793Z",
+  "repo": {
+    "name": "mohammadrezayaghoobi123-dev/Chat-gpt",
+    "visibility": "public",
+    "defaultBranch": "main",
+    "mainSha": "f2cae91de818385ec48daafc43c621b9e2cc0675",
+    "baseBranch": "integration/unify-main-and-integrated-2026-11-02",
+    "baseSha": "de1059a7bf6f276fb2998b4c304c9469c4880c53"
+  },
+  "github": {
+    "standardPublicRunnerFree": true,
+    "workflowPermissions": [
+      "contents:read",
+      "pull-requests:read",
+      "actions:read"
+    ],
+    "protectedBranchPolicyVerified": false,
+    "taskScopedWriteCredentialVerified": false,
+    "pullRequests": [
+      {
+        "number": 113,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "de1059a7bf6f276fb2998b4c304c9469c4880c53",
+        "base": "main",
+        "baseSha": "f2cae91de818385ec48daafc43c621b9e2cc0675",
+        "mergeable": true,
+        "mergeableState": "blocked",
+        "aheadBy": 1320,
+        "behindBy": 0,
+        "changedFiles": 311
+      },
+      {
+        "number": 145,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "bc747dd84fb1fbcb8c8311412825779c4f66052f",
+        "base": "integration/unify-main-and-integrated-2026-11-02",
+        "mergeable": false,
+        "mergeableState": "dirty",
+        "aheadBy": 21,
+        "behindBy": 204,
+        "safetyHold": "converted to draft"
+      },
+      {
+        "number": 146,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "1d09ee8bc0a786c57cfcfd1cc211cb6cae01b02e",
+        "base": "docs/ai-engineering-handoff-protocol-2026-11-03",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "aheadBy": 4,
+        "behindBy": 205,
+        "safetyHold": "converted to draft"
+      },
+      {
+        "number": 147,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "9edcb05e603feebf39063f05cc35a70c12274bd3",
+        "base": "integration/unify-main-and-integrated-2026-11-02",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "aheadBy": 7,
+        "behindBy": 204
+      },
+      {
+        "number": 148,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "fadc832ad6f1b99107d6b98d08d01b701cefd1a7",
+        "base": "integration/unify-main-and-integrated-2026-11-02",
+        "mergeable": true,
+        "mergeableState": "unstable",
+        "aheadBy": 35,
+        "behindBy": 0,
+        "ci": "PASS",
+        "nodeTests": "367/367",
+        "doTests": "75/75",
+        "pythonTests": "1414 run; kernel enforcement skipped",
+        "mvpTests": "1411 passed; 3 skipped",
+        "preflight": "BLOCKED as expected"
+      },
+      {
+        "number": 149,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "409c3321820c4ada9bcc8ffd305704f37852d07d",
+        "base": "integration/unify-main-and-integrated-2026-11-02",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "aheadBy": 23,
+        "behindBy": 0,
+        "ci": "PASS"
+      },
+      {
+        "number": 150,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "7dc4896b38dbe2be2539b3173bcb915d9fb9ed25",
+        "base": "integration/orchestrator-p1-contracts-2026-11-04",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "aheadBy": 12,
+        "behindBy": 0,
+        "ci": "PASS"
+      },
+      {
+        "number": 156,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "ed91986273d074b4c4c19a1af91b18487ff7ed70",
+        "base": "integration/unify-main-and-integrated-2026-11-02",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "aheadBy": 79,
+        "behindBy": 0,
+        "ci": "PASS"
+      },
+      {
+        "number": 157,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "d6c9d3734d531c68511c209804872c13c6400d6f",
+        "base": "remediation/production-readiness-2026-11-06",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "aheadBy": 204,
+        "behindBy": 0,
+        "ci": "PASS"
+      },
+      {
+        "number": 161,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "0b6282fcc1979c8f530115e0a94140170819561c",
+        "base": "remediation/orchestrator-production-hardening",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "aheadBy": 6,
+        "behindBy": 65
+      },
+      {
+        "number": 175,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "a3d59a0b03c257db3261ea687ed65896acedab5c",
+        "base": "remediation/orchestrator-production-hardening",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "aheadBy": 16,
+        "behindBy": 0,
+        "ci": "PASS"
+      },
+      {
+        "number": 177,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "c43a2819b3d3799101df5cc0ea028ba70b2b403a",
+        "base": "remediation/orchestrator-production-hardening",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "aheadBy": 30,
+        "behindBy": 0,
+        "ci": "PASS",
+        "nodeTests": "404/404",
+        "doTests": "75/75",
+        "secretScan": "PASS"
+      },
+      {
+        "number": 179,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "233bf99d341c45976a71c8fa58d3191e05a71400",
+        "base": "fix/production-readonly-preflight-guard-2026-11-07",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "aheadBy": 2,
+        "behindBy": 0,
+        "ci": "PASS",
+        "nodeTests": "408/408",
+        "doTests": "75/75",
+        "secretScan": "PASS"
+      }
+    ],
+    "mainRuleset": {
+      "active": true,
+      "requiredApprovals": 1,
+      "requiredStatusChecks": [],
+      "staleReviewsDismissed": true,
+      "requiredReviewThreadResolution": true,
+      "branchProtectionEndpointReadable": false
+    },
+    "integrationVsMain": {
+      "aheadBy": 1320,
+      "behindBy": 0,
+      "changedFiles": 311,
+      "prNumber": 113,
+      "draft": true
+    },
+    "branchInventory": {
+      "branchCount": 204,
+      "openPullRequestCount": 25,
+      "branchesWithoutOpenPullRequest": 179,
+      "duplicateHeadGroups": 3,
+      "cleanupPerformed": false
+    }
+  },
+  "cloudflareInventory": {
+    "planVerified": false,
+    "workers": [
+      "chat-gpt111",
+      "chat-gpt111-staging",
+      "master-brain-cloud-agent"
+    ],
+    "durableObjectNamespaces": [
+      {
+        "script": "master-brain-cloud-agent",
+        "className": "AgentBudget",
+        "name": "master-brain-cloud-agent_AgentBudget"
+      },
+      {
+        "script": "master-brain-cloud-agent",
+        "className": "AgentSession",
+        "name": "master-brain-cloud-agent_AgentSession"
+      },
+      {
+        "script": "chat-gpt111-staging",
+        "className": "WriteControl",
+        "name": "chat-gpt111-staging_WriteControl"
+      }
+    ],
+    "knowledgeStoreSourceDeclared": true,
+    "knowledgeStoreNamespacePresent": false,
+    "d1Databases": [],
+    "queues": [
+      {
+        "name": "chat-gpt111-orchestrator-outbox",
+        "consumerCount": 0
+      },
+      {
+        "name": "chat-gpt111-orchestrator-outbox-dlq",
+        "consumerCount": 0
+      },
+      {
+        "name": "chat-gpt111-orchestrator-outbox-dlq-quarantine",
+        "consumerCount": 0
+      },
+      {
+        "name": "chat-gpt111-staging-orchestrator-outbox",
+        "consumerCount": 0
+      },
+      {
+        "name": "chat-gpt111-staging-orchestrator-outbox-dlq",
+        "consumerCount": 0
+      },
+      {
+        "name": "chat-gpt111-staging-orchestrator-outbox-dlq-quarantine",
+        "consumerCount": 0
+      }
+    ],
+    "workerBindings": [
+      {
+        "worker": "chat-gpt111",
+        "durableObjectBindings": []
+      },
+      {
+        "worker": "chat-gpt111-staging",
+        "durableObjectBindings": [
+          "WRITE_CONTROL"
+        ]
+      },
+      {
+        "worker": "master-brain-cloud-agent",
+        "durableObjectBindings": [
+          "AgentBudget",
+          "AgentSession"
+        ]
+      }
+    ],
+    "queueConsumersAttached": false,
+    "quarantineQueuesPresent": true,
+    "missingQuarantineQueues": [],
+    "accountMfaEnforced": true,
+    "observability": {
+      "enabled": true,
+      "logsPersist": true,
+      "redactQueryString": true,
+      "invocationLogs": false,
+      "tracesEnabled": false
+    },
+    "cronSchedules": {
+      "production": [],
+      "staging": []
+    },
+    "releaseBindings": {
+      "productionPublicReadOnlyType": "secret_text",
+      "stagingPublicReadOnly": {
+        "type": "plain_text",
+        "value": "true"
+      },
+      "productionWriteControlPresent": false,
+      "stagingWriteControlPresent": true,
+      "missing": [
+        "GITHUB_WEBHOOK_SECRET",
+        "LEDGER_WORKER_ASSERTION_KEYS",
+        "LEDGER_WORKER_ASSERTION_ACTIVE_KID"
+      ]
+    },
+    "deploymentProvenance": {
+      "production": {
+        "date": "2026-11-03T14:29:40.273955Z",
+        "deploymentId": "8ba62286-395e-4082-9d69-29e40c4e9f09",
+        "versionId": "b4667a11-aa74-49ca-8d29-2f7b62608de0",
+        "source": "api",
+        "gitSha": null
+      },
+      "staging": {
+        "date": "2026-11-02T19:15:06.136487Z",
+        "deploymentId": "ea057836-238f-49e1-87e0-455fe01f0913",
+        "versionId": "2a3283f0-f443-4d51-885c-e30e4ff7434a",
+        "source": "dash",
+        "gitSha": null
+      },
+      "agent": {
+        "date": "2026-11-03T14:17:53.102542Z",
+        "deploymentId": "d77d0b5e-08b6-4e30-ade0-8f5ea5de142a",
+        "versionId": "b5a8f54d-e2bc-4e3f-8a4b-b2172b739e2c",
+        "source": "api",
+        "gitSha": null
+      }
+    }
+  },
+  "agentEligibility": {
+    "openai": "UNAVAILABLE",
+    "anthropic": "UNAVAILABLE"
+  },
+  "independentReviewer": {
+    "verified": false
+  },
+  "backupRestore": {
+    "verified": false,
+    "externalCheckpoint": false
+  },
+  "baseline": {
+    "status": "PASS",
+    "commitSha": "de1059a7bf6f276fb2998b4c304c9469c4880c53",
+    "runId": "42364664617"
+  },
+  "evidenceRefs": [
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/commit/de1059a7bf6f276fb2998b4c304c9469c4880c53",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/commit/f2cae91de818385ec48daafc43c621b9e2cc0675",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/145",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/148",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/149",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/150",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/175",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/177",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/179",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/42374336280",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/42374336282"
+  ]
+}

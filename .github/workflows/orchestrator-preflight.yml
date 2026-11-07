@@ -1,0 +1,44 @@
+name: Orchestrator P0 Read-Only Preflight
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "cloud-engineering-connector/**"
+      - "docs/evidence/2026-11-07-orchestrator-p0-preflight-input.json"
+      - ".github/workflows/orchestrator-preflight.yml"
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: orchestrator-p0-preflight-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: cloud-engineering-connector
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Audit npm dependency advisories
+        run: npm audit --audit-level=moderate
+      - name: Run repository tests
+        run: npm test
+      - name: Check syntax and Wrangler dry-runs
+        run: npm run check
+      - name: Render sanitized preflight evidence
+        run: node scripts/orchestrator-preflight.mjs ../docs/evidence/2026-11-07-orchestrator-p0-preflight-input.json --summary >> "$GITHUB_STEP_SUMMARY"

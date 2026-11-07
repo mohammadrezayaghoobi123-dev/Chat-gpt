@@ -177,6 +177,38 @@ describe("GitHub webhook Worker route", () => {
       status: "duplicate",
       operation: "cancel",
     });
+
+    const changedBody = JSON.stringify({
+      ...event,
+      comment: { ...event.comment, body: `/orchestrator cancel ${taskId} --reason "Changed reason"` },
+    });
+    const bodyConflict = await worker.fetch(
+      await signedRequest(changedBody, deliveryId, undefined, "issue_comment"),
+      ownerEnv,
+    );
+    expect(bodyConflict.status).toBe(409);
+    await expect(bodyConflict.json()).resolves.toMatchObject({
+      error: "owner_command_conflict",
+      reason: "OWNER_RECEIPT_CONFLICT",
+    });
+
+    const secondComment = JSON.stringify({
+      ...event,
+      comment: {
+        ...event.comment,
+        id: 900002,
+        body: `/orchestrator cancel ${taskId} --reason "Owner repeated cancellation"`,
+      },
+    });
+    const terminalConflict = await worker.fetch(
+      await signedRequest(secondComment, "gh-owner-delivery-0000003", undefined, "issue_comment"),
+      ownerEnv,
+    );
+    expect(terminalConflict.status).toBe(409);
+    await expect(terminalConflict.json()).resolves.toMatchObject({
+      error: "owner_command_conflict",
+      reason: "ILLEGAL_OWNER_TRANSITION",
+    });
   });
 
   it("rejects Owner-like comments with invalid author, repository, PR, action, or freshness before Ledger access", async () => {
@@ -203,6 +235,7 @@ describe("GitHub webhook Worker route", () => {
       { name: "bot author", expected: 403, patch: { sender: base.sender, comment: { ...base.comment, user: { id: ownerId, type: "Bot" } } } },
       { name: "wrong repository", expected: 403, patch: { repository: { id: 123456, full_name: "owner/other" } } },
       { name: "pull request comment", expected: 422, patch: { issue: { ...base.issue, pull_request: { url: "https://api.github.com/repos/example/pulls/7" } } } },
+      { name: "present but null pull request field", expected: 422, patch: { issue: { ...base.issue, pull_request: null } } },
       { name: "edited comment event", expected: 422, patch: { action: "edited" } },
       { name: "stale comment timestamp", expected: 422, patch: { comment: { ...base.comment, created_at: new Date(Date.now() - 600_000).toISOString() } } },
     ];

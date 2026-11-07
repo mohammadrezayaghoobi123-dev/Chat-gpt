@@ -55,6 +55,18 @@ jobs:
         env:
           RELEASE_GITHUB_TOKEN: ${{ github.token }}
 
+      - name: Validate MCP smoke credential
+        env:
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          const token = process.env.MCP_AUTH_TOKEN;
+          if (typeof token !== "string" || token.length < 32 || token.length > 512) {
+            throw new Error("Set the MCP_AUTH_TOKEN secret in the Staging GitHub environment to the exact Staging Worker bearer token. The value is never logged.");
+          }
+          console.log("Staging MCP smoke credential is configured.");
+          NODE
+
       - name: Install dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
@@ -136,8 +148,42 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
 
+      - name: Verify Staging KnowledgeStore binding and scheduled reconciliation
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          const account = process.env.CLOUDFLARE_ACCOUNT_ID;
+          const token = process.env.CLOUDFLARE_API_TOKEN;
+          const root = "https://api.cloudflare.com/client/v4/accounts/" + account + "/workers/scripts/chat-gpt111-staging";
+          async function api(path) {
+            const response = await fetch(root + path, {
+              headers: { authorization: "Bearer " + token, accept: "application/json" },
+              signal: AbortSignal.timeout(15000),
+            });
+            const body = await response.json();
+            assert.equal(response.ok && body.success, true, "Cloudflare verification failed: HTTP " + response.status);
+            return body.result;
+          }
+          const [settings, schedules] = await Promise.all([api("/settings"), api("/schedules")]);
+          const bindings = new Map((settings.bindings || []).map((binding) => [binding.name, binding]));
+          const knowledgeStore = bindings.get("KNOWLEDGE_STORE");
+          assert.equal(knowledgeStore?.type, "durable_object_namespace", "Staging KNOWLEDGE_STORE Durable Object binding is required");
+          assert.ok(knowledgeStore.namespace_id, "Staging KNOWLEDGE_STORE namespace ID must be present");
+          assert.ok(
+            (schedules.schedules || []).some((schedule) => schedule.cron === "*/5 * * * *"),
+            "Staging five-minute Knowledge Store reconciliation Cron must be active",
+          );
+          console.log("Staging KnowledgeStore binding and five-minute reconciliation Cron are verified.");
+          NODE
+
       - name: Run live Staging acceptance
         run: node test/staging-smoke.mjs
+        env:
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
 
       - name: Confirm deployed version and write release evidence
         if: success()

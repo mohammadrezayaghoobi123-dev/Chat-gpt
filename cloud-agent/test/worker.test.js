@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 
 const coreSource = await readFile(new URL("../src/core.js", import.meta.url), "utf8");
 const workerSource = await readFile(new URL("../src/worker.js", import.meta.url), "utf8");
+const wranglerSource = await readFile(new URL("../wrangler.toml", import.meta.url), "utf8");
 const coreUrl = "data:text/javascript;base64," + Buffer.from(coreSource).toString("base64");
 const testableWorkerSource = workerSource
   .replace(
@@ -434,4 +435,12 @@ test("Cloud Agent adds HSTS to HTTPS JSON and console responses but not HTTP", a
   const httpHealth = await worker.fetch(new Request("http://agent.example/healthz"), publicEnv());
   assert.equal(httpHealth.status, 200);
   assert.equal(httpHealth.headers.get("strict-transport-security"), null);
+});
+
+
+test("Cloud Agent observability redacts query strings and disables invocation logs", () => {
+  assert.ok(wranglerSource.includes("[observability]"));
+  assert.ok(wranglerSource.includes("redact_query_string = true"));
+  assert.ok(wranglerSource.includes("invocation_logs = false"));
+  assert.ok(wranglerSource.includes("persist = true"));
 });

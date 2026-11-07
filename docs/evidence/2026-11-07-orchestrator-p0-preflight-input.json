@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-07T12:55:38.334Z",
+  "generatedAt": "2026-11-07T13:00:40.793Z",
   "repo": {
     "name": "mohammadrezayaghoobi123-dev/Chat-gpt",
     "visibility": "public",
@@ -35,13 +35,39 @@
       {
         "number": 145,
         "state": "open",
-        "draft": false,
+        "draft": true,
         "merged": false,
         "headSha": "bc747dd84fb1fbcb8c8311412825779c4f66052f",
         "base": "integration/unify-main-and-integrated-2026-11-02",
         "mergeable": false,
         "mergeableState": "dirty",
         "aheadBy": 21,
+        "behindBy": 204,
+        "safetyHold": "converted to draft"
+      },
+      {
+        "number": 146,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "1d09ee8bc0a786c57cfcfd1cc211cb6cae01b02e",
+        "base": "docs/ai-engineering-handoff-protocol-2026-11-03",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "aheadBy": 4,
+        "behindBy": 205,
+        "safetyHold": "converted to draft"
+      },
+      {
+        "number": 147,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "9edcb05e603feebf39063f05cc35a70c12274bd3",
+        "base": "integration/unify-main-and-integrated-2026-11-02",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "aheadBy": 7,
         "behindBy": 204
       },
       {
@@ -49,21 +75,18 @@
         "state": "open",
         "draft": true,
         "merged": false,
-        "headSha": "dd00508b2e7446cb44972afdc3a0d223de899248",
+        "headSha": "fadc832ad6f1b99107d6b98d08d01b701cefd1a7",
         "base": "integration/unify-main-and-integrated-2026-11-02",
         "mergeable": true,
-        "mergeableState": "clean",
+        "mergeableState": "unstable",
         "aheadBy": 35,
         "behindBy": 0,
         "ci": "PASS",
-        "runIds": [
-          42373362956,
-          42373362993,
-          42373362995,
-          42373362968,
-          42373362998,
-          42373362953
-        ]
+        "nodeTests": "367/367",
+        "doTests": "75/75",
+        "pythonTests": "1414 run; kernel enforcement skipped",
+        "mvpTests": "1411 passed; 3 skipped",
+        "preflight": "BLOCKED as expected"
       },
       {
         "number": 149,
@@ -76,14 +99,7 @@
         "mergeableState": "clean",
         "aheadBy": 23,
         "behindBy": 0,
-        "ci": "PASS",
-        "runIds": [
-          42372004958,
-          42372005096,
-          42372004953,
-          42372005149,
-          42372004917
-        ]
+        "ci": "PASS"
       },
       {
         "number": 150,
@@ -96,12 +112,7 @@
         "mergeableState": "clean",
         "aheadBy": 12,
         "behindBy": 0,
-        "ci": "PASS",
-        "runIds": [
-          42373013759,
-          42373013832,
-          42373013823
-        ]
+        "ci": "PASS"
       },
       {
         "number": 156,
@@ -130,6 +141,18 @@
         "ci": "PASS"
       },
       {
+        "number": 161,
+        "state": "open",
+        "draft": true,
+        "merged": false,
+        "headSha": "0b6282fcc1979c8f530115e0a94140170819561c",
+        "base": "remediation/orchestrator-production-hardening",
+        "mergeable": true,
+        "mergeableState": "clean",
+        "aheadBy": 6,
+        "behindBy": 65
+      },
+      {
         "number": 175,
         "state": "open",
         "draft": true,
@@ -140,11 +163,7 @@
         "mergeableState": "clean",
         "aheadBy": 16,
         "behindBy": 0,
-        "ci": "PASS",
-        "runIds": [
-          42371672780,
-          42371672800
-        ]
+        "ci": "PASS"
       },
       {
         "number": 177,
@@ -158,10 +177,9 @@
         "aheadBy": 30,
         "behindBy": 0,
         "ci": "PASS",
-        "runIds": [
-          42374336280,
-          42374336282
-        ]
+        "nodeTests": "404/404",
+        "doTests": "75/75",
+        "secretScan": "PASS"
       },
       {
         "number": 179,
@@ -171,11 +189,13 @@
         "headSha": "233bf99d341c45976a71c8fa58d3191e05a71400",
         "base": "fix/production-readonly-preflight-guard-2026-11-07",
         "mergeable": true,
-        "mergeableState": "unstable",
+        "mergeableState": "clean",
         "aheadBy": 2,
         "behindBy": 0,
-        "ci": "PENDING",
-        "note": "rebased onto current PR #177 head; CI not yet completed"
+        "ci": "PASS",
+        "nodeTests": "408/408",
+        "doTests": "75/75",
+        "secretScan": "PASS"
       }
     ],
     "mainRuleset": {

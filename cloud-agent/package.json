@@ -1,0 +1,20 @@
+{
+  "name": "master-brain-cloud-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Independent Cloudflare Workers AI engineering agent with read-only GitHub tools.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test:node": "node --test test/core.test.js test/worker.test.js test/session-capability.test.js",
+    "test:runtime": "vitest run --config vitest.config.js",
+    "test": "npm run test:node && npm run test:runtime",
+    "check": "node --check src/core.js && node --check src/worker.js && node --check src/budget.js && node --check test/core.test.js && node --check test/worker.test.js && node --check test/session-capability.test.js && node --check test/runtime.test.js && node --check vitest.config.js && node --check test/budget.runtime.test.js && node --check test/principal.runtime.test.js"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.4.11",
+    "vitest": "4.1.12"
+  }
+}

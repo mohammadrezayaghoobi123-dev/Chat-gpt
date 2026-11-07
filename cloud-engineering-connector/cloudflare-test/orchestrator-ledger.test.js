@@ -475,10 +475,22 @@ it("requires verified worker identities before task or outbox lease side effects
       task: { ...task(), apiKey: "must-not-persist" }, idempotencyKey: "task-secret-0001", inputHash: "c".repeat(64), now,
     }))).rejects.toThrow(/sensitive field/);
     await createTask(ledger, { task: task(), idempotencyKey: "task-safe-0001", inputHash: "d".repeat(64), now });
-    await expect(Promise.resolve().then(() => ledger.recordMessage({
+    const unauthenticatedMessage = await ledger.recordMessage({
       messageId: "msg-secret-0001", taskId: "task-0001", inputHash: "e".repeat(64),
-      envelope: { token: "must-not-persist" }, now,
-    }))).rejects.toThrow(/sensitive field/);
+      envelope: { token: "must-not-persist" }, workerId: "agent:worker-1",
+      workerAssertion: null, now,
+    });
+    expect(unauthenticatedMessage).toEqual({
+      accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED",
+    });
+    const authenticatedMessageAssertion = await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now,
+    });
+    await expect(ledger.recordMessage({
+      messageId: "msg-secret-0001", taskId: "task-0001", inputHash: "e".repeat(64),
+      envelope: { token: "must-not-persist" }, workerId: "agent:worker-1",
+      workerAssertion: authenticatedMessageAssertion, now,
+    })).rejects.toThrow(/sensitive field/);
     await runInDurableObject(ledger, async (_instance, state) => {
       const tables = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row => row.name);
       expect(tables.some(name => name.startsWith("knowledge_"))).toBe(false);
@@ -742,6 +754,20 @@ it("authenticates an outbox writer before inspecting an untrusted event payload"
     reason: "AUTHENTICATED_WORKER_REQUIRED",
   });
 
+  const authenticatedPayloadAssertion = await createWorkerAssertion({
+    subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now,
+  });
+  await expect(ledger.enqueueOutbox({
+    eventId: "evt-outbox-auth-order-authenticated-0001",
+    idempotencyKey: "idem-outbox-auth-order-authenticated-0001",
+    taskId: "task-0001",
+    eventType: "task.created",
+    payload: { apiKey: "must-still-be-rejected-after-authentication" },
+    workerId: "agent:worker-1",
+    workerAssertion: authenticatedPayloadAssertion,
+    now,
+  })).rejects.toThrow(/sensitive field/);
+
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec(
       "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE event_id = ?",
@@ -864,6 +890,14 @@ it("authenticates the Queue consumer before inspecting an untrusted receipt payl
     recorded: false,
     reason: "AUTHENTICATED_WORKER_REQUIRED",
   });
+
+  const authenticatedReceiptAssertion = await createWorkerAssertion({
+    subject: input.consumerId, role: "consumer", operation: "recordOutboxReceipt", nowMs: now,
+  });
+  await expect(ledger.recordOutboxReceipt({
+    ...input,
+    workerAssertion: authenticatedReceiptAssertion,
+  })).rejects.toThrow(/sensitive field/);
 
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec(

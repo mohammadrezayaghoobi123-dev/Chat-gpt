@@ -645,7 +645,45 @@ for (const workflow of workflows) {
 }
 
 
-test("Staging preflight blocks when its dedicated outbox DLQ is missing", () => {
+test("Staging preflight does not require the DLQ before deployment because Cloudflare creates it with the consumer", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  runPreflightWithMissingObservability(
+    source,
+    "Preflight Staging bindings and capture rollback target",
+    false,
+    false,
+    false,
+    {
+    enabled: true,
+    head_sampling_rate: 1,
+    redact_query_string: true,
+    logs: { enabled: true, persist: true, head_sampling_rate: 1, invocation_logs: false },
+  },
+    /Queue|DLQ/i,
+    "chat-gpt111-staging-orchestrator-outbox-dlq",
+  );
+});
+
+test("Production preflight does not require the DLQ before deployment because Cloudflare creates it with the consumer", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
+  runPreflightWithMissingObservability(
+    source,
+    "Preflight Production credentials, namespace isolation, and rollback target",
+    true,
+    false,
+    false,
+    {
+    enabled: true,
+    head_sampling_rate: 1,
+    redact_query_string: true,
+    logs: { enabled: true, persist: true, head_sampling_rate: 1, invocation_logs: false },
+  },
+    /Queue|DLQ/i,
+    "chat-gpt111-orchestrator-outbox-dlq",
+  );
+});
+
+test("Staging preflight still blocks when its primary outbox Queue is missing", () => {
   const source = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
   runPreflightWithMissingObservability(
     source,
@@ -659,26 +697,28 @@ test("Staging preflight blocks when its dedicated outbox DLQ is missing", () => 
     redact_query_string: true,
     logs: { enabled: true, persist: true, head_sampling_rate: 1, invocation_logs: false },
   },
-    /Queue|DLQ/i,
-    "chat-gpt111-staging-orchestrator-outbox-dlq",
+    /Queue/i,
+    "chat-gpt111-staging-orchestrator-outbox",
   );
 });
 
-test("Production preflight blocks when its dedicated outbox DLQ is missing", () => {
+test("Production preflight still blocks when a primary outbox Queue is missing", () => {
   const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
-  runPreflightWithMissingObservability(
-    source,
-    "Preflight Production credentials, namespace isolation, and rollback target",
-    true,
-    true,
-    false,
-    {
+  for (const missing of ["chat-gpt111-orchestrator-outbox", "chat-gpt111-staging-orchestrator-outbox"]) {
+    runPreflightWithMissingObservability(
+      source,
+      "Preflight Production credentials, namespace isolation, and rollback target",
+      true,
+      true,
+      false,
+      {
     enabled: true,
     head_sampling_rate: 1,
     redact_query_string: true,
     logs: { enabled: true, persist: true, head_sampling_rate: 1, invocation_logs: false },
   },
-    /Queue|DLQ/i,
-    "chat-gpt111-orchestrator-outbox-dlq",
-  );
+      /Queue/i,
+      missing,
+    );
+  }
 });

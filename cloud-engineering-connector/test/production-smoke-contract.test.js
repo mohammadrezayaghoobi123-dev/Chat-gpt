@@ -93,3 +93,16 @@ test("Production release verifies isolated second-level DLQ quarantine for both 
   assert.match(releaseWorkflow, /productionDlqConsumer\?\.dead_letter_queue/);
   assert.match(releaseWorkflow, /stagingDlqConsumer\?\.dead_letter_queue/);
 });
+
+test("Production preflight requires only the primary outbox Queues; DLQ and quarantine are auto-created by deploy and verified afterwards", () => {
+  const start = releaseWorkflow.indexOf("      - name: Preflight Production credentials, namespace isolation, and rollback target");
+  const end = releaseWorkflow.indexOf("      - name: Deploy candidate to Production", start);
+  assert.ok(start >= 0 && end > start, "Production preflight must be bounded before the deploy step");
+  const preflight = releaseWorkflow.slice(start, end);
+  assert.ok(preflight.includes("chat-gpt111-orchestrator-outbox\""), "Production primary Queue must be preflighted");
+  assert.ok(preflight.includes("chat-gpt111-staging-orchestrator-outbox\""), "Staging primary Queue must be preflighted");
+  assert.doesNotMatch(preflight, /outbox-dlq/, "Wrangler creates the DLQ and quarantine Queues at deploy; requiring them first deadlocks the first release");
+  const post = releaseWorkflow.slice(end);
+  assert.match(post, /productionDlq\?\.queue_id/);
+  assert.match(post, /productionDlqQuarantine\?\.queue_id/);
+});

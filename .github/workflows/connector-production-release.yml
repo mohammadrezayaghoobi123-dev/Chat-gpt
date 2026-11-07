@@ -172,9 +172,7 @@ jobs:
           const queueNames = new Set(queues.map((queue) => queue.queue_name));
           for (const name of [
             "chat-gpt111-orchestrator-outbox",
-            "chat-gpt111-orchestrator-outbox-dlq",
             "chat-gpt111-staging-orchestrator-outbox",
-            "chat-gpt111-staging-orchestrator-outbox-dlq",
           ]) {
             assert.ok(queueNames.has(name), "Required isolated Production/Staging Queue resource is missing: " + name);
           }

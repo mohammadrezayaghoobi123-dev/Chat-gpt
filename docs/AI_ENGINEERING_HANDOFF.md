@@ -151,3 +151,51 @@ The initial handshake is complete only after both agents:
 5. identify any limitation that prevents them from following the protocol.
 
 Until both acknowledgements are recorded, the protocol status remains PROPOSED. A GitHub comment alone does not prove that the other agent has read or accepted it.
+
+## 13. Independent review protocol (added by Claude review, proposed)
+
+Claude and ChatGPT act as independent reviewers. For every material claim by the other agent each agent must:
+
+1. review the available evidence itself (re-run the command, read the diff, open the log) instead of trusting the summary;
+2. list the assumptions and unsupported claims it found;
+3. challenge unsafe or incomplete proposals with a DISPUTE;
+4. label each statement FACT (cited), HYPOTHESIS, or INFERENCE;
+5. give reproducible evidence (command, SHA, run ID) for technical conclusions;
+6. explicitly acknowledge valid corrections from the other agent; and
+7. never record agreement only to finish a task.
+
+## 14. Mandatory rules and status vocabulary (reconciliation)
+
+Mandatory rules:
+
+- no unreferenced claim of successful execution;
+- no undocumented architecture change (architecture changes require a DECISION);
+- no silent dismissal of a finding: every finding receives an ACKNOWLEDGEMENT that accepts, rejects with evidence, or asks for clarification;
+- every disagreement is recorded as a DISPUTE;
+- every accepted resolution is recorded as a DECISION naming the approving authority;
+- every claimed fix has a matching VERIFICATION that names the tested SHA;
+- every unresolved dependency stays visible as a BLOCKER until its acceptance criteria are met.
+
+Status mapping. Earlier instructions used OPEN, IN_REVIEW, ACCEPTED, REJECTED, BLOCKED, RESOLVED. Section 4 statuses are authoritative; the equivalence is:
+
+| Earlier | Section 4 |
+|---|---|
+| OPEN | PROPOSED |
+| IN_REVIEW | IN_PROGRESS |
+| ACCEPTED | ACKNOWLEDGED (accepted) |
+| REJECTED | DISPUTED, then CLOSED (rejected) after the owner or the receiving agent confirms |
+| BLOCKED | BLOCKED |
+| RESOLVED | CLOSED |
+
+## 15. Identity, attribution and message IDs
+
+Both agents currently post through the same GitHub account, so GitHub shows one author for every comment. The `author` field is therefore self-declared and is not authenticated evidence of who wrote a message. Consequences and mitigations:
+
+- a message can only prove what it contains; it never proves the other agent read or accepted anything (see section 12);
+- Claude messages carry the Claude session URL as an evidence item when one exists; ChatGPT messages carry the analogous conversation or task reference when one exists;
+- to prevent ID collisions between two writers, new IDs use `MB-HO-YYYYMMDD-<writer><NNN>`, where writer is `C` (Claude), `G` (ChatGPT) or `H` (human owner). IDs already issued (MB-HO-20261103-001..003) stay valid unchanged;
+- decisions that need real authority (section 9) must cite approval evidence from the human owner, not only an agent message.
+
+## 16. Pull-request state discipline
+
+PR and branch state can change between messages. Every message that cites a PR must state, as observed at `created_at_utc`: PR state (open, closed, merged), base branch, head SHA, and the merge commit SHA when merged. A request that targets a PR that was merged or closed after the request was written must be re-evaluated against the new state before any action. Never retarget, reopen, merge or close a PR as a side effect of a handoff message.

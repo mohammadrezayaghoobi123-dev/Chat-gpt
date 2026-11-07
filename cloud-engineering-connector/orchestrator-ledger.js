@@ -1055,6 +1055,20 @@ export class OrchestratorLedger extends DurableObject {
         }
         return { recorded: false, conflict: true, reason: "OUTBOX_EVENT_ID_CONFLICT" };
       }
+      if (eventType === "task.created" || eventType === "task.transitioned") {
+        const receiptPayload = parseJson(source.payload_json, "outbox receipt payload");
+        if (!Number.isSafeInteger(receiptPayload?.version) || receiptPayload.version < 1) {
+          return { recorded: false, blocked: true, reason: "OUTBOX_TASK_VERSION_REQUIRED" };
+        }
+        const currentTask = sql.exec(
+          "SELECT state, version FROM orchestrator_tasks WHERE task_id = ?",
+          taskId,
+        ).toArray()[0];
+        if (!currentTask || currentTask.version !== receiptPayload.version ||
+            currentTask.state === "CANCELLED" || currentTask.state === "QUARANTINED") {
+          return { recorded: false, blocked: true, reason: "TASK_VERSION_FENCED" };
+        }
+      }
       sql.exec(
         "INSERT INTO orchestrator_outbox_receipts (event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at) VALUES (?, ?, ?, ?, ?, ?)",
         eventId, eventType, schemaVersion, envelopeSha256, consumerId, now,

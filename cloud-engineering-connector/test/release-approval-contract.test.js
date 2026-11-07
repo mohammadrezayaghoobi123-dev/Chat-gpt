@@ -102,7 +102,7 @@ function extractPreflightScript(source, stepName) {
   return lines.slice(heredocStart + 1, heredocEnd).map((line) => line.replace(/^ {10}/, "")).join("\n");
 }
 
-function runPreflightWithMissingObservability(source, stepName, production, expectFailure = true, legacyPublicReadOnlySecret = false, observabilityOverride = null, expectedFailurePattern = /observability|persistent logs|invocation logs|redact_query_string/i) {
+function runPreflightWithMissingObservability(source, stepName, production, expectFailure = true, legacyPublicReadOnlySecret = false, observabilityOverride = null, expectedFailurePattern = /observability|persistent logs|invocation logs|redact_query_string/i, missingQueueName = null) {
   const script = extractPreflightScript(source, stepName);
   const stagingSettings = {
     bindings: [
@@ -161,6 +161,7 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
     },
     { queue_name: "chat-gpt111-staging-orchestrator-outbox-dlq", queue_id: "staging-outbox-dlq", consumers: [{ script_name: "chat-gpt111-staging", consumer_id: "staging-dlq-consumer", settings: { batch_size: 5, max_concurrency: 2, max_retries: 100, retry_delay: 3600 } }] },
   ];
+  const availableQueueData = missingQueueName ? queueData.filter((queue) => queue.queue_name !== missingQueueName) : queueData;
   const scheduleData = { schedules: [{ cron: "*/5 * * * *" }] };
   const accountData = { settings: { enforce_twofactor: true } };
   const prelude = [
@@ -171,8 +172,8 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
     "  else if (url.includes('/chat-gpt111-staging/settings')) result = " + JSON.stringify(stagingSettings) + ";",
     "  else if (url.includes('/chat-gpt111/settings')) result = " + JSON.stringify(productionSettings) + ";",
     "  else if (url.includes('/schedules')) result = " + JSON.stringify(scheduleData) + ";",
-    "  else if (url.includes('/queues?')) result = " + JSON.stringify(queueData) + ";",
-    "  else if (url.includes('/queues?')) result = " + JSON.stringify(queueData) + ";",
+    "  else if (url.includes('/queues?')) result = " + JSON.stringify(availableQueueData) + ";",
+    "  else if (url.includes('/queues?')) result = " + JSON.stringify(availableQueueData) + ";",
     "  else if (url.includes('/deployments?')) result = " + JSON.stringify(deploymentData) + ";",
     "  else throw new Error('Unexpected Cloudflare API request: ' + url);",
     "  return new Response(JSON.stringify({ success: true, result }), { status: 200, headers: { 'content-type': 'application/json' } });",
@@ -279,8 +280,8 @@ function runPreflightWithMfaDisabled(source, stepName, production) {
     "  if (url.endsWith('/accounts/test-account')) result = " + JSON.stringify(accountData) + ";",
     "  else if (url.includes('/chat-gpt111-staging/settings')) result = " + JSON.stringify(stagingSettings) + ";",
     "  else if (url.includes('/chat-gpt111/settings')) result = " + JSON.stringify(productionSettings) + ";",
-    "  else if (url.includes('/queues?')) result = " + JSON.stringify(queueData) + ";",
-    "  else if (url.includes('/queues?')) result = " + JSON.stringify(queueData) + ";",
+    "  else if (url.includes('/queues?')) result = " + JSON.stringify(availableQueueData) + ";",
+    "  else if (url.includes('/queues?')) result = " + JSON.stringify(availableQueueData) + ";",
     "  else if (url.includes('/deployments?')) result = " + JSON.stringify(deploymentData) + ";",
     "  else throw new Error('Unexpected Cloudflare API request: ' + url);",
     "  return new Response(JSON.stringify({ success: true, result }), { status: 200, headers: { 'content-type': 'application/json' } });",
@@ -640,3 +641,32 @@ for (const workflow of workflows) {
       "preflight must not fall back to an arbitrary version when the 100% target is ambiguous");
   });
 }
+
+
+test("Staging preflight blocks when its dedicated outbox DLQ is missing", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url), "utf8");
+  runPreflightWithMissingObservability(
+    source,
+    "Preflight Staging bindings and capture rollback target",
+    false,
+    true,
+    false,
+    null,
+    /Queue|DLQ/i,
+    "chat-gpt111-staging-orchestrator-outbox-dlq",
+  );
+});
+
+test("Production preflight blocks when its dedicated outbox DLQ is missing", () => {
+  const source = readFileSync(new URL("../../.github/workflows/connector-production-release.yml", import.meta.url), "utf8");
+  runPreflightWithMissingObservability(
+    source,
+    "Preflight Production credentials, namespace isolation, and rollback target",
+    true,
+    true,
+    false,
+    null,
+    /Queue|DLQ/i,
+    "chat-gpt111-orchestrator-outbox-dlq",
+  );
+});

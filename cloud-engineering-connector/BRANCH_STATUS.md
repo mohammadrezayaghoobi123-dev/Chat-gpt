@@ -1,48 +1,40 @@
 # Branch status — `engineering/hardening-v0.2.0`
 
-**Severity: CRITICAL for connector runtime**
+**Severity: RECOVERING (runtime restored from main + surgical v0.2.0 allowlist)**
 
-## Verdict
+## Verdict (current)
 
 | Check | Result |
 |-------|--------|
-| Safe to merge to `main` | **NO** |
-| Safe to deploy Worker | **NO** |
-| Docs / structure only | Partial yes |
-| Runtime MCP tools | **Unavailable (fail-closed stub)** |
+| Safe to merge to `main` | **NO** (still needs full worker.test.js suite + interop review) |
+| Safe to deploy Worker | **NO** until full test suite + smoke on staging |
+| Runtime MCP tools | **Present** (monolithic worker restored + configurable allowlist) |
+| Fail-closed stub | **Removed** |
+| source-parts pipeline | **Deprecated / incomplete — do not use** |
 
-## What went wrong (evidence)
+## What changed in this recovery
 
-1. `worker.js` was replaced with `export { default } from "./worker.generated.js"` while `worker.generated.js` is gitignored and not produced in a complete form on the remote branch.
-2. `lib/source-parts/` mixed **two incompatible chunk schemes** (6-part vs 12-part). Only some parts were uploaded; `part0.js` was briefly `PLACEHOLDER` (11 bytes), which caused `assemble.js` to load **zero** parts.
-3. Manual re-escape of large payloads through the GitHub tool path produced size mismatches (e.g. remote part0 payload length ≠ local known-good payload). That is a corruption risk for any assembled bundle.
-4. `main` still holds the last known-good monolithic worker (`worker.js` ~36KB, version `0.1.0`).
+1. Restored known-good monolithic `worker.js` baseline from `main` (0.1.0).
+2. Applied surgical v0.2.0 patches documented in `docs/WORKER_V0.2_PATCH.md`:
+   - `VERSION = "0.2.0"`
+   - `DEFAULT_ALLOWED_BASE_BRANCH` + `DEFAULT_ALLOWED_REPOSITORIES`
+   - Inlined `parseAllowlist` / `allowedBaseBranch` / `repoPath(owner, repo, env)` (semantically identical to `lib/allowlist.js`)
+   - All call sites updated to pass `env`
+   - Base-branch guard uses `allowedBaseBranch(env)`
+   - Basic `/healthz` allowlist fields + `/metrics` Prometheus text (no secrets)
+3. `lib/allowlist.js` remains the pure, unit-tested source of truth.
+4. Local gates verified before push: `node --check worker.js` + 7 allowlist unit tests green.
+5. Incomplete `lib/source-parts/part*.b64` left in place but **must not be used** for assemble. The b64 pipeline is abandoned for this recovery because of prior non-contiguous/corrupt risk.
 
-## What is still valuable on this branch
+## Remaining recovery gates before merge / deploy
 
-- Root `README.md`, `docs/ARCHITECTURE.md`, `docs/VERSIONING.md`, `docs/RELEASE.md`
-- Connector README env surface documentation
-- `lib/allowlist.js` pure module + unit tests (logic design for v0.2.0)
-- CI wiring ideas (assemble-before-test) — only after parts are complete
-
-## Recovery gates (all required)
-
-1. Contiguous `part0.js` … `partN.js` from a **single** split of a locally tested worker.
-2. `node scripts/assemble.js` produces `worker.generated.js`.
-3. `node --check worker.generated.js` passes.
-4. Full suite: **105** tests green (or documented equivalent after intentional test updates).
-5. Byte-identity or semantic review vs local known-good bundle.
-6. Only then replace the fail-closed `worker.js` stub and allow deploy.
-
-## Alternative recovery (simpler)
-
-```bash
-git checkout main -- cloud-engineering-connector/worker.js
-# restore package.json scripts / wrangler main to monolithic worker.js
-# delete incomplete lib/source-parts or leave behind experimental/
-```
+1. Full `worker.test.js` suite green against the restored worker (or intentional test updates documented).
+2. Staging interop smoke (initialize / tools/list / allowlist deny / draft PR).
+3. Update root README maturity statement.
+4. Only then consider merge to `main` via PR.
 
 ## Policy
 
-- Do not merge this branch until recovery gates pass or connector runtime is restored from `main`.
-- Prefer small atomic PRs: docs-only vs runtime.
+- Do **not** merge until the remaining gates pass.
+- Prefer small atomic PRs.
+- source-parts may be deleted in a follow-up commit once this recovery is confirmed.

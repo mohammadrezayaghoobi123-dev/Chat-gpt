@@ -137,7 +137,7 @@ describe("Owner command atomic Ledger contract", () => {
         END
       `);
     });
-    await expect(ledger.executeOwnerCommand(input)).rejects.toThrow("injected owner audit failure");
+    await expect(ledger.executeOwnerCommand(input)).resolves.toMatchObject({ applied: false, reason: "LEDGER_TRANSACTION_FAILED" });
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries").one().count).toBe(0);
       expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions").one().count).toBe(0);

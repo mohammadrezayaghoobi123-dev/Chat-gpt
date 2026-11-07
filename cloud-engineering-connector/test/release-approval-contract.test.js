@@ -38,19 +38,19 @@ for (const workflow of workflows) {
     assert.match(source, /pull-requests:\s*read/, "release workflow must have read-only PR review access");
     assert.match(source, /node scripts\/verify-release-approval\.mjs/, "approval guard must run before deployment");
     const tokenCount = (source.match(/RELEASE_GITHUB_TOKEN:/g) || []).length;
-    const guardCount = (source.match(/node scripts\\/verify-release-approval\\.mjs/g) || []).length;
+    const guardCount = source.split("node scripts/verify-release-approval.mjs").length - 1;
     const expectedApprovalChecks = workflow.name === "Staging" ? 2 : 1;
     assert.equal(guardCount, expectedApprovalChecks, "release must validate the candidate at every required approval boundary");
     assert.equal(tokenCount, guardCount, "read-only GitHub token must be injected exactly once per approval check");
-    const lines = source.split("\\n");
+    const lines = source.split("\n");
     const tokenSteps = lines.map((line, index) => ({ line, index })).filter(({ line }) => line.includes("RELEASE_GITHUB_TOKEN:"));
     for (const token of tokenSteps) {
       let stepStart = token.index;
       while (stepStart >= 0 && !lines[stepStart].startsWith("      - name: ")) stepStart -= 1;
       let stepEnd = token.index + 1;
       while (stepEnd < lines.length && !lines[stepEnd].startsWith("      - name: ")) stepEnd += 1;
-      const scopedStep = lines.slice(stepStart, stepEnd).join("\\n");
-      assert.match(scopedStep, /node scripts\\/verify-release-approval\\.mjs/, "read-only GitHub token must exist only in an approval-validation step");
+      const scopedStep = lines.slice(stepStart, stepEnd).join("\n");
+      assert.ok(scopedStep.includes("node scripts/verify-release-approval.mjs"), "read-only GitHub token must exist only in an approval-validation step");
     }
     const deployPosition = source.indexOf("npx wrangler deploy");
     assert.ok(source.indexOf("node scripts/verify-release-approval.mjs") < deployPosition, "approval validation must run before deploy");

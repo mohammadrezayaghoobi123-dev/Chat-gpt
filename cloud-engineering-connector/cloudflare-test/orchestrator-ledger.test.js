@@ -449,6 +449,36 @@ describe("OrchestratorLedger durable coordination contract", () => {
       .resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
   });
 
+  it("skips an unreconciled expired-lease task and still claims later work for the same Agent", async () => {
+    const ledger = ledgerFor("ledger-expired-lease-head-of-line");
+    const workerId = "agent:worker-1";
+    await createTask(ledger, { task: task("task-0001"), idempotencyKey: "task-create-hol-0001", inputHash: "b".repeat(64), now });
+    const stuck = await ledger.claimTask({
+      workerId, workerAssertion: await claimAssertion(workerId), leaseMs: 100, now, taskId: "task-0001",
+    });
+    expect(stuck).toMatchObject({ claimed: true, leaseGeneration: 1 });
+    const later = now + 1;
+    await createTask(ledger, {
+      task: { ...task("task-0002"), createdAt: later, updatedAt: later },
+      idempotencyKey: "task-create-hol-0002", inputHash: "c".repeat(64), now: later,
+    });
+
+    const at = now + 101;
+    await expect(ledger.claimTask({
+      workerId, workerAssertion: await claimAssertion(workerId, at), leaseMs: 100, now: at,
+    })).resolves.toMatchObject({ claimed: true, task: { taskId: "task-0002" }, leaseGeneration: 1 });
+
+    // The stuck task stays fail-closed and untouched.
+    await expect(ledger.claimTask({
+      workerId, workerAssertion: await claimAssertion(workerId, at + 1), leaseMs: 100, now: at + 1, taskId: "task-0001",
+    })).resolves.toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-0001",
+      ).one()).toMatchObject({ worker_id: workerId, lease_generation: 1, lease_until: now + 100 });
+    });
+  });
   it("refuses to persist a protocol message without a verified authenticated sender context", async () => {
     const ledger = ledgerFor("ledger-message-authentication");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-auth-message", inputHash: "c".repeat(64), now });

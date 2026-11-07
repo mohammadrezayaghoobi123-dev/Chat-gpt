@@ -175,7 +175,7 @@ describe("GitHub webhook Worker route", () => {
     expect(differentDeliverySameComment.status).toBe(202);
     await expect(differentDeliverySameComment.json()).resolves.toMatchObject({
       status: "duplicate",
-      reason: "OWNER_RECEIPT_CONFLICT",
+      operation: "cancel",
     });
   });
 

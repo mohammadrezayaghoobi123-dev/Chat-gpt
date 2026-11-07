@@ -486,11 +486,14 @@ it("requires verified worker identities before task or outbox lease side effects
     const authenticatedMessageAssertion = await createWorkerAssertion({
       subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: now,
     });
-    await expect(ledger.recordMessage({
+    const authenticatedMessageResult = await ledger.recordMessage({
       messageId: "msg-secret-0001", taskId: "task-0001", inputHash: "e".repeat(64),
       envelope: { token: "must-not-persist" }, workerId: "agent:worker-1",
       workerAssertion: authenticatedMessageAssertion, now,
-    })).rejects.toThrow(/sensitive field/);
+    });
+    expect(authenticatedMessageResult).toEqual({
+      accepted: false, reason: "SENSITIVE_FIELD_REJECTED",
+    });
     await runInDurableObject(ledger, async (_instance, state) => {
       const tables = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row => row.name);
       expect(tables.some(name => name.startsWith("knowledge_"))).toBe(false);
@@ -757,7 +760,7 @@ it("authenticates an outbox writer before inspecting an untrusted event payload"
   const authenticatedPayloadAssertion = await createWorkerAssertion({
     subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: now,
   });
-  await expect(ledger.enqueueOutbox({
+  const authenticatedResult = await ledger.enqueueOutbox({
     eventId: "evt-outbox-auth-order-authenticated-0001",
     idempotencyKey: "idem-outbox-auth-order-authenticated-0001",
     taskId: "task-0001",
@@ -766,7 +769,11 @@ it("authenticates an outbox writer before inspecting an untrusted event payload"
     workerId: "agent:worker-1",
     workerAssertion: authenticatedPayloadAssertion,
     now,
-  })).rejects.toThrow(/sensitive field/);
+  });
+  expect(authenticatedResult).toEqual({
+    enqueued: false,
+    reason: "SENSITIVE_FIELD_REJECTED",
+  });
 
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec(
@@ -894,10 +901,14 @@ it("authenticates the Queue consumer before inspecting an untrusted receipt payl
   const authenticatedReceiptAssertion = await createWorkerAssertion({
     subject: input.consumerId, role: "consumer", operation: "recordOutboxReceipt", nowMs: now,
   });
-  await expect(ledger.recordOutboxReceipt({
+  const authenticatedReceiptResult = await ledger.recordOutboxReceipt({
     ...input,
     workerAssertion: authenticatedReceiptAssertion,
-  })).rejects.toThrow(/sensitive field/);
+  });
+  expect(authenticatedReceiptResult).toEqual({
+    recorded: false,
+    reason: "SENSITIVE_FIELD_REJECTED",
+  });
 
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec(

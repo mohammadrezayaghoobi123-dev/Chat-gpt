@@ -71,6 +71,7 @@ jobs:
           assert.equal(healthBody.service, 'cloud-engineering-connector');
           assert.equal(healthBody.execution, 'cloudflare-workers');
           assert.equal(healthBody.laptop_dependency, false);
+          assert.equal(healthBody.durable_objects, "ok", "healthz must execute a live SQLite Durable Object probe");
           for (const [header, expected] of [
             ['x-content-type-options', 'nosniff'],
             ['x-frame-options', 'DENY'],
@@ -81,6 +82,23 @@ jobs:
           const getMcp = await fetch(new URL('/mcp', base), { signal: AbortSignal.timeout(15000) });
           assert.equal(getMcp.status, 405, 'GET /mcp must be rejected');
           assert.match(getMcp.headers.get('allow') ?? '', /POST/);
+
+          const readOnlyList = await fetch(new URL('/mcp', base), {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              accept: 'application/json, text/event-stream',
+            },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 99000, method: 'tools/list', params: {} }),
+            signal: AbortSignal.timeout(15000),
+          });
+          assert.equal(readOnlyList.status, 200, 'public read-only MCP tools/list must succeed');
+          const readOnlyPayload = await readOnlyList.json();
+          const toolNames = (readOnlyPayload.result?.tools ?? []).map(tool => tool.name);
+          for (const name of ['project_inspect', 'read_project_file', 'engineering_standards', 'architecture_review']) {
+            assert.ok(toolNames.includes(name), 'approved read-only MCP tool must be available: ' + name);
+          }
+          assert.ok(!toolNames.includes('create_change_pr'), 'write tool must remain hidden in public read-only mode');
 
           const rpc = {
             jsonrpc: '2.0',
@@ -111,6 +129,8 @@ jobs:
               'security response headers',
               'GET /mcp rejected with HTTP 405',
               'POST /mcp rejects invalid bearer token with HTTP 401',
+              'public read-only MCP tools/list exposes only approved read tools',
+              'healthz performs a live Durable Object SQLite schema probe',
             ],
             credentialMaterialLogged: false,
           }, null, 2));

@@ -1,10 +1,20 @@
 name = "chat-gpt111"
-main = "worker.js"
+main = "index.js"
 compatibility_date = "2026-10-23"
 workers_dev = true
+keep_vars = true
+tags = ["cf:service=chat-gpt111"]
 
-[vars]
-SERVICE_MODE = "cloud"
+[observability]
+enabled = true
+head_sampling_rate = 1
+redact_query_string = true
+
+[observability.logs]
+enabled = true
+invocation_logs = false
+head_sampling_rate = 1
+persist = true
 
 [[ratelimits]]
 name = "MCP_RATE_LIMITER"
@@ -14,8 +24,27 @@ namespace_id = "78294163"
 limit = 60
 period = 60
 
-[env.staging.vars]
-SERVICE_MODE = "cloud"
+[[durable_objects.bindings]]
+name = "WRITE_CONTROL"
+class_name = "WriteControl"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WriteControl"]
+
+[env.staging]
+tags = ["cf:service=chat-gpt111-staging"]
+
+[env.staging.observability]
+enabled = true
+head_sampling_rate = 1
+redact_query_string = true
+
+[env.staging.observability.logs]
+enabled = true
+invocation_logs = false
+head_sampling_rate = 1
+persist = true
 
 [[env.staging.ratelimits]]
 name = "MCP_RATE_LIMITER"
@@ -24,3 +53,11 @@ namespace_id = "78294164"
 [env.staging.ratelimits.simple]
 limit = 60
 period = 60
+
+[[env.staging.durable_objects.bindings]]
+name = "WRITE_CONTROL"
+class_name = "WriteControl"
+
+[[env.staging.migrations]]
+tag = "v1"
+new_sqlite_classes = ["WriteControl"]

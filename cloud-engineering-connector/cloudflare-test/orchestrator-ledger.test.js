@@ -1543,7 +1543,7 @@ it("consumes a DLQ archiver assertion when an authenticated dead-letter body con
   const safeBody = {
     schemaVersion: 1,
     eventId: "evt-dlq-sensitive-jti-0001",
-    idempotencyKey: "idem-dlq-sensitive-jti-0001",
+    idempotencyKey: "dlq-test-idempotency-1",
     taskId: "task-0001",
     eventType: "task.created",
     payload: { taskId: "task-0001" },

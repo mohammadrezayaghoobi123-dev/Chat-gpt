@@ -111,6 +111,24 @@ export async function verifyReleaseApproval({
     throw new Error("Release blocked: candidate must belong to " + requirement + ".");
   }
 
+  if (releaseEnvironment === "staging") {
+    if (pull.mergeable !== true || pull.mergeable_state !== "clean") {
+      throw new Error("Release blocked: staging candidate must be a mergeable, current-base PR.");
+    }
+    const currentBase = await getJson(
+      fetchImpl,
+      API_ROOT + "/repos/" + repoPath + "/git/ref/heads/" + STAGING_BASE,
+      token,
+    );
+    if (
+      typeof currentBase?.object?.sha !== "string" ||
+      typeof pull.base?.sha !== "string" ||
+      currentBase.object.sha !== pull.base.sha
+    ) {
+      throw new Error("Release blocked: staging candidate PR must target the current integration head.");
+    }
+  }
+
   const reviewCommitSha = pull.head.sha;
   const reviews = await getJsonCollection(
     fetchImpl,

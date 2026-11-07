@@ -389,7 +389,37 @@ describe("OrchestratorLedger durable coordination contract", () => {
     })).resolves.toMatchObject({ accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" });
   });
 
-  it("requires verified worker identities before task or outbox lease side effects", async () => {
+  it("authenticates a message sender before inspecting an untrusted protocol envelope", async () => {
+  const ledger = ledgerFor("ledger-message-auth-before-inspection");
+  await createTask(ledger, { task: task(), idempotencyKey: "task-create-message-auth-order", inputHash: "b".repeat(64), now });
+  const envelope = protocolEnvelope("msg-auth-order-0001", "task-0001", "c".repeat(64), {
+    apiKey: "must-not-be-inspected-before-authentication",
+  });
+
+  const result = await ledger.recordMessage({
+    messageId: "msg-auth-order-0001",
+    taskId: "task-0001",
+    inputHash: "c".repeat(64),
+    envelope,
+    workerId: "agent:worker-1",
+    workerAssertion: null,
+    now,
+  });
+  expect(result).toEqual({
+    accepted: false,
+    reason: "AUTHENTICATED_SENDER_REQUIRED",
+  });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_processed_messages WHERE message_id = ?",
+      "msg-auth-order-0001",
+    ).one().count).toBe(0);
+  });
+});
+
+
+it("requires verified worker identities before task or outbox lease side effects", async () => {
     const ledger = ledgerFor("ledger-worker-authentication");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-worker-auth", inputHash: "c".repeat(64), now });
     await expect(ledger.claimTask({ workerId: "agent:worker-1", leaseMs: 30_000, now }))
@@ -694,6 +724,32 @@ it("rejects unauthenticated direct outbox enqueue", async () => {
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_outbox_events").one().count).toBe(0);
   });
 });
+
+it("authenticates an outbox writer before inspecting an untrusted event payload", async () => {
+  const ledger = ledgerFor("ledger-outbox-auth-before-inspection");
+  const result = await ledger.enqueueOutbox({
+    eventId: "evt-outbox-auth-order-0001",
+    idempotencyKey: "idem-outbox-auth-order-0001",
+    taskId: "task-0001",
+    eventType: "task.created",
+    payload: { apiKey: "must-not-be-inspected-before-authentication" },
+    workerId: "agent:worker-1",
+    workerAssertion: null,
+    now,
+  });
+  expect(result).toEqual({
+    enqueued: false,
+    reason: "AUTHENTICATED_WORKER_REQUIRED",
+  });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE event_id = ?",
+      "evt-outbox-auth-order-0001",
+    ).one().count).toBe(0);
+  });
+});
+
 
 it("rejects unauthenticated and caller-forged task creation", async () => {
   const ledger = ledgerFor("ledger-create-task-forged");

@@ -211,6 +211,47 @@ describe("OrchestratorLedger durable coordination contract", () => {
     });
   });
 
+  it("paginates past more than 100 active leases for the same executor", async () => {
+    const ledger = ledgerFor("ledger-claim-paginate-active-leases");
+    for (let index = 0; index < 100; index += 1) {
+      const createdAt = now + index;
+      const suffix = String(index).padStart(3, "0");
+      const taskId = "task-leased-" + suffix;
+      await createTask(ledger, {
+        task: { ...task(taskId), createdAt, updatedAt: createdAt },
+        idempotencyKey: "claim-paginate-leased-" + suffix,
+        inputHash: index.toString(16).padStart(64, "0"),
+        now: createdAt,
+      });
+      const claimed = await ledger.claimTask({
+        taskId,
+        workerId: "agent:worker-1",
+        workerAssertion: await claimAssertion("agent:worker-1", createdAt + 1),
+        leaseMs: 30_000,
+        now: createdAt + 1,
+      });
+      expect(claimed).toMatchObject({ claimed: true, task: { taskId } });
+    }
+    await createTask(ledger, {
+      task: { ...task("task-worker-1-after-100-active"), createdAt: now + 100, updatedAt: now + 100 },
+      idempotencyKey: "claim-paginate-worker-1-after-100",
+      inputHash: "e".repeat(64),
+      now: now + 100,
+    });
+
+    const result = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1", now + 101),
+      leaseMs: 30_000,
+      now: now + 101,
+    });
+    expect(result).toMatchObject({
+      claimed: true,
+      task: { taskId: "task-worker-1-after-100-active" },
+      leaseGeneration: 1,
+    });
+  });
+
   it("rejects stale lease generations on renew, release, and worker-driven state transitions", async () => {
     const ledger = ledgerFor("ledger-stale-fence");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0004", inputHash: "f".repeat(64), now });

@@ -30,9 +30,17 @@ period = 60
 name = "WRITE_CONTROL"
 class_name = "WriteControl"
 
+[[durable_objects.bindings]]
+name = "KNOWLEDGE_STORE"
+class_name = "KnowledgeStore"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["WriteControl"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["KnowledgeStore"]
 
 [env.staging]
 
@@ -62,6 +70,14 @@ period = 60
 name = "WRITE_CONTROL"
 class_name = "WriteControl"
 
+[[env.staging.durable_objects.bindings]]
+name = "KNOWLEDGE_STORE"
+class_name = "KnowledgeStore"
+
 [[env.staging.migrations]]
 tag = "v1"
 new_sqlite_classes = ["WriteControl"]
+
+[[env.staging.migrations]]
+tag = "v2"
+new_sqlite_classes = ["KnowledgeStore"]

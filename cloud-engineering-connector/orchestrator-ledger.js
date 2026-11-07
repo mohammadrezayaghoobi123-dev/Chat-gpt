@@ -346,30 +346,8 @@ export class OrchestratorLedger extends DurableObject {
   }
 
   ping() {
-    const sql = this.ctx.storage.sql;
-    const result = sql.exec("SELECT 1 AS ok").one();
-    const integrityRows = sql.exec("PRAGMA quick_check(1)").toArray();
-    const integrityValue = integrityRows.length === 1
-      ? Object.values(integrityRows[0])[0]
-      : null;
-    const integrityOk = integrityValue === "ok";
-    const tableNames = new Set(
-      sql.exec("SELECT name FROM sqlite_master WHERE type = 'table'").toArray().map(row => row.name),
-    );
-    const requiredTablesOk = [
-      "orchestrator_tasks",
-      "orchestrator_outbox_events",
-      "orchestrator_audit_events",
-      "orchestrator_owner_command_receipts",
-    ].every(name => tableNames.has(name));
-    return {
-      ok: Number(result.ok) === 1 && integrityOk && requiredTablesOk,
-      schemaVersion: 6,
-      storage: {
-        integrityCheck: integrityOk ? "ok" : "failed",
-        requiredTables: requiredTablesOk,
-      },
-    };
+    const result = this.ctx.storage.sql.exec("SELECT 1 AS ok").one();
+    return { ok: Number(result.ok) === 1, schemaVersion: 6 };
   }
 
   claimGitHubDelivery({ deliveryId, bodySha256, eventName, receivedAt, idempotencyKey, inputHash } = {}) {

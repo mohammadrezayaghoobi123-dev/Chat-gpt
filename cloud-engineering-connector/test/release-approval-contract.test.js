@@ -102,7 +102,7 @@ function extractPreflightScript(source, stepName) {
   return lines.slice(heredocStart + 1, heredocEnd).map((line) => line.replace(/^ {10}/, "")).join("\n");
 }
 
-function runPreflightWithMissingObservability(source, stepName, production, expectFailure = true, legacyPublicReadOnlySecret = false, observabilityOverride = null) {
+function runPreflightWithMissingObservability(source, stepName, production, expectFailure = true, legacyPublicReadOnlySecret = false, observabilityOverride = null, expectedFailurePattern = /observability|persistent logs|invocation logs|redact_query_string/i) {
   const script = extractPreflightScript(source, stepName);
   const stagingSettings = {
     bindings: [
@@ -198,8 +198,8 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
       );
       assert.match(
         result.stderr + result.stdout,
-        /observability|persistent logs|invocation logs|redact_query_string/i,
-        "verification must explain the observability gate that blocked release",
+        expectedFailurePattern,
+        "preflight failure must explain the specific gate that blocked release",
       );
     } else {
       assert.equal(result.status, 0, "Production preflight must allow deployment to remediate legacy dashboard settings; post-deploy verification enforces the final state: " + result.stderr + result.stdout);
@@ -328,6 +328,8 @@ test("Production preflight blocks legacy secret-text PUBLIC_READ_ONLY before dep
     true,
     true,
     true,
+    null,
+    /Production PUBLIC_READ_ONLY must be a plain-text Worker variable/,
   );
 });
 

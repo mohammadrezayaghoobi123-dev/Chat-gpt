@@ -80,6 +80,6 @@ test("Production preflight rejects a legacy secret-text PUBLIC_READ_ONLY binding
   assert.ok(start >= 0 && end > start, "Production preflight must be bounded before the deploy step");
   const preflight = releaseWorkflow.slice(start, end);
   assert.match(preflight, /const publicReadOnly = productionBindings\.get\(["']PUBLIC_READ_ONLY["']\)/);
-  assert.match(preflight, /assert\.equal\(publicReadOnly\?\.type,\s*["']plain_text["']/);
-  assert.match(preflight, /assert\.equal\(publicReadOnly\.text,\s*["']true["']/);
+  assert.match(preflight, /assert\.equal\(\s*publicReadOnly\?\.type,\s*["']plain_text["']/);
+  assert.match(preflight, /assert\.equal\(\s*publicReadOnly\.text,\s*["']true["']/);
 });

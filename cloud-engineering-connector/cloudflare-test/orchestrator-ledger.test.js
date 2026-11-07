@@ -60,13 +60,15 @@ const evidence = { kind: "test-evidence", reference: "ci://run/123" };
 describe("OrchestratorLedger durable coordination contract", () => {
   it("initializes its own SQLite schema and reports the schema version", async () => {
     const ledger = ledgerFor("ledger-schema-ping");
-    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 5 });
+    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 6 });
     await runInDurableObject(ledger, async (instance, state) => {
       const tables = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row => row.name);
       expect(tables).toEqual(expect.arrayContaining([
         "orchestrator_tasks", "orchestrator_processed_messages",
         "orchestrator_execution_leases", "orchestrator_outbox_events", "orchestrator_outbox_receipts", "orchestrator_audit_events",
         "orchestrator_consumed_assertions",
+        "orchestrator_owner_consumed_assertions",
+        "orchestrator_owner_command_receipts",
       ]));
       const outboxColumns = state.storage.sql.exec("PRAGMA table_info(orchestrator_outbox_events)").toArray().map(row => row.name);
       expect(outboxColumns).toEqual(expect.arrayContaining([

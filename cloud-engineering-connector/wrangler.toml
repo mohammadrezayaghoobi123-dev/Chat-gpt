@@ -1,3 +1,4 @@
 name = "cloud-engineering-connector"
-main = "worker.generated.js"
+# FAIL-CLOSED stub — do not point production routes here until BRANCH_STATUS.md gates pass.
+main = "worker.js"
 compatibility_date = "2024-11-01"

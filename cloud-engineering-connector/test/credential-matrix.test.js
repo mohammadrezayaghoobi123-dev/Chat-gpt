@@ -129,6 +129,27 @@ test("health endpoint never reveals credential configuration booleans", async ()
   assert.equal(Object.hasOwn(body, "auth_configured"), false);
 });
 
+test("readyz reports not_ready when the Durable Object binding is absent", async () => {
+  const response = await worker.fetch(new Request("https://example.test/readyz"), {});
+  const body = await response.json();
+  assert.equal(response.status, 503);
+  assert.equal(body.status, "not_ready");
+  assert.equal(body.durable_objects, "unavailable");
+});
+
+test("readyz uses a lightweight Durable Object ping rather than a full storage scan", async () => {
+  const response = await worker.fetch(new Request("https://example.test/readyz"), {
+    WRITE_CONTROL: {
+      idFromName: name => name,
+      get: () => ({ ping: async () => ({ ok: true, schemaVersion: 1 }) })
+    }
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.status, "ready");
+  assert.equal(body.durable_objects, "ok");
+});
+
 test("short configured MCP token fails closed before rate limiting or request parsing", async () => {
   let limiterCalls = 0;
   const response = await worker.fetch(post({ jsonrpc: "2.0", id: 1, method: "tools/list" }, "Bearer short"), {

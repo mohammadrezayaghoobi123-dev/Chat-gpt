@@ -497,7 +497,6 @@ export class OrchestratorLedger extends DurableObject {
     identifier(taskId, "taskId");
     hash(inputHash, "inputHash");
     timestamp(now);
-    serializeBounded(envelope, "message envelope");
     if (typeof workerId !== "string" || workerId.length === 0) {
       return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
     }
@@ -510,6 +509,8 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
     }
+    // Authenticate the sender before inspecting the untrusted message envelope.
+    serializeBounded(envelope, "message envelope");
     const authenticatedSender = { id: verifiedAssertion.subject, authenticated: true, identityVerified: true };
     if (!envelope || typeof envelope !== "object" || envelope.senderId !== authenticatedSender.id) {
       return { accepted: false, reason: "SENDER_IDENTITY_MISMATCH" };
@@ -744,7 +745,10 @@ export class OrchestratorLedger extends DurableObject {
   }
 
   async enqueueOutbox(input) {
-    const normalized = validateOutboxInput(input);
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw fail("outbox input must be an object.");
+    }
+    const now = timestamp(input.now);
     if (typeof input.workerId !== "string" || input.workerId.length === 0) {
       return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
@@ -752,11 +756,13 @@ export class OrchestratorLedger extends DurableObject {
     let verifiedAssertion;
     try {
       verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, input.workerAssertion, {
-        subject: input.workerId, role: "agent", operation: "enqueueOutbox", nowMs: normalized.now,
+        subject: input.workerId, role: "agent", operation: "enqueueOutbox", nowMs: now,
       });
     } catch {
       return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
+    // Validate and serialize the untrusted payload only after worker authentication.
+    const normalized = validateOutboxInput(input);
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, normalized.now)) {
@@ -911,7 +917,6 @@ export class OrchestratorLedger extends DurableObject {
     identifier(eventType, "eventType");
     identifier(idempotencyKey, "idempotencyKey");
     identifier(taskId, "taskId");
-    const payloadJson = serializeBounded(payload, "outbox receipt payload");
     timestamp(createdAt, "createdAt");
     hash(envelopeSha256, "envelopeSha256");
     timestamp(now);
@@ -926,6 +931,8 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
+    // Authenticate the consumer before inspecting the untrusted receipt payload.
+    const payloadJson = serializeBounded(payload, "outbox receipt payload");
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {

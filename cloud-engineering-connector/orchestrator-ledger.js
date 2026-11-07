@@ -1352,7 +1352,9 @@ export class OrchestratorLedger extends DurableObject {
       if (["INVALID_INPUT", "RECORD_TOO_LARGE"].includes(error?.code)) {
         return { applied: false, reason: "INVALID_OWNER_COMMAND" };
       }
-      throw error;
+      // Durable Object storage errors roll back transactionSync. Return only a
+      // bounded failure code; never expose SQL details or stack traces to callers.
+      return { applied: false, reason: "LEDGER_TRANSACTION_FAILED" };
     }
   }
 

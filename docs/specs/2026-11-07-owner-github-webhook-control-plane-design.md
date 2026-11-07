@@ -2,7 +2,7 @@
 
 **Status:** Owner-approved for implementation on an isolated feature branch; deployment remains separately blocked  
 **Date:** 2026-11-07  
-**Parent:** `remediation/orchestrator-production-hardening` at `dc2934ad3cd8106d3066dcb668c56633ace3df1a`  
+**Parent:** `remediation/orchestrator-production-hardening` at `d6c9d3734d531c68511c209804872c13c6400d6f`  
 **Repository:** `mohammadrezayaghoobi123-dev/Chat-gpt` (repository ID `1398846697`)  
 **Owner principal:** GitHub user ID `335530603` (`mohammadrezayaghoobi123-dev`)
 

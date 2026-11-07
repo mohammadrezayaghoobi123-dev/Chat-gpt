@@ -1180,7 +1180,7 @@ export class OrchestratorLedger extends DurableObject {
         operation: command.operation,
         deliveryId: assertionContext.deliveryId,
         commentId: assertionContext.commentId,
-        commandHash: await sha256Canonical(command),
+        commandHash: await sha256Canonical({ eventId: command.eventId, operation: command.operation, reason: command.reason, taskId: command.taskId }),
       };
       if (assertionContext.commandHash !== context.commandHash ||
           context.repositoryId !== Number(this.env?.GITHUB_WEBHOOK_REPOSITORY_ID) ||

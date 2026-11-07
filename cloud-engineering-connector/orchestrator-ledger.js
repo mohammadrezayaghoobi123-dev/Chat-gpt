@@ -489,6 +489,9 @@ export class OrchestratorLedger extends DurableObject {
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
       const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
       if (!row) return { updated: false, reason: "NOT_FOUND" };
       if (row.version !== expectedVersion || row.state !== expectedState) {
@@ -504,9 +507,6 @@ export class OrchestratorLedger extends DurableObject {
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
-      }
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
-        return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       if (outboxRejectionReason) {
         return { updated: false, reason: outboxRejectionReason };
@@ -711,6 +711,9 @@ export class OrchestratorLedger extends DurableObject {
     if (nextRound > 4) return { advanced: false, reason: "AGENT_ROUND_LIMIT" };
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
       const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
       if (!row) return { advanced: false, reason: "NOT_FOUND" };
       const current = taskFromRow(row);
@@ -731,9 +734,6 @@ export class OrchestratorLedger extends DurableObject {
       if (assignedAgentId !== workerId || !lease || lease.worker_id !== workerId ||
           lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { advanced: false, reason: "LEASE_FENCE_MISMATCH", task: current };
-      }
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
-        return { advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       const next = {
         ...current,
@@ -769,13 +769,13 @@ export class OrchestratorLedger extends DurableObject {
       return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     return this.ctx.storage.transactionSync(() => {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
       const sql = this.ctx.storage.sql;
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { renewed: false, reason: "LEASE_FENCE_MISMATCH" };
-      }
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
-        return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       sql.exec(
         "UPDATE orchestrator_execution_leases SET lease_until = ?, updated_at = ? WHERE task_id = ? AND worker_id = ? AND lease_generation = ?",
@@ -799,13 +799,13 @@ export class OrchestratorLedger extends DurableObject {
       return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     return this.ctx.storage.transactionSync(() => {
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
       const sql = this.ctx.storage.sql;
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { released: false, reason: "LEASE_FENCE_MISMATCH" };
-      }
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
-        return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       sql.exec(
         "UPDATE orchestrator_execution_leases SET worker_id = NULL, lease_until = 0, updated_at = ? WHERE task_id = ? AND worker_id = ? AND lease_generation = ?",

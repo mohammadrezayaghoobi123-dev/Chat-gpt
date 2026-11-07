@@ -113,3 +113,11 @@ test("Production and Staging declare isolated DLQ consumers and queue routing na
   assert.match(production, /\[\[queues\.consumers\]\]\s*\nqueue = "chat-gpt111-orchestrator-outbox-dlq"[\s\S]*?max_retries = 100[\s\S]*?retry_delay = 3600/);
   assert.match(staging, /\[\[env\.staging\.queues\.consumers\]\]\s*\nqueue = "chat-gpt111-staging-orchestrator-outbox-dlq"[\s\S]*?max_retries = 100[\s\S]*?retry_delay = 3600/);
 });
+
+test("README documents the same keep_vars policy as wrangler.toml", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const declared = config.match(/^keep_vars\s*=\s*(true|false)$/m)?.[1];
+  assert.equal(declared, "false");
+  assert.doesNotMatch(readme, /`keep_vars\s*=\s*true`\s+is intentional/);
+  assert.match(readme, /`keep_vars\s*=\s*false`\s+is intentional/);
+});

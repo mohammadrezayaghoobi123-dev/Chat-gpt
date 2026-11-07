@@ -3,17 +3,20 @@
 ## [0.2.0] - 2026-11-07
 
 ### Added
-- `lib/allowlist.js` — configurable repository allowlist (`ALLOWED_REPOSITORIES`) and base branch (`ALLOWED_BASE_BRANCH`)
-- Default remain fail-closed to `mohammadrezayaghoobi123-dev/Chat-gpt` and `feature/cloud-engineering-connector`
-- Negative tests scaffold for allowlist expansion and invalid config
+- Configurable repository allowlist via `ALLOWED_REPOSITORIES` (comma-separated `owner/repo`)
+- Configurable `ALLOWED_BASE_BRANCH` (default `feature/cloud-engineering-connector`)
+- Enhanced `/healthz` (allowlist_count, protocol, flags) and Prometheus-text `/metrics`
+- Source-parts packaging (`lib/source-parts/part*.js`) + `scripts/assemble.js` → `worker.generated.js`
+- Negative tests for allowlist expansion and invalid configuration
 
 ### Changed
 - Package version 0.2.0
-- Connector README documents new env surface
+- Wrangler main entry is `worker.generated.js` (assemble before deploy)
+- CI runs assemble before tests
 
 ### Security
-- Invalid allowlist entries fail closed
-- Non-listed repositories rejected before GitHub API calls (same guarantee, now config-driven)
+- Default allowlist remains this repository only (fail-closed)
+- Invalid allowlist entries fail closed before GitHub calls
 
 ## [0.1.0]
 

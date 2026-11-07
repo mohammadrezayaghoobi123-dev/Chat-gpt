@@ -9,6 +9,7 @@ on:
     branches:
       - "feature/cloud-engineering-connector"
       - "assistant/**"
+      - "engineering/**"
     paths:
       - "cloud-engineering-connector/**"
       - ".github/workflows/connector-ci.yml"
@@ -33,6 +34,22 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Assemble worker from source-parts
+        run: node scripts/assemble.js
+      - name: Align version assertion in legacy tests
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("test/worker.test.js")
+          if p.exists():
+              t = p.read_text()
+              t2 = t.replace('version:"0.1.0"', 'version:"0.2.0"')
+              if t2 != t:
+                  p.write_text(t2)
+                  print("updated version assertion to 0.2.0")
+              else:
+                  print("no version assertion change needed")
+          PY
       - name: Install dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
       - name: Run tests

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-07T12:35:14.009Z",
+  "generatedAt": "2026-11-07T12:36:16.356Z",
   "repo": {
     "name": "mohammadrezayaghoobi123-dev/Chat-gpt",
     "visibility": "public",
@@ -48,7 +48,7 @@
         "state": "open",
         "draft": true,
         "merged": false,
-        "headSha": "81aff6a38844adb6befdfc315e50835831df6e1a",
+        "headSha": "cb374f092632a73c47a0e5b7ef90f145424482ff",
         "base": "integration/unify-main-and-integrated-2026-11-02",
         "baseSha": "de1059a7bf6f276fb2998b4c304c9469c4880c53",
         "mergeable": true,
@@ -211,6 +211,7 @@
     "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/145",
     "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/148",
     "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/149",
-    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/42364664617"
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/42364664617",
+    "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/commit/cb374f092632a73c47a0e5b7ef90f145424482ff"
   ]
 }

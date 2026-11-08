@@ -125,6 +125,24 @@ describe("persistent Tenant Directory", () => {
       action: "project.read",
       policyVersion: "policy-v1",
     });
+
+    const directoryStub = env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName("tenant-alpha"));
+    await runInDurableObject(directoryStub, instance => {
+      const sql = instance.ctx.storage.sql;
+      const events = sql.exec(
+        "SELECT operation, before_version, after_version FROM tenant_directory_audit_events ORDER BY sequence",
+      ).toArray();
+      expect(events).toEqual([
+        { operation: "upsertMembership", before_version: null, after_version: 1 },
+        { operation: "upsertProjectPolicy", before_version: null, after_version: 1 },
+      ]);
+      expect(() => sql.exec(
+        "UPDATE tenant_directory_audit_events SET operation='tampered' WHERE sequence=1",
+      )).toThrow();
+      expect(() => sql.exec(
+        "DELETE FROM tenant_directory_audit_events WHERE sequence=1",
+      )).toThrow();
+    });
   });
 
   it("does not expose one tenant's membership or project policy through another tenant directory", async () => {

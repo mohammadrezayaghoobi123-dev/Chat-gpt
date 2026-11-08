@@ -40,6 +40,16 @@ function timestamp(value, field = "now") {
   return value;
 }
 
+function hasTenantProjectScope(tenantId, projectId) {
+  try {
+    identifier(tenantId, "tenantId");
+    identifier(projectId, "projectId");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function assertNoSecretFields(value, path = "record") {
   if (!value || typeof value !== "object") return;
   if (Array.isArray(value)) {
@@ -645,6 +655,9 @@ export class OrchestratorLedger extends DurableObject {
   }
 
   async createTask({ task, idempotencyKey, inputHash, now, workerId, workerAssertion }) {
+    if (!task || !hasTenantProjectScope(task.tenantId, task.projectId)) {
+      return { created: false, reason: "TENANT_PROJECT_SCOPE_REQUIRED" };
+    }
     identifier(idempotencyKey, "idempotencyKey");
     hash(inputHash, "inputHash");
     timestamp(now);
@@ -686,7 +699,10 @@ export class OrchestratorLedger extends DurableObject {
       if (taskRejectionReason) {
         return { created: false, reason: taskRejectionReason };
       }
-      const existing = sql.exec("SELECT * FROM orchestrator_tasks WHERE idempotency_key = ?", idempotencyKey).toArray()[0];
+      const existing = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE idempotency_key = ? AND tenant_id = ? AND project_id = ?",
+        idempotencyKey, normalizedTask.tenantId, normalizedTask.projectId,
+      ).toArray()[0];
       if (existing) {
         if (existing.input_hash !== inputHash || existing.task_id !== normalizedTask.taskId) {
           return { created: false, conflict: true, reason: "IDEMPOTENCY_CONFLICT" };
@@ -696,8 +712,9 @@ export class OrchestratorLedger extends DurableObject {
       const taskIdExisting = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", normalizedTask.taskId).toArray()[0];
       if (taskIdExisting) return { created: false, conflict: true, reason: "TASK_ID_CONFLICT" };
       sql.exec(
-        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        normalizedTask.taskId, idempotencyKey, inputHash, normalizedTask.state, normalizedTask.version, taskJson, normalizedTask.createdAt, normalizedTask.updatedAt,
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        normalizedTask.taskId, idempotencyKey, inputHash, normalizedTask.state, normalizedTask.version, taskJson,
+        normalizedTask.createdAt, normalizedTask.updatedAt, normalizedTask.tenantId, normalizedTask.projectId,
       );
       syncClaimCandidateInTransaction(sql, normalizedTask.taskId);
       return { created: true, task: normalizedTask };
@@ -722,9 +739,12 @@ export class OrchestratorLedger extends DurableObject {
   async transitionTask(input) {
     if (!input || typeof input !== "object") throw fail("transition input must be an object.");
     const {
-      taskId, expectedVersion, expectedState, nextState, actor, evidence, now,
+      taskId, tenantId, projectId, expectedVersion, expectedState, nextState, actor, evidence, now,
       workerId, workerAssertion, leaseGeneration, outboxEvent,
     } = input;
+    if (!hasTenantProjectScope(tenantId, projectId)) {
+      return { updated: false, reason: "TENANT_PROJECT_SCOPE_REQUIRED" };
+    }
     identifier(taskId, "taskId");
     timestamp(now);
     let verifiedAssertion;
@@ -746,7 +766,10 @@ export class OrchestratorLedger extends DurableObject {
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
+      const row = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, tenantId, projectId,
+      ).toArray()[0];
       if (!row) return { updated: false, reason: "NOT_FOUND" };
       if (row.version !== expectedVersion || row.state !== expectedState) {
         return { updated: false, reason: "VERSION_OR_STATE_CONFLICT", task: taskFromRow(row) };
@@ -784,10 +807,13 @@ export class OrchestratorLedger extends DurableObject {
         return { updated: false, reason: error.code };
       }
       sql.exec(
-        "UPDATE orchestrator_tasks SET state = ?, version = ?, task_json = ?, updated_at = ? WHERE task_id = ? AND version = ? AND state = ?",
-        next.state, next.version, nextTaskJson, next.updatedAt, taskId, expectedVersion, expectedState,
+        "UPDATE orchestrator_tasks SET state = ?, version = ?, task_json = ?, updated_at = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ? AND version = ? AND state = ?",
+        next.state, next.version, nextTaskJson, next.updatedAt, taskId, tenantId, projectId, expectedVersion, expectedState,
       );
-      const persisted = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
+      const persisted = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, tenantId, projectId,
+      ).toArray()[0];
       if (!persisted || persisted.version !== next.version || persisted.state !== next.state ||
           persisted.task_json !== canonicalJson(next)) {
         throw fail("Task transition persistence verification failed; transaction rolled back.", "PERSISTENCE_VERIFICATION_FAILED");
@@ -801,7 +827,10 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  async recordMessage({ messageId, taskId, inputHash, envelope, workerId, workerAssertion, now }) {
+  async recordMessage({ messageId, taskId, tenantId, projectId, inputHash, envelope, workerId, workerAssertion, now }) {
+    if (!hasTenantProjectScope(tenantId, projectId)) {
+      return { accepted: false, reason: "TENANT_PROJECT_SCOPE_REQUIRED" };
+    }
     identifier(messageId, "messageId");
     identifier(taskId, "taskId");
     hash(inputHash, "inputHash");
@@ -860,9 +889,15 @@ export class OrchestratorLedger extends DurableObject {
       if (payloadRejectionReason) {
         return { accepted: false, reason: payloadRejectionReason };
       }
-      const task = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
+      const task = sql.exec(
+        "SELECT task_id FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, tenantId, projectId,
+      ).toArray()[0];
       if (!task) return { accepted: false, reason: "TASK_NOT_FOUND" };
-      const existing = sql.exec("SELECT * FROM orchestrator_processed_messages WHERE message_id = ?", messageId).toArray()[0];
+      const existing = sql.exec(
+        "SELECT * FROM orchestrator_processed_messages WHERE message_id = ? AND tenant_id = ? AND project_id = ?",
+        messageId, tenantId, projectId,
+      ).toArray()[0];
       if (existing) {
         if (existing.task_id === taskId && existing.input_hash === inputHash &&
             existing.envelope_json === envelopeJson) {
@@ -871,14 +906,17 @@ export class OrchestratorLedger extends DurableObject {
         return { accepted: false, conflict: true, reason: "MESSAGE_ID_CONFLICT" };
       }
       sql.exec(
-        "INSERT INTO orchestrator_processed_messages (message_id, task_id, input_hash, envelope_json, received_at, status) VALUES (?, ?, ?, ?, ?, 'ACCEPTED')",
-        messageId, taskId, inputHash, envelopeJson, now,
+        "INSERT INTO orchestrator_processed_messages (message_id, task_id, input_hash, envelope_json, received_at, status, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, 'ACCEPTED', ?, ?)",
+        messageId, taskId, inputHash, envelopeJson, now, tenantId, projectId,
       );
       return { accepted: true, messageId, taskId };
     });
   }
 
-  async claimTask({ workerId, workerAssertion, leaseMs, now, taskId, reconciliationEvidence } = {}) {
+  async claimTask({ workerId, workerAssertion, leaseMs, now, taskId, tenantId, projectId, reconciliationEvidence } = {}) {
+    if (!hasTenantProjectScope(tenantId, projectId)) {
+      return { claimed: false, reason: "TENANT_PROJECT_SCOPE_REQUIRED" };
+    }
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);
     timestamp(now);
@@ -910,8 +948,8 @@ export class OrchestratorLedger extends DurableObject {
       let row;
       if (taskId) {
         row = sql.exec(
-          "SELECT * FROM orchestrator_tasks WHERE task_id = ? AND state IN ('SCHEDULED','RUNNING','VERIFYING') ORDER BY created_at, task_id LIMIT 1",
-          taskId,
+          "SELECT * FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ? AND state IN ('SCHEDULED','RUNNING','VERIFYING') ORDER BY created_at, task_id LIMIT 1",
+          taskId, tenantId, projectId,
         ).toArray()[0];
       } else {
         // The primary scheduler path reads only unleased rows from the
@@ -1038,7 +1076,10 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  async advanceAgentRound({ taskId, expectedVersion, expectedRound, nextRound, workerId, workerAssertion, leaseGeneration, now }) {
+  async advanceAgentRound({ taskId, tenantId, projectId, expectedVersion, expectedRound, nextRound, workerId, workerAssertion, leaseGeneration, now }) {
+    if (!hasTenantProjectScope(tenantId, projectId)) {
+      return { advanced: false, reason: "TENANT_PROJECT_SCOPE_REQUIRED" };
+    }
     identifier(taskId, "taskId");
     identifier(workerId, "workerId");
     timestamp(now);
@@ -1059,7 +1100,10 @@ export class OrchestratorLedger extends DurableObject {
     if (nextRound > 4) return { advanced: false, reason: "AGENT_ROUND_LIMIT" };
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
+      const row = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, tenantId, projectId,
+      ).toArray()[0];
       if (!row) return { advanced: false, reason: "NOT_FOUND" };
       const current = taskFromRow(row);
       if (row.version !== expectedVersion || (current.agentRound ?? 0) !== expectedRound) {
@@ -1102,7 +1146,10 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  async renewLease({ taskId, workerId, workerAssertion, leaseGeneration, leaseMs, now }) {
+  async renewLease({ taskId, tenantId, projectId, workerId, workerAssertion, leaseGeneration, leaseMs, now }) {
+    if (!hasTenantProjectScope(tenantId, projectId)) {
+      return { renewed: false, reason: "TENANT_PROJECT_SCOPE_REQUIRED" };
+    }
     identifier(taskId, "taskId");
     identifier(workerId, "workerId");
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw fail("leaseGeneration must be positive.");
@@ -1133,7 +1180,10 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  async releaseLease({ taskId, workerId, workerAssertion, leaseGeneration, now }) {
+  async releaseLease({ taskId, tenantId, projectId, workerId, workerAssertion, leaseGeneration, now }) {
+    if (!hasTenantProjectScope(tenantId, projectId)) {
+      return { released: false, reason: "TENANT_PROJECT_SCOPE_REQUIRED" };
+    }
     identifier(taskId, "taskId");
     identifier(workerId, "workerId");
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw fail("leaseGeneration must be positive.");
@@ -1807,7 +1857,10 @@ export class OrchestratorLedger extends DurableObject {
     };
   }
 
-  async appendAuditEvent({ eventId, taskId, actor, workerId, workerAssertion, eventType, details, now }) {
+  async appendAuditEvent({ eventId, taskId, tenantId, projectId, actor, workerId, workerAssertion, eventType, details, now }) {
+    if (!hasTenantProjectScope(tenantId, projectId)) {
+      return { appended: false, reason: "TENANT_PROJECT_SCOPE_REQUIRED" };
+    }
     identifier(eventId, "eventId");
     identifier(taskId, "taskId");
     if (typeof workerId !== "string" || workerId.length === 0) {

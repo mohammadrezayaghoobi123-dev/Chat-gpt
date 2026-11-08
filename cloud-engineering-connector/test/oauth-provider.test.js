@@ -30,7 +30,7 @@ function env() {
 }
 
 test("OAuth authorization-server metadata advertises the canonical issuer and S256 PKCE", async () => {
-  const provider = createOAuthProvider();
+  const provider = createOAuthProvider({ issuer: ISSUER, resource: RESOURCE, apiHandler: { async fetch() { return new Response('ok'); } } });
   const response = await provider.fetch(new Request(ISSUER + "/.well-known/oauth-authorization-server"));
   assert.equal(response.status, 200);
   const metadata = await response.json();
@@ -55,6 +55,8 @@ test("protected-resource metadata binds MCP to the canonical resource and issuer
 test("MCP resource rejects missing and invalid bearer tokens before invoking the API handler", async () => {
   let handlerCalls = 0;
   const provider = createOAuthProvider({
+    issuer: ISSUER,
+    resource: RESOURCE,
     apiHandler: { async fetch() { handlerCalls += 1; return Response.json({ reached: true }); } },
   });
   for (const authorization of [null, "Bearer deliberately-invalid"]) {

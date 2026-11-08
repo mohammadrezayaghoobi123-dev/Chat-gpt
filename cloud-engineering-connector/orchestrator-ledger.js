@@ -614,6 +614,9 @@ export class OrchestratorLedger extends DurableObject {
         "CREATE UNIQUE INDEX IF NOT EXISTS orchestrator_outbox_by_tenant_project_idempotency ON orchestrator_outbox_events(tenant_id, project_id, idempotency_key)",
       );
       sql.exec(
+        "CREATE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_scope_executor_order ON orchestrator_claim_candidates(executor_id, tenant_id, project_id, created_at, task_id)",
+      );
+      sql.exec(
         "INSERT INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (9, ?, ?)",
         Date.now(),
         "Namespace task and outbox idempotency keys by injective tenant/project tuple; preserve existing identifiers and rows",

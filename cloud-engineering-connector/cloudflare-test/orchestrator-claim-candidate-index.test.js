@@ -555,6 +555,8 @@ describe("OrchestratorLedger migration, concurrency, and scale", () => {
         now: now + calls,
         cursor,
       });
+      expect(result.candidatesExamined).toBeLessThanOrEqual(128);
+      expect(result.candidateRowsRead).toBeLessThanOrEqual(129);
       cursor = result.nextCursor;
       calls++;
     }

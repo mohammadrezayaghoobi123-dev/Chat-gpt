@@ -838,10 +838,12 @@ export class OrchestratorLedger extends DurableObject {
       ).toArray();
       const budgetExhausted = candidateRows.length > MAX_CLAIM_CANDIDATES_PER_CALL;
       const batch = candidateRows.slice(0, MAX_CLAIM_CANDIDATES_PER_CALL);
+      let candidatesExamined = 0;
       let blockedByReconciliation = false;
       let deferredCandidates = false;
 
       for (const candidate of batch) {
+        candidatesExamined++;
         if (candidate.candidate_seq > snapshotSequence) {
           deferredCandidates = true;
           continue;
@@ -890,6 +892,8 @@ export class OrchestratorLedger extends DurableObject {
           leaseGeneration: generation,
           leaseUntil: now + leaseMs,
           reconciliationRequired,
+          candidatesExamined,
+          candidateRowsRead: candidateRows.length,
         };
       }
 
@@ -907,6 +911,8 @@ export class OrchestratorLedger extends DurableObject {
           },
           budgetExhausted: true,
           scanExhausted: false,
+          candidatesExamined,
+          candidateRowsRead: candidateRows.length,
         };
       }
       if (deferredCandidates) {
@@ -917,6 +923,8 @@ export class OrchestratorLedger extends DurableObject {
           restartRequired: true,
           budgetExhausted: false,
           scanExhausted: true,
+          candidatesExamined,
+          candidateRowsRead: candidateRows.length,
         };
       }
 
@@ -945,6 +953,8 @@ export class OrchestratorLedger extends DurableObject {
         nextCursor: null,
         budgetExhausted: false,
         scanExhausted: true,
+        candidatesExamined,
+        candidateRowsRead: candidateRows.length,
       };
     });
   }

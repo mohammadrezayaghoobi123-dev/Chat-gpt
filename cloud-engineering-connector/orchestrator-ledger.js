@@ -454,11 +454,6 @@ export class OrchestratorLedger extends DurableObject {
   ping() {
     const sql = this.ctx.storage.sql;
     const result = sql.exec("SELECT 1 AS ok").one();
-    const integrityRows = sql.exec("PRAGMA quick_check(1)").toArray();
-    const integrityValue = integrityRows.length === 1
-      ? Object.values(integrityRows[0])[0]
-      : null;
-    const integrityOk = integrityValue === "ok";
     const tableNames = new Set(
       sql.exec("SELECT name FROM sqlite_master WHERE type = 'table'").toArray().map(row => row.name),
     );
@@ -469,12 +464,24 @@ export class OrchestratorLedger extends DurableObject {
       "orchestrator_owner_command_receipts",
     ].every(name => tableNames.has(name));
     return {
-      ok: Number(result.ok) === 1 && integrityOk && requiredTablesOk,
+      ok: Number(result.ok) === 1 && requiredTablesOk,
       schemaVersion: 7,
       storage: {
-        integrityCheck: integrityOk ? "ok" : "failed",
         requiredTables: requiredTablesOk,
       },
+    };
+  }
+
+  checkIntegrity() {
+    const integrityRows = this.ctx.storage.sql.exec("PRAGMA quick_check(1)").toArray();
+    const integrityValue = integrityRows.length === 1
+      ? Object.values(integrityRows[0])[0]
+      : null;
+    const integrityOk = integrityValue === "ok";
+    return {
+      ok: integrityOk,
+      integrityCheck: integrityOk ? "ok" : "failed",
+      errorCount: integrityOk ? 0 : integrityRows.length,
     };
   }
 

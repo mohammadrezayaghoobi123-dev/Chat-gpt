@@ -3,6 +3,7 @@ import { transitionTask as transitionTaskCore, TASK_STATES } from "./orchestrato
 import { assertAgentRoundLimit } from "./orchestrator-protocol.js";
 import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orchestrator-protocol.js";
 import { verifyWorkerAssertion } from "./orchestrator-worker-identity.js";
+import { verifyReconciliationEvidence } from "./orchestrator-reconciliation-evidence.js";
 import { verifyOwnerAssertion } from "./orchestrator-owner-assertion.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -379,6 +380,19 @@ export class OrchestratorLedger extends DurableObject {
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_consumed_assertions_by_expiry ON orchestrator_consumed_assertions(expires_at)");
     sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_consumed_reconciliation_evidence (
+        evidence_id TEXT PRIMARY KEY,
+        evidence_hash TEXT NOT NULL CHECK(length(evidence_hash) = 64),
+        task_id TEXT NOT NULL,
+        prior_generation INTEGER NOT NULL CHECK(prior_generation > 0),
+        issuer TEXT NOT NULL,
+        issued_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at INTEGER NOT NULL
+      )
+    `);
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_consumed_reconciliation_evidence_by_expiry ON orchestrator_consumed_reconciliation_evidence(expires_at)");
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_github_webhook_deliveries (
         delivery_id TEXT PRIMARY KEY,
         body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
@@ -461,7 +475,7 @@ export class OrchestratorLedger extends DurableObject {
 
   ping() {
     const result = this.ctx.storage.sql.exec("SELECT 1 AS ok").one();
-    return { ok: Number(result.ok) === 1, schemaVersion: 6 };
+    return { ok: Number(result.ok) === 1, schemaVersion: 7 };
   }
 
   claimGitHubDelivery({ deliveryId, bodySha256, eventName, receivedAt, idempotencyKey, inputHash } = {}) {
@@ -771,19 +785,18 @@ export class OrchestratorLedger extends DurableObject {
     }
     if (taskId !== undefined) identifier(taskId, "taskId");
 
-    const hasReconciliationEvidence = Boolean(
-      reconciliationEvidence &&
-      reconciliationEvidence.checked === true &&
-      typeof reconciliationEvidence.taskId === "string" &&
-      reconciliationEvidence.taskId.length > 0 &&
-      reconciliationEvidence.taskId.length <= 128 &&
-      (!taskId || reconciliationEvidence.taskId === taskId) &&
-      Number.isSafeInteger(reconciliationEvidence.priorGeneration) &&
-      reconciliationEvidence.priorGeneration >= 1 &&
-      typeof reconciliationEvidence.evidenceRef === "string" &&
-      reconciliationEvidence.evidenceRef.length > 0 &&
-      reconciliationEvidence.evidenceRef.length <= 512
-    );
+    const verifiedReconciliationEvidence = reconciliationEvidence
+      ? await verifyReconciliationEvidence(
+        this.env?.LEDGER_RECONCILIATION_EVIDENCE_KEYS,
+        this.env?.LEDGER_RECONCILIATION_EVIDENCE_ISSUERS,
+        reconciliationEvidence,
+        { taskId: taskId ?? reconciliationEvidence?.taskId, nowMs: now },
+      )
+      : null;
+    const hasReconciliationEvidence = Boolean(verifiedReconciliationEvidence);
+    const reconciliationEvidenceHash = hasReconciliationEvidence
+      ? await sha256Canonical(reconciliationEvidence)
+      : null;
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       let row;
@@ -805,7 +818,7 @@ export class OrchestratorLedger extends DurableObject {
         if (hasReconciliationEvidence) {
           evidenceRow = sql.exec(
             "SELECT task.* FROM orchestrator_tasks AS task INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.task_id = ? AND task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND lease.lease_generation = ? LIMIT 1",
-            reconciliationEvidence.taskId, workerId, now, reconciliationEvidence.priorGeneration,
+            verifiedReconciliationEvidence.taskId, workerId, now, verifiedReconciliationEvidence.priorGeneration,
           ).toArray()[0];
         }
         if (!candidateRow && !evidenceRow) {
@@ -839,8 +852,8 @@ export class OrchestratorLedger extends DurableObject {
           blockedByReconciliation = Boolean(sql.exec(
             "SELECT 1 FROM orchestrator_tasks AS task INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND (? = 0 OR lease.task_id != ? OR lease.lease_generation != ?) LIMIT 1",
             workerId, now, hasReconciliationEvidence ? 1 : 0,
-            hasReconciliationEvidence ? reconciliationEvidence.taskId : "",
-            hasReconciliationEvidence ? reconciliationEvidence.priorGeneration : -1,
+            hasReconciliationEvidence ? verifiedReconciliationEvidence.taskId : "",
+            hasReconciliationEvidence ? verifiedReconciliationEvidence.priorGeneration : -1,
           ).toArray()[0]);
         }
         return {
@@ -870,16 +883,35 @@ export class OrchestratorLedger extends DurableObject {
         generation = lease.lease_generation + 1;
         if (lease.worker_id !== null && lease.lease_until <= now) {
           if (!hasReconciliationEvidence ||
-              reconciliationEvidence.taskId !== row.task_id ||
-              reconciliationEvidence.priorGeneration !== lease.lease_generation) {
+              verifiedReconciliationEvidence.taskId !== row.task_id ||
+              verifiedReconciliationEvidence.priorGeneration !== lease.lease_generation) {
             return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
           }
           reconciliationRequired = true;
         }
       }
 
+      if (reconciliationRequired && sql.exec(
+        "SELECT 1 FROM orchestrator_consumed_reconciliation_evidence WHERE evidence_id = ?",
+        verifiedReconciliationEvidence.evidenceId,
+      ).toArray()[0]) {
+        return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
+      }
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      if (reconciliationRequired) {
+        sql.exec(
+          "INSERT INTO orchestrator_consumed_reconciliation_evidence (evidence_id, evidence_hash, task_id, prior_generation, issuer, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          verifiedReconciliationEvidence.evidenceId,
+          reconciliationEvidenceHash,
+          verifiedReconciliationEvidence.taskId,
+          verifiedReconciliationEvidence.priorGeneration,
+          verifiedReconciliationEvidence.issuer,
+          verifiedReconciliationEvidence.issuedAt,
+          verifiedReconciliationEvidence.expiresAt,
+          now,
+        );
       }
       if (lease) {
         sql.exec(

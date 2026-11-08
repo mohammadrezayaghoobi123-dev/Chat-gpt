@@ -67,6 +67,16 @@ export class TenantDirectory extends DurableObject {
       "PRIMARY KEY(tenant_id, project_id, principal_id, action, resource_digest))"
     );
     sql.exec("CREATE INDEX IF NOT EXISTS tenant_project_policy_rules_active ON tenant_project_policy_rules(tenant_id, project_id, principal_id, action, status)");
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS tenant_directory_audit_events (" +
+      "sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, tenant_id TEXT NOT NULL, " +
+      "project_id TEXT, actor_id TEXT NOT NULL, operation TEXT NOT NULL, target_digest TEXT NOT NULL, " +
+      "before_version INTEGER, after_version INTEGER NOT NULL, details_json TEXT NOT NULL CHECK(json_valid(details_json)), " +
+      "created_at INTEGER NOT NULL)"
+    );
+    sql.exec("CREATE INDEX IF NOT EXISTS tenant_directory_audit_by_tenant ON tenant_directory_audit_events(tenant_id, sequence DESC)");
+    sql.exec("CREATE TRIGGER IF NOT EXISTS tenant_directory_audit_no_update BEFORE UPDATE ON tenant_directory_audit_events BEGIN SELECT RAISE(ABORT, 'TENANT_DIRECTORY_AUDIT_APPEND_ONLY'); END");
+    sql.exec("CREATE TRIGGER IF NOT EXISTS tenant_directory_audit_no_delete BEFORE DELETE ON tenant_directory_audit_events BEGIN SELECT RAISE(ABORT, 'TENANT_DIRECTORY_AUDIT_APPEND_ONLY'); END");
     sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(1, ?)", Date.now());
   }
 
@@ -75,16 +85,27 @@ export class TenantDirectory extends DurableObject {
     return { ok: Number(row.version) === 1, schemaVersion: Number(row.version ?? 0) };
   }
 
-  async #verifyAdmin(assertion, operation, tenantId, projectId, now) {
+  async #verifyAdmin(assertion, operation, tenantId, projectId, target, now) {
     try {
       return await verifyTenantDirectoryAdminAssertion(
         this.env?.TENANT_DIRECTORY_ADMIN_ASSERTION_KEYS,
         assertion,
-        { subject: "tenant-directory-provisioner", operation, tenantId, projectId, nowMs: now }
+        { subject: "tenant-directory-provisioner", operation, tenantId, projectId, target, nowMs: now }
       );
     } catch {
       throw fail("TENANT_DIRECTORY_ADMIN_ASSERTION_REJECTED", "A valid tenant-scoped provisioning assertion is required.");
     }
+  }
+
+  #appendAuditEvent(sql, verified, operation, tenantId, projectId, target, beforeVersion, afterVersion, now) {
+    const eventId = "td-audit-" + crypto.randomUUID();
+    sql.exec(
+      "INSERT INTO tenant_directory_audit_events(event_id, tenant_id, project_id, actor_id, operation, target_digest, before_version, after_version, details_json, created_at) " +
+      "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      eventId, tenantId, projectId, verified.subject, operation, verified.targetDigest,
+      beforeVersion, afterVersion, JSON.stringify(target), now
+    );
+    return eventId;
   }
 
   getActiveMembership(input) {
@@ -107,7 +128,8 @@ export class TenantDirectory extends DurableObject {
     if (!MEMBERSHIP_STATUSES.has(status)) throw fail("INVALID_TENANT_DIRECTORY_INPUT", "Membership status must be active or suspended.");
     const expectedVersion = version(input?.expectedVersion);
     const now = timestamp(input?.now);
-    await this.#verifyAdmin(input?.assertion, "upsertMembership", tenantId, null, now);
+    const target = { principalId, membershipId, role, status, expectedVersion };
+    const verified = await this.#verifyAdmin(input?.assertion, "upsertMembership", tenantId, null, target, now);
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
       const current = sql.exec(
@@ -136,10 +158,14 @@ export class TenantDirectory extends DurableObject {
           now, tenantId, principalId
         );
       }
-      return membershipRecord(sql.exec(
+      const auditEventId = this.#appendAuditEvent(
+        sql, verified, "upsertMembership", tenantId, null, target, current?.version ?? null, nextVersion, now
+      );
+      const membership = membershipRecord(sql.exec(
         "SELECT tenant_id, principal_id, membership_id, role, status, version FROM tenant_memberships WHERE tenant_id=? AND principal_id=?",
         tenantId, principalId
       ).one());
+      return { ...membership, auditEventId };
     });
   }
 
@@ -148,7 +174,8 @@ export class TenantDirectory extends DurableObject {
     const principalId = identifier(input?.principalId, "principalId");
     const expectedVersion = version(input?.expectedVersion);
     const now = timestamp(input?.now);
-    await this.#verifyAdmin(input?.assertion, "revokeMembership", tenantId, null, now);
+    const target = { principalId, expectedVersion };
+    const verified = await this.#verifyAdmin(input?.assertion, "revokeMembership", tenantId, null, target, now);
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
       const current = sql.exec(
@@ -167,7 +194,10 @@ export class TenantDirectory extends DurableObject {
         "WHERE tenant_id=? AND principal_id=? AND status='active'",
         now, tenantId, principalId
       );
-      return { revoked: true, tenantId, principalId, version: nextVersion };
+      const auditEventId = this.#appendAuditEvent(
+        sql, verified, "revokeMembership", tenantId, null, target, current.version, nextVersion, now
+      );
+      return { revoked: true, tenantId, principalId, version: nextVersion, auditEventId };
     });
   }
 
@@ -184,7 +214,8 @@ export class TenantDirectory extends DurableObject {
     const policyVersion = requiredString(input?.policyVersion, "policyVersion", 128);
     const expectedVersion = version(input?.expectedVersion);
     const now = timestamp(input?.now);
-    await this.#verifyAdmin(input?.assertion, "upsertProjectPolicy", tenantId, projectId, now);
+    const target = { projectId, principalId, action, resourceDigest, effect, policyVersion, status, expectedVersion };
+    const verified = await this.#verifyAdmin(input?.assertion, "upsertProjectPolicy", tenantId, projectId, target, now);
     const decisionId = "policy-" + crypto.randomUUID();
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
@@ -203,7 +234,10 @@ export class TenantDirectory extends DurableObject {
         tenantId, projectId, principalId, action, resourceDigest, effect, policyVersion, decisionId, status,
         nextVersion, current?.created_at ?? now, now
       );
-      return { tenantId, projectId, principalId, action, resourceDigest, effect, policyVersion, decisionId, status, version: nextVersion };
+      const auditEventId = this.#appendAuditEvent(
+        sql, verified, "upsertProjectPolicy", tenantId, projectId, target, current?.version ?? null, nextVersion, now
+      );
+      return { tenantId, projectId, principalId, action, resourceDigest, effect, policyVersion, decisionId, status, version: nextVersion, auditEventId };
     });
   }
 

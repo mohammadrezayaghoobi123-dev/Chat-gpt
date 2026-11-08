@@ -250,7 +250,7 @@ export class OrchestratorLedger extends DurableObject {
         CREATE TABLE IF NOT EXISTS orchestrator_claim_candidates (
           candidate_seq INTEGER PRIMARY KEY AUTOINCREMENT,
           task_id TEXT NOT NULL UNIQUE REFERENCES orchestrator_tasks(task_id) ON DELETE CASCADE,
-          executor_id TEXT NOT NULL CHECK(length(executor_id) BETWEEN 1 AND 160),
+          executor_id TEXT NOT NULL CHECK(length(executor_id) BETWEEN 1 AND 160 AND substr(executor_id, 1, 1) GLOB '[A-Za-z0-9]' AND executor_id NOT GLOB '*[^A-Za-z0-9._:-]*'),
           created_at INTEGER NOT NULL
         )
       `);
@@ -261,7 +261,7 @@ export class OrchestratorLedger extends DurableObject {
           CREATE TABLE orchestrator_claim_candidates (
             candidate_seq INTEGER PRIMARY KEY AUTOINCREMENT,
             task_id TEXT NOT NULL UNIQUE REFERENCES orchestrator_tasks(task_id) ON DELETE CASCADE,
-            executor_id TEXT NOT NULL CHECK(length(executor_id) BETWEEN 1 AND 160),
+            executor_id TEXT NOT NULL CHECK(length(executor_id) BETWEEN 1 AND 160 AND substr(executor_id, 1, 1) GLOB '[A-Za-z0-9]' AND executor_id NOT GLOB '*[^A-Za-z0-9._:-]*'),
             created_at INTEGER NOT NULL
           )
         `);
@@ -269,20 +269,26 @@ export class OrchestratorLedger extends DurableObject {
           INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at)
           SELECT task_id, executor_id, created_at
           FROM orchestrator_claim_candidates_legacy
+          WHERE length(executor_id) BETWEEN 1 AND 160
+            AND substr(executor_id, 1, 1) GLOB '[A-Za-z0-9]'
+            AND executor_id NOT GLOB '*[^A-Za-z0-9._:-]*'
           ORDER BY created_at, task_id
         `);
         sql.exec("DROP TABLE orchestrator_claim_candidates_legacy");
       }
       sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_executor_created ON orchestrator_claim_candidates(executor_id, created_at, task_id)");
       const executorExpression = "COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId'))";
+      const validExecutorPredicate = `typeof(${executorExpression}) = 'text'
+        AND length(${executorExpression}) BETWEEN 1 AND 160
+        AND substr(${executorExpression}, 1, 1) GLOB '[A-Za-z0-9]'
+        AND ${executorExpression} NOT GLOB '*[^A-Za-z0-9._:-]*'`;
       sql.exec(`
         DELETE FROM orchestrator_claim_candidates
         WHERE NOT EXISTS (
           SELECT 1 FROM orchestrator_tasks AS task
           WHERE task.task_id = orchestrator_claim_candidates.task_id
             AND task.state IN ('SCHEDULED','RUNNING','VERIFYING')
-            AND typeof(${executorExpression}) = 'text'
-            AND length(${executorExpression}) BETWEEN 1 AND 160
+            AND ${validExecutorPredicate}
             AND orchestrator_claim_candidates.executor_id = ${executorExpression}
             AND orchestrator_claim_candidates.created_at = task.created_at
         )
@@ -292,8 +298,7 @@ export class OrchestratorLedger extends DurableObject {
         SELECT task.task_id, ${executorExpression}, task.created_at
         FROM orchestrator_tasks AS task
         WHERE task.state IN ('SCHEDULED','RUNNING','VERIFYING')
-          AND typeof(${executorExpression}) = 'text'
-          AND length(${executorExpression}) BETWEEN 1 AND 160
+          AND ${validExecutorPredicate}
         ON CONFLICT(task_id) DO UPDATE
           SET executor_id = excluded.executor_id, created_at = excluded.created_at
       `);

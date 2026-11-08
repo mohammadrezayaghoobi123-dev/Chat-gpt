@@ -19,7 +19,7 @@ function nonEmptyString(value) {
     value.length > 0 &&
     value.length <= 256 &&
     value.trim() === value &&
-    !/[\\u0000-\\u001f\\u007f]/.test(value)
+    !/[\u0000-\u001f\u007f]/.test(value)
   );
 }
 

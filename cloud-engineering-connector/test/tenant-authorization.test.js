@@ -2,14 +2,52 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   AuthorizationError,
+  resolvePrincipal,
   resolveTenantContext,
   authorizeProjectAction,
 } from "../identity/tenant-context.js";
 
-const principal = Object.freeze({
-  id: "principal-user-01",
-  type: "human",
-  authenticated: true,
+const principal = await resolvePrincipal({
+  credential: "opaque-test-session",
+  authenticator: {
+    async authenticate(credential) {
+      assert.equal(credential, "opaque-test-session");
+      return { authenticated: true, principalId: "principal-user-01", type: "human" };
+    },
+  },
+});
+
+test("resolvePrincipal returns an immutable identity without retaining the credential", async () => {
+  const identity = await resolvePrincipal({
+    credential: "sensitive-session-value",
+    authenticator: {
+      async authenticate() {
+        return {
+          authenticated: true,
+          principalId: "principal-user-02",
+          type: "human",
+          credential: "must-not-be-copied",
+        };
+      },
+    },
+  });
+  assert.deepEqual(identity, {
+    id: "principal-user-02",
+    type: "human",
+    authenticated: true,
+  });
+  assert.equal(Object.isFrozen(identity), true);
+  assert.equal(Object.hasOwn(identity, "credential"), false);
+});
+
+test("resolvePrincipal fails closed when authentication fails", async () => {
+  await assert.rejects(
+    resolvePrincipal({
+      credential: "invalid-session",
+      authenticator: { async authenticate() { throw new Error("sensitive adapter detail"); } },
+    }),
+    error => error.code === "AUTHENTICATION_FAILED",
+  );
 });
 
 const activeMembership = Object.freeze({

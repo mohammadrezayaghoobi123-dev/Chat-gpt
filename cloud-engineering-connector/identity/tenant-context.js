@@ -1,3 +1,6 @@
+const AUTHENTICATED_PRINCIPALS = new WeakSet();
+const VERIFIED_TENANT_CONTEXTS = new WeakSet();
+
 export class AuthorizationError extends Error {
   constructor(code) {
     super(code);
@@ -15,13 +18,47 @@ function nonEmptyString(value) {
 }
 
 /**
- * Resolve the active tenant membership for an already-authenticated principal.
+ * Convert a credential into an opaque principal using the trusted server-side
+ * authenticator adapter. Credentials and adapter payloads are never copied.
+ */
+export async function resolvePrincipal({ credential, authenticator } = {}) {
+  if (!authenticator || typeof authenticator.authenticate !== "function") {
+    reject("AUTHENTICATOR_UNAVAILABLE");
+  }
+
+  let identity;
+  try {
+    identity = await authenticator.authenticate(credential);
+  } catch {
+    reject("AUTHENTICATION_FAILED");
+  }
+
+  if (
+    !identity ||
+    identity.authenticated !== true ||
+    !nonEmptyString(identity.principalId) ||
+    !nonEmptyString(identity.type)
+  ) {
+    reject("AUTHENTICATION_FAILED");
+  }
+
+  const principal = Object.freeze({
+    id: identity.principalId,
+    type: identity.type,
+    authenticated: true,
+  });
+  AUTHENTICATED_PRINCIPALS.add(principal);
+  return principal;
+}
+
+/**
+ * Resolve the active tenant membership for an opaque authenticated principal.
  *
- * tenantSelector is trusted session/request context used only to select a tenant;
- * it is never proof of membership. The membership store is authoritative.
+ * tenantSelector is trusted session/request context used only to select a
+ * tenant; it is never proof of membership. The membership store is authoritative.
  */
 export async function resolveTenantContext({ principal, tenantSelector, membershipStore } = {}) {
-  if (!principal || principal.authenticated !== true || !nonEmptyString(principal.id)) {
+  if (!principal || !AUTHENTICATED_PRINCIPALS.has(principal)) {
     reject("AUTHENTICATED_PRINCIPAL_REQUIRED");
   }
   if (!nonEmptyString(tenantSelector)) {
@@ -52,20 +89,22 @@ export async function resolveTenantContext({ principal, tenantSelector, membersh
     reject("TENANT_MEMBERSHIP_REQUIRED");
   }
 
-  return Object.freeze({
+  const context = Object.freeze({
     principalId: principal.id,
     tenantId: membership.tenantId,
     membershipId: membership.membershipId,
     role: membership.role,
   });
+  VERIFIED_TENANT_CONTEXTS.add(context);
+  return context;
 }
 
 /**
  * Ask the policy authority to authorize one project action.
  *
  * The caller may select a project, but only the policy authority can grant
- * access. Its decision must be bound to the exact authenticated principal,
- * tenant context, and selected project.
+ * access. Its decision must be bound to the exact principal, tenant context,
+ * and selected project.
  */
 export async function authorizeProjectAction({
   principal,
@@ -75,15 +114,13 @@ export async function authorizeProjectAction({
   resource = null,
   authorizationStore,
 } = {}) {
-  if (!principal || principal.authenticated !== true || !nonEmptyString(principal.id)) {
+  if (!principal || !AUTHENTICATED_PRINCIPALS.has(principal)) {
     reject("AUTHENTICATED_PRINCIPAL_REQUIRED");
   }
   if (
     !tenantContext ||
-    tenantContext.principalId !== principal.id ||
-    !nonEmptyString(tenantContext.tenantId) ||
-    !nonEmptyString(tenantContext.membershipId) ||
-    !nonEmptyString(tenantContext.role)
+    !VERIFIED_TENANT_CONTEXTS.has(tenantContext) ||
+    tenantContext.principalId !== principal.id
   ) {
     reject("TENANT_CONTEXT_MISMATCH");
   }

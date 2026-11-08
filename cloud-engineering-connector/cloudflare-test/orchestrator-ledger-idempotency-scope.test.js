@@ -63,6 +63,7 @@ describe("OrchestratorLedger tenant/project idempotency isolation", () => {
         { task_id: "tenant-beta-task-42", tenant_id: "tenant-beta", project_id: "project-blue" },
       ]);
     });
+  });
 
   it("backfills v8 task and outbox keys into injective tenant/project namespaces exactly once", async () => {
     const ledger = ledgerFor("task-outbox-idempotency-v8-to-v9");
@@ -119,6 +120,5 @@ describe("OrchestratorLedger tenant/project idempotency isolation", () => {
         "v8-legacy-event",
       ).one().idempotency_key).toBe(eventKey);
     });
-  });
   });
 });

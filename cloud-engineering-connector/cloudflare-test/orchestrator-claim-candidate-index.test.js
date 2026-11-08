@@ -304,6 +304,7 @@ describe("OrchestratorLedger claim candidate query plan", () => {
       ).toArray();
       const details = plan.map(row => row.detail).join("\n");
       expect(details).toContain("orchestrator_claim_candidates_by_executor_created");
+      expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
     });
   });
 });
@@ -407,5 +408,157 @@ describe("OrchestratorLedger reconciliation fail-closed policy", () => {
         lease_until: now + 100,
       });
     });
+  });
+});
+
+
+describe("OrchestratorLedger migration, concurrency, and scale", () => {
+  it("migrates the previous candidate-table schema without losing eligible rows", async () => {
+    const ledger = ledgerFor("claim-candidate-index-legacy-migration");
+    await createTask(ledger, "candidate-legacy-migration", "agent:worker-1");
+    await runInDurableObject(ledger, async (instance, state) => {
+      state.storage.sql.exec("DROP INDEX orchestrator_claim_candidates_by_executor_created");
+      state.storage.sql.exec("DROP TABLE orchestrator_claim_candidates");
+      state.storage.sql.exec(`
+        CREATE TABLE orchestrator_claim_candidates (
+          task_id TEXT PRIMARY KEY REFERENCES orchestrator_tasks(task_id) ON DELETE CASCADE,
+          executor_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+      `);
+      state.storage.sql.exec(
+        "CREATE INDEX orchestrator_claim_candidates_by_executor_created ON orchestrator_claim_candidates(executor_id, created_at, task_id)",
+      );
+      state.storage.sql.exec(
+        "INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at) VALUES (?, ?, ?)",
+        "candidate-legacy-migration", "agent:worker-1", now,
+      );
+      instance.ensureSchema();
+      const columns = state.storage.sql.exec(
+        "PRAGMA table_info(orchestrator_claim_candidates)",
+      ).toArray().map(row => row.name);
+      expect(columns).toContain("candidate_seq");
+      expect(state.storage.sql.exec(
+        "SELECT task_id, executor_id, created_at FROM orchestrator_claim_candidates",
+      ).toArray()).toEqual([
+        { task_id: "candidate-legacy-migration", executor_id: "agent:worker-1", created_at: now },
+      ]);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'orchestrator_claim_candidates_legacy'",
+      ).one().count).toBe(0);
+    });
+  });
+
+  it("claims distinct tasks under concurrent multi-worker contention", async () => {
+    const ledger = ledgerFor("claim-candidate-multi-worker-contention");
+    const taskIds = [];
+    for (let index = 0; index < 12; index++) {
+      const workerId = index % 2 === 0 ? "agent:worker-1" : "agent:worker-2";
+      const taskId = "candidate-concurrent-" + String(index).padStart(2, "0");
+      taskIds.push(taskId);
+      await createTask(ledger, taskId, workerId);
+    }
+    const results = await Promise.all(Array.from({ length: 12 }, async (_value, index) => {
+      const workerId = index % 2 === 0 ? "agent:worker-1" : "agent:worker-2";
+      return ledger.claimTask({
+        workerId,
+        workerAssertion: await createWorkerAssertion({
+          subject: workerId, role: "agent", operation: "claimTask", nowMs: now,
+        }),
+        leaseMs: 30_000,
+        now,
+      });
+    }));
+    const claimed = results.filter(result => result.claimed);
+    const claimedIds = claimed.map(result => result.task.taskId);
+    expect(claimed).toHaveLength(12);
+    expect(new Set(claimedIds).size).toBe(12);
+    expect(new Set(claimedIds)).toEqual(new Set(taskIds));
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE worker_id IS NOT NULL",
+      ).one().count).toBe(12);
+    });
+  });
+
+  it("bounds work and resumes losslessly across a 30,000-task, 29,999-active-lease queue", async () => {
+    const ledger = ledgerFor("claim-candidate-30000-stress");
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.transactionSync(() => {
+        for (let start = 1; start <= 30_000; start += 1_000) {
+          const end = Math.min(start + 999, 30_000);
+          state.storage.sql.exec(`
+            WITH RECURSIVE seq(n) AS (
+              SELECT ? UNION ALL SELECT n + 1 FROM seq WHERE n < ?
+            )
+            INSERT INTO orchestrator_tasks
+              (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at)
+            SELECT
+              'stress-' || printf('%05d', n),
+              'stress-idem-' || printf('%05d', n),
+              ?, 'SCHEDULED', 1,
+              json_object(
+                'taskId', 'stress-' || printf('%05d', n),
+                'state', 'SCHEDULED', 'version', 1, 'agentRound', 0,
+                'createdAt', ?, 'updatedAt', ?, 'executorId', 'agent:worker-1',
+                'commitSha', ?, 'objective', '30k candidate stress fixture'
+              ),
+              ?, ?
+            FROM seq
+          `, start, end, "a".repeat(64), now, now, "b".repeat(40), now, now);
+        }
+        state.storage.sql.exec(`
+          INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at)
+          SELECT task_id, 'agent:worker-1', created_at
+          FROM orchestrator_tasks
+          WHERE task_id LIKE 'stress-%'
+          ORDER BY created_at, task_id
+        `);
+        state.storage.sql.exec(`
+          INSERT INTO orchestrator_execution_leases
+            (task_id, worker_id, lease_generation, lease_until, updated_at)
+          SELECT task_id, 'agent:other-worker', 1, ?, ?
+          FROM orchestrator_tasks
+          WHERE task_id LIKE 'stress-%' AND task_id != 'stress-30000'
+        `, now + 60_000, now);
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE executor_id = ?",
+        "agent:worker-1",
+      ).one().count).toBe(30_000);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases",
+      ).one().count).toBe(29_999);
+    });
+
+    let result = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 30_000,
+      now,
+    });
+    let calls = 1;
+    let cursor = result.nextCursor;
+    while (!result.claimed && cursor && calls < 300) {
+      result = await ledger.claimTask({
+        workerId: "agent:worker-1",
+        workerAssertion: await createWorkerAssertion({
+          subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now + calls,
+        }),
+        leaseMs: 30_000,
+        now: now + calls,
+        cursor,
+      });
+      cursor = result.nextCursor;
+      calls++;
+    }
+    expect(result).toMatchObject({
+      claimed: true,
+      task: { taskId: "stress-30000" },
+      leaseGeneration: 1,
+    });
+    expect(calls).toBe(235);
   });
 });

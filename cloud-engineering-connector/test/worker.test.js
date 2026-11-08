@@ -31,16 +31,134 @@ function createKnowledgeStoreBinding(){
 const knowledgeStore=createKnowledgeStoreBinding();
 function createOrchestratorLedgerBinding(){
  const calls=[];
- const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:5}}};
+ const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:7,storage:{integrityCheck:"ok",requiredTables:true}}}};
  return{calls,binding:{idFromName(name){calls.push({method:"idFromName",name});return name},get(id){calls.push({method:"get",id});return stub}}};
 }
 const orchestratorLedger=createOrchestratorLedgerBinding();
-const env={ORCHESTRATOR_LEDGER:orchestratorLedger.binding,ORCHESTRATOR_OUTBOX_QUEUE:{send:async()=>{}},ORCHESTRATOR_OUTBOX_QUEUE_NAME:"chat-gpt111-orchestrator-outbox",ORCHESTRATOR_OUTBOX_DLQ_QUEUE:"chat-gpt111-orchestrator-outbox-dlq",LEDGER_WORKER_ASSERTION_KEYS:JSON.stringify({"worker-v1":randomBytes(32).toString("hex")}),LEDGER_WORKER_ASSERTION_ACTIVE_KID:"worker-v1",MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_READONLY_TOKEN:"read-only-test-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding(),KNOWLEDGE_STORE:knowledgeStore.binding};
+const env={ORCHESTRATOR_LEDGER:orchestratorLedger.binding,ORCHESTRATOR_OUTBOX_QUEUE:{send:async()=>{}},ORCHESTRATOR_OUTBOX_QUEUE_NAME:"chat-gpt111-orchestrator-outbox",ORCHESTRATOR_OUTBOX_DLQ_QUEUE:"chat-gpt111-orchestrator-outbox-dlq",LEDGER_WORKER_ASSERTION_KEYS:JSON.stringify({"worker-v1":randomBytes(32).toString("hex")}),LEDGER_WORKER_ASSERTION_ACTIVE_KID:"worker-v1",LEDGER_RECONCILIATION_EVIDENCE_KEYS:JSON.stringify({"reconcile-v1":"3031323334353637383961626364656630313233343536373839616263646566"}),LEDGER_RECONCILIATION_EVIDENCE_ISSUERS:JSON.stringify(["test-reconciler"]),MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",GITHUB_READONLY_TOKEN:"read-only-test-token",MCP_RATE_LIMITER:{limit:async()=>({success:true})},WRITE_CONTROL:createWriteControlBinding(),KNOWLEDGE_STORE:knowledgeStore.binding};
 const req=(path,options={})=>{const headers=new Headers(options.headers);if(!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
 const rpc=(method,params={},id=1)=>{if(method==="tools/call"&&params.name==="create_change_pr"&&params.arguments&&!params.arguments.idempotency_key)params={...params,arguments:{...params.arguments,idempotency_key:"worker-test-idempotency-key-"+String(++idempotencyCounter).padStart(8,"0")}};return req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})})};
 const anonymousRpc=(method,params={},id=1)=>{const request=rpc(method,params,id);const headers=new Headers(request.headers);headers.delete("authorization");return new Request(request,{headers})};
+test("MCP tool calls emit privacy-safe structured outcome, principal, duration, and inference-usage availability", async () => {
+  const lines = [];
+  const originalLog = console.log;
+  try {
+    console.log = (...args) => lines.push(args.join(" "));
+    const response = await worker.fetch(rpc("tools/call", {
+      name: "engineering_standards", arguments: {}
+    }, 981), env);
+    assert.equal(response.status, 200);
+  } finally {
+    console.log = originalLog;
+  }
+  const event = lines.map(line => { try { return JSON.parse(line); } catch { return null; } })
+    .find(value => value?.event === "mcp_tool_call");
+  assert.ok(event, "a structured tool outcome event must be emitted");
+  assert.equal(event.tool_name, "engineering_standards");
+  assert.equal(event.outcome, "success");
+  assert.deepEqual(event.principal, { type: "shared_bearer", id: null });
+  assert.equal(typeof event.duration_ms, "number");
+  assert.ok(event.duration_ms >= 0);
+  assert.deepEqual(event.model_usage, {
+    available: false,
+    source: "client_side_inference",
+    input_tokens: null,
+    output_tokens: null,
+    total_tokens: null
+  });
+  assert.equal(JSON.stringify(event).includes(env.MCP_AUTH_TOKEN), false);
+});
+
+test("MCP tool-call telemetry records rejected unknown tool names as error outcomes", async () => {
+  const lines = [];
+  const originalLog = console.log;
+  try {
+    console.log = (...args) => lines.push(args.join(" "));
+    const response = await worker.fetch(rpc("tools/call", {
+      name: "unknown_engineering_tool", arguments: {}
+    }, 982), env);
+    assert.equal(response.status, 200);
+  } finally {
+    console.log = originalLog;
+  }
+  const event = lines.map(line => { try { return JSON.parse(line); } catch { return null; } })
+    .find(value => value?.event === "mcp_tool_call");
+  assert.ok(event, "rejected tool calls must still produce an outcome event");
+  assert.equal(event.tool_name, "unknown_engineering_tool");
+  assert.equal(event.outcome, "error");
+});
+
+test("MCP telemetry never invents a unique principal identifier for a shared bearer", async () => {
+  const lines = [];
+  const originalLog = console.log;
+  try {
+    console.log = (...args) => lines.push(args.join(" "));
+    await worker.fetch(rpc("tools/call", { name: "engineering_standards", arguments: {} }, 983), env);
+  } finally {
+    console.log = originalLog;
+  }
+  const event = lines.map(line => { try { return JSON.parse(line); } catch { return null; } })
+    .find(value => value?.event === "mcp_tool_call");
+  assert.ok(event);
+  assert.deepEqual(event.principal, { type: "shared_bearer", id: null });
+});
+
+test("MCP telemetry marks a tool-call rejected by the knowledge-write rate limiter as error", async () => {
+  let calls = 0;
+  const lines = [];
+  const originalLog = console.log;
+  try {
+    console.log = (...args) => lines.push(args.join(" "));
+    const response = await worker.fetch(rpc("tools/call", {
+      name: "knowledge_entity_upsert",
+      arguments: { entityId: "telemetry-test", entityType: "service", name: "Telemetry", expectedVersion: 0 }
+    }, 984), {
+      ...env,
+      MCP_RATE_LIMITER: { limit: async () => ({ success: ++calls === 1 }) }
+    });
+    assert.equal(response.status, 429);
+  } finally {
+    console.log = originalLog;
+  }
+  const event = lines.map(line => { try { return JSON.parse(line); } catch { return null; } })
+    .find(value => value?.event === "mcp_tool_call");
+  assert.ok(event);
+  assert.equal(event.outcome, "error");
+});
+
+test("public read-only telemetry identifies the unauthenticated principal without inventing an ID", async () => {
+  const lines = [];
+  const originalLog = console.log;
+  try {
+    console.log = (...args) => lines.push(args.join(" "));
+    const response = await worker.fetch(anonymousRpc("tools/call", {
+      name: "engineering_standards", arguments: {}
+    }, 985), { ...env, PUBLIC_READ_ONLY: "true" });
+    assert.equal(response.status, 200);
+  } finally {
+    console.log = originalLog;
+  }
+  const event = lines.map(line => { try { return JSON.parse(line); } catch { return null; } })
+    .find(value => value?.event === "mcp_tool_call");
+  assert.ok(event);
+  assert.deepEqual(event.principal, { type: "public_read_only", id: null });
+});
+
 test("healthz is a liveness endpoint independent of credentials and Durable Object availability",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.service,"cloud-engineering-connector");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers");assert.equal(Object.hasOwn(b,"durable_objects"),false);assert.equal(Object.hasOwn(b,"mcp"),false)});
-test("readyz reports Durable Object schema readiness using the lightweight ping",async()=>{const r=await worker.fetch(req("/readyz"),env);assert.equal(r.status,200,JSON.stringify(await r.clone().json()));const b=await r.json();assert.equal(b.status,"ready");assert.equal(b.durable_objects,"ok");assert.equal(env.WRITE_CONTROL.__test.events.some(event=>event.type==="ping"),true);assert.equal(b.knowledge_store,"ok");assert.equal(knowledgeStore.calls.some(call=>call.method==="ping"),true);assert.equal(b.orchestrator_ledger,"ok");assert.equal(b.orchestrator_outbox_publisher,"ok");assert.equal(orchestratorLedger.calls.some(call=>call.method==="ping"),true)});
+test("readyz reports Durable Object schema readiness using the lightweight ping",async()=>{const r=await worker.fetch(req("/readyz"),env);assert.equal(r.status,200,JSON.stringify(await r.clone().json()));const b=await r.json();assert.equal(b.status,"ready");assert.equal(b.durable_objects,"ok");assert.equal(env.WRITE_CONTROL.__test.events.some(event=>event.type==="ping"),true);assert.equal(b.knowledge_store,"ok");assert.equal(knowledgeStore.calls.some(call=>call.method==="ping"),true);assert.equal(b.orchestrator_ledger,"ok");assert.equal(b.orchestrator_reconciliation,"ok");assert.equal(b.orchestrator_outbox_publisher,"ok");assert.equal(orchestratorLedger.calls.some(call=>call.method==="ping"),true)});
+test("readyz fails closed when OrchestratorLedger storage integrity or required tables are unhealthy",async()=>{
+ for(const storage of [
+  {integrityCheck:"failed",requiredTables:true},
+  {integrityCheck:"ok",requiredTables:false}
+ ]){
+  const unhealthyLedger={idFromName:name=>name,get:()=>({ping:async()=>({ok:true,schemaVersion:7,storage})})};
+  const r=await worker.fetch(req("/readyz"),{...env,ORCHESTRATOR_LEDGER:unhealthyLedger});
+  assert.equal(r.status,503,JSON.stringify(await r.clone().json()));
+  const b=await r.json();
+  assert.equal(b.status,"not_ready");
+  assert.equal(b.orchestrator_ledger,"unavailable");
+ }
+});
 test("readyz fails closed when the Orchestrator outbox Queue binding is unavailable",async()=>{
  const r=await worker.fetch(req("/readyz"),{...env,ORCHESTRATOR_OUTBOX_QUEUE:undefined});
  assert.equal(r.status,503);
@@ -1496,7 +1614,7 @@ test("Queue consumer durably acknowledges first delivery and identical redeliver
  const body={
   schemaVersion:1,eventId:"queue-event-test-0001",idempotencyKey:"queue-idempotency-test-0001",
   taskId:"task-consumer-0001",eventType:"task.transitioned",
-  payload:{taskId:"task-consumer-0001",from:"SCHEDULED",to:"RUNNING"},
+  payload:{taskId:"task-consumer-0001",version:2,from:"SCHEDULED",to:"RUNNING"},
   attempts:1,createdAt:Date.now()
  };
  const makeMessage=()=>({body,acked:0,retried:0,ack(){this.acked++},retry(){this.retried++}});
@@ -1509,6 +1627,26 @@ test("Queue consumer durably acknowledges first delivery and identical redeliver
  assert.equal(calls[0].consumerId,"orchestrator-outbox-consumer");
  assert.match(calls[0].envelopeSha256,/^[a-f0-9]{64}$/);
  assert.equal(typeof calls[0].workerAssertion,"string");
+});
+
+test("Queue consumer acknowledges a deterministically fenced task event without retry",async()=>{
+ let retried=0,acked=0,receiptCalls=0;
+ const result=await consumeOrchestratorOutbox({messages:[{
+  body:{
+   schemaVersion:1,eventId:"queue-event-fenced-0001",idempotencyKey:"queue-idempotency-fenced-0001",
+   taskId:"task-fenced-0001",eventType:"task.transitioned",
+   payload:{taskId:"task-fenced-0001",version:1},attempts:1,createdAt:Date.now()
+  },
+  ack(){acked++},retry(){retried++}
+ }]},{
+  ORCHESTRATOR_LEDGER:{idFromName:name=>name,get:()=>({recordOutboxReceipt:async()=>{receiptCalls++;return{recorded:false,blocked:true,reason:"TASK_VERSION_FENCED"}}})},
+  LEDGER_WORKER_ASSERTION_KEYS:env.LEDGER_WORKER_ASSERTION_KEYS,
+  LEDGER_WORKER_ASSERTION_ACTIVE_KID:env.LEDGER_WORKER_ASSERTION_ACTIVE_KID
+ });
+ assert.deepEqual(result,{received:1,acknowledged:1,retried:0,duplicates:0});
+ assert.equal(receiptCalls,1);
+ assert.equal(retried,0);
+ assert.equal(acked,1);
 });
 
 test("Queue consumer retries unknown event types without invoking durable receipt",async()=>{
@@ -1525,4 +1663,13 @@ test("Queue consumer retries unknown event types without invoking durable receip
  assert.equal(receiptCalls,0);
  assert.equal(retried,1);
  assert.equal(acked,0);
+});
+
+test("readyz fails closed when the independent reconciliation verifier is not configured",async()=>{
+ const r=await worker.fetch(req("/readyz"),{...env,LEDGER_RECONCILIATION_EVIDENCE_KEYS:undefined});
+ assert.equal(r.status,503);
+ const b=await r.json();
+ assert.equal(b.status,"not_ready");
+ assert.equal(b.orchestrator_ledger,"ok");
+ assert.equal(b.orchestrator_reconciliation,"unavailable");
 });

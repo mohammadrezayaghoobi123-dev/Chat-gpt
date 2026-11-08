@@ -320,3 +320,49 @@ test("rejects an allow decision bound to a different action", async () => {
     error => error.code === "POLICY_DECISION_SCOPE_MISMATCH",
   );
 });
+
+
+test("rejects a policy decision bound to a different resource fingerprint", async () => {
+  await assert.rejects(
+    authorizeProjectAction({
+      principal,
+      tenantContext,
+      projectSelector: "project-01",
+      action: "project.read",
+      resource: { kind: "repository", id: "repo-01" },
+      authorizationStore: {
+        async authorizeProjectAction() {
+          return {
+            effect: "allow",
+            action: "project.read",
+            principalId: principal.id,
+            tenantId: "tenant-alpha",
+            projectId: "project-01",
+            resourceDigest: "0".repeat(64),
+            decisionId: "decision-wrong-resource",
+            policyVersion: "policy-v1",
+          };
+        },
+      },
+    }),
+    error => error.code === "POLICY_DECISION_SCOPE_MISMATCH",
+  );
+});
+
+test("rejects oversized resource descriptors before policy evaluation", async () => {
+  let calls = 0;
+  await assert.rejects(
+    authorizeProjectAction({
+      principal,
+      tenantContext,
+      projectSelector: "project-01",
+      action: "project.read",
+      resource: { kind: "repository", content: "x".repeat(20_000) },
+      authorizationStore: {
+        async authorizeProjectAction() { calls += 1; return {}; },
+      },
+    }),
+    error => error.code === "RESOURCE_TOO_LARGE",
+  );
+  assert.equal(calls, 0);
+});

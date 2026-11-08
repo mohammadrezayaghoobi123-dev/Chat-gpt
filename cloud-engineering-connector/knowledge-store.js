@@ -611,6 +611,7 @@ export class KnowledgeStore extends DurableObject {
 
   recordVaultProposal(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const proposalId = identifier(input?.proposalId, "proposalId");
     const documentId = identifier(input?.documentId, "documentId");
     const repository = repoName(input?.repository);
@@ -631,9 +632,10 @@ export class KnowledgeStore extends DurableObject {
     const commitSha = requiredString(input?.commitSha, "commitSha", 40);
     if (!SHA40.test(commitSha)) throw new TypeError("commitSha must be a 40-character Git SHA.");
     const now = timestamp(input?.now);
-    const existing = this.ctx.storage.sql.exec(
-      "SELECT * FROM knowledge_vault_proposals WHERE tenant_id=? AND proposal_id=?",
-      tenantId, proposalId
+    const sql = this.ctx.storage.sql;
+    const existing = sql.exec(
+      "SELECT * FROM knowledge_vault_proposals_v4 WHERE tenant_id=? AND project_id=? AND proposal_id=?",
+      tenantId, projectId, proposalId
     ).toArray()[0];
     if (existing) {
       const same = existing.document_id === documentId && existing.repository === repository &&
@@ -644,36 +646,39 @@ export class KnowledgeStore extends DurableObject {
       if (!same) throw fail("KNOWLEDGE_PROPOSAL_IDEMPOTENCY_CONFLICT", "Proposal ID is already bound to a different Vault change.");
       return proposalRecord(existing);
     }
-    this.ctx.storage.sql.exec(
-      "INSERT INTO knowledge_vault_proposals(tenant_id, proposal_id, document_id, repository, path, expected_blob_sha, proposed_content_sha256, pr_number, pr_url, branch, commit_sha, status, merge_commit_sha, merged_blob_sha, created_at, updated_at) " +
-      "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', NULL, NULL, ?, ?)",
-      tenantId, proposalId, documentId, repository, path, expectedBlobSha, proposedContentSha256,
+    sql.exec(
+      "INSERT INTO knowledge_vault_proposals_v4(tenant_id, project_id, proposal_id, document_id, repository, path, expected_blob_sha, proposed_content_sha256, pr_number, pr_url, branch, commit_sha, status, merge_commit_sha, merged_blob_sha, created_at, updated_at) " +
+      "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', NULL, NULL, ?, ?)",
+      tenantId, projectId, proposalId, documentId, repository, path, expectedBlobSha, proposedContentSha256,
       pullRequestNumber, pullRequestUrl, branch, commitSha, now, now
     );
-    return this.getVaultProposal({ tenantId, proposalId });
+    return this.getVaultProposal({ tenantId, projectId, proposalId });
   }
 
   getVaultProposal(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const proposalId = identifier(input?.proposalId, "proposalId");
     return proposalRecord(this.ctx.storage.sql.exec(
-      "SELECT * FROM knowledge_vault_proposals WHERE tenant_id=? AND proposal_id=?",
-      tenantId, proposalId
+      "SELECT * FROM knowledge_vault_proposals_v4 WHERE tenant_id=? AND project_id=? AND proposal_id=?",
+      tenantId, projectId, proposalId
     ).toArray()[0]);
   }
 
   listPendingVaultProposals(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const limit = input?.limit === undefined ? 20 : input.limit;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new TypeError("limit must be between 1 and 50.");
     return this.ctx.storage.sql.exec(
-      "SELECT * FROM knowledge_vault_proposals WHERE tenant_id=? AND status='proposed' ORDER BY created_at LIMIT ?",
-      tenantId, limit
+      "SELECT * FROM knowledge_vault_proposals_v4 WHERE tenant_id=? AND project_id=? AND status='proposed' ORDER BY created_at LIMIT ?",
+      tenantId, projectId, limit
     ).toArray().map(proposalRecord);
   }
 
   updateVaultProposal(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const proposalId = identifier(input?.proposalId, "proposalId");
     const status = input?.status;
     if (!["merged", "closed", "conflict", "failed"].includes(status)) throw new TypeError("status must be a terminal proposal state.");
@@ -685,8 +690,8 @@ export class KnowledgeStore extends DurableObject {
     const now = timestamp(input?.now);
     return this.ctx.storage.transactionSync(() => {
       const current = this.ctx.storage.sql.exec(
-        "SELECT * FROM knowledge_vault_proposals WHERE tenant_id=? AND proposal_id=?",
-        tenantId, proposalId
+        "SELECT * FROM knowledge_vault_proposals_v4 WHERE tenant_id=? AND project_id=? AND proposal_id=?",
+        tenantId, projectId, proposalId
       ).toArray()[0];
       if (!current) return null;
       if (current.status !== "proposed") {
@@ -696,16 +701,17 @@ export class KnowledgeStore extends DurableObject {
         throw fail("KNOWLEDGE_PROPOSAL_STATE_CONFLICT", "Vault proposal is already in a terminal state.");
       }
       this.ctx.storage.sql.exec(
-        "UPDATE knowledge_vault_proposals SET status=?, merge_commit_sha=?, merged_blob_sha=?, updated_at=? " +
-        "WHERE tenant_id=? AND proposal_id=? AND status='proposed'",
-        status, mergeCommitSha, mergedBlobSha, now, tenantId, proposalId
+        "UPDATE knowledge_vault_proposals_v4 SET status=?, merge_commit_sha=?, merged_blob_sha=?, updated_at=? " +
+        "WHERE tenant_id=? AND project_id=? AND proposal_id=? AND status='proposed'",
+        status, mergeCommitSha, mergedBlobSha, now, tenantId, projectId, proposalId
       );
-      return this.getVaultProposal({ tenantId, proposalId });
+      return this.getVaultProposal({ tenantId, projectId, proposalId });
     });
   }
 
   async enqueueOutbox(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const eventId = identifier(input?.eventId, "eventId");
     const idempotencyKey = requiredString(input?.idempotencyKey, "idempotencyKey", 128);
     const aggregateType = requiredString(input?.aggregateType, "aggregateType", MAX_TYPE);
@@ -713,75 +719,91 @@ export class KnowledgeStore extends DurableObject {
     const eventType = requiredString(input?.eventType, "eventType", MAX_TYPE);
     const payloadJson = jsonObject(input?.payload, "payload");
     const now = timestamp(input?.now);
-    const fingerprint = await sha256([tenantId, aggregateType, aggregateId, eventType, payloadJson].join("\n"));
-
-    // The digest is asynchronous, so serialize the idempotency read/insert after it
-    // completes. This prevents concurrent retries from racing on the UNIQUE key.
+    const fingerprint = await sha256([tenantId, projectId, aggregateType, aggregateId, eventType, payloadJson].join("\n"));
     return this.ctx.storage.transactionSync(() => {
       const existing = this.ctx.storage.sql.exec(
-        "SELECT * FROM knowledge_outbox WHERE tenant_id = ? AND idempotency_key = ?",
-        tenantId, idempotencyKey
+        "SELECT * FROM knowledge_outbox_v4 WHERE tenant_id = ? AND project_id = ? AND idempotency_key = ?",
+        tenantId, projectId, idempotencyKey
       ).toArray()[0];
       if (existing) {
-        if (existing.fingerprint !== fingerprint || existing.tenant_id !== tenantId) {
+        if (existing.fingerprint !== fingerprint) {
           throw fail("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "The idempotency key is already bound to a different operation.");
         }
         return outboxRecord(existing);
       }
+      const eventCollision = this.ctx.storage.sql.exec(
+        "SELECT event_id FROM knowledge_outbox_v4 WHERE tenant_id = ? AND project_id = ? AND event_id = ?",
+        tenantId, projectId, eventId
+      ).toArray()[0];
+      if (eventCollision) {
+        throw fail("KNOWLEDGE_EVENT_ID_CONFLICT", "The event ID is already bound to another operation in this project.");
+      }
       this.ctx.storage.sql.exec(
-        "INSERT INTO knowledge_outbox(event_id, tenant_id, idempotency_key, aggregate_type, aggregate_id, event_type, payload_json, fingerprint, status, attempts, next_attempt_at, lease_until, lease_generation, last_error, created_at, updated_at) " +
-        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, 0, NULL, ?, ?)",
-        eventId, tenantId, idempotencyKey, aggregateType, aggregateId, eventType, payloadJson, fingerprint, now, now, now
+        "INSERT INTO knowledge_outbox_v4(tenant_id, project_id, event_id, idempotency_key, aggregate_type, aggregate_id, event_type, payload_json, fingerprint, status, attempts, next_attempt_at, lease_until, lease_generation, last_error, created_at, updated_at) " +
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, 0, NULL, ?, ?)",
+        tenantId, projectId, eventId, idempotencyKey, aggregateType, aggregateId, eventType, payloadJson, fingerprint, now, now, now
       );
-      return this.getOutboxEvent({ tenantId, eventId });
+      return this.getOutboxEvent({ tenantId, projectId, eventId });
     });
   }
 
   claimOutbox(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const now = timestamp(input?.now);
     const leaseMs = input?.leaseMs === undefined ? 30_000 : input.leaseMs;
     if (!Number.isSafeInteger(leaseMs) || leaseMs < 1_000 || leaseMs > 300_000) {
       throw new TypeError("leaseMs must be between 1000 and 300000 milliseconds.");
     }
     const sql = this.ctx.storage.sql;
-    const row = sql.exec(
-      "SELECT * FROM knowledge_outbox WHERE " +
-      "((status IN ('pending','retry') AND next_attempt_at <= ?) OR (status = 'processing' AND lease_until <= ?)) " +
-      "ORDER BY next_attempt_at, created_at LIMIT 1",
-      now, now
-    ).toArray()[0];
-    if (!row) return null;
-    const leaseGeneration = row.lease_generation + 1;
-    sql.exec(
-      "UPDATE knowledge_outbox SET status='processing', attempts=attempts+1, lease_until=?, " +
-      "lease_generation=?, updated_at=? WHERE event_id=? AND lease_generation=?",
-      now + leaseMs, leaseGeneration, now, row.event_id, row.lease_generation
-    );
-    return outboxRecord(sql.exec("SELECT * FROM knowledge_outbox WHERE event_id = ?", row.event_id).one());
+    return this.ctx.storage.transactionSync(() => {
+      const row = sql.exec(
+        "SELECT * FROM knowledge_outbox_v4 WHERE tenant_id = ? AND project_id = ? AND " +
+        "((status IN ('pending','retry') AND next_attempt_at <= ?) OR (status = 'processing' AND lease_until <= ?)) " +
+        "ORDER BY next_attempt_at, created_at LIMIT 1",
+        tenantId, projectId, now, now
+      ).toArray()[0];
+      if (!row) return null;
+      const leaseGeneration = row.lease_generation + 1;
+      sql.exec(
+        "UPDATE knowledge_outbox_v4 SET status='processing', attempts=attempts+1, lease_until=?, " +
+        "lease_generation=?, updated_at=? WHERE tenant_id=? AND project_id=? AND event_id=? AND lease_generation=?",
+        now + leaseMs, leaseGeneration, now, tenantId, projectId, row.event_id, row.lease_generation
+      );
+      const updated = sql.exec(
+        "SELECT * FROM knowledge_outbox_v4 WHERE tenant_id = ? AND project_id = ? AND event_id = ?",
+        tenantId, projectId, row.event_id
+      ).toArray()[0];
+      if (!updated || updated.status !== "processing" || updated.lease_generation !== leaseGeneration) {
+        throw fail("KNOWLEDGE_OUTBOX_LEASE_CONFLICT", "Outbox claim did not persist.");
+      }
+      return outboxRecord(updated);
+    });
   }
 
   completeOutbox(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const eventId = identifier(input?.eventId, "eventId");
     const leaseGeneration = input?.leaseGeneration;
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw new TypeError("leaseGeneration must be a positive safe integer.");
     const now = timestamp(input?.now);
     return this.ctx.storage.transactionSync(() => {
       const current = this.ctx.storage.sql.exec(
-        "SELECT status, lease_generation FROM knowledge_outbox WHERE tenant_id=? AND event_id=?",
-        tenantId, eventId
+        "SELECT status, lease_generation FROM knowledge_outbox_v4 WHERE tenant_id=? AND project_id=? AND event_id=?",
+        tenantId, projectId, eventId
       ).toArray()[0];
       if (!current || current.status !== "processing" || current.lease_generation !== leaseGeneration) {
         throw fail("KNOWLEDGE_OUTBOX_LEASE_CONFLICT", "Outbox lease is stale or the event is not processing.");
       }
       this.ctx.storage.sql.exec(
-        "UPDATE knowledge_outbox SET status='completed', lease_until=NULL, last_error=NULL, updated_at=? " +
-        "WHERE tenant_id=? AND event_id=? AND status='processing' AND lease_generation=?",
-        now, tenantId, eventId, leaseGeneration
+        "UPDATE knowledge_outbox_v4 SET status='completed', lease_until=NULL, last_error=NULL, updated_at=? " +
+        "WHERE tenant_id=? AND project_id=? AND event_id=? AND status='processing' AND lease_generation=?",
+        now, tenantId, projectId, eventId, leaseGeneration
       );
       const updated = this.ctx.storage.sql.exec(
-        "SELECT * FROM knowledge_outbox WHERE tenant_id=? AND event_id=?",
-        tenantId, eventId
+        "SELECT * FROM knowledge_outbox_v4 WHERE tenant_id=? AND project_id=? AND event_id=?",
+        tenantId, projectId, eventId
       ).toArray()[0];
       if (!updated || updated.status !== "completed") {
         throw fail("KNOWLEDGE_OUTBOX_LEASE_CONFLICT", "Outbox completion did not persist.");
@@ -792,6 +814,7 @@ export class KnowledgeStore extends DurableObject {
 
   deferOutbox(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const eventId = identifier(input?.eventId, "eventId");
     const leaseGeneration = input?.leaseGeneration;
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw new TypeError("leaseGeneration must be a positive safe integer.");
@@ -802,24 +825,25 @@ export class KnowledgeStore extends DurableObject {
     const now = timestamp(input?.now);
     return this.ctx.storage.transactionSync(() => {
       const current = this.ctx.storage.sql.exec(
-        "SELECT status, lease_generation FROM knowledge_outbox WHERE tenant_id=? AND event_id=?",
-        tenantId, eventId
+        "SELECT status, lease_generation FROM knowledge_outbox_v4 WHERE tenant_id=? AND project_id=? AND event_id=?",
+        tenantId, projectId, eventId
       ).toArray()[0];
       if (!current || current.status !== "processing" || current.lease_generation !== leaseGeneration) {
         throw fail("KNOWLEDGE_OUTBOX_LEASE_CONFLICT", "Outbox lease is stale or the event is not processing.");
       }
       this.ctx.storage.sql.exec(
-        "UPDATE knowledge_outbox SET status='retry', attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END, " +
+        "UPDATE knowledge_outbox_v4 SET status='retry', attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END, " +
         "next_attempt_at=?, lease_until=NULL, last_error=NULL, updated_at=? " +
-        "WHERE tenant_id=? AND event_id=? AND status='processing' AND lease_generation=?",
-        now + retryAfterMs, now, tenantId, eventId, leaseGeneration
+        "WHERE tenant_id=? AND project_id=? AND event_id=? AND status='processing' AND lease_generation=?",
+        now + retryAfterMs, now, tenantId, projectId, eventId, leaseGeneration
       );
-      return this.getOutboxEvent({ tenantId, eventId });
+      return this.getOutboxEvent({ tenantId, projectId, eventId });
     });
   }
 
   failOutbox(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const eventId = identifier(input?.eventId, "eventId");
     const leaseGeneration = input?.leaseGeneration;
     if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) throw new TypeError("leaseGeneration must be a positive safe integer.");
@@ -827,27 +851,31 @@ export class KnowledgeStore extends DurableObject {
     if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20) throw new TypeError("maxAttempts must be between 1 and 20.");
     const error = requiredString(input?.error, "error", 500);
     const now = timestamp(input?.now);
-    const row = this.ctx.storage.sql.exec(
-      "SELECT attempts FROM knowledge_outbox WHERE tenant_id=? AND event_id=? AND status='processing' AND lease_generation=?",
-      tenantId, eventId, leaseGeneration
-    ).toArray()[0];
-    if (!row) throw fail("KNOWLEDGE_OUTBOX_LEASE_CONFLICT", "Outbox lease is stale or the event is not processing.");
-    const dead = row.attempts >= maxAttempts;
-    const delay = Math.min(2 ** Math.max(0, row.attempts - 1) * 1000, 3_600_000);
-    this.ctx.storage.sql.exec(
-      "UPDATE knowledge_outbox SET status=?, next_attempt_at=?, lease_until=NULL, last_error=?, updated_at=? " +
-      "WHERE tenant_id=? AND event_id=? AND status='processing' AND lease_generation=?",
-      dead ? "dead_letter" : "retry", now + delay, error, now, tenantId, eventId, leaseGeneration
-    );
-    return this.getOutboxEvent({ tenantId, eventId });
+    return this.ctx.storage.transactionSync(() => {
+      const row = this.ctx.storage.sql.exec(
+        "SELECT attempts FROM knowledge_outbox_v4 WHERE tenant_id=? AND project_id=? AND event_id=? AND status='processing' AND lease_generation=?",
+        tenantId, projectId, eventId, leaseGeneration
+      ).toArray()[0];
+      if (!row) throw fail("KNOWLEDGE_OUTBOX_LEASE_CONFLICT", "Outbox lease is stale or the event is not processing.");
+      const dead = row.attempts >= maxAttempts;
+      const delay = Math.min(2 ** Math.max(0, row.attempts - 1) * 1000, 3_600_000);
+      this.ctx.storage.sql.exec(
+        "UPDATE knowledge_outbox_v4 SET status=?, next_attempt_at=?, lease_until=NULL, last_error=?, updated_at=? " +
+        "WHERE tenant_id=? AND project_id=? AND event_id=? AND status='processing' AND lease_generation=?",
+        dead ? "dead_letter" : "retry", now + delay, error, now, tenantId, projectId, eventId, leaseGeneration
+      );
+      return this.getOutboxEvent({ tenantId, projectId, eventId });
+    });
   }
 
   getOutboxEvent(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const eventId = identifier(input?.eventId, "eventId");
     return outboxRecord(this.ctx.storage.sql.exec(
-      "SELECT * FROM knowledge_outbox WHERE tenant_id=? AND event_id=?",
-      tenantId, eventId
+      "SELECT * FROM knowledge_outbox_v4 WHERE tenant_id=? AND project_id=? AND event_id=?",
+      tenantId, projectId, eventId
     ).toArray()[0]);
   }
+
 }

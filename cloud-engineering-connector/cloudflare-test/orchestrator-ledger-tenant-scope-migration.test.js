@@ -34,7 +34,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         expect(columns.has("tenant_id"), `${table} must have tenant_id`).toBe(true);
         expect(columns.has("project_id"), `${table} must have project_id`).toBe(true);
       }
-      expect(instance.ping().schemaVersion).toBe(8);
+      expect(instance.ping().schemaVersion).toBe(9);
     });
   });
 

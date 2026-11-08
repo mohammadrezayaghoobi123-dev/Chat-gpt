@@ -146,6 +146,35 @@ describe("OrchestratorLedger cross-tenant API isolation", () => {
         }),
       ]);
 
+      const fallbackClaim = await instance.claimTask({
+        workerId: "worker-a",
+        workerAssertion: await createAgentWorkerAssertion(
+          JSON.stringify({ test: keyHex }), "test", {
+            subject: "worker-a",
+            operation: "claimTask",
+            tenantId: "tenant-beta",
+            projectId: "project-blue",
+            taskId: null,
+            nowMs: now,
+          },
+        ),
+        leaseMs: 5_000,
+        now,
+        tenantId: "tenant-beta",
+        projectId: "project-blue",
+      });
+      expect(fallbackClaim).toMatchObject({ claimed: false, reason: "NO_TASK_AVAILABLE" });
+
+      expect(instance.getTask({
+        taskId: task.taskId, tenantId: "tenant-alpha", projectId: "project-red",
+      })).toMatchObject({ taskId: task.taskId, tenantId: "tenant-alpha", projectId: "project-red" });
+      expect(instance.getTask({
+        taskId: task.taskId, tenantId: "tenant-beta", projectId: "project-blue",
+      })).toBeNull();
+      expect(instance.getTask({
+        taskId: task.taskId, tenantId: "tenant-alpha",
+      })).toBeNull();
+
       expect(transition.reason).toBe("NOT_FOUND");
       expect(claim.claimed).toBe(false);
       expect(claim.reason).toBe("NO_TASK_AVAILABLE");

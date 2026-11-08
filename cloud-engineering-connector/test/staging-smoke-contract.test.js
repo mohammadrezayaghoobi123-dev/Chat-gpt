@@ -170,3 +170,15 @@ test("readyz fails closed unless DLQ archive routing is configured", () => {
   const smoke = readFileSync(new URL("./staging-smoke.mjs", import.meta.url), "utf8");
   assert.match(smoke, /readinessBody\.orchestrator_outbox_dlq_archiver, "ok"/);
 });
+
+
+test("Staging and Production releases require the independent reconciliation verifier bindings", () => {
+  for (const workflowPath of [
+    "../../.github/workflows/connector-staging-release.yml",
+    "../../.github/workflows/connector-production-release.yml",
+  ]) {
+    const workflow = readFileSync(new URL(workflowPath, import.meta.url), "utf8");
+    assert.match(workflow, /LEDGER_RECONCILIATION_EVIDENCE_KEYS/);
+    assert.match(workflow, /LEDGER_RECONCILIATION_EVIDENCE_ISSUERS/);
+  }
+});

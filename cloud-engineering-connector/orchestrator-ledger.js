@@ -792,7 +792,7 @@ export class OrchestratorLedger extends DurableObject {
       return { accepted: true, messageId, taskId };
     });
   }
-  async claimTask({ workerId, workerAssertion, leaseMs, now, taskId } = {}) {
+  async claimTask({ workerId, workerAssertion, leaseMs, now, taskId, reconciliationEvidence } = {}) {
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);
     timestamp(now);

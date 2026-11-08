@@ -89,7 +89,7 @@ async function sha256(value) {
 function proposalRecord(row) {
   if (!row) return null;
   return {
-    tenantId: row.tenant_id, proposalId: row.proposal_id, documentId: row.document_id,
+    tenantId: row.tenant_id, projectId: row.project_id, proposalId: row.proposal_id, documentId: row.document_id,
     repository: row.repository, path: row.path, expectedBlobSha: row.expected_blob_sha,
     proposedContentSha256: row.proposed_content_sha256, pullRequestNumber: row.pr_number,
     pullRequestUrl: row.pr_url, branch: row.branch, commitSha: row.commit_sha,
@@ -103,6 +103,7 @@ function outboxRecord(row) {
   return {
     eventId: row.event_id,
     tenantId: row.tenant_id,
+    projectId: row.project_id,
     idempotencyKey: row.idempotency_key,
     aggregateType: row.aggregate_type,
     aggregateId: row.aggregate_id,

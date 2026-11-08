@@ -267,3 +267,24 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 });
+
+
+it("removes a scheduler candidate atomically when an Owner command cancels its task", async () => {
+  const ledger = ledgerFor("owner-command-candidate-sync");
+  await createTask(ledger);
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-owner-0001",
+    ).one().count).toBe(1);
+  });
+
+  const result = await ledger.executeOwnerCommand(await ownerInput());
+  expect(result).toMatchObject({ applied: true, task: { state: "CANCELLED", version: 2 } });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-owner-0001",
+    ).one().count).toBe(0);
+  });
+});

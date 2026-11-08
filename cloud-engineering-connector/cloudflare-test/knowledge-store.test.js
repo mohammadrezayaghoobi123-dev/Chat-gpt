@@ -250,3 +250,18 @@ it("does not expose the internal derived-index writer as a Durable Object RPC me
     expect(typeof instance.search).toBe("function");
   });
 });
+
+
+it("owns knowledge persistence without creating orchestration tables", async () => {
+  const store = storeFor("knowledge-ownership-boundary");
+  await runInDurableObject(store, async instance => {
+    const tables = new Set(instance.ctx.storage.sql
+      .exec("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .toArray()
+      .map(row => row.name));
+    expect(tables.has("knowledge_entities")).toBe(true);
+    for (const name of ["orchestrator_tasks", "orchestrator_execution_leases", "orchestrator_outbox_events"]) {
+      expect(tables.has(name)).toBe(false);
+    }
+  });
+});

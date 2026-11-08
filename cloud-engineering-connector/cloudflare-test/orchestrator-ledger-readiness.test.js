@@ -41,3 +41,19 @@ describe("OrchestratorLedger readiness and integrity diagnostics", () => {
     });
   });
 });
+
+
+it("owns orchestration persistence without creating Brain Store tables", async () => {
+  const ledger = ledgerFor("orchestration-ownership-boundary");
+  await runInDurableObject(ledger, async instance => {
+    const tables = new Set(instance.ctx.storage.sql
+      .exec("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .toArray()
+      .map(row => row.name));
+    expect(tables.has("orchestrator_tasks")).toBe(true);
+    expect(tables.has("orchestrator_execution_leases")).toBe(true);
+    for (const name of ["knowledge_entities", "knowledge_relationships", "knowledge_tags"]) {
+      expect(tables.has(name)).toBe(false);
+    }
+  });
+});

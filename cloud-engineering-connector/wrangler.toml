@@ -9,6 +9,10 @@ SERVICE_MODE = "cloud"
 OAUTH_ISSUER = "https://chat-gpt111.mohammadrezayaghoobi123.workers.dev"
 MCP_RESOURCE_URL = "https://chat-gpt111.mohammadrezayaghoobi123.workers.dev/mcp"
 
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "3cc3207de5754d7cb968be0df9604cac"
+
 [[ratelimits]]
 name = "MCP_RATE_LIMITER"
 namespace_id = "78294163"
@@ -21,6 +25,10 @@ period = 60
 SERVICE_MODE = "cloud"
 OAUTH_ISSUER = "https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev"
 MCP_RESOURCE_URL = "https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev/mcp"
+
+[[env.staging.kv_namespaces]]
+binding = "OAUTH_KV"
+id = "4a2b689d12f34f3e8348720c0637589d"
 
 [[env.staging.ratelimits]]
 name = "MCP_RATE_LIMITER"

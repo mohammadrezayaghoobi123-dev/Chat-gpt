@@ -98,6 +98,8 @@ function taskFromRow(row) {
 }
 
 const CLAIM_FALLBACK_BATCH_SIZE = 32;
+const RECONCILIATION_EVIDENCE_RETENTION_MS = 600_000;
+const RECONCILIATION_EVIDENCE_PRUNE_BATCH = 100;
 
 function syncClaimCandidateInTransaction(sql, taskId) {
   const candidate = sql.exec(`
@@ -155,6 +157,15 @@ function reconcileClaimCandidatesInBoundedBatch(sql, executorId, now) {
     );
   }
   return { scanned: rows.length, complete: rows.length < CLAIM_FALLBACK_BATCH_SIZE };
+}
+
+function pruneConsumedReconciliationEvidenceInTransaction(sql, now) {
+  const cutoff = now - RECONCILIATION_EVIDENCE_RETENTION_MS;
+  if (cutoff < 1) return;
+  sql.exec(
+    "DELETE FROM orchestrator_consumed_reconciliation_evidence WHERE evidence_id IN (SELECT evidence_id FROM orchestrator_consumed_reconciliation_evidence WHERE expires_at < ? ORDER BY expires_at LIMIT ?)",
+    cutoff, RECONCILIATION_EVIDENCE_PRUNE_BATCH,
+  );
 }
 
 function outboxFromRow(row) {
@@ -766,6 +777,7 @@ export class OrchestratorLedger extends DurableObject {
       : null;
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      pruneConsumedReconciliationEvidenceInTransaction(sql, now);
       let row;
       if (taskId) {
         row = sql.exec(

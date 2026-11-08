@@ -1257,6 +1257,9 @@ export class OrchestratorLedger extends DurableObject {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       throw fail("outbox input must be an object.");
     }
+    if (!hasTenantProjectScope(input.tenantId, input.projectId)) {
+      return { enqueued: false, reason: "TENANT_PROJECT_SCOPE_REQUIRED" };
+    }
     const now = timestamp(input.now);
     if (typeof input.workerId !== "string" || input.workerId.length === 0) {
       return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
@@ -1681,6 +1684,8 @@ export class OrchestratorLedger extends DurableObject {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const taskRow = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", command.taskId).toArray()[0] ?? null;
         const currentTask = taskFromRow(taskRow);
+        const taskTenantId = taskRow?.tenant_id ?? "__legacy__";
+        const taskProjectId = taskRow?.project_id ?? "__legacy__";
         const auditHead = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
         const previousHash = auditHead?.event_hash ?? null;
         // Expected state/version are derived from this trusted Durable Object
@@ -1780,7 +1785,10 @@ export class OrchestratorLedger extends DurableObject {
           }
           const currentAuditHead = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
           if ((currentAuditHead?.event_hash ?? null) !== previousHash) return { retry: true };
-          const currentRow = sql.exec("SELECT state, version FROM orchestrator_tasks WHERE task_id = ?", command.taskId).toArray()[0] ?? null;
+          const currentRow = sql.exec(
+            "SELECT state, version FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+            command.taskId, taskTenantId, taskProjectId,
+          ).toArray()[0] ?? null;
           if ((currentRow?.version ?? null) !== (taskRow?.version ?? null) ||
               (currentRow?.state ?? null) !== (taskRow?.state ?? null)) return { retry: true };
           const claimedDelivery = sql.exec(
@@ -1805,21 +1813,24 @@ export class OrchestratorLedger extends DurableObject {
           );
           if (!conflictReason) {
             sql.exec(
-              "UPDATE orchestrator_tasks SET state = ?, version = ?, task_json = ?, updated_at = ? WHERE task_id = ? AND version = ? AND state = ?",
+              "UPDATE orchestrator_tasks SET state = ?, version = ?, task_json = ?, updated_at = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ? AND version = ? AND state = ?",
               resultingTask.state, resultingTask.version, serializeBounded(resultingTask, "task"),
-              now, command.taskId, expectedVersion, expectedState,
+              now, command.taskId, taskTenantId, taskProjectId, expectedVersion, expectedState,
             );
-            const lease = sql.exec("SELECT lease_generation FROM orchestrator_execution_leases WHERE task_id = ?", command.taskId).toArray()[0];
+            const lease = sql.exec(
+              "SELECT lease_generation FROM orchestrator_execution_leases WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+              command.taskId, taskTenantId, taskProjectId,
+            ).toArray()[0];
             const nextGeneration = (lease?.lease_generation ?? 0) + 1;
             if (lease) {
               sql.exec(
-                "UPDATE orchestrator_execution_leases SET worker_id = NULL, lease_generation = ?, lease_until = 0, updated_at = ? WHERE task_id = ?",
-                nextGeneration, now, command.taskId,
+                "UPDATE orchestrator_execution_leases SET worker_id = NULL, lease_generation = ?, lease_until = 0, updated_at = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+                nextGeneration, now, command.taskId, taskTenantId, taskProjectId,
               );
             } else {
               sql.exec(
-                "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, NULL, ?, 0, ?)",
-                command.taskId, nextGeneration, now,
+                "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at, tenant_id, project_id) VALUES (?, NULL, ?, 0, ?, ?, ?)",
+                command.taskId, nextGeneration, now, taskTenantId, taskProjectId,
               );
             }
             syncClaimCandidateInTransaction(sql, command.taskId);
@@ -1854,15 +1865,16 @@ export class OrchestratorLedger extends DurableObject {
             }
           }
           sql.exec(
-            "INSERT INTO orchestrator_audit_events (event_id, task_id, actor_id, actor_role, event_type, details_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, 'owner', ?, ?, ?, ?, ?)",
+            "INSERT INTO orchestrator_audit_events (event_id, task_id, actor_id, actor_role, event_type, details_json, previous_hash, event_hash, created_at, tenant_id, project_id) VALUES (?, ?, ?, 'owner', ?, ?, ?, ?, ?, ?, ?)",
             auditEventId, command.taskId, context.actorId, auditType, detailsJson, previousHash, eventHash, now,
+            taskTenantId, taskProjectId,
           );
           const storedResult = serializeBounded(successResult, "Owner command result");
           sql.exec(
-            "INSERT INTO orchestrator_owner_command_receipts (delivery_id, comment_id, body_sha256, command_hash, assertion_jti, task_id, operation, repository, issue_number, comment_created_at, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO orchestrator_owner_command_receipts (delivery_id, comment_id, body_sha256, command_hash, assertion_jti, task_id, operation, repository, issue_number, comment_created_at, result_json, created_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             context.deliveryId, context.commentId, bodySha256, context.commandHash, verified.jti,
             command.taskId, command.operation, provenance.repository, provenance.issueNumber,
-            provenance.commentCreatedAt, storedResult, now,
+            provenance.commentCreatedAt, storedResult, now, taskTenantId, taskProjectId,
           );
           return { replay: false, result: successResult };
         });
@@ -1889,6 +1901,8 @@ export class OrchestratorLedger extends DurableObject {
     return {
       eventId: row.event_id,
       taskId: row.task_id,
+      tenantId: row.tenant_id,
+      projectId: row.project_id,
       actorId: row.actor_id,
       actorRole: row.actor_role,
       eventType: row.event_type,

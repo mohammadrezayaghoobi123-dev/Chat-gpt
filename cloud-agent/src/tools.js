@@ -1,5 +1,9 @@
-import { DEFAULT_REF, MAX_FILE_BYTES, REPO_OWNER as OWNER, REPO_NAME as REPO, TOOL_DEFINITIONS, VERSION } from "./config.js";
+import { DEFAULT_REF, MAX_FILE_BYTES, TOOL_DEFINITIONS, VERSION } from "./config.js";
+import { resolveRepository } from "./repository-policy.js";
 import { buildGitHubContentsApiUrl, decodeGitHubBase64Text, isSafeRef, parseToolArguments, readTextBounded } from "./core.js";
+
+// Single policy point for which repository the tools read (see repository-policy.js).
+const { owner: OWNER, repo: REPO } = resolveRepository();
 
 export const TOOL_LABELS = new Set(TOOL_DEFINITIONS.map(tool => tool.function.name));
 

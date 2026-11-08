@@ -14,7 +14,7 @@ const CLAIMABLE_TASK_STATES = Object.freeze(["SCHEDULED", "RUNNING", "VERIFYING"
 const MAX_CLAIM_CANDIDATES_PER_CALL = 128;
 export const CLAIM_CANDIDATE_QUERY = `
   SELECT candidate.candidate_seq, candidate.task_id, candidate.executor_id,
-         candidate.created_at, task.state, task.task_json
+         candidate.created_at, task.created_at AS task_created_at, task.state, task.task_json
   FROM orchestrator_claim_candidates AS candidate
   INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id
   WHERE candidate.executor_id = ?
@@ -865,7 +865,8 @@ export class OrchestratorLedger extends DurableObject {
         }
         const taskProjection = taskFromRow(candidate);
         const assignedAgentId = taskProjection.executorId ?? taskProjection.assignedAgentId;
-        if (typeof assignedAgentId !== "string" || assignedAgentId !== workerId) {
+        if (typeof assignedAgentId !== "string" || assignedAgentId !== workerId ||
+            candidate.executor_id !== assignedAgentId || candidate.created_at !== candidate.task_created_at) {
           return { claimed: false, reason: "CANDIDATE_INDEX_INCONSISTENT" };
         }
 

@@ -41,6 +41,19 @@ const rpc=(method,params={},id=1)=>{if(method==="tools/call"&&params.name==="cre
 const anonymousRpc=(method,params={},id=1)=>{const request=rpc(method,params,id);const headers=new Headers(request.headers);headers.delete("authorization");return new Request(request,{headers})};
 test("healthz is a liveness endpoint independent of credentials and Durable Object availability",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.service,"cloud-engineering-connector");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers");assert.equal(Object.hasOwn(b,"durable_objects"),false);assert.equal(Object.hasOwn(b,"mcp"),false)});
 test("readyz reports Durable Object schema readiness using the lightweight ping",async()=>{const r=await worker.fetch(req("/readyz"),env);assert.equal(r.status,200,JSON.stringify(await r.clone().json()));const b=await r.json();assert.equal(b.status,"ready");assert.equal(b.durable_objects,"ok");assert.equal(env.WRITE_CONTROL.__test.events.some(event=>event.type==="ping"),true);assert.equal(b.knowledge_store,"ok");assert.equal(knowledgeStore.calls.some(call=>call.method==="ping"),true);assert.equal(b.orchestrator_ledger,"ok");assert.equal(b.orchestrator_reconciliation,"ok");assert.equal(b.orchestrator_outbox_publisher,"ok");assert.equal(orchestratorLedger.calls.some(call=>call.method==="ping"),true)});
+test("readyz fails closed when OrchestratorLedger storage integrity or required tables are unhealthy",async()=>{
+ for(const storage of [
+  {integrityCheck:"failed",requiredTables:true},
+  {integrityCheck:"ok",requiredTables:false}
+ ]){
+  const unhealthyLedger={idFromName:name=>name,get:()=>({ping:async()=>({ok:true,schemaVersion:7,storage})})};
+  const r=await worker.fetch(req("/readyz"),{...env,ORCHESTRATOR_LEDGER:unhealthyLedger});
+  assert.equal(r.status,503,JSON.stringify(await r.clone().json()));
+  const b=await r.json();
+  assert.equal(b.status,"not_ready");
+  assert.equal(b.orchestrator_ledger,"unavailable");
+ }
+});
 test("readyz fails closed when the Orchestrator outbox Queue binding is unavailable",async()=>{
  const r=await worker.fetch(req("/readyz"),{...env,ORCHESTRATOR_OUTBOX_QUEUE:undefined});
  assert.equal(r.status,503);

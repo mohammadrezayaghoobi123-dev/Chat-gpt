@@ -200,6 +200,18 @@ Observed on 2026-11-08:
   
   Run: `npm test` and `npm run check`. Commit the schema migration and its tests together.
 
+## Task 3 implementation evidence — incremental Ledger scope gates
+
+The implementation is intentionally incremental; Task 3 remains open until every Ledger API, key constraint, query plan, and replay/recovery path is covered.
+
+- Schema v8 adds tenant/project columns to all 15 Ledger tables and backfills task-linked rows only from persisted task projections. Unmapped historical records remain explicitly under `__legacy__`.
+- Schema v9 migrates task and outbox idempotency values to an injective length-prefixed tenant/project namespace (`tp1:<tenant-length>:<tenant>:<project-length>:<project>:<key-length>:<key>`). Existing global UNIQUE constraints and primary identifiers are preserved; composite unique indexes enforce scoped key uniqueness. This avoids destructive table rebuilds while allowing the same caller key in independent tenant/project scopes.
+- Public task APIs now require both tenant and project scope. Cross-tenant negative tests cover task transitions, claim, agent-round advancement, lease renewal/release, outbox admission, audit append, and message recording. Outbox receipt verification binds task-version checks to the source event's persisted tenant/project scope.
+- TDD evidence: the outbox receipt regression test first failed because a receipt was accepted across scope; the fix passed. The idempotency test first failed with SQLite UNIQUE constraint on a shared caller key; schema v9 and scoped key derivation resolved it. Migration tests cover explicit tenant/project backfill, legacy-scope backfill, and repeat initialization.
+- Latest exact-head verification at `9c155c602f19fe404a1921851e2ba83f397bd854`: 176 Node tests and 26 Vitest/Cloudflare tests passed; npm audit, syntax checks, Production/Staging Wrangler dry-runs, and Full History Secret Scan passed. Staging smoke was skipped.
+
+Remaining Task 3 work includes message/outbox/event identifier constraints beyond idempotency, complete cross-tenant tests for every public/system path, independent query-plan review, and validation of reconciliation and replay behavior under failure injection. Do not treat this increment as complete end-to-end multi-tenant enforcement.
+
 ## Task 4: Add provider-neutral principal, membership, and project authorization seams
 
 **Files:**

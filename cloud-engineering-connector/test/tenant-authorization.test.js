@@ -182,6 +182,7 @@ test("denies project access when the policy decision is not allow", async () => 
           request = input;
           return {
             effect: "deny",
+            action: "project.write",
             principalId: principal.id,
             tenantId: "tenant-alpha",
             projectId: "project-01",
@@ -212,6 +213,7 @@ test("accepts only an allow decision bound to the exact principal, tenant, and p
       async authorizeProjectAction() {
         return {
           effect: "allow",
+          action: "project.read",
           principalId: principal.id,
           tenantId: "tenant-alpha",
           projectId: "project-01",
@@ -291,4 +293,29 @@ test("rejects a caller-constructed tenant context before project policy evaluati
     error => error.code === "TENANT_CONTEXT_MISMATCH",
   );
   assert.equal(calls, 0);
+});
+
+test("rejects an allow decision bound to a different action", async () => {
+  await assert.rejects(
+    authorizeProjectAction({
+      principal,
+      tenantContext,
+      projectSelector: "project-01",
+      action: "project.write",
+      authorizationStore: {
+        async authorizeProjectAction() {
+          return {
+            effect: "allow",
+            action: "project.read",
+            principalId: principal.id,
+            tenantId: "tenant-alpha",
+            projectId: "project-01",
+            decisionId: "decision-wrong-action",
+            policyVersion: "policy-v1",
+          };
+        },
+      },
+    }),
+    error => error.code === "POLICY_DECISION_SCOPE_MISMATCH",
+  );
 });

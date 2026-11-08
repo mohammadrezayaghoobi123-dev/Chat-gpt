@@ -65,6 +65,10 @@ describe("OrchestratorLedger claim candidate index", () => {
         "SELECT name FROM sqlite_master WHERE type = 'index'",
       ).toArray().map(row => row.name);
       expect(indexes).toContain("orchestrator_claim_candidates_by_executor_created");
+      const columns = state.storage.sql.exec(
+        "PRAGMA table_info(orchestrator_claim_candidates)",
+      ).toArray().map(row => row.name);
+      expect(columns).toContain("candidate_seq");
     });
   });
 
@@ -296,7 +300,7 @@ describe("OrchestratorLedger claim candidate query plan", () => {
     await runInDurableObject(ledger, async (_instance, state) => {
       const plan = state.storage.sql.exec(
         "EXPLAIN QUERY PLAN " + CLAIM_CANDIDATE_QUERY,
-        "agent:worker-1", now, 0, -1,
+        "agent:worker-1", 0, 0, "", 129,
       ).toArray();
       const details = plan.map(row => row.detail).join("\n");
       expect(details).toContain("orchestrator_claim_candidates_by_executor_created");

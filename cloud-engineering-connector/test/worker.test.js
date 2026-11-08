@@ -56,7 +56,7 @@ test("MCP tool calls emit privacy-safe structured outcome, principal, duration, 
   assert.ok(event, "a structured tool outcome event must be emitted");
   assert.equal(event.tool_name, "engineering_standards");
   assert.equal(event.outcome, "success");
-  assert.deepEqual(event.principal, { type: "shared_bearer", id: "shared-bearer" });
+  assert.deepEqual(event.principal, { type: "shared_bearer", id: null });
   assert.equal(typeof event.duration_ms, "number");
   assert.ok(event.duration_ms >= 0);
   assert.deepEqual(event.model_usage, {

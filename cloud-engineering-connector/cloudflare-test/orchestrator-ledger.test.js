@@ -2566,3 +2566,52 @@ it("claims multiple executor-scoped tasks concurrently without duplicate ownersh
     ]);
   });
 });
+
+
+it("prunes consumed reconciliation evidence in bounded batches after its retention margin", async () => {
+  const ledger = ledgerFor("ledger-reconciliation-evidence-retention");
+  await runInDurableObject(ledger, async (_instance, state) => {
+    const sql = state.storage.sql;
+    for (let i = 0; i < 120; i += 1) {
+      sql.exec(
+        "INSERT INTO orchestrator_consumed_reconciliation_evidence (evidence_id, evidence_hash, task_id, prior_generation, issuer, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?)",
+        "expired-evidence-" + String(i).padStart(4, "0"),
+        "a".repeat(64),
+        "task-expired",
+        "test-reconciler",
+        now - 7_200_000,
+        now - 3_600_000,
+        now - 3_600_000,
+      );
+    }
+    sql.exec(
+      "INSERT INTO orchestrator_consumed_reconciliation_evidence (evidence_id, evidence_hash, task_id, prior_generation, issuer, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?)",
+      "recent-evidence-retained",
+      "b".repeat(64),
+      "task-recent",
+      "test-reconciler",
+      now - 120_000,
+      now - 60_000,
+      now - 60_000,
+    );
+  });
+
+  const result = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(result).toEqual({ claimed: false, reason: "NO_TASK_AVAILABLE" });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    const sql = state.storage.sql;
+    expect(sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_reconciliation_evidence WHERE evidence_id LIKE 'expired-evidence-%'",
+    ).one().count).toBe(20);
+    expect(sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_reconciliation_evidence WHERE evidence_id = ?",
+      "recent-evidence-retained",
+    ).one().count).toBe(1);
+  });
+});

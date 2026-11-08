@@ -91,7 +91,7 @@ export async function verifyReconciliationEvidence(keySet, issuerPolicy, evidenc
         !Number.isSafeInteger(expiresAt) || expiresAt <= issuedAt ||
         expiresAt - issuedAt > MAX_EVIDENCE_LIFETIME_MS ||
         issuedAt > expected.nowMs + CLOCK_SKEW_MS ||
-        expiresAt < expected.nowMs ||
+        expiresAt <= expected.nowMs ||
         typeof signature !== "string" || signature.length > 256) {
       throw new TypeError("Invalid reconciliation evidence claims.");
     }

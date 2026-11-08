@@ -74,3 +74,19 @@ test("MCP resource rejects missing and invalid bearer tokens before invoking the
   }
   assert.equal(handlerCalls, 0);
 });
+
+test("OAuth protocol endpoints fail closed with an explicit unavailable response when OAUTH_KV is absent", async () => {
+  const provider = createOAuthProvider({
+    issuer: ISSUER,
+    resource: RESOURCE,
+    apiHandler: { async fetch() { throw new Error("resource handler must not run"); } },
+  });
+  const response = await provider.fetch(new Request(ISSUER + "/oauth/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: "grant_type=authorization_code&code=invalid",
+  }), { OAUTH_ISSUER: ISSUER, MCP_RESOURCE_URL: RESOURCE }, { waitUntil() {} });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: "oauth_storage_unavailable" });
+  assert.equal(response.headers.get("cache-control"), "no-store");
+});

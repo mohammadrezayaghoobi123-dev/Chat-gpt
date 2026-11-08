@@ -635,3 +635,33 @@ describe("OrchestratorLedger candidate identifier invariant", () => {
     });
   });
 });
+
+
+describe("OrchestratorLedger explicit claim index integrity", () => {
+  it("fails closed on explicit task claims when the derived candidate row is missing", async () => {
+    const ledger = ledgerFor("claim-candidate-explicit-missing-row");
+    await createTask(ledger, "candidate-explicit-missing", "agent:worker-1");
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "DELETE FROM orchestrator_claim_candidates WHERE task_id = ?",
+        "candidate-explicit-missing",
+      );
+    });
+    const result = await ledger.claimTask({
+      taskId: "candidate-explicit-missing",
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 30_000,
+      now,
+    });
+    expect(result).toEqual({ claimed: false, reason: "CANDIDATE_INDEX_INCONSISTENT" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ?",
+        "candidate-explicit-missing",
+      ).one().count).toBe(0);
+    });
+  });
+});

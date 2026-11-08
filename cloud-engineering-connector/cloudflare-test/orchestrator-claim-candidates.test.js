@@ -8,6 +8,44 @@ function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
 }
 
+const task = (taskId = "task-0001") => ({
+  taskId, state: "SCHEDULED", version: 1, agentRound: 0,
+  createdAt: now, updatedAt: now, executorId: "agent:worker-1",
+  commitSha: "a".repeat(40), objective: "candidate query fixture",
+});
+const TEST_ASSERTION_KID = "test-v1";
+const TEST_ASSERTION_KEY = Uint8Array.from(
+  "3031323334353637383961626364656630313233343536373839616263646566".match(/../g),
+  byte => Number.parseInt(byte, 16),
+);
+function base64Url(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+async function createWorkerAssertion({ subject, role, operation, nowMs, jti }) {
+  const issuedAt = Math.floor(nowMs / 1000);
+  const claims = {
+    v: 1, iss: "chat-gpt111-worker", aud: "orchestrator-ledger",
+    sub: subject, role, op: operation, iat: issuedAt, exp: issuedAt + 60,
+    jti: jti ?? "jti-" + base64Url(crypto.getRandomValues(new Uint8Array(16))),
+  };
+  const payload = base64Url(new TextEncoder().encode(canonicalJson(claims)));
+  const signingInput = "v1." + TEST_ASSERTION_KID + "." + payload;
+  const key = await crypto.subtle.importKey("raw", TEST_ASSERTION_KEY, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signingInput)));
+  return signingInput + "." + base64Url(signature);
+}
+const claimAssertion = (subject, issuedAt = now) => createWorkerAssertion({
+  subject, role: "agent", operation: "claimTask", nowMs: issuedAt,
+});
+const createTask = async (ledger, input) => ledger.createTask({
+  ...input, workerId: "orchestrator-scheduler",
+  workerAssertion: await createWorkerAssertion({
+    subject: "orchestrator-scheduler", role: "system", operation: "createTask", nowMs: input.now,
+  }),
+});
+
 function insertTask(sql, {
   taskId,
   state = "SCHEDULED",

@@ -132,11 +132,15 @@ jobs:
           ]);
           assert.equal(accountSecurity.enforce_twofactor, true, "Cloudflare account-level MFA enforcement must be enabled before Staging release");
           const bindings = new Map((settings.bindings || []).map((binding) => [binding.name, binding]));
-          const requiredSecrets = ["GITHUB_READONLY_TOKEN", "GITHUB_TOKEN", "MCP_AUTH_TOKEN", "MCP_ALLOWED_ORIGINS", "GITHUB_WEBHOOK_SECRET", "LEDGER_WORKER_ASSERTION_KEYS", "LEDGER_OWNER_ASSERTION_KEYS"];
+          const requiredSecrets = ["GITHUB_READONLY_TOKEN", "GITHUB_TOKEN", "MCP_AUTH_TOKEN", "MCP_ALLOWED_ORIGINS", "GITHUB_WEBHOOK_SECRET", "LEDGER_WORKER_ASSERTION_KEYS", "LEDGER_OWNER_ASSERTION_KEYS", "LEDGER_RECONCILIATION_EVIDENCE_KEYS"];
           const missing = requiredSecrets.filter((name) => bindings.get(name)?.type !== "secret_text");
           if (missing.length) {
             throw new Error("Staging deployment blocked; missing Worker secret binding(s): " + missing.join(", ") + ". Add them in Cloudflare Workers > chat-gpt111-staging > Settings > Variables and Secrets. Secret values are never read.");
           }
+          const reconciliationIssuers = bindings.get("LEDGER_RECONCILIATION_EVIDENCE_ISSUERS");
+          assert.equal(reconciliationIssuers?.type, "plain_text", "Staging LEDGER_RECONCILIATION_EVIDENCE_ISSUERS must be a JSON plain-text issuer allowlist");
+          const allowedReconciliationIssuers = JSON.parse(reconciliationIssuers.text || "null");
+          assert.ok(Array.isArray(allowedReconciliationIssuers) && allowedReconciliationIssuers.length >= 1 && allowedReconciliationIssuers.length <= 16 && allowedReconciliationIssuers.every((issuer) => typeof issuer === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(issuer)), "Staging reconciliation issuer allowlist must contain 1-16 bounded issuer IDs");
           const activeSignerKid = bindings.get("LEDGER_WORKER_ASSERTION_ACTIVE_KID");
           assert.equal(activeSignerKid?.type, "plain_text", "Staging LEDGER_WORKER_ASSERTION_ACTIVE_KID must be a non-secret plain-text binding");
           assert.match(activeSignerKid.text || "", /^[A-Za-z0-9._-]{1,64}$/, "Staging active signer key ID must be a bounded identifier");

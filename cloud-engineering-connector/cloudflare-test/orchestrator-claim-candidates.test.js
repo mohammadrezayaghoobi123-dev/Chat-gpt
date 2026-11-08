@@ -181,7 +181,7 @@ it("reconciles a missing candidate index in bounded batches with a stable keyset
     await createTask(ledger, {
       task: { ...task(taskId), createdAt, updatedAt: createdAt },
       idempotencyKey: taskId,
-      inputHash: i.toString(16).repeat(64),
+      inputHash: i.toString(16).padStart(2, "0").repeat(32),
       now: createdAt,
     });
   }

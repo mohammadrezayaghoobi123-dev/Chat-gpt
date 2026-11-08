@@ -701,23 +701,6 @@ export class OrchestratorLedger extends DurableObject {
             workerId, now, hasReconciliationEvidence ? 1 : 0,
             hasReconciliationEvidence ? reconciliationEvidence.priorGeneration : -1,
           ).toArray()[0]);
-        } else {
-          const taskRow = sql.exec(
-            "SELECT * FROM orchestrator_tasks WHERE task_id = ?",
-            taskId,
-          ).toArray()[0];
-          if (taskRow) {
-            const assignedAgentId = taskFromRow(taskRow).executorId ?? taskFromRow(taskRow).assignedAgentId;
-            assigneeMismatch = typeof assignedAgentId !== "string" || assignedAgentId !== workerId;
-            const lease = sql.exec(
-              "SELECT * FROM orchestrator_execution_leases WHERE task_id = ?",
-              taskId,
-            ).toArray()[0];
-            blockedByReconciliation = Boolean(
-              !assigneeMismatch && lease && lease.worker_id !== null && lease.lease_until <= now &&
-              (!hasReconciliationEvidence || reconciliationEvidence.priorGeneration !== lease.lease_generation)
-            );
-          }
         }
         return {
           claimed: false,

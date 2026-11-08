@@ -81,3 +81,54 @@ describe("OrchestratorLedger claim candidate index", () => {
     });
   });
 });
+
+
+it("uses the candidate relation for scheduler discovery while preserving explicit task lookup", async () => {
+  const ledger = ledgerFor("ledger-candidate-query-path");
+  await createTask(ledger, {
+    task: task("task-candidate-query-path"),
+    idempotencyKey: "task-candidate-query-path",
+    inputHash: "3".repeat(64),
+    now,
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    state.storage.sql.exec(
+      "DELETE FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-query-path",
+    );
+  });
+
+  const schedulerResult = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(schedulerResult).toEqual({ claimed: false, reason: "NO_TASK_AVAILABLE" });
+
+  const explicitResult = await ledger.claimTask({
+    taskId: "task-candidate-query-path",
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now + 1),
+    leaseMs: 30_000,
+    now: now + 1,
+  });
+  expect(explicitResult).toMatchObject({
+    claimed: true,
+    task: { taskId: "task-candidate-query-path" },
+    leaseGeneration: 1,
+  });
+});
+
+it("uses the executor/order candidate index for the scheduler lookup query plan", async () => {
+  const ledger = ledgerFor("ledger-candidate-query-plan");
+  await runInDurableObject(ledger, async (_instance, state) => {
+    const plan = state.storage.sql.exec(
+      "EXPLAIN QUERY PLAN SELECT task.* FROM orchestrator_claim_candidates AS candidate INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id WHERE candidate.executor_id = ? ORDER BY candidate.created_at, candidate.task_id LIMIT 1",
+      "agent:worker-1",
+    ).toArray();
+    expect(plan.map(row => row.detail).join(" ")).toContain(
+      "orchestrator_claim_candidates_by_executor_order",
+    );
+  });
+});

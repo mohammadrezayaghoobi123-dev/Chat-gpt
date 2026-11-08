@@ -920,3 +920,61 @@ test("overlong configured MCP bearer tokens fail closed before authentication",a
  assert.deepEqual(await response.json(),{error:"server_misconfigured",message:"MCP_AUTH_TOKEN must be at most 512 characters."});
  assert.equal(limiterCalls,0);
 });
+
+test("create_change_pr records the verified shared-bearer service principal without claiming a human identity", async () => {
+  const originalFetch = globalThis.fetch;
+  let pullRequestBody;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    const method = init.method || "GET";
+    if (method === "GET" && url.endsWith("/repos/mohammadrezayaghoobi123-dev/Chat-gpt")) {
+      return new Response(JSON.stringify({ full_name: "mohammadrezayaghoobi123-dev/Chat-gpt" }), { status: 200 });
+    }
+    if (method === "GET" && url.includes("/git/ref/heads/feature/cloud-engineering-connector")) {
+      return new Response(JSON.stringify({ object: { sha: "base-sha" } }), { status: 200 });
+    }
+    if (method === "GET" && url.endsWith("/git/commits/base-sha")) {
+      return new Response(JSON.stringify({ tree: { sha: "base-tree" } }), { status: 200 });
+    }
+    if (method === "POST" && url.endsWith("/git/trees")) {
+      return new Response(JSON.stringify({ sha: "new-tree" }), { status: 201 });
+    }
+    if (method === "POST" && url.endsWith("/git/commits")) {
+      return new Response(JSON.stringify({ sha: "new-commit" }), { status: 201 });
+    }
+    if (method === "POST" && url.endsWith("/git/refs")) {
+      return new Response(JSON.stringify({ ref: "refs/heads/assistant/test-principal" }), { status: 201 });
+    }
+    if (method === "POST" && url.endsWith("/pulls")) {
+      pullRequestBody = JSON.parse(init.body);
+      return new Response(JSON.stringify({
+        number: 987,
+        html_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/987",
+        draft: true,
+        state: "open",
+      }), { status: 201 });
+    }
+    throw new Error("Unexpected mocked GitHub request: " + method + " " + url);
+  };
+  try {
+    const response = await worker.fetch(rpc("tools/call", {
+      name: "create_change_pr",
+      arguments: {
+        owner: "mohammadrezayaghoobi123-dev",
+        repo: "Chat-gpt",
+        base_branch: "feature/cloud-engineering-connector",
+        title: "Principal attribution test",
+        summary: "Test principal attribution.",
+        files: [{ path: "docs/principal-attribution.md", content: "test" }],
+      },
+    }), { ...env, GITHUB_TOKEN: "test-token" });
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.result.isError, undefined);
+    assert.equal(JSON.parse(body.result.content[0].text).status, "draft_pull_request_created");
+    assert.match(pullRequestBody.body, /Requesting principal: service:shared-mcp-bearer/);
+    assert.match(pullRequestBody.body, /shared bearer; not a human identity/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

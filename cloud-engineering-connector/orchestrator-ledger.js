@@ -1494,6 +1494,7 @@ export class OrchestratorLedger extends DurableObject {
                 command.taskId, nextGeneration, now,
               );
             }
+            syncClaimCandidateInTransaction(sql, command.taskId);
             if (command.operation === "release") {
               const releaseEventId = "owner-release-" + command.eventId;
               const releasePayload = {

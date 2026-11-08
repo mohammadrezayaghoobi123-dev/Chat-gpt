@@ -1,7 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
 import { readTextBounded } from "./core.js";
+import { DAILY_NEURON_BUDGET as CONFIG_DAILY_NEURON_BUDGET } from "./config.js";
 
-export const DAILY_NEURON_BUDGET = 1_000;
+/** Re-export so existing imports (`from "./budget.js"`) continue to work. */
+export const DAILY_NEURON_BUDGET = CONFIG_DAILY_NEURON_BUDGET;
+
 const RESERVATION_TTL_MS = 60 * 60 * 1_000;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const MAX_SETTLEMENT_NEURONS = 1_000_000;

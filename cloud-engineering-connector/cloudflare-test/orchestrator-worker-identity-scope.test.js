@@ -18,6 +18,7 @@ describe("task-scoped agent worker assertions", () => {
 
   it("binds an agent assertion to the exact tenant, project, task, subject, and operation", async () => {
     const token = await createAgentWorkerAssertion(keySet, "test", base);
+    expect(token.startsWith("v2.")).toBe(true);
     const verified = await verifyWorkerAssertion(keySet, token, base);
     expect(verified).toMatchObject({
       subject: "agent-alpha",

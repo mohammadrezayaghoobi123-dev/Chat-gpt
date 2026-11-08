@@ -44,7 +44,7 @@ function validClaims(claims, expected) {
   const keys = Object.keys(claims).sort();
   const requiredKeys = claims.role === "agent" ? AGENT_CLAIM_KEYS : BASE_CLAIM_KEYS;
   if (keys.length !== requiredKeys.length || keys.some((key, index) => key !== requiredKeys[index])) throw reject();
-  if (claims.v !== 1 || claims.iss !== ISSUER || claims.aud !== AUDIENCE ||
+  if (claims.v !== (claims.role === "agent" ? 2 : 1) || claims.iss !== ISSUER || claims.aud !== AUDIENCE ||
       claims.sub !== expected.subject || claims.role !== expected.role ||
       claims.op !== expected.operation || !ID.test(claims.sub) ||
       !ID.test(claims.jti) || claims.jti.length < 22 ||
@@ -79,7 +79,7 @@ export async function verifyWorkerAssertion(keySet, token, expected) {
         (!ID.test(expected.tenantId) || !ID.test(expected.projectId) ||
          !(expected.taskId === null || (typeof expected.taskId === "string" && ID.test(expected.taskId))))) throw reject();
     const parts = token.split(".");
-    if (parts.length !== 4 || parts[0] !== "v1" || !KID.test(parts[1])) throw reject();
+    if (parts.length !== 4 || parts[0] !== (expected.role === "agent" ? "v2" : "v1") || !KID.test(parts[1])) throw reject();
     const key = loadKey(keySet, parts[1]);
     const payloadBytes = decodeBase64Url(parts[2]);
     if (payloadBytes.byteLength > 2048) throw reject();
@@ -114,13 +114,13 @@ export async function createAgentWorkerAssertion(keySet, activeKid, expected) {
     const keyBytes = loadKey(keySet, activeKid);
     const issuedAt = Math.floor(expected.nowMs / 1000);
     const claims = {
-      v: 1, iss: ISSUER, aud: AUDIENCE, sub: expected.subject, role: "agent",
+      v: 2, iss: ISSUER, aud: AUDIENCE, sub: expected.subject, role: "agent",
       op: expected.operation, iat: issuedAt, exp: issuedAt + MAX_LIFETIME_SECONDS,
       jti: "jti-" + encodeBase64Url(crypto.getRandomValues(new Uint8Array(16))),
       tenantId: expected.tenantId, projectId: expected.projectId, taskId,
     };
     const payload = encodeBase64Url(new TextEncoder().encode(canonicalJson(claims)));
-    const signingInput = "v1." + activeKid + "." + payload;
+    const signingInput = "v2." + activeKid + "." + payload;
     const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
     const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signingInput)));
     return signingInput + "." + encodeBase64Url(signature);

@@ -97,7 +97,38 @@ describe("OrchestratorLedger tenant/project idempotency isolation", () => {
         ":" + projectId.length + ":" + projectId +
         ":" + key.length + ":" + key;
 
+      const legacyTask = {
+        taskId: "v8-unmapped-task",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: now + 1,
+        updatedAt: now + 1,
+      };
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        legacyTask.taskId, "legacy-unmapped-client-key", "4".repeat(64),
+        legacyTask.state, legacyTask.version, JSON.stringify(legacyTask),
+        legacyTask.createdAt, legacyTask.updatedAt,
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_generation, lease_until, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'PENDING', 0, 0, 0, ?, ?)",
+        "v8-unmapped-event", "legacy-unmapped-outbox-key", legacyTask.taskId,
+        "task.created", JSON.stringify({ taskId: legacyTask.taskId, version: 1 }),
+        now + 2, now + 2,
+      );
+
       instance.ensureSchema();
+      const legacyTaskKey = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        legacyTask.taskId,
+      ).one().idempotency_key;
+      const legacyEventKey = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_outbox_events WHERE event_id = ?",
+        "v8-unmapped-event",
+      ).one().idempotency_key;
+      expect(legacyTaskKey).toBe(scoped("__legacy__", "__legacy__", "legacy-unmapped-client-key"));
+      expect(legacyEventKey).toBe(scoped("__legacy__", "__legacy__", "legacy-unmapped-outbox-key"));
+
       const taskKey = sql.exec(
         "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
         task.taskId,

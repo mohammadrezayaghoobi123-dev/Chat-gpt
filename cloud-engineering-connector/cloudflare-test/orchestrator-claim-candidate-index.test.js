@@ -396,7 +396,7 @@ describe("OrchestratorLedger reconciliation fail-closed policy", () => {
         evidenceRef: "github://untrusted-caller-controlled-reference",
       },
     });
-    expect(result).toEqual({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
+    expect(result).toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec(
         "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",

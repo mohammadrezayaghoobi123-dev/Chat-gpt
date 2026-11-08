@@ -771,14 +771,10 @@ export class OrchestratorLedger extends DurableObject {
       return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
     }
 
-    const hasReconciliationEvidence = Boolean(
-      reconciliationEvidence &&
-      reconciliationEvidence.checked === true &&
-      Number.isSafeInteger(reconciliationEvidence.priorGeneration) &&
-      typeof reconciliationEvidence.evidenceRef === "string" &&
-      reconciliationEvidence.evidenceRef.length > 0 &&
-      reconciliationEvidence.evidenceRef.length <= 512
-    );
+    // Caller-shaped evidence is not an authorization. No trusted reconciliation
+    // issuer or claimTask runtime caller exists in this repository, so expired
+    // leases remain fail-closed until that end-to-end trust path is implemented.
+    void reconciliationEvidence;
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       if (taskId !== undefined) {
@@ -804,10 +800,7 @@ export class OrchestratorLedger extends DurableObject {
           }
           generation = lease.lease_generation + 1;
           if (lease.worker_id !== null && lease.lease_until <= now) {
-            if (!hasReconciliationEvidence || reconciliationEvidence.priorGeneration !== lease.lease_generation) {
-              return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
-            }
-            reconciliationRequired = true;
+            return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
           }
         }
         if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
@@ -872,11 +865,8 @@ export class OrchestratorLedger extends DurableObject {
           if (lease.worker_id !== null && lease.lease_until > now) continue;
           generation = lease.lease_generation + 1;
           if (lease.worker_id !== null && lease.lease_until <= now) {
-            if (!hasReconciliationEvidence || reconciliationEvidence.priorGeneration !== lease.lease_generation) {
-              blockedByReconciliation = true;
-              continue;
-            }
-            reconciliationRequired = true;
+            blockedByReconciliation = true;
+            continue;
           }
         }
         if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {

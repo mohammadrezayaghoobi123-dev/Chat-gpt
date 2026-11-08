@@ -517,16 +517,25 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("requires reconciliation evidence before reclaiming an expired lease and preserves task state", async () => {
     const ledger = ledgerFor("ledger-expired-lease-reconciliation");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0012", inputHash: "b".repeat(64), now });
-    const worker = authenticatedWorker("agent:worker-1");
     const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
     await expect(ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101 }))
       .resolves.toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
-    const reclaimed = await ledger.claimTask({
+    const untrustedEvidence = await ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101,
-      reconciliationEvidence: { checked: true, priorGeneration: first.leaseGeneration, evidenceRef: "github://audit/reconcile/12" },
+      reconciliationEvidence: { checked: true, priorGeneration: first.leaseGeneration, evidenceRef: "github://caller-controlled/reference" },
     });
-    expect(reclaimed).toMatchObject({ claimed: true, leaseGeneration: 2, reconciliationRequired: true });
+    expect(untrustedEvidence).toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
     await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-0001",
+      ).one()).toMatchObject({
+        worker_id: "agent:worker-1",
+        lease_generation: first.leaseGeneration,
+        lease_until: now + 100,
+      });
+    });
   });
 
   it("refuses to persist a protocol message without a verified authenticated sender context", async () => {

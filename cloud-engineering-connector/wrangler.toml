@@ -41,3 +41,20 @@ class_name = "KnowledgeStore"
 [[env.staging.migrations]]
 tag = "v1"
 new_sqlite_classes = ["KnowledgeStore"]
+
+
+[[durable_objects.bindings]]
+name = "ORCHESTRATOR_LEDGER"
+class_name = "OrchestratorLedger"
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["OrchestratorLedger"]
+
+[[env.staging.durable_objects.bindings]]
+name = "ORCHESTRATOR_LEDGER"
+class_name = "OrchestratorLedger"
+
+[[env.staging.migrations]]
+tag = "v2"
+new_sqlite_classes = ["OrchestratorLedger"]

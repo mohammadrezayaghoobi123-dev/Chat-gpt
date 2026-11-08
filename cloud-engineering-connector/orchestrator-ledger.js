@@ -11,6 +11,21 @@ const MAX_RECORD_BYTES = 32_768;
 const MAX_LEASE_MS = 86_400_000;
 const MAX_OUTBOX_ATTEMPTS = 8;
 const CLAIMABLE_TASK_STATES = Object.freeze(["SCHEDULED", "RUNNING", "VERIFYING"]);
+export const CLAIM_CANDIDATE_QUERY = `
+  SELECT task.*
+  FROM orchestrator_claim_candidates AS candidate
+  INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id
+  LEFT JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id
+  WHERE candidate.executor_id = ?
+    AND task.state IN ('SCHEDULED','RUNNING','VERIFYING')
+    AND (
+      lease.task_id IS NULL OR
+      lease.worker_id IS NULL OR
+      (lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND ? = 1 AND lease.lease_generation = ?)
+    )
+  ORDER BY candidate.created_at, candidate.task_id
+  LIMIT 1
+`;
 const OUTBOX_RETRY_BASE_MS = 1_000;
 const OUTBOX_RETRY_MAX_MS = 900_000;
 const SECRET_FIELD = /(?:secret|token|password|credential|api[_-]?key|private[_-]?key)/i;
@@ -742,7 +757,7 @@ export class OrchestratorLedger extends DurableObject {
         // Push lease eligibility into SQLite so claim work is bounded to one
         // candidate row instead of paging through every active lease in JS.
         row = sql.exec(
-          "SELECT task.* FROM orchestrator_tasks AS task LEFT JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND (lease.task_id IS NULL OR lease.worker_id IS NULL OR (lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND ? = 1 AND lease.lease_generation = ?)) ORDER BY task.created_at, task.task_id LIMIT 1",
+          CLAIM_CANDIDATE_QUERY,
           workerId, now, hasReconciliationEvidence ? 1 : 0,
           hasReconciliationEvidence ? reconciliationEvidence.priorGeneration : -1,
         ).toArray()[0];
@@ -753,16 +768,23 @@ export class OrchestratorLedger extends DurableObject {
         let blockedByReconciliation = false;
         if (!taskId) {
           const hasAssignedTask = Boolean(sql.exec(
-            "SELECT 1 FROM orchestrator_tasks WHERE state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? LIMIT 1",
+            "SELECT 1 FROM orchestrator_claim_candidates WHERE executor_id = ? LIMIT 1",
             workerId,
           ).toArray()[0]);
           if (!hasAssignedTask) {
+            const hasAuthoritativeAssignedTask = Boolean(sql.exec(
+              "SELECT 1 FROM orchestrator_tasks WHERE state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? LIMIT 1",
+              workerId,
+            ).toArray()[0]);
+            if (hasAuthoritativeAssignedTask) {
+              return { claimed: false, reason: "CANDIDATE_INDEX_INCONSISTENT" };
+            }
             assigneeMismatch = Boolean(sql.exec(
               "SELECT 1 FROM orchestrator_tasks WHERE state IN ('SCHEDULED','RUNNING','VERIFYING') LIMIT 1",
             ).toArray()[0]);
           }
           blockedByReconciliation = Boolean(sql.exec(
-            "SELECT 1 FROM orchestrator_tasks AS task INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND (? = 0 OR lease.lease_generation != ?) LIMIT 1",
+            "SELECT 1 FROM orchestrator_claim_candidates AS candidate INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = candidate.task_id WHERE candidate.executor_id = ? AND task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND (? = 0 OR lease.lease_generation != ?) LIMIT 1",
             workerId, now, hasReconciliationEvidence ? 1 : 0,
             hasReconciliationEvidence ? reconciliationEvidence.priorGeneration : -1,
           ).toArray()[0]);

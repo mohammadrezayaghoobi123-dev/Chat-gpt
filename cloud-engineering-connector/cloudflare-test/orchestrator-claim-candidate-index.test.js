@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
+import { CLAIM_CANDIDATE_QUERY } from "../orchestrator-ledger.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 
 const now = 1_800_000_000_000;
@@ -283,6 +284,22 @@ describe("OrchestratorLedger candidate index fail-closed behavior", () => {
         "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ?",
         "candidate-missing-row",
       ).one().count).toBe(0);
+    });
+  });
+});
+
+
+describe("OrchestratorLedger claim candidate query plan", () => {
+  it("uses the executor and deterministic-order candidate index", async () => {
+    const ledger = ledgerFor("claim-candidate-query-plan");
+    await createTask(ledger, "candidate-query-plan", "agent:worker-1");
+    await runInDurableObject(ledger, async (_instance, state) => {
+      const plan = state.storage.sql.exec(
+        "EXPLAIN QUERY PLAN " + CLAIM_CANDIDATE_QUERY,
+        "agent:worker-1", now, 0, -1,
+      ).toArray();
+      const details = plan.map(row => row.detail).join("\n");
+      expect(details).toContain("orchestrator_claim_candidates_by_executor_created");
     });
   });
 });

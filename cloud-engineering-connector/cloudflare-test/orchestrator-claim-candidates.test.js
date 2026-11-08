@@ -289,3 +289,53 @@ it("uses the executor/created-at index for bounded fallback pagination", async (
     );
   });
 });
+
+it("atomically assigns distinct candidate tasks under concurrent claims for one executor", async () => {
+  const ledger = ledgerFor("ledger-candidate-concurrent-claims");
+  for (const taskId of ["task-concurrent-a", "task-concurrent-b"]) {
+    await createTask(ledger, {
+      task: task(taskId),
+      idempotencyKey: taskId,
+      inputHash: taskId === "task-concurrent-a" ? "a".repeat(64) : "b".repeat(64),
+      now,
+    });
+  }
+
+  const [first, second] = await Promise.all([
+    ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1", now + 1),
+      leaseMs: 30_000,
+      now: now + 1,
+    }),
+    ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1", now + 2),
+      leaseMs: 30_000,
+      now: now + 2,
+    }),
+  ]);
+
+  expect(first.claimed).toBe(true);
+  expect(second.claimed).toBe(true);
+  expect(new Set([first.task.taskId, second.task.taskId])).toEqual(
+    new Set(["task-concurrent-a", "task-concurrent-b"]),
+  );
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    const leases = state.storage.sql.exec(
+      "SELECT task_id, worker_id, lease_generation FROM orchestrator_execution_leases WHERE task_id IN (?, ?) ORDER BY task_id",
+      "task-concurrent-a", "task-concurrent-b",
+    ).toArray();
+    expect(leases).toHaveLength(2);
+    expect(leases).toEqual([
+      { task_id: "task-concurrent-a", worker_id: "agent:worker-1", lease_generation: 1 },
+      { task_id: "task-concurrent-b", worker_id: "agent:worker-1", lease_generation: 1 },
+    ]);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id IN (?, ?)",
+      "task-concurrent-a", "task-concurrent-b",
+    ).one().count).toBe(0);
+  });
+});
+

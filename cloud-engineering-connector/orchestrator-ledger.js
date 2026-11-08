@@ -18,7 +18,7 @@ export const CLAIM_CANDIDATE_QUERY = `
   FROM orchestrator_claim_candidates AS candidate
   INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id
   WHERE candidate.executor_id = ?
-    AND (candidate.created_at > ? OR (candidate.created_at = ? AND candidate.task_id > ?))
+    AND (candidate.created_at, candidate.task_id) > (?, ?)
   ORDER BY candidate.created_at, candidate.task_id
   LIMIT ?
 `;
@@ -838,7 +838,7 @@ export class OrchestratorLedger extends DurableObject {
       const lastTaskId = cursor?.taskId ?? "";
       const candidateRows = sql.exec(
         CLAIM_CANDIDATE_QUERY,
-        workerId, lastCreatedAt, lastCreatedAt, lastTaskId,
+        workerId, lastCreatedAt, lastTaskId,
         MAX_CLAIM_CANDIDATES_PER_CALL + 1,
       ).toArray();
       const budgetExhausted = candidateRows.length > MAX_CLAIM_CANDIDATES_PER_CALL;

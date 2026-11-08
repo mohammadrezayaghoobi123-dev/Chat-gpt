@@ -300,7 +300,7 @@ describe("OrchestratorLedger claim candidate query plan", () => {
     await runInDurableObject(ledger, async (_instance, state) => {
       const plan = state.storage.sql.exec(
         "EXPLAIN QUERY PLAN " + CLAIM_CANDIDATE_QUERY,
-        "agent:worker-1", 0, 0, "", 129,
+        "agent:worker-1", 0, "", 129,
       ).toArray();
       const details = plan.map(row => row.detail).join("\n");
       expect(details).toContain("orchestrator_claim_candidates_by_executor_created");

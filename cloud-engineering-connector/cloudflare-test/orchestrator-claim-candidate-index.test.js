@@ -368,3 +368,44 @@ describe("OrchestratorLedger bounded candidate cursor", () => {
     });
   });
 });
+
+
+describe("OrchestratorLedger reconciliation fail-closed policy", () => {
+  it("does not accept caller-shaped reconciliation evidence without a trusted issuer", async () => {
+    const ledger = ledgerFor("claim-reconciliation-untrusted-evidence");
+    await createTask(ledger, "candidate-expired-lease", "agent:worker-1");
+    const first = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 100,
+      now,
+    });
+    expect(first).toMatchObject({ claimed: true, leaseGeneration: 1 });
+    const result = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now + 101,
+      }),
+      leaseMs: 100,
+      now: now + 101,
+      reconciliationEvidence: {
+        checked: true,
+        priorGeneration: first.leaseGeneration,
+        evidenceRef: "github://untrusted-caller-controlled-reference",
+      },
+    });
+    expect(result).toEqual({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        "candidate-expired-lease",
+      ).one()).toMatchObject({
+        worker_id: "agent:worker-1",
+        lease_generation: 1,
+        lease_until: now + 100,
+      });
+    });
+  });
+});

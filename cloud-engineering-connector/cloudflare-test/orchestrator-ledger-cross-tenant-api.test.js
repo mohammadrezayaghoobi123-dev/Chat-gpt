@@ -66,7 +66,29 @@ describe("OrchestratorLedger cross-tenant API isolation", () => {
       );
 
       const assertion = async operation => mintAgentAssertion(keyHex, operation, now);
-      const [transition, claim, advance, renew, release, enqueue, audit] = await Promise.all([
+      const messageInputHash = "e".repeat(64);
+      const messageId = "foreign-scope-message";
+      const messageEnvelope = {
+        protocolVersion: 1,
+        messageId,
+        taskId: task.taskId,
+        correlationId: "foreign-scope-correlation",
+        senderId: "worker-a",
+        recipientId: "worker-b",
+        type: "PROGRESS",
+        createdAt: now - 20,
+        expiresAt: now + 5_000,
+        scopeRef: {
+          repository: "org/repo",
+          baseBranch: "main",
+          targetBranch: "feature/foreign-scope",
+          allowedPaths: ["src/**"],
+        },
+        inputHash: messageInputHash,
+        evidenceRefs: [],
+        payload: { progress: "must not cross tenant" },
+      };
+      const [transition, claim, advance, renew, release, enqueue, audit, message] = await Promise.all([
         instance.transitionTask({
           taskId: task.taskId, tenantId: "tenant-beta", projectId: "project-blue",
           expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
@@ -106,6 +128,11 @@ describe("OrchestratorLedger cross-tenant API isolation", () => {
           workerAssertion: await assertion("appendAuditEvent"),
           eventType: "TASK_NOTE", details: { note: "must not cross tenant" }, now,
         }),
+        instance.recordMessage({
+          messageId, taskId: task.taskId, tenantId: "tenant-beta", projectId: "project-blue",
+          inputHash: messageInputHash, envelope: messageEnvelope, workerId: "worker-a",
+          workerAssertion: await assertion("recordMessage"), now,
+        }),
       ]);
 
       expect(transition.reason).toBe("NOT_FOUND");
@@ -116,6 +143,7 @@ describe("OrchestratorLedger cross-tenant API isolation", () => {
       expect(release.released).toBe(false);
       expect(enqueue.reason).toBe("TASK_NOT_FOUND");
       expect(audit.reason).toBe("TASK_NOT_FOUND");
+      expect(message.reason).toBe("TASK_NOT_FOUND");
 
       const storedTask = sql.exec("SELECT state, version, tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?", task.taskId).one();
       expect(storedTask).toEqual({

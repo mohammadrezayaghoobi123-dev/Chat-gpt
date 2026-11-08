@@ -665,3 +665,32 @@ describe("OrchestratorLedger explicit claim index integrity", () => {
     });
   });
 });
+
+
+describe("OrchestratorLedger candidate ordering integrity", () => {
+  it("fails closed when a candidate ordering key diverges from its task row", async () => {
+    const ledger = ledgerFor("claim-candidate-order-key-drift");
+    await createTask(ledger, "candidate-order-drift", "agent:worker-1");
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE orchestrator_claim_candidates SET created_at = ? WHERE task_id = ?",
+        now + 1, "candidate-order-drift",
+      );
+    });
+    const result = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 30_000,
+      now,
+    });
+    expect(result).toEqual({ claimed: false, reason: "CANDIDATE_INDEX_INCONSISTENT" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ?",
+        "candidate-order-drift",
+      ).one().count).toBe(0);
+    });
+  });
+});

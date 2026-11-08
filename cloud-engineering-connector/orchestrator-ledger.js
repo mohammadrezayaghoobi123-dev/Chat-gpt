@@ -96,6 +96,32 @@ function taskFromRow(row) {
   return row ? parseJson(row.task_json, "task") : null;
 }
 
+function syncClaimCandidateInTransaction(sql, taskId) {
+  const candidate = sql.exec(`
+    SELECT task.task_id,
+           COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) AS executor_id,
+           task.created_at
+    FROM orchestrator_tasks AS task
+    WHERE task.task_id = ?
+      AND task.state IN ('SCHEDULED','RUNNING','VERIFYING')
+      AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM orchestrator_execution_leases AS lease
+        WHERE lease.task_id = task.task_id AND lease.worker_id IS NOT NULL
+      )
+  `, taskId).toArray()[0];
+
+  if (!candidate) {
+    sql.exec("DELETE FROM orchestrator_claim_candidates WHERE task_id = ?", taskId);
+    return false;
+  }
+  sql.exec(
+    "INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at) VALUES (?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET executor_id = excluded.executor_id, created_at = excluded.created_at",
+    candidate.task_id, candidate.executor_id, candidate.created_at,
+  );
+  return true;
+}
+
 function outboxFromRow(row) {
   if (!row) return null;
   return {
@@ -517,6 +543,7 @@ export class OrchestratorLedger extends DurableObject {
         "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         normalizedTask.taskId, idempotencyKey, inputHash, normalizedTask.state, normalizedTask.version, taskJson, normalizedTask.createdAt, normalizedTask.updatedAt,
       );
+      syncClaimCandidateInTransaction(sql, normalizedTask.taskId);
       return { created: true, task: normalizedTask };
     });
   }

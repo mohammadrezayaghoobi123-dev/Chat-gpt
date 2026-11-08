@@ -10,6 +10,7 @@ const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const MAX_RECORD_BYTES = 32_768;
 const MAX_LEASE_MS = 86_400_000;
 const MAX_OUTBOX_ATTEMPTS = 8;
+const CLAIMABLE_TASK_STATES = Object.freeze(["SCHEDULED", "RUNNING", "VERIFYING"]);
 const OUTBOX_RETRY_BASE_MS = 1_000;
 const OUTBOX_RETRY_MAX_MS = 900_000;
 const SECRET_FIELD = /(?:secret|token|password|credential|api[_-]?key|private[_-]?key)/i;
@@ -94,6 +95,33 @@ function consumeWorkerAssertion(sql, assertion, nowMs) {
 
 function taskFromRow(row) {
   return row ? parseJson(row.task_json, "task") : null;
+}
+
+function syncClaimCandidateInTransaction(sql, taskId) {
+  const row = sql.exec(
+    "SELECT task_id, state, task_json, created_at FROM orchestrator_tasks WHERE task_id = ?",
+    taskId,
+  ).toArray()[0];
+  const task = taskFromRow(row);
+  const executorId = task?.executorId ?? task?.assignedAgentId;
+  if (!row || !CLAIMABLE_TASK_STATES.includes(row.state) ||
+      typeof executorId !== "string" || !IDENTIFIER.test(executorId)) {
+    sql.exec("DELETE FROM orchestrator_claim_candidates WHERE task_id = ?", taskId);
+    return false;
+  }
+  sql.exec(
+    "INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at) VALUES (?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET executor_id = excluded.executor_id, created_at = excluded.created_at",
+    row.task_id, executorId, row.created_at,
+  );
+  const persisted = sql.exec(
+    "SELECT task_id, executor_id, created_at FROM orchestrator_claim_candidates WHERE task_id = ?",
+    taskId,
+  ).toArray()[0];
+  if (!persisted || persisted.task_id !== row.task_id ||
+      persisted.executor_id !== executorId || persisted.created_at !== row.created_at) {
+    throw fail("Claim candidate synchronization failed; transaction rolled back.", "CLAIM_CANDIDATE_SYNC_FAILED");
+  }
+  return true;
 }
 
 function outboxFromRow(row) {
@@ -198,6 +226,41 @@ export class OrchestratorLedger extends DurableObject {
         updated_at INTEGER NOT NULL
       )
     `);
+    // Derived index: task eligibility is authoritative in orchestrator_tasks;
+    // lease eligibility is always rechecked inside claimTask's transaction.
+    this.ctx.storage.transactionSync(() => {
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_claim_candidates (
+          task_id TEXT PRIMARY KEY REFERENCES orchestrator_tasks(task_id) ON DELETE CASCADE,
+          executor_id TEXT NOT NULL CHECK(length(executor_id) BETWEEN 1 AND 160),
+          created_at INTEGER NOT NULL
+        )
+      `);
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_executor_created ON orchestrator_claim_candidates(executor_id, created_at, task_id)");
+      const executorExpression = "COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId'))";
+      sql.exec(`
+        DELETE FROM orchestrator_claim_candidates
+        WHERE NOT EXISTS (
+          SELECT 1 FROM orchestrator_tasks AS task
+          WHERE task.task_id = orchestrator_claim_candidates.task_id
+            AND task.state IN ('SCHEDULED','RUNNING','VERIFYING')
+            AND typeof(${executorExpression}) = 'text'
+            AND length(${executorExpression}) BETWEEN 1 AND 160
+            AND orchestrator_claim_candidates.executor_id = ${executorExpression}
+            AND orchestrator_claim_candidates.created_at = task.created_at
+        )
+      `);
+      sql.exec(`
+        INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at)
+        SELECT task.task_id, ${executorExpression}, task.created_at
+        FROM orchestrator_tasks AS task
+        WHERE task.state IN ('SCHEDULED','RUNNING','VERIFYING')
+          AND typeof(${executorExpression}) = 'text'
+          AND length(${executorExpression}) BETWEEN 1 AND 160
+        ON CONFLICT(task_id) DO UPDATE
+          SET executor_id = excluded.executor_id, created_at = excluded.created_at
+      `);
+    });
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_outbox_events (
         event_id TEXT PRIMARY KEY,
@@ -348,7 +411,7 @@ export class OrchestratorLedger extends DurableObject {
 
   ping() {
     const result = this.ctx.storage.sql.exec("SELECT 1 AS ok").one();
-    return { ok: Number(result.ok) === 1, schemaVersion: 6 };
+    return { ok: Number(result.ok) === 1, schemaVersion: 7 };
   }
 
   claimGitHubDelivery({ deliveryId, bodySha256, eventName, receivedAt, idempotencyKey, inputHash } = {}) {
@@ -474,6 +537,7 @@ export class OrchestratorLedger extends DurableObject {
         "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         normalizedTask.taskId, idempotencyKey, inputHash, normalizedTask.state, normalizedTask.version, taskJson, normalizedTask.createdAt, normalizedTask.updatedAt,
       );
+      syncClaimCandidateInTransaction(sql, normalizedTask.taskId);
       return { created: true, task: normalizedTask };
     });
   }
@@ -557,6 +621,7 @@ export class OrchestratorLedger extends DurableObject {
           persisted.task_json !== canonicalJson(next)) {
         throw fail("Task transition persistence verification failed; transaction rolled back.", "PERSISTENCE_VERIFICATION_FAILED");
       }
+      syncClaimCandidateInTransaction(sql, taskId);
       let outboxResult = null;
       if (normalizedOutboxInput !== null) {
         outboxResult = enqueueOutboxInTransaction(sql, normalizedOutboxInput);
@@ -750,6 +815,7 @@ export class OrchestratorLedger extends DurableObject {
           row.task_id, workerId, now + leaseMs, now,
         );
       }
+      syncClaimCandidateInTransaction(sql, row.task_id);
       return {
         claimed: true,
         task: taskProjection,
@@ -821,6 +887,7 @@ export class OrchestratorLedger extends DurableObject {
       if (!persisted || persisted.version !== next.version || persisted.task_json !== canonicalJson(next)) {
         throw fail("Agent round persistence verification failed; transaction rolled back.", "PERSISTENCE_VERIFICATION_FAILED");
       }
+      syncClaimCandidateInTransaction(sql, taskId);
       return { advanced: true, task: next };
     });
   }
@@ -882,6 +949,7 @@ export class OrchestratorLedger extends DurableObject {
         "UPDATE orchestrator_execution_leases SET worker_id = NULL, lease_until = 0, updated_at = ? WHERE task_id = ? AND worker_id = ? AND lease_generation = ?",
         now, taskId, workerId, leaseGeneration,
       );
+      syncClaimCandidateInTransaction(sql, taskId);
       return { released: true, leaseGeneration };
     });
   }
@@ -1422,6 +1490,7 @@ export class OrchestratorLedger extends DurableObject {
                 command.taskId, nextGeneration, now,
               );
             }
+            syncClaimCandidateInTransaction(sql, command.taskId);
             if (command.operation === "release") {
               const releaseEventId = "owner-release-" + command.eventId;
               const releasePayload = {

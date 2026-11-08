@@ -257,3 +257,32 @@ describe("OrchestratorLedger lease/index separation", () => {
     expect(after).toEqual(before);
   });
 });
+
+
+describe("OrchestratorLedger candidate index fail-closed behavior", () => {
+  it("does not claim an authoritative task when its derived candidate row is missing", async () => {
+    const ledger = ledgerFor("claim-candidate-index-missing-row");
+    await createTask(ledger, "candidate-missing-row", "agent:worker-1");
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "DELETE FROM orchestrator_claim_candidates WHERE task_id = ?",
+        "candidate-missing-row",
+      );
+    });
+    const result = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 30_000,
+      now,
+    });
+    expect(result).toEqual({ claimed: false, reason: "CANDIDATE_INDEX_INCONSISTENT" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ?",
+        "candidate-missing-row",
+      ).one().count).toBe(0);
+    });
+  });
+});

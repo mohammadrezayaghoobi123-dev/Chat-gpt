@@ -793,6 +793,13 @@ export class OrchestratorLedger extends DurableObject {
         if (typeof assignedAgentId !== "string" || assignedAgentId !== workerId) {
           return { claimed: false, reason: "ASSIGNEE_MISMATCH" };
         }
+        const candidate = sql.exec(
+          "SELECT executor_id, created_at FROM orchestrator_claim_candidates WHERE task_id = ?",
+          row.task_id,
+        ).toArray()[0];
+        if (!candidate || candidate.executor_id !== assignedAgentId || candidate.created_at !== row.created_at) {
+          return { claimed: false, reason: "CANDIDATE_INDEX_INCONSISTENT" };
+        }
         const lease = sql.exec(
           "SELECT * FROM orchestrator_execution_leases WHERE task_id = ?",
           row.task_id,

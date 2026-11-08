@@ -42,6 +42,25 @@ async function createWorkerAssertion({ subject, role, operation, nowMs, jti }) {
 const claimAssertion = (subject, issuedAt = now) => createWorkerAssertion({
   subject, role: "agent", operation: "claimTask", nowMs: issuedAt,
 });
+const RECONCILIATION_KID = "reconcile-v1";
+async function createReconciliationEvidence({
+  taskId,
+  priorGeneration,
+  evidenceId,
+  issuer = "test-reconciler",
+  issuedAt = now,
+  expiresAt = issuedAt + 60_000,
+}) {
+  const claims = { v: 1, taskId, priorGeneration, evidenceId, issuer, issuedAt, expiresAt };
+  const payload = base64Url(new TextEncoder().encode(canonicalJson(claims)));
+  const signingInput = "v1." + RECONCILIATION_KID + "." + payload;
+  const key = await crypto.subtle.importKey("raw", TEST_ASSERTION_KEY, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signingInput)));
+  return {
+    taskId, priorGeneration, evidenceId, issuer, issuedAt, expiresAt,
+    signature: "v1." + RECONCILIATION_KID + "." + base64Url(mac),
+  };
+}
 const createTask = async (ledger, input) => ledger.createTask({
   ...input, workerId: "orchestrator-scheduler",
   workerAssertion: await createWorkerAssertion({
@@ -303,7 +322,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
     const reclaimed = await ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101,
-      reconciliationEvidence: { checked: true, taskId: "task-0001", priorGeneration: 1, evidenceRef: "github://audit/reconcile/1" },
+      reconciliationEvidence: await createReconciliationEvidence({ taskId: "task-0001", priorGeneration: 1, evidenceId: "reconcile-evidence-00000001", issuedAt: now + 101 }),
     });
     expect(reclaimed.leaseGeneration).toBe(2);
     await expect(ledger.renewLease({
@@ -523,7 +542,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       .resolves.toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
     const reclaimed = await ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101,
-      reconciliationEvidence: { checked: true, taskId: "task-0001", priorGeneration: first.leaseGeneration, evidenceRef: "github://audit/reconcile/12" },
+      reconciliationEvidence: await createReconciliationEvidence({ taskId: "task-0001", priorGeneration: first.leaseGeneration, evidenceId: "reconcile-evidence-00000012", issuedAt: now + 101 }),
     });
     expect(reclaimed).toMatchObject({ claimed: true, leaseGeneration: 2, reconciliationRequired: true });
     await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
@@ -2339,12 +2358,12 @@ it("rejects expired-lease evidence bound to a different task", async () => {
     workerAssertion: await claimAssertion("agent:worker-1", now + 101),
     leaseMs: 30_000,
     now: now + 101,
-    reconciliationEvidence: {
-      checked: true,
+    reconciliationEvidence: await createReconciliationEvidence({
       taskId: "task-another",
       priorGeneration: first.leaseGeneration,
-      evidenceRef: "github://audit/reconcile/wrong-task",
-    },
+      evidenceId: "reconcile-evidence-wrong-task-0001",
+      issuedAt: now + 101,
+    }),
   });
   expect(result).toEqual({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
   await runInDurableObject(ledger, async (_instance, state) => {
@@ -2352,5 +2371,150 @@ it("rejects expired-lease evidence bound to a different task", async () => {
       "SELECT worker_id, lease_generation FROM orchestrator_execution_leases WHERE task_id = ?",
       "task-reconcile-target",
     ).one()).toMatchObject({ worker_id: "agent:worker-1", lease_generation: 1 });
+  });
+});
+
+
+it("rejects forged reconciliation signatures without changing the lease generation", async () => {
+  const ledger = ledgerFor("ledger-reconciliation-forged-signature");
+  await createTask(ledger, {
+    task: task("task-forged-evidence"),
+    idempotencyKey: "task-forged-evidence",
+    inputHash: "6".repeat(64),
+    now,
+  });
+  const first = await ledger.claimTask({
+    taskId: "task-forged-evidence",
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 100,
+    now,
+  });
+  const valid = await createReconciliationEvidence({
+    taskId: "task-forged-evidence",
+    priorGeneration: first.leaseGeneration,
+    evidenceId: "reconcile-evidence-forged-0001",
+    issuedAt: now + 101,
+  });
+  const forged = { ...valid, signature: valid.signature.slice(0, -1) + (valid.signature.endsWith("A") ? "B" : "A") };
+  const result = await ledger.claimTask({
+    taskId: "task-forged-evidence",
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now + 101),
+    leaseMs: 30_000,
+    now: now + 101,
+    reconciliationEvidence: forged,
+  });
+  expect(result).toEqual({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT lease_generation FROM orchestrator_execution_leases WHERE task_id = ?",
+      "task-forged-evidence",
+    ).one().lease_generation).toBe(1);
+  });
+});
+
+it("rejects expired and unauthorized reconciliation evidence", async () => {
+  const ledger = ledgerFor("ledger-reconciliation-invalid-policy");
+  await createTask(ledger, {
+    task: task("task-invalid-policy"),
+    idempotencyKey: "task-invalid-policy",
+    inputHash: "7".repeat(64),
+    now,
+  });
+  const first = await ledger.claimTask({
+    taskId: "task-invalid-policy",
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 100,
+    now,
+  });
+  const expired = await createReconciliationEvidence({
+    taskId: "task-invalid-policy",
+    priorGeneration: first.leaseGeneration,
+    evidenceId: "reconcile-evidence-expired-0001",
+    issuedAt: now - 120_000,
+    expiresAt: now - 60_000,
+  });
+  const expiredResult = await ledger.claimTask({
+    taskId: "task-invalid-policy",
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now + 101),
+    leaseMs: 30_000,
+    now: now + 101,
+    reconciliationEvidence: expired,
+  });
+  expect(expiredResult).toEqual({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
+
+  const unauthorized = await createReconciliationEvidence({
+    taskId: "task-invalid-policy",
+    priorGeneration: first.leaseGeneration,
+    evidenceId: "reconcile-evidence-issuer-0001",
+    issuer: "untrusted-issuer",
+    issuedAt: now + 102,
+  });
+  const unauthorizedResult = await ledger.claimTask({
+    taskId: "task-invalid-policy",
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now + 102),
+    leaseMs: 30_000,
+    now: now + 102,
+    reconciliationEvidence: unauthorized,
+  });
+  expect(unauthorizedResult).toEqual({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
+});
+
+it("consumes each reconciliation evidence ID once across lease generations", async () => {
+  const ledger = ledgerFor("ledger-reconciliation-evidence-replay");
+  await createTask(ledger, {
+    task: task("task-evidence-replay"),
+    idempotencyKey: "task-evidence-replay",
+    inputHash: "8".repeat(64),
+    now,
+  });
+  const first = await ledger.claimTask({
+    taskId: "task-evidence-replay",
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 100,
+    now,
+  });
+  const evidenceId = "reconcile-evidence-replay-0001";
+  const firstEvidence = await createReconciliationEvidence({
+    taskId: "task-evidence-replay",
+    priorGeneration: first.leaseGeneration,
+    evidenceId,
+    issuedAt: now + 101,
+  });
+  const reclaimed = await ledger.claimTask({
+    taskId: "task-evidence-replay",
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now + 101),
+    leaseMs: 100,
+    now: now + 101,
+    reconciliationEvidence: firstEvidence,
+  });
+  expect(reclaimed).toMatchObject({ claimed: true, leaseGeneration: 2 });
+
+  const replayWithNextGeneration = await createReconciliationEvidence({
+    taskId: "task-evidence-replay",
+    priorGeneration: 2,
+    evidenceId,
+    issuedAt: now + 202,
+  });
+  const replayed = await ledger.claimTask({
+    taskId: "task-evidence-replay",
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now + 202),
+    leaseMs: 30_000,
+    now: now + 202,
+    reconciliationEvidence: replayWithNextGeneration,
+  });
+  expect(replayed).toEqual({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_reconciliation_evidence WHERE evidence_id = ?",
+      evidenceId,
+    ).one().count).toBe(1);
   });
 });

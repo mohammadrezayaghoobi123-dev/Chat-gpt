@@ -171,3 +171,74 @@ it("uses the executor/order candidate index for the scheduler lookup query plan"
     );
   });
 });
+
+
+it("reconciles a missing candidate index in bounded batches with a stable keyset cursor", async () => {
+  const ledger = ledgerFor("ledger-candidate-bounded-fallback");
+  for (let i = 0; i < 40; i += 1) {
+    const taskId = "task-fallback-" + String(i + 1).padStart(2, "0");
+    const createdAt = now + i;
+    await createTask(ledger, {
+      task: { ...task(taskId), createdAt, updatedAt: createdAt },
+      idempotencyKey: taskId,
+      inputHash: i.toString(16).repeat(64),
+      now: createdAt,
+    });
+  }
+  await runInDurableObject(ledger, async (_instance, state) => {
+    state.storage.sql.exec("DELETE FROM orchestrator_claim_candidates");
+  });
+
+  const first = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now + 1_000),
+    leaseMs: 30_000,
+    now: now + 1_000,
+  });
+  expect(first).toMatchObject({
+    claimed: true,
+    task: { taskId: "task-fallback-01" },
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates",
+    ).one().count).toBe(31);
+    expect(state.storage.sql.exec(
+      "SELECT last_created_at, last_task_id FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
+      "agent:worker-1",
+    ).one()).toMatchObject({ last_created_at: now + 31, last_task_id: "task-fallback-32" });
+  });
+
+  const second = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now + 1_001),
+    leaseMs: 30_000,
+    now: now + 1_001,
+  });
+  expect(second).toMatchObject({
+    claimed: true,
+    task: { taskId: "task-fallback-02" },
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates",
+    ).one().count).toBe(38);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
+      "agent:worker-1",
+    ).one().count).toBe(0);
+  });
+});
+
+it("uses the executor/created-at index for bounded fallback pagination", async () => {
+  const ledger = ledgerFor("ledger-candidate-fallback-query-plan");
+  await runInDurableObject(ledger, async (_instance, state) => {
+    const plan = state.storage.sql.exec(
+      "EXPLAIN QUERY PLAN SELECT task_id, state, task_json, created_at FROM orchestrator_tasks WHERE COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? ORDER BY created_at, task_id LIMIT 32",
+      "agent:worker-1",
+    ).toArray();
+    expect(plan.map(row => row.detail).join(" ")).toContain(
+      "orchestrator_tasks_by_executor_created",
+    );
+  });
+});

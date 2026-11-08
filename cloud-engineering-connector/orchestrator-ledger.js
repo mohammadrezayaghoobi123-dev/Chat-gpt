@@ -449,6 +449,97 @@ export class OrchestratorLedger extends DurableObject {
       sql.exec("ALTER TABLE orchestrator_audit_events ADD COLUMN actor_role TEXT NOT NULL DEFAULT 'unknown'");
     }
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_audit_by_task ON orchestrator_audit_events(task_id, sequence)");
+
+    // Schema v8: additive tenant/project attribution. Existing rows are retained
+    // and explicitly isolated under the legacy scope until an authenticated
+    // migration maps them to a verified tenant and project.
+    this.ctx.storage.transactionSync(() => {
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_schema_migrations (
+          version INTEGER PRIMARY KEY,
+          applied_at INTEGER NOT NULL,
+          description TEXT NOT NULL
+        )
+      `);
+      const scopedTables = [
+        "orchestrator_tasks",
+        "orchestrator_processed_messages",
+        "orchestrator_execution_leases",
+        "orchestrator_claim_candidates",
+        "orchestrator_claim_scan_cursors",
+        "orchestrator_outbox_events",
+        "orchestrator_outbox_receipts",
+        "orchestrator_outbox_dead_letters",
+        "orchestrator_consumed_assertions",
+        "orchestrator_consumed_reconciliation_evidence",
+        "orchestrator_github_webhook_deliveries",
+        "orchestrator_github_business_idempotency",
+        "orchestrator_owner_consumed_assertions",
+        "orchestrator_owner_command_receipts",
+        "orchestrator_audit_events",
+      ];
+      for (const table of scopedTables) {
+        const columns = new Set(sql.exec(`PRAGMA table_info(${table})`).toArray().map(column => column.name));
+        if (!columns.has("tenant_id")) {
+          sql.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '__legacy__'`);
+        }
+        if (!columns.has("project_id")) {
+          sql.exec(`ALTER TABLE ${table} ADD COLUMN project_id TEXT NOT NULL DEFAULT '__legacy__'`);
+        }
+      }
+
+      // Recover explicit scope only from already-persisted task projections.
+      // Missing/invalid legacy attributes never inherit a caller-supplied scope.
+      sql.exec(`
+        UPDATE orchestrator_tasks
+        SET tenant_id = COALESCE(NULLIF(CAST(json_extract(task_json, '$.tenantId') AS TEXT), ''), '__legacy__'),
+            project_id = COALESCE(NULLIF(CAST(json_extract(task_json, '$.projectId') AS TEXT), ''), '__legacy__')
+      `);
+      const taskScopedTables = [
+        "orchestrator_processed_messages",
+        "orchestrator_execution_leases",
+        "orchestrator_claim_candidates",
+        "orchestrator_outbox_events",
+        "orchestrator_consumed_reconciliation_evidence",
+        "orchestrator_owner_consumed_assertions",
+        "orchestrator_owner_command_receipts",
+        "orchestrator_audit_events",
+      ];
+      for (const table of taskScopedTables) {
+        sql.exec(`
+          UPDATE ${table}
+          SET tenant_id = COALESCE((
+                SELECT task.tenant_id FROM orchestrator_tasks AS task
+                WHERE task.task_id = ${table}.task_id
+              ), '__legacy__'),
+              project_id = COALESCE((
+                SELECT task.project_id FROM orchestrator_tasks AS task
+                WHERE task.task_id = ${table}.task_id
+              ), '__legacy__')
+          WHERE task_id IS NOT NULL
+        `);
+      }
+      sql.exec(`
+        UPDATE orchestrator_outbox_receipts
+        SET tenant_id = COALESCE((
+              SELECT event.tenant_id FROM orchestrator_outbox_events AS event
+              WHERE event.event_id = orchestrator_outbox_receipts.event_id
+            ), '__legacy__'),
+            project_id = COALESCE((
+              SELECT event.project_id FROM orchestrator_outbox_events AS event
+              WHERE event.event_id = orchestrator_outbox_receipts.event_id
+            ), '__legacy__')
+      `);
+
+      for (const table of scopedTables) {
+        sql.exec(`CREATE INDEX IF NOT EXISTS ${table}_by_tenant_project ON ${table}(tenant_id, project_id)`);
+      }
+      sql.exec(
+        "INSERT OR IGNORE INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (8, ?, ?)",
+        Date.now(),
+        "Add tenant/project attribution to all ledger persistence tables; preserve unmapped records in legacy scope",
+      );
+    });
   }
 
   ping() {
@@ -465,7 +556,7 @@ export class OrchestratorLedger extends DurableObject {
     ].every(name => tableNames.has(name));
     return {
       ok: Number(result.ok) === 1 && requiredTablesOk,
-      schemaVersion: 7,
+      schemaVersion: 8,
       storage: {
         requiredTables: requiredTablesOk,
       },

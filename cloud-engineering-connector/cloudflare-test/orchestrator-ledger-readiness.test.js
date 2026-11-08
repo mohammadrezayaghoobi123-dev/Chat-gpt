@@ -14,7 +14,7 @@ describe("OrchestratorLedger readiness and integrity diagnostics", () => {
       const result = instance.ping();
 
       expect(result.ok).toBe(true);
-      expect(result.schemaVersion).toBe(7);
+      expect(result.schemaVersion).toBe(8);
       expect(result.storage.requiredTables).toBe(true);
       expect(result.storage).not.toHaveProperty("integrityCheck");
       expect(execSpy.mock.calls.some(([statement]) =>

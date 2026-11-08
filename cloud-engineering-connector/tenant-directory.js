@@ -7,7 +7,7 @@ function fail(code, message) {
 
 function required(value, field, max = 256) {
   if (typeof value !== "string" || value.length === 0 || value !== value.trim() ||
-      value.length > max || /[\\u0000-\\u001f\\u007f]/.test(value)) {
+      value.length > max || Array.from(value).some(character => { const code = character.charCodeAt(0); return code <= 31 || code === 127; })) {
     throw new TypeError(field + " must be a non-empty, trimmed string.");
   }
   return value;

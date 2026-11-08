@@ -225,3 +225,41 @@ test("rejects an allow decision scoped to a different tenant or project", async 
     error => error.code === "POLICY_DECISION_SCOPE_MISMATCH",
   );
 });
+
+
+test("rejects a caller-constructed principal even when it claims authenticated=true", async () => {
+  let calls = 0;
+  await assert.rejects(
+    resolveTenantContext({
+      principal: { id: "attacker", type: "human", authenticated: true },
+      tenantSelector: "tenant-alpha",
+      membershipStore: {
+        async getActiveMembership() { calls += 1; return activeMembership; },
+      },
+    }),
+    error => error.code === "AUTHENTICATED_PRINCIPAL_REQUIRED",
+  );
+  assert.equal(calls, 0);
+});
+
+test("rejects a caller-constructed tenant context before project policy evaluation", async () => {
+  let calls = 0;
+  await assert.rejects(
+    authorizeProjectAction({
+      principal,
+      tenantContext: {
+        principalId: principal.id,
+        tenantId: "tenant-alpha",
+        membershipId: "fabricated-membership",
+        role: "tenant-admin",
+      },
+      projectSelector: "project-01",
+      action: "project.write",
+      authorizationStore: {
+        async authorizeProjectAction() { calls += 1; return { effect: "allow" }; },
+      },
+    }),
+    error => error.code === "TENANT_CONTEXT_MISMATCH",
+  );
+  assert.equal(calls, 0);
+});

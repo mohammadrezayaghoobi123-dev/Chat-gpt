@@ -304,6 +304,7 @@ describe("OrchestratorLedger claim candidate query plan", () => {
       ).toArray();
       const details = plan.map(row => row.detail).join("\n");
       expect(details).toContain("orchestrator_claim_candidates_by_executor_created");
+      expect(details).toMatch(/SEARCH candidate USING INDEX orchestrator_claim_candidates_by_executor_created \\(executor_id=\\? AND created_at>\\?\\)/);
       expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
     });
   });

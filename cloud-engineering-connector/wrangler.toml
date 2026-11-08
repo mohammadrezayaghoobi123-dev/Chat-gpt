@@ -58,3 +58,20 @@ class_name = "OrchestratorLedger"
 [[env.staging.migrations]]
 tag = "v2"
 new_sqlite_classes = ["OrchestratorLedger"]
+
+
+[[durable_objects.bindings]]
+name = "TENANT_DIRECTORY"
+class_name = "TenantDirectory"
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["TenantDirectory"]
+
+[[env.staging.durable_objects.bindings]]
+name = "TENANT_DIRECTORY"
+class_name = "TenantDirectory"
+
+[[env.staging.migrations]]
+tag = "v3"
+new_sqlite_classes = ["TenantDirectory"]

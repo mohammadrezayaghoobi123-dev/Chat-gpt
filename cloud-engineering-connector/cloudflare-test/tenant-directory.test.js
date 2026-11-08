@@ -20,13 +20,14 @@ async function configureDirectory(selectedTenantId, keySet) {
   });
 }
 
-async function adminAssertion(keySet, operation, tenantId, projectId, nowMs) {
+async function adminAssertion(keySet, operation, tenantId, projectId, nowMs, target) {
   return createTenantDirectoryAdminAssertion(keySet, "test", {
     subject: "tenant-directory-provisioner",
     operation,
     tenantId,
     projectId,
     nowMs,
+    target,
   });
 }
 
@@ -66,7 +67,7 @@ describe("persistent Tenant Directory", () => {
     const now = 1_800_000_000_000;
     await configureDirectory("tenant-alpha", keySet);
     await adapters.provisioningStore.upsertMembership({
-      assertion: await adminAssertion(keySet, "upsertMembership", "tenant-alpha", null, now),
+      assertion: await adminAssertion(keySet, "upsertMembership", "tenant-alpha", null, now, { principalId: "principal-01", membershipId: "membership-01", role: "tenant-member", status: "active", expectedVersion: 0 }),
       tenantId: "tenant-alpha",
       principalId: "principal-01",
       membershipId: "membership-01",
@@ -88,7 +89,7 @@ describe("persistent Tenant Directory", () => {
 
     const resourceDigest = await sha256("null");
     await adapters.provisioningStore.upsertProjectPolicy({
-      assertion: await adminAssertion(keySet, "upsertProjectPolicy", "tenant-alpha", "project-red", now + 1),
+      assertion: await adminAssertion(keySet, "upsertProjectPolicy", "tenant-alpha", "project-red", now + 1, { projectId: "project-red", principalId: "principal-01", action: "project.read", resourceDigest, effect: "allow", policyVersion: "policy-v1", status: "active", expectedVersion: 0 }),
       tenantId: "tenant-alpha",
       projectId: "project-red",
       principalId: "principal-01",
@@ -162,7 +163,7 @@ describe("persistent Tenant Directory", () => {
     const keySet = JSON.stringify({ test: "c".repeat(64) });
     const now = 1_800_000_000_000;
     await configureDirectory("tenant-alpha", keySet);
-    const token = await adminAssertion(keySet, "upsertMembership", "tenant-alpha", null, now);
+    const token = await adminAssertion(keySet, "upsertMembership", "tenant-alpha", null, now, { principalId: "principal-02", membershipId: "membership-02", role: "tenant-member", status: "active", expectedVersion: 0 });
     await expect(adapters.provisioningStore.upsertMembership({
       assertion: token,
       tenantId: "tenant-beta",
@@ -174,7 +175,7 @@ describe("persistent Tenant Directory", () => {
       now,
     })).rejects.toMatchObject({ code: "TENANT_DIRECTORY_SCOPE_MISMATCH" });
 
-    const wrongOperationToken = await adminAssertion(keySet, "upsertProjectPolicy", "tenant-alpha", "project-red", now + 1);
+    const wrongOperationToken = await adminAssertion(keySet, "upsertProjectPolicy", "tenant-alpha", "project-red", now + 1, { projectId: "project-red", principalId: "principal-02", action: "project.read", resourceDigest: await sha256("null"), effect: "allow", policyVersion: "policy-v1", status: "active", expectedVersion: 0 });
     await expect(adapters.provisioningStore.upsertMembership({
       assertion: wrongOperationToken,
       tenantId: "tenant-alpha",
@@ -185,6 +186,21 @@ describe("persistent Tenant Directory", () => {
       expectedVersion: 0,
       now: now + 1,
     })).rejects.toMatchObject({ code: "TENANT_DIRECTORY_ADMIN_ASSERTION_REJECTED" });
+
+    const targetBoundToken = await adminAssertion(keySet, "upsertMembership", "tenant-alpha", null, now + 2, {
+      principalId: "principal-02", membershipId: "membership-02", role: "tenant-member",
+      status: "active", expectedVersion: 0,
+    });
+    await expect(adapters.provisioningStore.upsertMembership({
+      assertion: targetBoundToken,
+      tenantId: "tenant-alpha",
+      principalId: "principal-03",
+      membershipId: "membership-03",
+      role: "tenant-member",
+      status: "active",
+      expectedVersion: 0,
+      now: now + 2,
+    })).rejects.toMatchObject({ code: "TENANT_DIRECTORY_ADMIN_ASSERTION_REJECTED" });
   });
 
   it("revokes membership persistently and immediately restores default deny", async () => {
@@ -193,7 +209,7 @@ describe("persistent Tenant Directory", () => {
     const now = 1_800_000_000_000;
     await configureDirectory("tenant-revoke", keySet);
     await adapters.provisioningStore.upsertMembership({
-      assertion: await adminAssertion(keySet, "upsertMembership", "tenant-revoke", null, now),
+      assertion: await adminAssertion(keySet, "upsertMembership", "tenant-revoke", null, now, { principalId: "principal-revoke", membershipId: "membership-revoke", role: "tenant-member", status: "active", expectedVersion: 0 }),
       tenantId: "tenant-revoke",
       principalId: "principal-revoke",
       membershipId: "membership-revoke",
@@ -204,7 +220,7 @@ describe("persistent Tenant Directory", () => {
     });
     const resourceDigest = await sha256("null");
     await adapters.provisioningStore.upsertProjectPolicy({
-      assertion: await adminAssertion(keySet, "upsertProjectPolicy", "tenant-revoke", "project-red", now + 1),
+      assertion: await adminAssertion(keySet, "upsertProjectPolicy", "tenant-revoke", "project-red", now + 1, { projectId: "project-red", principalId: "principal-revoke", action: "project.read", resourceDigest, effect: "allow", policyVersion: "revoke-test-v1", status: "active", expectedVersion: 0 }),
       tenantId: "tenant-revoke",
       projectId: "project-red",
       principalId: "principal-revoke",
@@ -217,7 +233,7 @@ describe("persistent Tenant Directory", () => {
       now: now + 1,
     });
     await adapters.provisioningStore.revokeMembership({
-      assertion: await adminAssertion(keySet, "revokeMembership", "tenant-revoke", null, now + 2),
+      assertion: await adminAssertion(keySet, "revokeMembership", "tenant-revoke", null, now + 2, { principalId: "principal-revoke", expectedVersion: 1 }),
       tenantId: "tenant-revoke",
       principalId: "principal-revoke",
       expectedVersion: 1,
@@ -229,7 +245,7 @@ describe("persistent Tenant Directory", () => {
     })).resolves.toBeNull();
 
     await adapters.provisioningStore.upsertMembership({
-      assertion: await adminAssertion(keySet, "upsertMembership", "tenant-revoke", null, now + 3),
+      assertion: await adminAssertion(keySet, "upsertMembership", "tenant-revoke", null, now + 3, { principalId: "principal-revoke", membershipId: "membership-revoke", role: "tenant-member", status: "active", expectedVersion: 2 }),
       tenantId: "tenant-revoke",
       principalId: "principal-revoke",
       membershipId: "membership-revoke",

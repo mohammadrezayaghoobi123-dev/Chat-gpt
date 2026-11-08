@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 
 const { default: worker } = await import("./helpers/load-worker.js");
 const config = await import("../src/config.js");
-const workerSource = await readFile(new URL("../src/worker.js", import.meta.url), "utf8");
+// worker.js was split into modules; the config policy applies to every runtime module except config.js itself.
+const sourceFiles = (await readdir(new URL("../src/", import.meta.url))).filter(name => name.endsWith(".js") && name !== "config.js").sort();
+const workerSource = (await Promise.all(sourceFiles.map(name => readFile(new URL("../src/" + name, import.meta.url), "utf8")))).join("\n");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 
 const SECRET = "x".repeat(48);
@@ -26,14 +28,14 @@ const MOVED_CONSTANTS = [
   "INPUT_NEURONS_PER_MILLION", "OUTPUT_NEURONS_PER_MILLION", "MAX_COMPLETION_TOKENS"
 ];
 
-test("worker.js imports shared constants from config.js instead of redefining them", () => {
+test("runtime modules import shared constants from config.js instead of redefining them", () => {
   assert.match(workerSource, /from "\.\/config\.js"/);
   for (const name of MOVED_CONSTANTS) {
-    assert.equal(new RegExp("^(?:export )?(?:const|let|var) " + name + "\\b", "m").test(workerSource), false, name + " must not be redefined in worker.js");
+    assert.equal(new RegExp("^(?:export )?(?:const|let|var) " + name + "\\b", "m").test(workerSource), false, name + " must not be redefined outside config.js");
   }
 });
 
-test("worker.js does not hard-code the version, user-agent version, or default ref", () => {
+test("runtime modules do not hard-code the version, user-agent version, or default ref", () => {
   assert.equal(workerSource.includes('"0.1.0"'), false);
   assert.equal(/master-brain-cloud-agent\/\d/.test(workerSource), false);
   assert.equal(workerSource.includes('"master-brain/integrated"'), false);

@@ -203,26 +203,40 @@ function outboxFromRow(row) {
   };
 }
 
+function tenantProjectIdempotencyKey(tenantId, projectId, idempotencyKey) {
+  identifier(tenantId, "tenantId");
+  identifier(projectId, "projectId");
+  identifier(idempotencyKey, "idempotencyKey");
+  // Length-prefixing makes the tuple encoding injective even when identifiers
+  // contain punctuation. The global UNIQUE constraint remains a safe physical
+  // constraint while callers receive independent tenant/project key spaces.
+  return "tp1:" + tenantId.length + ":" + tenantId +
+    ":" + projectId.length + ":" + projectId +
+    ":" + idempotencyKey.length + ":" + idempotencyKey;
+}
+
 function validateOutboxInput(input) {
   if (!input || typeof input !== "object") throw fail("outbox input must be an object.");
   const eventId = identifier(input.eventId, "eventId");
-  const idempotencyKey = identifier(input.idempotencyKey, "idempotencyKey");
+  const tenantId = identifier(input.tenantId, "tenantId");
+  const projectId = identifier(input.projectId, "projectId");
+  const idempotencyKey = tenantProjectIdempotencyKey(tenantId, projectId, input.idempotencyKey);
   const taskId = identifier(input.taskId, "taskId");
   const eventType = identifier(input.eventType, "eventType");
   const payloadJson = serializeBounded(input.payload, "outbox payload");
   const now = timestamp(input.now);
-  return { eventId, idempotencyKey, taskId, eventType, payloadJson, now };
+  return { eventId, idempotencyKey, tenantId, projectId, taskId, eventType, payloadJson, now };
 }
 
 function enqueueOutboxInTransaction(sql, input) {
   const taskScope = sql.exec(
-    "SELECT tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
-    input.taskId,
+    "SELECT tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+    input.taskId, input.tenantId, input.projectId,
   ).toArray()[0];
   if (!taskScope) return { enqueued: false, reason: "TASK_NOT_FOUND" };
   const existing = sql.exec(
-    "SELECT * FROM orchestrator_outbox_events WHERE idempotency_key = ?",
-    input.idempotencyKey,
+    "SELECT * FROM orchestrator_outbox_events WHERE idempotency_key = ? AND tenant_id = ? AND project_id = ?",
+    input.idempotencyKey, input.tenantId, input.projectId,
   ).toArray()[0];
   if (existing) {
     if (existing.task_id === input.taskId && existing.event_type === input.eventType &&
@@ -559,6 +573,50 @@ export class OrchestratorLedger extends DurableObject {
         "Add tenant/project attribution to all ledger persistence tables; preserve unmapped records in legacy scope",
       );
     });
+
+    // Schema v9: encode caller idempotency keys as an injective tenant/project
+    // tuple. This preserves old global UNIQUE constraints and all primary keys,
+    // while allowing independent tenants to reuse the same caller-supplied key.
+    this.ctx.storage.transactionSync(() => {
+      const applied = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 9",
+      ).toArray()[0];
+      if (applied) return;
+
+      const tasks = sql.exec(
+        "SELECT task_id, idempotency_key, tenant_id, project_id FROM orchestrator_tasks",
+      ).toArray();
+      for (const row of tasks) {
+        sql.exec(
+          "UPDATE orchestrator_tasks SET idempotency_key = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+          tenantProjectIdempotencyKey(row.tenant_id, row.project_id, row.idempotency_key),
+          row.task_id, row.tenant_id, row.project_id,
+        );
+      }
+
+      const events = sql.exec(
+        "SELECT event_id, idempotency_key, tenant_id, project_id FROM orchestrator_outbox_events",
+      ).toArray();
+      for (const row of events) {
+        sql.exec(
+          "UPDATE orchestrator_outbox_events SET idempotency_key = ? WHERE event_id = ? AND tenant_id = ? AND project_id = ?",
+          tenantProjectIdempotencyKey(row.tenant_id, row.project_id, row.idempotency_key),
+          row.event_id, row.tenant_id, row.project_id,
+        );
+      }
+
+      sql.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project_idempotency ON orchestrator_tasks(tenant_id, project_id, idempotency_key)",
+      );
+      sql.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS orchestrator_outbox_by_tenant_project_idempotency ON orchestrator_outbox_events(tenant_id, project_id, idempotency_key)",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (9, ?, ?)",
+        Date.now(),
+        "Namespace task and outbox idempotency keys by injective tenant/project tuple; preserve existing identifiers and rows",
+      );
+    });
   }
 
   ping() {
@@ -575,7 +633,7 @@ export class OrchestratorLedger extends DurableObject {
     ].every(name => tableNames.has(name));
     return {
       ok: Number(result.ok) === 1 && requiredTablesOk,
-      schemaVersion: 8,
+      schemaVersion: 9,
       storage: {
         requiredTables: requiredTablesOk,
       },
@@ -708,9 +766,12 @@ export class OrchestratorLedger extends DurableObject {
       if (taskRejectionReason) {
         return { created: false, reason: taskRejectionReason };
       }
+      const scopedIdempotencyKey = tenantProjectIdempotencyKey(
+        normalizedTask.tenantId, normalizedTask.projectId, idempotencyKey,
+      );
       const existing = sql.exec(
         "SELECT * FROM orchestrator_tasks WHERE idempotency_key = ? AND tenant_id = ? AND project_id = ?",
-        idempotencyKey, normalizedTask.tenantId, normalizedTask.projectId,
+        scopedIdempotencyKey, normalizedTask.tenantId, normalizedTask.projectId,
       ).toArray()[0];
       if (existing) {
         if (existing.input_hash !== inputHash || existing.task_id !== normalizedTask.taskId) {
@@ -722,7 +783,7 @@ export class OrchestratorLedger extends DurableObject {
       if (taskIdExisting) return { created: false, conflict: true, reason: "TASK_ID_CONFLICT" };
       sql.exec(
         "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        normalizedTask.taskId, idempotencyKey, inputHash, normalizedTask.state, normalizedTask.version, taskJson,
+        normalizedTask.taskId, scopedIdempotencyKey, inputHash, normalizedTask.state, normalizedTask.version, taskJson,
         normalizedTask.createdAt, normalizedTask.updatedAt, normalizedTask.tenantId, normalizedTask.projectId,
       );
       syncClaimCandidateInTransaction(sql, normalizedTask.taskId);
@@ -768,7 +829,7 @@ export class OrchestratorLedger extends DurableObject {
     let outboxRejectionReason = null;
     if (outboxEvent !== undefined) {
       try {
-        normalizedOutboxInput = validateOutboxInput({ ...outboxEvent, taskId, now });
+        normalizedOutboxInput = validateOutboxInput({ ...outboxEvent, taskId, tenantId, projectId, now });
       } catch (error) {
         outboxRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_OUTBOX_EVENT";
       }
@@ -1846,7 +1907,9 @@ export class OrchestratorLedger extends DurableObject {
               };
               const queued = enqueueOutboxInTransaction(sql, {
                 eventId: releaseEventId,
-                idempotencyKey: releaseEventId,
+                idempotencyKey: tenantProjectIdempotencyKey(taskTenantId, taskProjectId, releaseEventId),
+                tenantId: taskTenantId,
+                projectId: taskProjectId,
                 taskId: command.taskId,
                 eventType: "task.transitioned",
                 payloadJson: serializeBounded(releasePayload, "Owner release outbox payload"),
@@ -1859,8 +1922,8 @@ export class OrchestratorLedger extends DurableObject {
             if (command.operation === "cancel" || command.operation === "quarantine") {
               const reasonCode = command.operation === "cancel" ? "OWNER_CANCELLED" : "OWNER_QUARANTINED";
               sql.exec(
-                "UPDATE orchestrator_outbox_events SET retry_state = 'DEAD_LETTER', last_error_code = ?, dead_lettered_at = ?, lease_worker_id = NULL, lease_generation = lease_generation + 1, lease_until = 0, updated_at = ? WHERE task_id = ? AND status IN ('PENDING','IN_PROGRESS') AND retry_state != 'DEAD_LETTER'",
-                reasonCode, now, now, command.taskId,
+                "UPDATE orchestrator_outbox_events SET retry_state = 'DEAD_LETTER', last_error_code = ?, dead_lettered_at = ?, lease_worker_id = NULL, lease_generation = lease_generation + 1, lease_until = 0, updated_at = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ? AND status IN ('PENDING','IN_PROGRESS') AND retry_state != 'DEAD_LETTER'",
+                reasonCode, now, now, command.taskId, taskTenantId, taskProjectId,
               );
             }
           }

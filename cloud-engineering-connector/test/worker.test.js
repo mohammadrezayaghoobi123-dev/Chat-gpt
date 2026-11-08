@@ -88,6 +88,62 @@ test("MCP tool-call telemetry records rejected unknown tool names as error outco
   assert.equal(event.outcome, "error");
 });
 
+test("MCP telemetry never invents a unique principal identifier for a shared bearer", async () => {
+  const lines = [];
+  const originalLog = console.log;
+  try {
+    console.log = (...args) => lines.push(args.join(" "));
+    await worker.fetch(rpc("tools/call", { name: "engineering_standards", arguments: {} }, 983), env);
+  } finally {
+    console.log = originalLog;
+  }
+  const event = lines.map(line => { try { return JSON.parse(line); } catch { return null; } })
+    .find(value => value?.event === "mcp_tool_call");
+  assert.ok(event);
+  assert.deepEqual(event.principal, { type: "shared_bearer", id: null });
+});
+
+test("MCP telemetry marks a tool-call rejected by the knowledge-write rate limiter as error", async () => {
+  let calls = 0;
+  const lines = [];
+  const originalLog = console.log;
+  try {
+    console.log = (...args) => lines.push(args.join(" "));
+    const response = await worker.fetch(rpc("tools/call", {
+      name: "knowledge_entity_upsert",
+      arguments: { entityId: "telemetry-test", entityType: "service", name: "Telemetry", expectedVersion: 0 }
+    }, 984), {
+      ...env,
+      MCP_RATE_LIMITER: { limit: async () => ({ success: ++calls === 1 }) }
+    });
+    assert.equal(response.status, 429);
+  } finally {
+    console.log = originalLog;
+  }
+  const event = lines.map(line => { try { return JSON.parse(line); } catch { return null; } })
+    .find(value => value?.event === "mcp_tool_call");
+  assert.ok(event);
+  assert.equal(event.outcome, "error");
+});
+
+test("public read-only telemetry identifies the unauthenticated principal without inventing an ID", async () => {
+  const lines = [];
+  const originalLog = console.log;
+  try {
+    console.log = (...args) => lines.push(args.join(" "));
+    const response = await worker.fetch(anonymousRpc("tools/call", {
+      name: "engineering_standards", arguments: {}
+    }, 985), { ...env, PUBLIC_READ_ONLY: "true" });
+    assert.equal(response.status, 200);
+  } finally {
+    console.log = originalLog;
+  }
+  const event = lines.map(line => { try { return JSON.parse(line); } catch { return null; } })
+    .find(value => value?.event === "mcp_tool_call");
+  assert.ok(event);
+  assert.deepEqual(event.principal, { type: "public_read_only", id: null });
+});
+
 test("readyz explicitly identifies model inference as client-side and does not require a Worker AI binding", async () => {
   const response = await worker.fetch(req("/readyz"), env);
   assert.equal(response.status, 200);

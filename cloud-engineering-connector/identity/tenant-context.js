@@ -117,18 +117,81 @@ export async function resolvePrincipal({ credential, authenticator } = {}) {
     reject("AUTHENTICATION_FAILED");
   }
 
-  if (
-    !identity ||
-    identity.authenticated !== true ||
-    !nonEmptyString(identity.principalId) ||
-    !nonEmptyString(identity.type)
-  ) {
+  if (!identity || identity.authenticated !== true) {
     reject("AUTHENTICATION_FAILED");
   }
 
+  let principalId;
+  let principalType;
+
+  // OIDC claims are accepted only from the trusted server-side authenticator.
+  // The immutable subject key is issuer + subject; email is validated profile
+  // data and is deliberately excluded from the principal identifier.
+  const hasOidcClaims =
+    Object.prototype.hasOwnProperty.call(identity, "issuer") ||
+    Object.prototype.hasOwnProperty.call(identity, "subject") ||
+    Object.prototype.hasOwnProperty.call(identity, "emailVerified");
+
+  if (hasOidcClaims) {
+    if (
+      !nonEmptyString(identity.issuer) ||
+      !nonEmptyString(identity.subject) ||
+      !nonEmptyString(identity.email) ||
+      identity.email.length > 254 ||
+      !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(identity.email) ||
+      identity.emailVerified !== true
+    ) {
+      reject("AUTHENTICATION_FAILED");
+    }
+
+    let issuerUrl;
+    try {
+      issuerUrl = new URL(identity.issuer);
+    } catch {
+      reject("AUTHENTICATION_FAILED");
+    }
+    if (
+      issuerUrl.protocol !== "https:" ||
+      !issuerUrl.hostname ||
+      issuerUrl.username ||
+      issuerUrl.password ||
+      issuerUrl.search ||
+      issuerUrl.hash
+    ) {
+      reject("AUTHENTICATION_FAILED");
+    }
+
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle || typeof subtle.digest !== "function") {
+      reject("AUTHENTICATION_FAILED");
+    }
+
+    let digest;
+    try {
+      const material = JSON.stringify(["oidc:v1", identity.issuer, identity.subject]);
+      digest = await subtle.digest("SHA-256", new TextEncoder().encode(material));
+    } catch {
+      reject("AUTHENTICATION_FAILED");
+    }
+    const fingerprint = Array.from(
+      new Uint8Array(digest),
+      byte => byte.toString(16).padStart(2, "0"),
+    ).join("");
+    principalId = `oidc:v1:${fingerprint}`;
+    principalType = "human";
+  } else {
+    // Preserve the existing explicitly trusted service-principal adapter
+    // contract. This branch is not an OIDC or end-user authentication path.
+    if (!nonEmptyString(identity.principalId) || !nonEmptyString(identity.type)) {
+      reject("AUTHENTICATION_FAILED");
+    }
+    principalId = identity.principalId;
+    principalType = identity.type;
+  }
+
   const principal = Object.freeze({
-    id: identity.principalId,
-    type: identity.type,
+    id: principalId,
+    type: principalType,
     authenticated: true,
   });
   AUTHENTICATED_PRINCIPALS.add(principal);

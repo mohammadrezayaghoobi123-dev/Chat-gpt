@@ -67,7 +67,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       sql.exec(
         "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         task.taskId,
-        "legacy-idempotency-1",
+        "legacy-idem-1",
         "a".repeat(64),
         task.state,
         task.version,

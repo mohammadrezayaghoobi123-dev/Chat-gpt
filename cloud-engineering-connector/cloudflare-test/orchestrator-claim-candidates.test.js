@@ -273,11 +273,18 @@ it("reconciles a missing candidate index in bounded batches with a stable keyset
 it("uses the executor/created-at index for bounded fallback pagination", async () => {
   const ledger = ledgerFor("ledger-candidate-fallback-query-plan");
   await runInDurableObject(ledger, async (_instance, state) => {
-    const plan = state.storage.sql.exec(
+    const firstPagePlan = state.storage.sql.exec(
       "EXPLAIN QUERY PLAN SELECT task_id, state, task_json, created_at FROM orchestrator_tasks WHERE COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? ORDER BY created_at, task_id LIMIT 32",
       "agent:worker-1",
     ).toArray();
-    expect(plan.map(row => row.detail).join(" ")).toContain(
+    expect(firstPagePlan.map(row => row.detail).join(" ")).toContain(
+      "orchestrator_tasks_by_executor_created",
+    );
+    const continuationPlan = state.storage.sql.exec(
+      "EXPLAIN QUERY PLAN SELECT task_id, state, task_json, created_at FROM orchestrator_tasks WHERE COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? AND (created_at > ? OR (created_at = ? AND task_id > ?)) ORDER BY created_at, task_id LIMIT 32",
+      "agent:worker-1", now, now, "task-fallback-32",
+    ).toArray();
+    expect(continuationPlan.map(row => row.detail).join(" ")).toContain(
       "orchestrator_tasks_by_executor_created",
     );
   });

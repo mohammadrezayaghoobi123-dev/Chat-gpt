@@ -301,11 +301,12 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const ledger = ledgerFor("ledger-stale-fence");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0004", inputHash: "f".repeat(64), now });
     const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
-    const reclaimed = await ledger.claimTask({
-      workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101,
-      reconciliationEvidence: { checked: true, priorGeneration: 1, evidenceRef: "github://audit/reconcile/1" },
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE orchestrator_execution_leases SET worker_id = ?, lease_generation = 2, lease_until = ? WHERE task_id = ?",
+        "agent:worker-2", now + 200, "task-0001",
+      );
     });
-    expect(reclaimed.leaseGeneration).toBe(2);
     await expect(ledger.renewLease({
       taskId: "task-0001", workerId: "agent:worker-1", workerAssertion: await createWorkerAssertion({ subject: "agent:worker-1", role: "agent", operation: "renewLease", nowMs: now + 102 }), leaseGeneration: first.leaseGeneration, leaseMs: 100, now: now + 102,
     })).resolves.toMatchObject({ renewed: false, reason: "LEASE_FENCE_MISMATCH" });

@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { canonicalJson } from "../orchestrator-protocol.js";
 
 const now = 1_800_000_000_000;
 

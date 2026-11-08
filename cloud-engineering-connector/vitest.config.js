@@ -10,6 +10,9 @@ export default defineConfig({
           // Test-only deterministic key. Never copied into Wrangler or Cloudflare secrets.
           LEDGER_WORKER_ASSERTION_KEYS: JSON.stringify({ "test-v1": "3031323334353637383961626364656630313233343536373839616263646566" }),
           LEDGER_OWNER_ASSERTION_KEYS: JSON.stringify({ "owner-v1": "3031323334353637383961626364656630313233343536373839616263646566" }),
+          // Test-only reconciliation key and issuer allowlist; never copied to Wrangler or Cloudflare secrets.
+          LEDGER_RECONCILIATION_EVIDENCE_KEYS: JSON.stringify({ "reconcile-v1": "3031323334353637383961626364656630313233343536373839616263646566" }),
+          LEDGER_RECONCILIATION_EVIDENCE_ISSUERS: JSON.stringify(["test-reconciler"]),
           GITHUB_WEBHOOK_OWNER_ID: "335530603",
           GITHUB_WEBHOOK_REPOSITORY: "mohammadrezayaghoobi123-dev/Chat-gpt",
           LEDGER_OWNER_ASSERTION_ACTIVE_KID: "owner-v1",

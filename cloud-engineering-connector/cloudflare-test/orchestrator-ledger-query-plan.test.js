@@ -7,6 +7,24 @@ function ledgerFor(name) {
 }
 
 describe("OrchestratorLedger tenant/project query plans", () => {
+  it("uses a tenant/project/sequence index for bounded audit-head lookup", async () => {
+    const ledger = ledgerFor("audit-chain-scope-query-plan");
+    await runInDurableObject(ledger, async instance => {
+      const plan = instance.ctx.storage.sql.exec(
+        `EXPLAIN QUERY PLAN
+         SELECT event_hash
+         FROM orchestrator_audit_events
+         WHERE tenant_id = ? AND project_id = ?
+         ORDER BY sequence DESC
+         LIMIT 1`,
+        "tenant-alpha", "project-red",
+      ).toArray();
+      const details = plan.map(row => row.detail).join("\\n");
+      expect(details).toContain("orchestrator_audit_events_by_scope_sequence");
+      expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+    });
+  });
+
   it("uses a scope-leading index for bounded executor claim-candidate selection", async () => {
     const ledger = ledgerFor("claim-candidate-scope-query-plan");
     await runInDurableObject(ledger, async instance => {

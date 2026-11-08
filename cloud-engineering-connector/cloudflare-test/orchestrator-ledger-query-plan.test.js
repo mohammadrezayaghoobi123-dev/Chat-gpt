@@ -20,7 +20,7 @@ describe("OrchestratorLedger tenant/project query plans", () => {
         "tenant-alpha", "project-red",
       ).toArray();
       const details = plan.map(row => row.detail).join("\\n");
-      expect(details).toContain("orchestrator_audit_events_by_scope_sequence");
+      expect(details).toContain("orchestrator_audit_events_by_tenant_project");
       expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
     });
   });

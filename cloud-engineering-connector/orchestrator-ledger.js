@@ -623,22 +623,6 @@ export class OrchestratorLedger extends DurableObject {
       );
     });
 
-    // Schema v10: keep each tenant/project audit hash chain efficient without
-    // ordering or scanning another tenant's audit history.
-    this.ctx.storage.transactionSync(() => {
-      const applied = sql.exec(
-        "SELECT version FROM orchestrator_schema_migrations WHERE version = 10",
-      ).toArray()[0];
-      if (applied) return;
-      sql.exec(
-        "CREATE INDEX IF NOT EXISTS orchestrator_audit_events_by_scope_sequence ON orchestrator_audit_events(tenant_id, project_id, sequence DESC)",
-      );
-      sql.exec(
-        "INSERT INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (10, ?, ?)",
-        Date.now(),
-        "Index tenant/project audit chains by descending sequence for bounded audit-head lookup",
-      );
-    });
   }
 
   ping() {
@@ -655,7 +639,7 @@ export class OrchestratorLedger extends DurableObject {
     ].every(name => tableNames.has(name));
     return {
       ok: Number(result.ok) === 1 && requiredTablesOk,
-      schemaVersion: 10,
+      schemaVersion: 9,
       storage: {
         requiredTables: requiredTablesOk,
       },

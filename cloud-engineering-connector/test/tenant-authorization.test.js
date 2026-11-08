@@ -183,6 +183,7 @@ test("denies project access when the policy decision is not allow", async () => 
           return {
             effect: "deny",
             action: "project.write",
+            resourceDigest: input.resourceDigest,
             principalId: principal.id,
             tenantId: "tenant-alpha",
             projectId: "project-01",
@@ -194,7 +195,9 @@ test("denies project access when the policy decision is not allow", async () => 
     }),
     error => error.code === "PROJECT_ACCESS_DENIED",
   );
-  assert.deepEqual(request, {
+  const { resourceDigest, ...requestWithoutDigest } = request;
+  assert.match(resourceDigest, /^[a-f0-9]{64}$/);
+  assert.deepEqual(requestWithoutDigest, {
     principalId: principal.id,
     tenantId: "tenant-alpha",
     projectId: "project-01",
@@ -203,17 +206,20 @@ test("denies project access when the policy decision is not allow", async () => 
   });
 });
 
-test("accepts only an allow decision bound to the exact principal, tenant, and project", async () => {
+test("accepts only an allow decision bound to the exact principal, tenant, project, action, and resource", async () => {
+  let request;
   const result = await authorizeProjectAction({
     principal,
     tenantContext,
     projectSelector: "project-01",
     action: "project.read",
     authorizationStore: {
-      async authorizeProjectAction() {
+      async authorizeProjectAction(input) {
+        request = input;
         return {
           effect: "allow",
           action: "project.read",
+          resourceDigest: input.resourceDigest,
           principalId: principal.id,
           tenantId: "tenant-alpha",
           projectId: "project-01",
@@ -228,6 +234,7 @@ test("accepts only an allow decision bound to the exact principal, tenant, and p
     tenantId: "tenant-alpha",
     projectId: "project-01",
     action: "project.read",
+    resourceDigest: request.resourceDigest,
     decisionId: "decision-02",
     policyVersion: "policy-v1",
   });
@@ -241,10 +248,11 @@ test("rejects an allow decision scoped to a different tenant or project", async 
       projectSelector: "project-01",
       action: "project.read",
       authorizationStore: {
-        async authorizeProjectAction() {
+        async authorizeProjectAction(input) {
           return {
             effect: "allow",
             action: "project.read",
+            resourceDigest: input.resourceDigest,
             principalId: principal.id,
             tenantId: "tenant-beta",
             projectId: "project-01",
@@ -304,10 +312,11 @@ test("rejects an allow decision bound to a different action", async () => {
       projectSelector: "project-01",
       action: "project.write",
       authorizationStore: {
-        async authorizeProjectAction() {
+        async authorizeProjectAction(input) {
           return {
             effect: "allow",
             action: "project.read",
+            resourceDigest: input.resourceDigest,
             principalId: principal.id,
             tenantId: "tenant-alpha",
             projectId: "project-01",
@@ -363,6 +372,27 @@ test("rejects oversized resource descriptors before policy evaluation", async ()
       },
     }),
     error => error.code === "RESOURCE_TOO_LARGE",
+  );
+  assert.equal(calls, 0);
+});
+
+
+test("rejects non-JSON resource descriptors before policy evaluation", async () => {
+  let calls = 0;
+  const circular = {};
+  circular.self = circular;
+  await assert.rejects(
+    authorizeProjectAction({
+      principal,
+      tenantContext,
+      projectSelector: "project-01",
+      action: "project.read",
+      resource: circular,
+      authorizationStore: {
+        async authorizeProjectAction() { calls += 1; return {}; },
+      },
+    }),
+    error => error.code === "INVALID_RESOURCE_DESCRIPTOR",
   );
   assert.equal(calls, 0);
 });

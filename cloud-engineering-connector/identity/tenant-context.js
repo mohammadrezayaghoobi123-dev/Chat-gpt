@@ -14,7 +14,76 @@ function reject(code) {
 }
 
 function nonEmptyString(value) {
-  return typeof value === "string" && value.length > 0 && value.trim() === value;
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 256 &&
+    value.trim() === value &&
+    !/[\\u0000-\\u001f\\u007f]/.test(value)
+  );
+}
+
+function canonicalJson(value, state = { seen: new WeakSet(), nodes: 0 }, depth = 0) {
+  state.nodes += 1;
+  if (state.nodes > 1024 || depth > 12) reject("INVALID_RESOURCE_DESCRIPTOR");
+
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) reject("INVALID_RESOURCE_DESCRIPTOR");
+    return JSON.stringify(Object.is(value, -0) ? 0 : value);
+  }
+  if (typeof value !== "object") reject("INVALID_RESOURCE_DESCRIPTOR");
+  if (state.seen.has(value)) reject("INVALID_RESOURCE_DESCRIPTOR");
+
+  state.seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (value.length > 256) reject("INVALID_RESOURCE_DESCRIPTOR");
+      return "[" + value.map(item => canonicalJson(item, state, depth + 1)).join(",") + "]";
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      reject("INVALID_RESOURCE_DESCRIPTOR");
+    }
+    if (Object.getOwnPropertySymbols(value).length > 0) {
+      reject("INVALID_RESOURCE_DESCRIPTOR");
+    }
+
+    const keys = Object.keys(value).sort();
+    if (keys.length > 128) reject("INVALID_RESOURCE_DESCRIPTOR");
+    const entries = keys.map(key => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+        reject("INVALID_RESOURCE_DESCRIPTOR");
+      }
+      return JSON.stringify(key) + ":" + canonicalJson(descriptor.value, state, depth + 1);
+    });
+    return "{" + entries.join(",") + "}";
+  } finally {
+    state.seen.delete(value);
+  }
+}
+
+async function fingerprintResource(resource) {
+  const canonical = canonicalJson(resource);
+  const bytes = new TextEncoder().encode(canonical);
+  if (bytes.byteLength > 16_384) reject("RESOURCE_TOO_LARGE");
+
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle || typeof subtle.digest !== "function") {
+    reject("RESOURCE_FINGERPRINT_UNAVAILABLE");
+  }
+
+  let digest;
+  try {
+    digest = await subtle.digest("SHA-256", bytes);
+  } catch {
+    reject("RESOURCE_FINGERPRINT_FAILED");
+  }
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /**
@@ -134,6 +203,8 @@ export async function authorizeProjectAction({
     reject("POLICY_STORE_UNAVAILABLE");
   }
 
+  const resourceDigest = await fingerprintResource(resource);
+
   let decision;
   try {
     decision = await authorizationStore.authorizeProjectAction({
@@ -142,6 +213,7 @@ export async function authorizeProjectAction({
       projectId: projectSelector,
       action,
       resource,
+      resourceDigest,
     });
   } catch {
     reject("POLICY_EVALUATION_FAILED");
@@ -153,6 +225,7 @@ export async function authorizeProjectAction({
     decision.tenantId !== tenantContext.tenantId ||
     decision.action !== action ||
     decision.projectId !== projectSelector ||
+    decision.resourceDigest !== resourceDigest ||
     !nonEmptyString(decision.decisionId) ||
     !nonEmptyString(decision.policyVersion)
   ) {
@@ -167,6 +240,7 @@ export async function authorizeProjectAction({
     tenantId: tenantContext.tenantId,
     projectId: projectSelector,
     action,
+    resourceDigest,
     decisionId: decision.decisionId,
     policyVersion: decision.policyVersion,
   });

@@ -9,6 +9,40 @@ function ledgerFor(name) {
 
 
 describe("OrchestratorLedger cross-tenant API isolation", () => {
+  it("rejects an agent capability replayed against a different tenant/project before storage access", async () => {
+    const ledger = ledgerFor("agent-capability-scope-replay");
+    await runInDurableObject(ledger, async instance => {
+      const now = 1_800_000_000_000;
+      const keySet = JSON.stringify({ test: "7".repeat(64) });
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = keySet;
+      const token = await createAgentWorkerAssertion(keySet, "test", {
+        subject: "worker-a",
+        operation: "renewLease",
+        tenantId: "tenant-alpha",
+        projectId: "project-red",
+        taskId: "task-alpha",
+        nowMs: now,
+      });
+      const result = await instance.renewLease({
+        taskId: "task-alpha",
+        tenantId: "tenant-beta",
+        projectId: "project-blue",
+        workerId: "worker-a",
+        workerAssertion: token,
+        leaseGeneration: 1,
+        leaseMs: 5_000,
+        now,
+      });
+      expect(result).toMatchObject({
+        renewed: false,
+        reason: "AUTHENTICATED_WORKER_REQUIRED",
+      });
+      expect(instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases",
+      ).one().count).toBe(0);
+    });
+  });
+
   it("rejects foreign-scope task mutations and does not alter the owning tenant's rows", async () => {
     const ledger = ledgerFor("cross-tenant-task-api-isolation");
     await runInDurableObject(ledger, async instance => {

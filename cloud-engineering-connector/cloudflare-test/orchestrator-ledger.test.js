@@ -260,6 +260,39 @@ describe("OrchestratorLedger durable coordination contract", () => {
     });
   });
 
+  it("returns NO_TASK_AVAILABLE for an explicitly requested task that is no longer active", async () => {
+    const ledger = ledgerFor("ledger-claim-explicit-terminal-task");
+    await createTask(ledger, {
+      task: task("task-explicit-terminal"),
+      idempotencyKey: "claim-explicit-terminal-task",
+      inputHash: "9".repeat(64),
+      now,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE orchestrator_tasks SET state = 'COMPLETED' WHERE task_id = ?",
+        "task-explicit-terminal",
+      );
+    });
+
+    const result = await ledger.claimTask({
+      taskId: "task-explicit-terminal",
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1"),
+      leaseMs: 30_000,
+      now,
+    });
+    expect(result).toEqual({ claimed: false, reason: "NO_TASK_AVAILABLE" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions",
+      ).one().count).toBe(0);
+    });
+  });
+
   it("rejects stale lease generations on renew, release, and worker-driven state transitions", async () => {
     const ledger = ledgerFor("ledger-stale-fence");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0004", inputHash: "f".repeat(64), now });

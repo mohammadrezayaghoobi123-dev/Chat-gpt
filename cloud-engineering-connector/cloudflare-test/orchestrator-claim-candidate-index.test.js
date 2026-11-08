@@ -303,3 +303,64 @@ describe("OrchestratorLedger claim candidate query plan", () => {
     });
   });
 });
+
+
+describe("OrchestratorLedger bounded candidate cursor", () => {
+  it("returns a bounded continuation and resumes without skipping pre-snapshot work", async () => {
+    const ledger = ledgerFor("claim-candidate-bounded-cursor");
+    const taskIds = Array.from({ length: 129 }, (_value, index) =>
+      "task-" + String(index).padStart(3, "0"),
+    );
+    for (const taskId of taskIds) {
+      await createTask(ledger, taskId, "agent:worker-1");
+    }
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.transactionSync(() => {
+        for (const taskId of taskIds.slice(0, 128)) {
+          state.storage.sql.exec(
+            "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
+            taskId, "agent:other-worker", now + 60_000, now,
+          );
+        }
+      });
+    });
+
+    const first = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 30_000,
+      now,
+    });
+    expect(first).toMatchObject({
+      claimed: false,
+      reason: "CLAIM_SCAN_BUDGET_EXHAUSTED",
+      nextCursor: {
+        version: 1,
+        executorId: "agent:worker-1",
+        snapshotSequence: 129,
+        createdAt: now,
+        taskId: "task-127",
+      },
+    });
+
+    // This task sorts before the cursor but was created after the scan snapshot.
+    await createTask(ledger, "task-000-new", "agent:worker-1", "SCHEDULED", now);
+
+    const second = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now + 1,
+      }),
+      leaseMs: 30_000,
+      now: now + 1,
+      cursor: first.nextCursor,
+    });
+    expect(second).toMatchObject({
+      claimed: true,
+      task: { taskId: "task-128" },
+      leaseGeneration: 1,
+    });
+  });
+});

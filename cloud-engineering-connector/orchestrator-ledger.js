@@ -199,6 +199,49 @@ export class OrchestratorLedger extends DurableObject {
       )
     `);
     sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_claim_candidates (
+        task_id TEXT PRIMARY KEY REFERENCES orchestrator_tasks(task_id) ON DELETE CASCADE,
+        executor_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_executor_order ON orchestrator_claim_candidates(executor_id, created_at, task_id)");
+    // A candidate is an active, assigned task with no worker-owned lease.
+    // Expired worker-owned leases remain outside this index and are handled by
+    // the separately bounded reconciliation/fallback path.
+    this.ctx.storage.transactionSync(() => {
+      sql.exec(`
+        INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at)
+        SELECT task.task_id,
+               COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')),
+               task.created_at
+        FROM orchestrator_tasks AS task
+        WHERE task.state IN ('SCHEDULED','RUNNING','VERIFYING')
+          AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM orchestrator_execution_leases AS lease
+            WHERE lease.task_id = task.task_id AND lease.worker_id IS NOT NULL
+          )
+        ON CONFLICT(task_id) DO UPDATE SET
+          executor_id = excluded.executor_id,
+          created_at = excluded.created_at
+      `);
+      sql.exec(`
+        DELETE FROM orchestrator_claim_candidates
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM orchestrator_tasks AS task
+          WHERE task.task_id = orchestrator_claim_candidates.task_id
+            AND task.state IN ('SCHEDULED','RUNNING','VERIFYING')
+            AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM orchestrator_execution_leases AS lease
+              WHERE lease.task_id = task.task_id AND lease.worker_id IS NOT NULL
+            )
+        )
+      `);
+    });
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_outbox_events (
         event_id TEXT PRIMARY KEY,
         idempotency_key TEXT NOT NULL UNIQUE,

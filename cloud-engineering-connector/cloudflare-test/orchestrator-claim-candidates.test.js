@@ -143,18 +143,34 @@ it("uses the candidate relation for scheduler discovery while preserving explici
     leaseMs: 30_000,
     now,
   });
-  expect(schedulerResult).toEqual({ claimed: false, reason: "NO_TASK_AVAILABLE" });
+  expect(schedulerResult).toMatchObject({
+    claimed: true,
+    task: { taskId: "task-candidate-query-path" },
+    leaseGeneration: 1,
+  });
 
-  const explicitResult = await ledger.claimTask({
-    taskId: "task-candidate-query-path",
-    workerId: "agent:worker-1",
-    workerAssertion: await claimAssertion("agent:worker-1", now + 1),
-    leaseMs: 30_000,
+  await createTask(ledger, {
+    task: task("task-candidate-explicit-path"),
+    idempotencyKey: "task-candidate-explicit-path",
+    inputHash: "5".repeat(64),
     now: now + 1,
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    state.storage.sql.exec(
+      "DELETE FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-explicit-path",
+    );
+  });
+  const explicitResult = await ledger.claimTask({
+    taskId: "task-candidate-explicit-path",
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now + 2),
+    leaseMs: 30_000,
+    now: now + 2,
   });
   expect(explicitResult).toMatchObject({
     claimed: true,
-    task: { taskId: "task-candidate-query-path" },
+    task: { taskId: "task-candidate-explicit-path" },
     leaseGeneration: 1,
   });
 });

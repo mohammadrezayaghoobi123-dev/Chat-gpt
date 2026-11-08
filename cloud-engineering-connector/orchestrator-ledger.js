@@ -820,6 +820,7 @@ export class OrchestratorLedger extends DurableObject {
           row.task_id, workerId, now + leaseMs, now,
         );
       }
+      syncClaimCandidateInTransaction(sql, row.task_id);
       return {
         claimed: true,
         task: taskProjection,
@@ -952,6 +953,7 @@ export class OrchestratorLedger extends DurableObject {
         "UPDATE orchestrator_execution_leases SET worker_id = NULL, lease_until = 0, updated_at = ? WHERE task_id = ? AND worker_id = ? AND lease_generation = ?",
         now, taskId, workerId, leaseGeneration,
       );
+      syncClaimCandidateInTransaction(sql, taskId);
       return { released: true, leaseGeneration };
     });
   }

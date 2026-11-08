@@ -32,8 +32,8 @@ test("Staging explicitly declares non-inherited runtime variables", () => {
 
 test("Production and Staging declare isolated OAuth KV namespaces", () => {
   const productionBindings = config.split(/^\\[\\[durable_objects\\.bindings\\]\\]/m)[0];
-  const production = productionBindings.match(/\\[\\[kv_namespaces\\]\\]\\s*name\\s*=\\s*"OAUTH_KV"\\s*id\\s*=\\s*"([a-f0-9]{32})"/);
-  const staging = config.match(/\\[\\[env\\.staging\\.kv_namespaces\\]\\]\\s*name\\s*=\\s*"OAUTH_KV"\\s*id\\s*=\\s*"([a-f0-9]{32})"/);
+  const production = productionBindings.match(/\\[\\[kv_namespaces\\]\\]\\s*binding\\s*=\\s*"OAUTH_KV"\\s*id\\s*=\\s*"([a-f0-9]{32})"/);
+  const staging = config.match(/\\[\\[env\\.staging\\.kv_namespaces\\]\\]\\s*binding\\s*=\\s*"OAUTH_KV"\\s*id\\s*=\\s*"([a-f0-9]{32})"/);
   assert.ok(production, "Production OAUTH_KV binding is required");
   assert.ok(staging, "Staging OAUTH_KV binding is required");
   assert.notEqual(production[1], staging[1], "OAuth storage must be isolated by environment");

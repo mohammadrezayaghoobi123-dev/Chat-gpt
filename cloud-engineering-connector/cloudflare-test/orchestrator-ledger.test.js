@@ -2288,6 +2288,12 @@ it("restores a candidate in the same transaction that releases its worker-owned 
     now,
   });
   expect(claimed).toMatchObject({ claimed: true });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-release",
+    ).one().count).toBe(0);
+  });
   const released = await ledger.releaseLease({
     taskId: "task-candidate-release",
     workerId: "agent:worker-1",

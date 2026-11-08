@@ -1,38 +1,12 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { canonicalJson } from "../orchestrator-protocol.js";
+import { createAgentWorkerAssertion } from "../orchestrator-worker-identity.js";
 
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
 }
 
-function base64Url(bytes) {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("=", "").replaceAll("+", "-").replaceAll("/", "_");
-}
-
-async function mintAgentAssertion(keyHex, operation, nowMs) {
-  const issuedAt = Math.floor(nowMs / 1000);
-  const claims = {
-    v: 1,
-    iss: "chat-gpt111-worker",
-    aud: "orchestrator-ledger",
-    sub: "worker-a",
-    role: "agent",
-    op: operation,
-    iat: issuedAt,
-    exp: issuedAt + 60,
-    jti: "jti-" + crypto.randomUUID().replace(/-/g, ""),
-  };
-  const payload = base64Url(new TextEncoder().encode(canonicalJson(claims)));
-  const signingInput = "v1.test." + payload;
-  const keyBytes = Uint8Array.from(keyHex.match(/.{2}/g), pair => Number.parseInt(pair, 16));
-  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signingInput)));
-  return signingInput + "." + base64Url(signature);
-}
 
 describe("OrchestratorLedger globally unique identifiers across tenant scopes", () => {
   it("returns opaque conflicts for message and audit identifiers already owned by another tenant", async () => {
@@ -104,7 +78,12 @@ describe("OrchestratorLedger globally unique identifiers across tenant scopes", 
         taskA.tenantId, taskA.projectId,
       );
 
-      const assertion = operation => mintAgentAssertion(keyHex, operation, now);
+      const assertion = operation => createAgentWorkerAssertion(
+        JSON.stringify({ test: keyHex }), "test", {
+          subject: "worker-a", operation, tenantId: taskB.tenantId,
+          projectId: taskB.projectId, taskId: taskB.taskId, nowMs: now,
+        },
+      );
       const messageResult = await instance.recordMessage({
         messageId,
         taskId: taskB.taskId,

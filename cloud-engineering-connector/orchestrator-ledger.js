@@ -825,7 +825,7 @@ export class OrchestratorLedger extends DurableObject {
     let verifiedAssertion;
     try {
       verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: workerId, role: "agent", operation: "transitionTask", nowMs: now,
+        subject: workerId, role: "agent", operation: "transitionTask", tenantId, projectId, taskId, nowMs: now,
       });
     } catch {
       return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
@@ -920,7 +920,7 @@ export class OrchestratorLedger extends DurableObject {
     let verifiedAssertion;
     try {
       verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: workerId, role: "agent", operation: "recordMessage", nowMs: now,
+        subject: workerId, role: "agent", operation: "recordMessage", tenantId, projectId, taskId, nowMs: now,
       });
     } catch {
       return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
@@ -1011,7 +1011,7 @@ export class OrchestratorLedger extends DurableObject {
     let verifiedAssertion;
     try {
       verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: workerId, role: "agent", operation: "claimTask", nowMs: now,
+        subject: workerId, role: "agent", operation: "claimTask", tenantId, projectId, taskId: taskId ?? null, nowMs: now,
       });
     } catch {
       return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
@@ -1177,7 +1177,7 @@ export class OrchestratorLedger extends DurableObject {
     let verifiedAssertion;
     try {
       verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: workerId, role: "agent", operation: "advanceAgentRound", nowMs: now,
+        subject: workerId, role: "agent", operation: "advanceAgentRound", tenantId, projectId, taskId, nowMs: now,
       });
     } catch {
       return { advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
@@ -1259,7 +1259,7 @@ export class OrchestratorLedger extends DurableObject {
     let verifiedAssertion;
     try {
       verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: workerId, role: "agent", operation: "renewLease", nowMs: now,
+        subject: workerId, role: "agent", operation: "renewLease", tenantId, projectId, taskId, nowMs: now,
       });
     } catch {
       return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
@@ -1299,7 +1299,7 @@ export class OrchestratorLedger extends DurableObject {
     let verifiedAssertion;
     try {
       verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: workerId, role: "agent", operation: "releaseLease", nowMs: now,
+        subject: workerId, role: "agent", operation: "releaseLease", tenantId, projectId, taskId, nowMs: now,
       });
     } catch {
       return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
@@ -1344,7 +1344,7 @@ export class OrchestratorLedger extends DurableObject {
     let verifiedAssertion;
     try {
       verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, input.workerAssertion, {
-        subject: input.workerId, role: "agent", operation: "enqueueOutbox", nowMs: now,
+        subject: input.workerId, role: "agent", operation: "enqueueOutbox", tenantId: input.tenantId, projectId: input.projectId, taskId: input.taskId, nowMs: now,
       });
     } catch {
       return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
@@ -2006,7 +2006,7 @@ export class OrchestratorLedger extends DurableObject {
     let verifiedAssertion;
     try {
       verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: workerId, role: "agent", operation: "appendAuditEvent", nowMs: now,
+        subject: workerId, role: "agent", operation: "appendAuditEvent", tenantId, projectId, taskId, nowMs: now,
       });
     } catch {
       return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };

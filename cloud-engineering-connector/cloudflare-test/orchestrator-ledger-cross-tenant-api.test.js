@@ -1,40 +1,12 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { canonicalJson } from "../orchestrator-protocol.js";
+import { createAgentWorkerAssertion } from "../orchestrator-worker-identity.js";
 
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
 }
 
-function base64Url(bytes) {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("=", "").replaceAll("+", "-").replaceAll("/", "_");
-}
-
-async function mintAgentAssertion(keyHex, operation, nowMs) {
-  const issuedAt = Math.floor(nowMs / 1000);
-  const claims = {
-    v: 1,
-    iss: "chat-gpt111-worker",
-    aud: "orchestrator-ledger",
-    sub: "worker-a",
-    role: "agent",
-    op: operation,
-    iat: issuedAt,
-    exp: issuedAt + 60,
-    jti: "jti-" + crypto.randomUUID().replace(/-/g, ""),
-  };
-  const payload = base64Url(new TextEncoder().encode(canonicalJson(claims)));
-  const signingInput = "v1.test." + payload;
-  const keyBytes = Uint8Array.from(keyHex.match(/.{2}/g), pair => Number.parseInt(pair, 16));
-  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const signature = new Uint8Array(await crypto.subtle.sign(
-    "HMAC", key, new TextEncoder().encode(signingInput),
-  ));
-  return signingInput + "." + base64Url(signature);
-}
 
 describe("OrchestratorLedger cross-tenant API isolation", () => {
   it("rejects foreign-scope task mutations and does not alter the owning tenant's rows", async () => {
@@ -65,7 +37,12 @@ describe("OrchestratorLedger cross-tenant API isolation", () => {
         task.taskId, "worker-a", now + 10_000, now - 40, task.tenantId, task.projectId,
       );
 
-      const assertion = async operation => mintAgentAssertion(keyHex, operation, now);
+      const assertion = async operation => createAgentWorkerAssertion(
+        JSON.stringify({ test: keyHex }), "test", {
+          subject: "worker-a", operation, tenantId: "tenant-beta",
+          projectId: "project-blue", taskId: task.taskId, nowMs: now,
+        },
+      );
       const messageInputHash = "e".repeat(64);
       const messageId = "foreign-scope-message";
       const messageEnvelope = {

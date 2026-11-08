@@ -2247,3 +2247,66 @@ it("inserts a newly created unleased task into the claim candidate index atomica
     });
   });
 });
+
+
+it("removes a candidate in the same transaction that creates its worker-owned lease", async () => {
+  const ledger = ledgerFor("ledger-candidate-claim-sync");
+  await createTask(ledger, {
+    task: task("task-candidate-claim"),
+    idempotencyKey: "task-candidate-claim",
+    inputHash: "1".repeat(64),
+    now,
+  });
+  const claimed = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(claimed).toMatchObject({ claimed: true, task: { taskId: "task-candidate-claim" } });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-claim",
+    ).one().count).toBe(0);
+  });
+});
+
+it("restores a candidate in the same transaction that releases its worker-owned lease", async () => {
+  const ledger = ledgerFor("ledger-candidate-release-sync");
+  await createTask(ledger, {
+    task: task("task-candidate-release"),
+    idempotencyKey: "task-candidate-release",
+    inputHash: "2".repeat(64),
+    now,
+  });
+  const claimed = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(claimed).toMatchObject({ claimed: true });
+  const released = await ledger.releaseLease({
+    taskId: "task-candidate-release",
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "releaseLease", nowMs: now + 1,
+    }),
+    leaseGeneration: claimed.leaseGeneration,
+    now: now + 1,
+  });
+  expect(released).toMatchObject({ released: true });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT task_id, executor_id, created_at FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-release",
+    ).toArray()[0]).toEqual({
+      task_id: "task-candidate-release",
+      executor_id: "agent:worker-1",
+      created_at: now,
+    });
+  });
+});

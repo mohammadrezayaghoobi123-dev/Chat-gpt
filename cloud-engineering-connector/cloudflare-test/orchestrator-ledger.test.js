@@ -268,11 +268,15 @@ describe("OrchestratorLedger durable coordination contract", () => {
       inputHash: "9".repeat(64),
       now,
     });
+    let consumedAssertionsBeforeClaim;
     await runInDurableObject(ledger, async (_instance, state) => {
       state.storage.sql.exec(
         "UPDATE orchestrator_tasks SET state = 'COMPLETED' WHERE task_id = ?",
         "task-explicit-terminal",
       );
+      consumedAssertionsBeforeClaim = state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions",
+      ).one().count;
     });
 
     const result = await ledger.claimTask({
@@ -289,7 +293,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       ).one().count).toBe(0);
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions",
-      ).one().count).toBe(0);
+      ).one().count).toBe(consumedAssertionsBeforeClaim);
     });
   });
 

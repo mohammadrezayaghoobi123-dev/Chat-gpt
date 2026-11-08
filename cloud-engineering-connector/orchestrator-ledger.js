@@ -1498,8 +1498,8 @@ export class OrchestratorLedger extends DurableObject {
           return { recorded: false, blocked: true, reason: "OUTBOX_TASK_VERSION_REQUIRED" };
         }
         const currentTask = sql.exec(
-          "SELECT state, version FROM orchestrator_tasks WHERE task_id = ?",
-          taskId,
+          "SELECT state, version FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+          taskId, source.tenant_id, source.project_id,
         ).toArray()[0];
         if (!currentTask || currentTask.version !== receiptPayload.version ||
             currentTask.state === "CANCELLED" || currentTask.state === "QUARANTINED") {

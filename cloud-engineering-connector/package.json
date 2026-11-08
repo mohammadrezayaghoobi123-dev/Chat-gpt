@@ -17,5 +17,8 @@
     "@cloudflare/vitest-plugin": "1.4.11",
     "vitest": "4.1.12",
     "wrangler": "4.155.0"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.4"
   }
 }

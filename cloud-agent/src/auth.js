@@ -1,5 +1,18 @@
 import { isAuthorized } from "./core.js";
 
+/**
+ * Revocation epoch (issue #189 gate B). The owner raises AGENT_REVOCATION_EPOCH in
+ * wrangler.toml and deploys; every session created under a different epoch is then
+ * rejected and erased on its next request. Missing or empty means 0. Anything that is
+ * not a canonical non-negative integer of at most 9 digits is invalid and callers must
+ * fail closed.
+ */
+export function parseRevocationEpoch(value) {
+  if (value === undefined || value === "") return 0;
+  if (typeof value !== "string" || !/^(?:0|[1-9][0-9]{0,8})$/.test(value)) return null;
+  return Number(value);
+}
+
 export function createSessionCapability() {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");

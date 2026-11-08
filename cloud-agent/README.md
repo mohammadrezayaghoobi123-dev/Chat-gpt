@@ -66,6 +66,10 @@ npm run check
 - To update the registry, use the Cloudflare dashboard's secret editor or run `npx wrangler secret put AGENT_USER_KEYS` from this Worker directory and paste the complete JSON value at the interactive prompt. Never pass the secret value as a command-line argument.
 - Keep `AGENT_AUTH_TOKEN` restricted to the service owner/operator. Additional principals are isolated by principal ID, but this MVP does not provide a full organization identity provider, SSO, per-user administrative roles, or audit-grade user attribution.
 
+### Revoking all sessions (revocation epoch)
+
+`AGENT_REVOCATION_EPOCH` in `wrangler.toml` (`[vars]`, a canonical non-negative integer string, at most 9 digits) is stored in every new session. To revoke every existing session, raise the value (for example `"0"` to `"1"`) and deploy. From then on any request for a session with a different epoch (higher or lower, so a rollback cannot revive newer sessions) is answered `410`, before the model or the budget is touched, and the session's stored history, verifier and alarm are erased on that request. Sessions that are never requested again keep their stored data only until the existing 7-day inactivity alarm runs. The operation is idempotent. An invalid value (anything but a canonical integer) fails closed: new sessions and existing sessions get `503`, nothing is erased, and `/healthz` reports `ready: false` and `revocation_epoch_valid: false`. Credential rotation is still enforced separately by the stored bearer fingerprint. Not yet implemented: per-principal revocation and an operator endpoint; neither is needed for the epoch mechanism.
+
 ## API
 
 - `GET /healthz`: public liveness response; contains no private data.

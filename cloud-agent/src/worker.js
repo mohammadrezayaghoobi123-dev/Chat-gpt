@@ -8,7 +8,7 @@ import { logAuthFailure, logEvent, logModelInvocation, logToolCall } from "./obs
 import { applySecurityHeaders, json } from "./http.js";
 import { TOOL_LABELS, executeTool } from "./tools.js";
 import { actualNeuronsFromUsage, getCompletion, reserveModelBudget, settleModelBudget } from "./model-budget.js";
-import { constantTimeHexEqual, consumePrincipalRequestLimit, createSessionCapability, hashSessionCapability, isValidPrincipalId, resolvePrincipal } from "./auth.js";
+import { constantTimeHexEqual, consumePrincipalRequestLimit, createSessionCapability, hashSessionCapability, isValidPrincipalId, parseRevocationEpoch, resolvePrincipal } from "./auth.js";
 import { renderConsole } from "./console.js";
 
 export class AgentSession extends DurableObject {
@@ -46,8 +46,11 @@ export class AgentSession extends DurableObject {
       if (await this.ctx.storage.get("session-token-hash")) {
         return json({ error: "Session is already initialized." }, 409);
       }
+      const epoch = parseRevocationEpoch(this.env.AGENT_REVOCATION_EPOCH);
+      if (epoch === null) return json({ error: "Session revocation epoch is invalid." }, 503);
       const initializedAt = Date.now();
       await this.ctx.storage.put({
+        "revocation-epoch": epoch,
         "session-token-hash": initialization.token_hash,
         "principal-id": initialization.principal_id,
         "principal-auth-hash": initialization.principal_auth_hash,
@@ -65,6 +68,14 @@ export class AgentSession extends DurableObject {
     const suppliedPrincipalId = request.headers.get("x-principal-id");
     if (!isValidPrincipalId(storedPrincipalId)) {
       return json({ error: "Unauthorized" }, 401, { "www-authenticate": "Session" });
+    }
+    const currentEpoch = parseRevocationEpoch(this.env.AGENT_REVOCATION_EPOCH);
+    if (currentEpoch === null) return json({ error: "Session revocation epoch is invalid." }, 503);
+    const sessionEpoch = (await this.ctx.storage.get("revocation-epoch")) ?? 0;
+    if (sessionEpoch !== currentEpoch) {
+      await this.eraseSession();
+      logEvent("warn", "session_revoked", { reason: "epoch" });
+      return json({ error: "Session revoked; create a new session." }, 410);
     }
     if (suppliedPrincipalId !== storedPrincipalId) {
       return json({ error: "Session belongs to a different principal." }, 403);
@@ -216,8 +227,13 @@ export class AgentSession extends DurableObject {
   async expireIfNeeded() {
     const lastActivity = await this.ctx.storage.get("last-activity-at");
     if (!isSessionExpired(lastActivity, Date.now())) return false;
-    await this.ctx.storage.delete(["history", "rate-window", "last-activity-at", "session-token-hash", "principal-id", "principal-auth-hash"]);
+    await this.eraseSession();
     return true;
+  }
+
+  async eraseSession() {
+    await this.ctx.storage.delete(["history", "rate-window", "last-activity-at", "session-token-hash", "principal-id", "principal-auth-hash", "revocation-epoch"]);
+    await this.ctx.storage.deleteAlarm?.();
   }
 
   alarm() {
@@ -242,9 +258,11 @@ async function handleFetch(request, env) {
         budget: Boolean(env.AGENT_BUDGET),
         rate_limiter: Boolean(env.AGENT_RATE_LIMITER)
       };
+      const revocationEpochValid = parseRevocationEpoch(env.AGENT_REVOCATION_EPOCH) !== null;
       return json({
         ok: true,
-        ready: Object.values(bindings).every(Boolean),
+        ready: Object.values(bindings).every(Boolean) && revocationEpochValid,
+        revocation_epoch_valid: revocationEpochValid,
         service: "master-brain-cloud-agent",
         version: VERSION,
         model: MODEL,
@@ -293,6 +311,9 @@ async function handleFetch(request, env) {
         }
       }
       return json({ error: principal.error }, principal.status, principal.status === 401 ? { "www-authenticate": "Bearer" } : {});
+    }
+    if (parseRevocationEpoch(env.AGENT_REVOCATION_EPOCH) === null) {
+      return json({ error: "Session revocation epoch is invalid." }, 503);
     }
     const principalId = principal.principalId;
     const sessionId = match?.[1];

@@ -134,7 +134,7 @@ describe("persistent Tenant Directory", () => {
     const now = 1_800_000_000_000;
     await configureDirectory("tenant-alpha", keySet);
     await alpha.provisioningStore.upsertMembership({
-      assertion: await adminAssertion(keySet, "upsertMembership", "tenant-alpha", null, now),
+      assertion: await adminAssertion(keySet, "upsertMembership", "tenant-alpha", null, now, { principalId: "principal-shared", membershipId: "membership-alpha", role: "tenant-member", status: "active", expectedVersion: 0 }),
       tenantId: "tenant-alpha",
       principalId: "principal-shared",
       membershipId: "membership-alpha",

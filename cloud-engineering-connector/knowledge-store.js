@@ -362,67 +362,96 @@ export class KnowledgeStore extends DurableObject {
 
   createRelationship(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const relationshipId = identifier(input?.relationshipId, "relationshipId");
     const sourceEntityId = identifier(input?.sourceEntityId, "sourceEntityId");
     const targetEntityId = identifier(input?.targetEntityId, "targetEntityId");
     const relationType = requiredString(input?.relationType, "relationType", MAX_TYPE);
     const properties = jsonObject(input?.properties, "properties");
     const now = timestamp(input?.now);
-    this.ctx.storage.sql.exec(
-      "INSERT INTO knowledge_relationships(tenant_id, relationship_id, source_entity_id, target_entity_id, relation_type, properties_json, created_at) " +
-      "VALUES(?, ?, ?, ?, ?, ?, ?)",
-      tenantId, relationshipId, sourceEntityId, targetEntityId, relationType, properties, now
-    );
-    return {
-      tenantId, relationshipId, sourceEntityId, targetEntityId, relationType,
-      properties: parseJson(properties, "relationship properties"), createdAt: now
-    };
+    const sql = this.ctx.storage.sql;
+    return this.ctx.storage.transactionSync(() => {
+      const endpoints = sql.exec(
+        "SELECT COUNT(*) AS count FROM knowledge_entities_v4 WHERE tenant_id = ? AND project_id = ? AND entity_id IN (?, ?)",
+        tenantId, projectId, sourceEntityId, targetEntityId
+      ).one();
+      if (endpoints.count !== 2) {
+        throw fail("KNOWLEDGE_RELATIONSHIP_SCOPE_MISMATCH", "Both relationship endpoints must exist in the same tenant and project.");
+      }
+      sql.exec(
+        "INSERT INTO knowledge_relationships_v4(tenant_id, project_id, relationship_id, source_entity_id, target_entity_id, relation_type, properties_json, created_at) " +
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        tenantId, projectId, relationshipId, sourceEntityId, targetEntityId, relationType, properties, now
+      );
+      return {
+        tenantId, projectId, relationshipId, sourceEntityId, targetEntityId, relationType,
+        properties: parseJson(properties, "relationship properties"), createdAt: now
+      };
+    });
   }
 
   putTag(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const tagId = identifier(input?.tagId, "tagId");
     const label = requiredString(input?.label, "label", MAX_NAME);
     const normalized = label.normalize("NFKC").toLowerCase();
     const now = timestamp(input?.now);
-    const existing = this.ctx.storage.sql.exec(
-      "SELECT label FROM knowledge_tags WHERE tenant_id = ? AND tag_id = ?",
-      tenantId, tagId
+    const sql = this.ctx.storage.sql;
+    const existing = sql.exec(
+      "SELECT label FROM knowledge_tags_v4 WHERE tenant_id = ? AND project_id = ? AND tag_id = ?",
+      tenantId, projectId, tagId
     ).toArray()[0];
     if (existing && existing.label !== label) {
       throw fail("KNOWLEDGE_TAG_CONFLICT", "Tag identifiers are immutable once created.");
     }
-    this.ctx.storage.sql.exec(
-      "INSERT OR IGNORE INTO knowledge_tags(tenant_id, tag_id, label, normalized_label, created_at) VALUES(?, ?, ?, ?, ?)",
-      tenantId, tagId, label, normalized, now
+    sql.exec(
+      "INSERT OR IGNORE INTO knowledge_tags_v4(tenant_id, project_id, tag_id, label, normalized_label, created_at) VALUES(?, ?, ?, ?, ?, ?)",
+      tenantId, projectId, tagId, label, normalized, now
     );
-    const row = this.ctx.storage.sql.exec(
-      "SELECT tag_id, label FROM knowledge_tags WHERE tenant_id = ? AND tag_id = ?",
-      tenantId, tagId
+    const row = sql.exec(
+      "SELECT tag_id, label FROM knowledge_tags_v4 WHERE tenant_id = ? AND project_id = ? AND tag_id = ?",
+      tenantId, projectId, tagId
     ).one();
-    return { tagId: row.tag_id, label: row.label };
+    return { tenantId, projectId, tagId: row.tag_id, label: row.label };
   }
 
   attachTag(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const entityId = identifier(input?.entityId, "entityId");
     const tagId = identifier(input?.tagId, "tagId");
     const now = timestamp(input?.now);
-    this.ctx.storage.sql.exec(
-      "INSERT OR IGNORE INTO knowledge_entity_tags(tenant_id, entity_id, tag_id, created_at) VALUES(?, ?, ?, ?)",
-      tenantId, entityId, tagId, now
-    );
-    return { tenantId, entityId, tagId, createdAt: now };
+    const sql = this.ctx.storage.sql;
+    return this.ctx.storage.transactionSync(() => {
+      const entity = sql.exec(
+        "SELECT 1 AS found FROM knowledge_entities_v4 WHERE tenant_id = ? AND project_id = ? AND entity_id = ?",
+        tenantId, projectId, entityId
+      ).toArray()[0];
+      const tag = sql.exec(
+        "SELECT 1 AS found FROM knowledge_tags_v4 WHERE tenant_id = ? AND project_id = ? AND tag_id = ?",
+        tenantId, projectId, tagId
+      ).toArray()[0];
+      if (!entity || !tag) {
+        throw fail("KNOWLEDGE_TAG_SCOPE_MISMATCH", "The entity and tag must exist in the same tenant and project.");
+      }
+      sql.exec(
+        "INSERT OR IGNORE INTO knowledge_entity_tags_v4(tenant_id, project_id, entity_id, tag_id, created_at) VALUES(?, ?, ?, ?, ?)",
+        tenantId, projectId, entityId, tagId, now
+      );
+      return { tenantId, projectId, entityId, tagId, createdAt: now };
+    });
   }
 
   listEntityTags(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const entityId = identifier(input?.entityId, "entityId");
     return this.ctx.storage.sql.exec(
-      "SELECT t.tag_id, t.label FROM knowledge_tags t " +
-      "JOIN knowledge_entity_tags et ON et.tenant_id = t.tenant_id AND et.tag_id = t.tag_id " +
-      "WHERE et.tenant_id = ? AND et.entity_id = ? ORDER BY t.normalized_label",
-      tenantId, entityId
+      "SELECT t.tag_id, t.label FROM knowledge_tags_v4 t " +
+      "JOIN knowledge_entity_tags_v4 et ON et.tenant_id = t.tenant_id AND et.project_id = t.project_id AND et.tag_id = t.tag_id " +
+      "WHERE et.tenant_id = ? AND et.project_id = ? AND et.entity_id = ? ORDER BY t.normalized_label",
+      tenantId, projectId, entityId
     ).toArray().map(row => ({ tagId: row.tag_id, label: row.label }));
   }
 

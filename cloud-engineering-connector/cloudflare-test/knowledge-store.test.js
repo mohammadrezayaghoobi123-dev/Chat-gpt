@@ -241,3 +241,12 @@ it("deferOutbox releases a pending-review lease without consuming retry attempts
   expect(second.leaseGeneration).toBe(first.leaseGeneration + 1);
   expect(second.attempts).toBe(1);
 });
+
+
+it("does not expose the internal derived-index writer as a Durable Object RPC method", async () => {
+  const store = storeFor("knowledge-index-writer-boundary");
+  await runInDurableObject(store, async instance => {
+    expect(instance.indexSource).toBeUndefined();
+    expect(typeof instance.search).toBe("function");
+  });
+});

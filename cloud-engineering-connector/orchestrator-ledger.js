@@ -1762,7 +1762,7 @@ export class OrchestratorLedger extends DurableObject {
         const currentTask = taskFromRow(taskRow);
         const taskTenantId = taskRow?.tenant_id ?? "__legacy__";
         const taskProjectId = taskRow?.project_id ?? "__legacy__";
-        const auditHead = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
+        const auditHead = sql.exec("SELECT event_hash FROM orchestrator_audit_events WHERE tenant_id = ? AND project_id = ? ORDER BY sequence DESC LIMIT 1", taskTenantId, taskProjectId).toArray()[0];
         const previousHash = auditHead?.event_hash ?? null;
         // Expected state/version are derived from this trusted Durable Object
         // snapshot. Never accept caller-supplied CAS fields for privileged actions.
@@ -1859,7 +1859,7 @@ export class OrchestratorLedger extends DurableObject {
             }
             return { conflict: true, reason: "OWNER_RECEIPT_CONFLICT" };
           }
-          const currentAuditHead = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
+          const currentAuditHead = sql.exec("SELECT event_hash FROM orchestrator_audit_events WHERE tenant_id = ? AND project_id = ? ORDER BY sequence DESC LIMIT 1", taskTenantId, taskProjectId).toArray()[0];
           if ((currentAuditHead?.event_hash ?? null) !== previousHash) return { retry: true };
           const currentRow = sql.exec(
             "SELECT state, version FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
@@ -2051,13 +2051,13 @@ export class OrchestratorLedger extends DurableObject {
         }
         return { appended: false, conflict: true, reason: "EVENT_ID_CONFLICT" };
       }
-      const previous = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
+      const previous = sql.exec("SELECT event_hash FROM orchestrator_audit_events WHERE tenant_id = ? AND project_id = ? ORDER BY sequence DESC LIMIT 1", tenantId, projectId).toArray()[0];
       const previousHash = previous?.event_hash ?? null;
       const eventHash = await sha256Canonical({
         eventId, taskId, actorId, actorRole, eventType, details: JSON.parse(detailsJson), occurredAt: now, previousHash,
       });
       const inserted = this.ctx.storage.transactionSync(() => {
-        const latest = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
+        const latest = sql.exec("SELECT event_hash FROM orchestrator_audit_events WHERE tenant_id = ? AND project_id = ? ORDER BY sequence DESC LIMIT 1", tenantId, projectId).toArray()[0];
         if ((latest?.event_hash ?? null) !== previousHash) return "retry";
         // event_id remains globally unique for backward compatibility. Keep
         // the collision response opaque and deterministic across tenant scopes.

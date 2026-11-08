@@ -619,3 +619,18 @@ describe("OrchestratorLedger claim concurrency and cursor validation", () => {
     });
   });
 });
+
+
+describe("OrchestratorLedger candidate identifier invariant", () => {
+  it("does not backfill malformed executor identifiers into the candidate index", async () => {
+    const ledger = ledgerFor("claim-candidate-invalid-executor");
+    await createTask(ledger, "candidate-invalid-executor", "agent worker");
+    await runInDurableObject(ledger, async (instance, state) => {
+      instance.ensureSchema();
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+        "candidate-invalid-executor",
+      ).one().count).toBe(0);
+    });
+  });
+});

@@ -372,11 +372,15 @@ export class KnowledgeStore extends DurableObject {
     const now = timestamp(input?.now);
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      const endpoints = sql.exec(
-        "SELECT COUNT(*) AS count FROM knowledge_entities_v4 WHERE tenant_id = ? AND project_id = ? AND entity_id IN (?, ?)",
-        tenantId, projectId, sourceEntityId, targetEntityId
-      ).one();
-      if (endpoints.count !== 2) {
+      const source = sql.exec(
+        "SELECT 1 AS found FROM knowledge_entities_v4 WHERE tenant_id = ? AND project_id = ? AND entity_id = ?",
+        tenantId, projectId, sourceEntityId
+      ).toArray()[0];
+      const target = sql.exec(
+        "SELECT 1 AS found FROM knowledge_entities_v4 WHERE tenant_id = ? AND project_id = ? AND entity_id = ?",
+        tenantId, projectId, targetEntityId
+      ).toArray()[0];
+      if (!source || !target) {
         throw fail("KNOWLEDGE_RELATIONSHIP_SCOPE_MISMATCH", "Both relationship endpoints must exist in the same tenant and project.");
       }
       sql.exec(

@@ -218,3 +218,42 @@ describe("OrchestratorLedger candidate synchronization", () => {
     });
   });
 });
+
+
+describe("OrchestratorLedger lease/index separation", () => {
+  it("keeps the derived task candidate row stable across lease claim and release", async () => {
+    const ledger = ledgerFor("claim-candidate-index-lease-separation");
+    await createTask(ledger, "candidate-lease-stable", "agent:worker-1");
+    const before = await runInDurableObject(ledger, async (_instance, state) =>
+      state.storage.sql.exec(
+        "SELECT task_id, executor_id, created_at FROM orchestrator_claim_candidates WHERE task_id = ?",
+        "candidate-lease-stable",
+      ).one(),
+    );
+    const lease = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 30_000, now,
+    });
+    expect(lease).toMatchObject({ claimed: true });
+    const released = await ledger.releaseLease({
+      taskId: "candidate-lease-stable",
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "releaseLease", nowMs: now + 1,
+      }),
+      leaseGeneration: lease.leaseGeneration,
+      now: now + 1,
+    });
+    expect(released).toMatchObject({ released: true });
+    const after = await runInDurableObject(ledger, async (_instance, state) =>
+      state.storage.sql.exec(
+        "SELECT task_id, executor_id, created_at FROM orchestrator_claim_candidates WHERE task_id = ?",
+        "candidate-lease-stable",
+      ).one(),
+    );
+    expect(after).toEqual(before);
+  });
+});

@@ -621,6 +621,7 @@ export class OrchestratorLedger extends DurableObject {
           persisted.task_json !== canonicalJson(next)) {
         throw fail("Task transition persistence verification failed; transaction rolled back.", "PERSISTENCE_VERIFICATION_FAILED");
       }
+      syncClaimCandidateInTransaction(sql, taskId);
       let outboxResult = null;
       if (normalizedOutboxInput !== null) {
         outboxResult = enqueueOutboxInTransaction(sql, normalizedOutboxInput);
@@ -814,7 +815,6 @@ export class OrchestratorLedger extends DurableObject {
           row.task_id, workerId, now + leaseMs, now,
         );
       }
-      syncClaimCandidateInTransaction(sql, row.task_id);
       return {
         claimed: true,
         task: taskProjection,
@@ -886,7 +886,6 @@ export class OrchestratorLedger extends DurableObject {
       if (!persisted || persisted.version !== next.version || persisted.task_json !== canonicalJson(next)) {
         throw fail("Agent round persistence verification failed; transaction rolled back.", "PERSISTENCE_VERIFICATION_FAILED");
       }
-      syncClaimCandidateInTransaction(sql, taskId);
       return { advanced: true, task: next };
     });
   }
@@ -948,7 +947,6 @@ export class OrchestratorLedger extends DurableObject {
         "UPDATE orchestrator_execution_leases SET worker_id = NULL, lease_until = 0, updated_at = ? WHERE task_id = ? AND worker_id = ? AND lease_generation = ?",
         now, taskId, workerId, leaseGeneration,
       );
-      syncClaimCandidateInTransaction(sql, taskId);
       return { released: true, leaseGeneration };
     });
   }
@@ -1489,6 +1487,7 @@ export class OrchestratorLedger extends DurableObject {
                 command.taskId, nextGeneration, now,
               );
             }
+            syncClaimCandidateInTransaction(sql, command.taskId);
             if (command.operation === "release") {
               const releaseEventId = "owner-release-" + command.eventId;
               const releasePayload = {

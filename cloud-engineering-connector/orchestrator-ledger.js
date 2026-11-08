@@ -113,7 +113,7 @@ const RECONCILIATION_EVIDENCE_PRUNE_BATCH = 100;
 
 function syncClaimCandidateInTransaction(sql, taskId) {
   const candidate = sql.exec(`
-    SELECT task.task_id,
+    SELECT task.task_id, task.tenant_id, task.project_id,
            COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) AS executor_id,
            task.created_at
     FROM orchestrator_tasks AS task
@@ -131,28 +131,29 @@ function syncClaimCandidateInTransaction(sql, taskId) {
     return false;
   }
   sql.exec(
-    "INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at) VALUES (?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET executor_id = excluded.executor_id, created_at = excluded.created_at",
-    candidate.task_id, candidate.executor_id, candidate.created_at,
+    "INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET executor_id = excluded.executor_id, created_at = excluded.created_at, tenant_id = excluded.tenant_id, project_id = excluded.project_id",
+    candidate.task_id, candidate.executor_id, candidate.created_at, candidate.tenant_id, candidate.project_id,
   );
   return true;
 }
 
-function reconcileClaimCandidatesInBoundedBatch(sql, executorId, now) {
+function reconcileClaimCandidatesInBoundedBatch(sql, executorId, tenantId, projectId, now) {
+  const cursorKey = canonicalJson([executorId, tenantId, projectId]);
   const cursor = sql.exec(
-    "SELECT last_created_at, last_task_id, scan_complete FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
-    executorId,
+    "SELECT last_created_at, last_task_id, scan_complete FROM orchestrator_claim_scan_cursors WHERE executor_id = ? AND tenant_id = ? AND project_id = ?",
+    cursorKey, tenantId, projectId,
   ).toArray()[0];
   if (cursor?.scan_complete === 1) return { scanned: 0, complete: true };
 
   const rows = cursor
     ? sql.exec(
-      "SELECT task_id, created_at FROM orchestrator_tasks WHERE COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? AND (created_at, task_id) > (?, ?) ORDER BY created_at, task_id LIMIT ?",
-      executorId, cursor.last_created_at, cursor.last_task_id,
+      "SELECT task_id, created_at FROM orchestrator_tasks WHERE tenant_id = ? AND project_id = ? AND COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? AND (created_at, task_id) > (?, ?) ORDER BY created_at, task_id LIMIT ?",
+      tenantId, projectId, executorId, cursor.last_created_at, cursor.last_task_id,
       CLAIM_FALLBACK_BATCH_SIZE,
     ).toArray()
     : sql.exec(
-      "SELECT task_id, created_at FROM orchestrator_tasks WHERE COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? ORDER BY created_at, task_id LIMIT ?",
-      executorId, CLAIM_FALLBACK_BATCH_SIZE,
+      "SELECT task_id, created_at FROM orchestrator_tasks WHERE tenant_id = ? AND project_id = ? AND COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? ORDER BY created_at, task_id LIMIT ?",
+      tenantId, projectId, executorId, CLAIM_FALLBACK_BATCH_SIZE,
     ).toArray();
 
   for (const row of rows) syncClaimCandidateInTransaction(sql, row.task_id);
@@ -161,9 +162,9 @@ function reconcileClaimCandidatesInBoundedBatch(sql, executorId, now) {
   if (last) {
     const scanComplete = rows.length < CLAIM_FALLBACK_BATCH_SIZE ? 1 : 0;
     sql.exec(
-      "INSERT INTO orchestrator_claim_scan_cursors (executor_id, last_created_at, last_task_id, scan_complete, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(executor_id) DO UPDATE SET last_created_at = excluded.last_created_at, last_task_id = excluded.last_task_id, scan_complete = excluded.scan_complete, updated_at = excluded.updated_at",
-      executorId, last.created_at ?? last.last_created_at, last.task_id ?? last.last_task_id,
-      scanComplete, now,
+      "INSERT INTO orchestrator_claim_scan_cursors (executor_id, last_created_at, last_task_id, scan_complete, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(executor_id) DO UPDATE SET last_created_at = excluded.last_created_at, last_task_id = excluded.last_task_id, scan_complete = excluded.scan_complete, updated_at = excluded.updated_at, tenant_id = excluded.tenant_id, project_id = excluded.project_id",
+      cursorKey, last.created_at ?? last.last_created_at, last.task_id ?? last.last_task_id,
+      scanComplete, now, tenantId, projectId,
     );
   }
   return { scanned: rows.length, complete: rows.length < CLAIM_FALLBACK_BATCH_SIZE };
@@ -781,7 +782,10 @@ export class OrchestratorLedger extends DurableObject {
           !Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
-      const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
+      const lease = sql.exec(
+        "SELECT * FROM orchestrator_execution_leases WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, tenantId, projectId,
+      ).toArray()[0];
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
@@ -956,16 +960,16 @@ export class OrchestratorLedger extends DurableObject {
         // executor/order candidate index. An expired worker-owned lease is
         // considered only through the single task bound by reconciliation
         // evidence, avoiding an unbounded scan of leased tasks.
-        reconcileClaimCandidatesInBoundedBatch(sql, workerId, now);
+        reconcileClaimCandidatesInBoundedBatch(sql, workerId, tenantId, projectId, now);
         let candidateRow = sql.exec(
-          "SELECT task.* FROM orchestrator_claim_candidates AS candidate INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id WHERE candidate.executor_id = ? ORDER BY candidate.created_at, candidate.task_id LIMIT 1",
-          workerId,
+          "SELECT task.* FROM orchestrator_claim_candidates AS candidate INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id WHERE candidate.executor_id = ? AND candidate.tenant_id = ? AND candidate.project_id = ? AND task.tenant_id = ? AND task.project_id = ? ORDER BY candidate.created_at, candidate.task_id LIMIT 1",
+          workerId, tenantId, projectId, tenantId, projectId,
         ).toArray()[0];
         let evidenceRow;
         if (hasReconciliationEvidence) {
           evidenceRow = sql.exec(
-            "SELECT task.* FROM orchestrator_tasks AS task INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.task_id = ? AND task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND lease.lease_generation = ? LIMIT 1",
-            verifiedReconciliationEvidence.taskId, workerId, now, verifiedReconciliationEvidence.priorGeneration,
+            "SELECT task.* FROM orchestrator_tasks AS task INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.task_id = ? AND task.tenant_id = ? AND task.project_id = ? AND lease.tenant_id = ? AND lease.project_id = ? AND task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND lease.lease_generation = ? LIMIT 1",
+            verifiedReconciliationEvidence.taskId, tenantId, projectId, tenantId, projectId, workerId, now, verifiedReconciliationEvidence.priorGeneration,
           ).toArray()[0];
         }
         row = candidateRow;
@@ -981,17 +985,18 @@ export class OrchestratorLedger extends DurableObject {
         let blockedByReconciliation = false;
         if (!taskId) {
           const hasAssignedTask = Boolean(sql.exec(
-            "SELECT 1 FROM orchestrator_tasks WHERE state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? LIMIT 1",
-            workerId,
+            "SELECT 1 FROM orchestrator_tasks WHERE tenant_id = ? AND project_id = ? AND state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? LIMIT 1",
+            tenantId, projectId, workerId,
           ).toArray()[0]);
           if (!hasAssignedTask) {
             assigneeMismatch = Boolean(sql.exec(
-              "SELECT 1 FROM orchestrator_tasks WHERE state IN ('SCHEDULED','RUNNING','VERIFYING') LIMIT 1",
+              "SELECT 1 FROM orchestrator_tasks WHERE tenant_id = ? AND project_id = ? AND state IN ('SCHEDULED','RUNNING','VERIFYING') LIMIT 1",
+              tenantId, projectId,
             ).toArray()[0]);
           }
           blockedByReconciliation = Boolean(sql.exec(
-            "SELECT 1 FROM orchestrator_tasks AS task INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND (? = 0 OR lease.task_id != ? OR lease.lease_generation != ?) LIMIT 1",
-            workerId, now, hasReconciliationEvidence ? 1 : 0,
+            "SELECT 1 FROM orchestrator_tasks AS task INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.tenant_id = ? AND task.project_id = ? AND lease.tenant_id = ? AND lease.project_id = ? AND task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND (? = 0 OR lease.task_id != ? OR lease.lease_generation != ?) LIMIT 1",
+            tenantId, projectId, tenantId, projectId, workerId, now, hasReconciliationEvidence ? 1 : 0,
             hasReconciliationEvidence ? verifiedReconciliationEvidence.taskId : "",
             hasReconciliationEvidence ? verifiedReconciliationEvidence.priorGeneration : -1,
           ).toArray()[0]);
@@ -1011,8 +1016,8 @@ export class OrchestratorLedger extends DurableObject {
       }
 
       const lease = sql.exec(
-        "SELECT * FROM orchestrator_execution_leases WHERE task_id = ?",
-        row.task_id,
+        "SELECT * FROM orchestrator_execution_leases WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        row.task_id, tenantId, projectId,
       ).toArray()[0];
       let generation = 1;
       let reconciliationRequired = false;
@@ -1042,7 +1047,7 @@ export class OrchestratorLedger extends DurableObject {
       }
       if (reconciliationRequired) {
         sql.exec(
-          "INSERT INTO orchestrator_consumed_reconciliation_evidence (evidence_id, evidence_hash, task_id, prior_generation, issuer, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO orchestrator_consumed_reconciliation_evidence (evidence_id, evidence_hash, task_id, prior_generation, issuer, issued_at, expires_at, consumed_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
           verifiedReconciliationEvidence.evidenceId,
           reconciliationEvidenceHash,
           verifiedReconciliationEvidence.taskId,
@@ -1051,17 +1056,19 @@ export class OrchestratorLedger extends DurableObject {
           verifiedReconciliationEvidence.issuedAt,
           verifiedReconciliationEvidence.expiresAt,
           now,
+          tenantId,
+          projectId,
         );
       }
       if (lease) {
         sql.exec(
-          "UPDATE orchestrator_execution_leases SET worker_id = ?, lease_generation = ?, lease_until = ?, updated_at = ? WHERE task_id = ? AND lease_generation = ?",
-          workerId, generation, now + leaseMs, now, row.task_id, lease.lease_generation,
+          "UPDATE orchestrator_execution_leases SET worker_id = ?, lease_generation = ?, lease_until = ?, updated_at = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ? AND lease_generation = ?",
+          workerId, generation, now + leaseMs, now, row.task_id, tenantId, projectId, lease.lease_generation,
         );
       } else {
         sql.exec(
-          "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
-          row.task_id, workerId, now + leaseMs, now,
+          "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at, tenant_id, project_id) VALUES (?, ?, 1, ?, ?, ?, ?)",
+          row.task_id, workerId, now + leaseMs, now, tenantId, projectId,
         );
       }
       syncClaimCandidateInTransaction(sql, row.task_id);
@@ -1119,7 +1126,14 @@ export class OrchestratorLedger extends DurableObject {
         return { advanced: false, reason: error?.code ?? "INVALID_AGENT_ROUND" };
       }
       const assignedAgentId = current.executorId ?? current.assignedAgentId;
-      const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
+      const task = sql.exec(
+        "SELECT task_id FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, tenantId, projectId,
+      ).toArray()[0];
+      const lease = task ? sql.exec(
+        "SELECT * FROM orchestrator_execution_leases WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, tenantId, projectId,
+      ).toArray()[0] : null;
       if (assignedAgentId !== workerId || !lease || lease.worker_id !== workerId ||
           lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { advanced: false, reason: "LEASE_FENCE_MISMATCH", task: current };
@@ -1135,10 +1149,13 @@ export class OrchestratorLedger extends DurableObject {
         lastAgentRound: { from: expectedRound, to: nextRound, workerId, leaseGeneration, occurredAt: now },
       };
       sql.exec(
-        "UPDATE orchestrator_tasks SET version = ?, task_json = ?, updated_at = ? WHERE task_id = ? AND version = ?",
-        next.version, serializeBounded(next, "task"), now, taskId, expectedVersion,
+        "UPDATE orchestrator_tasks SET version = ?, task_json = ?, updated_at = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ? AND version = ?",
+        next.version, serializeBounded(next, "task"), now, taskId, tenantId, projectId, expectedVersion,
       );
-      const persisted = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
+      const persisted = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, tenantId, projectId,
+      ).toArray()[0];
       if (!persisted || persisted.version !== next.version || persisted.task_json !== canonicalJson(next)) {
         throw fail("Agent round persistence verification failed; transaction rolled back.", "PERSISTENCE_VERIFICATION_FAILED");
       }
@@ -1165,7 +1182,14 @@ export class OrchestratorLedger extends DurableObject {
     }
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
-      const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
+      const task = sql.exec(
+        "SELECT task_id FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, tenantId, projectId,
+      ).toArray()[0];
+      const lease = task ? sql.exec(
+        "SELECT * FROM orchestrator_execution_leases WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, tenantId, projectId,
+      ).toArray()[0] : null;
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { renewed: false, reason: "LEASE_FENCE_MISMATCH" };
       }
@@ -1173,8 +1197,8 @@ export class OrchestratorLedger extends DurableObject {
         return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       sql.exec(
-        "UPDATE orchestrator_execution_leases SET lease_until = ?, updated_at = ? WHERE task_id = ? AND worker_id = ? AND lease_generation = ?",
-        now + leaseMs, now, taskId, workerId, leaseGeneration,
+        "UPDATE orchestrator_execution_leases SET lease_until = ?, updated_at = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ? AND worker_id = ? AND lease_generation = ?",
+        now + leaseMs, now, taskId, tenantId, projectId, workerId, leaseGeneration,
       );
       return { renewed: true, leaseUntil: now + leaseMs, leaseGeneration };
     });
@@ -1206,8 +1230,8 @@ export class OrchestratorLedger extends DurableObject {
         return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       sql.exec(
-        "UPDATE orchestrator_execution_leases SET worker_id = NULL, lease_until = 0, updated_at = ? WHERE task_id = ? AND worker_id = ? AND lease_generation = ?",
-        now, taskId, workerId, leaseGeneration,
+        "UPDATE orchestrator_execution_leases SET worker_id = NULL, lease_until = 0, updated_at = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ? AND worker_id = ? AND lease_generation = ?",
+        now, taskId, tenantId, projectId, workerId, leaseGeneration,
       );
       syncClaimCandidateInTransaction(sql, taskId);
       return { released: true, leaseGeneration };
@@ -1895,12 +1919,18 @@ export class OrchestratorLedger extends DurableObject {
       if (!consumed) return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
       return { appended: false, reason: detailsRejectionReason };
     }
-    if (!sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0]) {
+    if (!sql.exec(
+      "SELECT task_id FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+      taskId, tenantId, projectId,
+    ).toArray()[0]) {
       return { appended: false, reason: "TASK_NOT_FOUND" };
     }
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      const existing = sql.exec("SELECT * FROM orchestrator_audit_events WHERE event_id = ?", eventId).toArray()[0];
+      const existing = sql.exec(
+        "SELECT * FROM orchestrator_audit_events WHERE event_id = ? AND tenant_id = ? AND project_id = ?",
+        eventId, tenantId, projectId,
+      ).toArray()[0];
       if (existing) {
         const consumed = this.ctx.storage.transactionSync(() => consumeWorkerAssertion(sql, verifiedAssertion, now));
         if (!consumed) return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
@@ -1923,8 +1953,8 @@ export class OrchestratorLedger extends DurableObject {
         if (duplicate) return "retry";
         if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return "replay";
         sql.exec(
-          "INSERT INTO orchestrator_audit_events (event_id, task_id, actor_id, actor_role, event_type, details_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          eventId, taskId, actorId, actorRole, eventType, detailsJson, previousHash, eventHash, now,
+          "INSERT INTO orchestrator_audit_events (event_id, task_id, actor_id, actor_role, event_type, details_json, previous_hash, event_hash, created_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          eventId, taskId, actorId, actorRole, eventType, detailsJson, previousHash, eventHash, now, tenantId, projectId,
         );
         return "inserted";
       });

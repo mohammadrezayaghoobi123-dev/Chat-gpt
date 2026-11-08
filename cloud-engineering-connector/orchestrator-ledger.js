@@ -185,6 +185,8 @@ function outboxFromRow(row) {
     eventId: row.event_id,
     idempotencyKey: row.idempotency_key,
     taskId: row.task_id,
+    tenantId: row.tenant_id,
+    projectId: row.project_id,
     eventType: row.event_type,
     payload: parseJson(row.payload_json, "outbox payload"),
     status: row.status,
@@ -213,6 +215,11 @@ function validateOutboxInput(input) {
 }
 
 function enqueueOutboxInTransaction(sql, input) {
+  const taskScope = sql.exec(
+    "SELECT tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
+    input.taskId,
+  ).toArray()[0];
+  if (!taskScope) return { enqueued: false, reason: "TASK_NOT_FOUND" };
   const existing = sql.exec(
     "SELECT * FROM orchestrator_outbox_events WHERE idempotency_key = ?",
     input.idempotencyKey,
@@ -230,8 +237,9 @@ function enqueueOutboxInTransaction(sql, input) {
   ).toArray()[0];
   if (eventIdRow) return { enqueued: false, conflict: true, reason: "EVENT_ID_CONFLICT" };
   sql.exec(
-    "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_worker_id, lease_generation, lease_until, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'PENDING', 0, NULL, 0, 0, ?, ?)",
-    input.eventId, input.idempotencyKey, input.taskId, input.eventType, input.payloadJson, input.now, input.now,
+    "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_worker_id, lease_generation, lease_until, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, 'PENDING', 0, NULL, 0, 0, ?, ?, ?, ?)",
+    input.eventId, input.idempotencyKey, input.taskId, input.eventType, input.payloadJson,
+    input.now, input.now, taskScope.tenant_id, taskScope.project_id,
   );
   const row = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", input.eventId).toArray()[0];
   return { enqueued: true, event: outboxFromRow(row) };
@@ -1222,7 +1230,14 @@ export class OrchestratorLedger extends DurableObject {
     }
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
-      const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
+      const task = sql.exec(
+        "SELECT task_id FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, tenantId, projectId,
+      ).toArray()[0];
+      const lease = task ? sql.exec(
+        "SELECT * FROM orchestrator_execution_leases WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, tenantId, projectId,
+      ).toArray()[0] : null;
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { released: false, reason: "LEASE_FENCE_MISMATCH" };
       }
@@ -1271,7 +1286,10 @@ export class OrchestratorLedger extends DurableObject {
       if (payloadRejectionReason) {
         return { enqueued: false, reason: payloadRejectionReason };
       }
-      if (!sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", normalized.taskId).toArray()[0]) {
+      if (!sql.exec(
+        "SELECT task_id FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        normalized.taskId, input.tenantId, input.projectId,
+      ).toArray()[0]) {
         return { enqueued: false, reason: "TASK_NOT_FOUND" };
       }
       return enqueueOutboxInTransaction(sql, normalized);
@@ -1452,7 +1470,7 @@ export class OrchestratorLedger extends DurableObject {
         return { recorded: false, reason: payloadRejectionReason };
       }
       const source = sql.exec(
-        "SELECT event_type, idempotency_key, task_id, payload_json, created_at FROM orchestrator_outbox_events WHERE event_id = ?",
+        "SELECT event_type, idempotency_key, task_id, payload_json, created_at, tenant_id, project_id FROM orchestrator_outbox_events WHERE event_id = ?",
         eventId,
       ).toArray()[0];
       if (!source || source.event_type !== eventType ||
@@ -1486,8 +1504,8 @@ export class OrchestratorLedger extends DurableObject {
         }
       }
       sql.exec(
-        "INSERT INTO orchestrator_outbox_receipts (event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at) VALUES (?, ?, ?, ?, ?, ?)",
-        eventId, eventType, schemaVersion, envelopeSha256, consumerId, now,
+        "INSERT INTO orchestrator_outbox_receipts (event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        eventId, eventType, schemaVersion, envelopeSha256, consumerId, now, source.tenant_id, source.project_id,
       );
       return { recorded: true, eventId };
     });

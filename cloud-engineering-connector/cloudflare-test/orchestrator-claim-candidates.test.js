@@ -77,34 +77,53 @@ function insertTask(sql, {
 }
 
 describe("OrchestratorLedger claim candidate index", () => {
-  it("backfills only unleased active tasks and is idempotent across schema initialization", async () => {
-    const ledger = ledgerFor("ledger-candidate-index-backfill");
-    await runInDurableObject(ledger, async (instance, state) => {
-      const sql = state.storage.sql;
-      sql.exec("DROP TABLE IF EXISTS orchestrator_claim_candidates");
-      insertTask(sql, { taskId: "task-candidate-b", createdAt: now + 1 });
-      insertTask(sql, { taskId: "task-candidate-a", createdAt: now + 1 });
-      insertTask(sql, { taskId: "task-terminal", state: "COMPLETED", createdAt: now + 2 });
-      insertTask(sql, { taskId: "task-unassigned", executorId: null, createdAt: now + 3 });
-      insertTask(sql, { taskId: "task-active-lease", createdAt: now + 4 });
-      sql.exec(
-        "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
-        "task-active-lease", "agent:worker-2", now + 60_000, now,
-      );
+  it("creates candidate schema without an unbounded startup backfill and reconciles it in a bounded claim batch", async () => {
+  const ledger = ledgerFor("ledger-candidate-index-backfill");
+  await runInDurableObject(ledger, async (instance, state) => {
+    const sql = state.storage.sql;
+    sql.exec("DROP TABLE IF EXISTS orchestrator_claim_candidates");
+    insertTask(sql, { taskId: "task-candidate-b", createdAt: now + 1 });
+    insertTask(sql, { taskId: "task-candidate-a", createdAt: now + 1 });
+    insertTask(sql, { taskId: "task-terminal", state: "COMPLETED", createdAt: now + 2 });
+    insertTask(sql, { taskId: "task-unassigned", executorId: null, createdAt: now + 3 });
+    insertTask(sql, { taskId: "task-active-lease", createdAt: now + 4 });
+    sql.exec(
+      "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
+      "task-active-lease", "agent:worker-2", now + 60_000, now,
+    );
 
-      instance.ensureSchema();
-      const first = sql.exec(
-        "SELECT task_id FROM orchestrator_claim_candidates ORDER BY executor_id, created_at, task_id",
-      ).toArray().map(row => row.task_id);
-      instance.ensureSchema();
-      const second = sql.exec(
-        "SELECT task_id FROM orchestrator_claim_candidates ORDER BY executor_id, created_at, task_id",
-      ).toArray().map(row => row.task_id);
-
-      expect(first).toEqual(["task-candidate-a", "task-candidate-b"]);
-      expect(second).toEqual(first);
-    });
+    instance.ensureSchema();
+    expect(sql.exec("SELECT COUNT(*) AS count FROM orchestrator_claim_candidates").one().count).toBe(0);
+    expect(sql.exec("SELECT COUNT(*) AS count FROM orchestrator_claim_scan_cursors").one().count).toBe(0);
   });
+
+  const claimed = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now + 10),
+    leaseMs: 30_000,
+    now: now + 10,
+  });
+  expect(claimed).toMatchObject({
+    claimed: true,
+    task: { taskId: "task-candidate-a" },
+  });
+
+  await runInDurableObject(ledger, async (instance, state) => {
+    const sql = state.storage.sql;
+    const candidates = sql.exec(
+      "SELECT task_id FROM orchestrator_claim_candidates ORDER BY executor_id, created_at, task_id",
+    ).toArray().map(row => row.task_id);
+    expect(candidates).toEqual(["task-candidate-b"]);
+    expect(sql.exec(
+      "SELECT last_task_id, scan_complete FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
+      "agent:worker-1",
+    ).one()).toMatchObject({ last_task_id: "task-active-lease", scan_complete: 1 });
+    instance.ensureSchema();
+    expect(sql.exec(
+      "SELECT task_id FROM orchestrator_claim_candidates ORDER BY executor_id, created_at, task_id",
+    ).toArray().map(row => row.task_id)).toEqual(["task-candidate-b"]);
+  });
+});
 
   it("creates an executor-scoped ordering index for candidate lookup", async () => {
     const ledger = ledgerFor("ledger-candidate-index-plan");

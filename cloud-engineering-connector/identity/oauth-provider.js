@@ -65,7 +65,7 @@ export function createOAuthProvider({ issuer, resource, apiHandler } = {}) {
     throw new TypeError("An MCP API handler is required.");
   }
 
-  return new OAuthProvider({
+  const provider = new OAuthProvider({
     apiRoute: "/mcp",
     apiHandler,
     defaultHandler: unavailableAuthorizationHandler(),
@@ -83,4 +83,18 @@ export function createOAuthProvider({ issuer, resource, apiHandler } = {}) {
     allowPlainPKCE: false,
     allowImplicitFlow: false,
   });
+
+  return {
+    fetch(request, env, ctx) {
+      const { pathname } = new URL(request.url);
+      const storageRequired = pathname === "/oauth/token" || pathname === "/oauth/revoke";
+      if (storageRequired && (!env || !env.OAUTH_KV)) {
+        return Response.json(
+          { error: "oauth_storage_unavailable" },
+          { status: 503, headers: { "cache-control": "no-store" } },
+        );
+      }
+      return provider.fetch(request, env, ctx);
+    },
+  };
 }

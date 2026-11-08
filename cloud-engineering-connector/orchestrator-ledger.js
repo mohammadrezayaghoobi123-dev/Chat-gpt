@@ -704,9 +704,18 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  getTask({ taskId }) {
-    identifier(taskId, "taskId");
-    const row = this.ctx.storage.sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
+  getTask({ taskId, tenantId, projectId } = {}) {
+    try {
+      identifier(taskId, "taskId");
+      identifier(tenantId, "tenantId");
+      identifier(projectId, "projectId");
+    } catch {
+      return null;
+    }
+    const row = this.ctx.storage.sql.exec(
+      "SELECT * FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+      taskId, tenantId, projectId,
+    ).toArray()[0];
     return taskFromRow(row);
   }
 

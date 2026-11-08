@@ -348,6 +348,8 @@ describe("OrchestratorLedger bounded candidate cursor", () => {
         createdAt: now,
         taskId: "task-127",
       },
+      candidatesExamined: 128,
+      candidateRowsRead: 129,
     });
 
     // This task sorts before the cursor but was created after the scan snapshot.
@@ -366,6 +368,8 @@ describe("OrchestratorLedger bounded candidate cursor", () => {
       claimed: true,
       task: { taskId: "task-128" },
       leaseGeneration: 1,
+      candidatesExamined: 1,
+      candidateRowsRead: 1,
     });
   });
 });
@@ -560,5 +564,56 @@ describe("OrchestratorLedger migration, concurrency, and scale", () => {
       leaseGeneration: 1,
     });
     expect(calls).toBe(235);
+  });
+});
+
+
+describe("OrchestratorLedger claim concurrency and cursor validation", () => {
+  it("allows only one concurrent claimant to acquire the same task lease", async () => {
+    const ledger = ledgerFor("claim-candidate-same-task-contention");
+    await createTask(ledger, "candidate-contention-one", "agent:worker-1");
+    const results = await Promise.all(Array.from({ length: 20 }, async () => ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 30_000,
+      now,
+    })));
+    expect(results.filter(result => result.claimed)).toHaveLength(1);
+    expect(results.filter(result => !result.claimed && result.reason === "NO_TASK_AVAILABLE")).toHaveLength(19);
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ? AND worker_id IS NOT NULL",
+        "candidate-contention-one",
+      ).one().count).toBe(1);
+    });
+  });
+
+  it("rejects a cursor scoped to a different executor before any lease side effect", async () => {
+    const ledger = ledgerFor("claim-candidate-invalid-cursor");
+    await createTask(ledger, "candidate-invalid-cursor", "agent:worker-1");
+    const result = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 30_000,
+      now,
+      cursor: {
+        version: 1,
+        executorId: "agent:worker-2",
+        snapshotSequence: 1,
+        createdAt: now,
+        taskId: "candidate-invalid-cursor",
+      },
+    });
+    expect(result).toEqual({ claimed: false, reason: "INVALID_CLAIM_CURSOR" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ?",
+        "candidate-invalid-cursor",
+      ).one().count).toBe(0);
+    });
   });
 });

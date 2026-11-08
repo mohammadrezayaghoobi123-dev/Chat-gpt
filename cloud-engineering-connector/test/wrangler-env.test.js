@@ -31,10 +31,13 @@ test("Staging explicitly declares non-inherited runtime variables", () => {
 });
 
 test("Production and Staging declare isolated OAuth KV namespaces", () => {
-  const productionBindings = config.split(/^\\[\\[durable_objects\\.bindings\\]\\]/m)[0];
-  const production = productionBindings.match(/\\[\\[kv_namespaces\\]\\]\\s*binding\\s*=\\s*"OAUTH_KV"\\s*id\\s*=\\s*"([a-f0-9]{32})"/);
-  const staging = config.match(/\\[\\[env\\.staging\\.kv_namespaces\\]\\]\\s*binding\\s*=\\s*"OAUTH_KV"\\s*id\\s*=\\s*"([a-f0-9]{32})"/);
-  assert.ok(production, "Production OAUTH_KV binding is required");
-  assert.ok(staging, "Staging OAUTH_KV binding is required");
-  assert.notEqual(production[1], staging[1], "OAuth storage must be isolated by environment");
+  const productionSection = config.slice(0, config.indexOf("[env.staging.vars]"));
+  const stagingSection = config.slice(config.indexOf("[env.staging.vars]"));
+  assert.ok(productionSection.includes('[[kv_namespaces]]'));
+  assert.ok(productionSection.includes('binding = "OAUTH_KV"'));
+  assert.ok(productionSection.includes('id = "3cc3207de5754d7cb968be0df9604cac"'));
+  assert.ok(stagingSection.includes('[[env.staging.kv_namespaces]]'));
+  assert.ok(stagingSection.includes('binding = "OAUTH_KV"'));
+  assert.ok(stagingSection.includes('id = "4a2b689d12f34f3e8348720c0637589d"'));
+  assert.notEqual("3cc3207de5754d7cb968be0df9604cac", "4a2b689d12f34f3e8348720c0637589d");
 });

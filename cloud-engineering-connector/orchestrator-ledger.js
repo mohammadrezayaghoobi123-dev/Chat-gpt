@@ -983,6 +983,16 @@ export class OrchestratorLedger extends DurableObject {
         }
         return { accepted: false, conflict: true, reason: "MESSAGE_ID_CONFLICT" };
       }
+      // message_id remains globally unique for backward compatibility. Detect
+      // a foreign-scope collision before INSERT so callers receive an opaque
+      // conflict instead of a SQLite constraint exception or row disclosure.
+      const globalMessageId = sql.exec(
+        "SELECT message_id FROM orchestrator_processed_messages WHERE message_id = ?",
+        messageId,
+      ).toArray()[0];
+      if (globalMessageId) {
+        return { accepted: false, conflict: true, reason: "MESSAGE_ID_CONFLICT" };
+      }
       sql.exec(
         "INSERT INTO orchestrator_processed_messages (message_id, task_id, input_hash, envelope_json, received_at, status, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, 'ACCEPTED', ?, ?)",
         messageId, taskId, inputHash, envelopeJson, now, tenantId, projectId,
@@ -2049,8 +2059,13 @@ export class OrchestratorLedger extends DurableObject {
       const inserted = this.ctx.storage.transactionSync(() => {
         const latest = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
         if ((latest?.event_hash ?? null) !== previousHash) return "retry";
-        const duplicate = sql.exec("SELECT * FROM orchestrator_audit_events WHERE event_id = ?", eventId).toArray()[0];
-        if (duplicate) return "retry";
+        // event_id remains globally unique for backward compatibility. Keep
+        // the collision response opaque and deterministic across tenant scopes.
+        const duplicate = sql.exec(
+          "SELECT event_id FROM orchestrator_audit_events WHERE event_id = ?",
+          eventId,
+        ).toArray()[0];
+        if (duplicate) return "conflict";
         if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return "replay";
         sql.exec(
           "INSERT INTO orchestrator_audit_events (event_id, task_id, actor_id, actor_role, event_type, details_json, previous_hash, event_hash, created_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -2059,6 +2074,7 @@ export class OrchestratorLedger extends DurableObject {
         return "inserted";
       });
       if (inserted === "replay") return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+      if (inserted === "conflict") return { appended: false, conflict: true, reason: "EVENT_ID_CONFLICT" };
       if (inserted === "retry") continue;
       return { appended: true, event: {
         eventId, taskId, actorId, actorRole, eventType, details: JSON.parse(detailsJson),

@@ -31,6 +31,15 @@ describe("OrchestratorLedger task API scope admission", () => {
           inputHash: "b".repeat(64), envelope: {}, workerId: "worker-a", now,
         }),
         instance.claimTask({ workerId: "worker-a", leaseMs: 1_000, now, taskId: task.taskId }),
+        instance.enqueueOutbox({
+          eventId: "scope-required-event",
+          idempotencyKey: "scope-required-outbox-idem",
+          taskId: task.taskId,
+          eventType: "task.created",
+          payload: { taskId: task.taskId },
+          workerId: "worker-a",
+          now,
+        }),
         instance.advanceAgentRound({
           taskId: task.taskId, expectedVersion: 1, expectedRound: 0, nextRound: 1,
           workerId: "worker-a", leaseGeneration: 1, now,

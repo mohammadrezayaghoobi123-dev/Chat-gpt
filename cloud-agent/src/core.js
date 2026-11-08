@@ -1,7 +1,27 @@
-export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * Core utilities for Master Brain Cloud Agent.
+ * Bounds and session constants are owned by config.js and re-exported here
+ * so existing imports continue to work while configuration is centralized.
+ */
 
-export const SESSION_RATE_LIMIT = 8;
-export const SESSION_RATE_WINDOW_MS = 60_000;
+export {
+  SESSION_TTL_MS,
+  SESSION_RATE_LIMIT,
+  SESSION_RATE_WINDOW_MS,
+  MAX_MESSAGE_CHARS,
+  MAX_HISTORY_MESSAGES,
+  MAX_FILE_BYTES,
+  MAX_TOOL_ROUNDS,
+  MAX_TOOL_CALLS
+} from "./config.js";
+
+import {
+  SESSION_TTL_MS,
+  SESSION_RATE_LIMIT,
+  SESSION_RATE_WINDOW_MS,
+  MAX_MESSAGE_CHARS,
+  MAX_HISTORY_MESSAGES
+} from "./config.js";
 
 export function recordSessionActivity(recentRequests, now) {
   if (!Number.isFinite(now)) throw new TypeError("now must be a finite timestamp.");
@@ -19,12 +39,6 @@ export function isSessionExpired(lastActivity, now = Date.now()) {
   return !Number.isFinite(lastActivity) || !Number.isFinite(now) ||
     now - lastActivity >= SESSION_TTL_MS;
 }
-
-export const MAX_MESSAGE_CHARS = 8_000;
-export const MAX_HISTORY_MESSAGES = 16;
-export const MAX_FILE_BYTES = 50_000;
-export const MAX_TOOL_ROUNDS = 3;
-export const MAX_TOOL_CALLS = 4;
 
 const BLOCKED_PATHS = [
   /(^|\/)(?:\.git|\.github|\.ssh|\.aws|\.azure|\.kube|\.docker)(?:\/|$)/i,
@@ -146,7 +160,7 @@ export function isSessionId(value) {
 
 export function isSafeRef(value) {
   if (typeof value !== "string" || value.length < 1 || value.length > 200) return false;
-  if (!/^[A-Za-z0-9._/-]+$/.test(value) || value.startsWith("/") || value.endsWith("/") || value.includes("//")) return false;
+  if (!/^[A-Za-z0-9._/-]+$/.test(value) || value.startsWith("/") || value.startsWith("-") || value.endsWith("/") || value.includes("//")) return false;
   return !value.split("/").some(part => !part || part === "." || part === ".." || part.endsWith(".lock"));
 }
 

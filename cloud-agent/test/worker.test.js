@@ -4,22 +4,9 @@ import { webcrypto } from "node:crypto";
 import { Script } from "node:vm";
 import { readFile } from "node:fs/promises";
 
-const coreSource = await readFile(new URL("../src/core.js", import.meta.url), "utf8");
-const workerSource = await readFile(new URL("../src/worker.js", import.meta.url), "utf8");
 const wranglerSource = await readFile(new URL("../wrangler.toml", import.meta.url), "utf8");
-const coreUrl = "data:text/javascript;base64," + Buffer.from(coreSource).toString("base64");
-const testableWorkerSource = workerSource
-  .replace(
-    'import { DurableObject } from "cloudflare:workers";',
-    "class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }"
-  )
-  .replace('from "./core.js"', 'from "' + coreUrl + '"')
-  .replace(
-    'import { AgentBudget, DAILY_NEURON_BUDGET } from "./budget.js";',
-    "const DAILY_NEURON_BUDGET = 1000; class AgentBudget {}"
-  );
-const workerUrl = "data:text/javascript;base64," + Buffer.from(testableWorkerSource).toString("base64");
-const { default: worker, AgentSession } = await import(workerUrl);
+const workerSource = await readFile(new URL("../src/worker.js", import.meta.url), "utf8");
+const { default: worker, AgentSession } = await import("./helpers/load-worker.js");
 
 const TOKEN = "t".repeat(48);
 const SESSION = "550e8400-e29b-41d4-a716-446655440000";

@@ -43,7 +43,7 @@ test("OAuth authorization-server metadata advertises the canonical issuer and S2
 });
 
 test("protected-resource metadata binds MCP to the canonical resource and issuer", async () => {
-  const provider = createOAuthProvider();
+  const provider = createOAuthProvider({ issuer: ISSUER, resource: RESOURCE, apiHandler: { async fetch() { return new Response("ok"); } } });
   const response = await provider.fetch(new Request(ISSUER + "/.well-known/oauth-protected-resource/mcp"));
   assert.equal(response.status, 200);
   const metadata = await response.json();

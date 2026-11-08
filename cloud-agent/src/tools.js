@@ -1,9 +1,6 @@
-import { DEFAULT_REF, MAX_FILE_BYTES, TOOL_DEFINITIONS, VERSION } from "./config.js";
+import { DEFAULT_REF, MAX_FILE_BYTES, REPO_FULL, TOOL_DEFINITIONS, VERSION } from "./config.js";
 import { resolveRepository } from "./repository-policy.js";
-import { buildGitHubContentsApiUrl, decodeGitHubBase64Text, isSafeRef, parseToolArguments, readTextBounded } from "./core.js";
-
-// Single policy point for which repository the tools read (see repository-policy.js).
-const { owner: OWNER, repo: REPO } = resolveRepository();
+import { buildGitHubContentsApiUrl, decodeGitHubBase64Text, isSafeRef, isSafeRepoPath, parseToolArguments, readTextBounded } from "./core.js";
 
 export const TOOL_LABELS = new Set(TOOL_DEFINITIONS.map(tool => tool.function.name));
 
@@ -24,13 +21,22 @@ export async function githubJson(pathOrUrl) {
   return JSON.parse(text);
 }
 
-export async function readRawFile(path, ref) {
-  const payload = await githubJson(buildGitHubContentsApiUrl(OWNER, REPO, path, ref));
+// The default branch of a non-default repository comes from GitHub; it is validated like any ref.
+async function defaultRefFor(repository) {
+  if (repository.full === REPO_FULL) return DEFAULT_REF;
+  const info = await githubJson("/repos/" + repository.full);
+  const branch = info?.default_branch;
+  if (typeof branch !== "string" || !isSafeRef(branch)) throw new Error("Repository default branch is invalid.");
+  return branch;
+}
+
+export async function readRawFile(path, ref, repository = resolveRepository()) {
+  const payload = await githubJson(buildGitHubContentsApiUrl(repository.owner, repository.repo, path, ref));
   if (payload?.type !== "file" || payload.encoding !== "base64" || typeof payload.content !== "string") {
     throw new Error("GitHub did not return a regular base64-encoded file.");
   }
   const content = decodeGitHubBase64Text(payload.content, MAX_FILE_BYTES);
-  return { repository: OWNER + "/" + REPO, ref, path, content };
+  return { repository: repository.full, ref, path, content };
 }
 
 export async function executeTool(name, rawArguments) {
@@ -51,15 +57,17 @@ export async function executeTool(name, rawArguments) {
   }
 
   if (name === "project_inspect") {
-    const args = parseToolArguments(rawArguments || "{}", ["branch"]);
+    const args = parseToolArguments(rawArguments || "{}", ["branch", "repository"]);
     if (!args) throw new Error("Invalid arguments.");
-    const branch = args.branch || DEFAULT_REF;
+    const repository = resolveRepository(args.repository);
+    if (args.branch !== undefined && (typeof args.branch !== "string" || !isSafeRef(args.branch))) throw new Error("Invalid branch ref.");
+    const branch = args.branch || await defaultRefFor(repository);
     if (!isSafeRef(branch)) throw new Error("Invalid branch ref.");
-    const branchInfo = await githubJson("/repos/" + OWNER + "/" + REPO + "/branches/" + encodeURIComponent(branch));
-    const tree = await githubJson("/repos/" + OWNER + "/" + REPO + "/git/trees/" + branchInfo.commit.sha + "?recursive=1");
+    const branchInfo = await githubJson("/repos/" + repository.full + "/branches/" + encodeURIComponent(branch));
+    const tree = await githubJson("/repos/" + repository.full + "/git/trees/" + branchInfo.commit.sha + "?recursive=1");
     const paths = (tree.tree || []).filter(item => item.type === "blob").slice(0, 100).map(item => item.path);
     return {
-      repository: OWNER + "/" + REPO,
+      repository: repository.full,
       branch,
       commit_sha: branchInfo.commit.sha,
       file_count_returned: paths.length,
@@ -69,9 +77,12 @@ export async function executeTool(name, rawArguments) {
   }
 
   if (name === "read_project_file") {
-    const args = parseToolArguments(rawArguments || "{}", ["path", "ref"]);
+    const args = parseToolArguments(rawArguments || "{}", ["path", "ref", "repository"]);
     if (!args || typeof args.path !== "string") throw new Error("Invalid arguments.");
-    return readRawFile(args.path, args.ref || DEFAULT_REF);
+    const repository = resolveRepository(args.repository);
+    if (!isSafeRepoPath(args.path)) throw new Error("Invalid repository path.");
+    if (args.ref !== undefined && (typeof args.ref !== "string" || !isSafeRef(args.ref))) throw new Error("Invalid ref.");
+    return readRawFile(args.path, args.ref || await defaultRefFor(repository), repository);
   }
 
   throw new Error("Unknown or disallowed tool.");

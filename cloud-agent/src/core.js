@@ -160,7 +160,7 @@ export function isSessionId(value) {
 
 export function isSafeRef(value) {
   if (typeof value !== "string" || value.length < 1 || value.length > 200) return false;
-  if (!/^[A-Za-z0-9._/-]+$/.test(value) || value.startsWith("/") || value.endsWith("/") || value.includes("//")) return false;
+  if (!/^[A-Za-z0-9._/-]+$/.test(value) || value.startsWith("/") || value.startsWith("-") || value.endsWith("/") || value.includes("//")) return false;
   return !value.split("/").some(part => !part || part === "." || part === ".." || part.endsWith(".lock"));
 }
 

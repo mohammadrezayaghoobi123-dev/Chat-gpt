@@ -9,12 +9,20 @@ export const VERSION = "0.1.1";
 /** Workers AI model. Free-tier compatible. Do not replace with paid-only models. */
 export const MODEL = "@cf/zai-org/glm-4.7-flash";
 
-/** Fixed repository boundary for this MVP. Multi-repo support requires redesign. */
+/** Default repository. Additional repositories are allowlisted explicitly below. */
 export const REPO_OWNER = "mohammadrezayaghoobi123-dev";
 export const REPO_NAME = "Chat-gpt";
 export const REPO_FULL = `${REPO_OWNER}/${REPO_NAME}`;
 
-/** Default ref used when caller does not specify one. */
+/**
+ * Extra repositories the agent may read (read-only, public). Adding an entry is a reviewed
+ * code change: the tools only accept values from this list. A private repository must never
+ * be added without a dedicated read credential design.
+ */
+export const ADDITIONAL_REPOSITORIES = Object.freeze(["mohammadrezayaghoobi123-dev/Master-Brain-MCP-Hub"]);
+export const REPOSITORY_ALLOWLIST = Object.freeze([REPO_FULL, ...ADDITIONAL_REPOSITORIES]);
+
+/** Default ref used for the default repository when caller does not specify one. */
 export const DEFAULT_REF = "master-brain/integrated";
 
 /** Neuron cost model (approximate, based on documented GLM-4.7-Flash rates). */
@@ -61,7 +69,10 @@ export const TOOL_DEFINITIONS = [
       description: "Read public repository metadata, a branch commit, and a bounded list of file paths.",
       parameters: {
         type: "object",
-        properties: { branch: { type: "string", description: "Git branch or ref to inspect." } },
+        properties: {
+          repository: { type: "string", enum: [...REPOSITORY_ALLOWLIST], description: "Allowlisted owner/repo; omit for the default repository." },
+          branch: { type: "string", description: "Git branch or ref to inspect; omit for the repository default." }
+        },
         additionalProperties: false
       }
     }
@@ -70,10 +81,11 @@ export const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "read_project_file",
-      description: "Read one non-sensitive text file from the fixed public GitHub repository at a specified ref.",
+      description: "Read one non-sensitive text file from an allowlisted public GitHub repository at a specified ref.",
       parameters: {
         type: "object",
         properties: {
+          repository: { type: "string", enum: [...REPOSITORY_ALLOWLIST], description: "Allowlisted owner/repo; omit for the default repository." },
           path: { type: "string", description: "Repository-relative file path." },
           ref: { type: "string", description: "Branch, tag, or commit ref." }
         },

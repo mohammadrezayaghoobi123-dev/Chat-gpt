@@ -1,12 +1,11 @@
-import { REPO_FULL, REPO_NAME, REPO_OWNER } from "./config.js";
+import { REPOSITORY_ALLOWLIST, REPO_FULL, REPO_NAME, REPO_OWNER } from "./config.js";
 
-/**
- * Repositories the agent may read. Exactly one today (single-repository MVP).
- * Supporting more repositories means extending this list in config-reviewed code
- * and deliberately exposing a repository argument to the tools; the model can not
- * widen it on its own, because tool arguments are validated against a fixed key set.
- */
-export const REPOSITORY_ALLOWLIST = Object.freeze([REPO_FULL]);
+export { REPOSITORY_ALLOWLIST };
+
+function split(full) {
+  const [owner, repo] = full.split("/");
+  return { owner, repo, full };
+}
 
 /**
  * Resolve the repository a tool call applies to. No request means the configured
@@ -19,7 +18,7 @@ export function resolveRepository(requested) {
   }
   if (typeof requested === "string") {
     const match = REPOSITORY_ALLOWLIST.find(entry => entry.toLowerCase() === requested.toLowerCase());
-    if (match === REPO_FULL) return { owner: REPO_OWNER, repo: REPO_NAME, full: REPO_FULL };
+    if (match) return split(match);
   }
   throw new TypeError("Repository is not allowed.");
 }

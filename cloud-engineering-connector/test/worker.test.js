@@ -1,9 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker.js";
-const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",MCP_RATE_LIMITER:{limit:async()=>({success:true})}};
+const tenantDirectory={idFromName:name=>name,get:name=>({
+ async getActiveMembership(input){return{tenantId:input.tenantId,principalId:input.principalId,membershipId:"test-membership",role:"service-operator",status:"active"}},
+ async authorizeProjectAction(input){return{...input,effect:"allow",decisionId:"test-decision",policyVersion:"test-policy-v1"}}
+})};
+const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",MCP_RATE_LIMITER:{limit:async()=>({success:true})},TENANT_DIRECTORY:tenantDirectory};
 const req=(path,options={})=>{const headers=new Headers(options.headers);if(path==="/mcp"&&!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
-const rpc=(method,params={},id=1)=>req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params})});
+const rpc=(method,params={},id=1)=>{
+ const scopedParams=method==="tools/call"&&params?.name==="create_change_pr"
+  ?{...params,arguments:{tenant_id:"tenant-test",project_id:"project-test",...(params.arguments||{})}}
+  :params;
+ return req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params:scopedParams})});
+};
 test("health reports cloud execution without laptop dependency",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers")});
 test("JSON API responses carry restrictive browser security headers",async()=>{
  const response=await worker.fetch(req("/healthz"),{});
@@ -43,7 +52,7 @@ test("public mode never permits write tools without MCP_AUTH_TOKEN",async()=>{co
 test("MCP rejects missing bearer token",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{"content-type":"application/json","cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize"})}),{...env,MCP_RATE_LIMITER:{limit:async()=>({success:true})}});assert.equal(r.status,401)});
 test("initialize advertises connector identity and tools capability",async()=>{const r=await worker.fetch(rpc("initialize",{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"test",version:"1"}}),env);const b=await r.json();assert.equal(b.result.serverInfo.name,"cloud-engineering-connector");assert.ok(b.result.capabilities.tools)});
 test("tools/list exposes all five declared tools",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();assert.deepEqual(b.result.tools.map(t=>t.name),["project_inspect","read_project_file","engineering_standards","architecture_review","create_change_pr"])});
-test("tools/list schema requires base_branch for create_change_pr",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();const tool=b.result.tools.find(t=>t.name==="create_change_pr");assert.ok(tool,"create_change_pr must be listed");assert.ok(Array.isArray(tool.inputSchema.required));assert.ok(tool.inputSchema.required.includes("base_branch"));assert.ok(Object.hasOwn(tool.inputSchema.properties,"base_branch"));assert.equal(tool.inputSchema.additionalProperties,false)});
+test("tools/list schema requires base_branch for create_change_pr",async()=>{const r=await worker.fetch(rpc("tools/list"),env);const b=await r.json();const tool=b.result.tools.find(t=>t.name==="create_change_pr");assert.ok(tool,"create_change_pr must be listed");assert.ok(Array.isArray(tool.inputSchema.required));assert.ok(tool.inputSchema.required.includes("base_branch"));assert.ok(tool.inputSchema.required.includes("tenant_id"));assert.ok(tool.inputSchema.required.includes("project_id"));assert.ok(Object.hasOwn(tool.inputSchema.properties,"base_branch"));assert.equal(tool.inputSchema.additionalProperties,false)});
 test("architecture review labels its output unverified",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"architecture_review",arguments:{project_goal:"Example",proposed_change:"Add cache"}}),env);const b=await r.json();const result=JSON.parse(b.result.content[0].text);assert.equal(result.status,"review_framework_generated_not_independently_verified");assert.ok(result.mandatory_output_sections.includes("Verification status"))});
 test("write tool fails closed without GitHub token",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",title:"Example",summary:"Test",files:[{path:"README.md",content:"proposal"}]}}),env);const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/GITHUB_TOKEN/)});
 test("change PR rejects credential filenames before API calls",async()=>{const r=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Example",summary:"Test",files:[{path:"credentials.json",content:"token=should-not-pass"}]}}),{...env,GITHUB_TOKEN:"unused"});const b=await r.json();assert.equal(b.result.isError,true);assert.match(b.result.content[0].text,/Rejected unsafe or protected file path/)});
@@ -921,6 +930,28 @@ test("overlong configured MCP bearer tokens fail closed before authentication",a
  assert.equal(limiterCalls,0);
 });
 
+test("create_change_pr denies missing tenant membership before any GitHub API call",async()=>{
+ const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("unexpected GitHub call")};
+ const deniedDirectory={idFromName:name=>name,get:name=>({
+  async getActiveMembership(){return null},
+  async authorizeProjectAction(input){return{...input,effect:"allow",decisionId:"should-not-run",policyVersion:"test"}}
+ })};
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Denied",summary:"No membership",files:[{path:"README.md",content:"proposal"}]}}),{...env,GITHUB_TOKEN:"test-token",TENANT_DIRECTORY:deniedDirectory});
+  const body=await response.json();assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/active tenant membership/i);assert.equal(calls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
+test("create_change_pr denies project policy before any GitHub API call",async()=>{
+ const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("unexpected GitHub call")};
+ const deniedDirectory={idFromName:name=>name,get:name=>({
+  async getActiveMembership(input){return{tenantId:input.tenantId,principalId:input.principalId,membershipId:"test-membership",role:"service-operator",status:"active"}},
+  async authorizeProjectAction(input){return{...input,effect:"deny",decisionId:"deny-decision",policyVersion:"deny-v1"}}
+ })};
+ try{
+  const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Denied",summary:"No policy",files:[{path:"README.md",content:"proposal"}]}}),{...env,GITHUB_TOKEN:"test-token",TENANT_DIRECTORY:deniedDirectory});
+  const body=await response.json();assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/policy denied/i);assert.equal(calls,0);
+ }finally{globalThis.fetch=originalFetch}
+});
 test("create_change_pr records the verified shared-bearer service principal without claiming a human identity", async () => {
   const originalFetch = globalThis.fetch;
   let pullRequestBody;
@@ -972,7 +1003,7 @@ test("create_change_pr records the verified shared-bearer service principal with
     assert.equal(response.status, 200);
     assert.equal(body.result.isError, undefined);
     assert.equal(JSON.parse(body.result.content[0].text).status, "draft_pull_request_created");
-    assert.match(pullRequestBody.body, /Requesting principal: service:shared-mcp-bearer/);
+    assert.match(pullRequestBody.body, /Requesting principal: service:shared-mcp-bearer/);assert.match(pullRequestBody.body,/Tenant: tenant-test/);assert.match(pullRequestBody.body,/Project: project-test/);assert.match(pullRequestBody.body,/Authorization decision: test-decision/);
     assert.match(pullRequestBody.body, /shared bearer; not a human identity/);
   } finally {
     globalThis.fetch = originalFetch;

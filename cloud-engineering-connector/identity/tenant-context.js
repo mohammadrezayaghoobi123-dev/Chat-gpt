@@ -151,6 +151,7 @@ export async function authorizeProjectAction({
     !decision ||
     decision.principalId !== principal.id ||
     decision.tenantId !== tenantContext.tenantId ||
+    decision.action !== action ||
     decision.projectId !== projectSelector ||
     !nonEmptyString(decision.decisionId) ||
     !nonEmptyString(decision.policyVersion)

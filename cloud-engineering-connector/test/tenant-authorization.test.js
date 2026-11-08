@@ -244,6 +244,7 @@ test("rejects an allow decision scoped to a different tenant or project", async 
         async authorizeProjectAction() {
           return {
             effect: "allow",
+            action: "project.read",
             principalId: principal.id,
             tenantId: "tenant-beta",
             projectId: "project-01",

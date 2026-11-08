@@ -2225,3 +2225,25 @@ it("rejects an expired lease even when its generation is still current", async (
     await expect(ledger.getTask({ taskId: "task-0001" }))
       .resolves.toMatchObject({ state: "RUNNING", version: 2 });
   });
+
+it("inserts a newly created unleased task into the claim candidate index atomically", async () => {
+  const ledger = ledgerFor("ledger-candidate-create-task-sync");
+  await createTask(ledger, {
+    task: task("task-candidate-create"),
+    idempotencyKey: "task-candidate-create",
+    inputHash: "f".repeat(64),
+    now,
+  });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    const candidate = state.storage.sql.exec(
+      "SELECT task_id, executor_id, created_at FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-create",
+    ).toArray()[0];
+    expect(candidate).toEqual({
+      task_id: "task-candidate-create",
+      executor_id: "agent:worker-1",
+      created_at: now,
+    });
+  });
+});

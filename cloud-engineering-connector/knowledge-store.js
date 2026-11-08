@@ -457,6 +457,7 @@ export class KnowledgeStore extends DurableObject {
 
   putDocumentRef(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const documentId = identifier(input?.documentId, "documentId");
     const repository = repoName(input?.repository);
     const path = documentPath(input?.path);
@@ -466,39 +467,41 @@ export class KnowledgeStore extends DurableObject {
     if (!SHA256.test(contentSha256)) throw new TypeError("contentSha256 must be a 64-character lowercase SHA-256 digest.");
     const now = timestamp(input?.now);
     const existing = this.ctx.storage.sql.exec(
-      "SELECT repository, path, content_sha256, updated_at FROM knowledge_document_refs " +
-      "WHERE tenant_id = ? AND document_id = ? AND commit_sha = ?",
-      tenantId, documentId, commitSha
+      "SELECT repository, path, content_sha256, updated_at FROM knowledge_document_refs_v4 " +
+      "WHERE tenant_id = ? AND project_id = ? AND document_id = ? AND commit_sha = ?",
+      tenantId, projectId, documentId, commitSha
     ).toArray()[0];
     if (existing) {
       if (existing.repository !== repository || existing.path !== path || existing.content_sha256 !== contentSha256) {
         throw fail("KNOWLEDGE_DOCUMENT_IMMUTABLE", "A Git commit revision cannot be rebound to different document content.");
       }
-      return { tenantId, documentId, repository, path, commitSha, contentSha256, updatedAt: existing.updated_at };
+      return { tenantId, projectId, documentId, repository, path, commitSha, contentSha256, updatedAt: existing.updated_at };
     }
     this.ctx.storage.sql.exec(
-      "INSERT INTO knowledge_document_refs(tenant_id, document_id, repository, path, commit_sha, content_sha256, updated_at) " +
-      "VALUES(?, ?, ?, ?, ?, ?, ?)",
-      tenantId, documentId, repository, path, commitSha, contentSha256, now
+      "INSERT INTO knowledge_document_refs_v4(tenant_id, project_id, document_id, repository, path, commit_sha, content_sha256, updated_at) " +
+      "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+      tenantId, projectId, documentId, repository, path, commitSha, contentSha256, now
     );
-    return { tenantId, documentId, repository, path, commitSha, contentSha256, updatedAt: now };
+    return { tenantId, projectId, documentId, repository, path, commitSha, contentSha256, updatedAt: now };
   }
 
   listDocumentRefs(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const documentId = identifier(input?.documentId, "documentId");
     return this.ctx.storage.sql.exec(
-      "SELECT tenant_id, document_id, repository, path, commit_sha, content_sha256, updated_at " +
-      "FROM knowledge_document_refs WHERE tenant_id = ? AND document_id = ? ORDER BY updated_at DESC",
-      tenantId, documentId
+      "SELECT tenant_id, project_id, document_id, repository, path, commit_sha, content_sha256, updated_at " +
+      "FROM knowledge_document_refs_v4 WHERE tenant_id = ? AND project_id = ? AND document_id = ? ORDER BY updated_at DESC",
+      tenantId, projectId, documentId
     ).toArray().map(row => ({
-      tenantId: row.tenant_id, documentId: row.document_id, repository: row.repository,
+      tenantId: row.tenant_id, projectId: row.project_id, documentId: row.document_id, repository: row.repository,
       path: row.path, commitSha: row.commit_sha, contentSha256: row.content_sha256, updatedAt: row.updated_at
     }));
   }
 
   setDocumentSyncState(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const documentId = identifier(input?.documentId, "documentId");
     if (!SYNC_STATES.has(input?.status)) throw new TypeError("status is not a supported document sync state.");
     const lastSeenCommit = input?.lastSeenCommit ?? null;
@@ -512,24 +515,25 @@ export class KnowledgeStore extends DurableObject {
       ? null : requiredString(input.lastError, "lastError", 500);
     const now = timestamp(input?.now);
     this.ctx.storage.sql.exec(
-      "INSERT INTO knowledge_document_sync(tenant_id, document_id, status, last_seen_commit, last_synced_commit, last_error, updated_at) " +
-      "VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(tenant_id, document_id) DO UPDATE SET " +
+      "INSERT INTO knowledge_document_sync_v4(tenant_id, project_id, document_id, status, last_seen_commit, last_synced_commit, last_error, updated_at) " +
+      "VALUES(?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(tenant_id, project_id, document_id) DO UPDATE SET " +
       "status=excluded.status, last_seen_commit=excluded.last_seen_commit, last_synced_commit=excluded.last_synced_commit, " +
       "last_error=excluded.last_error, updated_at=excluded.updated_at",
-      tenantId, documentId, input.status, lastSeenCommit, lastSyncedCommit, lastError, now
+      tenantId, projectId, documentId, input.status, lastSeenCommit, lastSyncedCommit, lastError, now
     );
-    return this.getDocumentSyncState({ tenantId, documentId });
+    return this.getDocumentSyncState({ tenantId, projectId, documentId });
   }
 
   getDocumentSyncState(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const documentId = identifier(input?.documentId, "documentId");
     const row = this.ctx.storage.sql.exec(
-      "SELECT * FROM knowledge_document_sync WHERE tenant_id = ? AND document_id = ?",
-      tenantId, documentId
+      "SELECT * FROM knowledge_document_sync_v4 WHERE tenant_id = ? AND project_id = ? AND document_id = ?",
+      tenantId, projectId, documentId
     ).toArray()[0];
     return row ? {
-      tenantId: row.tenant_id, documentId: row.document_id, status: row.status,
+      tenantId: row.tenant_id, projectId: row.project_id, documentId: row.document_id, status: row.status,
       lastSeenCommit: row.last_seen_commit, lastSyncedCommit: row.last_synced_commit,
       lastError: row.last_error, updatedAt: row.updated_at
     } : null;
@@ -537,6 +541,7 @@ export class KnowledgeStore extends DurableObject {
 
   async indexDocumentSnapshot(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const documentId = identifier(input?.documentId, "documentId");
     const commitSha = requiredString(input?.commitSha, "commitSha", 40);
     const contentSha256 = requiredString(input?.contentSha256, "contentSha256", 64);
@@ -549,38 +554,44 @@ export class KnowledgeStore extends DurableObject {
     }
     if (await sha256(body) !== contentSha256) throw fail("KNOWLEDGE_CONTENT_DIGEST_MISMATCH", "Indexed text does not match the canonical GitHub content digest.");
     const ref = this.ctx.storage.sql.exec(
-      "SELECT 1 AS found FROM knowledge_document_refs WHERE tenant_id = ? AND document_id = ? AND commit_sha = ? AND content_sha256 = ?",
-      tenantId, documentId, commitSha, contentSha256
+      "SELECT 1 AS found FROM knowledge_document_refs_v4 WHERE tenant_id = ? AND project_id = ? AND document_id = ? AND commit_sha = ? AND content_sha256 = ?",
+      tenantId, projectId, documentId, commitSha, contentSha256
     ).toArray()[0];
     if (!ref) throw fail("KNOWLEDGE_DOCUMENT_REF_REQUIRED", "Register the immutable GitHub Vault revision before indexing its derived text.");
     const now = timestamp(input?.now);
-    this.#indexSource({
-      tenantId, recordType: "document", recordId: documentId, commitSha,
-      contentSha256, title, body, now
+    this.ctx.storage.transactionSync(() => {
+      this.#indexSource({
+        tenantId, projectId, recordType: "document", recordId: documentId, commitSha,
+        contentSha256, title, body, now
+      });
     });
-    return { tenantId, documentId, commitSha, contentSha256, indexedAt: now };
+    return { tenantId, projectId, documentId, commitSha, contentSha256, indexedAt: now };
   }
 
   rebuildIndex(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const sql = this.ctx.storage.sql;
-    sql.exec("DELETE FROM knowledge_fts WHERE tenant_id = ?", tenantId);
-    const sources = sql.exec(
-      "SELECT index_id, tenant_id, record_type, record_id, commit_sha, title, body " +
-      "FROM knowledge_index_sources WHERE tenant_id = ? ORDER BY index_id",
-      tenantId
-    ).toArray();
-    for (const row of sources) {
-      sql.exec(
-        "INSERT INTO knowledge_fts(rowid, tenant_id, record_type, record_id, commit_sha, title, body) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        row.index_id, row.tenant_id, row.record_type, row.record_id, row.commit_sha, row.title, row.body
-      );
-    }
-    return { tenantId, rebuiltRows: sources.length };
+    return this.ctx.storage.transactionSync(() => {
+      sql.exec("DELETE FROM knowledge_fts_v4 WHERE tenant_id = ? AND project_id = ?", tenantId, projectId);
+      const sources = sql.exec(
+        "SELECT index_id, tenant_id, project_id, record_type, record_id, commit_sha, title, body " +
+        "FROM knowledge_index_sources_v4 WHERE tenant_id = ? AND project_id = ? ORDER BY index_id",
+        tenantId, projectId
+      ).toArray();
+      for (const row of sources) {
+        sql.exec(
+          "INSERT INTO knowledge_fts_v4(rowid, tenant_id, project_id, record_type, record_id, commit_sha, title, body) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+          row.index_id, row.tenant_id, row.project_id, row.record_type, row.record_id, row.commit_sha, row.title, row.body
+        );
+      }
+      return { tenantId, projectId, rebuiltRows: sources.length };
+    });
   }
 
   search(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const query = requiredString(input?.query, "query", 256);
     const limit = input?.limit === undefined ? 20 : input.limit;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new TypeError("limit must be an integer from 1 to 50.");
@@ -588,12 +599,12 @@ export class KnowledgeStore extends DurableObject {
     if (!terms.length) throw new TypeError("query must contain at least one searchable term.");
     const match = terms.map(term => '"' + term.replace(/"/g, '""') + '"').join(" AND ");
     return this.ctx.storage.sql.exec(
-      "SELECT record_type, record_id, commit_sha, title, snippet(knowledge_fts, 5, '[', ']', '…', 12) AS snippet, " +
-      "bm25(knowledge_fts) AS score FROM knowledge_fts " +
-      "WHERE knowledge_fts MATCH ? AND tenant_id = ? ORDER BY score LIMIT ?",
-      match, tenantId, limit
+      "SELECT record_type, record_id, commit_sha, title, snippet(knowledge_fts_v4, 5, '[', ']', '…', 12) AS snippet, " +
+      "bm25(knowledge_fts_v4) AS score FROM knowledge_fts_v4 " +
+      "WHERE knowledge_fts_v4 MATCH ? AND tenant_id = ? AND project_id = ? ORDER BY score LIMIT ?",
+      match, tenantId, projectId, limit
     ).toArray().map(row => ({
-      recordType: row.record_type, recordId: row.record_id,
+      tenantId, projectId, recordType: row.record_type, recordId: row.record_id,
       commitSha: row.commit_sha || null, title: row.title, snippet: row.snippet, score: row.score
     }));
   }

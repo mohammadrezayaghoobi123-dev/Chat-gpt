@@ -2,6 +2,8 @@ import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createAgentWorkerAssertion } from "../orchestrator-worker-identity.js";
+import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
+import { canonicalJson } from "../orchestrator-protocol.js";
 
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
@@ -70,6 +72,89 @@ describe("OrchestratorLedger tenant/project audit hash chains", () => {
         "SELECT event_hash FROM orchestrator_audit_events WHERE event_id = ?",
         "audit-alpha-head",
       ).one().event_hash).toBe("c".repeat(64));
+    });
+  });
+
+  it("keeps privileged owner-command audit events inside the target tenant/project chain", async () => {
+    const ledger = ledgerFor("owner-audit-chain-per-tenant-project");
+    await runInDurableObject(ledger, async instance => {
+      const now = 1_800_000_000_000;
+      const keySet = JSON.stringify({ test: "4".repeat(64) });
+      instance.env.LEDGER_OWNER_ASSERTION_KEYS = keySet;
+      instance.env.GITHUB_WEBHOOK_OWNER_ID = "42";
+      instance.env.GITHUB_WEBHOOK_REPOSITORY_ID = "123";
+      instance.env.GITHUB_WEBHOOK_REPOSITORY = "org/repo";
+      const sql = instance.ctx.storage.sql;
+      const tasks = [
+        { taskId: "owner-audit-task-alpha", tenantId: "tenant-alpha", projectId: "project-red" },
+        { taskId: "owner-audit-task-beta", tenantId: "tenant-beta", projectId: "project-blue" },
+      ];
+      for (const task of tasks) {
+        sql.exec(
+          "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'SCHEDULED', 1, ?, ?, ?, ?, ?)",
+          task.taskId, "idem-" + task.taskId, "d".repeat(64), JSON.stringify({
+            ...task, state: "SCHEDULED", version: 1, createdAt: now - 10, updatedAt: now - 10,
+          }), now - 10, now - 10, task.tenantId, task.projectId,
+        );
+      }
+      sql.exec(
+        "INSERT INTO orchestrator_audit_events (event_id, task_id, actor_id, actor_role, event_type, details_json, previous_hash, event_hash, created_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)",
+        "owner-audit-alpha-head", "owner-audit-task-alpha", "42", "owner", "OWNER_NOTE",
+        JSON.stringify({ note: "tenant alpha private owner audit detail" }), "e".repeat(64), now - 5,
+        "tenant-alpha", "project-red",
+      );
+
+      const command = {
+        eventId: "owner-event-beta-1",
+        operation: "cancel",
+        reason: "approved cancellation",
+        taskId: "owner-audit-task-beta",
+      };
+      const commandHashBytes = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(canonicalJson(command)),
+      );
+      const commandHash = Array.from(new Uint8Array(commandHashBytes), byte =>
+        byte.toString(16).padStart(2, "0"),
+      ).join("");
+      const assertionContext = {
+        actorId: "42",
+        repositoryId: 123,
+        taskId: command.taskId,
+        operation: command.operation,
+        deliveryId: "owner-delivery-beta-001",
+        commentId: "987654321",
+        commandHash,
+      };
+      const assertion = await createOwnerAssertion(keySet, "test", assertionContext, now);
+      const result = await instance.executeOwnerCommand({
+        assertion,
+        assertionContext,
+        command,
+        bodySha256: "f".repeat(64),
+        provenance: {
+          eventName: "issue_comment.created",
+          repository: "org/repo",
+          issueNumber: 17,
+          commentCreatedAt: now - 10,
+        },
+        now,
+      });
+
+      expect(result).toMatchObject({ applied: true, operation: "cancel" });
+      const betaAudit = sql.exec(
+        "SELECT previous_hash, tenant_id, project_id FROM orchestrator_audit_events WHERE event_id = ?",
+        "owner-owner-event-beta-1",
+      ).one();
+      expect(betaAudit).toEqual({
+        previous_hash: null,
+        tenant_id: "tenant-beta",
+        project_id: "project-blue",
+      });
+      expect(sql.exec(
+        "SELECT event_hash FROM orchestrator_audit_events WHERE event_id = ?",
+        "owner-audit-alpha-head",
+      ).one().event_hash).toBe("e".repeat(64));
     });
   });
 });

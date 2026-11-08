@@ -135,7 +135,7 @@ describe("OrchestratorLedger claim candidate index", () => {
       const columns = state.storage.sql.exec(
         "PRAGMA index_info(orchestrator_claim_candidates_by_executor_order)",
       ).toArray().map(row => row.name);
-      expect(columns).toEqual(["executor_id", "(created_at,task_id)>(?,?)", "task_id"]);
+      expect(columns).toEqual(["executor_id", "created_at", "task_id"]);
     });
   });
 });

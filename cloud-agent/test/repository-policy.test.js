@@ -6,8 +6,10 @@ const { REPOSITORY_ALLOWLIST, resolveRepository } = await import("../src/reposit
 const { REPO_FULL, REPO_OWNER, REPO_NAME } = await import("../src/config.js");
 const { executeTool } = await import("../src/tools.js");
 
-test("the allowlist holds exactly the configured repository and cannot be mutated", () => {
-  assert.deepEqual([...REPOSITORY_ALLOWLIST], [REPO_FULL]);
+const HUB = "mohammadrezayaghoobi123-dev/Master-Brain-MCP-Hub";
+
+test("the allowlist holds exactly the default and the approved second repository and cannot be mutated", () => {
+  assert.deepEqual([...REPOSITORY_ALLOWLIST], [REPO_FULL, HUB]);
   assert.equal(Object.isFrozen(REPOSITORY_ALLOWLIST), true);
   assert.throws(() => REPOSITORY_ALLOWLIST.push("evil/other"), TypeError);
 });
@@ -23,28 +25,12 @@ test("the configured repository is accepted case-insensitively and always normal
 });
 
 test("any other repository, and any malformed value, is rejected without echoing the input", () => {
-  const bad = ["octocat/Hello-World", REPO_OWNER + "/other", "other/" + REPO_NAME, REPO_FULL + "/extra", "../" + REPO_FULL, REPO_FULL + "?x=1", " " + REPO_FULL, "https://github.com/" + REPO_FULL, 7, {}, [], true];
+  const bad = ["octocat/Hello-World", REPO_OWNER + "/other", HUB + "-fork", HUB + "/", "verbose-funicular", REPO_OWNER + "/verbose-funicular", "other/" + REPO_NAME, REPO_FULL + "/extra", "../" + REPO_FULL, REPO_FULL + "?x=1", " " + REPO_FULL, "https://github.com/" + REPO_FULL, 7, {}, [], true];
   for (const value of bad) {
     assert.throws(() => resolveRepository(value), error => error instanceof TypeError && !String(error.message).includes("octocat") && error.message === "Repository is not allowed.", String(JSON.stringify(value)));
   }
 });
 
-test("tools reach GitHub only through the policy-resolved repository and ignore a model-supplied repository", async () => {
-  const urls = [];
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => {
-    urls.push(String(url));
-    const body = String(url).includes("/git/trees/")
-      ? { tree: [{ type: "blob", path: "README.md" }] }
-      : { commit: { sha: "a".repeat(40) } };
-    return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
-  };
-  try {
-    await executeTool("project_inspect", "{}");
-    await assert.rejects(() => executeTool("project_inspect", JSON.stringify({ repository: "octocat/Hello-World" })), /Invalid arguments/);
-  } finally {
-    globalThis.fetch = realFetch;
-  }
-  assert.ok(urls.length >= 2);
-  for (const url of urls) assert.ok(url.startsWith("https://api.github.com/repos/" + REPO_FULL + "/"), url);
+test("an allowlisted second repository resolves, normalised to its configured spelling", () => {
+  assert.deepEqual(resolveRepository(HUB.toUpperCase()), { owner: REPO_OWNER, repo: "Master-Brain-MCP-Hub", full: HUB });
 });

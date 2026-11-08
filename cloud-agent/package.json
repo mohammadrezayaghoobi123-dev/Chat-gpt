@@ -8,10 +8,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "test:node": "node --test test/core.test.js test/worker.test.js test/session-capability.test.js test/config-wiring.test.js test/observability.test.js test/session-revocation.test.js",
+    "test:node": "node --test test/core.test.js test/worker.test.js test/session-capability.test.js test/config-wiring.test.js test/observability.test.js test/session-revocation.test.js test/repository-policy.test.js test/memory-sync.test.js",
     "test:runtime": "vitest run --config vitest.config.js",
     "test": "npm run test:node && npm run test:runtime",
-    "check": "node --check src/config.js && node --check src/observability.js && node --check src/core.js && node --check src/worker.js && node --check src/http.js && node --check src/tools.js && node --check src/model-budget.js && node --check src/auth.js && node --check src/console.js && node --check src/budget.js && node --check test/core.test.js && node --check test/worker.test.js && node --check test/session-capability.test.js && node --check test/runtime.test.js && node --check vitest.config.js && node --check test/budget.runtime.test.js && node --check test/principal.runtime.test.js && node --check test/helpers/load-worker.js && node --check test/config-wiring.test.js && node --check test/observability.test.js && node --check test/session-revocation.test.js"
+    "check": "node --check src/config.js && node --check src/observability.js && node --check src/core.js && node --check src/worker.js && node --check src/http.js && node --check src/tools.js && node --check src/model-budget.js && node --check src/auth.js && node --check src/console.js && node --check src/budget.js && node --check test/core.test.js && node --check test/worker.test.js && node --check test/session-capability.test.js && node --check test/runtime.test.js && node --check vitest.config.js && node --check test/budget.runtime.test.js && node --check test/principal.runtime.test.js && node --check test/helpers/load-worker.js && node --check test/config-wiring.test.js && node --check test/observability.test.js && node --check test/session-revocation.test.js && node --check test/repository-policy.test.js && node --check test/memory-sync.test.js && node --check src/repository-policy.js && node --check src/memory-sync.js test/repository-policy.test.js test/memory-sync.test.js"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.4.11",

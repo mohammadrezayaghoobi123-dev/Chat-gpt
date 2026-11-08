@@ -1,10 +1,13 @@
 name = "chat-gpt111"
 main = "index.js"
 compatibility_date = "2026-10-23"
+compatibility_flags = ["global_fetch_strictly_public"]
 workers_dev = true
 
 [vars]
 SERVICE_MODE = "cloud"
+OAUTH_ISSUER = "https://chat-gpt111.mohammadrezayaghoobi123.workers.dev"
+MCP_RESOURCE_URL = "https://chat-gpt111.mohammadrezayaghoobi123.workers.dev/mcp"
 
 [[ratelimits]]
 name = "MCP_RATE_LIMITER"
@@ -16,6 +19,8 @@ period = 60
 
 [env.staging.vars]
 SERVICE_MODE = "cloud"
+OAUTH_ISSUER = "https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev"
+MCP_RESOURCE_URL = "https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev/mcp"
 
 [[env.staging.ratelimits]]
 name = "MCP_RATE_LIMITER"

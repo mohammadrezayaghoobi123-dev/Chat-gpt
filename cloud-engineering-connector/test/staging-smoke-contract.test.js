@@ -70,6 +70,8 @@ test("readiness requires the independent OrchestratorLedger SQLite probe", () =>
   assert.match(worker, /env\.ORCHESTRATOR_LEDGER/, "readyz must fail closed when the Ledger binding is absent");
   assert.match(worker, /orchestratorLedgerStub\.ping\(\)/, "readyz must execute the Ledger SQLite probe");
   assert.match(worker, /orchestratorLedgerProbe\.schemaVersion\s*!==\s*7/, "readyz must enforce the Ledger schema version");
+  assert.match(worker, /validateReconciliationEvidenceConfig/, "readyz must validate the independent reconciliation verifier");
+  assert.match(worker, /orchestrator_reconciliation/, "readyz must report reconciliation readiness separately");
   assert.match(worker, /readinessState\.orchestrator_ledger\s*=\s*"ok"/, "readyz must report Ledger readiness separately");
 });
 

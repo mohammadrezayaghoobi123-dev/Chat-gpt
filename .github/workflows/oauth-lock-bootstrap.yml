@@ -8,7 +8,7 @@ on:
       - ".github/workflows/oauth-lock-bootstrap.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   generate-lockfile:
@@ -19,6 +19,8 @@ jobs:
         working-directory: cloud-engineering-connector
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
@@ -27,11 +29,12 @@ jobs:
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund --save-exact @cloudflare/workers-oauth-provider@1.2.4
       - name: Verify lockfile consistency
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: oauth-dependency-lockfile
-          path: |
-            cloud-engineering-connector/package.json
-            cloud-engineering-connector/package-lock.json
-          if-no-files-found: error
-          retention-days: 1
+      - name: Commit generated dependency manifests to this feature branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          if ! git diff --cached --quiet; then
+            git commit -m "build(auth): pin Cloudflare OAuth provider 1.2.4"
+            git push origin HEAD:refs/heads/integration/multi-tenant-migration-2026-11-08
+          fi

@@ -25,21 +25,35 @@ function encodeBase64Url(bytes) {
   return btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
-function loadKey(keySet, kid) {
-  if (typeof keySet !== "string" || keySet.length > 4096 || !KID.test(kid)) {
+function parseKeySet(keySet) {
+  if (typeof keySet !== "string" || keySet.length > 4096) {
     throw new TypeError("Reconciliation key unavailable.");
   }
   const keys = JSON.parse(keySet);
   if (!keys || typeof keys !== "object" || Array.isArray(keys) ||
       Object.keys(keys).length < 1 || Object.keys(keys).length > 4 ||
-      Object.keys(keys).some(key => !KID.test(key))) {
+      Object.keys(keys).some(key => !KID.test(key) ||
+        typeof keys[key] !== "string" || !/^[a-f0-9]{64,128}$/.test(keys[key]))) {
     throw new TypeError("Invalid reconciliation key set.");
   }
-  const encoded = keys[kid];
-  if (typeof encoded !== "string" || !/^[a-f0-9]{64,128}$/.test(encoded)) {
-    throw new TypeError("Reconciliation key unavailable.");
-  }
+  return keys;
+}
+
+function loadKey(keySet, kid) {
+  if (!KID.test(kid)) throw new TypeError("Reconciliation key unavailable.");
+  const encoded = parseKeySet(keySet)[kid];
+  if (typeof encoded !== "string") throw new TypeError("Reconciliation key unavailable.");
   return Uint8Array.from(encoded.match(/.{2}/g), pair => Number.parseInt(pair, 16));
+}
+
+export function validateReconciliationEvidenceConfig(keySet, issuerPolicy) {
+  try {
+    parseKeySet(keySet);
+    allowedIssuers(issuerPolicy);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function allowedIssuers(value) {
@@ -77,7 +91,7 @@ export async function verifyReconciliationEvidence(keySet, issuerPolicy, evidenc
         !Number.isSafeInteger(expiresAt) || expiresAt <= issuedAt ||
         expiresAt - issuedAt > MAX_EVIDENCE_LIFETIME_MS ||
         issuedAt > expected.nowMs + CLOCK_SKEW_MS ||
-        expiresAt < expected.nowMs - CLOCK_SKEW_MS ||
+        expiresAt < expected.nowMs ||
         typeof signature !== "string" || signature.length > 256) {
       throw new TypeError("Invalid reconciliation evidence claims.");
     }

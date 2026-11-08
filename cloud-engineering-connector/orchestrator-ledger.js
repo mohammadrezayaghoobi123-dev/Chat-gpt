@@ -96,6 +96,8 @@ function taskFromRow(row) {
   return row ? parseJson(row.task_json, "task") : null;
 }
 
+const CLAIM_FALLBACK_BATCH_SIZE = 32;
+
 function syncClaimCandidateInTransaction(sql, taskId) {
   const candidate = sql.exec(`
     SELECT task.task_id,
@@ -120,6 +122,38 @@ function syncClaimCandidateInTransaction(sql, taskId) {
     candidate.task_id, candidate.executor_id, candidate.created_at,
   );
   return true;
+}
+
+function reconcileClaimCandidatesInBoundedBatch(sql, executorId, now) {
+  const cursor = sql.exec(
+    "SELECT last_created_at, last_task_id, scan_complete FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
+    executorId,
+  ).toArray()[0];
+  if (cursor?.scan_complete === 1) return { scanned: 0, complete: true };
+
+  const rows = cursor
+    ? sql.exec(
+      "SELECT task_id, created_at FROM orchestrator_tasks WHERE COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? AND (created_at > ? OR (created_at = ? AND task_id > ?)) ORDER BY created_at, task_id LIMIT ?",
+      executorId, cursor.last_created_at, cursor.last_created_at, cursor.last_task_id,
+      CLAIM_FALLBACK_BATCH_SIZE,
+    ).toArray()
+    : sql.exec(
+      "SELECT task_id, created_at FROM orchestrator_tasks WHERE COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? ORDER BY created_at, task_id LIMIT ?",
+      executorId, CLAIM_FALLBACK_BATCH_SIZE,
+    ).toArray();
+
+  for (const row of rows) syncClaimCandidateInTransaction(sql, row.task_id);
+
+  const last = rows.at(-1) ?? cursor;
+  if (last) {
+    const scanComplete = rows.length < CLAIM_FALLBACK_BATCH_SIZE ? 1 : 0;
+    sql.exec(
+      "INSERT INTO orchestrator_claim_scan_cursors (executor_id, last_created_at, last_task_id, scan_complete, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(executor_id) DO UPDATE SET last_created_at = excluded.last_created_at, last_task_id = excluded.last_task_id, scan_complete = excluded.scan_complete, updated_at = excluded.updated_at",
+      executorId, last.created_at ?? last.last_created_at, last.task_id ?? last.last_task_id,
+      scanComplete, now,
+    );
+  }
+  return { scanned: rows.length, complete: rows.length < CLAIM_FALLBACK_BATCH_SIZE };
 }
 
 function outboxFromRow(row) {
@@ -204,6 +238,7 @@ export class OrchestratorLedger extends DurableObject {
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_state ON orchestrator_tasks(state, created_at)");
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_executor_state_created ON orchestrator_tasks(state, COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')), created_at, task_id)");
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_executor_created ON orchestrator_tasks(COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')), created_at, task_id)");
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_processed_messages (
         message_id TEXT PRIMARY KEY,
@@ -232,6 +267,15 @@ export class OrchestratorLedger extends DurableObject {
       )
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_executor_order ON orchestrator_claim_candidates(executor_id, created_at, task_id)");
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_claim_scan_cursors (
+        executor_id TEXT PRIMARY KEY,
+        last_created_at INTEGER NOT NULL,
+        last_task_id TEXT NOT NULL,
+        scan_complete INTEGER NOT NULL CHECK(scan_complete IN (0,1)),
+        updated_at INTEGER NOT NULL
+      )
+    `);
     // A candidate is an active, assigned task with no worker-owned lease.
     // Expired worker-owned leases remain outside this index and are handled by
     // the separately bounded reconciliation/fallback path.
@@ -753,7 +797,7 @@ export class OrchestratorLedger extends DurableObject {
         // executor/order candidate index. An expired worker-owned lease is
         // considered only through the single task bound by reconciliation
         // evidence, avoiding an unbounded scan of leased tasks.
-        const candidateRow = sql.exec(
+        let candidateRow = sql.exec(
           "SELECT task.* FROM orchestrator_claim_candidates AS candidate INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id WHERE candidate.executor_id = ? ORDER BY candidate.created_at, candidate.task_id LIMIT 1",
           workerId,
         ).toArray()[0];
@@ -762,6 +806,13 @@ export class OrchestratorLedger extends DurableObject {
           evidenceRow = sql.exec(
             "SELECT task.* FROM orchestrator_tasks AS task INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.task_id = ? AND task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND lease.lease_generation = ? LIMIT 1",
             reconciliationEvidence.taskId, workerId, now, reconciliationEvidence.priorGeneration,
+          ).toArray()[0];
+        }
+        if (!candidateRow && !evidenceRow) {
+          reconcileClaimCandidatesInBoundedBatch(sql, workerId, now);
+          candidateRow = sql.exec(
+            "SELECT task.* FROM orchestrator_claim_candidates AS candidate INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id WHERE candidate.executor_id = ? ORDER BY candidate.created_at, candidate.task_id LIMIT 1",
+            workerId,
           ).toArray()[0];
         }
         row = candidateRow;

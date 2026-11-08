@@ -41,22 +41,37 @@ function canonicalJson(value, state = { seen: new WeakSet(), nodes: 0 }, depth =
   try {
     if (Array.isArray(value)) {
       if (value.length > 256) reject("INVALID_RESOURCE_DESCRIPTOR");
-      return "[" + value.map(item => canonicalJson(item, state, depth + 1)).join(",") + "]";
+      const ownKeys = Reflect.ownKeys(value);
+      if (ownKeys.length !== value.length + 1 || !ownKeys.includes("length")) {
+        reject("INVALID_RESOURCE_DESCRIPTOR");
+      }
+      const entries = [];
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor || !descriptor.enumerable ||
+            !Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+          reject("INVALID_RESOURCE_DESCRIPTOR");
+        }
+        entries.push(canonicalJson(descriptor.value, state, depth + 1));
+      }
+      return "[" + entries.join(",") + "]";
     }
 
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
       reject("INVALID_RESOURCE_DESCRIPTOR");
     }
-    if (Object.getOwnPropertySymbols(value).length > 0) {
+
+    const ownKeys = Reflect.ownKeys(value);
+    const keys = Object.keys(value).sort();
+    if (ownKeys.length !== keys.length || ownKeys.some(key => typeof key !== "string") ||
+        keys.length > 128) {
       reject("INVALID_RESOURCE_DESCRIPTOR");
     }
-
-    const keys = Object.keys(value).sort();
-    if (keys.length > 128) reject("INVALID_RESOURCE_DESCRIPTOR");
     const entries = keys.map(key => {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+      if (!descriptor || !descriptor.enumerable ||
+          !Object.prototype.hasOwnProperty.call(descriptor, "value")) {
         reject("INVALID_RESOURCE_DESCRIPTOR");
       }
       return JSON.stringify(key) + ":" + canonicalJson(descriptor.value, state, depth + 1);

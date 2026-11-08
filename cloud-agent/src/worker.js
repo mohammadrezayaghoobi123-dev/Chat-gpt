@@ -40,6 +40,9 @@ import {
   TOOL_DEFINITIONS,
   VERSION
 } from "./config.js";
+import { logAuthFailure, logBudget, logEvent, logModelInvocation, logToolCall } from "./observability.js";
+
+const TOOL_LABELS = new Set(TOOL_DEFINITIONS.map(tool => tool.function.name));
 
 function json(data, status = 200, headers = {}) {
   return Response.json(data, {
@@ -149,9 +152,10 @@ function actualNeuronsFromUsage(raw) {
   ));
 }
 
-async function reserveModelBudget(env, messages) {
+async function reserveModelBudget(env, messages, chatId) {
   const neurons = estimateReservedNeurons(messages);
   if (neurons > DAILY_NEURON_BUDGET) {
+    logBudget("denied", { chat_id: chatId, status: 429, reason: "request_exceeds_daily_budget", reserved_neurons: neurons });
     return { ok: false, status: 429, error: "This request exceeds the remaining daily model budget." };
   }
   const requestId = crypto.randomUUID();
@@ -164,6 +168,7 @@ async function reserveModelBudget(env, messages) {
   }));
   if (response.status === 429) {
     const result = await response.json().catch(() => ({}));
+    logBudget("denied", { chat_id: chatId, status: 429, reason: "daily_budget_exhausted", reserved_neurons: neurons });
     return {
       ok: false,
       status: 429,
@@ -171,11 +176,15 @@ async function reserveModelBudget(env, messages) {
       retryAfter: response.headers.get("retry-after")
     };
   }
-  if (!response.ok) throw new Error("Daily model budget reservation failed.");
+  if (!response.ok) {
+    logBudget("reserve_failed", { chat_id: chatId, status: response.status, reserved_neurons: neurons });
+    throw new Error("Daily model budget reservation failed.");
+  }
+  logBudget("reserve", { chat_id: chatId, reserved_neurons: neurons });
   return { ok: true, requestId, reservedNeurons: neurons, stub };
 }
 
-async function settleModelBudget(reservation, raw, success) {
+async function settleModelBudget(reservation, raw, success, chatId) {
   const actualNeurons = success ? actualNeuronsFromUsage(raw) : null;
   const response = await reservation.stub.fetch(new Request("https://agent-budget.internal/settle", {
     method: "POST",
@@ -186,7 +195,11 @@ async function settleModelBudget(reservation, raw, success) {
       ...(actualNeurons === null ? {} : { actual_neurons: actualNeurons })
     })
   }));
-  if (!response.ok) throw new Error("Daily model budget settlement failed.");
+  if (!response.ok) {
+    logBudget("settle_failed", { chat_id: chatId, success, status: response.status, reserved_neurons: reservation.reservedNeurons });
+    throw new Error("Daily model budget settlement failed.");
+  }
+  logBudget("settle", { chat_id: chatId, success, reserved_neurons: reservation.reservedNeurons, actual_neurons: actualNeurons });
 }
 
 function createSessionCapability() {
@@ -456,12 +469,13 @@ export class AgentSession extends DurableObject {
       ...history,
       { role: "user", content: body.message.trim() }
     ];
+    const chatId = crypto.randomUUID();
     let toolCallsUsed = 0;
     let finalText = "";
 
     try {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-        const reservation = await reserveModelBudget(this.env, messages);
+        const reservation = await reserveModelBudget(this.env, messages, chatId);
         if (!reservation.ok) {
           return json(
             { error: reservation.error },
@@ -479,10 +493,12 @@ export class AgentSession extends DurableObject {
             temperature: 0
           });
         } catch (error) {
-          await settleModelBudget(reservation, null, false);
+          logModelInvocation(chatId, false, reservation.reservedNeurons, null);
+          await settleModelBudget(reservation, null, false, chatId);
           throw error;
         }
-        await settleModelBudget(reservation, raw, true);
+        logModelInvocation(chatId, true, reservation.reservedNeurons, actualNeuronsFromUsage(raw));
+        await settleModelBudget(reservation, raw, true, chatId);
         const completion = getCompletion(raw);
         const message = completion?.choices?.[0]?.message;
         if (!message) throw new Error("Model returned no completion message.");
@@ -492,16 +508,26 @@ export class AgentSession extends DurableObject {
           finalText = extractAssistantText(message);
           break;
         }
-        const calls = validateToolCalls(rawCalls, MAX_TOOL_CALLS - toolCallsUsed);
+        let calls;
+        try {
+          calls = validateToolCalls(rawCalls, MAX_TOOL_CALLS - toolCallsUsed);
+        } catch (error) {
+          logEvent("warn", "tool_call_rejected", { chat_id: chatId, requested_calls: rawCalls.length });
+          throw error;
+        }
         messages.push({ ...message, tool_calls: calls });
         for (const call of calls) {
           toolCallsUsed += 1;
           let output;
+          const toolStarted = Date.now();
+          let toolSucceeded = true;
           try {
             output = await executeTool(call.function.name, call.function.arguments);
           } catch (error) {
+            toolSucceeded = false;
             output = { error: error instanceof Error ? error.message : "Tool failed." };
           }
+          logToolCall(chatId, TOOL_LABELS.has(call.function.name) ? call.function.name : "unknown", toolSucceeded, Date.now() - toolStarted);
           messages.push({
             role: "tool",
             tool_call_id: call.id,
@@ -510,10 +536,14 @@ export class AgentSession extends DurableObject {
         }
       }
     } catch {
+      logEvent("error", "chat_failed", { chat_id: chatId, stage: "model_or_tool", tool_calls: toolCallsUsed });
       return json({ error: "The model or a bounded repository tool failed. No project changes were made." }, 503);
     }
 
-    if (!finalText) return json({ error: "The agent reached its bounded tool-call limit without a final answer." }, 502);
+    if (!finalText) {
+      logEvent("warn", "chat_failed", { chat_id: chatId, stage: "tool_limit", tool_calls: toolCallsUsed });
+      return json({ error: "The agent reached its bounded tool-call limit without a final answer." }, 502);
+    }
     const nextHistory = boundedHistory([
       ...history,
       { role: "user", content: body.message.trim() },
@@ -525,6 +555,7 @@ export class AgentSession extends DurableObject {
       "last-activity-at": lastActivity
     });
     await this.ctx.storage.setAlarm(lastActivity + SESSION_TTL_MS);
+    logEvent("info", "chat_completed", { chat_id: chatId, tool_calls: toolCallsUsed });
     return json({ answer: finalText, model: MODEL, tool_calls: toolCallsUsed, read_only: true });
   }
 
@@ -599,6 +630,7 @@ async function handleFetch(request, env) {
     if (!isCreateSession && !match) return json({ error: "Not found" }, 404);
     const principal = await resolvePrincipal(request, env);
     if (!principal.ok) {
+      logAuthFailure(principal.status === 401 ? "unauthorized" : "identity_unavailable");
       if (principal.status === 401) {
         let authFailureAllowed;
         try {
@@ -611,9 +643,11 @@ async function handleFetch(request, env) {
             "master-brain-cloud-agent-auth-failure:" + clientKey
           );
         } catch {
+          logAuthFailure("auth_limiter_unavailable");
           return json({ error: "The authentication rate limiter is unavailable." }, 503);
         }
         if (!authFailureAllowed) {
+          logAuthFailure("auth_rate_limited");
           return json({ error: "Authentication attempt rate limit reached." }, 429, { "retry-after": "60" });
         }
       }

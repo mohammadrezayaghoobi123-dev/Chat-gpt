@@ -730,7 +730,12 @@ export class OrchestratorLedger extends DurableObject {
     const hasReconciliationEvidence = Boolean(
       reconciliationEvidence &&
       reconciliationEvidence.checked === true &&
+      typeof reconciliationEvidence.taskId === "string" &&
+      reconciliationEvidence.taskId.length > 0 &&
+      reconciliationEvidence.taskId.length <= 128 &&
+      (!taskId || reconciliationEvidence.taskId === taskId) &&
       Number.isSafeInteger(reconciliationEvidence.priorGeneration) &&
+      reconciliationEvidence.priorGeneration >= 1 &&
       typeof reconciliationEvidence.evidenceRef === "string" &&
       reconciliationEvidence.evidenceRef.length > 0 &&
       reconciliationEvidence.evidenceRef.length <= 512
@@ -744,13 +749,27 @@ export class OrchestratorLedger extends DurableObject {
           taskId,
         ).toArray()[0];
       } else {
-        // Push lease eligibility into SQLite so claim work is bounded to one
-        // candidate row instead of paging through every active lease in JS.
-        row = sql.exec(
-          "SELECT task.* FROM orchestrator_tasks AS task LEFT JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND (lease.task_id IS NULL OR lease.worker_id IS NULL OR (lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND ? = 1 AND lease.lease_generation = ?)) ORDER BY task.created_at, task.task_id LIMIT 1",
-          workerId, now, hasReconciliationEvidence ? 1 : 0,
-          hasReconciliationEvidence ? reconciliationEvidence.priorGeneration : -1,
+        // The primary scheduler path reads only unleased rows from the
+        // executor/order candidate index. An expired worker-owned lease is
+        // considered only through the single task bound by reconciliation
+        // evidence, avoiding an unbounded scan of leased tasks.
+        const candidateRow = sql.exec(
+          "SELECT task.* FROM orchestrator_claim_candidates AS candidate INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id WHERE candidate.executor_id = ? ORDER BY candidate.created_at, candidate.task_id LIMIT 1",
+          workerId,
         ).toArray()[0];
+        let evidenceRow;
+        if (hasReconciliationEvidence) {
+          evidenceRow = sql.exec(
+            "SELECT task.* FROM orchestrator_tasks AS task INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.task_id = ? AND task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND lease.lease_generation = ? LIMIT 1",
+            reconciliationEvidence.taskId, workerId, now, reconciliationEvidence.priorGeneration,
+          ).toArray()[0];
+        }
+        row = candidateRow;
+        if (evidenceRow && (!row ||
+            evidenceRow.created_at < row.created_at ||
+            (evidenceRow.created_at === row.created_at && evidenceRow.task_id < row.task_id))) {
+          row = evidenceRow;
+        }
       }
 
       if (!row) {
@@ -767,8 +786,9 @@ export class OrchestratorLedger extends DurableObject {
             ).toArray()[0]);
           }
           blockedByReconciliation = Boolean(sql.exec(
-            "SELECT 1 FROM orchestrator_tasks AS task INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND (? = 0 OR lease.lease_generation != ?) LIMIT 1",
+            "SELECT 1 FROM orchestrator_tasks AS task INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND (? = 0 OR lease.task_id != ? OR lease.lease_generation != ?) LIMIT 1",
             workerId, now, hasReconciliationEvidence ? 1 : 0,
+            hasReconciliationEvidence ? reconciliationEvidence.taskId : "",
             hasReconciliationEvidence ? reconciliationEvidence.priorGeneration : -1,
           ).toArray()[0]);
         }
@@ -799,6 +819,7 @@ export class OrchestratorLedger extends DurableObject {
         generation = lease.lease_generation + 1;
         if (lease.worker_id !== null && lease.lease_until <= now) {
           if (!hasReconciliationEvidence ||
+              reconciliationEvidence.taskId !== row.task_id ||
               reconciliationEvidence.priorGeneration !== lease.lease_generation) {
             return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
           }

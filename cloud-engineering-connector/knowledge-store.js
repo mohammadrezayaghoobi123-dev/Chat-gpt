@@ -241,7 +241,7 @@ export class KnowledgeStore extends DurableObject {
     return { ok: Number(result.ok) === 1, schemaVersion: Number(migration.version ?? 0) };
   }
 
-  indexSource({ tenantId, recordType, recordId, commitSha = "", contentSha256, title, body, now }) {
+  #indexSource({ tenantId, recordType, recordId, commitSha = "", contentSha256, title, body, now }) {
     const sql = this.ctx.storage.sql;
     const existing = sql.exec(
       "SELECT index_id FROM knowledge_index_sources WHERE tenant_id = ? AND record_type = ? AND record_id = ? AND commit_sha = ?",
@@ -300,7 +300,7 @@ export class KnowledgeStore extends DurableObject {
       "properties_json=excluded.properties_json, version=excluded.version, updated_at=excluded.updated_at",
       tenantId, entityId, entityType, name, properties, version, existing?.created_at ?? now, now
     );
-    this.indexSource({
+    this.#indexSource({
       tenantId, recordType: "entity", recordId: entityId, contentSha256: "entity-v" + version,
       title: name, body: properties, now
     });
@@ -486,7 +486,7 @@ export class KnowledgeStore extends DurableObject {
     ).toArray()[0];
     if (!ref) throw fail("KNOWLEDGE_DOCUMENT_REF_REQUIRED", "Register the immutable GitHub Vault revision before indexing its derived text.");
     const now = timestamp(input?.now);
-    this.indexSource({
+    this.#indexSource({
       tenantId, recordType: "document", recordId: documentId, commitSha,
       contentSha256, title, body, now
     });

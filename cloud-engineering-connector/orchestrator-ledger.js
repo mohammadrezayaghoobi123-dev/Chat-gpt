@@ -136,8 +136,8 @@ function reconcileClaimCandidatesInBoundedBatch(sql, executorId, now) {
 
   const rows = cursor
     ? sql.exec(
-      "SELECT task_id, created_at FROM orchestrator_tasks WHERE COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? AND (created_at > ? OR (created_at = ? AND task_id > ?)) ORDER BY created_at, task_id LIMIT ?",
-      executorId, cursor.last_created_at, cursor.last_created_at, cursor.last_task_id,
+      "SELECT task_id, created_at FROM orchestrator_tasks WHERE COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? AND (created_at, task_id) > (?, ?) ORDER BY created_at, task_id LIMIT ?",
+      executorId, cursor.last_created_at, cursor.last_task_id,
       CLAIM_FALLBACK_BATCH_SIZE,
     ).toArray()
     : sql.exec(

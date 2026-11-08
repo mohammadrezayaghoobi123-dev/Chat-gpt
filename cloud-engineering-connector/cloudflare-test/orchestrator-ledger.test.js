@@ -2519,3 +2519,50 @@ it("consumes each reconciliation evidence ID once across lease generations", asy
     ).one().count).toBe(1);
   });
 });
+
+
+it("claims multiple executor-scoped tasks concurrently without duplicate ownership", async () => {
+  const ledger = ledgerFor("ledger-multi-worker-multi-task-claims");
+  const taskIds = [];
+  for (let i = 0; i < 8; i += 1) {
+    const workerId = i < 4 ? "agent:worker-1" : "agent:worker-2";
+    const taskId = "task-multi-worker-" + String(i + 1).padStart(2, "0");
+    const createdAt = now + i;
+    taskIds.push({ taskId, workerId });
+    await createTask(ledger, {
+      task: {
+        ...task(taskId), executorId: workerId, createdAt, updatedAt: createdAt,
+      },
+      idempotencyKey: taskId,
+      inputHash: i.toString(16).padStart(2, "0").repeat(32),
+      now: createdAt,
+    });
+  }
+
+  const claims = await Promise.all(taskIds.map(async ({ workerId }) => ledger.claimTask({
+    workerId,
+    workerAssertion: await claimAssertion(workerId, now + 100),
+    leaseMs: 30_000,
+    now: now + 100,
+  })));
+  expect(claims.every(result => result.claimed)).toBe(true);
+  const claimedIds = claims.map(result => result.task.taskId);
+  expect(new Set(claimedIds).size).toBe(8);
+  expect(claimedIds.sort()).toEqual(taskIds.map(item => item.taskId).sort());
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE worker_id IS NOT NULL",
+    ).one().count).toBe(8);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates",
+    ).one().count).toBe(0);
+    const ownership = state.storage.sql.exec(
+      "SELECT lease.worker_id, COUNT(*) AS count FROM orchestrator_execution_leases AS lease GROUP BY lease.worker_id ORDER BY lease.worker_id",
+    ).toArray();
+    expect(ownership).toEqual([
+      { worker_id: "agent:worker-1", count: 4 },
+      { worker_id: "agent:worker-2", count: 4 },
+    ]);
+  });
+});

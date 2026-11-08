@@ -71,17 +71,13 @@ export function createOAuthProvider({ issuer, resource, apiHandler } = {}) {
     defaultHandler: unavailableAuthorizationHandler(),
     authorizeEndpoint: "/authorize",
     tokenEndpoint: "/oauth/token",
-    scopesSupported: SUPPORTED_SCOPES,
+    requiredScopes: REQUIRED_SCOPES,
     resourceMetadata: {
       resource: resourceUrl.toString(),
-      authorization_servers: [issuerUrl.origin],
-      scopes_supported: REQUIRED_SCOPES,
       bearer_methods_supported: ["header"],
       resource_name: "Cloud Engineering Connector",
     },
     clientIdMetadataDocumentEnabled: true,
-    allowPlainPKCE: false,
-    allowImplicitFlow: false,
   });
 
   return {

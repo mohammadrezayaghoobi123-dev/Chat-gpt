@@ -277,41 +277,8 @@ export class OrchestratorLedger extends DurableObject {
         updated_at INTEGER NOT NULL
       )
     `);
-    // A candidate is an active, assigned task with no worker-owned lease.
-    // Expired worker-owned leases remain outside this index and are handled by
-    // the separately bounded reconciliation/fallback path.
-    this.ctx.storage.transactionSync(() => {
-      sql.exec(`
-        INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at)
-        SELECT task.task_id,
-               COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')),
-               task.created_at
-        FROM orchestrator_tasks AS task
-        WHERE task.state IN ('SCHEDULED','RUNNING','VERIFYING')
-          AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM orchestrator_execution_leases AS lease
-            WHERE lease.task_id = task.task_id AND lease.worker_id IS NOT NULL
-          )
-        ON CONFLICT(task_id) DO UPDATE SET
-          executor_id = excluded.executor_id,
-          created_at = excluded.created_at
-      `);
-      sql.exec(`
-        DELETE FROM orchestrator_claim_candidates
-        WHERE NOT EXISTS (
-          SELECT 1
-          FROM orchestrator_tasks AS task
-          WHERE task.task_id = orchestrator_claim_candidates.task_id
-            AND task.state IN ('SCHEDULED','RUNNING','VERIFYING')
-            AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) IS NOT NULL
-            AND NOT EXISTS (
-              SELECT 1 FROM orchestrator_execution_leases AS lease
-              WHERE lease.task_id = task.task_id AND lease.worker_id IS NOT NULL
-            )
-        )
-      `);
-    });
+    // Legacy task discovery is performed incrementally by the bounded claim fallback.
+    // No full-table scan runs while a Durable Object starts.
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_outbox_events (
         event_id TEXT PRIMARY KEY,
@@ -810,6 +777,7 @@ export class OrchestratorLedger extends DurableObject {
         // executor/order candidate index. An expired worker-owned lease is
         // considered only through the single task bound by reconciliation
         // evidence, avoiding an unbounded scan of leased tasks.
+        reconcileClaimCandidatesInBoundedBatch(sql, workerId, now);
         let candidateRow = sql.exec(
           "SELECT task.* FROM orchestrator_claim_candidates AS candidate INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id WHERE candidate.executor_id = ? ORDER BY candidate.created_at, candidate.task_id LIMIT 1",
           workerId,
@@ -819,13 +787,6 @@ export class OrchestratorLedger extends DurableObject {
           evidenceRow = sql.exec(
             "SELECT task.* FROM orchestrator_tasks AS task INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.task_id = ? AND task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND lease.lease_generation = ? LIMIT 1",
             verifiedReconciliationEvidence.taskId, workerId, now, verifiedReconciliationEvidence.priorGeneration,
-          ).toArray()[0];
-        }
-        if (!candidateRow && !evidenceRow) {
-          reconcileClaimCandidatesInBoundedBatch(sql, workerId, now);
-          candidateRow = sql.exec(
-            "SELECT task.* FROM orchestrator_claim_candidates AS candidate INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id WHERE candidate.executor_id = ? ORDER BY candidate.created_at, candidate.task_id LIMIT 1",
-            workerId,
           ).toArray()[0];
         }
         row = candidateRow;

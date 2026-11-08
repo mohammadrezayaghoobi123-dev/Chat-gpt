@@ -396,3 +396,24 @@ test("rejects non-JSON resource descriptors before policy evaluation", async () 
   );
   assert.equal(calls, 0);
 });
+
+
+test("rejects sparse arrays in resource descriptors before policy evaluation", async () => {
+  let calls = 0;
+  const sparse = [];
+  sparse.length = 1;
+  await assert.rejects(
+    authorizeProjectAction({
+      principal,
+      tenantContext,
+      projectSelector: "project-01",
+      action: "project.read",
+      resource: sparse,
+      authorizationStore: {
+        async authorizeProjectAction() { calls += 1; return {}; },
+      },
+    }),
+    error => error.code === "INVALID_RESOURCE_DESCRIPTOR",
+  );
+  assert.equal(calls, 0);
+});

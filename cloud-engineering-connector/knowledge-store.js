@@ -276,38 +276,39 @@ export class KnowledgeStore extends DurableObject {
     return { ok: Number(result.ok) === 1, schemaVersion: Number(migration.version ?? 0) };
   }
 
-  #indexSource({ tenantId, recordType, recordId, commitSha = "", contentSha256, title, body, now }) {
+  #indexSource({ tenantId, projectId, recordType, recordId, commitSha = "", contentSha256, title, body, now }) {
     const sql = this.ctx.storage.sql;
     const existing = sql.exec(
-      "SELECT index_id FROM knowledge_index_sources WHERE tenant_id = ? AND record_type = ? AND record_id = ? AND commit_sha = ?",
-      tenantId, recordType, recordId, commitSha
+      "SELECT index_id FROM knowledge_index_sources_v4 WHERE tenant_id = ? AND project_id = ? AND record_type = ? AND record_id = ? AND commit_sha = ?",
+      tenantId, projectId, recordType, recordId, commitSha
     ).toArray()[0];
     if (existing) {
-      sql.exec("DELETE FROM knowledge_fts WHERE rowid = ?", existing.index_id);
+      sql.exec("DELETE FROM knowledge_fts_v4 WHERE rowid = ?", existing.index_id);
       sql.exec(
-        "UPDATE knowledge_index_sources SET content_sha256 = ?, title = ?, body = ?, updated_at = ? WHERE index_id = ?",
-        contentSha256, title, body, now, existing.index_id
+        "UPDATE knowledge_index_sources_v4 SET content_sha256 = ?, title = ?, body = ?, updated_at = ? WHERE tenant_id = ? AND project_id = ? AND index_id = ?",
+        contentSha256, title, body, now, tenantId, projectId, existing.index_id
       );
       sql.exec(
-        "INSERT INTO knowledge_fts(rowid, tenant_id, record_type, record_id, commit_sha, title, body) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        existing.index_id, tenantId, recordType, recordId, commitSha, title, body
+        "INSERT INTO knowledge_fts_v4(rowid, tenant_id, project_id, record_type, record_id, commit_sha, title, body) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        existing.index_id, tenantId, projectId, recordType, recordId, commitSha, title, body
       );
       return existing.index_id;
     }
     const inserted = sql.exec(
-      "INSERT INTO knowledge_index_sources(tenant_id, record_type, record_id, commit_sha, content_sha256, title, body, updated_at) " +
-      "VALUES(?, ?, ?, ?, ?, ?, ?, ?) RETURNING index_id",
-      tenantId, recordType, recordId, commitSha, contentSha256, title, body, now
+      "INSERT INTO knowledge_index_sources_v4(tenant_id, project_id, record_type, record_id, commit_sha, content_sha256, title, body, updated_at) " +
+      "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING index_id",
+      tenantId, projectId, recordType, recordId, commitSha, contentSha256, title, body, now
     ).one();
     sql.exec(
-      "INSERT INTO knowledge_fts(rowid, tenant_id, record_type, record_id, commit_sha, title, body) VALUES(?, ?, ?, ?, ?, ?, ?)",
-      inserted.index_id, tenantId, recordType, recordId, commitSha, title, body
+      "INSERT INTO knowledge_fts_v4(rowid, tenant_id, project_id, record_type, record_id, commit_sha, title, body) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+      inserted.index_id, tenantId, projectId, recordType, recordId, commitSha, title, body
     );
     return inserted.index_id;
   }
 
   upsertEntity(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const entityId = identifier(input?.entityId, "entityId");
     const entityType = requiredString(input?.entityType, "entityType", MAX_TYPE);
     const name = requiredString(input?.name, "name", MAX_NAME);
@@ -317,40 +318,43 @@ export class KnowledgeStore extends DurableObject {
     }
     const now = timestamp(input?.now);
     const sql = this.ctx.storage.sql;
-    const existing = sql.exec(
-      "SELECT version, created_at FROM knowledge_entities WHERE tenant_id = ? AND entity_id = ?",
-      tenantId, entityId
-    ).toArray()[0];
-    if (!existing && input.expectedVersion !== 0) {
-      throw fail("KNOWLEDGE_VERSION_CONFLICT", "Entity does not exist at the expected version.");
-    }
-    if (existing && existing.version !== input.expectedVersion) {
-      throw fail("KNOWLEDGE_VERSION_CONFLICT", "Entity version changed; reload before updating.");
-    }
-    const version = existing ? existing.version + 1 : 1;
-    sql.exec(
-      "INSERT INTO knowledge_entities(tenant_id, entity_id, entity_type, name, properties_json, version, created_at, updated_at) " +
-      "VALUES(?, ?, ?, ?, ?, ?, ?, ?) " +
-      "ON CONFLICT(tenant_id, entity_id) DO UPDATE SET entity_type=excluded.entity_type, name=excluded.name, " +
-      "properties_json=excluded.properties_json, version=excluded.version, updated_at=excluded.updated_at",
-      tenantId, entityId, entityType, name, properties, version, existing?.created_at ?? now, now
-    );
-    this.#indexSource({
-      tenantId, recordType: "entity", recordId: entityId, contentSha256: "entity-v" + version,
-      title: name, body: properties, now
+    return this.ctx.storage.transactionSync(() => {
+      const existing = sql.exec(
+        "SELECT version, created_at FROM knowledge_entities_v4 WHERE tenant_id = ? AND project_id = ? AND entity_id = ?",
+        tenantId, projectId, entityId
+      ).toArray()[0];
+      if (!existing && input.expectedVersion !== 0) {
+        throw fail("KNOWLEDGE_VERSION_CONFLICT", "Entity does not exist at the expected version.");
+      }
+      if (existing && existing.version !== input.expectedVersion) {
+        throw fail("KNOWLEDGE_VERSION_CONFLICT", "Entity version changed; reload before updating.");
+      }
+      const version = existing ? existing.version + 1 : 1;
+      sql.exec(
+        "INSERT INTO knowledge_entities_v4(tenant_id, project_id, entity_id, entity_type, name, properties_json, version, created_at, updated_at) " +
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT(tenant_id, project_id, entity_id) DO UPDATE SET entity_type=excluded.entity_type, name=excluded.name, " +
+        "properties_json=excluded.properties_json, version=excluded.version, updated_at=excluded.updated_at",
+        tenantId, projectId, entityId, entityType, name, properties, version, existing?.created_at ?? now, now
+      );
+      this.#indexSource({
+        tenantId, projectId, recordType: "entity", recordId: entityId, contentSha256: "entity-v" + version,
+        title: name, body: properties, now
+      });
+      return this.getEntity({ tenantId, projectId, entityId });
     });
-    return this.getEntity({ tenantId, entityId });
   }
 
   getEntity(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
     const entityId = identifier(input?.entityId, "entityId");
     const row = this.ctx.storage.sql.exec(
-      "SELECT * FROM knowledge_entities WHERE tenant_id = ? AND entity_id = ?",
-      tenantId, entityId
+      "SELECT * FROM knowledge_entities_v4 WHERE tenant_id = ? AND project_id = ? AND entity_id = ?",
+      tenantId, projectId, entityId
     ).toArray()[0];
     return row ? {
-      tenantId: row.tenant_id, entityId: row.entity_id, entityType: row.entity_type,
+      tenantId: row.tenant_id, projectId: row.project_id, entityId: row.entity_id, entityType: row.entity_type,
       name: row.name, properties: parseJson(row.properties_json, "entity properties"),
       version: row.version, createdAt: row.created_at, updatedAt: row.updated_at
     } : null;

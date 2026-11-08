@@ -117,15 +117,6 @@ const ownerKeySet = JSON.stringify({
 const agent = { id: "agent:worker-1", authenticated: true, identityVerified: true, role: "agent" };
 const transitionEvidence = { kind: "test-evidence", reference: "ci://candidate-index-transition" };
 
-async function seedCandidate(ledger, taskId, executorId = "agent:worker-1", createdAt = now) {
-  await runInDurableObject(ledger, async (_instance, state) => {
-    state.storage.sql.exec(
-      "INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at) VALUES (?, ?, ?)",
-      taskId, executorId, createdAt,
-    );
-  });
-}
-
 async function ownerCancelInput(taskId) {
   const command = {
     operation: "cancel", taskId, reason: "Owner requested cancellation",

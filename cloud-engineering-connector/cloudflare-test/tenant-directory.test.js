@@ -202,16 +202,50 @@ describe("persistent Tenant Directory", () => {
       expectedVersion: 0,
       now,
     });
+    const resourceDigest = await sha256("null");
+    await adapters.provisioningStore.upsertProjectPolicy({
+      assertion: await adminAssertion(keySet, "upsertProjectPolicy", "tenant-revoke", "project-red", now + 1),
+      tenantId: "tenant-revoke",
+      projectId: "project-red",
+      principalId: "principal-revoke",
+      action: "project.read",
+      resourceDigest,
+      effect: "allow",
+      policyVersion: "revoke-test-v1",
+      status: "active",
+      expectedVersion: 0,
+      now: now + 1,
+    });
     await adapters.provisioningStore.revokeMembership({
-      assertion: await adminAssertion(keySet, "revokeMembership", "tenant-revoke", null, now + 1),
+      assertion: await adminAssertion(keySet, "revokeMembership", "tenant-revoke", null, now + 2),
       tenantId: "tenant-revoke",
       principalId: "principal-revoke",
       expectedVersion: 1,
-      now: now + 1,
+      now: now + 2,
     });
     await expect(adapters.membershipStore.getActiveMembership({
       principalId: "principal-revoke",
       tenantId: "tenant-revoke",
     })).resolves.toBeNull();
+
+    await adapters.provisioningStore.upsertMembership({
+      assertion: await adminAssertion(keySet, "upsertMembership", "tenant-revoke", null, now + 3),
+      tenantId: "tenant-revoke",
+      principalId: "principal-revoke",
+      membershipId: "membership-revoke",
+      role: "tenant-member",
+      status: "active",
+      expectedVersion: 2,
+      now: now + 3,
+    });
+    const reactivatedDecision = await adapters.authorizationStore.authorizeProjectAction({
+      principalId: "principal-revoke",
+      tenantId: "tenant-revoke",
+      projectId: "project-red",
+      action: "project.read",
+      resource: null,
+      resourceDigest,
+    });
+    expect(reactivatedDecision.effect).toBe("deny");
   });
 });

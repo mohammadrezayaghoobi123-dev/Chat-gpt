@@ -193,6 +193,44 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
     });
   });
 
+  it("does not return a task across tenant or project boundaries", async () => {
+    const ledger = ledgerFor("tenant-scope-task-read-boundary");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "private-task-a",
+        tenantId: "tenant-alpha",
+        projectId: "project-red",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 300,
+        updatedAt: 300,
+      };
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, "idem-private-a", "e".repeat(64), task.state, task.version,
+        JSON.stringify(task), task.createdAt, task.updatedAt, task.tenantId, task.projectId,
+      );
+
+      expect(instance.getTask({
+        taskId: task.taskId,
+        tenantId: "tenant-beta",
+        projectId: "project-red",
+      })).toBeNull();
+      expect(instance.getTask({
+        taskId: task.taskId,
+        tenantId: "tenant-alpha",
+        projectId: "project-blue",
+      })).toBeNull();
+      expect(instance.getTask({
+        taskId: task.taskId,
+        tenantId: "tenant-alpha",
+        projectId: "project-red",
+      })).toMatchObject({ taskId: task.taskId, tenantId: "tenant-alpha", projectId: "project-red" });
+      expect(instance.getTask({ taskId: task.taskId })).toBeNull();
+    });
+  });
+
   it("is idempotent and does not rewrite existing scoped records on repeated initialization", async () => {
     const ledger = ledgerFor("tenant-scope-migration-idempotent");
     await runInDurableObject(ledger, async instance => {

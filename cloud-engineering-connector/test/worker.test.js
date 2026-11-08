@@ -9,7 +9,7 @@ const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",MCP_RATE_LIMITER:{l
 const req=(path,options={})=>{const headers=new Headers(options.headers);if(path==="/mcp"&&!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
 const rpc=(method,params={},id=1)=>{
  const scopedParams=method==="tools/call"&&params?.name==="create_change_pr"
-  ?{...params,arguments:{tenant_id:"tenant-test",project_id:"project-test",...(params.arguments||{})}}
+  ?{...params,arguments:{tenant_id:"tenant-test",project_id:"project-test",base_branch:"feature/cloud-engineering-connector",...(params.arguments||{})}}
   :params;
  return req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream", "cf-connecting-ip":"203.0.113.10"},body:JSON.stringify({jsonrpc:"2.0",id,method,params:scopedParams})});
 };
@@ -938,7 +938,7 @@ test("create_change_pr denies missing tenant membership before any GitHub API ca
  })};
  try{
   const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Denied",summary:"No membership",files:[{path:"README.md",content:"proposal"}]}}),{...env,GITHUB_TOKEN:"test-token",TENANT_DIRECTORY:deniedDirectory});
-  const body=await response.json();assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/active tenant membership/i);assert.equal(calls,0);
+  const body=await response.json();assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/TENANT_MEMBERSHIP_REQUIRED/);assert.equal(calls,0);
  }finally{globalThis.fetch=originalFetch}
 });
 test("create_change_pr denies project policy before any GitHub API call",async()=>{
@@ -949,7 +949,7 @@ test("create_change_pr denies project policy before any GitHub API call",async()
  })};
  try{
   const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Denied",summary:"No policy",files:[{path:"README.md",content:"proposal"}]}}),{...env,GITHUB_TOKEN:"test-token",TENANT_DIRECTORY:deniedDirectory});
-  const body=await response.json();assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/policy denied/i);assert.equal(calls,0);
+  const body=await response.json();assert.equal(body.result.isError,true);assert.match(body.result.content[0].text,/PROJECT_ACCESS_DENIED/);assert.equal(calls,0);
  }finally{globalThis.fetch=originalFetch}
 });
 test("create_change_pr records the verified shared-bearer service principal without claiming a human identity", async () => {

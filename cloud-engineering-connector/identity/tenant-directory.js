@@ -129,6 +129,13 @@ export class TenantDirectory extends DurableObject {
         "role=excluded.role, status=excluded.status, version=excluded.version, updated_at=excluded.updated_at, revoked_at=NULL",
         tenantId, principalId, membershipId, role, status, nextVersion, current?.created_at ?? now, now
       );
+      if (status !== "active") {
+        sql.exec(
+          "UPDATE tenant_project_policy_rules SET status='disabled', version=version+1, updated_at=? " +
+          "WHERE tenant_id=? AND principal_id=? AND status='active'",
+          now, tenantId, principalId
+        );
+      }
       return membershipRecord(sql.exec(
         "SELECT tenant_id, principal_id, membership_id, role, status, version FROM tenant_memberships WHERE tenant_id=? AND principal_id=?",
         tenantId, principalId
@@ -154,6 +161,11 @@ export class TenantDirectory extends DurableObject {
       sql.exec(
         "UPDATE tenant_memberships SET status='revoked', version=?, updated_at=?, revoked_at=? WHERE tenant_id=? AND principal_id=? AND version=?",
         nextVersion, now, now, tenantId, principalId, expectedVersion
+      );
+      sql.exec(
+        "UPDATE tenant_project_policy_rules SET status='disabled', version=version+1, updated_at=? " +
+        "WHERE tenant_id=? AND principal_id=? AND status='active'",
+        now, tenantId, principalId
       );
       return { revoked: true, tenantId, principalId, version: nextVersion };
     });

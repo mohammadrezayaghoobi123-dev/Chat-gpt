@@ -22,27 +22,27 @@ export function createTenantDirectoryAdapters(namespace, selectedTenantId) {
 
   return Object.freeze({
     membershipStore: Object.freeze({
-      getActiveMembership(input) {
+      async getActiveMembership(input) {
         assertTenant(input);
         return stub.getActiveMembership(input);
       },
     }),
     authorizationStore: Object.freeze({
-      authorizeProjectAction(input) {
+      async authorizeProjectAction(input) {
         assertTenant(input);
         return stub.authorizeProjectAction(input);
       },
     }),
     provisioningStore: Object.freeze({
-      upsertMembership(input) {
+      async upsertMembership(input) {
         assertTenant(input);
         return stub.upsertMembership(input);
       },
-      revokeMembership(input) {
+      async revokeMembership(input) {
         assertTenant(input);
         return stub.revokeMembership(input);
       },
-      upsertProjectPolicy(input) {
+      async upsertProjectPolicy(input) {
         assertTenant(input);
         return stub.upsertProjectPolicy(input);
       },

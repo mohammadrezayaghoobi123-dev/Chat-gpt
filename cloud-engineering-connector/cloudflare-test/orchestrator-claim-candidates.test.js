@@ -209,6 +209,9 @@ it("reconciles a missing candidate index in bounded batches with a stable keyset
     ).one()).toMatchObject({ last_created_at: now + 31, last_task_id: "task-fallback-32" });
   });
 
+  await runInDurableObject(ledger, async (_instance, state) => {
+    state.storage.sql.exec("DELETE FROM orchestrator_claim_candidates");
+  });
   const second = await ledger.claimTask({
     workerId: "agent:worker-1",
     workerAssertion: await claimAssertion("agent:worker-1", now + 1_001),
@@ -217,16 +220,18 @@ it("reconciles a missing candidate index in bounded batches with a stable keyset
   });
   expect(second).toMatchObject({
     claimed: true,
-    task: { taskId: "task-fallback-02" },
+    task: { taskId: "task-fallback-33" },
   });
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec(
       "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates",
-    ).one().count).toBe(38);
+    ).one().count).toBe(7);
     expect(state.storage.sql.exec(
-      "SELECT COUNT(*) AS count FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
+      "SELECT last_created_at, last_task_id, scan_complete FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
       "agent:worker-1",
-    ).one().count).toBe(0);
+    ).one()).toMatchObject({
+      last_created_at: now + 39, last_task_id: "task-fallback-40", scan_complete: 1,
+    });
   });
 });
 

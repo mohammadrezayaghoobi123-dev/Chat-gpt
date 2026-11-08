@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Cloud-hosted MCP connector for rigorous software engineering, architecture, code review, and evidence-aware workflows.",
   "scripts": {
-    "test:node": "node --test test/*.test.js",
+    "test:node": "node --experimental-loader ./test/cloudflare-workers-loader.js --test test/*.test.js",
     "test:do": "vitest run --config vitest.config.js",
     "test": "npm run test:node && npm run test:do",
     "check": "node -e 'const fs=require(\"node:fs\");const name=fs.readFileSync(\"wrangler.toml\",\"utf8\").split(/\\r?\\n/).find(line=>line.trim().startsWith(\"name =\"));if(name?.trim()!==\"name = \\\"chat-gpt111\\\"\")throw new Error(\"wrangler.toml must target chat-gpt111\");' && node --check worker.js && node --check identity/tenant-context.js && node --check knowledge-store.js && node --check orchestrator-ledger.js && node --check orchestrator-core.js && node --check orchestrator-protocol.js && node --check orchestrator-worker-identity.js && node --check orchestrator-reconciliation-evidence.js && node --check orchestrator-owner-assertion.js && node --check index.js && node --check vitest.config.js && node --check test/credential-matrix.test.js && node --check test/rate-limit-key.test.js && node --check test/upstream-error-redaction.test.js && node --check test/worker.test.js && node --check test/wrangler-env.test.js && node --check test/write-hardening.test.js && node --check test/tenant-authorization.test.js && node --check cloudflare-test/knowledge-store.test.js && node --check cloudflare-test/orchestrator-ledger-readiness.test.js && wrangler deploy --env=\"\" --dry-run && wrangler deploy --env staging --dry-run"

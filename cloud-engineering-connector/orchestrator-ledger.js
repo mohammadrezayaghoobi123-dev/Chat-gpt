@@ -204,8 +204,10 @@ function outboxFromRow(row) {
 }
 
 function tenantProjectIdempotencyKey(tenantId, projectId, idempotencyKey) {
-  identifier(tenantId, "tenantId");
-  identifier(projectId, "projectId");
+  // The reserved legacy scope is valid only for rows being migrated; public
+  // APIs independently require a verified, non-legacy tenant/project scope.
+  if (tenantId !== "__legacy__") identifier(tenantId, "tenantId");
+  if (projectId !== "__legacy__") identifier(projectId, "projectId");
   identifier(idempotencyKey, "idempotencyKey");
   // Length-prefixing makes the tuple encoding injective even when identifiers
   // contain punctuation. The global UNIQUE constraint remains a safe physical

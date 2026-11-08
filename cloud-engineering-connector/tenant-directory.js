@@ -50,6 +50,7 @@ export class TenantDirectory extends DurableObject {
   ensureSchema() {
     const sql = this.ctx.storage.sql;
     sql.exec("PRAGMA foreign_keys = ON");
+    sql.exec("CREATE TABLE IF NOT EXISTS tenant_directory_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), tenant_id TEXT NOT NULL)");
     sql.exec(
       "CREATE TABLE IF NOT EXISTS tenant_memberships (" +
       "tenant_id TEXT NOT NULL, principal_id TEXT NOT NULL, membership_id TEXT NOT NULL, " +
@@ -75,11 +76,18 @@ export class TenantDirectory extends DurableObject {
     );
   }
 
+  assertTenant(tenantId) {
+    const sql = this.ctx.storage.sql;
+    const row = sql.exec("SELECT tenant_id FROM tenant_directory_meta WHERE singleton=1").toArray()[0];
+    if (row && row.tenant_id !== tenantId) {
+      throw fail("TENANT_DIRECTORY_TENANT_MISMATCH", "Tenant Directory partition mismatch.");
+    }
+    if (!row) sql.exec("INSERT INTO tenant_directory_meta (singleton, tenant_id) VALUES (1, ?)", tenantId);
+  }
+
   async authorizeAdmin(input, operation, projectId, now) {
     const tenantId = identifier(input?.tenantId, "tenantId");
-    if (tenantId !== this.envTenantId()) {
-      throw fail("TENANT_DIRECTORY_ADMIN_ASSERTION_REJECTED", "Tenant Directory assertion rejected.");
-    }
+    this.assertTenant(tenantId);
     await verifyTenantDirectoryAdminAssertion(
       input.assertion,
       input.keySet,
@@ -89,12 +97,9 @@ export class TenantDirectory extends DurableObject {
     return tenantId;
   }
 
-  envTenantId() {
-    return this.tenantId;
-  }
-
   async getActiveMembership(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    this.assertTenant(tenantId);
     const principalId = identifier(input?.principalId, "principalId");
     const row = this.ctx.storage.sql.exec(
       "SELECT principal_id, tenant_id, membership_id, role, status, version, updated_at " +
@@ -106,6 +111,7 @@ export class TenantDirectory extends DurableObject {
 
   async authorizeProjectAction(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
+    this.assertTenant(tenantId);
     const projectId = identifier(input?.projectId, "projectId");
     const principalId = identifier(input?.principalId, "principalId");
     const action = required(input?.action, "action", 128);
@@ -178,12 +184,15 @@ export class TenantDirectory extends DurableObject {
     const expectedVersion = positiveVersion(input.expectedVersion, "expectedVersion");
     const now = Number.isSafeInteger(input.now) && input.now > 0 ? input.now : Date.now();
     const sql = this.ctx.storage.sql;
-    const result = sql.exec(
+    const current = sql.exec("SELECT version, status FROM tenant_memberships WHERE tenant_id=? AND principal_id=?", tenantId, principalId).toArray()[0];
+    if (!current || current.version !== expectedVersion || current.status === "revoked") {
+      throw fail("TENANT_DIRECTORY_VERSION_CONFLICT", "Membership version changed or does not exist.");
+    }
+    sql.exec(
       "UPDATE tenant_memberships SET status='revoked', version=version+1, updated_at=? " +
       "WHERE tenant_id=? AND principal_id=? AND version=? AND status!='revoked'",
       now, tenantId, principalId, expectedVersion
     );
-    if (result.rowsWritten !== 1) throw fail("TENANT_DIRECTORY_VERSION_CONFLICT", "Membership version changed or does not exist.");
     return membershipRecord(sql.exec(
       "SELECT * FROM tenant_memberships WHERE tenant_id=? AND principal_id=?",
       tenantId, principalId

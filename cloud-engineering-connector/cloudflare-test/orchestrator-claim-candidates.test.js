@@ -135,7 +135,7 @@ describe("OrchestratorLedger claim candidate index", () => {
       const columns = state.storage.sql.exec(
         "PRAGMA index_info(orchestrator_claim_candidates_by_executor_order)",
       ).toArray().map(row => row.name);
-      expect(columns).toEqual(["executor_id", "created_at", "task_id"]);
+      expect(columns).toEqual(["executor_id", "(created_at,task_id)>(?,?)", "task_id"]);
     });
   });
 });
@@ -281,8 +281,8 @@ it("uses the executor/created-at index for bounded fallback pagination", async (
       "orchestrator_tasks_by_executor_created",
     );
     const continuationPlan = state.storage.sql.exec(
-      "EXPLAIN QUERY PLAN SELECT task_id, state, task_json, created_at FROM orchestrator_tasks WHERE COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? AND (created_at > ? OR (created_at = ? AND task_id > ?)) ORDER BY created_at, task_id LIMIT 32",
-      "agent:worker-1", now, now, "task-fallback-32",
+      "EXPLAIN QUERY PLAN SELECT task_id, state, task_json, created_at FROM orchestrator_tasks WHERE COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? AND (created_at, task_id) > (?, ?) ORDER BY created_at, task_id LIMIT 32",
+      "agent:worker-1", now, "task-fallback-32",
     ).toArray();
     expect(continuationPlan.map(row => row.detail).join(" ")).toContain(
       "orchestrator_tasks_by_executor_created",

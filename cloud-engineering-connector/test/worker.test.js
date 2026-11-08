@@ -31,7 +31,7 @@ function createKnowledgeStoreBinding(){
 const knowledgeStore=createKnowledgeStoreBinding();
 function createOrchestratorLedgerBinding(){
  const calls=[];
- const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:7}}};
+ const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:7,storage:{integrityCheck:"ok",requiredTables:true}}}};
  return{calls,binding:{idFromName(name){calls.push({method:"idFromName",name});return name},get(id){calls.push({method:"get",id});return stub}}};
 }
 const orchestratorLedger=createOrchestratorLedgerBinding();

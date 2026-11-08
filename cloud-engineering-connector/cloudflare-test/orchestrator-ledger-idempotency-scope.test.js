@@ -63,5 +63,62 @@ describe("OrchestratorLedger tenant/project idempotency isolation", () => {
         { task_id: "tenant-beta-task-42", tenant_id: "tenant-beta", project_id: "project-blue" },
       ]);
     });
+
+  it("backfills v8 task and outbox keys into injective tenant/project namespaces exactly once", async () => {
+    const ledger = ledgerFor("task-outbox-idempotency-v8-to-v9");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 9");
+      const now = 1_800_000_000_000;
+      const task = {
+        taskId: "v8-legacy-task",
+        tenantId: "tenant-alpha",
+        projectId: "project-red",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      };
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, "legacy-client-key", "3".repeat(64), task.state, task.version,
+        JSON.stringify(task), now, now, task.tenantId, task.projectId,
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_generation, lease_until, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, 'PENDING', 0, 0, 0, ?, ?, ?, ?)",
+        "v8-legacy-event", "legacy-outbox-key", task.taskId, "task.created",
+        JSON.stringify({ taskId: task.taskId, version: 1 }), now, now,
+        task.tenantId, task.projectId,
+      );
+
+      const scoped = (tenantId, projectId, key) =>
+        "tp1:" + tenantId.length + ":" + tenantId +
+        ":" + projectId.length + ":" + projectId +
+        ":" + key.length + ":" + key;
+
+      instance.ensureSchema();
+      const taskKey = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).one().idempotency_key;
+      const eventKey = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_outbox_events WHERE event_id = ?",
+        "v8-legacy-event",
+      ).one().idempotency_key;
+      expect(taskKey).toBe(scoped(task.tenantId, task.projectId, "legacy-client-key"));
+      expect(eventKey).toBe(scoped(task.tenantId, task.projectId, "legacy-outbox-key"));
+      expect(sql.exec("SELECT version FROM orchestrator_schema_migrations WHERE version = 9").one().version).toBe(9);
+
+      instance.ensureSchema();
+      expect(sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).one().idempotency_key).toBe(taskKey);
+      expect(sql.exec(
+        "SELECT idempotency_key FROM orchestrator_outbox_events WHERE event_id = ?",
+        "v8-legacy-event",
+      ).one().idempotency_key).toBe(eventKey);
+    });
+  });
   });
 });

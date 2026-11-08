@@ -417,3 +417,75 @@ test("rejects sparse arrays in resource descriptors before policy evaluation", a
   );
   assert.equal(calls, 0);
 });
+
+
+test("resolvePrincipal derives a stable opaque human ID from verified OIDC issuer and subject, not email", async () => {
+  const authenticate = claims => ({
+    async authenticate() {
+      return {
+        authenticated: true,
+        issuer: claims.issuer,
+        subject: claims.subject,
+        email: claims.email,
+        emailVerified: claims.emailVerified,
+      };
+    },
+  });
+
+  const first = await resolvePrincipal({
+    credential: "oauth-session-a",
+    authenticator: authenticate({
+      issuer: "https://identity.example.test",
+      subject: "user-opaque-42",
+      email: "first@example.test",
+      emailVerified: true,
+    }),
+  });
+  const sameIdentityAfterEmailChange = await resolvePrincipal({
+    credential: "oauth-session-b",
+    authenticator: authenticate({
+      issuer: "https://identity.example.test",
+      subject: "user-opaque-42",
+      email: "renamed@example.test",
+      emailVerified: true,
+    }),
+  });
+  const differentSubject = await resolvePrincipal({
+    credential: "oauth-session-c",
+    authenticator: authenticate({
+      issuer: "https://identity.example.test",
+      subject: "user-opaque-43",
+      email: "first@example.test",
+      emailVerified: true,
+    }),
+  });
+
+  assert.match(first.id, /^oidc:v1:[a-f0-9]{64}$/);
+  assert.equal(first.id, sameIdentityAfterEmailChange.id);
+  assert.notEqual(first.id, differentSubject.id);
+  assert.deepEqual(first, {
+    id: first.id,
+    type: "human",
+    authenticated: true,
+  });
+});
+
+test("resolvePrincipal rejects OIDC identity without a verified email claim", async () => {
+  await assert.rejects(
+    resolvePrincipal({
+      credential: "oauth-session-unverified",
+      authenticator: {
+        async authenticate() {
+          return {
+            authenticated: true,
+            issuer: "https://identity.example.test",
+            subject: "user-opaque-44",
+            email: "unverified@example.test",
+            emailVerified: false,
+          };
+        },
+      },
+    }),
+    error => error.code === "AUTHENTICATION_FAILED",
+  );
+});

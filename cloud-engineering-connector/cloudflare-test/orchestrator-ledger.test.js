@@ -2465,6 +2465,46 @@ it("rejects expired and unauthorized reconciliation evidence", async () => {
   expect(unauthorizedResult).toEqual({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
 });
 
+it("rejects reconciliation evidence at the exact expiry boundary", async () => {
+  const ledger = ledgerFor("ledger-reconciliation-evidence-expiry-boundary");
+  await createTask(ledger, {
+    task: task("task-evidence-expiry-boundary"),
+    idempotencyKey: "task-evidence-expiry-boundary",
+    inputHash: "9".repeat(64),
+    now,
+  });
+  const first = await ledger.claimTask({
+    taskId: "task-evidence-expiry-boundary",
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 100,
+    now,
+  });
+  const boundaryNow = now + 101;
+  const evidence = await createReconciliationEvidence({
+    taskId: "task-evidence-expiry-boundary",
+    priorGeneration: first.leaseGeneration,
+    evidenceId: "reconcile-evidence-expiry-boundary-0001",
+    issuedAt: now,
+    expiresAt: boundaryNow,
+  });
+  const result = await ledger.claimTask({
+    taskId: "task-evidence-expiry-boundary",
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", boundaryNow),
+    leaseMs: 30_000,
+    now: boundaryNow,
+    reconciliationEvidence: evidence,
+  });
+  expect(result).toEqual({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT worker_id, lease_generation FROM orchestrator_execution_leases WHERE task_id = ?",
+      "task-evidence-expiry-boundary",
+    ).one()).toMatchObject({ worker_id: "agent:worker-1", lease_generation: 1 });
+  });
+});
+
 it("consumes each reconciliation evidence ID once across lease generations", async () => {
   const ledger = ledgerFor("ledger-reconciliation-evidence-replay");
   await createTask(ledger, {

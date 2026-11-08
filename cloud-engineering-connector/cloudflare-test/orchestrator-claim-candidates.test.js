@@ -288,7 +288,7 @@ it("uses the executor/created-at index for bounded fallback pagination", async (
       "orchestrator_tasks_by_executor_created",
     );
     expect(continuationPlan.map(row => row.detail).join(" ")).toContain(
-      "created_at",
+      "(created_at,task_id)>(?,?)",
     );
   });
 });

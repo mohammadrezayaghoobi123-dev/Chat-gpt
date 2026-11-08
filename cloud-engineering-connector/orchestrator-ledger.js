@@ -621,7 +621,6 @@ export class OrchestratorLedger extends DurableObject {
           persisted.task_json !== canonicalJson(next)) {
         throw fail("Task transition persistence verification failed; transaction rolled back.", "PERSISTENCE_VERIFICATION_FAILED");
       }
-      syncClaimCandidateInTransaction(sql, taskId);
       let outboxResult = null;
       if (normalizedOutboxInput !== null) {
         outboxResult = enqueueOutboxInTransaction(sql, normalizedOutboxInput);
@@ -1490,7 +1489,6 @@ export class OrchestratorLedger extends DurableObject {
                 command.taskId, nextGeneration, now,
               );
             }
-            syncClaimCandidateInTransaction(sql, command.taskId);
             if (command.operation === "release") {
               const releaseEventId = "owner-release-" + command.eventId;
               const releasePayload = {

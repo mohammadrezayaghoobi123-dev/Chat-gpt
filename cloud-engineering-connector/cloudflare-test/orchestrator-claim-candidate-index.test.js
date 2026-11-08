@@ -1,7 +1,8 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { canonicalJson } from "../orchestrator-protocol.js";
+import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
+import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 
 const now = 1_800_000_000_000;
 const TEST_ASSERTION_KID = "test-v1";
@@ -98,6 +99,122 @@ describe("OrchestratorLedger claim candidate index", () => {
         "SELECT task_id, executor_id, created_at FROM orchestrator_claim_candidates ORDER BY created_at, task_id",
       ).toArray();
       expect(actual).toEqual(expected);
+    });
+  });
+});
+
+
+const ownerId = "335530603";
+const repositoryId = 1398846697;
+const ownerKeySet = JSON.stringify({
+  "owner-v1": "3031323334353637383961626364656630313233343536373839616263646566",
+});
+const agent = { id: "agent:worker-1", authenticated: true, identityVerified: true, role: "agent" };
+const transitionEvidence = { kind: "test-evidence", reference: "ci://candidate-index-transition" };
+
+async function seedCandidate(ledger, taskId, executorId = "agent:worker-1", createdAt = now) {
+  await runInDurableObject(ledger, async (_instance, state) => {
+    state.storage.sql.exec(
+      "INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at) VALUES (?, ?, ?)",
+      taskId, executorId, createdAt,
+    );
+  });
+}
+
+async function ownerCancelInput(taskId) {
+  const command = {
+    operation: "cancel", taskId, reason: "Owner requested cancellation",
+    eventId: "candidate-owner-cancel-" + taskId,
+  };
+  const context = {
+    actorId: ownerId, repositoryId, taskId, operation: command.operation,
+    deliveryId: "delivery-" + taskId + "-0001",
+    commentId: "987654321",
+    commandHash: await sha256Canonical({
+      eventId: command.eventId, operation: command.operation,
+      reason: command.reason, taskId: command.taskId,
+    }),
+  };
+  return {
+    assertion: await createOwnerAssertion(ownerKeySet, "owner-v1", context, now),
+    assertionContext: context,
+    command,
+    bodySha256: "c".repeat(64),
+    provenance: {
+      eventName: "issue_comment.created",
+      repository: "mohammadrezayaghoobi123-dev/Chat-gpt",
+      issueNumber: 7,
+      commentCreatedAt: now,
+    },
+    now,
+  };
+}
+
+describe("OrchestratorLedger candidate synchronization", () => {
+  it("backfills candidate rows idempotently when the schema initializer is rerun", async () => {
+    const ledger = ledgerFor("claim-candidate-index-backfill");
+    await createTask(ledger, "candidate-backfill", "agent:worker-1");
+    await runInDurableObject(ledger, async (instance, state) => {
+      state.storage.sql.exec("DELETE FROM orchestrator_claim_candidates");
+      instance.ensureSchema();
+      const rows = state.storage.sql.exec(
+        "SELECT task_id, executor_id, created_at FROM orchestrator_claim_candidates",
+      ).toArray();
+      expect(rows).toEqual([
+        { task_id: "candidate-backfill", executor_id: "agent:worker-1", created_at: now },
+      ]);
+      instance.ensureSchema();
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_claim_candidates").one().count).toBe(1);
+    });
+  });
+
+  it("removes a task from the candidate index atomically when it transitions out of claimable states", async () => {
+    const ledger = ledgerFor("claim-candidate-index-transition-removal");
+    await createTask(ledger, "candidate-transition", "agent:worker-1");
+    const lease = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 30_000, now,
+    });
+    expect(lease).toMatchObject({ claimed: true, task: { taskId: "candidate-transition" } });
+    const result = await ledger.transitionTask({
+      taskId: "candidate-transition",
+      expectedVersion: 1,
+      expectedState: "SCHEDULED",
+      nextState: "BLOCKED",
+      actor: agent,
+      evidence: transitionEvidence,
+      now: now + 1,
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "transitionTask", nowMs: now + 1,
+      }),
+      leaseGeneration: lease.leaseGeneration,
+    });
+    expect(result).toMatchObject({ updated: true, task: { state: "BLOCKED", version: 2 } });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+        "candidate-transition",
+      ).one().count).toBe(0);
+    });
+  });
+
+  it("removes a task from the candidate index atomically when an Owner command cancels it", async () => {
+    const ledger = ledgerFor("claim-candidate-index-owner-cancel");
+    await createTask(ledger, "candidate-owner-cancel", "agent:worker-1");
+    const result = await ledger.executeOwnerCommand(await ownerCancelInput("candidate-owner-cancel"));
+    expect(result).toMatchObject({
+      applied: true, operation: "cancel",
+      task: { taskId: "candidate-owner-cancel", state: "CANCELLED", version: 2 },
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+        "candidate-owner-cancel",
+      ).one().count).toBe(0);
     });
   });
 });

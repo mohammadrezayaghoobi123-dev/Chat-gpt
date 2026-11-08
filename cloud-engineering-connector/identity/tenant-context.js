@@ -138,7 +138,12 @@ export async function resolvePrincipal({ credential, authenticator } = {}) {
       !nonEmptyString(identity.subject) ||
       !nonEmptyString(identity.email) ||
       identity.email.length > 254 ||
-      !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(identity.email) ||
+      identity.email.split("@").length !== 2 ||
+      identity.email.indexOf("@") <= 0 ||
+      identity.email.lastIndexOf(".") <= identity.email.indexOf("@") + 1 ||
+      identity.email.endsWith(".") ||
+      identity.email.trim() !== identity.email ||
+      identity.email.includes(" ") ||
       identity.emailVerified !== true
     ) {
       reject("AUTHENTICATION_FAILED");

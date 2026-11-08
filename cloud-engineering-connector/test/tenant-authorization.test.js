@@ -58,6 +58,12 @@ const activeMembership = Object.freeze({
   role: "tenant-member",
 });
 
+const tenantContext = await resolveTenantContext({
+  principal,
+  tenantSelector: "tenant-alpha",
+  membershipStore: { async getActiveMembership() { return activeMembership; } },
+});
+
 test("rejects unauthenticated principals before querying tenant membership", async () => {
   let calls = 0;
   await assert.rejects(
@@ -167,12 +173,7 @@ test("denies project access when the policy decision is not allow", async () => 
   await assert.rejects(
     authorizeProjectAction({
       principal,
-      tenantContext: {
-        principalId: principal.id,
-        tenantId: "tenant-alpha",
-        membershipId: "membership-01",
-        role: "tenant-member",
-      },
+      tenantContext,
       projectSelector: "project-01",
       action: "project.write",
       resource: { kind: "repository", id: "repo-01" },
@@ -204,12 +205,7 @@ test("denies project access when the policy decision is not allow", async () => 
 test("accepts only an allow decision bound to the exact principal, tenant, and project", async () => {
   const result = await authorizeProjectAction({
     principal,
-    tenantContext: {
-      principalId: principal.id,
-      tenantId: "tenant-alpha",
-      membershipId: "membership-01",
-      role: "tenant-member",
-    },
+    tenantContext,
     projectSelector: "project-01",
     action: "project.read",
     authorizationStore: {
@@ -239,12 +235,7 @@ test("rejects an allow decision scoped to a different tenant or project", async 
   await assert.rejects(
     authorizeProjectAction({
       principal,
-      tenantContext: {
-        principalId: principal.id,
-        tenantId: "tenant-alpha",
-        membershipId: "membership-01",
-        role: "tenant-member",
-      },
+      tenantContext,
       projectSelector: "project-01",
       action: "project.read",
       authorizationStore: {

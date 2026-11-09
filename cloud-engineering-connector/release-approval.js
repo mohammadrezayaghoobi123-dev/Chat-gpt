@@ -189,25 +189,33 @@ export async function verifyReleaseApproval({
   );
   if (!Array.isArray(associated)) throw new Error("GitHub returned an invalid associated-PR list.");
 
-  let pull = associated.find(item => {
+  const matchingPulls = associated.filter(item => {
     if (!item || item.head?.sha === undefined || item.base?.ref === undefined) return false;
     if (releaseEnvironment === "staging") {
-      return item.state === "open" &&
+      const openHeadCandidate = item.state === "open" &&
         item.draft === false &&
         item.head.sha === candidateSha &&
         item.base.ref === STAGING_BASE;
+      const mergedCommitCandidate = item.state === "closed" &&
+        item.draft === false &&
+        typeof item.merged_at === "string" &&
+        item.merged_at.length > 0 &&
+        item.merge_commit_sha === candidateSha &&
+        item.base.ref === STAGING_BASE;
+      return openHeadCandidate || mergedCommitCandidate;
     }
     return item.state === "closed" &&
       typeof item.merged_at === "string" &&
       item.merge_commit_sha === candidateSha &&
       item.base.ref === "main";
   });
-  if (!pull) {
+  if (matchingPulls.length !== 1) {
     const requirement = releaseEnvironment === "staging"
-      ? "an open, non-draft PR whose exact head is this SHA and whose base is the approved integration branch"
-      : "a merged PR to main whose merge commit is this exact SHA";
+      ? "exactly one open PR head or merged Integration PR commit matching this SHA"
+      : "exactly one merged PR to main whose merge commit is this exact SHA";
     throw new Error("Release blocked: candidate must belong to " + requirement + ".");
   }
+  let pull = matchingPulls[0];
 
   if (releaseEnvironment === "staging") {
     pull = await getJson(
@@ -215,36 +223,64 @@ export async function verifyReleaseApproval({
       API_ROOT + "/repos/" + repoPath + "/pulls/" + pull.number,
       token,
     );
-    if (
-      pull.state !== "open" ||
-      pull.draft !== false ||
-      pull.head?.sha !== candidateSha ||
-      pull.base?.ref !== STAGING_BASE
-    ) {
-      throw new Error("Release blocked: staging candidate must remain an open, non-draft PR for this exact head.");
+    const openHeadCandidate =
+      pull.state === "open" &&
+      pull.draft === false &&
+      pull.head?.sha === candidateSha &&
+      pull.base?.ref === STAGING_BASE;
+    const mergedCommitCandidate =
+      pull.state === "closed" &&
+      pull.draft === false &&
+      typeof pull.merged_at === "string" &&
+      pull.merged_at.length > 0 &&
+      pull.merge_commit_sha === candidateSha &&
+      pull.base?.ref === STAGING_BASE;
+    if (!openHeadCandidate && !mergedCommitCandidate) {
+      throw new Error("Release blocked: Staging candidate must be an exact open PR head or the exact merge commit of a merged Integration PR.");
     }
-    if (pull.mergeable !== true || !(await stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, pull.mergeable_state, workflowRunId, workflowRunAttempt, workflowJob))) {
-      throw new Error("Release blocked: staging candidate must be a mergeable, current-base PR.");
-    }
+
     const currentBase = await getJson(
       fetchImpl,
       API_ROOT + "/repos/" + repoPath + "/git/ref/heads/" + STAGING_BASE,
       token,
     );
     const currentBaseSha = currentBase?.object?.sha;
-    if (typeof currentBaseSha !== "string") {
+    if (typeof currentBaseSha !== "string" || !/^[a-f0-9]{40}$/.test(currentBaseSha)) {
       throw new Error("Release blocked: current integration head could not be verified.");
     }
-    const comparison = await getJson(
-      fetchImpl,
-      API_ROOT + "/repos/" + repoPath + "/compare/" + currentBaseSha + "..." + candidateSha,
-      token,
-    );
-    if (
-      comparison?.behind_by !== 0 ||
-      comparison?.merge_base_commit?.sha !== currentBaseSha
-    ) {
-      throw new Error("Release blocked: staging candidate PR must descend from the current integration head.");
+
+    if (openHeadCandidate) {
+      if (pull.mergeable !== true || !(await stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, pull.mergeable_state, workflowRunId, workflowRunAttempt, workflowJob))) {
+        throw new Error("Release blocked: staging candidate must be a mergeable, current-base PR.");
+      }
+      const comparison = await getJson(
+        fetchImpl,
+        API_ROOT + "/repos/" + repoPath + "/compare/" + currentBaseSha + "..." + candidateSha,
+        token,
+      );
+      if (
+        comparison?.behind_by !== 0 ||
+        comparison?.merge_base_commit?.sha !== currentBaseSha
+      ) {
+        throw new Error("Release blocked: staging candidate PR must descend from the current integration head.");
+      }
+    } else {
+      // A merged candidate is immutable. Verify every check on its exact merge SHA,
+      // excluding only this workflow's uniquely identified check run.
+      if (!(await stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, "unstable", workflowRunId, workflowRunAttempt, workflowJob))) {
+        throw new Error("Release blocked: merged Staging candidate has incomplete or failing checks.");
+      }
+      const comparison = await getJson(
+        fetchImpl,
+        API_ROOT + "/repos/" + repoPath + "/compare/" + candidateSha + "..." + currentBaseSha,
+        token,
+      );
+      if (
+        comparison?.behind_by !== 0 ||
+        comparison?.merge_base_commit?.sha !== candidateSha
+      ) {
+        throw new Error("Release blocked: merged Staging candidate is not an ancestor of the current integration head.");
+      }
     }
   }
 

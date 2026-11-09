@@ -92,6 +92,39 @@ describe("Claim Engine bounded cursor contract", () => {
     });
   });
 
+  it("rejects a caller-forged cursor that skips an eligible earlier candidate", async () => {
+    const ledger = ledgerFor("ledger-bounded-cursor-forgery");
+    await createTask(ledger, "task-forgery-earliest", now, 501);
+    await createTask(ledger, "task-forgery-later", now + 1, 502);
+    const snapshotSequence = await runInDurableObject(ledger, async (_instance, state) => (
+      state.storage.sql.exec(
+        "SELECT MAX(candidate_seq) AS sequence FROM orchestrator_claim_candidates WHERE executor_id = ?",
+        "agent:worker-1",
+      ).one().sequence
+    ));
+    const forged = {
+      version: 1,
+      executorId: "agent:worker-1",
+      snapshotSequence,
+      createdAt: now + 1,
+      taskId: "task-forgery-later",
+    };
+    const result = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 2),
+      leaseMs: 30_000,
+      now: now + 2,
+      cursor: forged,
+    });
+    expect(result).toEqual({ claimed: false, reason: "INVALID_CLAIM_CURSOR" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-forgery-earliest",
+      ).one().count).toBe(0);
+    });
+  });
+
   it("requests a fresh snapshot when a new earlier-sorted candidate appears during cursor continuation", async () => {
     const ledger = ledgerFor("ledger-bounded-cursor-snapshot-churn");
     const ids = [];

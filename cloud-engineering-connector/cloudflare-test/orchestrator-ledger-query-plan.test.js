@@ -120,10 +120,10 @@ describe("OrchestratorLedger tenant/project query plans", () => {
            AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ?
            AND lease.worker_id IS NOT NULL
            AND lease.lease_until <= ?
-           AND (? = 0 OR lease.task_id != ? OR lease.lease_generation != ?)
+           AND lease.lease_generation = ?
          LIMIT 1`,
         "tenant-alpha", "project-red", "tenant-alpha", "project-red",
-        "worker-a", 1000, 0, "", -1,
+        "worker-a", 1000, 1,
       ).toArray();
       const details = plan.map(row => row.detail).join("\\n");
       expect(details).toContain("orchestrator_tasks_by_scope_state_executor_created");

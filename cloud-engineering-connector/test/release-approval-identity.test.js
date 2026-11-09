@@ -62,7 +62,7 @@ test("same-name same-app pending or failed checks other than the exact current j
   ]) {
     await assert.rejects(verifyReleaseApproval(input({
       fetchImpl: fixture({ checks: [own(42), extra] }),
-    })), /current workflow job identity|mergeable, current-base PR/);
+    })), /mergeable, current-base PR/);
   }
 });
 
@@ -83,7 +83,7 @@ test("missing, duplicate, stale-attempt, or wrong-SHA current job identity fails
   for (const jobs of cases) {
     await assert.rejects(verifyReleaseApproval(input({
       fetchImpl: fixture({ jobs }),
-    })), /mergeable, current-base PR/);
+    })), /current workflow job identity|mergeable, current-base PR/);
   }
 });
 

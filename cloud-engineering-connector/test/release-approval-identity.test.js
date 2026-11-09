@@ -28,10 +28,10 @@ const currentJob = (overrides = {}) => ({
   check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/42", ...overrides,
 });
 
-function fixture({ checks = [own(42)], jobs = [currentJob()], runId = "12345", attempt = "2", pullData = pull, reviewData = review, currentBase = baseSha, comparison = { behind_by: 0, merge_base_commit: { sha: baseSha } } } = {}) {
+function fixture({ checks = [own(42)], jobs = [currentJob()], runId = "12345", attempt = "2", pullData = pull, reviewData = review, currentBase = baseSha, comparison = { behind_by: 0, merge_base_commit: { sha: baseSha } }, associatedPulls = [pull], closedPulls = [pullData] } = {}) {
   return async (url) => {
     const parsed = new URL(String(url));
-    if (parsed.pathname.endsWith("/commits/" + sha + "/pulls")) return response([pullData]);
+    if (parsed.pathname.endsWith("/commits/" + sha + "/pulls")) return response(associatedPulls);\n    if (parsed.pathname.endsWith("/pulls") && parsed.searchParams.get("state") === "closed") return response(closedPulls);
     if (parsed.pathname.endsWith("/pulls/129")) return response(pullData);
     if (parsed.pathname.endsWith("/check-runs")) return response({ total_count: checks.length, check_runs: checks });
     if (parsed.pathname.endsWith("/status")) return response({ state: "success", total_count: 0 });
@@ -150,7 +150,7 @@ test("Staging rejects merged candidates that are not the exact merged Integratio
   ];
   for (const pullData of invalidCandidates) {
     await assert.rejects(
-      verifyReleaseApproval(input({ fetchImpl: fixture({ pullData }) })),
+      verifyReleaseApproval(input({ fetchImpl: fixture({ pullData, associatedPulls: [], closedPulls: [pullData] }) })),
       /exactly one open, non-draft PR head or merged Integration PR commit/,
     );
   }

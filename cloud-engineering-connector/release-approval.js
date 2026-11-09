@@ -1,5 +1,10 @@
 const API_ROOT = "https://api.github.com";
 const STAGING_BASE = "integration/unify-main-and-integrated-2026-11-02";
+// The Staging release job is itself a check on the candidate SHA. Its own pending
+// or failed run must not make the PR look unstable to the gate that runs inside it.
+const OWN_RELEASE_CHECK = "Deploy exact candidate to Staging and verify";
+const OWN_RELEASE_APP = "github-actions";
+const PASSING_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
 
 function validateInput({ repository, candidateSha, releaseEnvironment, token, fetchImpl }) {
   if (typeof repository !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
@@ -59,6 +64,35 @@ async function getJsonCollection(fetchImpl, url, token) {
     if (items.length < 100) return collection;
   }
   throw new Error("GitHub release-approval pagination exceeded 100 pages; refusing to approve an incomplete review history.");
+}
+
+/**
+ * "clean" passes as before. "unstable" is accepted only when every check run and
+ * commit status on the exact candidate SHA other than this release job's own run is
+ * complete and passing. Any other mergeable_state (blocked, behind, dirty, draft,
+ * unknown) fails closed, and so does any incomplete or unverifiable check listing.
+ */
+async function stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, mergeableState) {
+  if (mergeableState === "clean") return true;
+  if (mergeableState !== "unstable") return false;
+  const checks = await getJson(
+    fetchImpl,
+    API_ROOT + "/repos/" + repoPath + "/commits/" + candidateSha + "/check-runs?per_page=100",
+    token,
+  );
+  const runs = checks?.check_runs;
+  if (!Array.isArray(runs) || !Number.isSafeInteger(checks.total_count) || checks.total_count !== runs.length) return false;
+  for (const run of runs) {
+    const own = run?.name === OWN_RELEASE_CHECK && run?.app?.slug === OWN_RELEASE_APP;
+    if (own) continue;
+    if (run?.status !== "completed" || !PASSING_CONCLUSIONS.has(run?.conclusion)) return false;
+  }
+  const status = await getJson(
+    fetchImpl,
+    API_ROOT + "/repos/" + repoPath + "/commits/" + candidateSha + "/status",
+    token,
+  );
+  return status?.total_count === 0 || status?.state === "success";
 }
 
 function latestReviewsByUser(reviews) {
@@ -125,7 +159,7 @@ export async function verifyReleaseApproval({
     ) {
       throw new Error("Release blocked: staging candidate must remain an open, non-draft PR for this exact head.");
     }
-    if (pull.mergeable !== true || pull.mergeable_state !== "clean") {
+    if (pull.mergeable !== true || !(await stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, pull.mergeable_state))) {
       throw new Error("Release blocked: staging candidate must be a mergeable, current-base PR.");
     }
     const currentBase = await getJson(

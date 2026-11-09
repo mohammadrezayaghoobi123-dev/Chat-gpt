@@ -189,10 +189,32 @@ jobs:
         env:
           RELEASE_GITHUB_TOKEN: ${{ github.token }}
 
+      - name: Build immutable Cloudflare deployment identity
+        id: deployment_identity
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from "node:fs";
+          import { createReleaseDeploymentMessage } from "./scripts/release-deployment-identity.mjs";
+          const message = createReleaseDeploymentMessage({
+            releaseEnvironment: process.env.RELEASE_ENV,
+            candidateSha: process.env.GITHUB_SHA,
+            workflowRunId: process.env.GITHUB_RUN_ID,
+            workflowRunAttempt: process.env.GITHUB_RUN_ATTEMPT,
+          });
+          appendFileSync(process.env.GITHUB_OUTPUT, "message=" + message + "\n");
+          console.log("Staging release deployment identity generated.");
+          NODE
+        env:
+          RELEASE_ENV: staging
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+
       - name: Deploy candidate to Staging
         id: deploy
-        run: npx wrangler deploy --env staging
+        run: npx wrangler deploy --env staging --message "$WRANGLER_DEPLOYMENT_MESSAGE"
         env:
+          WRANGLER_DEPLOYMENT_MESSAGE: ${{ steps.deployment_identity.outputs.message }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
 
@@ -274,27 +296,18 @@ jobs:
         env:
           MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
 
-      - name: Verify deployed version before finalizing release
+      - name: Verify exact Staging candidate deployment before finalizing release
         if: success()
-        shell: bash
+        run: node scripts/verify-release-deployment.mjs
         env:
+          RELEASE_ENV: staging
+          WORKER_NAME: chat-gpt111-staging
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELEASE_DEPLOYMENT_MESSAGE: ${{ steps.deployment_identity.outputs.message }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          node --input-type=module <<'NODE'
-          const account = process.env.CLOUDFLARE_ACCOUNT_ID;
-          const token = process.env.CLOUDFLARE_API_TOKEN;
-          const url = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/chat-gpt111-staging/deployments?per_page=1&page=1`;
-          const response = await fetch(url, { headers: { authorization: `Bearer ${token}`, accept: "application/json" }, signal: AbortSignal.timeout(15000) });
-          const body = await response.json();
-          if (!response.ok || !body.success) throw new Error("Could not verify final Staging deployment.");
-          const active = body.result.deployments?.[0];
-          const versions = active?.versions || [];
-          if (versions.length !== 1 || versions[0]?.percentage !== 100 || !versions[0]?.version_id) {
-            throw new Error("Staging must have exactly one active version receiving 100% traffic.");
-          }
-          console.log(`Staging active deployment verified. Version=${versions[0].version_id}; Deployment=${active.id}`);
-          NODE
 
       - name: Roll back Staging if post-deploy acceptance fails
         id: rollback
@@ -354,6 +367,7 @@ jobs:
         env:
           RELEASE_ENV: staging
           WORKER_NAME: chat-gpt111-staging
+          RELEASE_DEPLOYMENT_MESSAGE: ${{ steps.deployment_identity.outputs.message }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           PREVIOUS_VERSION_ID: ${{ steps.preflight.outputs.previous_version_id }}

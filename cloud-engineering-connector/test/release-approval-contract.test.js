@@ -13,7 +13,7 @@ const workflows = [
       "Preflight Staging bindings and capture rollback target",
       "Deploy candidate to Staging",
       "Verify Staging KnowledgeStore binding and scheduled reconciliation",
-      "Verify deployed version before finalizing release",
+      "Verify exact Staging candidate deployment before finalizing release",
       "Roll back Staging if post-deploy acceptance fails",
       "Write release evidence manifest",
     ],
@@ -25,7 +25,7 @@ const workflows = [
       "Preflight Production credentials, namespace isolation, and rollback target",
       "Deploy candidate to Production",
       "Verify Production Durable Object namespace isolation",
-      "Verify deployed version before finalizing release",
+      "Verify exact Production candidate deployment before finalizing release",
       "Roll back Production if post-deploy acceptance fails",
       "Write release evidence manifest",
     ],
@@ -566,6 +566,10 @@ test("release evidence helper records audit metadata without serializing credent
     "active_version_id",
     "active_traffic_percentage",
     "active_traffic_verification",
+    "release_deployment_message",
+    "candidate_deployment_id",
+    "candidate_version_ids",
+    "candidate_active_verification",
     "candidate_deployment_association",
   ]) {
     assert.ok(helper.includes(field), "release evidence must record " + field);
@@ -576,14 +580,14 @@ test("release evidence helper records audit metadata without serializing credent
 
 
 function executeReleaseEvidenceHelper({ cloudflareResponse, includeCredentials = true }) {
-  const helper = readFileSync(new URL("../scripts/write-release-evidence.mjs", import.meta.url), "utf8");
+  const helperUrl = new URL("../scripts/write-release-evidence.mjs", import.meta.url).href;
   const prelude = cloudflareResponse
     ? "globalThis.fetch = async () => new Response(" + JSON.stringify(JSON.stringify(cloudflareResponse.body)) +
       ", { status: " + cloudflareResponse.status + ", headers: { 'content-type': 'application/json' } });"
     : "globalThis.fetch = async () => { throw new Error('fetch must not run without credentials'); };";
   const directory = mkdtempSync(join(tmpdir(), "release-evidence-helper-"));
   try {
-    const result = spawnSync(process.execPath, ["--input-type=module", "-e", prelude + "\n" + helper], {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", prelude + "\nawait import(" + JSON.stringify(helperUrl) + ");"], {
       cwd: directory,
       encoding: "utf8",
       env: {
@@ -613,7 +617,7 @@ test("release evidence helper records the active deployment and never writes cre
   const manifest = executeReleaseEvidenceHelper({
     cloudflareResponse: {
       status: 200,
-      body: { success: true, result: { deployments: [{ id: "deployment-123", versions: [{ version_id: "version-456", percentage: 100 }] }] } },
+      body: { success: true, result_info: { total_pages: 1 }, result: { deployments: [{ id: "deployment-123", annotations: { "workers/message": "release-evidence:v1;environment=staging;sha=" + "a".repeat(40) + ";run_id=123456;run_attempt=1" }, versions: [{ version_id: "version-456", percentage: 100 }] }] } },
     },
   });
   assert.equal(manifest.active_traffic_verification, "verified");
@@ -621,7 +625,10 @@ test("release evidence helper records the active deployment and never writes cre
   assert.equal(manifest.active_version_id, "version-456");
   assert.equal(manifest.active_traffic_percentage, 100);
   assert.equal(manifest.candidate_sha, "a".repeat(40));
-  assert.equal(manifest.candidate_deployment_association, "not_established_by_current_api_metadata");
+  assert.equal(manifest.candidate_deployment_association, "verified");
+  assert.equal(manifest.candidate_deployment_id, "deployment-123");
+  assert.equal(manifest.candidate_active_verification, "verified");
+  assert.equal(manifest.release_deployment_message, "release-evidence:v1;environment=staging;sha=" + "a".repeat(40) + ";run_id=123456;run_attempt=1");
   assert.equal(manifest.rollback_outcome, "skipped");
   assert.equal(JSON.stringify(manifest).includes("do-not-write-this-token"), false);
 });
@@ -631,14 +638,14 @@ test("release evidence helper still writes a manifest when Cloudflare metadata i
     cloudflareResponse: { status: 403, body: { success: false, errors: [{ message: "forbidden" }] } },
   });
   assert.equal(manifest.active_traffic_verification, "unavailable");
-  assert.equal(manifest.candidate_deployment_association, "not_established_by_current_api_metadata");
-  assert.equal(manifest.deployment_http_status, 403);
+  assert.equal(manifest.candidate_deployment_association, "unverified");
+  assert.match(manifest.deployment_error, /Cloudflare deployment metadata request failed/);
 });
 
 test("release evidence helper writes an explicit not-attempted state when credentials are absent", () => {
   const manifest = executeReleaseEvidenceHelper({ includeCredentials: false });
   assert.equal(manifest.active_traffic_verification, "not_attempted");
-  assert.equal(manifest.candidate_deployment_association, "not_established_by_current_api_metadata");
+  assert.equal(manifest.candidate_deployment_association, "not_attempted");
   assert.equal(manifest.active_version_id, null);
 });
 
@@ -655,17 +662,26 @@ test("Master Brain MVP CI job has a finite timeout", () => {
 
 
 for (const workflow of workflows) {
-  test(workflow.name + " deployment verification checks one 100% active version without claiming candidate identity", () => {
+  test(workflow.name + " release deploys and verifies the exact GitHub execution identity", () => {
     const source = readFileSync(workflow.path, "utf8");
-    const stepName = "- name: Verify deployed version before finalizing release";
-    const start = source.indexOf(stepName);
-    assert.ok(start >= 0, "deployment verification step must have an accurate name");
-    const end = source.indexOf("\n      - name:", start + stepName.length);
-    const block = source.slice(start, end < 0 ? source.length : end);
-    assert.match(block, /versions\.length\s*!==\s*1/, "verification must reject split traffic across multiple versions");
-    assert.match(block, /versions\[0\]\?\.percentage\s*!==\s*100/, "verification must require exactly 100% traffic");
-    assert.doesNotMatch(block, /Candidate=\$\{process\.env\.GITHUB_SHA\}/, "must not imply that Cloudflare metadata proves candidate SHA identity");
-    assert.match(block, /Version=/, "must report the active version ID");
+    const identityStart = source.indexOf("- name: Build immutable Cloudflare deployment identity");
+    const deployStart = source.indexOf("- name: Deploy candidate to " + workflow.name);
+    const verifyName = "- name: Verify exact " + workflow.name + " candidate deployment before finalizing release";
+    const verifyStart = source.indexOf(verifyName);
+    assert.ok(identityStart >= 0 && deployStart > identityStart, "identity must be built before deployment");
+    assert.ok(verifyStart > deployStart, "candidate identity must be verified after deployment");
+    const deployEnd = source.indexOf("\n      - name:", deployStart + 1);
+    const deployBlock = source.slice(deployStart, deployEnd);
+    assert.match(deployBlock, /wrangler deploy[^\n]*--message "\$WRANGLER_DEPLOYMENT_MESSAGE"/);
+    assert.match(deployBlock, /steps\.deployment_identity\.outputs\.message/);
+    const verifyEnd = source.indexOf("\n      - name:", verifyStart + 1);
+    const verifyBlock = source.slice(verifyStart, verifyEnd);
+    assert.match(verifyBlock, /node scripts\/verify-release-deployment\.mjs/);
+    assert.match(verifyBlock, /RELEASE_DEPLOYMENT_MESSAGE:/);
+    const evidenceStart = source.indexOf("- name: Write release evidence manifest");
+    const evidenceEnd = source.indexOf("\n      - name:", evidenceStart + 1);
+    const evidenceBlock = source.slice(evidenceStart, evidenceEnd);
+    assert.match(evidenceBlock, /RELEASE_DEPLOYMENT_MESSAGE:/);
   });
 }
 

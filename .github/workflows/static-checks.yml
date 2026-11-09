@@ -10,13 +10,6 @@ on:
     paths:
       - .github/workflows/static-checks.yml
       - src/**
-  pull_request:
-    branches:
-      - integration/unify-main-and-integrated-2026-11-02
-    paths:
-      - .github/workflows/static-checks.yml
-      - src/**
-      - tests/**
   workflow_dispatch:
 
 concurrency:

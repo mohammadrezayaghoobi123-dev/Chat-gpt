@@ -560,6 +560,9 @@ export class OrchestratorLedger extends DurableObject {
       "orchestrator_outbox_events",
       "orchestrator_audit_events",
       "orchestrator_owner_command_receipts",
+      "orchestrator_claim_candidates",
+      "orchestrator_claim_candidate_sequence",
+      "orchestrator_claim_scan_cursors",
     ].every(name => tableNames.has(name));
     return {
       ok: Number(result.ok) === 1 && integrityOk && requiredTablesOk,
@@ -1003,11 +1006,17 @@ export class OrchestratorLedger extends DurableObject {
           const sequence = nextClaimCandidateSequence(sql);
           sql.exec("UPDATE orchestrator_claim_candidates SET candidate_seq = ? WHERE task_id = ?", sequence, taskId);
         }
-        return claimRow({
+        const explicitResult = claimRow({
           ...row,
           executor_id: candidate.executor_id,
           task_created_at: row.created_at,
         }, { candidatesExamined: 1, candidateRowsRead: 1 });
+        if (explicitResult.claimed) return explicitResult;
+        if (explicitResult.blocked) return { claimed: false, reason: "NO_TASK_AVAILABLE" };
+        if (explicitResult.blockedByReconciliation) {
+          return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
+        }
+        return explicitResult;
       }
 
       const fallback = cursor === undefined

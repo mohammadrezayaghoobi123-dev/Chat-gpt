@@ -77,6 +77,7 @@ describe("OrchestratorLedger tenant/project query plans", () => {
       for (const plan of [initialBatchPlan, cursorBatchPlan]) {
         const details = plan.map(row => row.detail).join("\\n");
         expect(details).toContain("orchestrator_tasks_by_scope_executor_created");
+        expect(details).toMatch(/tenant_id=\?.*project_id=\?.*<expr>=\?/);
         expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
       }
     });
@@ -98,6 +99,7 @@ describe("OrchestratorLedger tenant/project query plans", () => {
       ).toArray();
       const details = plan.map(row => row.detail).join("\\n");
       expect(details).toContain("orchestrator_tasks_by_scope_state_executor_created");
+      expect(details).toMatch(/tenant_id=\?.*project_id=\?.*state=\?.*<expr>=\?/);
     });
   });
 
@@ -116,6 +118,7 @@ describe("OrchestratorLedger tenant/project query plans", () => {
       ).toArray();
       const details = plan.map(row => row.detail).join("\\n");
       expect(details).toContain("orchestrator_tasks_by_scope_state_executor_created");
+      expect(details).toMatch(/tenant_id=\?.*project_id=\?.*state=\?/);
     });
   });
 
@@ -142,6 +145,7 @@ describe("OrchestratorLedger tenant/project query plans", () => {
       ).toArray();
       const details = plan.map(row => row.detail).join("\\n");
       expect(details).toContain("orchestrator_tasks_by_scope_state_executor_created");
+      expect(details).toMatch(/tenant_id=\?.*project_id=\?.*state=\?.*<expr>=\?/);
     });
   });
 

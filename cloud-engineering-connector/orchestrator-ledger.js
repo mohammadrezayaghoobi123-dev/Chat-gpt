@@ -171,7 +171,7 @@ function syncClaimCandidateInTransaction(sql, taskId) {
     if (Number.isSafeInteger(existing.candidate_seq) && existing.candidate_seq > 0) return true;
     const sequence = nextClaimCandidateSequence(sql);
     sql.exec(
-      "UPDATE orchestrator_claim_candidates SET candidate_seq = ? WHERE task_id = ? AND candidate_seq IS NULL",
+      "UPDATE orchestrator_claim_candidates SET candidate_seq = ? WHERE task_id = ?",
       sequence, taskId,
     );
     return true;
@@ -1047,6 +1047,9 @@ export class OrchestratorLedger extends DurableObject {
 
       for (const candidate of batch) {
         candidatesExamined += 1;
+        if (!Number.isSafeInteger(candidate.candidate_seq) || candidate.candidate_seq < 1) {
+          return { claimed: false, reason: "CANDIDATE_INDEX_INCONSISTENT" };
+        }
         if (!CLAIMABLE_TASK_STATES.includes(candidate.state)) {
           return { claimed: false, reason: "CANDIDATE_INDEX_INCONSISTENT" };
         }

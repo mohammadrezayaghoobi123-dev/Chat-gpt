@@ -359,4 +359,43 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
     });
   });
 
+
+  it("rolls back the v12 index drop when its migration marker cannot be recorded", async () => {
+    const ledger = ledgerFor("tenant-scope-v12-rollback-on-marker-failure");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project ON orchestrator_tasks(tenant_id, project_id)");
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 12");
+      sql.exec(`
+        CREATE TRIGGER reject_v12_migration_marker
+        BEFORE INSERT ON orchestrator_schema_migrations
+        WHEN NEW.version = 12
+        BEGIN
+          SELECT RAISE(ABORT, 'forced v12 marker failure');
+        END
+      `);
+
+      expect(() => instance.ensureSchema()).toThrow(/forced v12 marker failure/);
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_tenant_project",
+      ).toArray()[0]?.name).toBe("orchestrator_tasks_by_tenant_project");
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 12",
+      ).toArray()[0]).toBeUndefined();
+
+      sql.exec("DROP TRIGGER reject_v12_migration_marker");
+      instance.ensureSchema();
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_tenant_project",
+      ).toArray()[0]).toBeUndefined();
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 12",
+      ).toArray()[0]?.version).toBe(12);
+      expect(instance.ping().schemaVersion).toBe(12);
+    });
+  });
+
+
 });

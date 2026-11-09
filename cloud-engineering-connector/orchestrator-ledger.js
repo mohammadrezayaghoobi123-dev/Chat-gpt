@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { transitionTask as transitionTaskCore, TASK_STATES } from "./orchestrator-core.js";
 import { assertAgentRoundLimit } from "./orchestrator-protocol.js";
 import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orchestrator-protocol.js";
-import { verifyWorkerAssertion } from "./orchestrator-worker-identity.js";
+import { signClaimCursor, verifyClaimCursor, verifyWorkerAssertion } from "./orchestrator-worker-identity.js";
 import { verifyReconciliationEvidence } from "./orchestrator-reconciliation-evidence.js";
 import { verifyOwnerAssertion } from "./orchestrator-owner-assertion.js";
 
@@ -884,15 +884,17 @@ export class OrchestratorLedger extends DurableObject {
     if (taskId !== undefined && cursor !== undefined) {
       return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
     }
-    if (cursor !== undefined && (
-      !cursor || typeof cursor !== "object" || Array.isArray(cursor) ||
-      Object.keys(cursor).sort().join(",") !== "createdAt,executorId,snapshotSequence,taskId,version" ||
-      cursor.version !== 1 || cursor.executorId !== workerId ||
-      !Number.isSafeInteger(cursor.snapshotSequence) || cursor.snapshotSequence < 0 ||
-      !Number.isSafeInteger(cursor.createdAt) || cursor.createdAt < 1 ||
-      typeof cursor.taskId !== "string" || !IDENTIFIER.test(cursor.taskId)
-    )) {
-      return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
+    let normalizedCursor = null;
+    if (cursor !== undefined) {
+      try {
+        normalizedCursor = await verifyClaimCursor(
+          this.env?.LEDGER_WORKER_ASSERTION_KEYS,
+          cursor,
+          { executorId: workerId, nowMs: now },
+        );
+      } catch {
+        return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
+      }
     }
 
     const verifiedReconciliationEvidence = reconciliationEvidence
@@ -909,7 +911,7 @@ export class OrchestratorLedger extends DurableObject {
       : null;
     const sql = this.ctx.storage.sql;
 
-    return this.ctx.storage.transactionSync(() => {
+    const result = this.ctx.storage.transactionSync(() => {
       // Consume the signed assertion once, before any task/lease inspection.
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
@@ -1027,14 +1029,14 @@ export class OrchestratorLedger extends DurableObject {
         "SELECT last_sequence FROM orchestrator_claim_candidate_sequence WHERE singleton = 1",
       ).toArray()[0];
       const currentSequence = Number(sequenceRow?.last_sequence ?? 0);
-      const snapshotSequence = cursor?.snapshotSequence ?? currentSequence;
+      const snapshotSequence = normalizedCursor?.snapshotSequence ?? currentSequence;
       if (!Number.isSafeInteger(currentSequence) || !Number.isSafeInteger(snapshotSequence) ||
           snapshotSequence < 0 || snapshotSequence > currentSequence) {
         return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
       }
 
-      const lastCreatedAt = cursor?.createdAt ?? 0;
-      const lastTaskId = cursor?.taskId ?? "";
+      const lastCreatedAt = normalizedCursor?.createdAt ?? 0;
+      const lastTaskId = normalizedCursor?.taskId ?? "";
       const candidateRows = sql.exec(
         CLAIM_CANDIDATE_QUERY,
         workerId, snapshotSequence, lastCreatedAt, lastTaskId,
@@ -1120,8 +1122,16 @@ export class OrchestratorLedger extends DurableObject {
         candidateRowsRead: candidateRows.length,
       };
     });
+    if (result?.nextCursor) {
+      result.nextCursor = await signClaimCursor(
+        this.env?.LEDGER_WORKER_ASSERTION_KEYS,
+        verifiedAssertion.kid,
+        result.nextCursor,
+        now,
+      );
+    }
+    return result;
   }
-
   async advanceAgentRound({ taskId, expectedVersion, expectedRound, nextRound, workerId, workerAssertion, leaseGeneration, now }) {
     identifier(taskId, "taskId");
     identifier(workerId, "workerId");

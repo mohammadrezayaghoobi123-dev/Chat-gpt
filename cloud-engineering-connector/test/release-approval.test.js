@@ -50,9 +50,14 @@ function fakeFetch(
     const value = String(url);
     onRequest(value, options);
     if (value.includes("/actions/runs/") && value.includes("/jobs")) {
+      const jobs = gateChecks.jobs ?? [{
+        run_id: 987654321,
+        name: OWN_CHECK,
+        check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/777",
+      }];
       return response({
-        total_count: 1,
-        jobs: [{ run_id: 987654321, name: OWN_CHECK, check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/777" }],
+        total_count: gateChecks.jobsTotalCount ?? jobs.length,
+        jobs,
       });
     }
     if (value.includes("/check-runs")) {
@@ -379,7 +384,7 @@ test("Staging fails closed when the current workflow run cannot identify exactly
       { run_id: 987654321, name: OWN_CHECK, check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/777" },
       { run_id: 987654321, name: OWN_CHECK, check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/779" },
     ],
-    totalCount: 2,
+    jobsTotalCount: 2,
   };
   await assert.rejects(
     verifyReleaseApproval({

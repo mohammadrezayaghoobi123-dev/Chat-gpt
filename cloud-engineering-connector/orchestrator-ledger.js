@@ -659,6 +659,21 @@ export class OrchestratorLedger extends DurableObject {
       );
     });
 
+    // Schema v12: remove the superseded task-only tenant/project index.
+    // The v10/v11 indexes retain this prefix; other tables keep their v8 indexes.
+    this.ctx.storage.transactionSync(() => {
+      const applied = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 12",
+      ).toArray()[0];
+      if (applied) return;
+      sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_tenant_project");
+      sql.exec(
+        "INSERT INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (12, ?, ?)",
+        Date.now(),
+        "Drop superseded tenant/project index from orchestrator_tasks; retain scoped indexes on other ledger tables",
+      );
+    });
+
   }
 
   ping() {
@@ -675,7 +690,7 @@ export class OrchestratorLedger extends DurableObject {
     ].every(name => tableNames.has(name));
     return {
       ok: Number(result.ok) === 1 && requiredTablesOk,
-      schemaVersion: 11,
+      schemaVersion: 12,
       storage: {
         requiredTables: requiredTablesOk,
       },

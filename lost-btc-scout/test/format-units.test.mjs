@@ -22,3 +22,12 @@ test("rejects invalid decimal parameters", () => {
   assert.throws(() => formatUnits("1", -1), RangeError);
   assert.throws(() => formatUnits("1", 2, 3), RangeError);
 });
+
+
+test("formats six-decimal tokens with the default precision", () => {
+  assert.equal(formatUnits("1234567", 6), "۱٫۲۳۴۵۶۷");
+});
+
+test("formats zero-decimal tokens with the default precision", () => {
+  assert.equal(formatUnits("123456", 0), "۱۲۳٬۴۵۶");
+});

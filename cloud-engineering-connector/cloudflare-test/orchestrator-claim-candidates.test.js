@@ -202,6 +202,59 @@ it("migrates pre-v8 candidate rows lazily and resets the bounded reconciliation 
   });
 });
 
+it("removes a task from the candidate index when a fenced transition makes it non-claimable", async () => {
+  const ledger = ledgerFor("ledger-candidate-transition-removal");
+  await createTask(ledger, {
+    task: task("task-transition-blocked"),
+    idempotencyKey: "task-transition-blocked",
+    inputHash: "9".repeat(64),
+    now,
+  });
+  await createTask(ledger, {
+    task: task("task-transition-next"),
+    idempotencyKey: "task-transition-next",
+    inputHash: "a".repeat(64),
+    now: now + 1,
+  });
+  const firstLease = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(firstLease).toMatchObject({ claimed: true, task: { taskId: "task-transition-blocked" } });
+
+  const transitioned = await ledger.transitionTask({
+    taskId: "task-transition-blocked",
+    expectedVersion: 1,
+    expectedState: "SCHEDULED",
+    nextState: "BLOCKED",
+    actor: { id: "agent:worker-1", authenticated: true, identityVerified: true, role: "agent" },
+    evidence: { kind: "test-evidence", reference: "ci://claim-candidate-transition" },
+    now: now + 1,
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "transitionTask", nowMs: now + 1,
+    }),
+    leaseGeneration: firstLease.leaseGeneration,
+  });
+  expect(transitioned).toMatchObject({ updated: true, task: { state: "BLOCKED" } });
+
+  const next = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now + 2),
+    leaseMs: 30_000,
+    now: now + 2,
+  });
+  expect(next).toMatchObject({ claimed: true, task: { taskId: "task-transition-next" } });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-transition-blocked",
+    ).one().count).toBe(0);
+  });
+});
+
 it("uses candidate discovery for scheduling and fails closed on missing explicit candidate rows", async () => {
   const ledger = ledgerFor("ledger-candidate-query-path");
   await createTask(ledger, {

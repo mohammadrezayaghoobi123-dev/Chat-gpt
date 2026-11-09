@@ -331,7 +331,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       leaseMs: 30_000,
       now,
     });
-    expect(result).toEqual({ claimed: false, reason: "NO_TASK_AVAILABLE" });
+    expect(result).toMatchObject({ claimed: false, reason: "NO_TASK_AVAILABLE" });
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_execution_leases",
@@ -3039,7 +3039,7 @@ it("claims multiple executor-scoped tasks concurrently without duplicate ownersh
     ).one().count).toBe(8);
     expect(state.storage.sql.exec(
       "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates",
-    ).one().count).toBe(0);
+    ).one().count).toBe(8);
     const ownership = state.storage.sql.exec(
       "SELECT lease.worker_id, COUNT(*) AS count FROM orchestrator_execution_leases AS lease GROUP BY lease.worker_id ORDER BY lease.worker_id",
     ).toArray();

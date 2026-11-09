@@ -34,7 +34,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         expect(columns.has("tenant_id"), `${table} must have tenant_id`).toBe(true);
         expect(columns.has("project_id"), `${table} must have project_id`).toBe(true);
       }
-      expect(instance.ping().schemaVersion).toBe(11);
+      expect(instance.ping().schemaVersion).toBe(12);
     });
   });
 
@@ -292,7 +292,10 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       // but remove only the two additive indexes and their migration records.
       sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_scope_executor_created");
       sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_scope_state_executor_created");
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version IN (10, 11)");
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version IN (10, 11, 12)");
+      // Reconstruct the v9 state even though the test harness initialized the
+      // current schema before entering this callback.
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project ON orchestrator_tasks(tenant_id, project_id)");
       expect(sql.exec("SELECT version FROM orchestrator_schema_migrations WHERE version = 9").toArray()[0]?.version).toBe(9);
       expect(sql.exec(
         "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",

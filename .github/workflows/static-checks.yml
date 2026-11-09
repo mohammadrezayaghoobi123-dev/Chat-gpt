@@ -3,19 +3,13 @@ name: Static checks
 # Blocking quality gate: Ruff E9/F and non-strict Mypy must remain clean.
 # The previous baseline debt was remediated and verified at zero findings.
 on:
+  workflow_call:
   push:
     branches:
       - master-brain/integrated
     paths:
       - .github/workflows/static-checks.yml
       - src/**
-  pull_request:
-    branches:
-      - integration/unify-main-and-integrated-2026-11-02
-    paths:
-      - .github/workflows/static-checks.yml
-      - src/**
-      - tests/**
   workflow_dispatch:
 
 concurrency:

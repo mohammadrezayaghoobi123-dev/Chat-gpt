@@ -1,19 +1,13 @@
 name: Master Brain MCP CI
 
 on:
+  workflow_call:
   push:
     branches:
       - feature/master-brain-cloud-mcp
     paths:
       - "master-brain-mcp/**"
       - ".github/workflows/master-brain-mcp.yml"
-  pull_request:
-    branches:
-      - integration/unify-main-and-integrated-2026-11-02
-    paths:
-      - "master-brain-mcp/**"
-      - ".github/workflows/master-brain-mcp.yml"
-
 permissions:
   contents: read
 

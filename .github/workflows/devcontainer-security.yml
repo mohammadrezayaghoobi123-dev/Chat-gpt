@@ -1,10 +1,7 @@
 name: Dev Container Security
 
 on:
-  pull_request:
-    paths:
-      - ".devcontainer/**"
-      - ".github/workflows/devcontainer-security.yml"
+  workflow_call:
   push:
     branches:
       - "security/**"

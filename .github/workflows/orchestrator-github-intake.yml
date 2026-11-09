@@ -1,6 +1,7 @@
 name: Orchestrator GitHub Intake Contract
 
 on:
+  workflow_call:
   push:
     branches:
       - "plan/orchestrator-p2-github-intake-2026-11-04"

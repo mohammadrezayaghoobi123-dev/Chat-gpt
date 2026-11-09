@@ -781,3 +781,30 @@ test("Staging revalidates exact candidate approval after preflight and immediate
   assert.match(finalGate, /node scripts\/verify-release-approval\.mjs/);
   assert.match(finalGate, /RELEASE_GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
 });
+
+
+for (const workflow of workflows) {
+  test(workflow.name + " rollback runs after any attempted deployment failure, including ambiguous deploy outcomes", () => {
+    const source = readFileSync(workflow.path, "utf8");
+    const stepName = workflow.name === "Staging"
+      ? "Roll back Staging if post-deploy acceptance fails"
+      : "Roll back Production if post-deploy acceptance fails";
+    const start = source.indexOf("      - name: " + stepName);
+    assert.ok(start >= 0, "rollback step must exist");
+    const next = source.indexOf("\\n      - name: ", start + 1);
+    const block = source.slice(start, next < 0 ? source.length : next);
+    const condition = block.match(/^        if: (.+)$/m)?.[1] ?? "";
+    assert.match(condition, /failure\\(\\)/, "rollback must run on workflow failure");
+    assert.match(
+      condition,
+      /steps\\.deploy\\.outcome\\s*!=\\s*'skipped'/,
+      "rollback must also run when deployment was attempted but its outcome is failure/ambiguous",
+    );
+    assert.match(
+      condition,
+      /steps\\.preflight\\.outputs\\.previous_version_id\\s*!=\\s*''/,
+      "rollback must require the immutable previous version captured before deployment",
+    );
+    assert.doesNotMatch(condition, /steps\\.deploy\\.outcome\\s*==\\s*'success'/);
+  });
+}

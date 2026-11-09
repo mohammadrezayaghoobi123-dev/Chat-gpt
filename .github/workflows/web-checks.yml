@@ -13,15 +13,6 @@ on:
       - "tools/web_e2e.py"
       - "tools/a11y_check.py"
       - ".github/workflows/web-checks.yml"
-  pull_request:
-    branches:
-      - integration/unify-main-and-integrated-2026-11-02
-    paths:
-      - .github/workflows/web-checks.yml
-      - src/master_brain/web/**
-      - src/master_brain/http_api.py
-      - tools/web_e2e.py
-      - tools/a11y_check.py
   workflow_dispatch:
 
 concurrency:

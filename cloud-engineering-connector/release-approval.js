@@ -72,9 +72,57 @@ async function getJsonCollection(fetchImpl, url, token) {
  * complete and passing. Any other mergeable_state (blocked, behind, dirty, draft,
  * unknown) fails closed, and so does any incomplete or unverifiable check listing.
  */
-async function stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, mergeableState) {
+async function stagingChecksAreClean(
+  fetchImpl,
+  repoPath,
+  candidateSha,
+  token,
+  mergeableState,
+  currentRunId,
+  currentRunAttempt,
+) {
   if (mergeableState === "clean") return true;
   if (mergeableState !== "unstable") return false;
+  if (
+    typeof currentRunId !== "string" ||
+    !/^[1-9][0-9]*$/.test(currentRunId) ||
+    !Number.isSafeInteger(Number(currentRunId)) ||
+    typeof currentRunAttempt !== "string" ||
+    !/^[1-9][0-9]*$/.test(currentRunAttempt) ||
+    !Number.isSafeInteger(Number(currentRunAttempt))
+  ) return false;
+
+  const jobs = await getJson(
+    fetchImpl,
+    API_ROOT + "/repos/" + repoPath + "/actions/runs/" + currentRunId +
+      "/attempts/" + currentRunAttempt + "/jobs?per_page=100",
+    token,
+  );
+  if (
+    !Array.isArray(jobs?.jobs) ||
+    !Number.isSafeInteger(jobs.total_count) ||
+    jobs.total_count !== jobs.jobs.length
+  ) return false;
+  const ownJobs = jobs.jobs.filter(job =>
+    job?.name === OWN_RELEASE_CHECK && job?.run_id === Number(currentRunId)
+  );
+  if (ownJobs.length !== 1) return false;
+  let ownCheckRunId;
+  try {
+    const checkRunUrl = new URL(ownJobs[0].check_run_url);
+    const expectedPrefix = "/repos/" + repoPath + "/check-runs/";
+    if (
+      checkRunUrl.origin !== API_ROOT ||
+      !checkRunUrl.pathname.startsWith(expectedPrefix)
+    ) return false;
+    const candidateId = checkRunUrl.pathname.slice(expectedPrefix.length);
+    if (!/^[1-9][0-9]*$/.test(candidateId)) return false;
+    ownCheckRunId = Number(candidateId);
+    if (!Number.isSafeInteger(ownCheckRunId)) return false;
+  } catch {
+    return false;
+  }
+
   const checks = await getJson(
     fetchImpl,
     API_ROOT + "/repos/" + repoPath + "/commits/" + candidateSha + "/check-runs?per_page=100",
@@ -82,9 +130,10 @@ async function stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, m
   );
   const runs = checks?.check_runs;
   if (!Array.isArray(runs) || !Number.isSafeInteger(checks.total_count) || checks.total_count !== runs.length) return false;
+  const ownMatches = runs.filter(run => run?.id === ownCheckRunId);
+  if (ownMatches.length !== 1) return false;
   for (const run of runs) {
-    const own = run?.name === OWN_RELEASE_CHECK && run?.app?.slug === OWN_RELEASE_APP;
-    if (own) continue;
+    if (run?.id === ownCheckRunId) continue;
     if (run?.status !== "completed" || !PASSING_CONCLUSIONS.has(run?.conclusion)) return false;
   }
   const status = await getJson(
@@ -115,6 +164,8 @@ export async function verifyReleaseApproval({
   releaseEnvironment,
   token,
   fetchImpl = globalThis.fetch,
+  currentRunId = process.env.GITHUB_RUN_ID,
+  currentRunAttempt = process.env.GITHUB_RUN_ATTEMPT,
 }) {
   validateInput({ repository, candidateSha, releaseEnvironment, token, fetchImpl });
   const repoPath = repository.split("/").map(encodeURIComponent).join("/");
@@ -159,7 +210,15 @@ export async function verifyReleaseApproval({
     ) {
       throw new Error("Release blocked: staging candidate must remain an open, non-draft PR for this exact head.");
     }
-    if (pull.mergeable !== true || !(await stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, pull.mergeable_state))) {
+    if (pull.mergeable !== true || !(await stagingChecksAreClean(
+      fetchImpl,
+      repoPath,
+      candidateSha,
+      token,
+      pull.mergeable_state,
+      currentRunId,
+      currentRunAttempt,
+    ))) {
       throw new Error("Release blocked: staging candidate must be a mergeable, current-base PR.");
     }
     const currentBase = await getJson(

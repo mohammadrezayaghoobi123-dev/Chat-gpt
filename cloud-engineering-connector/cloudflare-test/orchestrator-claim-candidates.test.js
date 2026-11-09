@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { canonicalJson } from "../orchestrator-protocol.js";
+import { CLAIM_CANDIDATE_QUERY } from "../orchestrator-ledger.js";
 
 const now = 1_800_000_000_000;
 
@@ -199,16 +200,16 @@ it("uses candidate discovery for scheduling and fails closed on missing explicit
   });
 });
 
-it("uses the executor/order candidate index for the scheduler lookup query plan", async () => {
+it("uses the executor/order index for the exact bounded cursor query without a temporary sort", async () => {
   const ledger = ledgerFor("ledger-candidate-query-plan");
   await runInDurableObject(ledger, async (_instance, state) => {
     const plan = state.storage.sql.exec(
-      "EXPLAIN QUERY PLAN SELECT task.* FROM orchestrator_claim_candidates AS candidate INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id WHERE candidate.executor_id = ? ORDER BY candidate.created_at, candidate.task_id LIMIT 1",
-      "agent:worker-1",
+      "EXPLAIN QUERY PLAN " + CLAIM_CANDIDATE_QUERY,
+      "agent:worker-1", 10_000, 0, "", 129,
     ).toArray();
-    expect(plan.map(row => row.detail).join(" ")).toContain(
-      "orchestrator_claim_candidates_by_executor_order",
-    );
+    const details = plan.map(row => row.detail).join(" ");
+    expect(details).toContain("orchestrator_claim_candidates_by_executor_order");
+    expect(details).not.toMatch(/USE TEMP B-TREE/i);
   });
 });
 

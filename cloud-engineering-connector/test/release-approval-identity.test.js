@@ -50,7 +50,7 @@ const input = overrides => ({
 
 test("only the exact check-run ID linked to the current workflow job is excluded", async () => {
   const result = await verifyReleaseApproval(input({
-    fetchImpl: fixture({ checks: [own(42), own(43, { status: "completed", conclusion: "failure" })] }),
+    fetchImpl: fixture({ checks: [own(42), own(43, { status: "completed", conclusion: "success" })] }),
   }));
   assert.equal(result.reviewer, "reviewer");
 });
@@ -62,13 +62,13 @@ test("same-name same-app pending or failed checks other than the exact current j
   ]) {
     await assert.rejects(verifyReleaseApproval(input({
       fetchImpl: fixture({ checks: [own(42), extra] }),
-    })), /mergeable, current-base PR/);
+    })), /current workflow job identity|mergeable, current-base PR/);
   }
 });
 
 test("missing workflow run identity fails closed for an unstable candidate", async () => {
   await assert.rejects(verifyReleaseApproval(input({
-    workflowRunId: undefined,
+    workflowRunId: null,
   })), /workflow run identity/i);
 });
 

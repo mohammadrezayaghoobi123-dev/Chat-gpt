@@ -550,7 +550,7 @@ for (const workflow of workflows) {
 }
 
 test("release evidence helper records audit metadata without serializing credentials", () => {
-  const helper = readFileSync(new URL("../scripts/write-release-evidence.mjs", import.meta.url), "utf8");
+  const helperUrl = new URL("../scripts/write-release-evidence.mjs", import.meta.url).href;
   for (const field of [
     "candidate_sha",
     "release_environment",
@@ -587,7 +587,7 @@ function executeReleaseEvidenceHelper({ cloudflareResponse, includeCredentials =
     : "globalThis.fetch = async () => { throw new Error('fetch must not run without credentials'); };";
   const directory = mkdtempSync(join(tmpdir(), "release-evidence-helper-"));
   try {
-    const result = spawnSync(process.execPath, ["--input-type=module", "-e", prelude + "\n" + helper], {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", prelude + "\nawait import(" + JSON.stringify(helperUrl) + ");"], {
       cwd: directory,
       encoding: "utf8",
       env: {

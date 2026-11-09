@@ -110,6 +110,7 @@ async function stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, m
 
   const currentJobs = jobs.filter(job =>
     job?.name === OWN_RELEASE_CHECK &&
+    job?.run_id === Number(runId) &&
     job?.run_attempt === attempt &&
     job?.head_sha === candidateSha &&
     typeof job?.check_run_url === "string"

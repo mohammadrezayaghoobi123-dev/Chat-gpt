@@ -3,7 +3,6 @@ const STAGING_BASE = "integration/unify-main-and-integrated-2026-11-02";
 // The Staging release job is itself a check on the candidate SHA. Its own pending
 // or failed run must not make the PR look unstable to the gate that runs inside it.
 const OWN_RELEASE_CHECK = "Deploy exact candidate to Staging and verify";
-const OWN_RELEASE_APP = "github-actions";
 const PASSING_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
 
 function validateInput({ repository, candidateSha, releaseEnvironment, token, fetchImpl }) {
@@ -69,8 +68,9 @@ async function getJsonCollection(fetchImpl, url, token) {
 /**
  * "clean" passes as before. "unstable" is accepted only when every check run and
  * commit status on the exact candidate SHA other than this release job's own run is
- * complete and passing. Any other mergeable_state (blocked, behind, dirty, draft,
- * unknown) fails closed, and so does any incomplete or unverifiable check listing.
+ * complete and passing. Only the Check Run ID resolved from this exact workflow
+ * run attempt's Actions Jobs API response is excluded. Any ambiguous or incomplete
+ * identity, or any other mergeable_state, fails closed.
  */
 async function stagingChecksAreClean(
   fetchImpl,

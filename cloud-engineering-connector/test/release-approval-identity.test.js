@@ -25,7 +25,7 @@ const own = (id, overrides = {}) => ({
 });
 const currentJob = (overrides = {}) => ({
   id: 700, name: ownName, run_id: 12345, run_attempt: 2, head_sha: sha,
-  check_run_url: "https://api.github.com/repos/example/repo/check-runs/42", ...overrides,
+  check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/42", ...overrides,
 });
 
 function fixture({ checks = [own(42)], jobs = [currentJob()], runId = "12345", attempt = "2" } = {}) {
@@ -75,7 +75,7 @@ test("missing workflow run identity fails closed for an unstable candidate", asy
 test("missing, duplicate, stale-attempt, or wrong-SHA current job identity fails closed", async () => {
   const cases = [
     [],
-    [currentJob(), currentJob({ id: 701, check_run_url: "https://api.github.com/repos/example/repo/check-runs/44" })],
+    [currentJob(), currentJob({ id: 701, check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/44" })],
     [currentJob({ run_attempt: 1 })],
     [currentJob({ head_sha: "d".repeat(40) })],
     [currentJob({ check_run_url: null })],

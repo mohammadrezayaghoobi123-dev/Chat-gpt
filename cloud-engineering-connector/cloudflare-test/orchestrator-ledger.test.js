@@ -79,7 +79,7 @@ const evidence = { kind: "test-evidence", reference: "ci://run/123" };
 describe("OrchestratorLedger durable coordination contract", () => {
   it("initializes its own SQLite schema and reports the schema version", async () => {
     const ledger = ledgerFor("ledger-schema-ping");
-    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 7 });
+    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 7, storage: { integrityCheck: "ok", requiredTables: true } });
     await runInDurableObject(ledger, async (instance, state) => {
       const tables = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row => row.name);
       expect(tables).toEqual(expect.arrayContaining([

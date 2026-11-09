@@ -452,8 +452,30 @@ export class OrchestratorLedger extends DurableObject {
   }
 
   ping() {
-    const result = this.ctx.storage.sql.exec("SELECT 1 AS ok").one();
-    return { ok: Number(result.ok) === 1, schemaVersion: 7 };
+    const sql = this.ctx.storage.sql;
+    const result = sql.exec("SELECT 1 AS ok").one();
+    const integrityRows = sql.exec("PRAGMA quick_check(1)").toArray();
+    const integrityValue = integrityRows.length === 1
+      ? Object.values(integrityRows[0])[0]
+      : null;
+    const integrityOk = integrityValue === "ok";
+    const tableNames = new Set(
+      sql.exec("SELECT name FROM sqlite_master WHERE type = 'table'").toArray().map(row => row.name),
+    );
+    const requiredTablesOk = [
+      "orchestrator_tasks",
+      "orchestrator_outbox_events",
+      "orchestrator_audit_events",
+      "orchestrator_owner_command_receipts",
+    ].every(name => tableNames.has(name));
+    return {
+      ok: Number(result.ok) === 1 && integrityOk && requiredTablesOk,
+      schemaVersion: 7,
+      storage: {
+        integrityCheck: integrityOk ? "ok" : "failed",
+        requiredTables: requiredTablesOk,
+      },
+    };
   }
 
   claimGitHubDelivery({ deliveryId, bodySha256, eventName, receivedAt, idempotencyKey, inputHash } = {}) {
@@ -1358,6 +1380,36 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
+
+  lookupOwnerCommandReceipt(input) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      return { found: false, reason: "INVALID_OWNER_RECEIPT_LOOKUP" };
+    }
+    try {
+      const deliveryId = identifier(input.deliveryId, "deliveryId");
+      const commentId = identifier(input.commentId, "commentId");
+      const bodySha256 = hash(input.bodySha256, "bodySha256");
+      const commandHash = hash(input.commandHash, "commandHash");
+      const rows = this.ctx.storage.sql.exec(
+        "SELECT delivery_id, comment_id, body_sha256, command_hash, result_json FROM orchestrator_owner_command_receipts WHERE delivery_id = ? OR comment_id = ?",
+        deliveryId, commentId,
+      ).toArray();
+      if (rows.length === 0) return { found: false };
+      if (rows.length !== 1) return { found: true, conflict: true, reason: "OWNER_RECEIPT_CONFLICT" };
+      const row = rows[0];
+      if ((row.delivery_id === deliveryId || row.comment_id === commentId) &&
+          row.body_sha256 === bodySha256 && row.command_hash === commandHash) {
+        return {
+          found: true,
+          replay: true,
+          result: parseJson(row.result_json, "Owner command receipt"),
+        };
+      }
+      return { found: true, conflict: true, reason: "OWNER_RECEIPT_CONFLICT" };
+    } catch {
+      return { found: false, reason: "LEDGER_TRANSACTION_FAILED" };
+    }
+  }
 
   async executeOwnerCommand(input) {
     if (!input || typeof input !== "object" || Array.isArray(input)) {

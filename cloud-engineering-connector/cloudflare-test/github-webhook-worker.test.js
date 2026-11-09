@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import worker from "../worker.js";
 import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.js";
 
@@ -178,6 +178,20 @@ describe("GitHub webhook Worker route", () => {
       operation: "cancel",
     });
 
+    const realNow = Date.now();
+    vi.setSystemTime(new Date(createdAt + 6 * 60 * 1000));
+    try {
+      const delayedReplay = await worker.fetch(
+        await signedRequest(body, deliveryId, undefined, "issue_comment"),
+        ownerEnv,
+      );
+      expect(delayedReplay.status).toBe(202);
+      await expect(delayedReplay.json()).resolves.toMatchObject({ status: "duplicate", deliveryId });
+      await expect(ledger.getTask({ taskId })).resolves.toMatchObject({ state: "CANCELLED", version: 2 });
+    } finally {
+      vi.setSystemTime(new Date(realNow));
+    }
+
     const changedBody = JSON.stringify({
       ...event,
       comment: { ...event.comment, body: `/orchestrator cancel ${taskId} --reason "Changed reason"` },
@@ -211,7 +225,7 @@ describe("GitHub webhook Worker route", () => {
     });
   });
 
-  it("rejects Owner-like comments with invalid author, repository, PR, action, or freshness before Ledger access", async () => {
+  it("rejects invalid Owner webhook identity before Ledger lookup and stale new commands before execution", async () => {
     const repository = "mohammadrezayaghoobi123-dev/Chat-gpt";
     const ownerId = 335530603;
     const base = payload({
@@ -241,6 +255,7 @@ describe("GitHub webhook Worker route", () => {
     ];
     let ledgerRpcCalls = 0;
     const fakeLedger = {
+      lookupOwnerCommandReceipt: async () => { ledgerRpcCalls++; return { found: false }; },
       getTask: async () => { ledgerRpcCalls++; return null; },
       executeOwnerCommand: async () => { ledgerRpcCalls++; return { applied: true }; },
     };
@@ -266,7 +281,7 @@ describe("GitHub webhook Worker route", () => {
       );
       expect(response.status, item.name).toBe(item.expected);
     }
-    expect(ledgerRpcCalls).toBe(0);
+    expect(ledgerRpcCalls).toBe(1);
   });
 
   it("treats the same semantic GitHub issue event as a replay when provider timestamps differ", async () => {

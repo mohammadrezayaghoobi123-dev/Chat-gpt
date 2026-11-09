@@ -155,7 +155,7 @@ test("readyz uses a lightweight Durable Object ping rather than a full storage s
     },
     ORCHESTRATOR_LEDGER: {
       idFromName: name => name,
-      get: () => ({ ping: async () => ({ ok: true, schemaVersion: 7 }) })
+      get: () => ({ ping: async () => ({ ok: true, schemaVersion: 7, storage: { integrityCheck: "ok", requiredTables: true } }) })
     },
     ORCHESTRATOR_OUTBOX_QUEUE: { send: async () => {} },
     ORCHESTRATOR_OUTBOX_QUEUE_NAME: "chat-gpt111-staging-orchestrator-outbox",

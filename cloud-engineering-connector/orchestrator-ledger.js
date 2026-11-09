@@ -146,7 +146,7 @@ function nextClaimCandidateSequence(sql) {
   return row.last_sequence;
 }
 
-function syncClaimCandidateInTransaction(sql, taskId) {
+function syncClaimCandidateInTransaction(sql, taskId, forceSequence = false) {
   const candidate = sql.exec(`
     SELECT task.task_id,
            COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) AS executor_id,
@@ -167,7 +167,7 @@ function syncClaimCandidateInTransaction(sql, taskId) {
     taskId,
   ).toArray()[0];
   if (existing && existing.executor_id === executorId && existing.created_at === candidate.created_at) {
-    if (Number.isSafeInteger(existing.candidate_seq) && existing.candidate_seq > 0) return true;
+    if (!forceSequence && Number.isSafeInteger(existing.candidate_seq) && existing.candidate_seq > 0) return true;
     const sequence = nextClaimCandidateSequence(sql);
     sql.exec(
       "UPDATE orchestrator_claim_candidates SET candidate_seq = ? WHERE task_id = ?",
@@ -937,7 +937,7 @@ export class OrchestratorLedger extends DurableObject {
         let reconciliationRequired = false;
         if (lease) {
           if (lease.worker_id !== null && lease.lease_until > now) {
-            return { claimed: false, blocked: true };
+            return { claimed: false, blocked: true, leaseUntil: lease.lease_until };
           }
           generation = lease.lease_generation + 1;
           if (lease.worker_id !== null && lease.lease_until <= now) {
@@ -980,7 +980,8 @@ export class OrchestratorLedger extends DurableObject {
             row.task_id, workerId, now + leaseMs, now,
           );
         }
-        syncClaimCandidateInTransaction(sql, row.task_id);
+        // A lease mutation changes candidate availability for every outstanding snapshot.
+        syncClaimCandidateInTransaction(sql, row.task_id, true);
         return {
           claimed: true,
           task: taskProjection,
@@ -1065,6 +1066,7 @@ export class OrchestratorLedger extends DurableObject {
       const batch = candidateRows.slice(0, MAX_CLAIM_CANDIDATES_PER_CALL);
       let candidatesExamined = 0;
       let blockedByReconciliation = false;
+      let earliestLeaseExpiry = null;
 
       for (const candidate of batch) {
         candidatesExamined += 1;
@@ -1080,6 +1082,11 @@ export class OrchestratorLedger extends DurableObject {
         });
         if (result.claimed) return result;
         if (result.reason === "CANDIDATE_INDEX_INCONSISTENT") return result;
+        if (result.blocked && Number.isSafeInteger(result.leaseUntil) && result.leaseUntil > now) {
+          earliestLeaseExpiry = earliestLeaseExpiry === null
+            ? result.leaseUntil
+            : Math.min(earliestLeaseExpiry, result.leaseUntil);
+        }
         if (result.blockedByReconciliation) blockedByReconciliation = true;
       }
 
@@ -1095,6 +1102,7 @@ export class OrchestratorLedger extends DurableObject {
             createdAt: last.created_at,
             taskId: last.task_id,
           },
+          cursorValidUntilMs: earliestLeaseExpiry,
           budgetExhausted: true,
           scanExhausted: false,
           candidatesExamined,
@@ -1138,11 +1146,14 @@ export class OrchestratorLedger extends DurableObject {
       };
     });
     if (result?.nextCursor) {
+      const cursorValidUntilMs = result.cursorValidUntilMs;
+      delete result.cursorValidUntilMs;
       result.nextCursor = await signClaimCursor(
         this.env?.LEDGER_WORKER_ASSERTION_KEYS,
         verifiedAssertion.kid,
         result.nextCursor,
         now,
+        cursorValidUntilMs,
       );
     }
     return result;
@@ -1238,6 +1249,7 @@ export class OrchestratorLedger extends DurableObject {
         "UPDATE orchestrator_execution_leases SET lease_until = ?, updated_at = ? WHERE task_id = ? AND worker_id = ? AND lease_generation = ?",
         now + leaseMs, now, taskId, workerId, leaseGeneration,
       );
+      syncClaimCandidateInTransaction(sql, taskId, true);
       return { renewed: true, leaseUntil: now + leaseMs, leaseGeneration };
     });
   }
@@ -1268,7 +1280,7 @@ export class OrchestratorLedger extends DurableObject {
         "UPDATE orchestrator_execution_leases SET worker_id = NULL, lease_until = 0, updated_at = ? WHERE task_id = ? AND worker_id = ? AND lease_generation = ?",
         now, taskId, workerId, leaseGeneration,
       );
-      syncClaimCandidateInTransaction(sql, taskId);
+      syncClaimCandidateInTransaction(sql, taskId, true);
       return { released: true, leaseGeneration };
     });
   }

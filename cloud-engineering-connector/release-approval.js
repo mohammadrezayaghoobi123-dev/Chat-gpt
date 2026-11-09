@@ -3,6 +3,7 @@ const STAGING_BASE = "integration/unify-main-and-integrated-2026-11-02";
 // The Staging release job is itself a check on the candidate SHA. Its own pending
 // or failed run must not make the PR look unstable to the gate that runs inside it.
 const OWN_RELEASE_CHECK = "Deploy exact candidate to Staging and verify";
+const OWN_RELEASE_APP = "github-actions";
 const PASSING_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
 
 function validateInput({ repository, candidateSha, releaseEnvironment, token, fetchImpl }) {
@@ -131,7 +132,7 @@ async function stagingChecksAreClean(
   const runs = checks?.check_runs;
   if (!Array.isArray(runs) || !Number.isSafeInteger(checks.total_count) || checks.total_count !== runs.length) return false;
   const ownMatches = runs.filter(run => run?.id === ownCheckRunId);
-  if (ownMatches.length !== 1) return false;
+  if (ownMatches.length !== 1 || ownMatches[0]?.app?.slug !== OWN_RELEASE_APP) return false;
   for (const run of runs) {
     if (run?.id === ownCheckRunId) continue;
     if (run?.status !== "completed" || !PASSING_CONCLUSIONS.has(run?.conclusion)) return false;

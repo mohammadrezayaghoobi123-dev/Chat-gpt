@@ -34,7 +34,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         expect(columns.has("tenant_id"), `${table} must have tenant_id`).toBe(true);
         expect(columns.has("project_id"), `${table} must have project_id`).toBe(true);
       }
-      expect(instance.ping().schemaVersion).toBe(10);
+      expect(instance.ping().schemaVersion).toBe(11);
     });
   });
 
@@ -250,6 +250,15 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         "orchestrator_tasks_by_scope_executor_created",
       ).toArray()[0];
       expect(index?.name).toBe("orchestrator_tasks_by_scope_executor_created");
+      const claimDiagnosticIndexMigration = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 11",
+      ).toArray()[0];
+      expect(claimDiagnosticIndexMigration?.version).toBe(11);
+      const diagnosticIndex = sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_scope_state_executor_created",
+      ).toArray()[0];
+      expect(diagnosticIndex?.name).toBe("orchestrator_tasks_by_scope_state_executor_created");
       const row = sql.exec(
         "SELECT tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
         "not-present",

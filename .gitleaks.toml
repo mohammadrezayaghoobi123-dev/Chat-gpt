@@ -77,6 +77,7 @@ paths = ['''^cloud-engineering-connector/test/worker\.test\.js$''']
 regexTarget = "line"
 regexes = ['''const\s+token\s*=\s*["']0123456789abcdef0123456789abcdef["']''']
 
+
 [[allowlists]]
 description = "Synthetic MCP bearer value used only in historical architecture-analysis tests; restricted to the exact test literal, file, and commits."
 targetRules = ["generic-api-key"]
@@ -100,3 +101,67 @@ regexes = [
   '''idempotencyKey\s*:\s*["']vault-proposal-stale-0001["']''',
   '''idempotencyKey\s*:\s*["']vault-proposal-success-0001["']'''
 ]
+
+[[allowlists]]
+description = "Synthetic, deliberately invalid JWT assembled only inside the historical evidence-redaction unit test; exact commit, path, and fixture components only."
+targetRules = ["jwt"]
+condition = "AND"
+commits = ["4cb3f9b9a2a64ccacb704066de1974a9af134c49"]
+paths = ['''^cloud-engineering-connector/test/orchestrator-preflight\.test\.js$''']
+regexTarget = "line"
+regexes = ['''eyJhbGciOiJIUzI1NiJ9.*eyJzdWIiOiJ1c2VyIn0.*signaturepayloadlongenough123456''']
+
+[[allowlists]]
+description = "Synthetic ephemeral HMAC test-key fixture from one historical identity test commit; restricted to that exact commit, file, and generic-api-key rule."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["d5ffafb6df54e26189d8494548f7693fdcfdf108"]
+paths = ['''^cloud-engineering-connector/test/orchestrator-worker-identity\.test\.js$''']
+
+[[allowlists]]
+description = "Synthetic ephemeral HMAC test-key fixture from one historical outbox publisher test commit; restricted to that exact commit, file, and generic-api-key rule."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["a5c36d1c2e7461e38578a688133c797f541b4b46"]
+paths = ['''^cloud-engineering-connector/test/orchestrator-outbox-publisher\.test\.js$''']
+
+
+[[allowlists]]
+description = "Synthetic Queue-consumer event and idempotency identifiers in one historical unit-test commit; exact commit, file, and literals only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["6dd3ef5270b89a8b76efaecf0f5c519d4dfe8eae"]
+paths = ['''^cloud-engineering-connector/test/worker\.test\.js$''']
+regexTarget = "line"
+regexes = [
+  '''eventId\s*:\s*["']evt-consumer-00000001["']''',
+  '''idempotencyKey\s*:\s*["']idem-consumer-0001["']'''
+]
+
+[[allowlists]]
+description = "Synthetic non-credential idempotency fixture in one historical assertion-consumption regression test commit; restricted to the exact commit, test file, and literal."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["916436f86dc076916bc5588a61b92e710a6680f9"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger\.test\.js$''']
+regexTarget = "line"
+regexes = ['''idempotencyKey\s*:\s*["']idem-transition-sensitive-0001["']''']
+
+
+[[allowlists]]
+description = "Synthetic apiKey field value used only to assert sensitive-field rejection in one historical Durable Object test; exact commit, path, rule, and literal line only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["916436f86dc076916bc5588a61b92e710a6680f9"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger\.test\.js$''']
+regexTarget = "line"
+regexes = ['''apiKey\s*:\s*["']must-not-persist["']''']
+
+[[allowlists]]
+description = "Synthetic legacy idempotency identifier used only in the v7-to-v8 migration fixture; exact commit, file, literal, and rule only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["168a5097fa6c50f4351c5d753ee0358403175a7d"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger-tenant-scope-migration\.test\.js$''']
+regexTarget = "line"
+regexes = ['''legacy-idempotency-1''']

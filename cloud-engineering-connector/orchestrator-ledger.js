@@ -19,7 +19,6 @@ export const CLAIM_CANDIDATE_QUERY = `
   FROM orchestrator_claim_candidates AS candidate
   INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id
   WHERE candidate.executor_id = ?
-    AND candidate.candidate_seq <= ?
     AND (candidate.created_at, candidate.task_id) > (?, ?)
   ORDER BY candidate.created_at, candidate.task_id
   LIMIT ?
@@ -347,6 +346,7 @@ export class OrchestratorLedger extends DurableObject {
       )
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_executor_order ON orchestrator_claim_candidates(executor_id, created_at, task_id)");
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_executor_sequence ON orchestrator_claim_candidates(executor_id, candidate_seq)");
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_claim_scan_cursors (
         executor_id TEXT PRIMARY KEY,
@@ -1038,11 +1038,27 @@ export class OrchestratorLedger extends DurableObject {
         return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
       }
 
+      if (normalizedCursor && sql.exec(
+        "SELECT 1 FROM orchestrator_claim_candidates WHERE executor_id = ? AND candidate_seq > ? LIMIT 1",
+        workerId, snapshotSequence,
+      ).toArray()[0]) {
+        return {
+          claimed: false,
+          reason: "CLAIM_SCAN_SNAPSHOT_EXHAUSTED",
+          nextCursor: null,
+          restartRequired: true,
+          budgetExhausted: false,
+          scanExhausted: true,
+          candidatesExamined: 0,
+          candidateRowsRead: 0,
+        };
+      }
+
       const lastCreatedAt = normalizedCursor?.createdAt ?? 0;
       const lastTaskId = normalizedCursor?.taskId ?? "";
       const candidateRows = sql.exec(
         CLAIM_CANDIDATE_QUERY,
-        workerId, snapshotSequence, lastCreatedAt, lastTaskId,
+        workerId, lastCreatedAt, lastTaskId,
         MAX_CLAIM_CANDIDATES_PER_CALL + 1,
       ).toArray();
       const budgetExhausted = candidateRows.length > MAX_CLAIM_CANDIDATES_PER_CALL;
@@ -1086,11 +1102,7 @@ export class OrchestratorLedger extends DurableObject {
         };
       }
 
-      const newCandidateAfterSnapshot = Boolean(sql.exec(
-        "SELECT 1 FROM orchestrator_claim_candidates WHERE executor_id = ? AND candidate_seq > ? LIMIT 1",
-        workerId, snapshotSequence,
-      ).toArray()[0]);
-      if (newCandidateAfterSnapshot || !fallback.complete) {
+      if (!fallback.complete) {
         return {
           claimed: false,
           reason: "CLAIM_SCAN_SNAPSHOT_EXHAUSTED",

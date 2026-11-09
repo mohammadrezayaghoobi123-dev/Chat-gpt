@@ -1,6 +1,7 @@
 name: Python tests
 
 on:
+  workflow_call:
   push:
     branches:
       - "feature/**"

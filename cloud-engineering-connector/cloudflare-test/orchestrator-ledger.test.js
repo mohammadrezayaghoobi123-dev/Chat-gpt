@@ -2767,6 +2767,25 @@ it("preserves candidate membership while advancing sequence on lease claim and r
   });
   expect(afterClaim.candidate_seq).toBeGreaterThan(before.candidate_seq);
 
+  const renewed = await ledger.renewLease({
+    taskId: "task-candidate-stable",
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "renewLease", nowMs: now + 1,
+    }),
+    leaseGeneration: claimed.leaseGeneration,
+    leaseMs: 60_000,
+    now: now + 1,
+  });
+  expect(renewed).toMatchObject({ renewed: true });
+  const afterRenew = await runInDurableObject(ledger, async (_instance, state) => (
+    state.storage.sql.exec(
+      "SELECT candidate_seq, task_id, executor_id, created_at FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-stable",
+    ).toArray()[0]
+  ));
+  expect(afterRenew.candidate_seq).toBeGreaterThan(afterClaim.candidate_seq);
+
   const released = await ledger.releaseLease({
     taskId: "task-candidate-stable",
     workerId: "agent:worker-1",
@@ -2774,7 +2793,7 @@ it("preserves candidate membership while advancing sequence on lease claim and r
       subject: "agent:worker-1", role: "agent", operation: "releaseLease", nowMs: now + 1,
     }),
     leaseGeneration: claimed.leaseGeneration,
-    now: now + 1,
+    now: now + 2,
   });
   expect(released).toMatchObject({ released: true });
   const afterRelease = await runInDurableObject(ledger, async (_instance, state) => (
@@ -2788,7 +2807,7 @@ it("preserves candidate membership while advancing sequence on lease claim and r
     executor_id: before.executor_id,
     created_at: before.created_at,
   });
-  expect(afterRelease.candidate_seq).toBeGreaterThan(afterClaim.candidate_seq);
+  expect(afterRelease.candidate_seq).toBeGreaterThan(afterRenew.candidate_seq);
 });
 
 it("rejects expired-lease evidence bound to a different task", async () => {

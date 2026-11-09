@@ -79,6 +79,7 @@ test("missing, duplicate, stale-attempt, or wrong-SHA current job identity fails
     [currentJob({ run_attempt: 1 })],
     [currentJob({ head_sha: "d".repeat(40) })],
     [currentJob({ check_run_url: null })],
+    [currentJob({ check_run_url: "https://attacker.example/repos/example/repo/check-runs/42" })],
   ];
   for (const jobs of cases) {
     await assert.rejects(verifyReleaseApproval(input({

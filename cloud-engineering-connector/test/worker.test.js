@@ -31,7 +31,7 @@ function createKnowledgeStoreBinding(){
 const knowledgeStore=createKnowledgeStoreBinding();
 function createOrchestratorLedgerBinding(){
  const calls=[];
- const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:7,storage:{integrityCheck:"ok",requiredTables:true}}}};
+ const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:8,storage:{integrityCheck:"ok",requiredTables:true}}}};
  return{calls,binding:{idFromName(name){calls.push({method:"idFromName",name});return name},get(id){calls.push({method:"get",id});return stub}}};
 }
 const orchestratorLedger=createOrchestratorLedgerBinding();
@@ -159,7 +159,7 @@ test("readyz fails closed when OrchestratorLedger storage integrity or required 
   {integrityCheck:"failed",requiredTables:true},
   {integrityCheck:"ok",requiredTables:false}
  ]){
-  const unhealthyLedger={idFromName:name=>name,get:()=>({ping:async()=>({ok:true,schemaVersion:7,storage})})};
+  const unhealthyLedger={idFromName:name=>name,get:()=>({ping:async()=>({ok:true,schemaVersion:8,storage})})};
   const r=await worker.fetch(req("/readyz"),{...env,ORCHESTRATOR_LEDGER:unhealthyLedger});
   assert.equal(r.status,503,JSON.stringify(await r.clone().json()));
   const b=await r.json();

@@ -68,6 +68,9 @@ const input = overrides => ({
   candidateSha: sha,
   releaseEnvironment: "staging",
   token: "test-token-not-a-real-secret",
+  workflowRunId: "12345",
+  workflowRunAttempt: "2",
+  workflowJob: "release-staging",
   ...overrides,
 });
 

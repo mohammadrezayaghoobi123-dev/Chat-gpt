@@ -1,6 +1,7 @@
 name: Cloud Agent CI
 
 on:
+  workflow_call:
   push:
     branches:
       - feature/independent-cloud-agent

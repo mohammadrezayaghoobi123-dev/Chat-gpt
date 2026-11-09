@@ -1,4 +1,4 @@
-export function formatUnits(rawValue, decimals = 18, maxFractionDigits = 8) {
+export function formatUnits(rawValue, decimals = 18, maxFractionDigits = Math.min(8, decimals)) {
   if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) {
     throw new RangeError("decimals must be an integer between 0 and 255");
   }

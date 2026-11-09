@@ -791,10 +791,12 @@ for (const workflow of workflows) {
       : "Roll back Production if post-deploy acceptance fails";
     const start = source.indexOf("      - name: " + stepName);
     assert.ok(start >= 0, "rollback step must exist");
-    const next = source.indexOf("\\n      - name: ", start + 1);
+    const next = source.indexOf("\n      - name: ", start + 1);
     const block = source.slice(start, next < 0 ? source.length : next);
     const condition = block.match(/^        if: (.+)$/m)?.[1] ?? "";
     assert.match(condition, /failure\(\)/, "rollback must run on workflow failure");
+    assert.match(condition, /always\(\)/, "rollback cleanup must be evaluated even after cancellation");
+    assert.match(condition, /cancelled\(\)/, "rollback must cover a cancelled deployment attempt");
     assert.match(
       condition,
       /steps\.deploy\.outcome\s*!=\s*'skipped'/,

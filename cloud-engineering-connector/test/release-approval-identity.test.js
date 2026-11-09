@@ -151,7 +151,7 @@ test("Staging rejects merged candidates that are not the exact merged Integratio
   for (const pullData of invalidCandidates) {
     await assert.rejects(
       verifyReleaseApproval(input({ fetchImpl: fixture({ pullData }) })),
-      /exactly one open PR head or merged Integration PR commit/,
+      /exactly one open, non-draft PR head or merged Integration PR commit/,
     );
   }
 });

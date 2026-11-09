@@ -29,3 +29,15 @@ test("Staging explicitly declares non-inherited runtime variables", () => {
   assert.match(staging, /\[env\.staging\.vars\]/);
   assert.match(staging, /SERVICE_MODE\s*=\s*"cloud"/);
 });
+
+test("Production and Staging declare isolated OAuth KV namespaces", () => {
+  const productionSection = config.slice(0, config.indexOf("[env.staging.vars]"));
+  const stagingSection = config.slice(config.indexOf("[env.staging.vars]"));
+  assert.ok(productionSection.includes('[[kv_namespaces]]'));
+  assert.ok(productionSection.includes('binding = "OAUTH_KV"'));
+  assert.ok(productionSection.includes('id = "3cc3207de5754d7cb968be0df9604cac"'));
+  assert.ok(stagingSection.includes('[[env.staging.kv_namespaces]]'));
+  assert.ok(stagingSection.includes('binding = "OAUTH_KV"'));
+  assert.ok(stagingSection.includes('id = "4a2b689d12f34f3e8348720c0637589d"'));
+  assert.notEqual("3cc3207de5754d7cb968be0df9604cac", "4a2b689d12f34f3e8348720c0637589d");
+});

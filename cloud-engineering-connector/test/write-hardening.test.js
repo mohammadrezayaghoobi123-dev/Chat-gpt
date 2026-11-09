@@ -4,13 +4,17 @@ import assert from "node:assert/strict";
 import worker from "../worker.js";
 
 const MCP = "0123456789abcdef0123456789abcdef", GH = "ghp_FAKE_TOKEN_FOR_TEST_0123456789";
-const env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) } };
+const TENANT_DIRECTORY={idFromName:name=>name,get:name=>({
+  async getActiveMembership(input){return{tenantId:input.tenantId,principalId:input.principalId,membershipId:"test-membership",role:"service-operator",status:"active"}},
+  async authorizeProjectAction(input){return{...input,effect:"allow",decisionId:"test-decision",policyVersion:"test-policy-v1"}}
+})};
+const env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) }, TENANT_DIRECTORY };
 const OWNER = "mohammadrezayaghoobi123-dev", REPO = "Chat-gpt";
 const headers = { "content-type": "application/json", accept: "application/json, text/event-stream",
   authorization: "Bearer " + MCP, "mcp-protocol-version": "2025-03-26", "cf-connecting-ip": "203.0.113.10" };
 const call = (name, args, overrides = {}) => worker.fetch(new Request("https://example.test/mcp", { method: "POST", headers,
   body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) }), { ...env, ...overrides });
-const pr = (files, extra = {}) => ({ owner: OWNER, repo: REPO, base_branch: "feature/cloud-engineering-connector",
+const pr = (files, extra = {}) => ({ owner: OWNER, repo: REPO, tenant_id:"tenant-test", project_id:"project-test", base_branch: "feature/cloud-engineering-connector",
   title: "Example", summary: "Test", files, ...extra });
 
 async function withFetch(handler, fn) {

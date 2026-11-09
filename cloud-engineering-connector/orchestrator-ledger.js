@@ -781,6 +781,9 @@ export class OrchestratorLedger extends DurableObject {
           persisted.task_json !== canonicalJson(next)) {
         throw fail("Task transition persistence verification failed; transaction rolled back.", "PERSISTENCE_VERIFICATION_FAILED");
       }
+      // Keep the derived candidate relation atomic with every state transition.
+      // A task leaving the claimable states must disappear before another scan.
+      syncClaimCandidateInTransaction(sql, taskId);
       let outboxResult = null;
       if (normalizedOutboxInput !== null) {
         outboxResult = enqueueOutboxInTransaction(sql, normalizedOutboxInput);

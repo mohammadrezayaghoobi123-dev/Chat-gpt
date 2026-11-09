@@ -58,10 +58,21 @@ describe("Claim Engine bounded cursor contract", () => {
       candidatesExamined: 128, candidateRowsRead: 129,
       nextCursor: { version: 1, executorId: "agent:worker-1", snapshotSequence: expect.any(Number), createdAt: now + 127, taskId: ids[127] },
     });
-    const second = await ledger.claimTask({
+    const tamperedCursor = {
+      ...first.nextCursor,
+      createdAt: first.nextCursor.createdAt + 1,
+    };
+    const tampered = await ledger.claimTask({
       workerId: "agent:worker-1",
       workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 2_001),
-      leaseMs: 30_000, now: now + 2_001, cursor: first.nextCursor,
+      leaseMs: 30_000, now: now + 2_001, cursor: tamperedCursor,
+    });
+    expect(tampered).toEqual({ claimed: false, reason: "INVALID_CLAIM_CURSOR" });
+
+    const second = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 2_002),
+      leaseMs: 30_000, now: now + 2_002, cursor: first.nextCursor,
     });
     expect(second).toMatchObject({ claimed: true, task: { taskId: ids[128] }, candidatesExamined: 1 });
   });

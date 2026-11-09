@@ -128,3 +128,72 @@ test("Staging accepts the exact merge commit of an independently approved merged
   assert.equal(result.reviewer, "reviewer");
   assert.equal(result.releaseEnvironment, "staging");
 });
+
+
+test("Staging rejects merged candidates that are not the exact merged Integration PR commit", async () => {
+  const reviewedHead = "b".repeat(40);
+  const valid = {
+    number: 129,
+    state: "closed",
+    draft: false,
+    merged_at: "2026-11-09T07:59:11Z",
+    merge_commit_sha: sha,
+    user: { login: "author" },
+    head: { sha: reviewedHead },
+    base: { ref: "integration/unify-main-and-integrated-2026-11-02" },
+  };
+  const invalidCandidates = [
+    { ...valid, merge_commit_sha: "e".repeat(40) },
+    { ...valid, base: { ref: "main" } },
+    { ...valid, merged_at: null },
+    { ...valid, state: "open" },
+  ];
+  for (const pullData of invalidCandidates) {
+    await assert.rejects(
+      verifyReleaseApproval(input({ fetchImpl: fixture({ pullData }) })),
+      /exactly one open PR head or merged Integration PR commit/,
+    );
+  }
+});
+
+test("Staging rejects a merged candidate that is not an ancestor of current Integration", async () => {
+  const reviewedHead = "b".repeat(40);
+  const mergedPull = {
+    number: 129, state: "closed", draft: false,
+    merged_at: "2026-11-09T07:59:11Z", merge_commit_sha: sha,
+    user: { login: "author" }, head: { sha: reviewedHead },
+    base: { ref: "integration/unify-main-and-integrated-2026-11-02" },
+  };
+  await assert.rejects(
+    verifyReleaseApproval(input({
+      fetchImpl: fixture({
+        pullData: mergedPull,
+        reviewData: { ...review, commit_id: reviewedHead },
+        currentBase: "d".repeat(40),
+        comparison: { behind_by: 1, merge_base_commit: { sha: "e".repeat(40) } },
+      }),
+    })),
+    /not an ancestor of the current integration head/,
+  );
+});
+
+test("Staging merged candidate still requires approval on the exact reviewed PR head", async () => {
+  const reviewedHead = "b".repeat(40);
+  const mergedPull = {
+    number: 129, state: "closed", draft: false,
+    merged_at: "2026-11-09T07:59:11Z", merge_commit_sha: sha,
+    user: { login: "author" }, head: { sha: reviewedHead },
+    base: { ref: "integration/unify-main-and-integrated-2026-11-02" },
+  };
+  await assert.rejects(
+    verifyReleaseApproval(input({
+      fetchImpl: fixture({
+        pullData: mergedPull,
+        reviewData: { ...review, commit_id: sha },
+        currentBase: "d".repeat(40),
+        comparison: { behind_by: 0, merge_base_commit: { sha } },
+      }),
+    })),
+    /no independent approval exists for the exact PR head commit/,
+  );
+});

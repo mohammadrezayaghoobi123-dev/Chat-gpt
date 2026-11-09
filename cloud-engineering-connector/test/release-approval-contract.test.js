@@ -112,6 +112,7 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
       { name: "MCP_RATE_LIMITER", type: "ratelimit", namespace_id: "staging-rate" },
       { name: "WRITE_CONTROL", type: "durable_object_namespace", namespace_id: "staging-write" },
       { name: "KNOWLEDGE_STORE", type: "durable_object_namespace", namespace_id: "staging-knowledge" },
+      { name: "ORCHESTRATOR_LEDGER", type: "durable_object_namespace", namespace_id: "staging-ledger" },
     ],
     observability: observabilityOverride,
   };
@@ -125,6 +126,7 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
       { name: "MCP_RATE_LIMITER", type: "ratelimit", namespace_id: "production-rate" },
       { name: "WRITE_CONTROL", type: "durable_object_namespace", namespace_id: "production-write" },
       { name: "KNOWLEDGE_STORE", type: "durable_object_namespace", namespace_id: "production-knowledge" },
+      { name: "ORCHESTRATOR_LEDGER", type: "durable_object_namespace", namespace_id: "production-ledger" },
     ],
     observability: observabilityOverride,
   };

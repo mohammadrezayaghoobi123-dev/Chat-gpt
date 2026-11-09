@@ -173,6 +173,9 @@ jobs:
           const knowledgeStore = bindings.get("KNOWLEDGE_STORE");
           assert.equal(knowledgeStore?.type, "durable_object_namespace", "Staging KNOWLEDGE_STORE Durable Object binding is required");
           assert.ok(knowledgeStore.namespace_id, "Staging KNOWLEDGE_STORE namespace ID must be present");
+          const orchestratorLedger = bindings.get("ORCHESTRATOR_LEDGER");
+          assert.equal(orchestratorLedger?.type, "durable_object_namespace", "Staging ORCHESTRATOR_LEDGER Durable Object binding is required");
+          assert.ok(orchestratorLedger.namespace_id, "Staging ORCHESTRATOR_LEDGER namespace ID must be present");
           assert.ok(
             (schedules.schedules || []).some((schedule) => schedule.cron === "*/5 * * * *"),
             "Staging five-minute Knowledge Store reconciliation Cron must be active",

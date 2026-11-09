@@ -211,6 +211,12 @@ jobs:
           assert.equal(stagingKnowledgeStore?.type, "durable_object_namespace", "Staging KNOWLEDGE_STORE binding is required");
           assert.ok(productionKnowledgeStore.namespace_id && stagingKnowledgeStore.namespace_id, "Both KnowledgeStore namespace IDs must be present");
           assert.notEqual(productionKnowledgeStore.namespace_id, stagingKnowledgeStore.namespace_id, "Production and Staging KnowledgeStore namespaces must differ");
+          const productionLedger = production.get("ORCHESTRATOR_LEDGER");
+          const stagingLedger = staging.get("ORCHESTRATOR_LEDGER");
+          assert.equal(productionLedger?.type, "durable_object_namespace", "Production ORCHESTRATOR_LEDGER binding is required");
+          assert.equal(stagingLedger?.type, "durable_object_namespace", "Staging ORCHESTRATOR_LEDGER binding is required");
+          assert.ok(productionLedger.namespace_id && stagingLedger.namespace_id, "Both OrchestratorLedger namespace IDs must be present");
+          assert.notEqual(productionLedger.namespace_id, stagingLedger.namespace_id, "Production and Staging OrchestratorLedger namespaces must differ");
           assert.ok((productionSchedules.schedules || []).some((schedule) => schedule.cron === "*/5 * * * *"), "Production five-minute Knowledge Store reconciliation Cron must be active");
           assert.ok((stagingSchedules.schedules || []).some((schedule) => schedule.cron === "*/5 * * * *"), "Staging five-minute Knowledge Store reconciliation Cron must be active");
           assert.notEqual(production.get("MCP_RATE_LIMITER")?.namespace_id, staging.get("MCP_RATE_LIMITER")?.namespace_id, "Production and Staging rate-limit namespaces must differ");

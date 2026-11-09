@@ -165,3 +165,13 @@ commits = ["168a5097fa6c50f4351c5d753ee0358403175a7d"]
 paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger-tenant-scope-migration\.test\.js$''']
 regexTarget = "line"
 regexes = ['''legacy-idempotency-1''']
+
+ 
+[[allowlists]]
+description = "Deliberate credential-shaped negative fixture proving that memory-sync rejects secret-like text; exact commit, file, rule, and literal only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["fe0302ea9927936f70c8a4acc577cae0b140e2d7"]
+paths = ['''^cloud-agent/test/memory-sync\.test\.js$''']
+regexTarget = "line"
+regexes = ['''api_key = .abcd1234efgh5678''']

@@ -53,6 +53,7 @@ function fakeFetch(
         total_count: 1,
         jobs: [{
           name: OWN_CHECK,
+          run_id: 12345,
           run_attempt: 2,
           head_sha: sha,
           check_run_url: "https://api.github.com/repos/example/repo/check-runs/" + (gateChecks.ownCheckRunId ?? 42),

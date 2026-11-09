@@ -260,6 +260,47 @@ it("uses candidate discovery for scheduling and fails closed on missing explicit
   });
 });
 
+it("consumes a valid worker assertion before rejecting an explicit claim with a missing candidate row", async () => {
+  const ledger = ledgerFor("ledger-explicit-claim-index-mismatch-consumes-assertion");
+  await createTask(ledger, {
+    task: task("task-explicit-index-missing"),
+    idempotencyKey: "task-explicit-index-missing",
+    inputHash: "6".repeat(64),
+    now,
+  });
+  await createTask(ledger, {
+    task: task("task-explicit-index-present"),
+    idempotencyKey: "task-explicit-index-present",
+    inputHash: "7".repeat(64),
+    now: now + 1,
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    state.storage.sql.exec(
+      "DELETE FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-explicit-index-missing",
+    );
+  });
+
+  const oneTimeAssertion = await claimAssertion("agent:worker-1", now + 2);
+  const rejected = await ledger.claimTask({
+    taskId: "task-explicit-index-missing",
+    workerId: "agent:worker-1",
+    workerAssertion: oneTimeAssertion,
+    leaseMs: 30_000,
+    now: now + 2,
+  });
+  expect(rejected).toEqual({ claimed: false, reason: "CANDIDATE_INDEX_INCONSISTENT" });
+
+  const replay = await ledger.claimTask({
+    taskId: "task-explicit-index-present",
+    workerId: "agent:worker-1",
+    workerAssertion: oneTimeAssertion,
+    leaseMs: 30_000,
+    now: now + 3,
+  });
+  expect(replay).toEqual({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+});
+
 it("uses the executor/order index for the exact bounded cursor query without a temporary sort", async () => {
   const ledger = ledgerFor("ledger-candidate-query-plan");
   await runInDurableObject(ledger, async (_instance, state) => {

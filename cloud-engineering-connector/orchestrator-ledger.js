@@ -899,6 +899,20 @@ export class OrchestratorLedger extends DurableObject {
         return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
       }
     }
+    // Evidence can make an earlier, already-scanned expired lease claimable.
+    // Require a fresh snapshot rather than allowing a continuation to skip it.
+    if (normalizedCursor && reconciliationEvidence) {
+      return {
+        claimed: false,
+        reason: "CLAIM_SCAN_SNAPSHOT_EXHAUSTED",
+        nextCursor: null,
+        restartRequired: true,
+        budgetExhausted: false,
+        scanExhausted: true,
+        candidatesExamined: 0,
+        candidateRowsRead: 0,
+      };
+    }
 
     const verifiedReconciliationEvidence = reconciliationEvidence
       ? await verifyReconciliationEvidence(
@@ -1146,7 +1160,7 @@ export class OrchestratorLedger extends DurableObject {
       };
     });
     if (result?.nextCursor) {
-      const cursorValidUntilMs = result.cursorValidUntilMs;
+      const cursorValidUntilMs = result.cursorValidUntilMs ?? undefined;
       delete result.cursorValidUntilMs;
       result.nextCursor = await signClaimCursor(
         this.env?.LEDGER_WORKER_ASSERTION_KEYS,

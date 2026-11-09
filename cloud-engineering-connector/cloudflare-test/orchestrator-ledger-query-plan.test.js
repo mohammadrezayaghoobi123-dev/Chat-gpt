@@ -46,4 +46,25 @@ describe("OrchestratorLedger tenant/project query plans", () => {
       expect(details).toContain("orchestrator_claim_candidates_by_scope_executor_order");
     });
   });
+  it("uses a tenant/project/executor-leading index for bounded legacy candidate backfill", async () => {
+    const ledger = ledgerFor("claim-candidate-backfill-scope-query-plan");
+    await runInDurableObject(ledger, async instance => {
+      const plan = instance.ctx.storage.sql.exec(
+        `EXPLAIN QUERY PLAN
+         SELECT task_id, created_at
+         FROM orchestrator_tasks
+         WHERE tenant_id = ?
+           AND project_id = ?
+           AND COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ?
+           AND (created_at, task_id) > (?, ?)
+         ORDER BY created_at, task_id
+         LIMIT ?`,
+        "tenant-alpha", "project-red", "worker-a", 0, "", 32,
+      ).toArray();
+      const details = plan.map(row => row.detail).join("\\n");
+      expect(details).toContain("orchestrator_tasks_by_scope_executor_created");
+      expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+    });
+  });
+
 });

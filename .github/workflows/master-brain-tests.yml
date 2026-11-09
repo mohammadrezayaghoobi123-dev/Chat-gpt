@@ -1,6 +1,7 @@
 name: Master Brain MVP tests
 
 on:
+  workflow_call:
   push:
     branches:
       - master-brain/integrated-mvp

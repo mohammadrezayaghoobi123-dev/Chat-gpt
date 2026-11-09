@@ -104,4 +104,30 @@ describe("OrchestratorLedger tenant/project query plans", () => {
     });
   });
 
+  it("uses a scope/state/executor-leading index for expired-lease reconciliation probes", async () => {
+    const ledger = ledgerFor("claim-reconciliation-existence-query-plan");
+    await runInDurableObject(ledger, async instance => {
+      const plan = instance.ctx.storage.sql.exec(
+        `EXPLAIN QUERY PLAN
+         SELECT 1
+         FROM orchestrator_tasks AS task
+         INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id
+         WHERE task.tenant_id = ?
+           AND task.project_id = ?
+           AND lease.tenant_id = ?
+           AND lease.project_id = ?
+           AND task.state IN ('SCHEDULED','RUNNING','VERIFYING')
+           AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ?
+           AND lease.worker_id IS NOT NULL
+           AND lease.lease_until <= ?
+           AND (? = 0 OR lease.task_id != ? OR lease.lease_generation != ?)
+         LIMIT 1`,
+        "tenant-alpha", "project-red", "tenant-alpha", "project-red",
+        "worker-a", 1000, 0, "", -1,
+      ).toArray();
+      const details = plan.map(row => row.detail).join("\\n");
+      expect(details).toContain("orchestrator_tasks_by_scope_state_executor_created");
+    });
+  });
+
 });

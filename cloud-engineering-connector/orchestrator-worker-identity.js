@@ -81,6 +81,88 @@ export async function verifyWorkerAssertion(keySet, token, expected) {
   }
 }
 
+const CLAIM_CURSOR_KEYS = Object.freeze([
+  "createdAt", "executorId", "expiresAt", "issuedAt", "kid",
+  "snapshotSequence", "taskId", "version",
+]);
+
+function validateClaimCursorPayload(cursor, expected) {
+  if (!cursor || typeof cursor !== "object" || Array.isArray(cursor)) throw reject();
+  const keys = Object.keys(cursor).sort();
+  if (keys.length !== CLAIM_CURSOR_KEYS.length ||
+      keys.some((key, index) => key !== CLAIM_CURSOR_KEYS[index])) throw reject();
+  if (cursor.version !== 1 || cursor.executorId !== expected.executorId ||
+      !ID.test(cursor.executorId) ||
+      !Number.isSafeInteger(cursor.snapshotSequence) || cursor.snapshotSequence < 0 ||
+      !Number.isSafeInteger(cursor.createdAt) || cursor.createdAt < 1 ||
+      typeof cursor.taskId !== "string" || !ID.test(cursor.taskId) ||
+      !KID.test(cursor.kid) ||
+      !Number.isSafeInteger(cursor.issuedAt) ||
+      !Number.isSafeInteger(cursor.expiresAt) ||
+      cursor.expiresAt <= cursor.issuedAt ||
+      cursor.expiresAt - cursor.issuedAt > 300) throw reject();
+  const nowSeconds = Math.floor(expected.nowMs / 1000);
+  if (cursor.issuedAt > nowSeconds + CLOCK_SKEW_SECONDS ||
+      cursor.expiresAt < nowSeconds - CLOCK_SKEW_SECONDS) throw reject();
+}
+
+export async function signClaimCursor(keySet, kid, cursor, nowMs) {
+  try {
+    if (!cursor || typeof cursor !== "object" || Array.isArray(cursor) ||
+        !KID.test(kid) || !Number.isSafeInteger(nowMs) || nowMs < 1 ||
+        cursor.version !== 1 || !ID.test(cursor.executorId) ||
+        !Number.isSafeInteger(cursor.snapshotSequence) || cursor.snapshotSequence < 0 ||
+        !Number.isSafeInteger(cursor.createdAt) || cursor.createdAt < 1 ||
+        typeof cursor.taskId !== "string" || !ID.test(cursor.taskId)) throw reject();
+    const issuedAt = Math.floor(nowMs / 1000);
+    const payload = {
+      ...cursor,
+      kid,
+      issuedAt,
+      expiresAt: issuedAt + 300,
+    };
+    const keyBytes = loadKey(keySet, kid);
+    const encoded = encodeBase64Url(new TextEncoder().encode(canonicalJson(payload)));
+    const signingInput = "claim-cursor.v1." + kid + "." + encoded;
+    const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signingInput)));
+    return Object.freeze({ ...payload, signature: encodeBase64Url(signature) });
+  } catch {
+    throw reject();
+  }
+}
+
+export async function verifyClaimCursor(keySet, cursor, expected) {
+  try {
+    if (!expected || !ID.test(expected.executorId) ||
+        !Number.isSafeInteger(expected.nowMs)) throw reject();
+    const unsigned = { ...cursor };
+    if (!cursor || typeof cursor !== "object" || Array.isArray(cursor) ||
+        typeof unsigned.signature !== "string") throw reject();
+    delete unsigned.signature;
+    validateClaimCursorPayload(unsigned, expected);
+    const supplied = decodeBase64Url(cursor.signature);
+    if (supplied.byteLength !== 32) throw reject();
+    const keyBytes = loadKey(keySet, cursor.kid);
+    const encoded = encodeBase64Url(new TextEncoder().encode(canonicalJson(unsigned)));
+    const signingInput = "claim-cursor.v1." + cursor.kid + "." + encoded;
+    if (!(await verifyMac(keyBytes, signingInput, supplied))) throw reject();
+    return Object.freeze({
+      version: unsigned.version,
+      executorId: unsigned.executorId,
+      snapshotSequence: unsigned.snapshotSequence,
+      createdAt: unsigned.createdAt,
+      taskId: unsigned.taskId,
+      issuedAt: unsigned.issuedAt,
+      expiresAt: unsigned.expiresAt,
+      kid: unsigned.kid,
+      signature: cursor.signature,
+    });
+  } catch {
+    throw reject();
+  }
+}
+
 const SCHEDULED_SIGNER_POLICY = Object.freeze({
   "orchestrator-scheduler": Object.freeze({ system: Object.freeze(["createTask"]) }),
   "orchestrator-outbox-publisher": Object.freeze({

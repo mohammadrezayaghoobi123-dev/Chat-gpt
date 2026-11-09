@@ -14,7 +14,7 @@
     "check": "node --check src/core.js && node --check src/worker.js && node --check src/budget.js && node --check test/core.test.js && node --check test/worker.test.js && node --check test/session-capability.test.js && node --check test/runtime.test.js && node --check vitest.config.js && node --check test/budget.runtime.test.js && node --check test/principal.runtime.test.js"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "1.4.11",
-    "vitest": "4.1.12"
+    "@cloudflare/vitest-plugin": "1.5.1",
+    "vitest": "5.1.0"
   }
 }

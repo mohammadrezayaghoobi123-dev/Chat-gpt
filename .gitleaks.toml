@@ -145,8 +145,6 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["d5ffafb6df54e26189d8494548f7693fdcfdf108"]
 paths = ['''^cloud-engineering-connector/test/orchestrator-worker-identity\.test\.js$''']
-regexTarget = "line"
-regexes = ['''3031323334353637383961626364656630313233343536373839616263646566''']
 
 [[allowlists]]
 description = "Synthetic ephemeral HMAC fixture in one historical outbox-publisher unit test; exact commit, path, rule, and literal."

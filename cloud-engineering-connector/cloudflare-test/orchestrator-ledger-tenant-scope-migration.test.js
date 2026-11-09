@@ -241,6 +241,15 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         "SELECT version FROM orchestrator_schema_migrations WHERE version = 8",
       ).toArray()[0];
       expect(migration?.version).toBe(8);
+      const scopedBackfillIndexMigration = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 10",
+      ).toArray()[0];
+      expect(scopedBackfillIndexMigration?.version).toBe(10);
+      const index = sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_scope_executor_created",
+      ).toArray()[0];
+      expect(index?.name).toBe("orchestrator_tasks_by_scope_executor_created");
       const row = sql.exec(
         "SELECT tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
         "not-present",

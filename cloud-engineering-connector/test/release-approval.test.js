@@ -1,3 +1,4 @@
+// G001 regression coverage: same-name checks from other run attempts must remain blocking.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { verifyReleaseApproval } from "../release-approval.js";

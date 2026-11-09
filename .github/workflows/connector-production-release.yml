@@ -225,7 +225,7 @@ jobs:
             workflowRunId: process.env.GITHUB_RUN_ID,
             workflowRunAttempt: process.env.GITHUB_RUN_ATTEMPT,
           });
-          appendFileSync(process.env.GITHUB_OUTPUT, "message=" + message + "\\n");
+          appendFileSync(process.env.GITHUB_OUTPUT, "message=" + message + "\n");
           console.log("Production release deployment identity generated.");
           NODE
         env:
@@ -241,7 +241,7 @@ jobs:
           WRANGLER_DEPLOYMENT_MESSAGE: ${{ steps.deployment_identity.outputs.message }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        env:
+
       - name: Verify Production Durable Object namespace isolation
         shell: bash
         env:

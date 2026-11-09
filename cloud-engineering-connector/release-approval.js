@@ -75,6 +75,52 @@ async function getJsonCollection(fetchImpl, url, token) {
 async function stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, mergeableState, workflowRunId, workflowRunAttempt, workflowJob) {
   if (mergeableState === "clean") return true;
   if (mergeableState !== "unstable") return false;
+
+  if (!/^[1-9][0-9]{0,19}$/.test(String(workflowRunId ?? "")) ||
+      !/^[1-9][0-9]{0,3}$/.test(String(workflowRunAttempt ?? ""))) {
+    throw new Error("Release blocked: current GitHub Actions workflow run identity is unavailable.");
+  }
+  const expectedJobId = "release-staging";
+  if (workflowJob !== expectedJobId) {
+    throw new Error("Release blocked: current GitHub Actions job identity is invalid.");
+  }
+
+  const runId = String(workflowRunId);
+  const attempt = Number(workflowRunAttempt);
+  const jobs = [];
+  let totalJobs = null;
+  for (let page = 1; page <= 100; page += 1) {
+    const pageResult = await getJson(
+      fetchImpl,
+      API_ROOT + "/repos/" + repoPath + "/actions/runs/" + runId + "/jobs?filter=latest&per_page=100&page=" + page,
+      token,
+    );
+    if (!Array.isArray(pageResult?.jobs) || !Number.isSafeInteger(pageResult.total_count)) {
+      throw new Error("GitHub returned an invalid workflow job listing.");
+    }
+    if (totalJobs === null) totalJobs = pageResult.total_count;
+    if (pageResult.total_count !== totalJobs) throw new Error("GitHub workflow job listing changed during pagination.");
+    jobs.push(...pageResult.jobs);
+    if (jobs.length >= totalJobs) break;
+    if (pageResult.jobs.length < 100) throw new Error("GitHub returned an incomplete workflow job listing.");
+  }
+  if (totalJobs === null || jobs.length !== totalJobs) {
+    throw new Error("GitHub workflow job listing is incomplete; refusing to ignore a check.");
+  }
+
+  const currentJobs = jobs.filter(job =>
+    job?.name === OWN_RELEASE_CHECK &&
+    job?.run_attempt === attempt &&
+    job?.head_sha === candidateSha &&
+    typeof job?.check_run_url === "string"
+  );
+  if (currentJobs.length !== 1) {
+    throw new Error("Release blocked: current workflow job identity is missing, stale, or ambiguous.");
+  }
+  const match = currentJobs[0].check_run_url.match(/\/check-runs\/([1-9][0-9]*)$/);
+  if (!match) throw new Error("Release blocked: current workflow job has no verifiable check-run identity.");
+  const ownCheckRunId = match[1];
+
   const checks = await getJson(
     fetchImpl,
     API_ROOT + "/repos/" + repoPath + "/commits/" + candidateSha + "/check-runs?per_page=100",
@@ -82,9 +128,13 @@ async function stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, m
   );
   const runs = checks?.check_runs;
   if (!Array.isArray(runs) || !Number.isSafeInteger(checks.total_count) || checks.total_count !== runs.length) return false;
+  const exactOwnChecks = runs.filter(run => String(run?.id) === ownCheckRunId);
+  if (exactOwnChecks.length !== 1 ||
+      exactOwnChecks[0]?.name !== OWN_RELEASE_CHECK ||
+      exactOwnChecks[0]?.app?.slug !== OWN_RELEASE_APP) return false;
+
   for (const run of runs) {
-    const own = run?.name === OWN_RELEASE_CHECK && run?.app?.slug === OWN_RELEASE_APP;
-    if (own) continue;
+    if (String(run?.id) === ownCheckRunId) continue;
     if (run?.status !== "completed" || !PASSING_CONCLUSIONS.has(run?.conclusion)) return false;
   }
   const status = await getJson(
@@ -94,7 +144,6 @@ async function stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, m
   );
   return status?.total_count === 0 || status?.state === "success";
 }
-
 function latestReviewsByUser(reviews) {
   const latest = new Map();
   for (const review of reviews) {
@@ -115,6 +164,9 @@ export async function verifyReleaseApproval({
   releaseEnvironment,
   token,
   fetchImpl = globalThis.fetch,
+  workflowRunId = process.env.GITHUB_RUN_ID,
+  workflowRunAttempt = process.env.GITHUB_RUN_ATTEMPT,
+  workflowJob = process.env.GITHUB_JOB,
 }) {
   validateInput({ repository, candidateSha, releaseEnvironment, token, fetchImpl });
   const repoPath = repository.split("/").map(encodeURIComponent).join("/");

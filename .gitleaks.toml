@@ -175,4 +175,3 @@ commits = ["fe0302ea9927936f70c8a4acc577cae0b140e2d7"]
 paths = ['''^cloud-agent/test/memory-sync\.test\.js$''']
 regexTarget = "line"
 regexes = ['''^"api_key = 'abcd1234efgh5678'"\z''']
-'']

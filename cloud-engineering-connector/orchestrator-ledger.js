@@ -496,6 +496,11 @@ export class OrchestratorLedger extends DurableObject {
           description TEXT NOT NULL
         )
       `);
+      const applied = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 8",
+      ).toArray()[0];
+      if (applied) return;
+
       const scopedTables = [
         "orchestrator_tasks",
         "orchestrator_processed_messages",

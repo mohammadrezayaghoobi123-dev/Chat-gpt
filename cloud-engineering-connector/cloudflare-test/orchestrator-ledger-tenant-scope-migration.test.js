@@ -294,6 +294,14 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_scope_state_executor_created");
       sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version IN (10, 11)");
       expect(sql.exec("SELECT version FROM orchestrator_schema_migrations WHERE version = 9").toArray()[0]?.version).toBe(9);
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_tenant_project",
+      ).toArray()[0]?.name).toBe("orchestrator_tasks_by_tenant_project");
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_outbox_events_by_tenant_project",
+      ).toArray()[0]?.name).toBe("orchestrator_outbox_events_by_tenant_project");
 
       instance.ensureSchema();
 

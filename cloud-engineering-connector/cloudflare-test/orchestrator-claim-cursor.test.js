@@ -77,6 +77,94 @@ describe("Claim Engine bounded cursor contract", () => {
     expect(second).toMatchObject({ claimed: true, task: { taskId: ids[128] }, candidatesExamined: 1 });
   });
 
+  it("invalidates a continuation when an earlier candidate lease is released", async () => {
+    const ledger = ledgerFor("ledger-bounded-cursor-release-invalidation");
+    const ids = [];
+    for (let i = 0; i < 129; i += 1) {
+      const id = "task-release-invalidation-" + String(i + 1).padStart(3, "0");
+      ids.push(id);
+      await createTask(ledger, id, now + i, 600 + i);
+    }
+    await runInDurableObject(ledger, async (_instance, state) => {
+      for (const id of ids.slice(0, 128)) {
+        state.storage.sql.exec(
+          "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
+          id, "agent:worker-1", now + 10_000, now,
+        );
+      }
+    });
+    const first = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 2_000),
+      leaseMs: 30_000, now: now + 2_000,
+    });
+    expect(first.reason).toBe("CLAIM_SCAN_BUDGET_EXHAUSTED");
+
+    const released = await ledger.releaseLease({
+      taskId: ids[0],
+      workerId: "agent:worker-1",
+      workerAssertion: await assertion("agent:worker-1", "agent", "releaseLease", now + 2_001),
+      leaseGeneration: 1,
+      now: now + 2_001,
+    });
+    expect(released).toMatchObject({ released: true });
+
+    const resumed = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 2_002),
+      leaseMs: 30_000,
+      now: now + 2_002,
+      cursor: first.nextCursor,
+    });
+    expect(resumed).toMatchObject({
+      claimed: false,
+      reason: "CLAIM_SCAN_SNAPSHOT_EXHAUSTED",
+      restartRequired: true,
+    });
+
+    const restarted = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 2_003),
+      leaseMs: 30_000,
+      now: now + 2_003,
+    });
+    expect(restarted).toMatchObject({ claimed: true, task: { taskId: ids[0] } });
+  });
+
+  it("expires a continuation no later than the earliest active lease in its scanned page", async () => {
+    const ledger = ledgerFor("ledger-bounded-cursor-lease-expiry");
+    const ids = [];
+    for (let i = 0; i < 129; i += 1) {
+      const id = "task-lease-expiry-" + String(i + 1).padStart(3, "0");
+      ids.push(id);
+      await createTask(ledger, id, now + i, 800 + i);
+    }
+    await runInDurableObject(ledger, async (_instance, state) => {
+      for (const id of ids.slice(0, 128)) {
+        state.storage.sql.exec(
+          "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
+          id, "agent:worker-1", now + 5_000, now,
+        );
+      }
+    });
+    const first = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 2_000),
+      leaseMs: 30_000,
+      now: now + 2_000,
+    });
+    expect(first.reason).toBe("CLAIM_SCAN_BUDGET_EXHAUSTED");
+
+    const expired = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 6_000),
+      leaseMs: 30_000,
+      now: now + 6_000,
+      cursor: first.nextCursor,
+    });
+    expect(expired).toEqual({ claimed: false, reason: "INVALID_CLAIM_CURSOR" });
+  });
+
   it("rejects a cursor scoped to another executor without creating a lease", async () => {
     const ledger = ledgerFor("ledger-bounded-cursor-wrong-executor");
     const taskId = "task-cursor-wrong-executor";

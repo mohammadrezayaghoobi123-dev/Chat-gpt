@@ -3,6 +3,7 @@ name: Web client checks (real browser)
 # Real Chromium end-to-end flow + automated accessibility audit (with its own self-test that proves
 # the audit can fail). Runs only when the web client, the HTTP layer or these tools change.
 on:
+  workflow_call:
   push:
     branches:
       - master-brain/integrated

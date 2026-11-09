@@ -14,9 +14,9 @@ permissions:
 
 concurrency:
   group: pr-quality-gate-${{ github.event.pull_request.number || github.ref }}
-  # Never cancel a required check: a canceled run must not leave an ambiguous
-  # status that can be mistaken for a successful quality decision.
-  cancel-in-progress: false
+  # A newer commit supersedes the older PR candidate. Cancel only the older
+  # run in this PR concurrency group; the newest SHA receives its own full gate.
+  cancel-in-progress: true
 
 jobs:
   connector:

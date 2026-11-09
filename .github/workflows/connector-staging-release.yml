@@ -6,6 +6,7 @@ on:
       - "integration/staging-release-*"
 
 permissions:
+  actions: read
   contents: read
   pull-requests: read
 

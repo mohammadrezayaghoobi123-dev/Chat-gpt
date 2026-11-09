@@ -368,3 +368,15 @@ test("a 'clean' PR needs no extra check lookups and keeps the 5-request contract
   assert.equal(urls.length, 5);
   assert.ok(urls.every(url => !url.includes("/check-runs") && !/\/status(\?|$)/.test(url)));
 });
+
+
+test("Staging does not ignore a failing same-name Check Run from another execution", async () => {
+  const unrelatedSameName = ownRun({ id: 43, conclusion: "failure" });
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: gate([ownRun(), unrelatedSameName]),
+    }),
+    /mergeable, current-base PR/,
+  );
+});

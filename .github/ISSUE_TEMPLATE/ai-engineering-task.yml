@@ -1,0 +1,88 @@
+name: AI Engineering Task
+description: Create a traceable engineering task for the centralized operations workflow.
+title: "[Engineering]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Link this task to the Notion Operations Hub. Do not include secrets, tokens, personal data, or production credentials.
+  - type: dropdown
+    id: work_type
+    attributes:
+      label: Work type
+      options: [Architecture, Implementation, Bug, Security, Testing, Infrastructure, Documentation, Release readiness]
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options: [P0 - Critical, P1 - High, P2 - Normal, P3 - Low]
+    validations:
+      required: true
+  - type: input
+    id: owner
+    attributes:
+      label: Accountable owner
+      description: Provide the responsible GitHub handle or team. This is the accountable task owner, not an agent identity claim.
+      placeholder: "@github-handle or team"
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: List blocking tasks, external approvals, required integrations, or write "None".
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / objective
+      description: State the observable problem and desired outcome.
+      placeholder: What needs to change and why?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and constraints
+      description: Include affected services, allowed changes, and explicit exclusions.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List testable, objective completion conditions.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and reproduction
+      description: Include links, exact SHA, CI run, or reproduction steps. Do not paste logs; link to access-controlled evidence.
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and rollback
+      description: Identify security impact, dependencies, release gates, and rollback strategy.
+    validations:
+      required: true
+  - type: textarea
+    id: notion
+    attributes:
+      label: Notion Operations Hub link
+      description: Link the matching project/task record.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: No secrets, tokens, logs, or credential values are included.
+          required: true
+        - label: No change to main or Production is implied without explicit owner authorization.
+          required: true

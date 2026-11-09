@@ -267,7 +267,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
     });
   });
 
-  it("upgrades a populated schema-v9 ledger to v11 without rewriting task data", async () => {
+  it("upgrades a populated schema-v9 ledger to v12 and drops only the task scope index", async () => {
     const ledger = ledgerFor("tenant-scope-v9-to-v11-upgrade");
     await runInDurableObject(ledger, async instance => {
       const sql = instance.ctx.storage.sql;
@@ -316,6 +316,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       for (const indexName of [
         "orchestrator_tasks_by_scope_executor_created",
         "orchestrator_tasks_by_scope_state_executor_created",
+        "orchestrator_outbox_events_by_tenant_project",
       ]) {
         const index = sql.exec(
           "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
@@ -323,14 +324,21 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         ).toArray()[0];
         expect(index?.name).toBe(indexName);
       }
-      expect(instance.ping().schemaVersion).toBe(11);
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_tenant_project",
+      ).toArray()[0]).toBeUndefined();
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 12",
+      ).toArray()[0]?.version).toBe(12);
+      expect(instance.ping().schemaVersion).toBe(12);
 
       const appliedAtBeforeRetry = sql.exec(
-        "SELECT version, applied_at FROM orchestrator_schema_migrations WHERE version IN (10, 11) ORDER BY version",
+        "SELECT version, applied_at FROM orchestrator_schema_migrations WHERE version IN (10, 11, 12) ORDER BY version",
       ).toArray();
       instance.ensureSchema();
       const appliedAtAfterRetry = sql.exec(
-        "SELECT version, applied_at FROM orchestrator_schema_migrations WHERE version IN (10, 11) ORDER BY version",
+        "SELECT version, applied_at FROM orchestrator_schema_migrations WHERE version IN (10, 11, 12) ORDER BY version",
       ).toArray();
       expect(appliedAtAfterRetry).toEqual(appliedAtBeforeRetry);
       expect(sql.exec(

@@ -2726,7 +2726,7 @@ it("inserts a newly created unleased task into the claim candidate index atomica
 });
 
 
-it("keeps candidate membership and sequence stable across lease claim and release", async () => {
+it("preserves candidate membership while advancing sequence on lease claim and release", async () => {
   const ledger = ledgerFor("ledger-candidate-stable-across-lease");
   await createTask(ledger, {
     task: task("task-candidate-stable"),
@@ -2760,7 +2760,12 @@ it("keeps candidate membership and sequence stable across lease claim and releas
       "task-candidate-stable",
     ).toArray()[0]
   ));
-  expect(afterClaim).toEqual(before);
+  expect(afterClaim).toMatchObject({
+    task_id: before.task_id,
+    executor_id: before.executor_id,
+    created_at: before.created_at,
+  });
+  expect(afterClaim.candidate_seq).toBeGreaterThan(before.candidate_seq);
 
   const released = await ledger.releaseLease({
     taskId: "task-candidate-stable",
@@ -2778,7 +2783,12 @@ it("keeps candidate membership and sequence stable across lease claim and releas
       "task-candidate-stable",
     ).toArray()[0]
   ));
-  expect(afterRelease).toEqual(before);
+  expect(afterRelease).toMatchObject({
+    task_id: before.task_id,
+    executor_id: before.executor_id,
+    created_at: before.created_at,
+  });
+  expect(afterRelease.candidate_seq).toBeGreaterThan(afterClaim.candidate_seq);
 });
 
 it("rejects expired-lease evidence bound to a different task", async () => {

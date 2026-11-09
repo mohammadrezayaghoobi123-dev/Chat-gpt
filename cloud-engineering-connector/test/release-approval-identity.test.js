@@ -24,7 +24,7 @@ const own = (id, overrides = {}) => ({
   id, name: ownName, app: { slug: ownApp }, status: "completed", conclusion: "failure", ...overrides,
 });
 const currentJob = (overrides = {}) => ({
-  id: 700, name: ownName, run_attempt: 2, head_sha: sha,
+  id: 700, name: ownName, run_id: 12345, run_attempt: 2, head_sha: sha,
   check_run_url: "https://api.github.com/repos/example/repo/check-runs/42", ...overrides,
 });
 

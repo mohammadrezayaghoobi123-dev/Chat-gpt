@@ -333,9 +333,10 @@ describe("OrchestratorLedger durable coordination contract", () => {
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_execution_leases",
       ).one().count).toBe(0);
+      // A verified claim assertion is single-use even when the claim is rejected.
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions",
-      ).one().count).toBe(consumedAssertionsBeforeClaim);
+      ).one().count).toBe(consumedAssertionsBeforeClaim + 1);
     });
   });
 
@@ -572,16 +573,26 @@ describe("OrchestratorLedger durable coordination contract", () => {
     });
   });
 
-  it("fails closed on expired lease recovery and consumes the signed assertion exactly once", async () => {
-    const ledger = ledgerFor("ledger-expired-lease-reconciliation-single-use");
+  it("requires reconciliation evidence before reclaiming an expired lease and preserves task state", async () => {
+    const ledger = ledgerFor("ledger-expired-lease-reconciliation");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0012", inputHash: "b".repeat(64), now });
-    const worker = authenticatedWorker("agent:worker-1");
     const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
     await expect(ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101 }))
       .resolves.toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
     const reclaimed = await ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101,
       reconciliationEvidence: await createReconciliationEvidence({ taskId: "task-0001", priorGeneration: first.leaseGeneration, evidenceId: "reconcile-evidence-00000012", issuedAt: now + 101 }),
+    });
+    expect(reclaimed).toMatchObject({ claimed: true, leaseGeneration: 2, reconciliationRequired: true });
+    await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
+  });
+
+  it("fails closed on expired lease recovery and consumes the signed assertion exactly once", async () => {
+    const ledger = ledgerFor("ledger-expired-lease-reconciliation-single-use");
+    await createTask(ledger, { task: task(), idempotencyKey: "task-create-0012", inputHash: "b".repeat(64), now });
+    const first = await ledger.claimTask({
+      workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"),
+      leaseMs: 100, now,
     });
     const reconciliationJti = "jti-forged-lease-recovery-single-use-0001";
     const reconciliationAssertion = await createWorkerAssertion({

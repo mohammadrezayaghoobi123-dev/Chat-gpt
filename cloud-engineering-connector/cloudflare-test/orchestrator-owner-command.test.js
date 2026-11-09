@@ -162,7 +162,15 @@ describe("Owner command atomic Ledger contract", () => {
     const ledger = ledgerFor("owner-command-stale-queue-receipt");
     await createTask(ledger);
     const payload = { taskId: "task-owner-0001", version: 1 };
-    await ledger.enqueueOutbox({
+    const claim = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "claimTask"),
+      leaseMs: 30_000,
+      now,
+    });
+    expect(claim).toMatchObject({ claimed: true, leaseGeneration: 1 });
+    const enqueued = await ledger.enqueueOutbox({
+      leaseGeneration: claim.leaseGeneration,
       eventId: "owner-queued-before-cancel-01",
       idempotencyKey: "owner-queued-before-cancel-key-01",
       taskId: "task-owner-0001",
@@ -172,6 +180,7 @@ describe("Owner command atomic Ledger contract", () => {
       workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox"),
       now,
     });
+    expect(enqueued).toMatchObject({ enqueued: true });
     await ledger.executeOwnerCommand(await ownerInput());
     const consumerId = "orchestrator-outbox-consumer";
     const receipt = await ledger.recordOutboxReceipt({

@@ -231,6 +231,55 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
     });
   });
 
+  it("does not rerun the v8 task-scope backfill after its migration is recorded", async () => {
+    const ledger = ledgerFor("tenant-scope-v8-no-repeat-backfill");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "v8-repeat-task",
+        tenantId: "tenant-repeat",
+        projectId: "project-repeat",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 400,
+        updatedAt: 400,
+      };
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId,
+        "idem-v8-repeat",
+        "f".repeat(64),
+        task.state,
+        task.version,
+        JSON.stringify(task),
+        task.createdAt,
+        task.updatedAt,
+        task.tenantId,
+        task.projectId,
+      );
+      sql.exec("CREATE TABLE v8_migration_update_probe (updates INTEGER NOT NULL)");
+      sql.exec("INSERT INTO v8_migration_update_probe (updates) VALUES (0)");
+      sql.exec(`
+        CREATE TRIGGER count_v8_task_backfill_updates
+        BEFORE UPDATE ON orchestrator_tasks
+        BEGIN
+          UPDATE v8_migration_update_probe SET updates = updates + 1;
+        END
+      `);
+
+      instance.ensureSchema();
+
+      expect(sql.exec("SELECT updates FROM v8_migration_update_probe").toArray()[0].updates).toBe(0);
+      expect(sql.exec(
+        "SELECT tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0]).toEqual({
+        tenant_id: "tenant-repeat",
+        project_id: "project-repeat",
+      });
+    });
+  });
+
   it("is idempotent and does not rewrite existing scoped records on repeated initialization", async () => {
     const ledger = ledgerFor("tenant-scope-migration-idempotent");
     await runInDurableObject(ledger, async instance => {

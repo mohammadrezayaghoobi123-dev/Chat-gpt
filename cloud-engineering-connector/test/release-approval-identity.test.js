@@ -28,17 +28,17 @@ const currentJob = (overrides = {}) => ({
   check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/42", ...overrides,
 });
 
-function fixture({ checks = [own(42)], jobs = [currentJob()], runId = "12345", attempt = "2" } = {}) {
+function fixture({ checks = [own(42)], jobs = [currentJob()], runId = "12345", attempt = "2", pullData = pull, reviewData = review, currentBase = baseSha, comparison = { behind_by: 0, merge_base_commit: { sha: baseSha } } } = {}) {
   return async (url) => {
     const parsed = new URL(String(url));
-    if (parsed.pathname.endsWith("/commits/" + sha + "/pulls")) return response([pull]);
-    if (parsed.pathname.endsWith("/pulls/129")) return response(pull);
+    if (parsed.pathname.endsWith("/commits/" + sha + "/pulls")) return response([pullData]);
+    if (parsed.pathname.endsWith("/pulls/129")) return response(pullData);
     if (parsed.pathname.endsWith("/check-runs")) return response({ total_count: checks.length, check_runs: checks });
     if (parsed.pathname.endsWith("/status")) return response({ state: "success", total_count: 0 });
-    if (parsed.pathname.endsWith("/git/ref/heads/integration/unify-main-and-integrated-2026-11-02")) return response({ object: { sha: baseSha } });
-    if (parsed.pathname.includes("/compare/")) return response({ behind_by: 0, merge_base_commit: { sha: baseSha } });
+    if (parsed.pathname.endsWith("/git/ref/heads/integration/unify-main-and-integrated-2026-11-02")) return response({ object: { sha: currentBase } });
+    if (parsed.pathname.includes("/compare/")) return response(comparison);
     if (parsed.pathname.endsWith("/actions/runs/" + runId + "/jobs")) return response({ total_count: jobs.length, jobs });
-    if (parsed.pathname.endsWith("/pulls/129/reviews")) return response([review]);
+    if (parsed.pathname.endsWith("/pulls/129/reviews")) return response([reviewData]);
     return response({ message: "not found" }, 404);
   };
 }
@@ -92,4 +92,39 @@ test("a current job must resolve to exactly one matching check-run record", asyn
   await assert.rejects(verifyReleaseApproval(input({
     fetchImpl: fixture({ checks: [own(42), own(42, { conclusion: "success" })] }),
   })), /mergeable, current-base PR/);
+});
+
+
+test("Staging accepts the exact merge commit of an independently approved merged Integration PR", async () => {
+  const reviewedHead = "b".repeat(40);
+  const currentIntegration = "d".repeat(40);
+  const mergedPull = {
+    number: 129,
+    state: "closed",
+    draft: false,
+    merged_at: "2026-11-09T07:59:11Z",
+    merge_commit_sha: sha,
+    html_url: "https://github.com/" + repo + "/pull/129",
+    user: { login: "author" },
+    head: { sha: reviewedHead },
+    base: { ref: "integration/unify-main-and-integrated-2026-11-02" },
+  };
+  const mergedReview = {
+    user: { login: "reviewer" },
+    state: "APPROVED",
+    commit_id: reviewedHead,
+    submitted_at: "2026-11-09T07:50:00Z",
+  };
+  const result = await verifyReleaseApproval(input({
+    fetchImpl: fixture({
+      pullData: mergedPull,
+      reviewData: mergedReview,
+      currentBase: currentIntegration,
+      comparison: { behind_by: 0, merge_base_commit: { sha } },
+    }),
+  }));
+  assert.equal(result.pullNumber, 129);
+  assert.equal(result.reviewCommitSha, reviewedHead);
+  assert.equal(result.reviewer, "reviewer");
+  assert.equal(result.releaseEnvironment, "staging");
 });

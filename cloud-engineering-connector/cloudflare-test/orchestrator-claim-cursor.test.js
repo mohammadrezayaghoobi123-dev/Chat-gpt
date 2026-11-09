@@ -65,4 +65,83 @@ describe("Claim Engine bounded cursor contract", () => {
     });
     expect(second).toMatchObject({ claimed: true, task: { taskId: ids[128] }, candidatesExamined: 1 });
   });
+
+  it("rejects a cursor scoped to another executor without creating a lease", async () => {
+    const ledger = ledgerFor("ledger-bounded-cursor-wrong-executor");
+    const taskId = "task-cursor-wrong-executor";
+    await createTask(ledger, taskId, now, 200);
+    const result = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 1),
+      leaseMs: 30_000,
+      now: now + 1,
+      cursor: {
+        version: 1,
+        executorId: "agent:worker-2",
+        snapshotSequence: 0,
+        createdAt: now,
+        taskId: "task-cursor-wrong-executor",
+      },
+    });
+    expect(result).toEqual({ claimed: false, reason: "INVALID_CLAIM_CURSOR" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ?",
+        taskId,
+      ).one().count).toBe(0);
+    });
+  });
+
+  it("requests a fresh snapshot when a new earlier-sorted candidate appears during cursor continuation", async () => {
+    const ledger = ledgerFor("ledger-bounded-cursor-snapshot-churn");
+    const ids = [];
+    for (let i = 0; i < 129; i += 1) {
+      const id = "task-snapshot-churn-" + String(i + 1).padStart(3, "0");
+      ids.push(id);
+      await createTask(ledger, id, now + i, 300 + i);
+    }
+    await runInDurableObject(ledger, async (_instance, state) => {
+      for (const id of ids) {
+        state.storage.sql.exec(
+          "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
+          id, "agent:worker-1", now + 10_000, now,
+        );
+      }
+    });
+    const first = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 2_000),
+      leaseMs: 30_000,
+      now: now + 2_000,
+    });
+    expect(first.reason).toBe("CLAIM_SCAN_BUDGET_EXHAUSTED");
+
+    const newEarlierTaskId = "task-snapshot-churn-000";
+    await createTask(ledger, newEarlierTaskId, now, 500);
+    const resumed = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 2_001),
+      leaseMs: 30_000,
+      now: now + 2_001,
+      cursor: first.nextCursor,
+    });
+    expect(resumed).toMatchObject({
+      claimed: false,
+      reason: "CLAIM_SCAN_SNAPSHOT_EXHAUSTED",
+      nextCursor: null,
+      restartRequired: true,
+    });
+
+    const restarted = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 2_002),
+      leaseMs: 30_000,
+      now: now + 2_002,
+    });
+    expect(restarted).toMatchObject({
+      claimed: true,
+      task: { taskId: newEarlierTaskId },
+    });
+  });
+
 });

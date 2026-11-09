@@ -191,17 +191,21 @@ export async function verifyReleaseApproval({
 
   let pull;
   if (releaseEnvironment === "staging") {
-    const openHeadPulls = associated.filter(item =>
+    const openIntegrationPulls = associated.filter(item =>
       item?.state === "open" &&
-      item?.draft === false &&
-      item?.head?.sha === candidateSha &&
       item?.base?.ref === STAGING_BASE
+    );
+    const openHeadPulls = openIntegrationPulls.filter(item =>
+      item?.draft === false &&
+      item?.head?.sha === candidateSha
     );
     if (openHeadPulls.length > 1) {
       throw new Error("Release blocked: multiple open Staging PRs match this exact candidate SHA.");
     }
     if (openHeadPulls.length === 1) {
       pull = openHeadPulls[0];
+    } else if (openIntegrationPulls.length > 0) {
+      throw new Error("Release blocked: candidate must belong to an open, non-draft PR whose exact head is this SHA and whose base is the approved integration branch.");
     } else {
       // The commit-to-PR association endpoint can return PRs that merely contain
       // this commit in their history. Resolve merge commits from closed PRs whose

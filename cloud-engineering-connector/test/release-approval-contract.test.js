@@ -550,7 +550,7 @@ for (const workflow of workflows) {
 }
 
 test("release evidence helper records audit metadata without serializing credentials", () => {
-  const helperUrl = new URL("../scripts/write-release-evidence.mjs", import.meta.url).href;
+  const helper = readFileSync(new URL("../scripts/write-release-evidence.mjs", import.meta.url), "utf8");
   for (const field of [
     "candidate_sha",
     "release_environment",

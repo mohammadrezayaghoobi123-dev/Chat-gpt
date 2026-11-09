@@ -641,6 +641,24 @@ export class OrchestratorLedger extends DurableObject {
       );
     });
 
+    // Schema v11: make claim failure diagnostics scope/state selective.
+    // The v10 scope/executor index leaves state as a residual predicate for
+    // existence probes; this index covers tenant, project, state and executor.
+    this.ctx.storage.transactionSync(() => {
+      const applied = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 11",
+      ).toArray()[0];
+      if (applied) return;
+      sql.exec(
+        "CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_scope_state_executor_created ON orchestrator_tasks(tenant_id, project_id, state, COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')), created_at, task_id)",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (11, ?, ?)",
+        Date.now(),
+        "Scope claim diagnostic existence probes by tenant, project, state and executor",
+      );
+    });
+
   }
 
   ping() {
@@ -657,7 +675,7 @@ export class OrchestratorLedger extends DurableObject {
     ].every(name => tableNames.has(name));
     return {
       ok: Number(result.ok) === 1 && requiredTablesOk,
-      schemaVersion: 10,
+      schemaVersion: 11,
       storage: {
         requiredTables: requiredTablesOk,
       },

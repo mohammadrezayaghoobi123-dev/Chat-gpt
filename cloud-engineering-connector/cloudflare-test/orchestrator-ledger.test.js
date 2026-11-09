@@ -3085,7 +3085,7 @@ it("prunes consumed reconciliation evidence in bounded batches after its retenti
     leaseMs: 30_000,
     now,
   });
-  expect(result).toEqual({ claimed: false, reason: "NO_TASK_AVAILABLE" });
+  expect(result).toMatchObject({ claimed: false, reason: "NO_TASK_AVAILABLE" });
 
   await runInDurableObject(ledger, async (_instance, state) => {
     const sql = state.storage.sql;

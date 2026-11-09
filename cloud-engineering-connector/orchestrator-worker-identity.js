@@ -101,25 +101,25 @@ function validateClaimCursorPayload(cursor, expected) {
       !Number.isSafeInteger(cursor.expiresAt) ||
       cursor.expiresAt <= cursor.issuedAt ||
       cursor.expiresAt - cursor.issuedAt > 300) throw reject();
-  const nowSeconds = Math.floor(expected.nowMs / 1000);
-  if (cursor.issuedAt > nowSeconds + CLOCK_SKEW_SECONDS ||
-      cursor.expiresAt < nowSeconds - CLOCK_SKEW_SECONDS) throw reject();
+  if (cursor.issuedAt > expected.nowMs + CLOCK_SKEW_SECONDS * 1000 ||
+      cursor.expiresAt <= expected.nowMs) throw reject();
 }
 
-export async function signClaimCursor(keySet, kid, cursor, nowMs) {
+export async function signClaimCursor(keySet, kid, cursor, nowMs, validUntilMs) {
   try {
     if (!cursor || typeof cursor !== "object" || Array.isArray(cursor) ||
         typeof kid !== "string" || !KID.test(kid) || !Number.isSafeInteger(nowMs) || nowMs < 1 ||
+        (validUntilMs !== undefined && (!Number.isSafeInteger(validUntilMs) || validUntilMs <= nowMs)) ||
         cursor.version !== 1 || typeof cursor.executorId !== "string" || !ID.test(cursor.executorId) ||
         !Number.isSafeInteger(cursor.snapshotSequence) || cursor.snapshotSequence < 0 ||
         !Number.isSafeInteger(cursor.createdAt) || cursor.createdAt < 1 ||
         typeof cursor.taskId !== "string" || !ID.test(cursor.taskId)) throw reject();
-    const issuedAt = Math.floor(nowMs / 1000);
+    const issuedAt = nowMs;
     const payload = {
       ...cursor,
       kid,
       issuedAt,
-      expiresAt: issuedAt + 300,
+      expiresAt: Math.min(nowMs + 300_000, validUntilMs ?? Number.MAX_SAFE_INTEGER),
     };
     const keyBytes = loadKey(keySet, kid);
     const encoded = encodeBase64Url(new TextEncoder().encode(canonicalJson(payload)));

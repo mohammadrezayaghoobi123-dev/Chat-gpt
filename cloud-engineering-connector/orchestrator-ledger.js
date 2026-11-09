@@ -621,6 +621,24 @@ export class OrchestratorLedger extends DurableObject {
         Date.now(),
         "Namespace task and outbox idempotency keys by injective tenant/project tuple; preserve existing identifiers and rows",
       );
+    }); 
+
+    // Schema v10: scope the bounded legacy-task discovery scan before executor
+    // ordering. The v9 executor-only index can walk other tenants' rows before
+    // satisfying the LIMIT when worker identifiers are shared across scopes.
+    this.ctx.storage.transactionSync(() => {
+      const applied = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 10",
+      ).toArray()[0];
+      if (applied) return;
+      sql.exec(
+        "CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_scope_executor_created ON orchestrator_tasks(tenant_id, project_id, COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')), created_at, task_id)",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (10, ?, ?)",
+        Date.now(),
+        "Index bounded candidate backfill by tenant, project, executor and stable task order",
+      );
     });
 
   }
@@ -639,7 +657,7 @@ export class OrchestratorLedger extends DurableObject {
     ].every(name => tableNames.has(name));
     return {
       ok: Number(result.ok) === 1 && requiredTablesOk,
-      schemaVersion: 9,
+      schemaVersion: 10,
       storage: {
         requiredTables: requiredTablesOk,
       },

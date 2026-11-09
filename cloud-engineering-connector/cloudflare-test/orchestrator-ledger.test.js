@@ -3108,4 +3108,63 @@ it("prunes consumed reconciliation evidence in bounded batches after its retenti
       "recent-evidence-retained",
     ).one().count).toBe(1);
   });
+
+  it("returns a bounded continuation after skipping 128 active leases and resumes at the next candidate", async () => {
+    const ledger = ledgerFor("ledger-bounded-scan-integration-red");
+    const taskIds = [];
+    for (let i = 0; i < 129; i += 1) {
+      const taskId = "task-bounded-scan-" + String(i + 1).padStart(3, "0");
+      taskIds.push(taskId);
+      const createdAt = now + i;
+      await createTask(ledger, {
+        task: { ...task(taskId), createdAt, updatedAt: createdAt },
+        idempotencyKey: taskId,
+        inputHash: i.toString(16).padStart(2, "0").repeat(32),
+        now: createdAt,
+      });
+    }
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      for (const taskId of taskIds.slice(0, 128)) {
+        state.storage.sql.exec(
+          "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
+          taskId, "agent:worker-1", now + 10_000, now,
+        );
+      }
+    });
+
+    const first = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1", now + 2_000),
+      leaseMs: 30_000,
+      now: now + 2_000,
+    });
+    expect(first).toMatchObject({
+      claimed: false,
+      reason: "CLAIM_SCAN_BUDGET_EXHAUSTED",
+      candidatesExamined: 128,
+      candidateRowsRead: 129,
+      nextCursor: {
+        version: 1,
+        executorId: "agent:worker-1",
+        snapshotSequence: expect.any(Number),
+        createdAt: now + 127,
+        taskId: taskIds[127],
+      },
+    });
+
+    const second = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1", now + 2_001),
+      leaseMs: 30_000,
+      now: now + 2_001,
+      cursor: first.nextCursor,
+    });
+    expect(second).toMatchObject({
+      claimed: true,
+      task: { taskId: taskIds[128] },
+      candidatesExamined: 1,
+    });
+  });
+
 });

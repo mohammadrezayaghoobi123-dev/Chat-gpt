@@ -101,7 +101,7 @@ const evidence = { kind: "test-evidence", reference: "ci://run/123" };
 describe("OrchestratorLedger durable coordination contract", () => {
   it("initializes its own SQLite schema and reports the schema version", async () => {
     const ledger = ledgerFor("ledger-schema-ping");
-    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 7, storage: { integrityCheck: "ok", requiredTables: true } });
+    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 8, storage: { integrityCheck: "ok", requiredTables: true } });
     await runInDurableObject(ledger, async (instance, state) => {
       const tables = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row => row.name);
       expect(tables).toEqual(expect.arrayContaining([
@@ -111,6 +111,9 @@ describe("OrchestratorLedger durable coordination contract", () => {
         "orchestrator_consumed_reconciliation_evidence",
         "orchestrator_owner_consumed_assertions",
         "orchestrator_owner_command_receipts",
+        "orchestrator_claim_candidates",
+        "orchestrator_claim_candidate_sequence",
+        "orchestrator_claim_scan_cursors",
       ]));
       const outboxColumns = state.storage.sql.exec("PRAGMA table_info(orchestrator_outbox_events)").toArray().map(row => row.name);
       expect(outboxColumns).toEqual(expect.arrayContaining([
@@ -328,7 +331,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       leaseMs: 30_000,
       now,
     });
-    expect(result).toEqual({ claimed: false, reason: "NO_TASK_AVAILABLE" });
+    expect(result).toMatchObject({ claimed: false, reason: "NO_TASK_AVAILABLE" });
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_execution_leases",
@@ -353,7 +356,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       taskId: "task-0001",
       workerId: "agent:worker-1",
       workerAssertion: await createWorkerAssertion({
-        subject: "agent:worker-1", role: "agent", operation: "releaseLease", nowMs: now + 1,
+        subject: "agent:worker-1", role: "agent", operation: "releaseLease", nowMs: now + 2,
       }),
       leaseGeneration: first.leaseGeneration,
       now: now + 1,
@@ -2723,74 +2726,89 @@ it("inserts a newly created unleased task into the claim candidate index atomica
 });
 
 
-it("removes a candidate in the same transaction that creates its worker-owned lease", async () => {
-  const ledger = ledgerFor("ledger-candidate-claim-sync");
+it("preserves candidate membership while advancing sequence on lease claim, renewal, and release", async () => {
+  const ledger = ledgerFor("ledger-candidate-stable-across-lease");
   await createTask(ledger, {
-    task: task("task-candidate-claim"),
-    idempotencyKey: "task-candidate-claim",
+    task: task("task-candidate-stable"),
+    idempotencyKey: "task-candidate-stable",
     inputHash: "1".repeat(64),
     now,
   });
+  const before = await runInDurableObject(ledger, async (_instance, state) => (
+    state.storage.sql.exec(
+      "SELECT candidate_seq, task_id, executor_id, created_at FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-stable",
+    ).toArray()[0]
+  ));
+  expect(before).toMatchObject({
+    task_id: "task-candidate-stable",
+    executor_id: "agent:worker-1",
+    created_at: now,
+    candidate_seq: expect.any(Number),
+  });
+
   const claimed = await ledger.claimTask({
     workerId: "agent:worker-1",
     workerAssertion: await claimAssertion("agent:worker-1", now),
     leaseMs: 30_000,
     now,
   });
-  expect(claimed).toMatchObject({ claimed: true, task: { taskId: "task-candidate-claim" } });
-
-  await runInDurableObject(ledger, async (_instance, state) => {
-    expect(state.storage.sql.exec(
-      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
-      "task-candidate-claim",
-    ).one().count).toBe(0);
+  expect(claimed).toMatchObject({ claimed: true, task: { taskId: "task-candidate-stable" } });
+  const afterClaim = await runInDurableObject(ledger, async (_instance, state) => (
+    state.storage.sql.exec(
+      "SELECT candidate_seq, task_id, executor_id, created_at FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-stable",
+    ).toArray()[0]
+  ));
+  expect(afterClaim).toMatchObject({
+    task_id: before.task_id,
+    executor_id: before.executor_id,
+    created_at: before.created_at,
   });
-});
+  expect(afterClaim.candidate_seq).toBeGreaterThan(before.candidate_seq);
 
-it("restores a candidate in the same transaction that releases its worker-owned lease", async () => {
-  const ledger = ledgerFor("ledger-candidate-release-sync");
-  await createTask(ledger, {
-    task: task("task-candidate-release"),
-    idempotencyKey: "task-candidate-release",
-    inputHash: "2".repeat(64),
-    now,
-  });
-  const claimed = await ledger.claimTask({
+  const renewed = await ledger.renewLease({
+    taskId: "task-candidate-stable",
     workerId: "agent:worker-1",
-    workerAssertion: await claimAssertion("agent:worker-1", now),
-    leaseMs: 30_000,
-    now,
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "renewLease", nowMs: now + 1,
+    }),
+    leaseGeneration: claimed.leaseGeneration,
+    leaseMs: 60_000,
+    now: now + 1,
   });
-  expect(claimed).toMatchObject({ claimed: true });
-  await runInDurableObject(ledger, async (_instance, state) => {
-    expect(state.storage.sql.exec(
-      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
-      "task-candidate-release",
-    ).one().count).toBe(0);
-  });
+  expect(renewed).toMatchObject({ renewed: true });
+  const afterRenew = await runInDurableObject(ledger, async (_instance, state) => (
+    state.storage.sql.exec(
+      "SELECT candidate_seq, task_id, executor_id, created_at FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-stable",
+    ).toArray()[0]
+  ));
+  expect(afterRenew.candidate_seq).toBeGreaterThan(afterClaim.candidate_seq);
+
   const released = await ledger.releaseLease({
-    taskId: "task-candidate-release",
+    taskId: "task-candidate-stable",
     workerId: "agent:worker-1",
     workerAssertion: await createWorkerAssertion({
       subject: "agent:worker-1", role: "agent", operation: "releaseLease", nowMs: now + 1,
     }),
     leaseGeneration: claimed.leaseGeneration,
-    now: now + 1,
+    now: now + 2,
   });
   expect(released).toMatchObject({ released: true });
-
-  await runInDurableObject(ledger, async (_instance, state) => {
-    expect(state.storage.sql.exec(
-      "SELECT task_id, executor_id, created_at FROM orchestrator_claim_candidates WHERE task_id = ?",
-      "task-candidate-release",
-    ).toArray()[0]).toEqual({
-      task_id: "task-candidate-release",
-      executor_id: "agent:worker-1",
-      created_at: now,
-    });
+  const afterRelease = await runInDurableObject(ledger, async (_instance, state) => (
+    state.storage.sql.exec(
+      "SELECT candidate_seq, task_id, executor_id, created_at FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-stable",
+    ).toArray()[0]
+  ));
+  expect(afterRelease).toMatchObject({
+    task_id: before.task_id,
+    executor_id: before.executor_id,
+    created_at: before.created_at,
   });
+  expect(afterRelease.candidate_seq).toBeGreaterThan(afterRenew.candidate_seq);
 });
-
 
 it("rejects expired-lease evidence bound to a different task", async () => {
   const ledger = ledgerFor("ledger-reconciliation-evidence-wrong-task");
@@ -3050,7 +3068,7 @@ it("claims multiple executor-scoped tasks concurrently without duplicate ownersh
     ).one().count).toBe(8);
     expect(state.storage.sql.exec(
       "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates",
-    ).one().count).toBe(0);
+    ).one().count).toBe(8);
     const ownership = state.storage.sql.exec(
       "SELECT lease.worker_id, COUNT(*) AS count FROM orchestrator_execution_leases AS lease GROUP BY lease.worker_id ORDER BY lease.worker_id",
     ).toArray();
@@ -3096,7 +3114,7 @@ it("prunes consumed reconciliation evidence in bounded batches after its retenti
     leaseMs: 30_000,
     now,
   });
-  expect(result).toEqual({ claimed: false, reason: "NO_TASK_AVAILABLE" });
+  expect(result).toMatchObject({ claimed: false, reason: "NO_TASK_AVAILABLE" });
 
   await runInDurableObject(ledger, async (_instance, state) => {
     const sql = state.storage.sql;
@@ -3108,4 +3126,7 @@ it("prunes consumed reconciliation evidence in bounded batches after its retenti
       "recent-evidence-retained",
     ).one().count).toBe(1);
   });
+
+
+
 });

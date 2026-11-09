@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { canonicalJson } from "../orchestrator-protocol.js";
+import { CLAIM_CANDIDATE_QUERY } from "../orchestrator-ledger.js";
 
 const now = 1_800_000_000_000;
 
@@ -113,7 +114,7 @@ describe("OrchestratorLedger claim candidate index", () => {
     const candidates = sql.exec(
       "SELECT task_id FROM orchestrator_claim_candidates ORDER BY executor_id, created_at, task_id",
     ).toArray().map(row => row.task_id);
-    expect(candidates).toEqual(["task-candidate-b"]);
+    expect(candidates).toEqual(["task-candidate-a", "task-candidate-b", "task-active-lease"]);
     expect(sql.exec(
       "SELECT last_task_id, scan_complete FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
       "agent:worker-1",
@@ -121,7 +122,7 @@ describe("OrchestratorLedger claim candidate index", () => {
     instance.ensureSchema();
     expect(sql.exec(
       "SELECT task_id FROM orchestrator_claim_candidates ORDER BY executor_id, created_at, task_id",
-    ).toArray().map(row => row.task_id)).toEqual(["task-candidate-b"]);
+    ).toArray().map(row => row.task_id)).toEqual(["task-candidate-a", "task-candidate-b", "task-active-lease"]);
   });
 });
 
@@ -141,7 +142,120 @@ describe("OrchestratorLedger claim candidate index", () => {
 });
 
 
-it("uses the candidate relation for scheduler discovery while preserving explicit task lookup", async () => {
+it("migrates pre-v8 candidate rows lazily and resets the bounded reconciliation cursor", async () => {
+  const ledger = ledgerFor("ledger-candidate-sequence-migration");
+  await runInDurableObject(ledger, async (instance, state) => {
+    const sql = state.storage.sql;
+    insertTask(sql, { taskId: "task-pre-v8-candidate", createdAt: now });
+    sql.exec(
+      "INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at) VALUES (?, ?, ?)",
+      "task-pre-v8-candidate", "agent:worker-1", now,
+    );
+    sql.exec("DROP INDEX IF EXISTS orchestrator_claim_candidates_by_sequence");
+    sql.exec("DROP INDEX IF EXISTS orchestrator_claim_candidates_by_executor_order");
+    sql.exec("ALTER TABLE orchestrator_claim_candidates RENAME TO orchestrator_claim_candidates_pre_v8");
+    sql.exec(`
+      CREATE TABLE orchestrator_claim_candidates (
+        task_id TEXT PRIMARY KEY REFERENCES orchestrator_tasks(task_id) ON DELETE CASCADE,
+        executor_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    sql.exec(
+      "INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at) SELECT task_id, executor_id, created_at FROM orchestrator_claim_candidates_pre_v8",
+    );
+    sql.exec("DROP TABLE orchestrator_claim_candidates_pre_v8");
+    sql.exec("CREATE INDEX orchestrator_claim_candidates_by_executor_order ON orchestrator_claim_candidates(executor_id, created_at, task_id)");
+    sql.exec(
+      "INSERT OR REPLACE INTO orchestrator_claim_scan_cursors (executor_id, last_created_at, last_task_id, scan_complete, updated_at) VALUES (?, ?, ?, 1, ?)",
+      "agent:worker-1", now + 99, "task-z", now,
+    );
+
+    instance.ensureSchema();
+    const columns = sql.exec("PRAGMA table_info(orchestrator_claim_candidates)").toArray().map(row => row.name);
+    expect(columns).toContain("candidate_seq");
+    expect(sql.exec(
+      "SELECT candidate_seq FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-pre-v8-candidate",
+    ).one().candidate_seq).toBeNull();
+    expect(sql.exec(
+      "SELECT last_created_at, last_task_id, scan_complete FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
+      "agent:worker-1",
+    ).one()).toEqual({ last_created_at: 0, last_task_id: "", scan_complete: 0 });
+  });
+
+  const claimed = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now + 1),
+    leaseMs: 30_000,
+    now: now + 1,
+  });
+  expect(claimed).toMatchObject({
+    claimed: true,
+    task: { taskId: "task-pre-v8-candidate" },
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT candidate_seq FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-pre-v8-candidate",
+    ).one().candidate_seq).toBeGreaterThan(0);
+  });
+});
+
+it("removes a task from the candidate index when a fenced transition makes it non-claimable", async () => {
+  const ledger = ledgerFor("ledger-candidate-transition-removal");
+  await createTask(ledger, {
+    task: task("task-transition-blocked"),
+    idempotencyKey: "task-transition-blocked",
+    inputHash: "9".repeat(64),
+    now,
+  });
+  await createTask(ledger, {
+    task: task("task-transition-next"),
+    idempotencyKey: "task-transition-next",
+    inputHash: "a".repeat(64),
+    now: now + 1,
+  });
+  const firstLease = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(firstLease).toMatchObject({ claimed: true, task: { taskId: "task-transition-blocked" } });
+
+  const transitioned = await ledger.transitionTask({
+    taskId: "task-transition-blocked",
+    expectedVersion: 1,
+    expectedState: "SCHEDULED",
+    nextState: "BLOCKED",
+    actor: { id: "agent:worker-1", authenticated: true, identityVerified: true, role: "agent" },
+    evidence: { kind: "test-evidence", reference: "ci://claim-candidate-transition" },
+    now: now + 1,
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "transitionTask", nowMs: now + 1,
+    }),
+    leaseGeneration: firstLease.leaseGeneration,
+  });
+  expect(transitioned).toMatchObject({ updated: true, task: { state: "BLOCKED" } });
+
+  const next = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now + 2),
+    leaseMs: 30_000,
+    now: now + 2,
+  });
+  expect(next).toMatchObject({ claimed: true, task: { taskId: "task-transition-next" } });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-transition-blocked",
+    ).one().count).toBe(0);
+  });
+});
+
+it("uses candidate discovery for scheduling and fails closed on missing explicit candidate rows", async () => {
   const ledger = ledgerFor("ledger-candidate-query-path");
   await createTask(ledger, {
     task: task("task-candidate-query-path"),
@@ -187,22 +301,116 @@ it("uses the candidate relation for scheduler discovery while preserving explici
     leaseMs: 30_000,
     now: now + 2,
   });
-  expect(explicitResult).toMatchObject({
-    claimed: true,
-    task: { taskId: "task-candidate-explicit-path" },
-    leaseGeneration: 1,
+  expect(explicitResult).toEqual({
+    claimed: false,
+    reason: "CANDIDATE_INDEX_INCONSISTENT",
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ?",
+      "task-candidate-explicit-path",
+    ).one().count).toBe(0);
   });
 });
 
-it("uses the executor/order candidate index for the scheduler lookup query plan", async () => {
+it("consumes a valid worker assertion before rejecting an explicit claim with a missing candidate row", async () => {
+  const ledger = ledgerFor("ledger-explicit-claim-index-mismatch-consumes-assertion");
+  await createTask(ledger, {
+    task: task("task-explicit-index-missing"),
+    idempotencyKey: "task-explicit-index-missing",
+    inputHash: "6".repeat(64),
+    now,
+  });
+  await createTask(ledger, {
+    task: task("task-explicit-index-present"),
+    idempotencyKey: "task-explicit-index-present",
+    inputHash: "7".repeat(64),
+    now: now + 1,
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    state.storage.sql.exec(
+      "DELETE FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-explicit-index-missing",
+    );
+  });
+
+  const oneTimeAssertion = await claimAssertion("agent:worker-1", now + 2);
+  const rejected = await ledger.claimTask({
+    taskId: "task-explicit-index-missing",
+    workerId: "agent:worker-1",
+    workerAssertion: oneTimeAssertion,
+    leaseMs: 30_000,
+    now: now + 2,
+  });
+  expect(rejected).toEqual({ claimed: false, reason: "CANDIDATE_INDEX_INCONSISTENT" });
+
+  const replay = await ledger.claimTask({
+    taskId: "task-explicit-index-present",
+    workerId: "agent:worker-1",
+    workerAssertion: oneTimeAssertion,
+    leaseMs: 30_000,
+    now: now + 3,
+  });
+  expect(replay).toEqual({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+});
+
+it("repairs a malformed derived candidate sequence before scheduler claim", async () => {
+  const ledger = ledgerFor("ledger-candidate-sequence-repair");
+  await createTask(ledger, {
+    task: task("task-candidate-sequence-repair"),
+    idempotencyKey: "task-candidate-sequence-repair",
+    inputHash: "8".repeat(64),
+    now,
+  });
+  const originalSequence = await runInDurableObject(ledger, async (_instance, state) => {
+    const sql = state.storage.sql;
+    const sequence = sql.exec(
+      "SELECT candidate_seq FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-sequence-repair",
+    ).one().candidate_seq;
+    sql.exec(
+      "UPDATE orchestrator_claim_candidates SET candidate_seq = -1 WHERE task_id = ?",
+      "task-candidate-sequence-repair",
+    );
+    return sequence;
+  });
+
+  const claimed = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(claimed).toMatchObject({
+    claimed: true,
+    task: { taskId: "task-candidate-sequence-repair" },
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    const repairedSequence = state.storage.sql.exec(
+      "SELECT candidate_seq FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-sequence-repair",
+    ).one().candidate_seq;
+    expect(repairedSequence).toBeGreaterThan(originalSequence);
+  });
+});
+
+it("uses the executor/order index for the exact bounded cursor query without a temporary sort", async () => {
   const ledger = ledgerFor("ledger-candidate-query-plan");
   await runInDurableObject(ledger, async (_instance, state) => {
     const plan = state.storage.sql.exec(
-      "EXPLAIN QUERY PLAN SELECT task.* FROM orchestrator_claim_candidates AS candidate INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id WHERE candidate.executor_id = ? ORDER BY candidate.created_at, candidate.task_id LIMIT 1",
-      "agent:worker-1",
+      "EXPLAIN QUERY PLAN " + CLAIM_CANDIDATE_QUERY,
+      "agent:worker-1", 0, "", 129,
     ).toArray();
-    expect(plan.map(row => row.detail).join(" ")).toContain(
-      "orchestrator_claim_candidates_by_executor_order",
+    const details = plan.map(row => row.detail).join(" ");
+    expect(details).toContain("orchestrator_claim_candidates_by_executor_order");
+    expect(details).not.toMatch(/USE TEMP B-TREE/i);
+
+    const snapshotPlan = state.storage.sql.exec(
+      "EXPLAIN QUERY PLAN SELECT 1 FROM orchestrator_claim_candidates WHERE executor_id = ? AND candidate_seq > ? LIMIT 1",
+      "agent:worker-1", 100,
+    ).toArray();
+    expect(snapshotPlan.map(row => row.detail).join(" ")).toContain(
+      "orchestrator_claim_candidates_by_executor_sequence",
     );
   });
 });
@@ -237,7 +445,7 @@ it("reconciles a missing candidate index in bounded batches with a stable keyset
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec(
       "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates",
-    ).one().count).toBe(31);
+    ).one().count).toBe(32);
     expect(state.storage.sql.exec(
       "SELECT last_created_at, last_task_id FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
       "agent:worker-1",
@@ -260,7 +468,7 @@ it("reconciles a missing candidate index in bounded batches with a stable keyset
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec(
       "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates",
-    ).one().count).toBe(7);
+    ).one().count).toBe(8);
     expect(state.storage.sql.exec(
       "SELECT last_created_at, last_task_id, scan_complete FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
       "agent:worker-1",
@@ -338,7 +546,7 @@ it("atomically assigns distinct candidate tasks under concurrent claims for one 
     expect(state.storage.sql.exec(
       "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id IN (?, ?)",
       "task-concurrent-a", "task-concurrent-b",
-    ).one().count).toBe(0);
+    ).one().count).toBe(2);
   });
 });
 

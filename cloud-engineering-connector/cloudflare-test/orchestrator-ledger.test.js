@@ -356,7 +356,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       taskId: "task-0001",
       workerId: "agent:worker-1",
       workerAssertion: await createWorkerAssertion({
-        subject: "agent:worker-1", role: "agent", operation: "releaseLease", nowMs: now + 1,
+        subject: "agent:worker-1", role: "agent", operation: "releaseLease", nowMs: now + 2,
       }),
       leaseGeneration: first.leaseGeneration,
       now: now + 1,
@@ -2726,7 +2726,7 @@ it("inserts a newly created unleased task into the claim candidate index atomica
 });
 
 
-it("preserves candidate membership while advancing sequence on lease claim and release", async () => {
+it("preserves candidate membership while advancing sequence on lease claim, renewal, and release", async () => {
   const ledger = ledgerFor("ledger-candidate-stable-across-lease");
   await createTask(ledger, {
     task: task("task-candidate-stable"),

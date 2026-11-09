@@ -52,7 +52,7 @@ function fakeFetch(
     if (value.includes("/actions/runs/") && value.includes("/jobs")) {
       return response({
         total_count: 1,
-        jobs: [{ name: OWN_CHECK, check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/777" }],
+        jobs: [{ run_id: 987654321, name: OWN_CHECK, check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/777" }],
       });
     }
     if (value.includes("/check-runs")) {
@@ -368,6 +368,28 @@ test("Staging ignores only the exact check-run ID belonging to this workflow run
   const unrelatedSameName = ownRun({ id: 778, conclusion: "failure" });
   await assert.rejects(
     verifyReleaseApproval({ ...input({}), fetchImpl: gate([ownRun(), unrelatedSameName]) }),
+    /mergeable, current-base PR/,
+  );
+});
+
+
+test("Staging fails closed when the current workflow run cannot identify exactly one release job", async () => {
+  const ambiguousJobs = {
+    jobs: [
+      { run_id: 987654321, name: OWN_CHECK, check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/777" },
+      { run_id: 987654321, name: OWN_CHECK, check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/779" },
+    ],
+    totalCount: 2,
+  };
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch([unstable()], [approval()], () => {}, undefined, {
+        checkRuns: [ownRun()],
+        status: { state: "success", total_count: 0 },
+        ...ambiguousJobs,
+      }),
+    }),
     /mergeable, current-base PR/,
   );
 });

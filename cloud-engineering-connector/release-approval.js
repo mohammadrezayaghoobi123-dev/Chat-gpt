@@ -189,33 +189,54 @@ export async function verifyReleaseApproval({
   );
   if (!Array.isArray(associated)) throw new Error("GitHub returned an invalid associated-PR list.");
 
-  const matchingPulls = associated.filter(item => {
-    if (!item || item.head?.sha === undefined || item.base?.ref === undefined) return false;
-    if (releaseEnvironment === "staging") {
-      const openHeadCandidate = item.state === "open" &&
-        item.draft === false &&
-        item.head.sha === candidateSha &&
-        item.base.ref === STAGING_BASE;
-      const mergedCommitCandidate = item.state === "closed" &&
-        item.draft === false &&
-        typeof item.merged_at === "string" &&
-        item.merged_at.length > 0 &&
-        item.merge_commit_sha === candidateSha &&
-        item.base.ref === STAGING_BASE;
-      return openHeadCandidate || mergedCommitCandidate;
+  let pull;
+  if (releaseEnvironment === "staging") {
+    const openHeadPulls = associated.filter(item =>
+      item?.state === "open" &&
+      item?.draft === false &&
+      item?.head?.sha === candidateSha &&
+      item?.base?.ref === STAGING_BASE
+    );
+    if (openHeadPulls.length > 1) {
+      throw new Error("Release blocked: multiple open Staging PRs match this exact candidate SHA.");
     }
-    return item.state === "closed" &&
-      typeof item.merged_at === "string" &&
+    if (openHeadPulls.length === 1) {
+      pull = openHeadPulls[0];
+    } else {
+      // The commit-to-PR association endpoint can return PRs that merely contain
+      // this commit in their history. Resolve merge commits from closed PRs whose
+      // base is Integration, then require an exact merge_commit_sha match.
+      const closedIntegrationPulls = await getJsonCollection(
+        fetchImpl,
+        API_ROOT + "/repos/" + repoPath + "/pulls?state=closed&base=" + encodeURIComponent(STAGING_BASE),
+        token,
+      );
+      const mergedCommitPulls = closedIntegrationPulls.filter(item =>
+        item?.state === "closed" &&
+        item?.draft === false &&
+        typeof item?.merged_at === "string" &&
+        item.merged_at.length > 0 &&
+        item?.merge_commit_sha === candidateSha &&
+        item?.head?.sha &&
+        item?.base?.ref === STAGING_BASE
+      );
+      if (mergedCommitPulls.length !== 1) {
+        throw new Error("Release blocked: candidate must belong to exactly one open, non-draft PR head or merged Integration PR commit matching this SHA.");
+      }
+      pull = mergedCommitPulls[0];
+    }
+  } else {
+    const matchingPulls = associated.filter(item =>
+      item?.state === "closed" &&
+      typeof item?.merged_at === "string" &&
       item.merge_commit_sha === candidateSha &&
-      item.base.ref === "main";
-  });
-  if (matchingPulls.length !== 1) {
-    const requirement = releaseEnvironment === "staging"
-      ? "exactly one open, non-draft PR head or merged Integration PR commit matching this SHA"
-      : "exactly one merged PR to main whose merge commit is this exact SHA";
-    throw new Error("Release blocked: candidate must belong to " + requirement + ".");
+      item?.base?.ref === "main"
+    );
+    if (matchingPulls.length !== 1) {
+      throw new Error("Release blocked: candidate must belong to exactly one merged PR to main whose merge commit is this exact SHA.");
+    }
+    pull = matchingPulls[0];
   }
-  let pull = matchingPulls[0];
 
   if (releaseEnvironment === "staging") {
     pull = await getJson(

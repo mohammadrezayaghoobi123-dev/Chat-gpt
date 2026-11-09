@@ -72,7 +72,7 @@ async function getJsonCollection(fetchImpl, url, token) {
  * complete and passing. Any other mergeable_state (blocked, behind, dirty, draft,
  * unknown) fails closed, and so does any incomplete or unverifiable check listing.
  */
-async function stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, mergeableState) {
+async function stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, mergeableState, workflowRunId, workflowRunAttempt, workflowJob) {
   if (mergeableState === "clean") return true;
   if (mergeableState !== "unstable") return false;
   const checks = await getJson(
@@ -159,7 +159,7 @@ export async function verifyReleaseApproval({
     ) {
       throw new Error("Release blocked: staging candidate must remain an open, non-draft PR for this exact head.");
     }
-    if (pull.mergeable !== true || !(await stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, pull.mergeable_state))) {
+    if (pull.mergeable !== true || !(await stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, pull.mergeable_state, workflowRunId, workflowRunAttempt, workflowJob))) {
       throw new Error("Release blocked: staging candidate must be a mergeable, current-base PR.");
     }
     const currentBase = await getJson(

@@ -298,7 +298,7 @@ jobs:
 
       - name: Roll back Staging if post-deploy acceptance fails
         id: rollback
-        if: failure() && steps.deploy.outcome == 'success' && steps.preflight.outputs.previous_version_id != ''
+        if: always() && (failure() || cancelled()) && steps.deploy.outcome != 'skipped' && steps.preflight.outputs.previous_version_id != ''
         shell: bash
         run: |
           node --input-type=module <<'NODE'

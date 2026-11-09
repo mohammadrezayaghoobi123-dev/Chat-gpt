@@ -211,7 +211,7 @@ export async function verifyReleaseApproval({
   });
   if (matchingPulls.length !== 1) {
     const requirement = releaseEnvironment === "staging"
-      ? "exactly one open PR head or merged Integration PR commit matching this SHA"
+      ? "exactly one open, non-draft PR head or merged Integration PR commit matching this SHA"
       : "exactly one merged PR to main whose merge commit is this exact SHA";
     throw new Error("Release blocked: candidate must belong to " + requirement + ".");
   }

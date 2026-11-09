@@ -11,6 +11,19 @@ const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const MAX_RECORD_BYTES = 32_768;
 const MAX_LEASE_MS = 86_400_000;
 const MAX_OUTBOX_ATTEMPTS = 8;
+const CLAIMABLE_TASK_STATES = Object.freeze(["SCHEDULED", "RUNNING", "VERIFYING"]);
+const MAX_CLAIM_CANDIDATES_PER_CALL = 128;
+export const CLAIM_CANDIDATE_QUERY = `
+  SELECT candidate.candidate_seq, candidate.task_id, candidate.executor_id,
+         candidate.created_at, task.created_at AS task_created_at, task.state, task.task_json
+  FROM orchestrator_claim_candidates AS candidate
+  INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id
+  WHERE candidate.executor_id = ?
+    AND candidate.candidate_seq <= ?
+    AND (candidate.created_at, candidate.task_id) > (?, ?)
+  ORDER BY candidate.created_at, candidate.task_id
+  LIMIT ?
+`;
 const OUTBOX_RETRY_BASE_MS = 1_000;
 const OUTBOX_RETRY_MAX_MS = 900_000;
 const SECRET_FIELD = /(?:secret|token|password|credential|api[_-]?key|private[_-]?key)/i;
@@ -121,6 +134,19 @@ const CLAIM_FALLBACK_BATCH_SIZE = 32;
 const RECONCILIATION_EVIDENCE_RETENTION_MS = 600_000;
 const RECONCILIATION_EVIDENCE_PRUNE_BATCH = 100;
 
+function nextClaimCandidateSequence(sql) {
+  sql.exec(
+    "UPDATE orchestrator_claim_candidate_sequence SET last_sequence = last_sequence + 1 WHERE singleton = 1",
+  );
+  const row = sql.exec(
+    "SELECT last_sequence FROM orchestrator_claim_candidate_sequence WHERE singleton = 1",
+  ).toArray()[0];
+  if (!Number.isSafeInteger(row?.last_sequence) || row.last_sequence < 1) {
+    throw fail("Claim candidate sequence allocation failed.", "CLAIM_CANDIDATE_SEQUENCE_FAILED");
+  }
+  return row.last_sequence;
+}
+
 function syncClaimCandidateInTransaction(sql, taskId) {
   const candidate = sql.exec(`
     SELECT task.task_id,
@@ -129,21 +155,42 @@ function syncClaimCandidateInTransaction(sql, taskId) {
     FROM orchestrator_tasks AS task
     WHERE task.task_id = ?
       AND task.state IN ('SCHEDULED','RUNNING','VERIFYING')
-      AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM orchestrator_execution_leases AS lease
-        WHERE lease.task_id = task.task_id AND lease.worker_id IS NOT NULL
-      )
   `, taskId).toArray()[0];
 
-  if (!candidate) {
+  const executorId = candidate?.executor_id;
+  if (!candidate || typeof executorId !== "string" || !IDENTIFIER.test(executorId)) {
     sql.exec("DELETE FROM orchestrator_claim_candidates WHERE task_id = ?", taskId);
     return false;
   }
+
+  const existing = sql.exec(
+    "SELECT executor_id, created_at, candidate_seq FROM orchestrator_claim_candidates WHERE task_id = ?",
+    taskId,
+  ).toArray()[0];
+  if (existing && existing.executor_id === executorId && existing.created_at === candidate.created_at) {
+    if (Number.isSafeInteger(existing.candidate_seq) && existing.candidate_seq > 0) return true;
+    const sequence = nextClaimCandidateSequence(sql);
+    sql.exec(
+      "UPDATE orchestrator_claim_candidates SET candidate_seq = ? WHERE task_id = ? AND candidate_seq IS NULL",
+      sequence, taskId,
+    );
+    return true;
+  }
+
+  if (existing) sql.exec("DELETE FROM orchestrator_claim_candidates WHERE task_id = ?", taskId);
+  const sequence = nextClaimCandidateSequence(sql);
   sql.exec(
-    "INSERT INTO orchestrator_claim_candidates (task_id, executor_id, created_at) VALUES (?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET executor_id = excluded.executor_id, created_at = excluded.created_at",
-    candidate.task_id, candidate.executor_id, candidate.created_at,
+    "INSERT INTO orchestrator_claim_candidates (candidate_seq, task_id, executor_id, created_at) VALUES (?, ?, ?, ?)",
+    sequence, candidate.task_id, executorId, candidate.created_at,
   );
+  const persisted = sql.exec(
+    "SELECT candidate_seq, task_id, executor_id, created_at FROM orchestrator_claim_candidates WHERE task_id = ?",
+    taskId,
+  ).toArray()[0];
+  if (!persisted || persisted.candidate_seq !== sequence || persisted.task_id !== candidate.task_id ||
+      persisted.executor_id !== executorId || persisted.created_at !== candidate.created_at) {
+    throw fail("Claim candidate synchronization failed; transaction rolled back.", "CLAIM_CANDIDATE_SYNC_FAILED");
+  }
   return true;
 }
 
@@ -295,7 +342,8 @@ export class OrchestratorLedger extends DurableObject {
       CREATE TABLE IF NOT EXISTS orchestrator_claim_candidates (
         task_id TEXT PRIMARY KEY REFERENCES orchestrator_tasks(task_id) ON DELETE CASCADE,
         executor_id TEXT NOT NULL,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        candidate_seq INTEGER
       )
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_executor_order ON orchestrator_claim_candidates(executor_id, created_at, task_id)");
@@ -308,6 +356,31 @@ export class OrchestratorLedger extends DurableObject {
         updated_at INTEGER NOT NULL
       )
     `);
+    this.ctx.storage.transactionSync(() => {
+      const candidateColumns = sql.exec("PRAGMA table_info(orchestrator_claim_candidates)").toArray().map(column => column.name);
+      if (!candidateColumns.includes("candidate_seq")) {
+        sql.exec("ALTER TABLE orchestrator_claim_candidates ADD COLUMN candidate_seq INTEGER");
+        sql.exec(
+          "UPDATE orchestrator_claim_scan_cursors SET last_created_at = 0, last_task_id = '', scan_complete = 0, updated_at = ?",
+          Date.now(),
+        );
+      }
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_claim_candidate_sequence (
+          singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+          last_sequence INTEGER NOT NULL CHECK(last_sequence >= 0)
+        )
+      `);
+      sql.exec("INSERT OR IGNORE INTO orchestrator_claim_candidate_sequence (singleton, last_sequence) VALUES (1, 0)");
+      sql.exec("CREATE UNIQUE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_sequence ON orchestrator_claim_candidates(candidate_seq) WHERE candidate_seq IS NOT NULL");
+      const maximumSequence = sql.exec(
+        "SELECT COALESCE(MAX(candidate_seq), 0) AS maximum_sequence FROM orchestrator_claim_candidates",
+      ).toArray()[0]?.maximum_sequence ?? 0;
+      sql.exec(
+        "UPDATE orchestrator_claim_candidate_sequence SET last_sequence = CASE WHEN last_sequence < ? THEN ? ELSE last_sequence END WHERE singleton = 1",
+        maximumSequence, maximumSequence,
+      );
+    });
     // Legacy task discovery is performed incrementally by the bounded claim fallback.
     // No full-table scan runs while a Durable Object starts.
     sql.exec(`
@@ -490,7 +563,7 @@ export class OrchestratorLedger extends DurableObject {
     ].every(name => tableNames.has(name));
     return {
       ok: Number(result.ok) === 1 && integrityOk && requiredTablesOk,
-      schemaVersion: 7,
+      schemaVersion: 8,
       storage: {
         integrityCheck: integrityOk ? "ok" : "failed",
         requiredTables: requiredTablesOk,
@@ -792,7 +865,7 @@ export class OrchestratorLedger extends DurableObject {
       return { accepted: true, messageId, taskId };
     });
   }
-  async claimTask({ workerId, workerAssertion, leaseMs, now, taskId, reconciliationEvidence } = {}) {
+  async claimTask({ workerId, workerAssertion, leaseMs, now, taskId, reconciliationEvidence, cursor } = {}) {
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);
     timestamp(now);
@@ -805,6 +878,19 @@ export class OrchestratorLedger extends DurableObject {
       return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
     if (taskId !== undefined) identifier(taskId, "taskId");
+    if (taskId !== undefined && cursor !== undefined) {
+      return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
+    }
+    if (cursor !== undefined && (
+      !cursor || typeof cursor !== "object" || Array.isArray(cursor) ||
+      Object.keys(cursor).sort().join(",") !== "createdAt,executorId,snapshotSequence,taskId,version" ||
+      cursor.version !== 1 || cursor.executorId !== workerId ||
+      !Number.isSafeInteger(cursor.snapshotSequence) || cursor.snapshotSequence < 0 ||
+      !Number.isSafeInteger(cursor.createdAt) || cursor.createdAt < 1 ||
+      typeof cursor.taskId !== "string" || !IDENTIFIER.test(cursor.taskId)
+    )) {
+      return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
+    }
 
     const verifiedReconciliationEvidence = reconciliationEvidence
       ? await verifyReconciliationEvidence(
@@ -819,138 +905,206 @@ export class OrchestratorLedger extends DurableObject {
       ? await sha256Canonical(reconciliationEvidence)
       : null;
     const sql = this.ctx.storage.sql;
+
     return this.ctx.storage.transactionSync(() => {
-      // A verified claim token is single-use even when the claim is rejected.
-      // Consume it before inspecting task/lease state so caller-controlled
-      // reconciliation metadata cannot make the same authorization reusable.
+      // Consume the signed assertion once, before any task/lease inspection.
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       pruneConsumedReconciliationEvidenceInTransaction(sql, now);
-      let row;
-      if (taskId) {
-        row = sql.exec(
-          "SELECT * FROM orchestrator_tasks WHERE task_id = ? AND state IN ('SCHEDULED','RUNNING','VERIFYING') ORDER BY created_at, task_id LIMIT 1",
+
+      const claimRow = (row, scanStats = {}) => {
+        const taskProjection = taskFromRow(row);
+        const assignedAgentId = taskProjection.executorId ?? taskProjection.assignedAgentId;
+        if (typeof assignedAgentId !== "string" || assignedAgentId !== workerId ||
+            row.executor_id !== assignedAgentId || row.created_at !== row.task_created_at) {
+          return { claimed: false, reason: "CANDIDATE_INDEX_INCONSISTENT" };
+        }
+
+        const lease = sql.exec(
+          "SELECT * FROM orchestrator_execution_leases WHERE task_id = ?",
+          row.task_id,
+        ).toArray()[0];
+        let generation = 1;
+        let reconciliationRequired = false;
+        if (lease) {
+          if (lease.worker_id !== null && lease.lease_until > now) {
+            return { claimed: false, blocked: true };
+          }
+          generation = lease.lease_generation + 1;
+          if (lease.worker_id !== null && lease.lease_until <= now) {
+            if (!hasReconciliationEvidence ||
+                verifiedReconciliationEvidence.taskId !== row.task_id ||
+                verifiedReconciliationEvidence.priorGeneration !== lease.lease_generation) {
+              return { claimed: false, blockedByReconciliation: true };
+            }
+            if (sql.exec(
+              "SELECT 1 FROM orchestrator_consumed_reconciliation_evidence WHERE evidence_id = ?",
+              verifiedReconciliationEvidence.evidenceId,
+            ).toArray()[0]) {
+              return { claimed: false, blockedByReconciliation: true };
+            }
+            reconciliationRequired = true;
+          }
+        }
+
+        if (reconciliationRequired) {
+          sql.exec(
+            "INSERT INTO orchestrator_consumed_reconciliation_evidence (evidence_id, evidence_hash, task_id, prior_generation, issuer, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            verifiedReconciliationEvidence.evidenceId,
+            reconciliationEvidenceHash,
+            verifiedReconciliationEvidence.taskId,
+            verifiedReconciliationEvidence.priorGeneration,
+            verifiedReconciliationEvidence.issuer,
+            verifiedReconciliationEvidence.issuedAt,
+            verifiedReconciliationEvidence.expiresAt,
+            now,
+          );
+        }
+        if (lease) {
+          sql.exec(
+            "UPDATE orchestrator_execution_leases SET worker_id = ?, lease_generation = ?, lease_until = ?, updated_at = ? WHERE task_id = ? AND lease_generation = ?",
+            workerId, generation, now + leaseMs, now, row.task_id, lease.lease_generation,
+          );
+        } else {
+          sql.exec(
+            "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
+            row.task_id, workerId, now + leaseMs, now,
+          );
+        }
+        syncClaimCandidateInTransaction(sql, row.task_id);
+        return {
+          claimed: true,
+          task: taskProjection,
+          workerId,
+          leaseGeneration: generation,
+          leaseUntil: now + leaseMs,
+          reconciliationRequired,
+          ...scanStats,
+        };
+      };
+
+      if (taskId !== undefined) {
+        const row = sql.exec(
+          "SELECT * FROM orchestrator_tasks WHERE task_id = ? AND state IN ('SCHEDULED','RUNNING','VERIFYING')",
           taskId,
         ).toArray()[0];
-      } else {
-        // The primary scheduler path reads only unleased rows from the
-        // executor/order candidate index. An expired worker-owned lease is
-        // considered only through the single task bound by reconciliation
-        // evidence, avoiding an unbounded scan of leased tasks.
-        reconcileClaimCandidatesInBoundedBatch(sql, workerId, now);
-        let candidateRow = sql.exec(
-          "SELECT task.* FROM orchestrator_claim_candidates AS candidate INNER JOIN orchestrator_tasks AS task ON task.task_id = candidate.task_id WHERE candidate.executor_id = ? ORDER BY candidate.created_at, candidate.task_id LIMIT 1",
-          workerId,
+        if (!row) return { claimed: false, reason: "NO_TASK_AVAILABLE" };
+        const taskProjection = taskFromRow(row);
+        const assignedAgentId = taskProjection.executorId ?? taskProjection.assignedAgentId;
+        const candidate = sql.exec(
+          "SELECT candidate_seq, executor_id, created_at FROM orchestrator_claim_candidates WHERE task_id = ?",
+          taskId,
         ).toArray()[0];
-        let evidenceRow;
-        if (hasReconciliationEvidence) {
-          evidenceRow = sql.exec(
-            "SELECT task.* FROM orchestrator_tasks AS task INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.task_id = ? AND task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND lease.lease_generation = ? LIMIT 1",
-            verifiedReconciliationEvidence.taskId, workerId, now, verifiedReconciliationEvidence.priorGeneration,
-          ).toArray()[0];
+        if (!candidate || candidate.executor_id !== assignedAgentId || candidate.created_at !== row.created_at) {
+          return { claimed: false, reason: "CANDIDATE_INDEX_INCONSISTENT" };
         }
-        row = candidateRow;
-        if (evidenceRow && (!row ||
-            evidenceRow.created_at < row.created_at ||
-            (evidenceRow.created_at === row.created_at && evidenceRow.task_id < row.task_id))) {
-          row = evidenceRow;
+        if (!Number.isSafeInteger(candidate.candidate_seq) || candidate.candidate_seq < 1) {
+          const sequence = nextClaimCandidateSequence(sql);
+          sql.exec("UPDATE orchestrator_claim_candidates SET candidate_seq = ? WHERE task_id = ?", sequence, taskId);
         }
+        return claimRow({
+          ...row,
+          executor_id: candidate.executor_id,
+          task_created_at: row.created_at,
+        }, { candidatesExamined: 1, candidateRowsRead: 1 });
       }
 
-      if (!row) {
-        let assigneeMismatch = false;
-        let blockedByReconciliation = false;
-        if (!taskId) {
-          const hasAssignedTask = Boolean(sql.exec(
-            "SELECT 1 FROM orchestrator_tasks WHERE state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ? LIMIT 1",
-            workerId,
-          ).toArray()[0]);
-          if (!hasAssignedTask) {
-            assigneeMismatch = Boolean(sql.exec(
-              "SELECT 1 FROM orchestrator_tasks WHERE state IN ('SCHEDULED','RUNNING','VERIFYING') LIMIT 1",
-            ).toArray()[0]);
-          }
-          blockedByReconciliation = Boolean(sql.exec(
-            "SELECT 1 FROM orchestrator_tasks AS task INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id WHERE task.state IN ('SCHEDULED','RUNNING','VERIFYING') AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ? AND lease.worker_id IS NOT NULL AND lease.lease_until <= ? AND (? = 0 OR lease.task_id != ? OR lease.lease_generation != ?) LIMIT 1",
-            workerId, now, hasReconciliationEvidence ? 1 : 0,
-            hasReconciliationEvidence ? verifiedReconciliationEvidence.taskId : "",
-            hasReconciliationEvidence ? verifiedReconciliationEvidence.priorGeneration : -1,
-          ).toArray()[0]);
+      const fallback = cursor === undefined
+        ? reconcileClaimCandidatesInBoundedBatch(sql, workerId, now)
+        : { complete: true, scanned: 0 };
+      const sequenceRow = sql.exec(
+        "SELECT last_sequence FROM orchestrator_claim_candidate_sequence WHERE singleton = 1",
+      ).toArray()[0];
+      const currentSequence = Number(sequenceRow?.last_sequence ?? 0);
+      const snapshotSequence = cursor?.snapshotSequence ?? currentSequence;
+      if (!Number.isSafeInteger(currentSequence) || !Number.isSafeInteger(snapshotSequence) ||
+          snapshotSequence < 0 || snapshotSequence > currentSequence) {
+        return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
+      }
+
+      const lastCreatedAt = cursor?.createdAt ?? 0;
+      const lastTaskId = cursor?.taskId ?? "";
+      const candidateRows = sql.exec(
+        CLAIM_CANDIDATE_QUERY,
+        workerId, snapshotSequence, lastCreatedAt, lastTaskId,
+        MAX_CLAIM_CANDIDATES_PER_CALL + 1,
+      ).toArray();
+      const budgetExhausted = candidateRows.length > MAX_CLAIM_CANDIDATES_PER_CALL;
+      const batch = candidateRows.slice(0, MAX_CLAIM_CANDIDATES_PER_CALL);
+      let candidatesExamined = 0;
+      let blockedByReconciliation = false;
+
+      for (const candidate of batch) {
+        candidatesExamined += 1;
+        if (!CLAIMABLE_TASK_STATES.includes(candidate.state)) {
+          return { claimed: false, reason: "CANDIDATE_INDEX_INCONSISTENT" };
         }
+        const result = claimRow(candidate, {
+          candidatesExamined,
+          candidateRowsRead: candidateRows.length,
+        });
+        if (result.claimed) return result;
+        if (result.reason === "CANDIDATE_INDEX_INCONSISTENT") return result;
+        if (result.blockedByReconciliation) blockedByReconciliation = true;
+      }
+
+      if (budgetExhausted) {
+        const last = batch[batch.length - 1];
         return {
           claimed: false,
-          reason: blockedByReconciliation ? "RECONCILIATION_REQUIRED"
-            : assigneeMismatch ? "ASSIGNEE_MISMATCH"
-            : "NO_TASK_AVAILABLE",
+          reason: "CLAIM_SCAN_BUDGET_EXHAUSTED",
+          nextCursor: {
+            version: 1,
+            executorId: workerId,
+            snapshotSequence,
+            createdAt: last.created_at,
+            taskId: last.task_id,
+          },
+          budgetExhausted: true,
+          scanExhausted: false,
+          candidatesExamined,
+          candidateRowsRead: candidateRows.length,
         };
       }
 
-      const taskProjection = taskFromRow(row);
-      const assignedAgentId = taskProjection.executorId ?? taskProjection.assignedAgentId;
-      if (typeof assignedAgentId !== "string" || assignedAgentId !== workerId) {
-        return { claimed: false, reason: "ASSIGNEE_MISMATCH" };
+      const newCandidateAfterSnapshot = Boolean(sql.exec(
+        "SELECT 1 FROM orchestrator_claim_candidates WHERE executor_id = ? AND candidate_seq > ? LIMIT 1",
+        workerId, snapshotSequence,
+      ).toArray()[0]);
+      if (newCandidateAfterSnapshot || !fallback.complete) {
+        return {
+          claimed: false,
+          reason: "CLAIM_SCAN_SNAPSHOT_EXHAUSTED",
+          nextCursor: null,
+          restartRequired: true,
+          budgetExhausted: false,
+          scanExhausted: true,
+          candidatesExamined,
+          candidateRowsRead: candidateRows.length,
+        };
       }
 
-      const lease = sql.exec(
-        "SELECT * FROM orchestrator_execution_leases WHERE task_id = ?",
-        row.task_id,
-      ).toArray()[0];
-      let generation = 1;
-      let reconciliationRequired = false;
-      if (lease) {
-        if (lease.worker_id !== null && lease.lease_until > now) {
-          return { claimed: false, reason: "NO_TASK_AVAILABLE" };
-        }
-        generation = lease.lease_generation + 1;
-        if (lease.worker_id !== null && lease.lease_until <= now) {
-          if (!hasReconciliationEvidence ||
-              verifiedReconciliationEvidence.taskId !== row.task_id ||
-              verifiedReconciliationEvidence.priorGeneration !== lease.lease_generation) {
-            return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
-          }
-          reconciliationRequired = true;
-        }
-      }
-
-      if (reconciliationRequired && sql.exec(
-        "SELECT 1 FROM orchestrator_consumed_reconciliation_evidence WHERE evidence_id = ?",
-        verifiedReconciliationEvidence.evidenceId,
-      ).toArray()[0]) {
-        return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
-      }
-      if (reconciliationRequired) {
-        sql.exec(
-          "INSERT INTO orchestrator_consumed_reconciliation_evidence (evidence_id, evidence_hash, task_id, prior_generation, issuer, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-          verifiedReconciliationEvidence.evidenceId,
-          reconciliationEvidenceHash,
-          verifiedReconciliationEvidence.taskId,
-          verifiedReconciliationEvidence.priorGeneration,
-          verifiedReconciliationEvidence.issuer,
-          verifiedReconciliationEvidence.issuedAt,
-          verifiedReconciliationEvidence.expiresAt,
-          now,
-        );
-      }
-      if (lease) {
-        sql.exec(
-          "UPDATE orchestrator_execution_leases SET worker_id = ?, lease_generation = ?, lease_until = ?, updated_at = ? WHERE task_id = ? AND lease_generation = ?",
-          workerId, generation, now + leaseMs, now, row.task_id, lease.lease_generation,
-        );
-      } else {
-        sql.exec(
-          "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
-          row.task_id, workerId, now + leaseMs, now,
-        );
-      }
-      syncClaimCandidateInTransaction(sql, row.task_id);
-      return {
-        claimed: true,
-        task: taskProjection,
+      const hasAssignedTask = Boolean(sql.exec(
+        "SELECT 1 FROM orchestrator_claim_candidates WHERE executor_id = ? LIMIT 1",
         workerId,
-        leaseGeneration: generation,
-        leaseUntil: now + leaseMs,
-        reconciliationRequired,
+      ).toArray()[0]);
+      let assigneeMismatch = false;
+      if (!hasAssignedTask) {
+        assigneeMismatch = Boolean(sql.exec(
+          "SELECT 1 FROM orchestrator_tasks WHERE state IN ('SCHEDULED','RUNNING','VERIFYING') LIMIT 1",
+        ).toArray()[0]);
+      }
+      return {
+        claimed: false,
+        reason: blockedByReconciliation ? "RECONCILIATION_REQUIRED"
+          : assigneeMismatch ? "ASSIGNEE_MISMATCH"
+          : "NO_TASK_AVAILABLE",
+        nextCursor: null,
+        budgetExhausted: false,
+        scanExhausted: true,
+        candidatesExamined,
+        candidateRowsRead: candidateRows.length,
       };
     });
   }

@@ -2,14 +2,6 @@ name: Cloud Engineering Connector CI
 
 on:
   workflow_call:
-  pull_request:
-    paths:
-      - "cloud-engineering-connector/**"
-      - ".github/workflows/orchestrator-github-intake.yml"
-      - "docs/evidence/orchestrator-p2-intake-contract.md"
-      - ".github/workflows/connector-ci.yml"
-      - ".github/workflows/connector-staging-release.yml"
-      - ".github/workflows/cloud-engineering-connector.yml"
   push:
     branches:
       - "feature/cloud-engineering-connector"

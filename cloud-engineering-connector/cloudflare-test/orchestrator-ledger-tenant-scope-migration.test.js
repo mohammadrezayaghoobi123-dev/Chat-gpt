@@ -268,7 +268,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
   });
 
   it("upgrades a populated schema-v9 ledger to v12 and drops only the task scope index", async () => {
-    const ledger = ledgerFor("tenant-scope-v9-to-v11-upgrade");
+    const ledger = ledgerFor("tenant-scope-v9-to-v12-upgrade");
     await runInDurableObject(ledger, async instance => {
       const sql = instance.ctx.storage.sql;
       const task = {
@@ -289,7 +289,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       );
 
       // Reconstruct the schema-v9 boundary: retain all v9 data and migrations,
-      // but remove only the two additive indexes and their migration records.
+      // but remove only the three additive indexes and their migration records.
       sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_scope_executor_created");
       sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_scope_state_executor_created");
       sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version IN (10, 11, 12)");

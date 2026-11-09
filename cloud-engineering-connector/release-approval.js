@@ -118,9 +118,20 @@ async function stagingChecksAreClean(fetchImpl, repoPath, candidateSha, token, m
   if (currentJobs.length !== 1) {
     throw new Error("Release blocked: current workflow job identity is missing, stale, or ambiguous.");
   }
-  const match = currentJobs[0].check_run_url.match(/\/check-runs\/([1-9][0-9]*)$/);
-  if (!match) throw new Error("Release blocked: current workflow job has no verifiable check-run identity.");
-  const ownCheckRunId = match[1];
+  let checkRunUrl;
+  try {
+    checkRunUrl = new URL(currentJobs[0].check_run_url);
+  } catch {
+    throw new Error("Release blocked: current workflow job has no verifiable check-run identity.");
+  }
+  const expectedCheckRunPath = "/repos/" + repoPath + "/check-runs/";
+  const checkRunMatch = checkRunUrl.pathname.startsWith(expectedCheckRunPath)
+    ? checkRunUrl.pathname.slice(expectedCheckRunPath.length).match(/^([1-9][0-9]*)$/)
+    : null;
+  if (checkRunUrl.origin !== API_ROOT || !checkRunMatch) {
+    throw new Error("Release blocked: current workflow job check-run URL does not match this repository.");
+  }
+  const ownCheckRunId = checkRunMatch[1];
 
   const checks = await getJson(
     fetchImpl,

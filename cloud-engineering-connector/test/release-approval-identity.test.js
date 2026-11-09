@@ -84,7 +84,7 @@ test("missing, duplicate, stale-attempt, or wrong-SHA current job identity fails
   for (const jobs of cases) {
     await assert.rejects(verifyReleaseApproval(input({
       fetchImpl: fixture({ jobs }),
-    })), /current workflow job identity|mergeable, current-base PR/);
+    })), /current workflow job identity|check-run URL|mergeable, current-base PR/);
   }
 });
 

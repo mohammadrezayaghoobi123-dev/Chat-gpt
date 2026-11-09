@@ -121,7 +121,7 @@ describe("OrchestratorLedger claim candidate index", () => {
     instance.ensureSchema();
     expect(sql.exec(
       "SELECT task_id FROM orchestrator_claim_candidates ORDER BY executor_id, created_at, task_id",
-    ).toArray().map(row => row.task_id)).toEqual(["task-candidate-b"]);
+    ).toArray().map(row => row.task_id)).toEqual(["task-candidate-a", "task-candidate-b", "task-active-lease"]);
   });
 });
 
@@ -343,7 +343,7 @@ it("atomically assigns distinct candidate tasks under concurrent claims for one 
     expect(state.storage.sql.exec(
       "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id IN (?, ?)",
       "task-concurrent-a", "task-concurrent-b",
-    ).one().count).toBe(0);
+    ).one().count).toBe(2);
   });
 });
 

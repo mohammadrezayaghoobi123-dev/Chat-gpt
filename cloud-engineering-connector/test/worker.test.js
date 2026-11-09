@@ -144,6 +144,14 @@ test("public read-only telemetry identifies the unauthenticated principal withou
   assert.deepEqual(event.principal, { type: "public_read_only", id: null });
 });
 
+test("readyz explicitly identifies model inference as client-side and does not require a Worker AI binding", async () => {
+  const response = await worker.fetch(req("/readyz"), env);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.model_inference, "external_client");
+  assert.equal(body.ai_binding, "not_required");
+});
+
 test("healthz is a liveness endpoint independent of credentials and Durable Object availability",async()=>{const r=await worker.fetch(req("/healthz"),{});assert.equal(r.status,200);const b=await r.json();assert.equal(b.status,"ok");assert.equal(b.service,"cloud-engineering-connector");assert.equal(b.laptop_dependency,false);assert.equal(b.execution,"cloudflare-workers");assert.equal(Object.hasOwn(b,"durable_objects"),false);assert.equal(Object.hasOwn(b,"mcp"),false)});
 test("readyz reports Durable Object schema readiness using the lightweight ping",async()=>{const r=await worker.fetch(req("/readyz"),env);assert.equal(r.status,200,JSON.stringify(await r.clone().json()));const b=await r.json();assert.equal(b.status,"ready");assert.equal(b.durable_objects,"ok");assert.equal(env.WRITE_CONTROL.__test.events.some(event=>event.type==="ping"),true);assert.equal(b.knowledge_store,"ok");assert.equal(knowledgeStore.calls.some(call=>call.method==="ping"),true);assert.equal(b.orchestrator_ledger,"ok");assert.equal(b.orchestrator_reconciliation,"ok");assert.equal(b.orchestrator_outbox_publisher,"ok");assert.equal(orchestratorLedger.calls.some(call=>call.method==="ping"),true)});
 test("readyz fails closed when OrchestratorLedger storage integrity or required tables are unhealthy",async()=>{

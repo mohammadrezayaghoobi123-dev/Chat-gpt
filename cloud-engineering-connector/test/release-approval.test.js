@@ -48,6 +48,12 @@ function fakeFetch(
   return async (url, options) => {
     const value = String(url);
     onRequest(value, options);
+    if (value.includes("/actions/runs/") && value.includes("/jobs")) {
+      return response({
+        total_count: 1,
+        jobs: [{ name: OWN_CHECK, check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/777" }],
+      });
+    }
     if (value.includes("/check-runs")) {
       return response({ total_count: gateChecks.totalCount ?? gateChecks.checkRuns.length, check_runs: gateChecks.checkRuns });
     }
@@ -68,6 +74,8 @@ const input = overrides => ({
   candidateSha: sha,
   releaseEnvironment: "staging",
   token: "test-token-not-a-real-secret",
+  currentRunId: "987654321",
+  currentRunAttempt: "1",
   ...overrides,
 });
 
@@ -275,7 +283,7 @@ test("release approval paginates associated PRs and all reviews before accepting
 });
 
 const OWN_CHECK = "Deploy exact candidate to Staging and verify";
-const ownRun = (overrides = {}) => ({ name: OWN_CHECK, status: "completed", conclusion: "failure", app: { slug: "github-actions" }, ...overrides });
+const ownRun = (overrides = {}) => ({ id: 777, name: OWN_CHECK, status: "completed", conclusion: "failure", app: { slug: "github-actions" }, ...overrides });
 const ciRun = (name, overrides = {}) => ({ name, status: "completed", conclusion: "success", app: { slug: "github-actions" }, ...overrides });
 const unstable = () => stagingPull({ mergeable: true, mergeable_state: "unstable" });
 const gate = (checkRuns, extra = {}) => fakeFetch([unstable()], [approval()], () => {}, undefined, { checkRuns, status: { state: "success", total_count: 0 }, ...extra });
@@ -352,4 +360,13 @@ test("a 'clean' PR needs no extra check lookups and keeps the 5-request contract
   await verifyReleaseApproval({ ...input({}), fetchImpl: fakeFetch([stagingPull()], [approval()], url => urls.push(url)) });
   assert.equal(urls.length, 5);
   assert.ok(urls.every(url => !url.includes("/check-runs") && !/\/status(\?|$)/.test(url)));
+});
+
+
+test("Staging ignores only the exact check-run ID belonging to this workflow run attempt", async () => {
+  const unrelatedSameName = ownRun({ id: 778, conclusion: "failure" });
+  await assert.rejects(
+    verifyReleaseApproval({ ...input({}), fetchImpl: gate([ownRun(), unrelatedSameName]) }),
+    /mergeable, current-base PR/,
+  );
 });

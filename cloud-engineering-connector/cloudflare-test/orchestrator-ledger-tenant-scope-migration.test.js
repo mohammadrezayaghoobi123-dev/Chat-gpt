@@ -417,6 +417,70 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
 
 
 
+
+  it("rolls back v8 task and child-scope backfills when its migration marker fails", async () => {
+    const ledger = ledgerFor("tenant-scope-v8-rollback-on-marker-failure");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "v8-rollback-task",
+        tenantId: "tenant-rollback",
+        projectId: "project-rollback",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 900,
+        updatedAt: 901,
+      };
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 8");
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, "v8-rollback-idem", "9".repeat(64), task.state,
+        task.version, JSON.stringify(task), task.createdAt, task.updatedAt,
+        "__legacy__", "__legacy__",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, "worker-rollback", 1, 1200, 902, "__legacy__", "__legacy__",
+      );
+      sql.exec(`
+        CREATE TRIGGER reject_v8_migration_marker
+        BEFORE INSERT ON orchestrator_schema_migrations
+        WHEN NEW.version = 8
+        BEGIN
+          SELECT RAISE(ABORT, 'forced v8 marker failure');
+        END
+      `);
+
+      expect(() => instance.ensureSchema()).toThrow(/forced v8 marker failure/);
+      expect(sql.exec(
+        "SELECT tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0]).toEqual({ tenant_id: "__legacy__", project_id: "__legacy__" });
+      expect(sql.exec(
+        "SELECT tenant_id, project_id FROM orchestrator_execution_leases WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0]).toEqual({ tenant_id: "__legacy__", project_id: "__legacy__" });
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 8",
+      ).toArray()[0]).toBeUndefined();
+
+      sql.exec("DROP TRIGGER reject_v8_migration_marker");
+      instance.ensureSchema();
+      expect(sql.exec(
+        "SELECT tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0]).toEqual({ tenant_id: task.tenantId, project_id: task.projectId });
+      expect(sql.exec(
+        "SELECT tenant_id, project_id FROM orchestrator_execution_leases WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0]).toEqual({ tenant_id: task.tenantId, project_id: task.projectId });
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 8",
+      ).toArray()[0]?.version).toBe(8);
+      expect(instance.ping().schemaVersion).toBe(12);
+    });
+  });
+
   it("upgrades a populated schema-v8 ledger through v12 in order", async () => {
     const ledger = ledgerFor("tenant-scope-v8-to-v12-upgrade");
     await runInDurableObject(ledger, async instance => {

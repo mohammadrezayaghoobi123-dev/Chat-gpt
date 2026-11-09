@@ -1,6 +1,7 @@
 name: Master Brain MCP CI
 
 on:
+  workflow_call:
   push:
     branches:
       - feature/master-brain-cloud-mcp

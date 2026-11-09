@@ -3,6 +3,7 @@ name: Static checks
 # Blocking quality gate: Ruff E9/F and non-strict Mypy must remain clean.
 # The previous baseline debt was remediated and verified at zero findings.
 on:
+  workflow_call:
   push:
     branches:
       - master-brain/integrated

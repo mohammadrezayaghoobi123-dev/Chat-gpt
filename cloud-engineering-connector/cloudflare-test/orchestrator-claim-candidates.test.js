@@ -301,6 +301,46 @@ it("consumes a valid worker assertion before rejecting an explicit claim with a 
   expect(replay).toEqual({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
 });
 
+it("repairs a malformed derived candidate sequence before scheduler claim", async () => {
+  const ledger = ledgerFor("ledger-candidate-sequence-repair");
+  await createTask(ledger, {
+    task: task("task-candidate-sequence-repair"),
+    idempotencyKey: "task-candidate-sequence-repair",
+    inputHash: "8".repeat(64),
+    now,
+  });
+  const originalSequence = await runInDurableObject(ledger, async (_instance, state) => {
+    const sql = state.storage.sql;
+    const sequence = sql.exec(
+      "SELECT candidate_seq FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-sequence-repair",
+    ).one().candidate_seq;
+    sql.exec(
+      "UPDATE orchestrator_claim_candidates SET candidate_seq = -1 WHERE task_id = ?",
+      "task-candidate-sequence-repair",
+    );
+    return sequence;
+  });
+
+  const claimed = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(claimed).toMatchObject({
+    claimed: true,
+    task: { taskId: "task-candidate-sequence-repair" },
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    const repairedSequence = state.storage.sql.exec(
+      "SELECT candidate_seq FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-sequence-repair",
+    ).one().candidate_seq;
+    expect(repairedSequence).toBeGreaterThan(originalSequence);
+  });
+});
+
 it("uses the executor/order index for the exact bounded cursor query without a temporary sort", async () => {
   const ledger = ledgerFor("ledger-candidate-query-plan");
   await runInDurableObject(ledger, async (_instance, state) => {

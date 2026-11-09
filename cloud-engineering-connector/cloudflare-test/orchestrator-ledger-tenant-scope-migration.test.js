@@ -76,6 +76,9 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         task.updatedAt,
       );
 
+      // The test inserts a v7-shaped row after the DO's initial boot; rewind
+      // only v8's marker so ensureSchema exercises the legacy v7 -> v8 path.
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 8");
       instance.ensureSchema();
       const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", task.taskId).toArray()[0];
       expect(row).toMatchObject({
@@ -177,6 +180,9 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         "audit-backfill", task.taskId, "system", "system", "TASK_CREATED", JSON.stringify({ taskId: task.taskId }), "d".repeat(64), 204,
       );
 
+      // The test inserts v7-shaped rows after initial boot; rewind v8 to
+      // exercise its child-row backfill while leaving later migrations isolated.
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 8");
       instance.ensureSchema();
       for (const table of [
         "orchestrator_processed_messages",

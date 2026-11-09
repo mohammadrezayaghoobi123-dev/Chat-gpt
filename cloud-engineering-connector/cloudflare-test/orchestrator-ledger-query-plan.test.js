@@ -46,4 +46,107 @@ describe("OrchestratorLedger tenant/project query plans", () => {
       expect(details).toContain("orchestrator_claim_candidates_by_scope_executor_order");
     });
   });
+  it("uses the scope/executor index for both initial and cursor-based bounded legacy backfill batches", async () => {
+    const ledger = ledgerFor("claim-candidate-backfill-scope-query-plan");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const initialBatchPlan = sql.exec(
+        `EXPLAIN QUERY PLAN
+         SELECT task_id, created_at
+         FROM orchestrator_tasks
+         WHERE tenant_id = ?
+           AND project_id = ?
+           AND COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ?
+         ORDER BY created_at, task_id
+         LIMIT ?`,
+        "tenant-alpha", "project-red", "worker-a", 32,
+      ).toArray();
+      const cursorBatchPlan = sql.exec(
+        `EXPLAIN QUERY PLAN
+         SELECT task_id, created_at
+         FROM orchestrator_tasks
+         WHERE tenant_id = ?
+           AND project_id = ?
+           AND COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ?
+           AND (created_at, task_id) > (?, ?)
+         ORDER BY created_at, task_id
+         LIMIT ?`,
+        "tenant-alpha", "project-red", "worker-a", 0, "", 32,
+      ).toArray();
+
+      for (const plan of [initialBatchPlan, cursorBatchPlan]) {
+        const details = plan.map(row => row.detail).join("\\n");
+        expect(details).toContain("orchestrator_tasks_by_scope_executor_created");
+        expect(details).toMatch(/tenant_id=\?.*project_id=\?.*<expr>=\?/);
+        expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+      }
+    });
+  });
+
+  it("uses a scope/state/executor-leading index for assigned-task existence probes", async () => {
+    const ledger = ledgerFor("claim-assigned-task-existence-query-plan");
+    await runInDurableObject(ledger, async instance => {
+      const plan = instance.ctx.storage.sql.exec(
+        `EXPLAIN QUERY PLAN
+         SELECT 1
+         FROM orchestrator_tasks
+         WHERE tenant_id = ?
+           AND project_id = ?
+           AND state IN ('SCHEDULED','RUNNING','VERIFYING')
+           AND COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ?
+         LIMIT 1`,
+        "tenant-alpha", "project-red", "worker-a",
+      ).toArray();
+      const details = plan.map(row => row.detail).join("\\n");
+      expect(details).toContain("orchestrator_tasks_by_scope_state_executor_created");
+      expect(details).toMatch(/tenant_id=\?.*project_id=\?.*state=\?.*<expr>=\?/);
+    });
+  });
+
+  it("uses the scope/state prefix for assignee-mismatch existence probes", async () => {
+    const ledger = ledgerFor("claim-assignee-mismatch-existence-query-plan");
+    await runInDurableObject(ledger, async instance => {
+      const plan = instance.ctx.storage.sql.exec(
+        `EXPLAIN QUERY PLAN
+         SELECT 1
+         FROM orchestrator_tasks
+         WHERE tenant_id = ?
+           AND project_id = ?
+           AND state IN ('SCHEDULED','RUNNING','VERIFYING')
+         LIMIT 1`,
+        "tenant-alpha", "project-red",
+      ).toArray();
+      const details = plan.map(row => row.detail).join("\\n");
+      expect(details).toContain("orchestrator_tasks_by_scope_state_executor_created");
+      expect(details).toMatch(/tenant_id=\?.*project_id=\?.*state=\?/);
+    });
+  });
+
+  it("uses a scope/state/executor-leading index for expired-lease reconciliation probes", async () => {
+    const ledger = ledgerFor("claim-reconciliation-existence-query-plan");
+    await runInDurableObject(ledger, async instance => {
+      const plan = instance.ctx.storage.sql.exec(
+        `EXPLAIN QUERY PLAN
+         SELECT 1
+         FROM orchestrator_tasks AS task
+         INNER JOIN orchestrator_execution_leases AS lease ON lease.task_id = task.task_id
+         WHERE task.tenant_id = ?
+           AND task.project_id = ?
+           AND lease.tenant_id = ?
+           AND lease.project_id = ?
+           AND task.state IN ('SCHEDULED','RUNNING','VERIFYING')
+           AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) = ?
+           AND lease.worker_id IS NOT NULL
+           AND lease.lease_until <= ?
+           AND (? = 0 OR lease.task_id != ? OR lease.lease_generation != ?)
+         LIMIT 1`,
+        "tenant-alpha", "project-red", "tenant-alpha", "project-red",
+        "worker-a", 1000, 0, "", -1,
+      ).toArray();
+      const details = plan.map(row => row.detail).join("\\n");
+      expect(details).toContain("orchestrator_tasks_by_scope_state_executor_created");
+      expect(details).toMatch(/tenant_id=\?.*project_id=\?.*state=\?.*<expr>=\?/);
+    });
+  });
+
 });

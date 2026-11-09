@@ -496,6 +496,11 @@ export class OrchestratorLedger extends DurableObject {
           description TEXT NOT NULL
         )
       `);
+      const applied = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 8",
+      ).toArray()[0];
+      if (applied) return;
+
       const scopedTables = [
         "orchestrator_tasks",
         "orchestrator_processed_messages",
@@ -621,6 +626,57 @@ export class OrchestratorLedger extends DurableObject {
         Date.now(),
         "Namespace task and outbox idempotency keys by injective tenant/project tuple; preserve existing identifiers and rows",
       );
+    }); 
+
+    // Schema v10: scope the bounded legacy-task discovery scan before executor
+    // ordering. The v9 executor-only index can walk other tenants' rows before
+    // satisfying the LIMIT when worker identifiers are shared across scopes.
+    this.ctx.storage.transactionSync(() => {
+      const applied = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 10",
+      ).toArray()[0];
+      if (applied) return;
+      sql.exec(
+        "CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_scope_executor_created ON orchestrator_tasks(tenant_id, project_id, COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')), created_at, task_id)",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (10, ?, ?)",
+        Date.now(),
+        "Index bounded candidate backfill by tenant, project, executor and stable task order",
+      );
+    });
+
+    // Schema v11: make claim failure diagnostics scope/state selective.
+    // The v10 scope/executor index leaves state as a residual predicate for
+    // existence probes; this index covers tenant, project, state and executor.
+    this.ctx.storage.transactionSync(() => {
+      const applied = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 11",
+      ).toArray()[0];
+      if (applied) return;
+      sql.exec(
+        "CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_scope_state_executor_created ON orchestrator_tasks(tenant_id, project_id, state, COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')), created_at, task_id)",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (11, ?, ?)",
+        Date.now(),
+        "Scope claim diagnostic existence probes by tenant, project, state and executor",
+      );
+    });
+
+    // Schema v12: remove the superseded task-only tenant/project index.
+    // The v10/v11 indexes retain this prefix; other tables keep their v8 indexes.
+    this.ctx.storage.transactionSync(() => {
+      const applied = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 12",
+      ).toArray()[0];
+      if (applied) return;
+      sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_tenant_project");
+      sql.exec(
+        "INSERT INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (12, ?, ?)",
+        Date.now(),
+        "Drop superseded tenant/project index from orchestrator_tasks; retain scoped indexes on other ledger tables",
+      );
     });
 
   }
@@ -639,7 +695,7 @@ export class OrchestratorLedger extends DurableObject {
     ].every(name => tableNames.has(name));
     return {
       ok: Number(result.ok) === 1 && requiredTablesOk,
-      schemaVersion: 9,
+      schemaVersion: 12,
       storage: {
         requiredTables: requiredTablesOk,
       },

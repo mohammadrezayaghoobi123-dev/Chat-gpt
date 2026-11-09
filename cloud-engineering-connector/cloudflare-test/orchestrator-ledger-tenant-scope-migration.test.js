@@ -34,7 +34,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         expect(columns.has("tenant_id"), `${table} must have tenant_id`).toBe(true);
         expect(columns.has("project_id"), `${table} must have project_id`).toBe(true);
       }
-      expect(instance.ping().schemaVersion).toBe(9);
+      expect(instance.ping().schemaVersion).toBe(12);
     });
   });
 
@@ -76,6 +76,9 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         task.updatedAt,
       );
 
+      // The test inserts a v7-shaped row after the DO's initial boot; rewind
+      // only v8's marker so ensureSchema exercises the legacy v7 -> v8 path.
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 8");
       instance.ensureSchema();
       const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", task.taskId).toArray()[0];
       expect(row).toMatchObject({
@@ -177,6 +180,9 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         "audit-backfill", task.taskId, "system", "system", "TASK_CREATED", JSON.stringify({ taskId: task.taskId }), "d".repeat(64), 204,
       );
 
+      // The test inserts v7-shaped rows after initial boot; rewind v8 to
+      // exercise its child-row backfill while leaving later migrations isolated.
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 8");
       instance.ensureSchema();
       for (const table of [
         "orchestrator_processed_messages",
@@ -231,6 +237,56 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
     });
   });
 
+
+  it("does not rerun the v8 task-scope backfill after its migration is recorded", async () => {
+    const ledger = ledgerFor("tenant-scope-v8-no-repeat-backfill");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "v8-repeat-task",
+        tenantId: "tenant-repeat",
+        projectId: "project-repeat",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 400,
+        updatedAt: 400,
+      };
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId,
+        "idem-v8-repeat",
+        "f".repeat(64),
+        task.state,
+        task.version,
+        JSON.stringify(task),
+        task.createdAt,
+        task.updatedAt,
+        task.tenantId,
+        task.projectId,
+      );
+      sql.exec("CREATE TABLE v8_migration_update_probe (updates INTEGER NOT NULL)");
+      sql.exec("INSERT INTO v8_migration_update_probe (updates) VALUES (0)");
+      sql.exec(`
+        CREATE TRIGGER count_v8_task_backfill_updates
+        BEFORE UPDATE ON orchestrator_tasks
+        BEGIN
+          UPDATE v8_migration_update_probe SET updates = updates + 1;
+        END
+      `);
+
+      instance.ensureSchema();
+
+      expect(sql.exec("SELECT updates FROM v8_migration_update_probe").toArray()[0].updates).toBe(0);
+      expect(sql.exec(
+        "SELECT tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0]).toEqual({
+        tenant_id: "tenant-repeat",
+        project_id: "project-repeat",
+      });
+    });
+  });
+
   it("is idempotent and does not rewrite existing scoped records on repeated initialization", async () => {
     const ledger = ledgerFor("tenant-scope-migration-idempotent");
     await runInDurableObject(ledger, async instance => {
@@ -241,6 +297,24 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         "SELECT version FROM orchestrator_schema_migrations WHERE version = 8",
       ).toArray()[0];
       expect(migration?.version).toBe(8);
+      const scopedBackfillIndexMigration = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 10",
+      ).toArray()[0];
+      expect(scopedBackfillIndexMigration?.version).toBe(10);
+      const index = sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_scope_executor_created",
+      ).toArray()[0];
+      expect(index?.name).toBe("orchestrator_tasks_by_scope_executor_created");
+      const claimDiagnosticIndexMigration = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 11",
+      ).toArray()[0];
+      expect(claimDiagnosticIndexMigration?.version).toBe(11);
+      const diagnosticIndex = sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_scope_state_executor_created",
+      ).toArray()[0];
+      expect(diagnosticIndex?.name).toBe("orchestrator_tasks_by_scope_state_executor_created");
       const row = sql.exec(
         "SELECT tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
         "not-present",
@@ -248,4 +322,308 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       expect(row).toBeUndefined();
     });
   });
+
+  it("upgrades a populated schema-v9 ledger to v12 and drops only the task scope index", async () => {
+    const ledger = ledgerFor("tenant-scope-v9-to-v12-upgrade");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "v9-upgrade-task",
+        tenantId: "tenant-upgrade",
+        projectId: "project-upgrade",
+        executorId: "worker-upgrade",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 700,
+        updatedAt: 701,
+      };
+      const taskJson = JSON.stringify(task);
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, "v9-upgrade-idempotency", "f".repeat(64), task.state,
+        task.version, taskJson, task.createdAt, task.updatedAt, task.tenantId, task.projectId,
+      );
+
+      // Reconstruct the schema-v9 boundary: retain all v9 data and migrations,
+      // but remove only the three additive indexes and their migration records.
+      sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_scope_executor_created");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_scope_state_executor_created");
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version IN (10, 11, 12)");
+      // Reconstruct the v9 state even though the test harness initialized the
+      // current schema before entering this callback.
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project ON orchestrator_tasks(tenant_id, project_id)");
+      expect(sql.exec("SELECT version FROM orchestrator_schema_migrations WHERE version = 9").toArray()[0]?.version).toBe(9);
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_tenant_project",
+      ).toArray()[0]?.name).toBe("orchestrator_tasks_by_tenant_project");
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_outbox_events_by_tenant_project",
+      ).toArray()[0]?.name).toBe("orchestrator_outbox_events_by_tenant_project");
+
+      instance.ensureSchema();
+
+      const row = sql.exec(
+        "SELECT task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0];
+      expect(row).toEqual({
+        task_id: task.taskId,
+        idempotency_key: "v9-upgrade-idempotency",
+        input_hash: "f".repeat(64),
+        state: task.state,
+        version: task.version,
+        task_json: taskJson,
+        created_at: task.createdAt,
+        updated_at: task.updatedAt,
+        tenant_id: task.tenantId,
+        project_id: task.projectId,
+      });
+      for (const indexName of [
+        "orchestrator_tasks_by_scope_executor_created",
+        "orchestrator_tasks_by_scope_state_executor_created",
+        "orchestrator_outbox_events_by_tenant_project",
+      ]) {
+        const index = sql.exec(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+          indexName,
+        ).toArray()[0];
+        expect(index?.name).toBe(indexName);
+      }
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_tenant_project",
+      ).toArray()[0]).toBeUndefined();
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 12",
+      ).toArray()[0]?.version).toBe(12);
+      expect(instance.ping().schemaVersion).toBe(12);
+
+      const appliedAtBeforeRetry = sql.exec(
+        "SELECT version, applied_at FROM orchestrator_schema_migrations WHERE version IN (10, 11, 12) ORDER BY version",
+      ).toArray();
+      instance.ensureSchema();
+      const appliedAtAfterRetry = sql.exec(
+        "SELECT version, applied_at FROM orchestrator_schema_migrations WHERE version IN (10, 11, 12) ORDER BY version",
+      ).toArray();
+      expect(appliedAtAfterRetry).toEqual(appliedAtBeforeRetry);
+      expect(sql.exec(
+        "SELECT task_json FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0]?.task_json).toBe(taskJson);
+    });
+  });
+
+
+
+
+  it("rolls back v8 task and child-scope backfills when its migration marker fails", async () => {
+    const ledger = ledgerFor("tenant-scope-v8-rollback-on-marker-failure");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "v8-rollback-task",
+        tenantId: "tenant-rollback",
+        projectId: "project-rollback",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 900,
+        updatedAt: 901,
+      };
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 8");
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, "v8-rollback-idem", "9".repeat(64), task.state,
+        task.version, JSON.stringify(task), task.createdAt, task.updatedAt,
+        "__legacy__", "__legacy__",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, "worker-rollback", 1, 1200, 902, "__legacy__", "__legacy__",
+      );
+      sql.exec(`
+        CREATE TRIGGER reject_v8_migration_marker
+        BEFORE INSERT ON orchestrator_schema_migrations
+        WHEN NEW.version = 8
+        BEGIN
+          SELECT RAISE(ABORT, 'forced v8 marker failure');
+        END
+      `);
+
+      expect(() => instance.ensureSchema()).toThrow(/forced v8 marker failure/);
+      expect(sql.exec(
+        "SELECT tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0]).toEqual({ tenant_id: "__legacy__", project_id: "__legacy__" });
+      expect(sql.exec(
+        "SELECT tenant_id, project_id FROM orchestrator_execution_leases WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0]).toEqual({ tenant_id: "__legacy__", project_id: "__legacy__" });
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 8",
+      ).toArray()[0]).toBeUndefined();
+
+      sql.exec("DROP TRIGGER reject_v8_migration_marker");
+      instance.ensureSchema();
+      expect(sql.exec(
+        "SELECT tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0]).toEqual({ tenant_id: task.tenantId, project_id: task.projectId });
+      expect(sql.exec(
+        "SELECT tenant_id, project_id FROM orchestrator_execution_leases WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0]).toEqual({ tenant_id: task.tenantId, project_id: task.projectId });
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 8",
+      ).toArray()[0]?.version).toBe(8);
+      expect(instance.ping().schemaVersion).toBe(12);
+    });
+  });
+
+  it("upgrades a populated schema-v8 ledger through v12 in order", async () => {
+    const ledger = ledgerFor("tenant-scope-v8-to-v12-upgrade");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "v8-upgrade-task",
+        tenantId: "tenant-v8",
+        projectId: "project-v8",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 800,
+        updatedAt: 801,
+      };
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, "v8-idempotency-key", "8".repeat(64), task.state,
+        task.version, JSON.stringify(task), task.createdAt, task.updatedAt,
+        task.tenantId, task.projectId,
+      );
+
+      // Reconstruct v8: preserve v8 scope and task data, remove all later indexes/markers.
+      sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_tenant_project_idempotency");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_outbox_by_tenant_project_idempotency");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_claim_candidates_by_scope_executor_order");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_scope_executor_created");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_scope_state_executor_created");
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version IN (9, 10, 11, 12)");
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project ON orchestrator_tasks(tenant_id, project_id)");
+      expect(sql.exec("SELECT version FROM orchestrator_schema_migrations WHERE version = 8").toArray()[0]?.version).toBe(8);
+
+      instance.ensureSchema();
+
+      const row = sql.exec(
+        "SELECT task_id, idempotency_key, task_json, tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0];
+      expect(row.task_id).toBe(task.taskId);
+      expect(row.idempotency_key).not.toBe("v8-idempotency-key");
+      expect(row.task_json).toBe(JSON.stringify(task));
+      expect(row.tenant_id).toBe(task.tenantId);
+      expect(row.project_id).toBe(task.projectId);
+      for (const version of [8, 9, 10, 11, 12]) {
+        expect(sql.exec(
+          "SELECT version FROM orchestrator_schema_migrations WHERE version = ?",
+          version,
+        ).toArray()[0]?.version).toBe(version);
+      }
+      expect(instance.ping().schemaVersion).toBe(12);
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_tenant_project",
+      ).toArray()[0]).toBeUndefined();
+    });
+  });
+
+  it("upgrades a schema-v10 ledger through v12 without replaying v10", async () => {
+    const ledger = ledgerFor("tenant-scope-v10-to-v12-upgrade");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_scope_state_executor_created");
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version IN (11, 12)");
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project ON orchestrator_tasks(tenant_id, project_id)");
+      const v10AppliedAt = sql.exec(
+        "SELECT applied_at FROM orchestrator_schema_migrations WHERE version = 10",
+      ).toArray()[0]?.applied_at;
+
+      instance.ensureSchema();
+
+      expect(sql.exec("SELECT applied_at FROM orchestrator_schema_migrations WHERE version = 10").toArray()[0]?.applied_at).toBe(v10AppliedAt);
+      expect(sql.exec("SELECT version FROM orchestrator_schema_migrations WHERE version = 11").toArray()[0]?.version).toBe(11);
+      expect(sql.exec("SELECT version FROM orchestrator_schema_migrations WHERE version = 12").toArray()[0]?.version).toBe(12);
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_scope_state_executor_created",
+      ).toArray()[0]?.name).toBe("orchestrator_tasks_by_scope_state_executor_created");
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_tenant_project",
+      ).toArray()[0]).toBeUndefined();
+      expect(instance.ping().schemaVersion).toBe(12);
+    });
+  });
+
+  it("upgrades a schema-v11 ledger through v12 without replaying v10 or v11", async () => {
+    const ledger = ledgerFor("tenant-scope-v11-to-v12-upgrade");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 12");
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project ON orchestrator_tasks(tenant_id, project_id)");
+      const appliedBefore = sql.exec(
+        "SELECT version, applied_at FROM orchestrator_schema_migrations WHERE version IN (10, 11) ORDER BY version",
+      ).toArray();
+
+      instance.ensureSchema();
+
+      expect(sql.exec(
+        "SELECT version, applied_at FROM orchestrator_schema_migrations WHERE version IN (10, 11) ORDER BY version",
+      ).toArray()).toEqual(appliedBefore);
+      expect(sql.exec("SELECT version FROM orchestrator_schema_migrations WHERE version = 12").toArray()[0]?.version).toBe(12);
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_tenant_project",
+      ).toArray()[0]).toBeUndefined();
+      expect(instance.ping().schemaVersion).toBe(12);
+    });
+  });
+
+  it("rolls back the v12 index drop when its migration marker cannot be recorded", async () => {
+    const ledger = ledgerFor("tenant-scope-v12-rollback-on-marker-failure");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project ON orchestrator_tasks(tenant_id, project_id)");
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 12");
+      sql.exec(`
+        CREATE TRIGGER reject_v12_migration_marker
+        BEFORE INSERT ON orchestrator_schema_migrations
+        WHEN NEW.version = 12
+        BEGIN
+          SELECT RAISE(ABORT, 'forced v12 marker failure');
+        END
+      `);
+
+      expect(() => instance.ensureSchema()).toThrow(/forced v12 marker failure/);
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_tenant_project",
+      ).toArray()[0]?.name).toBe("orchestrator_tasks_by_tenant_project");
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 12",
+      ).toArray()[0]).toBeUndefined();
+
+      sql.exec("DROP TRIGGER reject_v12_migration_marker");
+      instance.ensureSchema();
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        "orchestrator_tasks_by_tenant_project",
+      ).toArray()[0]).toBeUndefined();
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 12",
+      ).toArray()[0]?.version).toBe(12);
+      expect(instance.ping().schemaVersion).toBe(12);
+    });
+  });
+
+
 });

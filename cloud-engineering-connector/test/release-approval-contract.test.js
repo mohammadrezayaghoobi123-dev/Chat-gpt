@@ -794,17 +794,17 @@ for (const workflow of workflows) {
     const next = source.indexOf("\\n      - name: ", start + 1);
     const block = source.slice(start, next < 0 ? source.length : next);
     const condition = block.match(/^        if: (.+)$/m)?.[1] ?? "";
-    assert.match(condition, /failure\\(\\)/, "rollback must run on workflow failure");
+    assert.match(condition, /failure\(\)/, "rollback must run on workflow failure");
     assert.match(
       condition,
-      /steps\\.deploy\\.outcome\\s*!=\\s*'skipped'/,
+      /steps\.deploy\.outcome\s*!=\s*'skipped'/,
       "rollback must also run when deployment was attempted but its outcome is failure/ambiguous",
     );
     assert.match(
       condition,
-      /steps\\.preflight\\.outputs\\.previous_version_id\\s*!=\\s*''/,
+      /steps\.preflight\.outputs\.previous_version_id\s*!=\s*''/,
       "rollback must require the immutable previous version captured before deployment",
     );
-    assert.doesNotMatch(condition, /steps\\.deploy\\.outcome\\s*==\\s*'success'/);
+    assert.doesNotMatch(condition, /steps\.deploy\.outcome\s*==\s*'success'/);
   });
 }

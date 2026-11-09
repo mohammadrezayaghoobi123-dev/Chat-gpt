@@ -92,11 +92,11 @@ function validateClaimCursorPayload(cursor, expected) {
   if (keys.length !== CLAIM_CURSOR_KEYS.length ||
       keys.some((key, index) => key !== CLAIM_CURSOR_KEYS[index])) throw reject();
   if (cursor.version !== 1 || cursor.executorId !== expected.executorId ||
-      !ID.test(cursor.executorId) ||
+      typeof cursor.executorId !== "string" || !ID.test(cursor.executorId) ||
       !Number.isSafeInteger(cursor.snapshotSequence) || cursor.snapshotSequence < 0 ||
       !Number.isSafeInteger(cursor.createdAt) || cursor.createdAt < 1 ||
       typeof cursor.taskId !== "string" || !ID.test(cursor.taskId) ||
-      !KID.test(cursor.kid) ||
+      typeof cursor.kid !== "string" || !KID.test(cursor.kid) ||
       !Number.isSafeInteger(cursor.issuedAt) ||
       !Number.isSafeInteger(cursor.expiresAt) ||
       cursor.expiresAt <= cursor.issuedAt ||
@@ -109,8 +109,8 @@ function validateClaimCursorPayload(cursor, expected) {
 export async function signClaimCursor(keySet, kid, cursor, nowMs) {
   try {
     if (!cursor || typeof cursor !== "object" || Array.isArray(cursor) ||
-        !KID.test(kid) || !Number.isSafeInteger(nowMs) || nowMs < 1 ||
-        cursor.version !== 1 || !ID.test(cursor.executorId) ||
+        typeof kid !== "string" || !KID.test(kid) || !Number.isSafeInteger(nowMs) || nowMs < 1 ||
+        cursor.version !== 1 || typeof cursor.executorId !== "string" || !ID.test(cursor.executorId) ||
         !Number.isSafeInteger(cursor.snapshotSequence) || cursor.snapshotSequence < 0 ||
         !Number.isSafeInteger(cursor.createdAt) || cursor.createdAt < 1 ||
         typeof cursor.taskId !== "string" || !ID.test(cursor.taskId)) throw reject();
@@ -134,7 +134,7 @@ export async function signClaimCursor(keySet, kid, cursor, nowMs) {
 
 export async function verifyClaimCursor(keySet, cursor, expected) {
   try {
-    if (!expected || !ID.test(expected.executorId) ||
+    if (!expected || typeof expected.executorId !== "string" || !ID.test(expected.executorId) ||
         !Number.isSafeInteger(expected.nowMs)) throw reject();
     const unsigned = { ...cursor };
     if (!cursor || typeof cursor !== "object" || Array.isArray(cursor) ||

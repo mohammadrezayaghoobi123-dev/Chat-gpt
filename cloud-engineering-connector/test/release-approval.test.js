@@ -48,7 +48,18 @@ function fakeFetch(
   return async (url, options) => {
     const value = String(url);
     onRequest(value, options);
-    if (value.includes("/actions/runs/12345/jobs")) {\n      return response({ total_count: 1, jobs: [{ name: OWN_CHECK, run_attempt: 2, head_sha: sha, check_run_url: "https://api.github.com/repos/example/repo/check-runs/" + (gateChecks.ownCheckRunId ?? 42) }] });\n    }\n    if (value.includes("/check-runs")) {
+    if (value.includes("/actions/runs/12345/jobs")) {
+      return response({
+        total_count: 1,
+        jobs: [{
+          name: OWN_CHECK,
+          run_attempt: 2,
+          head_sha: sha,
+          check_run_url: "https://api.github.com/repos/example/repo/check-runs/" + (gateChecks.ownCheckRunId ?? 42),
+        }],
+      });
+    }
+    if (value.includes("/check-runs")) {
       return response({ total_count: gateChecks.totalCount ?? gateChecks.checkRuns.length, check_runs: gateChecks.checkRuns });
     }
     if (/\/commits\/[a-f0-9]{40}\/status/.test(value)) return response(gateChecks.status);

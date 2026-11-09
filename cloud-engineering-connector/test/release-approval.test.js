@@ -48,6 +48,18 @@ function fakeFetch(
   return async (url, options) => {
     const value = String(url);
     onRequest(value, options);
+    if (value.includes("/actions/runs/12345/jobs")) {
+      return response({
+        total_count: 1,
+        jobs: [{
+          name: OWN_CHECK,
+          run_id: 12345,
+          run_attempt: 2,
+          head_sha: sha,
+          check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/" + (gateChecks.ownCheckRunId ?? 42),
+        }],
+      });
+    }
     if (value.includes("/check-runs")) {
       return response({ total_count: gateChecks.totalCount ?? gateChecks.checkRuns.length, check_runs: gateChecks.checkRuns });
     }
@@ -68,6 +80,9 @@ const input = overrides => ({
   candidateSha: sha,
   releaseEnvironment: "staging",
   token: "test-token-not-a-real-secret",
+  workflowRunId: "12345",
+  workflowRunAttempt: "2",
+  workflowJob: "release-staging",
   ...overrides,
 });
 
@@ -275,7 +290,7 @@ test("release approval paginates associated PRs and all reviews before accepting
 });
 
 const OWN_CHECK = "Deploy exact candidate to Staging and verify";
-const ownRun = (overrides = {}) => ({ name: OWN_CHECK, status: "completed", conclusion: "failure", app: { slug: "github-actions" }, ...overrides });
+const ownRun = (overrides = {}) => ({ id: 42, name: OWN_CHECK, status: "completed", conclusion: "failure", app: { slug: "github-actions" }, ...overrides });
 const ciRun = (name, overrides = {}) => ({ name, status: "completed", conclusion: "success", app: { slug: "github-actions" }, ...overrides });
 const unstable = () => stagingPull({ mergeable: true, mergeable_state: "unstable" });
 const gate = (checkRuns, extra = {}) => fakeFetch([unstable()], [approval()], () => {}, undefined, { checkRuns, status: { state: "success", total_count: 0 }, ...extra });

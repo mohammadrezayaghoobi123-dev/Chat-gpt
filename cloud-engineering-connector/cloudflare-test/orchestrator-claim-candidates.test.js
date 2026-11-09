@@ -404,6 +404,14 @@ it("uses the executor/order index for the exact bounded cursor query without a t
     const details = plan.map(row => row.detail).join(" ");
     expect(details).toContain("orchestrator_claim_candidates_by_executor_order");
     expect(details).not.toMatch(/USE TEMP B-TREE/i);
+
+    const snapshotPlan = state.storage.sql.exec(
+      "EXPLAIN QUERY PLAN SELECT 1 FROM orchestrator_claim_candidates WHERE executor_id = ? AND candidate_seq > ? LIMIT 1",
+      "agent:worker-1", 100,
+    ).toArray();
+    expect(snapshotPlan.map(row => row.detail).join(" ")).toContain(
+      "orchestrator_claim_candidates_by_executor_sequence",
+    );
   });
 });
 

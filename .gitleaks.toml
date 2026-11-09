@@ -146,7 +146,7 @@ condition = "AND"
 commits = ["d5ffafb6df54e26189d8494548f7693fdcfdf108"]
 paths = ['''^cloud-engineering-connector/test/orchestrator-worker-identity\.test\.js$''']
 regexTarget = "line"
-regexes = ['''const key = "3031323334353637383961626364656630313233343536373839616263646566"''']
+regexes = ['''3031323334353637383961626364656630313233343536373839616263646566''']
 
 [[allowlists]]
 description = "Synthetic ephemeral HMAC fixture in one historical outbox-publisher unit test; exact commit, path, rule, and literal."
@@ -156,3 +156,22 @@ commits = ["a5c36d1c2e7461e38578a688133c797f541b4b46"]
 paths = ['''^cloud-engineering-connector/test/orchestrator-outbox-publisher\.test\.js$''']
 regexTarget = "line"
 regexes = ['''const key = "3031323334353637383961626364656630313233343536373839616263646566"''']
+
+ 
+[[allowlists]]
+description = "Synthetic legacy idempotency identifier used only in the v7-to-v8 migration fixture; exact commit, file, literal, and rule only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["168a5097fa6c50f4351c5d753ee0358403175a7d"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger-tenant-scope-migration\.test\.js$''']
+regexTarget = "line"
+regexes = ['''legacy-idempotency-1''']
+
+[[allowlists]]
+description = "Deliberate credential-shaped negative fixture proving that memory-sync rejects secret-like text; exact commit, file, rule, and literal only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["fe0302ea9927936f70c8a4acc577cae0b140e2d7"]
+paths = ['''^cloud-agent/test/memory-sync\.test\.js$''']
+regexTarget = "line"
+regexes = ['''api_key = .abcd1234efgh5678''']

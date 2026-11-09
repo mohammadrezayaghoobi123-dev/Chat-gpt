@@ -580,7 +580,7 @@ test("release evidence helper records audit metadata without serializing credent
 
 
 function executeReleaseEvidenceHelper({ cloudflareResponse, includeCredentials = true }) {
-  const helper = readFileSync(new URL("../scripts/write-release-evidence.mjs", import.meta.url), "utf8");
+  const helperUrl = new URL("../scripts/write-release-evidence.mjs", import.meta.url).href;
   const prelude = cloudflareResponse
     ? "globalThis.fetch = async () => new Response(" + JSON.stringify(JSON.stringify(cloudflareResponse.body)) +
       ", { status: " + cloudflareResponse.status + ", headers: { 'content-type': 'application/json' } });"

@@ -15,7 +15,11 @@ function base64Url(bytes) {
 }
 async function assertion(subject, role, operation, at) {
   const issuedAt = Math.floor(at / 1000);
-  const claims = { v: 1, iss: "chat-gpt111-worker", aud: "orchestrator-ledger", sub: subject, role, op: operation, iat: issuedAt, exp: issuedAt + 60, jti: "jti-" + base64Url(crypto.getRandomValues(new Uint8Array(16))) };
+  const claims = {
+    v: 1, iss: "chat-gpt111-worker", aud: "orchestrator-ledger",
+    sub: subject, role, op: operation, iat: issuedAt, exp: issuedAt + 60,
+    jti: "jti-" + base64Url(crypto.getRandomValues(new Uint8Array(16))),
+  };
   const payload = base64Url(new TextEncoder().encode(canonicalJson(claims)));
   const input = "v1.test-v1." + payload;
   const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
@@ -25,44 +29,73 @@ async function assertion(subject, role, operation, at) {
 const ledgerFor = name => env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
 async function createTask(ledger, taskId, at, index) {
   return ledger.createTask({
-    task: { taskId, state: "SCHEDULED", version: 1, agentRound: 0, createdAt: at, updatedAt: at, executorId: "agent:worker-1", commitSha: "a".repeat(40), objective: "bounded claim cursor regression" },
-    idempotencyKey: taskId, inputHash: index.toString(16).padStart(2, "0").repeat(32), now: at,
+    task: {
+      taskId, state: "SCHEDULED", version: 1, agentRound: 0,
+      createdAt: at, updatedAt: at, executorId: "agent:worker-1",
+      commitSha: "a".repeat(40), objective: "bounded claim fallback regression",
+    },
+    idempotencyKey: taskId,
+    inputHash: index.toString(16).padStart(2, "0").repeat(32),
+    now: at,
     workerId: "orchestrator-scheduler",
     workerAssertion: await assertion("orchestrator-scheduler", "system", "createTask", at),
   });
 }
-describe("Claim Engine bounded cursor contract", () => {
-  it("returns a bounded continuation after skipping 128 active leases and resumes at candidate 129", async () => {
-    const ledger = ledgerFor("ledger-bounded-scan-integration-red");
+describe("Claim Engine bounded fallback cursor contract", () => {
+  it("advances a 32-row durable fallback cursor and claims the first eligible task in the next batch", async () => {
+    const ledger = ledgerFor("ledger-bounded-fallback-cursor");
     const ids = [];
-    for (let i = 0; i < 129; i += 1) {
-      const id = "task-bounded-scan-" + String(i + 1).padStart(3, "0");
+    for (let i = 0; i < 33; i += 1) {
+      const id = "task-fallback-" + String(i + 1).padStart(3, "0");
       ids.push(id);
       await createTask(ledger, id, now + i, i + 1);
     }
+
+    // Simulate pre-index/legacy rows: 32 tasks are actively leased and none
+    // of the 33 tasks has yet been reconciled into the candidate index.
     await runInDurableObject(ledger, async (_instance, state) => {
-      for (const id of ids.slice(0, 128)) {
+      state.storage.sql.exec("DELETE FROM orchestrator_claim_candidates");
+      for (const id of ids.slice(0, 32)) {
         state.storage.sql.exec(
           "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
           id, "agent:worker-1", now + 10_000, now,
         );
       }
     });
+
     const first = await ledger.claimTask({
       workerId: "agent:worker-1",
       workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 2_000),
       leaseMs: 30_000, now: now + 2_000,
     });
-    expect(first).toMatchObject({
-      claimed: false, reason: "CLAIM_SCAN_BUDGET_EXHAUSTED",
-      candidatesExamined: 128, candidateRowsRead: 129,
-      nextCursor: { version: 1, executorId: "agent:worker-1", snapshotSequence: expect.any(Number), createdAt: now + 127, taskId: ids[127] },
+    expect(first).toMatchObject({ claimed: false, reason: "NO_TASK_AVAILABLE" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT last_created_at, last_task_id, scan_complete FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
+        "agent:worker-1",
+      ).toArray()[0]).toEqual({
+        last_created_at: now + 31, last_task_id: ids[31], scan_complete: 0,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates",
+      ).one().count).toBe(0);
     });
+
     const second = await ledger.claimTask({
       workerId: "agent:worker-1",
       workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 2_001),
-      leaseMs: 30_000, now: now + 2_001, cursor: first.nextCursor,
+      leaseMs: 30_000, now: now + 2_001,
     });
-    expect(second).toMatchObject({ claimed: true, task: { taskId: ids[128] }, candidatesExamined: 1 });
+    expect(second).toMatchObject({
+      claimed: true, task: { taskId: ids[32] }, leaseGeneration: 1,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT last_created_at, last_task_id, scan_complete FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
+        "agent:worker-1",
+      ).toArray()[0]).toEqual({
+        last_created_at: now + 32, last_task_id: ids[32], scan_complete: 1,
+      });
+    });
   });
 });

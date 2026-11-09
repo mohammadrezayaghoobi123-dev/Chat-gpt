@@ -177,11 +177,3 @@ regexTarget = "line"
 regexes = ['''api_key = .abcd1234efgh5678''']
 
  
-[[allowlists]]
-description = "Synthetic legacy idempotency identifier used only in the v7-to-v8 migration fixture; exact commit, file, literal, and rule only."
-targetRules = ["generic-api-key"]
-condition = "AND"
-commits = ["168a5097fa6c50f4351c5d753ee0358403175a7d"]
-paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger-tenant-scope-migration\.test\.js$''']
-regexTarget = "line"
-regexes = ['''legacy-idempotency-1''']

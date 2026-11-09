@@ -43,10 +43,15 @@ function fakeFetch(
   reviews,
   onRequest = () => {},
   compareResult = { behind_by: 0, merge_base_commit: { sha: baseSha } },
+  gateChecks = { checkRuns: [], status: { state: "success", total_count: 0 } },
 ) {
   return async (url, options) => {
     const value = String(url);
     onRequest(value, options);
+    if (value.includes("/check-runs")) {
+      return response({ total_count: gateChecks.totalCount ?? gateChecks.checkRuns.length, check_runs: gateChecks.checkRuns });
+    }
+    if (/\/commits\/[a-f0-9]{40}\/status/.test(value)) return response(gateChecks.status);
     if (value.includes("/git/ref/heads/")) return response({ object: { sha: baseSha } });
     if (value.includes("/compare/")) return response(compareResult);
     if (value.endsWith("/pulls/129")) return response(pulls.find(pull => pull.number === 129) ?? pulls[0]);
@@ -267,4 +272,84 @@ test("release approval paginates associated PRs and all reviews before accepting
   );
   assert.ok(requestedUrls.some(url => url.includes("/commits/" + sha + "/pulls") && url.includes("page=2")));
   assert.ok(requestedUrls.some(url => url.includes("/pulls/129/reviews") && url.includes("page=2")));
+});
+
+const OWN_CHECK = "Deploy exact candidate to Staging and verify";
+const ownRun = (overrides = {}) => ({ name: OWN_CHECK, status: "completed", conclusion: "failure", app: { slug: "github-actions" }, ...overrides });
+const ciRun = (name, overrides = {}) => ({ name, status: "completed", conclusion: "success", app: { slug: "github-actions" }, ...overrides });
+const unstable = () => stagingPull({ mergeable: true, mergeable_state: "unstable" });
+const gate = (checkRuns, extra = {}) => fakeFetch([unstable()], [approval()], () => {}, undefined, { checkRuns, status: { state: "success", total_count: 0 }, ...extra });
+
+test("Staging accepts an 'unstable' PR when the only non-green check is the release job's own run", async () => {
+  for (const own of [ownRun(), ownRun({ status: "in_progress", conclusion: null }), ownRun({ status: "queued", conclusion: null })]) {
+    const result = await verifyReleaseApproval({ ...input({}), fetchImpl: gate([ciRun("test"), ciRun("unit-tests"), own]) });
+    assert.equal(result.reviewer, reviewer);
+  }
+});
+
+test("Staging still rejects an 'unstable' PR when any other check is failing, pending, cancelled or missing its result", async () => {
+  for (const other of [
+    ciRun("test", { conclusion: "failure" }),
+    ciRun("test", { status: "in_progress", conclusion: null }),
+    ciRun("test", { status: "queued", conclusion: null }),
+    ciRun("test", { conclusion: "cancelled" }),
+    ciRun("test", { conclusion: "timed_out" }),
+    ciRun("test", { conclusion: "action_required" }),
+    ciRun("test", { conclusion: null }),
+  ]) {
+    await assert.rejects(
+      verifyReleaseApproval({ ...input({}), fetchImpl: gate([other, ownRun()]) }),
+      /mergeable, current-base PR/,
+    );
+  }
+});
+
+test("Staging does not let a look-alike check from another app hide a failure", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({ ...input({}), fetchImpl: gate([ownRun({ app: { slug: "some-other-app" } })]) }),
+    /mergeable, current-base PR/,
+  );
+  await assert.rejects(
+    verifyReleaseApproval({ ...input({}), fetchImpl: gate([ownRun({ app: null })]) }),
+    /mergeable, current-base PR/,
+  );
+});
+
+test("Staging rejects an 'unstable' PR with a non-success commit status or an incomplete check list", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({ ...input({}), fetchImpl: gate([ciRun("test")], { status: { state: "failure", total_count: 1 } }) }),
+    /mergeable, current-base PR/,
+  );
+  await assert.rejects(
+    verifyReleaseApproval({ ...input({}), fetchImpl: gate([ciRun("test")], { status: { state: "pending", total_count: 1 } }) }),
+    /mergeable, current-base PR/,
+  );
+  await assert.rejects(
+    verifyReleaseApproval({ ...input({}), fetchImpl: gate([ciRun("test")], { totalCount: 150 }) }),
+    /mergeable, current-base PR/,
+  );
+});
+
+test("Staging never relaxes blocked, behind, dirty, unknown or non-mergeable states, even with only the release check failing", async () => {
+  for (const pull of [
+    stagingPull({ mergeable: true, mergeable_state: "blocked" }),
+    stagingPull({ mergeable: true, mergeable_state: "behind" }),
+    stagingPull({ mergeable: true, mergeable_state: "draft" }),
+    stagingPull({ mergeable: false, mergeable_state: "dirty" }),
+    stagingPull({ mergeable: false, mergeable_state: "unstable" }),
+    stagingPull({ mergeable: null, mergeable_state: "unstable" }),
+    stagingPull({ mergeable: null, mergeable_state: "unknown" }),
+  ]) {
+    await assert.rejects(
+      verifyReleaseApproval({ ...input({}), fetchImpl: fakeFetch([pull], [approval()], () => {}, undefined, { checkRuns: [ownRun()], status: { state: "success", total_count: 0 } }) }),
+      /mergeable, current-base PR/,
+    );
+  }
+});
+
+test("a 'clean' PR needs no extra check lookups and keeps the 5-request contract", async () => {
+  const urls = [];
+  await verifyReleaseApproval({ ...input({}), fetchImpl: fakeFetch([stagingPull()], [approval()], url => urls.push(url)) });
+  assert.equal(urls.length, 5);
+  assert.ok(urls.every(url => !url.includes("/check-runs") && !/\/status(\?|$)/.test(url)));
 });

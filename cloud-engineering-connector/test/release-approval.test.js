@@ -56,7 +56,7 @@ function fakeFetch(
           run_id: 12345,
           run_attempt: 2,
           head_sha: sha,
-          check_run_url: "https://api.github.com/repos/example/repo/check-runs/" + (gateChecks.ownCheckRunId ?? 42),
+          check_run_url: "https://api.github.com/repos/" + repo + "/check-runs/" + (gateChecks.ownCheckRunId ?? 42),
         }],
       });
     }

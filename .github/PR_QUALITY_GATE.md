@@ -38,3 +38,8 @@ Do not claim repository-wide enforcement until the active ruleset configuration 
 - No workflow in this gate deploys to Staging, Production, GitHub Pages, or Cloudflare.
 - No secrets are printed or read by this workflow.
 - `main` is not modified by this change; the implementation is proposed through an isolated branch and pull request.
+
+
+## Base refresh evidence — 2026-11-09
+
+The Integration base advanced after PR #206 was merged at `fdc07922cf53fe64c7fa2323e35a09d0b89c79d1`. This PR must be revalidated against the refreshed Integration merge candidate; the earlier exact-head gate run is not evidence for the refreshed merge candidate. The PR remains Draft until all 12 validations pass on the refreshed candidate, independent review is approved, and the repository Ruleset is read back with the required status check enabled.

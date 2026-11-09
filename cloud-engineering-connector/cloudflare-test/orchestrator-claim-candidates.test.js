@@ -113,7 +113,7 @@ describe("OrchestratorLedger claim candidate index", () => {
     const candidates = sql.exec(
       "SELECT task_id FROM orchestrator_claim_candidates ORDER BY executor_id, created_at, task_id",
     ).toArray().map(row => row.task_id);
-    expect(candidates).toEqual(["task-candidate-b"]);
+    expect(candidates).toEqual(["task-candidate-a", "task-candidate-b", "task-active-lease"]);
     expect(sql.exec(
       "SELECT last_task_id, scan_complete FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
       "agent:worker-1",
@@ -141,7 +141,7 @@ describe("OrchestratorLedger claim candidate index", () => {
 });
 
 
-it("uses the candidate relation for scheduler discovery while preserving explicit task lookup", async () => {
+it("uses candidate discovery for scheduling and fails closed on missing explicit candidate rows", async () => {
   const ledger = ledgerFor("ledger-candidate-query-path");
   await createTask(ledger, {
     task: task("task-candidate-query-path"),
@@ -187,10 +187,15 @@ it("uses the candidate relation for scheduler discovery while preserving explici
     leaseMs: 30_000,
     now: now + 2,
   });
-  expect(explicitResult).toMatchObject({
-    claimed: true,
-    task: { taskId: "task-candidate-explicit-path" },
-    leaseGeneration: 1,
+  expect(explicitResult).toEqual({
+    claimed: false,
+    reason: "CANDIDATE_INDEX_INCONSISTENT",
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ?",
+      "task-candidate-explicit-path",
+    ).one().count).toBe(0);
   });
 });
 
@@ -237,7 +242,7 @@ it("reconciles a missing candidate index in bounded batches with a stable keyset
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec(
       "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates",
-    ).one().count).toBe(31);
+    ).one().count).toBe(32);
     expect(state.storage.sql.exec(
       "SELECT last_created_at, last_task_id FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
       "agent:worker-1",
@@ -260,7 +265,7 @@ it("reconciles a missing candidate index in bounded batches with a stable keyset
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec(
       "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates",
-    ).one().count).toBe(7);
+    ).one().count).toBe(8);
     expect(state.storage.sql.exec(
       "SELECT last_created_at, last_task_id, scan_complete FROM orchestrator_claim_scan_cursors WHERE executor_id = ?",
       "agent:worker-1",

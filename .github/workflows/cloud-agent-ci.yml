@@ -1,6 +1,7 @@
 name: Cloud Agent CI
 
 on:
+  workflow_call:
   push:
     branches:
       - feature/independent-cloud-agent
@@ -10,11 +11,6 @@ on:
     paths:
       - "cloud-agent/**"
       - ".github/workflows/cloud-agent-ci.yml"
-  pull_request:
-    paths:
-      - "cloud-agent/**"
-      - ".github/workflows/cloud-agent-ci.yml"
-
 permissions:
   contents: read
 

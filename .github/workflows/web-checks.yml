@@ -3,6 +3,7 @@ name: Web client checks (real browser)
 # Real Chromium end-to-end flow + automated accessibility audit (with its own self-test that proves
 # the audit can fail). Runs only when the web client, the HTTP layer or these tools change.
 on:
+  workflow_call:
   push:
     branches:
       - master-brain/integrated
@@ -12,15 +13,6 @@ on:
       - "tools/web_e2e.py"
       - "tools/a11y_check.py"
       - ".github/workflows/web-checks.yml"
-  pull_request:
-    branches:
-      - integration/unify-main-and-integrated-2026-11-02
-    paths:
-      - .github/workflows/web-checks.yml
-      - src/master_brain/web/**
-      - src/master_brain/http_api.py
-      - tools/web_e2e.py
-      - tools/a11y_check.py
   workflow_dispatch:
 
 concurrency:

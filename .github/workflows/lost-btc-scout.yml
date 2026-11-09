@@ -1,10 +1,7 @@
 name: Lost BTC Scout
 
 on:
-  pull_request:
-    paths:
-      - "lost-btc-scout/**"
-      - ".github/workflows/lost-btc-scout.yml"
+  workflow_call:
   push:
     branches:
       - "feature/lost-btc-scout"

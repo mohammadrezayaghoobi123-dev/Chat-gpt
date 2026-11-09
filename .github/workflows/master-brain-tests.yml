@@ -1,18 +1,13 @@
 name: Master Brain MVP tests
 
 on:
+  workflow_call:
   push:
     branches:
       - master-brain/integrated-mvp
       - master-brain/proof-protocol-v0
       - master-brain/integrated
       - "assistant/**"
-  pull_request:
-    branches:
-      - main
-      - integration/unify-main-and-integrated-2026-11-02
-      - master-brain/integrated-mvp
-      - master-brain/integrated
   workflow_dispatch:
 
 concurrency:

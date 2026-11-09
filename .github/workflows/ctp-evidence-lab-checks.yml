@@ -1,10 +1,7 @@
 name: CTP Evidence Lab Checks
 
 on:
-  pull_request:
-    paths:
-      - "public-demos/ctp-evidence-lab/**"
-      - ".github/workflows/ctp-evidence-lab-checks.yml"
+  workflow_call:
   push:
     branches:
       - "feature/ctp-evidence-demo-current-main"

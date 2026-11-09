@@ -1,6 +1,7 @@
 name: Cloud Engineering Connector CI
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - "cloud-engineering-connector/**"

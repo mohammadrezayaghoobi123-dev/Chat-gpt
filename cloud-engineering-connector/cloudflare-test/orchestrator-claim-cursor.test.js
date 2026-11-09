@@ -117,7 +117,7 @@ describe("Claim Engine bounded cursor contract", () => {
     expect(first.reason).toBe("CLAIM_SCAN_BUDGET_EXHAUSTED");
 
     const newEarlierTaskId = "task-snapshot-churn-000";
-    await createTask(ledger, newEarlierTaskId, now, 500);
+    await createTask(ledger, newEarlierTaskId, now, 244);
     const resumed = await ledger.claimTask({
       workerId: "agent:worker-1",
       workerAssertion: await assertion("agent:worker-1", "agent", "claimTask", now + 2_001),

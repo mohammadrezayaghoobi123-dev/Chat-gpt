@@ -26,7 +26,7 @@ const ledgerFor = name => env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.id
 async function createTask(ledger, taskId, at, index) {
   return ledger.createTask({
     task: { taskId, state: "SCHEDULED", version: 1, agentRound: 0, createdAt: at, updatedAt: at, executorId: "agent:worker-1", commitSha: "a".repeat(40), objective: "bounded claim cursor regression" },
-    idempotencyKey: taskId, inputHash: index.toString(16).padStart(2, "0").repeat(32), now: at,
+    idempotencyKey: taskId, inputHash: (index % 256).toString(16).padStart(2, "0").repeat(32), now: at,
     workerId: "orchestrator-scheduler",
     workerAssertion: await assertion("orchestrator-scheduler", "system", "createTask", at),
   });

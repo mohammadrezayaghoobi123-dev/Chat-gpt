@@ -155,13 +155,15 @@ test("readyz uses a lightweight Durable Object ping rather than a full storage s
     },
     ORCHESTRATOR_LEDGER: {
       idFromName: name => name,
-      get: () => ({ ping: async () => ({ ok: true, schemaVersion: 5 }) })
+      get: () => ({ ping: async () => ({ ok: true, schemaVersion: 7, storage: { integrityCheck: "ok", requiredTables: true } }) })
     },
     ORCHESTRATOR_OUTBOX_QUEUE: { send: async () => {} },
     ORCHESTRATOR_OUTBOX_QUEUE_NAME: "chat-gpt111-staging-orchestrator-outbox",
     ORCHESTRATOR_OUTBOX_DLQ_QUEUE: "chat-gpt111-staging-orchestrator-outbox-dlq",
     LEDGER_WORKER_ASSERTION_KEYS: JSON.stringify({ "worker-v1": randomBytes(32).toString("hex") }),
-    LEDGER_WORKER_ASSERTION_ACTIVE_KID: "worker-v1"
+    LEDGER_WORKER_ASSERTION_ACTIVE_KID: "worker-v1",
+    LEDGER_RECONCILIATION_EVIDENCE_KEYS: JSON.stringify({ "reconcile-v1": "3031323334353637383961626364656630313233343536373839616263646566" }),
+    LEDGER_RECONCILIATION_EVIDENCE_ISSUERS: JSON.stringify(["test-reconciler"])
   });
   const body = await response.json();
   assert.equal(response.status, 200);

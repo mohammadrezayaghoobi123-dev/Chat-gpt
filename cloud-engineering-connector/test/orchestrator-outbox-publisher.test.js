@@ -10,7 +10,7 @@ const event = {
   idempotencyKey: "outbox-idempotency-0001",
   taskId: "task-0001",
   eventType: "task.transitioned",
-  payload: { taskId: "task-0001", from: "SCHEDULED", to: "RUNNING" },
+  payload: { taskId: "task-0001", version: 2, from: "SCHEDULED", to: "RUNNING" },
   attempts: 1,
   createdAt: now,
 };

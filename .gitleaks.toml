@@ -152,8 +152,6 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["a5c36d1c2e7461e38578a688133c797f541b4b46"]
 paths = ['''^cloud-engineering-connector/test/orchestrator-outbox-publisher\.test\.js$''']
-regexTarget = "line"
-regexes = ['''const key = "3031323334353637383961626364656630313233343536373839616263646566"''']
 
  
 [[allowlists]]

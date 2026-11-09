@@ -67,4 +67,41 @@ describe("OrchestratorLedger tenant/project query plans", () => {
     });
   });
 
+  it("uses a scope/state/executor-leading index for assigned-task existence probes", async () => {
+    const ledger = ledgerFor("claim-assigned-task-existence-query-plan");
+    await runInDurableObject(ledger, async instance => {
+      const plan = instance.ctx.storage.sql.exec(
+        `EXPLAIN QUERY PLAN
+         SELECT 1
+         FROM orchestrator_tasks
+         WHERE tenant_id = ?
+           AND project_id = ?
+           AND state IN ('SCHEDULED','RUNNING','VERIFYING')
+           AND COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')) = ?
+         LIMIT 1`,
+        "tenant-alpha", "project-red", "worker-a",
+      ).toArray();
+      const details = plan.map(row => row.detail).join("\\n");
+      expect(details).toContain("orchestrator_tasks_by_scope_state_executor_created");
+    });
+  });
+
+  it("uses the scope/state prefix for assignee-mismatch existence probes", async () => {
+    const ledger = ledgerFor("claim-assignee-mismatch-existence-query-plan");
+    await runInDurableObject(ledger, async instance => {
+      const plan = instance.ctx.storage.sql.exec(
+        `EXPLAIN QUERY PLAN
+         SELECT 1
+         FROM orchestrator_tasks
+         WHERE tenant_id = ?
+           AND project_id = ?
+           AND state IN ('SCHEDULED','RUNNING','VERIFYING')
+         LIMIT 1`,
+        "tenant-alpha", "project-red",
+      ).toArray();
+      const details = plan.map(row => row.detail).join("\\n");
+      expect(details).toContain("orchestrator_tasks_by_scope_state_executor_created");
+    });
+  });
+
 });

@@ -1,0 +1,100 @@
+name: PR Quality Gate
+
+# This workflow deliberately has no path or base-branch filters. Every PR
+# invokes every deterministic repository validation workflow on the same PR
+# merge candidate. Deployments and live external smoke tests are excluded.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: pr-quality-gate-${{ github.event.pull_request.number || github.ref }}
+  # Never cancel a required check: a canceled run must not leave an ambiguous
+  # status that can be mistaken for a successful quality decision.
+  cancel-in-progress: false
+
+jobs:
+  connector:
+    name: Cloud Engineering Connector
+    uses: ./.github/workflows/connector-ci.yml
+
+  cloud-agent:
+    name: Cloud Agent
+    uses: ./.github/workflows/cloud-agent-ci.yml
+
+  ctp:
+    name: CTP Evidence Lab
+    uses: ./.github/workflows/ctp-evidence-lab-checks.yml
+
+  devcontainer-security:
+    name: Dev Container Security
+    uses: ./.github/workflows/devcontainer-security.yml
+
+  lost-btc-scout:
+    name: Lost BTC Scout
+    uses: ./.github/workflows/lost-btc-scout.yml
+
+  master-brain-mcp:
+    name: Master Brain MCP
+    uses: ./.github/workflows/master-brain-mcp.yml
+
+  master-brain-tests:
+    name: Master Brain MVP
+    uses: ./.github/workflows/master-brain-tests.yml
+
+  orchestrator-intake:
+    name: Orchestrator GitHub Intake
+    uses: ./.github/workflows/orchestrator-github-intake.yml
+
+  python-tests:
+    name: Python pytest suite
+    uses: ./.github/workflows/python-tests.yml
+
+  secret-history:
+    name: Full History Secret Scan
+    uses: ./.github/workflows/secret-history-scan.yml
+
+  static-checks:
+    name: Static Analysis
+    uses: ./.github/workflows/static-checks.yml
+
+  web-checks:
+    name: Browser and Accessibility Tests
+    uses: ./.github/workflows/web-checks.yml
+
+  required:
+    name: required
+    if: ${{ always() }}
+    needs:
+      - connector
+      - cloud-agent
+      - ctp
+      - devcontainer-security
+      - lost-btc-scout
+      - master-brain-mcp
+      - master-brain-tests
+      - orchestrator-intake
+      - python-tests
+      - secret-history
+      - static-checks
+      - web-checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Enforce all required workflow results
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$NEEDS_JSON" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if ! printf '%s\n' "$NEEDS_JSON" | jq -e 'all(to_entries[]; .value.result == "success")' >/dev/null; then
+            echo "::error::PR Quality Gate failed: every required validation workflow must conclude success; failure, cancellation, or skip is blocking."
+            exit 1
+          fi
+          echo "PR Quality Gate: all 12 required validation workflows succeeded."

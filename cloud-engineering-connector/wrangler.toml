@@ -1,10 +1,17 @@
 name = "chat-gpt111"
-main = "worker.js"
+main = "index.js"
 compatibility_date = "2026-10-23"
+compatibility_flags = ["global_fetch_strictly_public"]
 workers_dev = true
 
 [vars]
 SERVICE_MODE = "cloud"
+OAUTH_ISSUER = "https://chat-gpt111.mohammadrezayaghoobi123.workers.dev"
+MCP_RESOURCE_URL = "https://chat-gpt111.mohammadrezayaghoobi123.workers.dev/mcp"
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "3cc3207de5754d7cb968be0df9604cac"
 
 [[ratelimits]]
 name = "MCP_RATE_LIMITER"
@@ -16,6 +23,12 @@ period = 60
 
 [env.staging.vars]
 SERVICE_MODE = "cloud"
+OAUTH_ISSUER = "https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev"
+MCP_RESOURCE_URL = "https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev/mcp"
+
+[[env.staging.kv_namespaces]]
+binding = "OAUTH_KV"
+id = "4a2b689d12f34f3e8348720c0637589d"
 
 [[env.staging.ratelimits]]
 name = "MCP_RATE_LIMITER"
@@ -24,3 +37,54 @@ namespace_id = "78294164"
 [env.staging.ratelimits.simple]
 limit = 60
 period = 60
+
+
+[[durable_objects.bindings]]
+name = "KNOWLEDGE_STORE"
+class_name = "KnowledgeStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["KnowledgeStore"]
+
+[[env.staging.durable_objects.bindings]]
+name = "KNOWLEDGE_STORE"
+class_name = "KnowledgeStore"
+
+[[env.staging.migrations]]
+tag = "v1"
+new_sqlite_classes = ["KnowledgeStore"]
+
+
+[[durable_objects.bindings]]
+name = "ORCHESTRATOR_LEDGER"
+class_name = "OrchestratorLedger"
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["OrchestratorLedger"]
+
+[[env.staging.durable_objects.bindings]]
+name = "ORCHESTRATOR_LEDGER"
+class_name = "OrchestratorLedger"
+
+[[env.staging.migrations]]
+tag = "v2"
+new_sqlite_classes = ["OrchestratorLedger"]
+
+
+[[durable_objects.bindings]]
+name = "TENANT_DIRECTORY"
+class_name = "TenantDirectory"
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["TenantDirectory"]
+
+[[env.staging.durable_objects.bindings]]
+name = "TENANT_DIRECTORY"
+class_name = "TenantDirectory"
+
+[[env.staging.migrations]]
+tag = "v3"
+new_sqlite_classes = ["TenantDirectory"]

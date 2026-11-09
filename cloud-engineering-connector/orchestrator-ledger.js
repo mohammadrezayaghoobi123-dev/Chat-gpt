@@ -346,7 +346,6 @@ export class OrchestratorLedger extends DurableObject {
       )
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_executor_order ON orchestrator_claim_candidates(executor_id, created_at, task_id)");
-    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_executor_sequence ON orchestrator_claim_candidates(executor_id, candidate_seq)");
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_claim_scan_cursors (
         executor_id TEXT PRIMARY KEY,
@@ -365,6 +364,7 @@ export class OrchestratorLedger extends DurableObject {
           Date.now(),
         );
       }
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_executor_sequence ON orchestrator_claim_candidates(executor_id, candidate_seq)");
       sql.exec(`
         CREATE TABLE IF NOT EXISTS orchestrator_claim_candidate_sequence (
           singleton INTEGER PRIMARY KEY CHECK(singleton = 1),

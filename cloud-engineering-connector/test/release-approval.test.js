@@ -48,7 +48,7 @@ function fakeFetch(
   return async (url, options) => {
     const value = String(url);
     onRequest(value, options);
-    if (value.includes("/check-runs")) {
+    if (value.includes("/actions/runs/12345/jobs")) {\n      return response({ total_count: 1, jobs: [{ name: OWN_CHECK, run_attempt: 2, head_sha: sha, check_run_url: "https://api.github.com/repos/example/repo/check-runs/" + (gateChecks.ownCheckRunId ?? 42) }] });\n    }\n    if (value.includes("/check-runs")) {
       return response({ total_count: gateChecks.totalCount ?? gateChecks.checkRuns.length, check_runs: gateChecks.checkRuns });
     }
     if (/\/commits\/[a-f0-9]{40}\/status/.test(value)) return response(gateChecks.status);
@@ -275,7 +275,7 @@ test("release approval paginates associated PRs and all reviews before accepting
 });
 
 const OWN_CHECK = "Deploy exact candidate to Staging and verify";
-const ownRun = (overrides = {}) => ({ name: OWN_CHECK, status: "completed", conclusion: "failure", app: { slug: "github-actions" }, ...overrides });
+const ownRun = (overrides = {}) => ({ id: 42, name: OWN_CHECK, status: "completed", conclusion: "failure", app: { slug: "github-actions" }, ...overrides });
 const ciRun = (name, overrides = {}) => ({ name, status: "completed", conclusion: "success", app: { slug: "github-actions" }, ...overrides });
 const unstable = () => stagingPull({ mergeable: true, mergeable_state: "unstable" });
 const gate = (checkRuns, extra = {}) => fakeFetch([unstable()], [approval()], () => {}, undefined, { checkRuns, status: { state: "success", total_count: 0 }, ...extra });

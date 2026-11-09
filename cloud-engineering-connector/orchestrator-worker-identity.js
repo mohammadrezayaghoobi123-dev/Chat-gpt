@@ -100,7 +100,7 @@ function validateClaimCursorPayload(cursor, expected) {
       !Number.isSafeInteger(cursor.issuedAt) ||
       !Number.isSafeInteger(cursor.expiresAt) ||
       cursor.expiresAt <= cursor.issuedAt ||
-      cursor.expiresAt - cursor.issuedAt > 300) throw reject();
+      cursor.expiresAt - cursor.issuedAt > 300_000) throw reject();
   if (cursor.issuedAt > expected.nowMs + CLOCK_SKEW_SECONDS * 1000 ||
       cursor.expiresAt <= expected.nowMs) throw reject();
 }
@@ -136,9 +136,9 @@ export async function verifyClaimCursor(keySet, cursor, expected) {
   try {
     if (!expected || typeof expected.executorId !== "string" || !ID.test(expected.executorId) ||
         !Number.isSafeInteger(expected.nowMs)) throw reject();
-    const unsigned = { ...cursor };
     if (!cursor || typeof cursor !== "object" || Array.isArray(cursor) ||
-        typeof unsigned.signature !== "string") throw reject();
+        typeof cursor.signature !== "string" || cursor.signature.length !== 43) throw reject();
+    const unsigned = { ...cursor };
     delete unsigned.signature;
     validateClaimCursorPayload(unsigned, expected);
     const supplied = decodeBase64Url(cursor.signature);

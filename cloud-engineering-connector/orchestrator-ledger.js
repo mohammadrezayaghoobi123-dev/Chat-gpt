@@ -1019,9 +1019,10 @@ export class OrchestratorLedger extends DurableObject {
         return explicitResult;
       }
 
-      const fallback = cursor === undefined
-        ? reconcileClaimCandidatesInBoundedBatch(sql, workerId, now)
-        : { complete: true, scanned: 0 };
+      // Continue the legacy-index backfill in bounded batches even while a
+      // snapshot cursor is being resumed. Newly indexed rows receive sequence
+      // values above the cursor snapshot and trigger a safe restart at exhaustion.
+      const fallback = reconcileClaimCandidatesInBoundedBatch(sql, workerId, now);
       const sequenceRow = sql.exec(
         "SELECT last_sequence FROM orchestrator_claim_candidate_sequence WHERE singleton = 1",
       ).toArray()[0];

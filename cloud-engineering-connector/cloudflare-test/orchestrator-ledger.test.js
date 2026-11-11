@@ -478,17 +478,24 @@ describe("OrchestratorLedger durable coordination contract", () => {
       }),
       leaseMs: 30_000, now,
     });
-    const failed = await ledger.failOutbox({
-      eventId: "event-outbox-retry", workerId: "publisher-1",
-      workerAssertion: await createWorkerAssertion({
-        subject: "publisher-1", role: "publisher", operation: "failOutbox", nowMs: now + 1,
-      }),
-      leaseGeneration: first.leaseGeneration, retryable: true,
-      errorCode: "UPSTREAM_TIMEOUT", now: now + 1,
-    });
+    const retryRandom = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    let failed;
+    try {
+      failed = await ledger.failOutbox({
+        eventId: "event-outbox-retry", workerId: "publisher-1",
+        workerAssertion: await createWorkerAssertion({
+          subject: "publisher-1", role: "publisher", operation: "failOutbox", nowMs: now + 1,
+        }),
+        leaseGeneration: first.leaseGeneration, retryable: true,
+        errorCode: "UPSTREAM_TIMEOUT", now: now + 1,
+      });
+      expect(retryRandom).toHaveBeenCalledOnce();
+    } finally {
+      retryRandom.mockRestore();
+    }
     expect(failed).toMatchObject({
       failed: true, retryScheduled: true, deadLettered: false,
-      nextAttemptAt: now + 1_001,
+      nextAttemptAt: now + 502,
     });
     await expect(ledger.claimOutbox({
       workerId: "publisher-2",
@@ -501,18 +508,18 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const retry = await ledger.claimOutbox({
       workerId: "publisher-2",
       workerAssertion: await createWorkerAssertion({
-        subject: "publisher-2", role: "publisher", operation: "claimOutbox", nowMs: now + 1_001,
+        subject: "publisher-2", role: "publisher", operation: "claimOutbox", nowMs: now + 502,
       }),
-      leaseMs: 30_000, now: now + 1_001,
+      leaseMs: 30_000, now: now + 502,
     });
     expect(retry).toMatchObject({ claimed: true, event: { attempts: 2 } });
     const deadLetter = await ledger.failOutbox({
       eventId: "event-outbox-retry", workerId: "publisher-2",
       workerAssertion: await createWorkerAssertion({
-        subject: "publisher-2", role: "publisher", operation: "failOutbox", nowMs: now + 1_002,
+        subject: "publisher-2", role: "publisher", operation: "failOutbox", nowMs: now + 503,
       }),
       leaseGeneration: retry.leaseGeneration, retryable: false,
-      errorCode: "UPSTREAM_REJECTED", now: now + 1_002,
+      errorCode: "UPSTREAM_REJECTED", now: now + 503,
     });
     expect(deadLetter).toMatchObject({ failed: true, retryScheduled: false, deadLettered: true });
     await runInDurableObject(ledger, async (_instance, state) => {
@@ -522,7 +529,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       ).one()).toMatchObject({
         retry_state: "DEAD_LETTER",
         last_error_code: "UPSTREAM_REJECTED",
-        dead_lettered_at: now + 1_002,
+        dead_lettered_at: now + 503,
       });
     });
   });

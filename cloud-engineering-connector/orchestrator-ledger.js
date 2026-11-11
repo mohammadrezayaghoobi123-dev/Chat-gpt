@@ -15,6 +15,19 @@ const OUTBOX_RETRY_BASE_MS = 1_000;
 const OUTBOX_RETRY_MAX_MS = 900_000;
 const SECRET_FIELD = /(?:secret|token|password|credential|api[_-]?key|private[_-]?key)/i;
 
+function outboxRetryDelayMs(attempts) {
+  const cap = Math.min(
+    OUTBOX_RETRY_MAX_MS,
+    OUTBOX_RETRY_BASE_MS * (2 ** Math.max(0, attempts - 1)),
+  );
+  const sample = Math.random();
+  if (!Number.isFinite(sample) || sample < 0 || sample >= 1) {
+    throw fail("Retry jitter source returned an invalid sample.", "OUTBOX_RETRY_JITTER_INVALID");
+  }
+  // Full jitter in [1 ms, cap]. The 1 ms floor avoids a zero-delay hot loop.
+  return 1 + Math.floor(sample * cap);
+}
+
 function fail(message, code = "INVALID_INPUT") {
   return Object.assign(new TypeError(message), { code });
 }
@@ -1201,9 +1214,7 @@ export class OrchestratorLedger extends DurableObject {
       }
       const deadLettered = !retryable || row.attempts >= MAX_OUTBOX_ATTEMPTS;
       const retryScheduled = !deadLettered;
-      const delay = retryScheduled
-        ? Math.min(OUTBOX_RETRY_MAX_MS, OUTBOX_RETRY_BASE_MS * (2 ** Math.max(0, row.attempts - 1)))
-        : 0;
+      const delay = retryScheduled ? outboxRetryDelayMs(row.attempts) : 0;
       const nextAttemptAt = retryScheduled ? now + delay : 0;
       sql.exec(
         "UPDATE orchestrator_outbox_events SET status = 'PENDING', retry_state = ?, next_attempt_at = ?, last_error_code = ?, dead_lettered_at = ?, lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND status = 'IN_PROGRESS' AND lease_worker_id = ? AND lease_generation = ?",

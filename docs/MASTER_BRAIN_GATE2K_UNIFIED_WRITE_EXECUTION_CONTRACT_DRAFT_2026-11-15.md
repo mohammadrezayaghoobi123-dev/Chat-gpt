@@ -199,6 +199,8 @@ It does not own Mission lifecycle, OrchestrationTask lifecycle, Knowledge entiti
 
 Every command must validate the full scope. A raw key hash alone is not sufficient authorization to read or mutate an operation.
 
+The initial operation reservation and its first append-only audit event must be committed atomically in the same Durable Object transaction. If the audit sink is a separate bounded context, write a transactional outbox record in the same transaction; do not rely on two independent non-atomic writes. A failed reservation/audit transaction must produce no external GitHub side effect.
+
 ### 6.3 Required state machine
 
 Candidate phases:
@@ -248,26 +250,25 @@ A tenant must not exhaust all ordinary capacity for every other tenant. The exac
 
 ## 7. Exact execution order
 
-1. Validate transport and request envelope.
-2. Authenticate credential.
-3. Resolve canonical principal and credential version.
-4. Resolve current tenant membership.
-5. Resolve exact project.
-6. Authorize action and normalized resource.
-7. Validate operation schema, paths, payload size, base branch, and preconditions.
-8. Construct trusted execution context and canonical operation identity.
-9. Atomically admit operation and reserve a fenced lease.
-10. Append durable audit evidence for the reservation.
-11. Perform external GitHub writes one phase at a time.
-12. Verify each returned GitHub object against exact expected identity.
-13. Persist each phase transition with compare-and-swap and lease fencing.
-14. On ambiguous response or crash, mark UNKNOWN and stop blind retry.
-15. Re-evaluate current authorization before replay or recovery.
-16. Reconcile only from independently fetched GitHub evidence.
-17. Persist terminal outcome and audit receipt.
-18. Return only scope-authorized result data.
+1. Validate the transport envelope and bounded request size.
+2. Perform pure local request validation: schema, path safety, payload size, base-branch syntax, preconditions, and deterministic resource normalization. This step performs no external call and creates no durable operation record.
+3. Authenticate the credential.
+4. Resolve canonical principal and credential version.
+5. Resolve current tenant membership.
+6. Resolve the exact project.
+7. Authorize the exact action against the normalized resource digest.
+8. Construct the trusted execution context and canonical operation identity.
+9. Atomically admit the operation, reserve a fenced lease, and append the initial audit event (or transactional outbox record) in one transaction.
+10. Perform external GitHub writes one phase at a time.
+11. Verify each returned GitHub object against exact expected identity.
+12. Persist each phase transition and audit event with compare-and-swap and lease fencing.
+13. On ambiguous response or crash, mark UNKNOWN and stop blind retry.
+14. Re-evaluate current authorization before replay or recovery.
+15. Reconcile only from independently fetched GitHub evidence under the separate reconciler capability.
+16. Persist terminal outcome and audit receipt.
+17. Return only scope-authorized result data.
 
-Any failure before step 9 must create no write reservation and no GitHub side effect. Any failure after step 9 but before an external side effect may be safely failed or reopened only under explicit state-machine rules. Any uncertain external outcome becomes UNKNOWN.
+Any failure before step 9 must create no write reservation and no GitHub side effect. If authentication or authorization fails, no operation existence or cross-scope metadata may be returned. Any failure after step 9 but before an external side effect may be safely failed or reopened only under explicit state-machine rules. Any uncertain external outcome becomes UNKNOWN.
 
 ## 8. Audit event contract
 

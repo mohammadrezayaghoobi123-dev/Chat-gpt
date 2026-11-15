@@ -76,7 +76,7 @@ The idempotency namespace/key and principal/tenant scope are separate identity d
 
 Construct a manifest from the exact file payloads intended for the Git tree. Each entry contains:
 
-- normalized repository-relative path;
+- validated repository-relative path, preserved exactly as the accepted UTF-8/NFC path representation;
 - byte length;
 - content encoding declaration (UTF-8 for text in the current adapter unless binary support is separately specified);
 - SHA-256 of the exact content bytes.
@@ -110,12 +110,20 @@ A single, versioned canonicalization profile MUST be shared by admission, replay
 
 ### 4.3 Repository-relative paths
 
-- Reject absolute paths, empty paths, NUL, traversal segments (`.` or `..`), and paths escaping the repository root.
-- Define slash as the only separator in canonical form; reject or normalize backslash consistently before duplicate detection.
-- Normalize path Unicode according to the declared path profile, then detect duplicates after normalization.
-- For v1, the server MUST reject any request containing two distinct repository-relative paths that collide under the versioned Unicode case-fold comparison profile (for example, `Readme` vs `README`). The system MUST NOT silently rename, merge, overwrite, or select a winner. The Unicode data version, normalization profile, and exact case-fold algorithm MUST be pinned before implementation; the comparison key is used only for collision detection and MUST NOT silently rewrite the stored path.
-- Preserve exact final path bytes in the content manifest after validation.
+The v1 path identity policy is **Option A — strict preservation**, as approved by the owner decision recorded in `MASTER_BRAIN_GATE2P_R1F_OWNER_DECISION_SR02_PATH_IDENTITY_OPTION_A_2026-11-15.md`.
+
+- The trusted boundary MUST accept only valid UTF-8 path input that is already in Unicode NFC under the exact Unicode profile/version pinned for this protocol.
+- Invalid UTF-8 MUST be rejected. Non-NFC input MUST be rejected; the system MUST NOT silently normalize, rewrite, or substitute it.
+- After validation, the accepted path representation MUST be preserved exactly as the actual repository-relative Git tree path. The content manifest MUST carry this preserved path identity; it MUST NOT carry a separately normalized path as the write target.
+- A separate, versioned Unicode case-fold collision key MUST be computed for collision detection only. It MUST NOT replace, rewrite, or become the stored Git path.
+- The request MUST be rejected if any two accepted paths collide under the pinned case-fold profile. The system MUST NOT silently rename, merge, overwrite, or select a winner.
+- Slash (`/`) is the only permitted path separator. Any backslash (`\\`) MUST be rejected; it MUST NOT be normalized to slash.
+- Reject absolute paths, empty paths, NUL, empty segments, traversal segments (`.` or `..`), and paths escaping the repository root.
+- Duplicate exact paths MUST be rejected. Case-fold collisions MUST be rejected before digest admission.
+- Preserve exact accepted path UTF-8 bytes in the content manifest after validation.
 - Symlinks, submodules, binary files, and mode changes are out of scope until separately specified; unsupported types MUST be rejected, not silently coerced.
+- The exact Unicode data version, NFC implementation/profile, and full case-fold algorithm MUST be pinned before implementation and contract freeze. Until pinned, path conformance remains NOT EXECUTABLE and the contract MUST NOT be frozen.
+
 
 ### 4.4 Numeric and optional values
 
@@ -174,6 +182,12 @@ A single, versioned canonicalization profile MUST be shared by admission, replay
 - T-SR02-12: LF/CRLF behavior matches field-specific rules; file content digest covers exact written bytes.
 - T-SR02-13: path traversal, absolute path, NUL, backslash ambiguity, and duplicate normalized path are rejected.
 - T-SR02-14: any two paths colliding under the pinned v1 Unicode case-fold comparison profile are rejected before digest admission.
+- T-SR02-23: valid UTF-8 + already-NFC path is accepted and its exact path representation is preserved as the Git tree path.
+- T-SR02-24: non-NFC path is rejected; no normalization or path substitution occurs.
+- T-SR02-25: invalid UTF-8 path is rejected before canonicalization or digest admission.
+- T-SR02-26: any backslash path separator is rejected; it is not rewritten to slash.
+- T-SR02-27: absolute paths, empty segments, traversal segments, NUL, and exact duplicate paths are rejected.
+- T-SR02-28: case-fold collision key is used only for collision detection and never changes the preserved Git path.
 - T-SR02-15: symlink/submodule/unsupported file mode is rejected.
 - T-SR02-16: same key + same fingerprint enters replay/reconciliation path, not blind dispatch.
 - T-SR02-17: same key + different fingerprint returns conflict.
@@ -189,7 +203,7 @@ Owner / independent review is required before freezing this contract:
 
 - Exact branch-name validation/canonicalization profile and version for `base_branch`.
 - Whether repository immutable provider ID is available and stable across rename/transfer, and the fallback behavior if unavailable.
-- Exact Unicode normalization profile, Unicode data version, and case-fold algorithm used for repository-relative path collision detection.
+- Exact Unicode NFC profile/implementation, Unicode data version, and full case-fold algorithm used for repository-relative path collision detection.
 - Exact field-level Unicode and line-ending rules for title, summary, and file content.
 - Whether non-text/binary files, symlinks, submodules, and file mode changes are supported in v1.
 - Whether SHA-256 is sufficient for the required retention horizon or a keyed HMAC is needed for any identifier class.

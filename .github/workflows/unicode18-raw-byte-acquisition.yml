@@ -1,0 +1,323 @@
+name: Unicode 18.0.0 Raw-Byte Acquisition Audit
+
+on:
+  push:
+    branches:
+      - "integration/master-brain-unification-2026-11-15"
+    paths:
+      - ".github/workflows/unicode18-raw-byte-acquisition.yml"
+
+permissions: {}
+
+concurrency:
+  group: unicode18-raw-byte-acquisition-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  acquire-and-compare:
+    name: Acquire official UCD bytes and compare ZIP members
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Run bounded integrity checks and dual-path acquisition
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import re
+          import stat
+          import sys
+          import time
+          import unittest
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          import zipfile
+          from datetime import datetime, timezone
+          from io import BytesIO
+
+          VERSION = "18.0.0"
+          ROOT = "https://www.unicode.org/Public/18.0.0/ucd/"
+          ARCHIVE_URL = ROOT + "UCD.zip"
+          REQUIRED = (
+              "ReadMe.txt",
+              "PropList.txt",
+              "DerivedCoreProperties.txt",
+              "DerivedAge.txt",
+              "extracted/DerivedGeneralCategory.txt",
+              "UnicodeData.txt",
+              "CaseFolding.txt",
+              "DerivedNormalizationProps.txt",
+              "NormalizationTest.txt",
+          )
+          MAX_ARCHIVE = 40 * 1024 * 1024
+          MAX_FILE = 25 * 1024 * 1024
+          MAX_TOTAL = 100 * 1024 * 1024
+          MAX_RATIO = 500
+          ALLOWED_TYPES = {
+              "text/plain",
+              "application/zip",
+              "application/octet-stream",
+              "application/x-zip-compressed",
+          }
+
+          def safe_member_name(raw):
+              if not isinstance(raw, str) or not raw or "\\" in raw:
+                  raise ValueError("unsafe ZIP member path")
+              is_dir = raw.endswith("/")
+              name = raw[:-1] if is_dir else raw
+              if not name or name.startswith("/") or "\x00" in name:
+                  raise ValueError("unsafe ZIP member path")
+              parts = name.split("/")
+              if any(part in ("", ".", "..") for part in parts):
+                  raise ValueError("unsafe ZIP member path")
+              if ":" in parts[0]:
+                  raise ValueError("drive-like ZIP member path")
+              try:
+                  name.encode("ascii")
+              except UnicodeEncodeError as exc:
+                  raise ValueError("non-ASCII ZIP member path") from exc
+              return name, is_dir
+
+          def validate_zip_index(infos):
+              by_name = {}
+              folded = {}
+              for info in infos:
+                  name, is_dir = safe_member_name(info.filename)
+                  if name in by_name:
+                      raise ValueError("duplicate ZIP member path")
+                  key = name.casefold()
+                  if key in folded and folded[key] != name:
+                      raise ValueError("case-fold-colliding ZIP member paths")
+                  folded[key] = name
+                  mode = (info.external_attr >> 16) & 0xFFFF
+                  if stat.S_ISLNK(mode):
+                      raise ValueError("symlink ZIP member rejected")
+                  if info.flag_bits & 0x1:
+                      raise ValueError("encrypted ZIP member rejected")
+                  if info.file_size < 0 or info.file_size > MAX_FILE:
+                      raise ValueError("ZIP member size limit exceeded")
+                  if info.compress_size < 0:
+                      raise ValueError("invalid ZIP compressed size")
+                  if info.file_size and info.compress_size == 0:
+                      raise ValueError("invalid ZIP compression ratio")
+                  if info.compress_size and info.file_size / info.compress_size > MAX_RATIO:
+                      raise ValueError("ZIP compression ratio limit exceeded")
+                  if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                      raise ValueError("unsupported ZIP compression method")
+                  by_name[name] = (info, is_dir)
+              for required in REQUIRED:
+                  item = by_name.get(required)
+                  if item is None or item[1]:
+                      raise ValueError("required ZIP member missing: " + required)
+              return by_name
+
+          def canonical_manifest_bytes(document):
+              return json.dumps(
+                  document, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+              ).encode("ascii")
+
+          class AcquisitionSafetyTests(unittest.TestCase):
+              def test_accepts_expected_relative_file(self):
+                  self.assertEqual(safe_member_name("extracted/DerivedGeneralCategory.txt"),
+                                   ("extracted/DerivedGeneralCategory.txt", False))
+
+              def test_rejects_parent_traversal(self):
+                  with self.assertRaises(ValueError):
+                      safe_member_name("../PropList.txt")
+
+              def test_rejects_absolute_and_backslash_paths(self):
+                  for value in ("/PropList.txt", "C:/PropList.txt", "extracted\\PropList.txt"):
+                      with self.subTest(value=value), self.assertRaises(ValueError):
+                          safe_member_name(value)
+
+              def test_rejects_duplicate_paths(self):
+                  first = zipfile.ZipInfo("PropList.txt")
+                  second = zipfile.ZipInfo("PropList.txt")
+                  with self.assertRaisesRegex(ValueError, "duplicate"):
+                      validate_zip_index([first, second])
+
+              def test_rejects_casefold_collisions(self):
+                  first = zipfile.ZipInfo("PropList.txt")
+                  second = zipfile.ZipInfo("proplist.txt")
+                  with self.assertRaisesRegex(ValueError, "case-fold"):
+                      validate_zip_index([first, second])
+
+              def test_manifest_encoding_is_stable(self):
+                  sample = {"unicode_version": VERSION, "files": [{"path": "A", "sha256": "00"}]}
+                  self.assertEqual(canonical_manifest_bytes(sample),
+                                   canonical_manifest_bytes(sample))
+
+          suite = unittest.defaultTestLoader.loadTestsFromTestCase(AcquisitionSafetyTests)
+          test_result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
+          if not test_result.wasSuccessful():
+              raise SystemExit("pre-acquisition safety tests failed")
+
+          def fetch_exact(url, maximum, expected_kind):
+              parsed = urllib.parse.urlsplit(url)
+              if parsed.scheme != "https" or parsed.hostname != "www.unicode.org":
+                  raise ValueError("source URL is outside the pinned Unicode HTTPS origin")
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "User-Agent": "MasterBrain-Unicode18-Audit/1.0",
+                      "Accept-Encoding": "identity",
+                      "Accept": "application/zip, text/plain, application/octet-stream",
+                  },
+                  method="GET",
+              )
+              last_error = None
+              for attempt in range(3):
+                  try:
+                      with urllib.request.urlopen(request, timeout=25) as response:
+                          final = urllib.parse.urlsplit(response.geturl())
+                          if (final.scheme != "https" or final.hostname != "www.unicode.org"
+                                  or final.path != parsed.path or final.query or final.fragment):
+                              raise ValueError("unexpected redirect target")
+                          if response.status != 200:
+                              raise ValueError("unexpected HTTP status: " + str(response.status))
+                          content_type = response.headers.get_content_type().lower()
+                          if content_type not in ALLOWED_TYPES:
+                              raise ValueError("unexpected content type: " + content_type)
+                          encoding = response.headers.get("Content-Encoding", "identity").lower()
+                          if encoding not in ("", "identity"):
+                              raise ValueError("unexpected content encoding: " + encoding)
+                          declared = response.headers.get("Content-Length")
+                          if declared is not None and int(declared) > maximum:
+                              raise ValueError("declared response size exceeds limit")
+                          chunks = []
+                          total = 0
+                          while True:
+                              chunk = response.read(min(1024 * 1024, maximum + 1 - total))
+                              if not chunk:
+                                  break
+                              chunks.append(chunk)
+                              total += len(chunk)
+                              if total > maximum:
+                                  raise ValueError("response size exceeds limit")
+                          body = b"".join(chunks)
+                          if declared is not None and len(body) != int(declared):
+                              raise ValueError("Content-Length does not match received bytes")
+                          if not body:
+                              raise ValueError("empty response body")
+                          if expected_kind == "zip" and not body.startswith(b"PK"):
+                              raise ValueError("UCD.zip signature is missing")
+                          if expected_kind == "text" and b"\x00" in body:
+                              raise ValueError("unexpected NUL in text source")
+                          return body, {
+                              "requested_url": url,
+                              "final_url": response.geturl(),
+                              "http_status": response.status,
+                              "content_type": content_type,
+                              "content_encoding": encoding or "identity",
+                              "byte_length": len(body),
+                          }
+                  except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+                      last_error = exc
+                      if attempt == 2:
+                          break
+                      time.sleep(2 ** attempt)
+              raise RuntimeError("source acquisition failed after bounded retries: " + str(last_error))
+
+          def validate_text_source(path, data):
+              data.decode("utf-8", errors="strict")
+              if path == "UnicodeData.txt":
+                  previous = -1
+                  rows = 0
+                  for line_number, line in enumerate(data.splitlines(), 1):
+                      fields = line.split(b";")
+                      if len(fields) != 15 or not re.fullmatch(rb"[0-9A-Fa-f]{4,6}", fields[0]):
+                          raise ValueError("UnicodeData.txt malformed row at line " + str(line_number))
+                      codepoint = int(fields[0], 16)
+                      if codepoint <= previous:
+                          raise ValueError("UnicodeData.txt code points are not strictly increasing")
+                      previous = codepoint
+                      rows += 1
+                  if rows == 0:
+                      raise ValueError("UnicodeData.txt has no records")
+                  return "15-field UTF-8 records; strictly increasing code points; rows=" + str(rows)
+              if VERSION.encode("ascii") not in data[:32768]:
+                  raise ValueError("version marker 18.0.0 not found in header window: " + path)
+              return "Unicode 18.0.0 marker present in first 32768 bytes"
+
+          def main():
+              archive_bytes, archive_meta = fetch_exact(ARCHIVE_URL, MAX_ARCHIVE, "zip")
+              archive_meta["sha256"] = hashlib.sha256(archive_bytes).hexdigest()
+              direct = {}
+              direct_meta = {}
+              total = 0
+              for path in REQUIRED:
+                  body, meta = fetch_exact(ROOT + path, MAX_FILE, "text")
+                  total += len(body)
+                  if total > MAX_TOTAL:
+                      raise ValueError("aggregate direct-source size limit exceeded")
+                  header_result = validate_text_source(path, body)
+                  direct[path] = body
+                  meta["sha256"] = hashlib.sha256(body).hexdigest()
+                  meta["header_validation"] = header_result
+                  direct_meta[path] = meta
+
+              with zipfile.ZipFile(BytesIO(archive_bytes), "r") as archive:
+                  index = validate_zip_index(archive.infolist())
+                  results = []
+                  for path in REQUIRED:
+                      info, _ = index[path]
+                      if info.file_size > MAX_FILE:
+                          raise ValueError("required ZIP member exceeds size limit: " + path)
+                      packaged = archive.read(info)
+                      if len(packaged) != info.file_size:
+                          raise ValueError("ZIP member size mismatch: " + path)
+                      if packaged != direct[path]:
+                          raise ValueError("direct-download and UCD.zip bytes differ: " + path)
+                      results.append({
+                          "relative_path": path,
+                          **direct_meta[path],
+                          "zip_member_byte_length": len(packaged),
+                          "zip_member_sha256": hashlib.sha256(packaged).hexdigest(),
+                          "direct_vs_zip_equal": True,
+                      })
+
+              stable = {
+                  "unicode_version": VERSION,
+                  "source_root": ROOT,
+                  "archive": {
+                      "url": ARCHIVE_URL,
+                      "byte_length": archive_meta["byte_length"],
+                      "sha256": archive_meta["sha256"],
+                  },
+                  "files": [
+                      {
+                          "relative_path": item["relative_path"],
+                          "byte_length": item["byte_length"],
+                          "sha256": item["sha256"],
+                          "zip_member_sha256": item["zip_member_sha256"],
+                          "direct_vs_zip_equal": item["direct_vs_zip_equal"],
+                          "header_validation": item["header_validation"],
+                      }
+                      for item in results
+                  ],
+              }
+              stable_digest = hashlib.sha256(canonical_manifest_bytes(stable)).hexdigest()
+              report = {
+                  "status": "PASS",
+                  "unicode_version": VERSION,
+                  "acquired_at_utc": datetime.now(timezone.utc).isoformat(),
+                  "archive": archive_meta,
+                  "files": results,
+                  "stable_manifest_sha256": stable_digest,
+                  "raw_source_contents_logged": False,
+                  "artifacts_uploaded": False,
+                  "independent_publisher_corroboration": "NOT_ESTABLISHED",
+                  "source_provenance_scope": "official Unicode direct files compared byte-for-byte with official Unicode UCD.zip; same publisher",
+              }
+              print("UNICODE18_ACQUISITION_REPORT_BEGIN")
+              print(json.dumps(report, ensure_ascii=True, sort_keys=True, indent=2))
+              print("UNICODE18_ACQUISITION_REPORT_END")
+
+          main()
+          PY

@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "unicode_version": "18.0.0",
+  "source_root": "https://www.unicode.org/Public/18.0.0/ucd/",
+  "archive": {
+    "relative_path": "UCD.zip",
+    "url": "https://www.unicode.org/Public/18.0.0/ucd/UCD.zip",
+    "byte_length": 5657953,
+    "sha256": "7b3e555514060b92290d154f53655c5eb0fa62b16eb04c03434ff72d1a66a0d8"
+  },
+  "files": [
+    {
+      "relative_path": "ReadMe.txt",
+      "byte_length": 729,
+      "sha256": "b0ea442f29dee90584aacd3665a6e1ce87ffc917a4d31f34e1916d2d6f7f9205",
+      "zip_member_byte_length": 729,
+      "zip_member_sha256": "b0ea442f29dee90584aacd3665a6e1ce87ffc917a4d31f34e1916d2d6f7f9205",
+      "direct_vs_zip_equal": true
+    },
+    {
+      "relative_path": "PropList.txt",
+      "byte_length": 149040,
+      "sha256": "f438f532e8737bb8a2702126cdf9c4af5e357c58c7acf9d9eb2fc7c1a1d955d6",
+      "zip_member_byte_length": 149040,
+      "zip_member_sha256": "f438f532e8737bb8a2702126cdf9c4af5e357c58c7acf9d9eb2fc7c1a1d955d6",
+      "direct_vs_zip_equal": true
+    },
+    {
+      "relative_path": "DerivedCoreProperties.txt",
+      "byte_length": 1159889,
+      "sha256": "09c928886a178fcafd93c29e4bd59073a058e5a100b716d425cb563ab50f68c9",
+      "zip_member_byte_length": 1159889,
+      "zip_member_sha256": "09c928886a178fcafd93c29e4bd59073a058e5a100b716d425cb563ab50f68c9",
+      "direct_vs_zip_equal": true
+    },
+    {
+      "relative_path": "DerivedAge.txt",
+      "byte_length": 142568,
+      "sha256": "58b04334e3a31f9612694bbc3f6bff4a302b7d424565bca9c47e30aa74f8dbac",
+      "zip_member_byte_length": 142568,
+      "zip_member_sha256": "58b04334e3a31f9612694bbc3f6bff4a302b7d424565bca9c47e30aa74f8dbac",
+      "direct_vs_zip_equal": true
+    },
+    {
+      "relative_path": "extracted/DerivedGeneralCategory.txt",
+      "byte_length": 282143,
+      "sha256": "d6b151d2d40ee9b1876d26f417980f45ffae47b6055ccf7203cb31f07a030f94",
+      "zip_member_byte_length": 282143,
+      "zip_member_sha256": "d6b151d2d40ee9b1876d26f417980f45ffae47b6055ccf7203cb31f07a030f94",
+      "direct_vs_zip_equal": true
+    },
+    {
+      "relative_path": "UnicodeData.txt",
+      "byte_length": 2243593,
+      "sha256": "0736451de439ae7baf1425136617da495e09ee5afbe6e394374db7009ea08950",
+      "validation": "UTF-8; 15 fields per record; strictly increasing code points; 41,341 records",
+      "zip_member_byte_length": 2243593,
+      "zip_member_sha256": "0736451de439ae7baf1425136617da495e09ee5afbe6e394374db7009ea08950",
+      "direct_vs_zip_equal": true
+    },
+    {
+      "relative_path": "CaseFolding.txt",
+      "byte_length": 88776,
+      "sha256": "a004797658a457bec4dc11683e39f69249ea3b595b752dbea6721c4c9f587b0d",
+      "zip_member_byte_length": 88776,
+      "zip_member_sha256": "a004797658a457bec4dc11683e39f69249ea3b595b752dbea6721c4c9f587b0d",
+      "direct_vs_zip_equal": true
+    },
+    {
+      "relative_path": "DerivedNormalizationProps.txt",
+      "byte_length": 1396877,
+      "sha256": "98ac7f67d985fe781e317f6182e885e94cabb0c314769e6dd73e48b226931ccd",
+      "zip_member_byte_length": 1396877,
+      "zip_member_sha256": "98ac7f67d985fe781e317f6182e885e94cabb0c314769e6dd73e48b226931ccd",
+      "direct_vs_zip_equal": true
+    },
+    {
+      "relative_path": "NormalizationTest.txt",
+      "byte_length": 2863708,
+      "sha256": "25a50d816764b04abfb4a646d3eb2b2a803284c3873d9a06757b94fe4513dde3",
+      "zip_member_byte_length": 2863708,
+      "zip_member_sha256": "25a50d816764b04abfb4a646d3eb2b2a803284c3873d9a06757b94fe4513dde3",
+      "direct_vs_zip_equal": true
+    }
+  ],
+  "stable_manifest_sha256": "965655de97a82e6efc751d4e5f5c577c9c484eaf798af9a90f1a0203516ac27c",
+  "stable_manifest_hash_definition": "SHA-256 over canonical ASCII JSON (sort_keys=true, separators=(',', ':')) of unicode_version, source_root, archive {url, byte_length, sha256}, and ordered files containing relative_path, byte_length, sha256, zip_member_sha256, direct_vs_zip_equal, header_validation. This hash is the workflow-produced stable manifest digest; this evidence document stores the equivalent file facts.",
+  "verification": {
+    "first_run_id": 43726852830,
+    "first_run_url": "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/43726852830",
+    "second_run_id": 43726926544,
+    "second_run_url": "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/43726926544",
+    "second_run_jobs": [
+      {
+        "job_id": 132850776436,
+        "method": "Python urllib + zipfile + unittest",
+        "runner_image": "ubuntu-24.04.5",
+        "cloud": "Azure",
+        "region": "westus",
+        "result": "success",
+        "tests": "6/6 passed"
+      },
+      {
+        "job_id": 132850776729,
+        "method": "curl + unzip + cmp + sha256sum",
+        "runner_image": "ubuntu-24.04.5",
+        "cloud": "AWS",
+        "region": "us-west-2",
+        "result": "success",
+        "files_verified": 9
+      }
+    ],
+    "cross_environment_digest_reproduction": "PASS",
+    "independent_publisher_corroboration": "NOT_ESTABLISHED",
+    "trusted_timestamp_or_signed_attestation": "NOT_ESTABLISHED"
+  },
+  "status": "RAW_BYTES_ACQUIRED_AND_DUAL_PATH_CROSS_ENVIRONMENT_REPRODUCED",
+  "limitations": [
+    "Both source representations originate from the Unicode Consortium; this is not independent publisher corroboration.",
+    "No raw source files were committed or uploaded as artifacts.",
+    "The manifest is not digitally signed and is not a trusted timestamp attestation.",
+    "The deterministic UCD parser and Unicode property derivation tests remain NOT_RUN.",
+    "R1-G independent review remains outstanding."
+  ]
+}

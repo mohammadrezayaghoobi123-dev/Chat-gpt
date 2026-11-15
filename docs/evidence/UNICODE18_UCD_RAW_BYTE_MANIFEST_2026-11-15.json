@@ -128,6 +128,55 @@
     "No raw source files were committed or uploaded as artifacts.",
     "The manifest is not digitally signed and is not a trusted timestamp attestation.",
     "The deterministic UCD parser and Unicode property derivation tests remain NOT_RUN.",
-    "R1-G independent review remains outstanding."
-  ]
+    "R1-G independent review remains outstanding.",
+    "FreeBSD packaging history records multiple UCD.zip hashes for the same Unicode version; archive-container identity is not historically immutable.",
+    "Likely archive repackaging cause (removal of two non-core PDF files) is supported by the FreeBSD package-list diff but not proven by a historical raw-archive byte diff."
+  ],
+  "independent_provenance": [
+    {
+      "source": "FreeBSD ports tree",
+      "immutable_commit": "c0caf8a2746e250774d46f938e8d043d44e890b2",
+      "commit_date": "2026-09-22T09:54:06Z",
+      "file": "textproc/UCD/distinfo",
+      "url": "https://raw.githubusercontent.com/freebsd/freebsd-ports/c0caf8a2746e250774d46f938e8d043d44e890b2/textproc/UCD/distinfo",
+      "independently_published_archive_sha256": "7b3e555514060b92290d154f53655c5eb0fa62b16eb04c03434ff72d1a66a0d8",
+      "independently_published_archive_byte_length": 5657953,
+      "match": "EXACT",
+      "trust_note": "Independent downstream package metadata, not a Unicode Consortium signature."
+    },
+    {
+      "source": "Sparkles Unicode data manifest",
+      "url": "https://sparkles-docs.pages.dev/src/libs/base/tools/unicode/manifest.json",
+      "release": "18.0.0",
+      "matching_file_hashes": [
+        "UnicodeData.txt",
+        "DerivedCoreProperties.txt",
+        "PropList.txt",
+        "DerivedNormalizationProps.txt",
+        "CaseFolding.txt",
+        "extracted/DerivedGeneralCategory.txt"
+      ],
+      "match_count": 6,
+      "total_required_files": 9,
+      "match": "EXACT_FOR_SIX_FILES",
+      "trust_note": "Third-party manifest; mutable URL and no immutable source revision was established. Supporting evidence only."
+    }
+  ],
+  "archive_history": {
+    "current": {
+      "sha256": "7b3e555514060b92290d154f53655c5eb0fa62b16eb04c03434ff72d1a66a0d8",
+      "byte_length": 5657953,
+      "freebsd_commit": "c0caf8a2746e250774d46f938e8d043d44e890b2"
+    },
+    "previous_freebsd_record": {
+      "sha256": "17591bf796d71323cdf69715aca3cc9778f6008bf61fb733bd2d1241c03702fd",
+      "byte_length": 9495736
+    },
+    "earlier_initial_freebsd_record": {
+      "sha256": "c961d4405edd144b5052cfaf8bf7db54af44ebc5db7181f83c6c52df99e9363a",
+      "byte_length": 9464017
+    },
+    "interpretation": "UCD.zip container was re-rolled. The 2026-09-22 FreeBSD commit also removes USourceGlyphs.pdf and USourceRSChart.pdf from the package file list. Removal of non-core PDF files is a plausible explanation for much of the size reduction, but historical archive bytes were not acquired for a byte-level diff; root cause remains PROVISIONALLY_SUPPORTED, not proven.",
+    "consequence": "Treat UCD.zip SHA-256 as a time-specific packaging digest. Do not infer that the archive container is historically immutable. The nine individual file digests are separately supported by current dual-path comparison; six also have third-party manifest matches."
+  }
 }

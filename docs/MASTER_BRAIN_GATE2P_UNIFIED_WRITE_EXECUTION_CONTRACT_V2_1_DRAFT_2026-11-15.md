@@ -68,13 +68,14 @@ The v2 length-prefix proposal is underspecified. Candidate v2.1 encoding, subjec
 - Domain separator: ASCII bytes MB-WRITE-OP followed by NUL.
 - Encoding version: unsigned 16-bit big-endian integer, currently 1.
 - Fields emitted in this exact order, each with a one-byte field tag, then unsigned 32-bit big-endian byte length, then field bytes:
-  1. action;
-  2. principal.type;
-  3. principal.id;
-  4. tenant_id;
-  5. project_id;
-  6. resource.repository_id as decimal ASCII;
-  7. client_idempotency_key.
+  1. tag 0x01: action;
+  2. tag 0x02: principal.type;
+  3. tag 0x03: principal.id;
+  4. tag 0x04: tenant_id;
+  5. tag 0x05: project_id;
+  6. tag 0x06: resource.repository_id as canonical decimal ASCII;
+  7. tag 0x07: client_idempotency_key.
+- Tag values are fixed for encoding version 1. A future field or tag reassignment requires a new encoding version; unknown tags are rejected.
 - All string fields MUST be valid UTF-8, non-empty, and subject to per-field and total byte-length limits fixed in the implementation profile.
 - Null, absent and empty are not interchangeable. Required fields reject null/absent/empty. Optional fields introduced later require an explicit presence tag; they MUST NOT be encoded as empty strings.
 - No Unicode normalization, case folding, locale conversion or trimming is implicit. Owning authorities validate identifiers before encoding.
@@ -91,7 +92,7 @@ Use a versioned canonical envelope:
 
 The envelope MUST include every semantically relevant input and every GitHub payload field, including:
 - action/schema version;
-- numeric repository ID, owner, repo and base branch;
+- repository ID represented as a canonical decimal string (to avoid JSON numeric coercion), owner, repo and base branch;
 - PR title and body/summary exactly as sent;
 - commit message and trailers;
 - author and committer identity fields;

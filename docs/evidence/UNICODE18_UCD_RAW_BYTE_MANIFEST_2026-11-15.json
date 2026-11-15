@@ -15,7 +15,8 @@
       "sha256": "b0ea442f29dee90584aacd3665a6e1ce87ffc917a4d31f34e1916d2d6f7f9205",
       "zip_member_byte_length": 729,
       "zip_member_sha256": "b0ea442f29dee90584aacd3665a6e1ce87ffc917a4d31f34e1916d2d6f7f9205",
-      "direct_vs_zip_equal": true
+      "direct_vs_zip_equal": true,
+      "header_validation": "Unicode 18.0.0 marker present in first 32768 bytes"
     },
     {
       "relative_path": "PropList.txt",
@@ -23,7 +24,8 @@
       "sha256": "f438f532e8737bb8a2702126cdf9c4af5e357c58c7acf9d9eb2fc7c1a1d955d6",
       "zip_member_byte_length": 149040,
       "zip_member_sha256": "f438f532e8737bb8a2702126cdf9c4af5e357c58c7acf9d9eb2fc7c1a1d955d6",
-      "direct_vs_zip_equal": true
+      "direct_vs_zip_equal": true,
+      "header_validation": "Unicode 18.0.0 marker present in first 32768 bytes"
     },
     {
       "relative_path": "DerivedCoreProperties.txt",
@@ -31,7 +33,8 @@
       "sha256": "09c928886a178fcafd93c29e4bd59073a058e5a100b716d425cb563ab50f68c9",
       "zip_member_byte_length": 1159889,
       "zip_member_sha256": "09c928886a178fcafd93c29e4bd59073a058e5a100b716d425cb563ab50f68c9",
-      "direct_vs_zip_equal": true
+      "direct_vs_zip_equal": true,
+      "header_validation": "Unicode 18.0.0 marker present in first 32768 bytes"
     },
     {
       "relative_path": "DerivedAge.txt",
@@ -39,7 +42,8 @@
       "sha256": "58b04334e3a31f9612694bbc3f6bff4a302b7d424565bca9c47e30aa74f8dbac",
       "zip_member_byte_length": 142568,
       "zip_member_sha256": "58b04334e3a31f9612694bbc3f6bff4a302b7d424565bca9c47e30aa74f8dbac",
-      "direct_vs_zip_equal": true
+      "direct_vs_zip_equal": true,
+      "header_validation": "Unicode 18.0.0 marker present in first 32768 bytes"
     },
     {
       "relative_path": "extracted/DerivedGeneralCategory.txt",
@@ -47,7 +51,8 @@
       "sha256": "d6b151d2d40ee9b1876d26f417980f45ffae47b6055ccf7203cb31f07a030f94",
       "zip_member_byte_length": 282143,
       "zip_member_sha256": "d6b151d2d40ee9b1876d26f417980f45ffae47b6055ccf7203cb31f07a030f94",
-      "direct_vs_zip_equal": true
+      "direct_vs_zip_equal": true,
+      "header_validation": "Unicode 18.0.0 marker present in first 32768 bytes"
     },
     {
       "relative_path": "UnicodeData.txt",
@@ -64,7 +69,8 @@
       "sha256": "a004797658a457bec4dc11683e39f69249ea3b595b752dbea6721c4c9f587b0d",
       "zip_member_byte_length": 88776,
       "zip_member_sha256": "a004797658a457bec4dc11683e39f69249ea3b595b752dbea6721c4c9f587b0d",
-      "direct_vs_zip_equal": true
+      "direct_vs_zip_equal": true,
+      "header_validation": "Unicode 18.0.0 marker present in first 32768 bytes"
     },
     {
       "relative_path": "DerivedNormalizationProps.txt",
@@ -72,7 +78,8 @@
       "sha256": "98ac7f67d985fe781e317f6182e885e94cabb0c314769e6dd73e48b226931ccd",
       "zip_member_byte_length": 1396877,
       "zip_member_sha256": "98ac7f67d985fe781e317f6182e885e94cabb0c314769e6dd73e48b226931ccd",
-      "direct_vs_zip_equal": true
+      "direct_vs_zip_equal": true,
+      "header_validation": "Unicode 18.0.0 marker present in first 32768 bytes"
     },
     {
       "relative_path": "NormalizationTest.txt",
@@ -80,7 +87,8 @@
       "sha256": "25a50d816764b04abfb4a646d3eb2b2a803284c3873d9a06757b94fe4513dde3",
       "zip_member_byte_length": 2863708,
       "zip_member_sha256": "25a50d816764b04abfb4a646d3eb2b2a803284c3873d9a06757b94fe4513dde3",
-      "direct_vs_zip_equal": true
+      "direct_vs_zip_equal": true,
+      "header_validation": "Unicode 18.0.0 marker present in first 32768 bytes"
     }
   ],
   "stable_manifest_sha256": "965655de97a82e6efc751d4e5f5c577c9c484eaf798af9a90f1a0203516ac27c",

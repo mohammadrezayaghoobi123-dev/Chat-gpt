@@ -1,0 +1,173 @@
+{
+  "schema_id": "org.masterbrain.security.unicode-path-policy",
+  "schema_version": "1.0.0",
+  "policy_id": "MB-SR02-FC3",
+  "policy_version": "1.0.0",
+  "decision_id": "MB-G2P-R1R-OWNER-DECISION-FC3-V1-2026-11-15",
+  "decision_status": "OWNER_APPROVED",
+  "implementation_status": "NOT_IMPLEMENTED",
+  "test_status": "NOT_RUN",
+  "unicode_version": "18.0.0",
+  "security_profile_reference": {
+    "identifier": "UTS39",
+    "revision": "34",
+    "conformance_claim": false
+  },
+  "scope": {
+    "applies_to": "repository_path_values",
+    "does_not_apply_to": [
+      "ordinary_file_contents",
+      "application_text",
+      "scientific_documents",
+      "source_code_string_literals",
+      "general_user_data"
+    ]
+  },
+  "admission": {
+    "default": "REJECT_ON_MATCH",
+    "normalization": "NFC_REQUIRED_REJECT_NON_NFC",
+    "preserve_accepted_path_representation": true,
+    "silent_strip_replace_or_rewrite": false,
+    "evaluate_before": [
+      "request_digest",
+      "content_digest",
+      "collision_comparison",
+      "persistence",
+      "external_write"
+    ]
+  },
+  "entries": [
+    {
+      "id": "FC3-01",
+      "code_points": ["U+00AD"],
+      "name": "SOFT HYPHEN",
+      "decision": "REJECT",
+      "reason_code": "FC3-SOFT-HYPHEN"
+    },
+    {
+      "id": "FC3-02",
+      "code_points": ["U+034F"],
+      "name": "COMBINING GRAPHEME JOINER",
+      "general_category": "Mn",
+      "decision": "REJECT",
+      "reason_code": "FC3-COMBINING-GRAPHEME-JOINER"
+    },
+    {
+      "id": "FC3-03",
+      "code_points": ["U+180E"],
+      "name": "MONGOLIAN VOWEL SEPARATOR",
+      "decision": "REJECT",
+      "reason_code": "FC3-MONGOLIAN-VOWEL-SEPARATOR"
+    },
+    {
+      "id": "FC3-04",
+      "code_points": ["U+200B"],
+      "name": "ZERO WIDTH SPACE",
+      "decision": "REJECT",
+      "reason_code": "FC3-ZERO-WIDTH-SPACE",
+      "reconsideration_gate": {
+        "required_evidence": "DISP-1 independently verified across every supported security-sensitive display surface",
+        "automatic_transition": false,
+        "requires_new_owner_decision": true,
+        "possible_future_decision": "DISPLAY_ONLY"
+      }
+    },
+    {
+      "id": "FC3-05",
+      "code_points": ["U+2060"],
+      "name": "WORD JOINER",
+      "decision": "REJECT",
+      "reason_code": "FC3-WORD-JOINER"
+    },
+    {
+      "id": "FC3-06",
+      "code_points": ["U+2061", "U+2062", "U+2063", "U+2064"],
+      "names": [
+        "FUNCTION APPLICATION",
+        "INVISIBLE TIMES",
+        "INVISIBLE SEPARATOR",
+        "INVISIBLE PLUS"
+      ],
+      "decision": "REJECT",
+      "reason_code": "FC3-INVISIBLE-MATH-OPERATOR"
+    },
+    {
+      "id": "FC3-07",
+      "code_points": ["U+206A", "U+206B", "U+206C", "U+206D", "U+206E", "U+206F"],
+      "name": "DEPRECATED FORMAT CONTROLS",
+      "decision": "REJECT",
+      "reason_code": "FC3-DEPRECATED-FORMAT"
+    },
+    {
+      "id": "FC3-08",
+      "code_points": ["U+FEFF"],
+      "name": "ZERO WIDTH NO-BREAK SPACE / BOM",
+      "decision": "REJECT_IN_DECODED_PATH_VALUE",
+      "reason_code": "FC3-FEFF-IN-PATH",
+      "transport_bom": "HANDLE_ONLY_AT_EXPLICIT_DECODER_BOUNDARY; NEVER_SILENTLY_MUTATE_A_DECODED_PATH_VALUE"
+    }
+  ],
+  "explicit_exclusions": [
+    {
+      "code_points": ["U+2065"],
+      "reason": "Unicode 18.0.0 Age=Unassigned",
+      "policy_owner": "AGE_UNASSIGNED"
+    },
+    {
+      "code_points": ["U+2066", "U+2067", "U+2068", "U+2069"],
+      "reason": "Bidi_Control=Yes",
+      "policy_owner": "BC-1"
+    },
+    {
+      "code_points": ["U+200C", "U+200D"],
+      "reason": "Join_Control=Yes; context-constrained admission",
+      "policy_owner": "JC-2"
+    },
+    {
+      "code_points": ["U+180B", "U+180C", "U+180D", "U+180F"],
+      "reason": "Not included by the U+180E-only decision",
+      "policy_owner": "OTHER_UNICODE_PATH_RULES"
+    }
+  ],
+  "overlap_handling": {
+    "preserve_all_applicable_reason_codes": true,
+    "discard_policy_provenance": false,
+    "arbitrary_single_reason_precedence": false
+  },
+  "display_safety": {
+    "policy_reference": "DISP-1",
+    "required_for_all_untrusted_path_values": true,
+    "required_surfaces": [
+      "audit_logs_and_event_records",
+      "review_and_approval_interfaces",
+      "terminal_and_cli_diagnostics",
+      "browser_and_desktop_ui",
+      "exports_downloads_and_reports",
+      "clipboard_and_copy",
+      "errors_and_support_bundles",
+      "api_diagnostics_consumed_by_humans"
+    ],
+    "implementation_status": "NOT_IMPLEMENTED",
+    "verification_status": "NOT_VERIFIED"
+  },
+  "source_artifacts": {
+    "unicode_version": "18.0.0",
+    "sha256_verified": false,
+    "byte_lengths_verified": false,
+    "independent_reproduction": "PENDING"
+  },
+  "verification": {
+    "tests": "NOT_RUN",
+    "cross_runtime_determinism": "NOT_VERIFIED",
+    "provider_and_filesystem_round_trip": "NOT_VERIFIED",
+    "independent_review": "NOT_RECEIVED"
+  },
+  "authorization": {
+    "implementation": "NOT_AUTHORIZED",
+    "test_execution": "NOT_AUTHORIZED",
+    "external_github_write_dispatch": "DENY",
+    "pull_request_creation": "NOT_AUTHORIZED",
+    "merge": "NOT_AUTHORIZED",
+    "deployment": "NOT_AUTHORIZED"
+  }
+}

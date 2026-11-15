@@ -1,7 +1,7 @@
 # Master Brain — Gate 2P / R1-Candidate: SR-02 Digest Semantics and Canonicalization Contract
 
 **Document ID:** MB-G2P-SR02-CANON-2026-11-15  
-**Status:** ENGINEERING PROPOSAL — NOT OWNER-APPROVED — NOT IMPLEMENTED — NOT TESTED  
+**Status:** ENGINEERING PROPOSAL — F-01/F-02 OWNER-DECIDED — NOT FROZEN — NOT IMPLEMENTED — NOT TESTED  
 **Scope:** Clarification of SR-02 only: authorization resource identity, exact request idempotency, and payload content identity.  
 **Repository:** `mohammadrezayaghoobi123-dev/Chat-gpt`  
 **Branch:** `integration/master-brain-unification-2026-11-15`  
@@ -40,7 +40,7 @@ The server constructs a typed descriptor containing only policy-relevant identit
 - project immutable identifier;
 - action identifier (for example, `project.create_pr`);
 - canonical repository identity, preferably immutable provider repository ID plus current canonical owner/name for audit;
-- resource target identity required by the action (for example, target repository and base branch, where base branch is part of policy scope);
+- resource target identity required by the action. For the current `project.create_pr` action, this MUST include the target repository and canonical `base_branch`;
 - any additional attribute only where the policy model explicitly declares it authorization-relevant.
 
 The descriptor MUST NOT silently include mutable presentation metadata. Title, summary, file content, and other request payload fields belong in this descriptor only if a separately documented policy rule explicitly makes them part of the authorization target. Default: they are excluded from the authorization resource descriptor.
@@ -113,7 +113,7 @@ A single, versioned canonicalization profile MUST be shared by admission, replay
 - Reject absolute paths, empty paths, NUL, traversal segments (`.` or `..`), and paths escaping the repository root.
 - Define slash as the only separator in canonical form; reject or normalize backslash consistently before duplicate detection.
 - Normalize path Unicode according to the declared path profile, then detect duplicates after normalization.
-- For portability across case-sensitive and case-insensitive workstations, evaluate rejecting case-fold collisions (for example, `Readme` vs `README`) rather than silently treating them as distinct. This remains an owner/implementation design choice until repository behavior is verified.
+- For v1, the server MUST reject any request containing two distinct repository-relative paths that collide under the versioned Unicode case-fold comparison profile (for example, `Readme` vs `README`). The system MUST NOT silently rename, merge, overwrite, or select a winner. The Unicode data version, normalization profile, and exact case-fold algorithm MUST be pinned before implementation; the comparison key is used only for collision detection and MUST NOT silently rewrite the stored path.
 - Preserve exact final path bytes in the content manifest after validation.
 - Symlinks, submodules, binary files, and mode changes are out of scope until separately specified; unsupported types MUST be rejected, not silently coerced.
 
@@ -141,7 +141,7 @@ A single, versioned canonicalization profile MUST be shared by admission, replay
 | Same key, changed summary | Usually same | Different | Usually same | IDEMPOTENCY_CONFLICT; no dispatch |
 | Same key, changed file bytes | Same | Different | Different | IDEMPOTENCY_CONFLICT; no dispatch |
 | Different target repository | Different | Different | May be same | New authorization required; scope mismatch is not replay |
-| Same bytes, changed base branch | Depends on policy scope | Different | Same | Request conflict for same key |
+| Same bytes, changed base branch | Different | Different | Same | Request conflict for same key; authorization must be evaluated for the new target |
 | GitHub object has different bytes | N/A | Stored request remains same | Observed digest differs | CONFLICT / UNKNOWN; never declare success |
 | Client supplies digest inconsistent with server computation | N/A | N/A | N/A | Reject client digest; server recomputes |
 
@@ -165,7 +165,7 @@ A single, versioned canonicalization profile MUST be shared by admission, replay
 - T-SR02-03: one content byte change changes content_digest and request_fingerprint.
 - T-SR02-04: path change changes content_digest and request_fingerprint.
 - T-SR02-05: repository/resource target change changes authorization_resource_digest.
-- T-SR02-06: base branch change changes request_fingerprint; authorization digest changes only if policy scope includes base branch.
+- T-SR02-06: changing `base_branch` MUST change both `authorization_resource_digest` and `request_fingerprint`; `content_digest` remains equal if the content manifest is unchanged.
 - T-SR02-07: same semantic request with reordered unordered manifest entries produces identical digests.
 - T-SR02-08: duplicate JSON keys are rejected.
 - T-SR02-09: absent/null/empty values follow explicit schema semantics.
@@ -173,7 +173,7 @@ A single, versioned canonicalization profile MUST be shared by admission, replay
 - T-SR02-11: invalid UTF-8 and unpaired surrogate inputs are rejected.
 - T-SR02-12: LF/CRLF behavior matches field-specific rules; file content digest covers exact written bytes.
 - T-SR02-13: path traversal, absolute path, NUL, backslash ambiguity, and duplicate normalized path are rejected.
-- T-SR02-14: case-fold collision behavior matches the approved portability policy.
+- T-SR02-14: any two paths colliding under the pinned v1 Unicode case-fold comparison profile are rejected before digest admission.
 - T-SR02-15: symlink/submodule/unsupported file mode is rejected.
 - T-SR02-16: same key + same fingerprint enters replay/reconciliation path, not blind dispatch.
 - T-SR02-17: same key + different fingerprint returns conflict.
@@ -187,9 +187,9 @@ A single, versioned canonicalization profile MUST be shared by admission, replay
 
 Owner / independent review is required before freezing this contract:
 
-- Whether base branch belongs in authorization scope for `project.create_pr`, or only in request_fingerprint.
+- Exact branch-name validation/canonicalization profile and version for `base_branch`.
 - Whether repository immutable provider ID is available and stable across rename/transfer, and the fallback behavior if unavailable.
-- Whether path case-fold collisions are rejected.
+- Exact Unicode normalization profile, Unicode data version, and case-fold algorithm used for repository-relative path collision detection.
 - Exact field-level Unicode and line-ending rules for title, summary, and file content.
 - Whether non-text/binary files, symlinks, submodules, and file mode changes are supported in v1.
 - Whether SHA-256 is sufficient for the required retention horizon or a keyed HMAC is needed for any identifier class.
@@ -212,7 +212,7 @@ Owner / independent review is required before freezing this contract:
 
 ## 11. Gate status and non-authorization
 
-- SR-02 engineering proposal: documented; owner decision NOT RECORDED.
+- SR-02 engineering proposal: documented; owner decisions F-01 and F-02 RECORDED; remaining owner/design decisions OPEN.
 - Independent review of this exact blob: NOT_RUN.
 - Canonicalization conformance tests: NOT_RUN.
 - Implementation: NOT_AUTHORIZED.
@@ -220,4 +220,4 @@ Owner / independent review is required before freezing this contract:
 - R2 experiments: NOT_AUTHORIZED by this document.
 - PR, merge, deployment, secrets, Cloudflare, Supabase, and laptop changes: NOT AUTHORIZED.
 
-**Conclusion:** SR-02 has a concrete candidate contract and falsifiable test plan, but remains PROPOSED / DISPUTED pending owner decisions and independent review. No implementation or execution claim is made.
+**Conclusion:** SR-02 has a concrete candidate contract and falsifiable test plan. Owner decisions F-01 and F-02 are recorded and incorporated in this revision. The proposal remains NOT FROZEN pending resolution of remaining design details, executable conformance evidence, and independent re-review of this exact revised blob. No implementation or execution claim is made.

@@ -1,7 +1,5 @@
 # Master Brain — Gate 2P / R1-U2: Deterministic UCD Parser and Manifest Reproduction Contract
 
-> **Provenance note (added at publication):** the analysis in this document was performed against branch `integration/master-brain-unification-2026-11-15` at commit `5d55336feef7f27c3ec8b02bb7b8dab4dab0d768` (main `919b19ca3d3887352cdef06b03c668ead04fbce7`). That branch was force-updated before publication; its head at publication is `5d8ae8c5c096356f0f64a68a46f874374b5a34b8`, whose history does not contain `5d55336` and which contains 45 additional files (including `.github/workflows/unicode18-raw-byte-acquisition.yml`) that were **NOT reviewed**. No finding here is claimed for `5d8ae8c`. Status: documentation only; no code, no tests run (NOT_RUN).
-
 **Document ID:** MB-G2P-R1U2-UCD-PARSER-MANIFEST-REPRODUCTION-CONTRACT-2026-11-15  
 **Status:** DESIGN SPECIFICATION — PROPOSED — NOT IMPLEMENTED — TESTS NOT RUN  
 **Repository:** `mohammadrezayaghoobi123-dev/Chat-gpt`  

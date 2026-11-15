@@ -321,3 +321,73 @@ jobs:
 
           main()
           PY
+
+  independent-shell-reproduction:
+    name: Independent curl and unzip reproduction
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Reacquire and independently compare all nine files
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://www.unicode.org/Public/18.0.0/ucd"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          mkdir -p "$tmp/direct" "$tmp/member"
+          archive="$tmp/UCD.zip"
+          fetch_one() {
+            local url="$1" destination="$2" limit="$3" expected="$4"
+            local metadata status content_type size effective actual
+            metadata="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+              --max-redirs 0 --max-filesize "$limit" \
+              --output "$destination" \
+              --write-out '%{http_code}\t%{content_type}\t%{size_download}\t%{url_effective}' \
+              "$url")"
+            IFS=$'\t' read -r status content_type size effective <<< "$metadata"
+            test "$status" = "200"
+            test "$effective" = "$url"
+            case "$expected:$content_type" in
+              zip:application/zip*|zip:application/octet-stream*|text:text/plain*|text:application/octet-stream*) ;;
+              *) echo "unexpected content type for $url: $content_type" >&2; exit 1 ;;
+            esac
+            actual="$(wc -c < "$destination" | tr -d ' ')"
+            test "$actual" = "$size"
+            test "$actual" -gt 0
+            printf '%s\t%s\t%s\n' "$actual" "$content_type" "$effective"
+          }
+          echo "INDEPENDENT_REPRODUCTION_BEGIN"
+          fetch_one "$base/UCD.zip" "$archive" 41943040 zip
+          unzip -tqq "$archive"
+          archive_size="$(wc -c < "$archive" | tr -d ' ')"
+          archive_sha="$(sha256sum "$archive" | cut -d ' ' -f 1)"
+          printf 'ARCHIVE\t%s\t%s\n' "$archive_size" "$archive_sha"
+          files=(
+            "ReadMe.txt"
+            "PropList.txt"
+            "DerivedCoreProperties.txt"
+            "DerivedAge.txt"
+            "extracted/DerivedGeneralCategory.txt"
+            "UnicodeData.txt"
+            "CaseFolding.txt"
+            "DerivedNormalizationProps.txt"
+            "NormalizationTest.txt"
+          )
+          listing="$tmp/listing.txt"
+          unzip -Z1 "$archive" > "$listing"
+          for path in "${files[@]}"; do
+            count="$(grep -Fxc -- "$path" "$listing" || true)"
+            test "$count" = "1"
+            mkdir -p "$tmp/direct/$(dirname "$path")" "$tmp/member/$(dirname "$path")"
+            fetch_one "$base/$path" "$tmp/direct/$path" 26214400 text
+            unzip -p "$archive" "$path" > "$tmp/member/$path"
+            cmp --silent "$tmp/direct/$path" "$tmp/member/$path"
+            direct_size="$(wc -c < "$tmp/direct/$path" | tr -d ' ')"
+            direct_sha="$(sha256sum "$tmp/direct/$path" | cut -d ' ' -f 1)"
+            member_sha="$(sha256sum "$tmp/member/$path" | cut -d ' ' -f 1)"
+            test "$direct_sha" = "$member_sha"
+            printf 'FILE\t%s\t%s\t%s\t%s\n' "$path" "$direct_size" "$direct_sha" "BYTE_EQUAL"
+          done
+          echo "FILES_VERIFIED=9"
+          echo "INDEPENDENT_REPRODUCTION_END"

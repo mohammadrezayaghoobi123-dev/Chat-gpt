@@ -110,7 +110,7 @@ The label `FAILED` is retired. Generic 4xx/5xx, transport errors, rate limits, m
 ## 13. Audit (C-13)
 - Each state transition and its audit event commit in the **same** WriteControl-local transaction; audit failure ⇒ rollback ⇒ `AUDIT_WRITE_FAILED`.
 - Event: JCS of `{schema_version, seq, operation_id|null, event_type, actor, at, payload_digest, prev_hash}`; `event_hash = SHA-256(prev_hash ‖ JCS bytes)`; `seq` gap-free per chain. Chain is tamper-**evident** only within the stored chain; not tamper-proof. External anchoring/trusted timestamping: **OD-6**.
-- Note: the independent review's C-13 text ends mid-sentence at "External" in the snapshot read; no further requirement was inferred.
+- External anchoring remains a separate future control (OD-6). *(An earlier revision of this line wrongly claimed the review text was truncated; that was a display artifact of the author's tooling. Withdrawn in the v2.2 amendments.)*
 - Secrets are never logged.
 
 ## 14. Quota lifecycle (C-11, D-13)

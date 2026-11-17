@@ -175,3 +175,22 @@ commits = ["fe0302ea9927936f70c8a4acc577cae0b140e2d7"]
 paths = ['''^cloud-agent/test/memory-sync\.test\.js$''']
 regexTarget = "line"
 regexes = ["api_key = 'abcd1234efgh5678'"]
+
+[[allowlists]]
+description = "Public ICU KEYS Git blob identifier, not a credential; exact historical commit, documentation path, and full line only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["3082b80fbaf71685827ba63de882c3d93083b96f"]
+paths = ['''^docs/MASTER_BRAIN_GATE2P_R1U17_ICU79_SIGNING_IDENTITY_CANDIDATE_RECONCILIATION_2026-11-16\.md$''']
+regexTarget = "line"
+regexes = ['''- KEYS blob SHA: 9523c0beaf609fc2c276dd8b4478c9471a9bbdec''']
+
+[[allowlists]]
+description = "Public ICU Release Robot signing-key fingerprint in downstream trust metadata, not a credential; exact historical commit, documentation path, and full line only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["3082b80fbaf71685827ba63de882c3d93083b96f"]
+paths = ['''^docs/MASTER_BRAIN_GATE2P_R1U17_ICU79_SIGNING_IDENTITY_CANDIDATE_RECONCILIATION_2026-11-16\.md$''']
+regexTarget = "line"
+regexes = ['''trusted-key id="E52F07877A5805F9AF4AB0ACD46C5610D06E7001" group="com\.ibm\.icu"''']
+

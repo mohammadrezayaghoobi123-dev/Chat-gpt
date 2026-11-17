@@ -28,6 +28,15 @@ function rejectUnboundedMigrationMaterialization(sql) {
       return (statement, ...bindings) => {
         const cursor = target.exec(statement, ...bindings);
         if (!readsSourceRows(statement)) return cursor;
+        let rowsRead = 0;
+        const readNext = () => {
+          rowsRead += 1;
+          if (rowsRead > 1) {
+            rejectedMaterializations += 1;
+            throw new Error("V9 migration must not iterate a source-table cursor beyond one row");
+          }
+          return cursor.next();
+        };
         return new Proxy(cursor, {
           get(cursorTarget, key) {
             if (key === "toArray") {
@@ -35,6 +44,13 @@ function rejectUnboundedMigrationMaterialization(sql) {
                 rejectedMaterializations += 1;
                 throw new Error("V9 migration must not materialize a full-table row collection");
               };
+            }
+            if (key === "next") return readNext;
+            if (key === Symbol.iterator) {
+              return () => ({
+                next: readNext,
+                [Symbol.iterator]() { return this; },
+              });
             }
             const value = Reflect.get(cursorTarget, key, cursorTarget);
             return typeof value === "function" ? value.bind(cursorTarget) : value;
@@ -52,6 +68,38 @@ function rejectUnboundedMigrationMaterialization(sql) {
 }
 
 describe("OrchestratorLedger v9 migration JavaScript memory bound", () => {
+  it("rejects unbounded cursor consumption through next() and for-of", async () => {
+    const ledger = ledgerFor("v9-migration-cursor-guard");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'SCHEDULED', 1, '{}', 1, 1, ?, ?)",
+        "v9-cursor-guard-a", "cursor-guard-a", "a".repeat(64), "tenant-a", "project-a",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'SCHEDULED', 1, '{}', 2, 2, ?, ?)",
+        "v9-cursor-guard-b", "cursor-guard-b", "b".repeat(64), "tenant-a", "project-a",
+      );
+
+      const guard = rejectUnboundedMigrationMaterialization(sql);
+      const directCursor = guard.sql.exec(
+        "SELECT task_id FROM orchestrator_tasks ORDER BY task_id",
+      );
+      expect(directCursor.next().done).toBe(false);
+      expect(() => directCursor.next()).toThrow(
+        "V9 migration must not iterate a source-table cursor beyond one row",
+      );
+
+      const iteratorCursor = guard.sql.exec(
+        "SELECT task_id FROM orchestrator_tasks ORDER BY task_id",
+      );
+      expect(() => {
+        for (const row of iteratorCursor) void row;
+      }).toThrow("V9 migration must not iterate a source-table cursor beyond one row");
+      expect(guard.rejectedMaterializations).toBe(2);
+    });
+  });
+
   it("migrates 10k task and outbox keys without materializing full-table result arrays", async () => {
     const ledger = ledgerFor("v9-migration-js-memory-bound-10k");
     await runInDurableObject(ledger, async instance => {

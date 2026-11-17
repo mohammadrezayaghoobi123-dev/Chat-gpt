@@ -47,7 +47,7 @@ const child=[
  "const [pattern,input,options]=[process.argv[2],process.argv[3],JSON.parse(process.argv[4])];",
  "try{const matched=pm(pattern,options)(input);process.stdout.write(JSON.stringify({outcome:'completed',matched}));}",
  "catch(e){process.stdout.write(JSON.stringify({outcome:'threw',name:e.name,message:e.message}));}"
-].join("\\n");
+].join("\n");
 const cache=new Map();
 function run(dir,c){
  const key=[dir,c.pattern,c.input,JSON.stringify(c.options)].join("\\0");

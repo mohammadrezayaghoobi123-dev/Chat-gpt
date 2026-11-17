@@ -23,7 +23,7 @@ function rejectUnboundedMigrationMaterialization(sql) {
       }
       return (statement, ...bindings) => {
         const cursor = target.exec(statement, ...bindings);
-        const normalized = String(statement).replace(/\\s+/g, " ").trim();
+        const normalized = String(statement).replace(/\s+/g, " ").trim();
         if (!guardedQueries.has(normalized)) return cursor;
         return new Proxy(cursor, {
           get(cursorTarget, key) {
@@ -127,6 +127,12 @@ describe("OrchestratorLedger v9 migration JavaScript memory bound", () => {
       ).one().count;
       expect(taskCount).toBe(ROW_COUNT);
       expect(eventCount).toBe(ROW_COUNT);
+      expect(sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id LIKE 'v9-memory-task-%' AND idempotency_key NOT LIKE 'tp1:%'",
+      ).one().count).toBe(0);
+      expect(sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE event_id LIKE 'v9-memory-event-%' AND idempotency_key NOT LIKE 'tp1:%'",
+      ).one().count).toBe(0);
 
       const task = sql.exec(
         "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
@@ -153,6 +159,38 @@ describe("OrchestratorLedger v9 migration JavaScript memory bound", () => {
         peakMemoryBytes: null,
         peakMemoryLimitation: "Cloudflare Vitest Durable Object runtime does not expose per-isolate heap telemetry",
       }));
+    });
+  });
+
+  it("fails closed and rolls back when a legacy idempotency key is not encodable", async () => {
+    const ledger = ledgerFor("v9-migration-invalid-idempotency-key");
+    await runInDurableObject(ledger, async instance => {
+      const storage = instance.ctx.storage;
+      const sql = storage.sql;
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'SCHEDULED', 1, '{}', 1, 1, ?, ?)",
+        "v9-invalid-key-task", "legacy key with spaces", "a".repeat(64), "tenant-a", "project-a",
+      );
+      sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_tenant_project_idempotency");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_outbox_by_tenant_project_idempotency");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_claim_candidates_by_scope_executor_order");
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 9");
+
+      expect(() => migrateV9IdempotencyKeys(storage)).toThrow(
+        "Schema v9 cannot encode every orchestrator_tasks idempotency key; source and staging row counts differ.",
+      );
+      expect(sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        "v9-invalid-key-task",
+      ).one().idempotency_key).toBe("legacy key with spaces");
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 9",
+      ).toArray()).toHaveLength(0);
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?)",
+        "orchestrator_v9_task_key_staging",
+        "orchestrator_v9_outbox_key_staging",
+      ).toArray()).toHaveLength(0);
     });
   });
 });

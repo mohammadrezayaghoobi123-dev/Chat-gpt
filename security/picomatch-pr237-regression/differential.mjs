@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 
@@ -19,7 +20,39 @@ assert.equal(git(baseDir, "rev-parse", "HEAD"), BASE_SHA, "baseline must be the 
 assert.equal(git(candidateDir, "rev-parse", "HEAD"), CANDIDATE_SHA, "candidate must be the exact PR #237 commit");
 assert.equal(git(candidateDir, "rev-parse", "HEAD^"), BASE_SHA, "candidate parent must equal baseline");
 assert.equal(git(fixedDir, "rev-parse", "HEAD"), CANDIDATE_SHA, "corrected candidate must start at exact PR #237 commit");
-assert.equal(git(fixedDir, "diff", "--name-only"), "lib/parse.js", "candidate correction must touch only the parser");
+
+const parsePath = path.join(fixedDir, "lib", "parse.js");
+let source = readFileSync(parsePath, "utf8");
+const replaceExactlyOnce = (input, before, after, label) => {
+  const first = input.indexOf(before);
+  assert.notEqual(first, -1, `correction anchor missing: ${label}`);
+  assert.equal(input.indexOf(before, first + before.length), -1, `correction anchor is ambiguous: ${label}`);
+  return input.slice(0, first) + after + input.slice(first + before.length);
+};
+
+// Minimal candidate-only correction: pass options into the branch scanner and
+// refuse the collapse when escaped '/' is structurally a path separator.
+source = replaceExactlyOnce(
+  source,
+  "const isSelfRepeatingStarBranch = branch => {",
+  "const isSelfRepeatingStarBranch = (branch, options) => {",
+  "helper signature",
+);
+source = replaceExactlyOnce(
+  source,
+  "    if (escaped === true) {\n      escaped = false;",
+  "    if (escaped === true) {\n      if (ch === '/' && options.bash !== true) {\n        return false;\n      }\n      escaped = false;",
+  "escaped separator guard",
+);
+source = replaceExactlyOnce(
+  source,
+  "isSelfRepeatingStarBranch(branches[0])",
+  "isSelfRepeatingStarBranch(branches[0], options)",
+  "options callsite",
+);
+writeFileSync(parsePath, source);
+
+assert.equal(git(fixedDir, "diff", "--name-only"), "lib/parse.js", "correction must touch only lib/parse.js");
 git(fixedDir, "diff", "--check");
 
 const load = directory => {
@@ -33,8 +66,6 @@ const baseline = load(baseDir);
 const candidate = load(candidateDir);
 const corrected = load(fixedDir);
 
-// Exactly one literal backslash precedes slash in the glob. The parser treats
-// this as a path separator when bash !== true, so collapsing the repetition is unsafe.
 const escapedSeparatorPattern = String.raw`+(foo\/bar*)`;
 const repeatedPathSegments = "foo/bar-onefoo/bar-two";
 const baselineMatch = baseline(escapedSeparatorPattern)(repeatedPathSegments);
@@ -45,8 +76,6 @@ assert.equal(baselineMatch, true, "upstream baseline must match two repetitions 
 assert.equal(candidateMatch, false, "unfixed PR #237 must reproduce the semantic regression");
 assert.equal(correctedMatch, true, "minimal guard must preserve baseline matching semantics");
 
-// Negative controls: plain same-segment branches may still collapse; an unescaped
-// separator is already rejected by the upstream candidate helper.
 const controls = [
   { name: "plain branch", pattern: "+(foobar*)", input: "foobar-onefoobar-two" },
   { name: "unescaped separator", pattern: "+(foo/bar*)", input: repeatedPathSegments },

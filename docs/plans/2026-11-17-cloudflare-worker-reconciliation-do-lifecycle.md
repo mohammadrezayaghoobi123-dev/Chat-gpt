@@ -81,7 +81,37 @@ https://developers.cloudflare.com/durable-objects/reference/durable-objects-migr
 - Historical Staging Wrangler config at PR #126 also enabled `keep_vars = true` and Workers observability/logging. The current repository Wrangler config omits those declarations. Before any deployment, verify whether those settings are still active and decide explicitly whether to preserve them; do not assume omission is harmless.
 - No secret values were requested or read. Only binding names and resource metadata were inspected.
 
-## 3. WriteControl: mandatory retention gate
+## 3. Additional live settings and variable-type reconciliation
+
+A fresh GET-only Worker settings inspection returned the following metadata for both Worker names. Secret values were not read.
+
+### Observability
+
+Both active Workers currently report:
+- observability enabled;
+- head sampling rate 1;
+- query-string redaction enabled;
+- Workers Logs enabled and persisted;
+- invocation logs disabled;
+- traces disabled (persist flag true, sampling rate 1).
+
+The current repository Wrangler file omits the `observability` block. This is a configuration gap. The next candidate must explicitly preserve the observed settings (or present a reviewed change) rather than allowing defaults to silently change logging/trace behavior.
+
+### Variable and secret binding types
+
+- Production reports `SERVICE_MODE` as `secret_text`; Staging reports it as `plain_text`.
+- The current Wrangler candidate declares `SERVICE_MODE = "cloud"` as a plain `vars` entry in both environments. This is a binding-type collision for Production and must be resolved before deployment.
+- Production and Staging both report `MCP_ALLOWED_ORIGINS` as `secret_text`; its value was not read.
+- Production reports `PUBLIC_READ_ONLY` as `secret_text`; Staging reports it as `plain_text`. The current Wrangler file does not declare `PUBLIC_READ_ONLY`.
+- Existing GitHub/MCP credential binding names remain secret bindings. No secret values were accessed or emitted.
+- The settings API response does not expose the Wrangler `keep_vars` setting. The historical Staging Wrangler file at PR #126 had `keep_vars = true`; whether the active Production/ Staging deployment was created with that setting remains unknown.
+
+Cloudflare's Wrangler guidance states that dashboard-managed non-secret variables are overridden on a subsequent deploy unless `keep_vars = true`; secrets are not deleted by Wrangler except through explicit secret-deletion operations. Consequently, the candidate must explicitly preserve the active `PUBLIC_READ_ONLY` and other non-secret dashboard variables, avoid a `SERVICE_MODE` type collision, and preserve secret names without reading values.
+
+Official source:
+https://developers.cloudflare.com/workers/wrangler/configuration/
+
+## 4. WriteControl: mandatory retention gate
 
 `WriteControl` is not an ordinary unused class. Its historical implementation stores operation admission and write-progress state. Its records may be relevant to idempotency and recovery of GitHub write workflows.
 
@@ -99,7 +129,7 @@ Therefore:
 5. Before the first Staging deployment, either restore and retain the historical `WriteControl` implementation and its live `exports` entry, or complete a separately reviewed data-preservation/decommission decision supported by an auditable export and retention evidence.
 6. Do not inspect or copy operation payloads as part of a generic preflight. If a data export is later authorized, scope and redact it to the minimum fields required and keep it outside this audit-only plan.
 
-## 4. Proposed repair direction (not implemented)
+## 5. Proposed repair direction (not implemented)
 
 The next code/configuration candidate should use the declarative `exports` model for Staging, preserving the model already deployed there. Do not mix `exports` with `migrations`.
 
@@ -115,7 +145,7 @@ Subject to the WriteControl retention decision, the candidate should:
 
 This is a design direction only. It is not an instruction to write the candidate code or deploy it.
 
-## 5. Required validation sequence before any Staging execution request
+## 6. Required validation sequence before any Staging execution request
 
 ### Gate A — source and resource identity
 - Re-fetch active Worker version IDs, deployment percentages, bindings, named handlers, and exports for both Worker names.
@@ -147,7 +177,7 @@ Only after Gates A–C pass:
 - Obtain a separate explicit authorization for the Staging deployment.
 - Production remains prohibited until Staging evidence is reviewed and a separate Production authorization is obtained.
 
-## 6. Rollback and failure model
+## 7. Rollback and failure model
 
 A code rollback is not equivalent to restoring connected resources or Durable Object data. Cloudflare states that:
 - A Worker rollback does not change connected resources.
@@ -157,7 +187,7 @@ A code rollback is not equivalent to restoring connected resources or Durable Ob
 
 Therefore the first deployment candidate must avoid deleting, renaming, transferring, or changing the storage type of any existing class. The rollback plan must identify the last compatible Worker version and preserve all resource IDs. If the first candidate requires a lifecycle transition that prevents rollback to the prior version, stop and redesign before requesting execution approval.
 
-## 7. Current CI and audit status
+## 8. Current CI and audit status
 
 PR #240's latest full-history Gitleaks check failed:
 - PR diff scan: no leaks found.
@@ -165,7 +195,7 @@ PR #240's latest full-history Gitleaks check failed:
 - The findings are outside PR #240's diff. No values are reproduced here.
 - Do not label PR #240's security check green until the historical findings are triaged and the current run is fully resolved.
 
-## 8. Explicit stop conditions
+## 9. Explicit stop conditions
 
 Stop immediately if:
 - Staging no longer reports the expected Worker/version or WriteControl namespace.
@@ -179,7 +209,7 @@ Stop immediately if:
 - CI, test, or resource-bound evidence is missing or ambiguous.
 - Any operation would touch Production before separate approval.
 
-## 9. Current verdict
+## 10. Current verdict
 
 - Worker destination ownership: **CONFIRMED by user**.
 - Staging uses the `exports` lifecycle model: **SUPPORTED** by deployed version 29 metadata and its exact historical Wrangler file.
@@ -191,7 +221,7 @@ Stop immediately if:
 - Staging deployment authorization: **NOT GRANTED**.
 - Production deployment authorization: **NOT GRANTED**.
 
-## 10. Audit trail
+## 11. Audit trail
 
 Read-only Cloudflare inspection only. No resource creation, binding modification, deployment, secret read, KV data read, Durable Object data read, or write operation was performed while preparing this plan.
 

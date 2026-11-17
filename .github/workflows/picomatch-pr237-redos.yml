@@ -1,0 +1,49 @@
+name: Picomatch PR 237 bounded ReDoS matrix
+on:
+  pull_request:
+    paths:
+      - "security/picomatch-pr237-redos/**"
+      - ".github/workflows/picomatch-pr237-redos.yml"
+  push:
+    branches:
+      - "security/picomatch-pr237-bounded-redos-matrix-2026-11-17"
+    paths:
+      - "security/picomatch-pr237-redos/**"
+      - ".github/workflows/picomatch-pr237-redos.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: picomatch-pr237-redos-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bounded-redos:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout audit harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - name: Fetch exact upstream baseline and PR candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout https://github.com/micromatch/picomatch.git "$RUNNER_TEMP/picomatch-base"
+          git -C "$RUNNER_TEMP/picomatch-base" checkout --detach 9fab7bf61913ea334c4203ed321c426cfde44a42
+          git clone --filter=blob:none --no-checkout https://github.com/seeibt/picomatch.git "$RUNNER_TEMP/picomatch-candidate"
+          git -C "$RUNNER_TEMP/picomatch-candidate" checkout --detach 1bf0d04563cb9ce568cf36efc5f6b7187d9911d5
+          cp -a "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
+      - name: Run process-isolated, bounded adversarial matrix
+        run: |
+          node security/picomatch-pr237-redos/bounded-redos.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
+      - name: Install upstream test dependencies and run the full suite on corrected temporary candidate
+        working-directory: ${{ runner.temp }}/picomatch-candidate-fixed
+        run: |
+          npm install --ignore-scripts --no-fund
+          npm test

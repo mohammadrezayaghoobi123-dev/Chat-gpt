@@ -593,11 +593,36 @@ export class OrchestratorLedger extends DurableObject {
       const tasks = sql.exec(
         "SELECT task_id, idempotency_key, tenant_id, project_id FROM orchestrator_tasks",
       ).toArray();
-      for (const row of tasks) {
+      const migratedTasks = tasks.map(row => ({
+        ...row,
+        migratedIdempotencyKey: tenantProjectIdempotencyKey(
+          row.tenant_id, row.project_id, row.idempotency_key,
+        ),
+      }));
+      const finalTaskKeys = new Set(migratedTasks.map(row => row.migratedIdempotencyKey));
+      // Move every legacy key out of the global UNIQUE namespace before
+      // writing any final tuple key. This avoids order-dependent collisions
+      // between a row's new key and another row's still-legacy key.
+      for (const row of migratedTasks) {
+        let stagingKey;
+        do {
+          stagingKey = "migration-v9-" + crypto.randomUUID();
+        } while (
+          finalTaskKeys.has(stagingKey) ||
+          sql.exec(
+            "SELECT 1 FROM orchestrator_tasks WHERE idempotency_key = ?",
+            stagingKey,
+          ).toArray().length > 0
+        );
+        sql.exec(
+          "UPDATE orchestrator_tasks SET idempotency_key = ? WHERE task_id = ?",
+          stagingKey, row.task_id,
+        );
+      }
+      for (const row of migratedTasks) {
         sql.exec(
           "UPDATE orchestrator_tasks SET idempotency_key = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
-          tenantProjectIdempotencyKey(row.tenant_id, row.project_id, row.idempotency_key),
-          row.task_id, row.tenant_id, row.project_id,
+          row.migratedIdempotencyKey, row.task_id, row.tenant_id, row.project_id,
         );
       }
 

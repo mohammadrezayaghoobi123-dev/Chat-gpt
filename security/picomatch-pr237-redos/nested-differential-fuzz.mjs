@@ -92,6 +92,43 @@ function minimize(c){
  assert.ok(isPreservedCounterexample(verification),"final minimized counterexample must preserve the baseline behavior in the corrected candidate");
  return {...minimized,verification};
 }
+const aliasCases=[
+ {pattern:"+ (foo\\\\/bar*)".replace(" ",""),input:"foo/barxfoo/bary"},
+ {pattern:"+(*a)",input:"aaab"}
+];
+const optionCombinations=[
+ {bash:true},
+ {windowsPathsNoEscape:true},
+ {capture:true},
+ {bash:true,windowsPathsNoEscape:true,capture:true}
+];
+const aliasChild=[
+ "const pm=require(process.argv[1]);",
+ "const [pattern,input,options]=[process.argv[2],process.argv[3],JSON.parse(process.argv[4])];",
+ "try{const matcher=pm(pattern,options);const re=pm.makeRe(pattern,options);process.stdout.write(JSON.stringify({outcome:'completed',matched:matcher(input),regexSource:re&&re.source}));}",
+ "catch(e){process.stdout.write(JSON.stringify({outcome:'threw',name:e.name,message:e.message}));}"
+].join("\\n");
+function runAlias(dir,c,options){
+ const r=spawnSync(process.execPath,["-e",aliasChild,path.join(dir,"index.js"),c.pattern,c.input,JSON.stringify(options)],{
+  encoding:"utf8",timeout:TIMEOUT_MS,maxBuffer:4096,killSignal:"SIGKILL",
+  env:{...process.env,NODE_OPTIONS:"--max-old-space-size="+HEAP_MB}
+ });
+ if(r.error&&r.error.code==="ETIMEDOUT")return {outcome:"timeout"};
+ if(r.error)throw r.error;
+ assert.equal(r.status,0,"alias parity child failed: "+r.stderr);
+ return JSON.parse(r.stdout);
+}
+for(const c of aliasCases){
+ for(const extra of optionCombinations){
+  for(const version of [{name:"baseline",dir:baseDir},{name:"upstream",dir:candidateDir},{name:"corrected",dir:fixedDir}]){
+   const canonical=runAlias(version.dir,c,{...extra,noextglob:true});
+   const alias=runAlias(version.dir,c,{...extra,noext:true});
+   assert.deepEqual(alias,canonical,version.name+" noext alias must equal noextglob with "+JSON.stringify(extra));
+   assert.equal(alias.outcome,"completed",version.name+" alias parity case must complete");
+  }
+ }
+}
+
 const findings=[],timeouts=[],observations=[];
 for(let i=0;i<cases.length;i++){
  const c=cases[i],m=mismatch(c);

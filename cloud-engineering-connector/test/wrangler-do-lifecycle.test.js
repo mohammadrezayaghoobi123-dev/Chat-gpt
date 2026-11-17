@@ -44,3 +44,12 @@ test("WriteControl suites run only under the isolated test config", () => {
   assert.match(writeControlVitestConfig, /configPath:\s*"\.\/wrangler\.test\.toml"/);
   assert.match(writeControlVitestConfig, /include:\s*\["cloudflare-test\/write-control\*\.test\.js"\]/);
 });
+
+test("Production and Staging preserve active observability and log-retention settings", () => {
+  for (const prefix of ["", "env.staging."]) {
+    assert.match(wrangler, new RegExp("\\[" + prefix.replaceAll(".", "\\\\.") + "observability\\]"));
+    assert.match(wrangler, new RegExp("\\[" + prefix.replaceAll(".", "\\\\.") + "observability\\.logs\\]"));
+    assert.match(wrangler, new RegExp("\\[" + prefix.replaceAll(".", "\\\\.") + "observability\\.traces\\]"));
+  }
+  assert.match(wrangler, /enabled = true[\s\S]*?redact_query_string = true[\s\S]*?invocation_logs = false[\s\S]*?persist = true/);
+});

@@ -261,6 +261,105 @@ function enqueueOutboxInTransaction(sql, input) {
   return { enqueued: true, event: outboxFromRow(row) };
 }
 
+export function migrateV9IdempotencyKeys(storage) {
+  const sql = storage.sql;
+    // Schema v9: encode caller idempotency keys as an injective tenant/project
+    // tuple. This preserves old global UNIQUE constraints and all primary keys,
+    // while allowing independent tenants to reuse the same caller-supplied key.
+    storage.transactionSync(() => {
+      const applied = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 9",
+      ).toArray()[0];
+      if (applied) return;
+
+      const tasks = sql.exec(
+        "SELECT task_id, idempotency_key, tenant_id, project_id FROM orchestrator_tasks",
+      ).toArray();
+      const migratedTasks = tasks.map(row => ({
+        ...row,
+        migratedIdempotencyKey: tenantProjectIdempotencyKey(
+          row.tenant_id, row.project_id, row.idempotency_key,
+        ),
+      }));
+      const finalTaskKeys = new Set(migratedTasks.map(row => row.migratedIdempotencyKey));
+      // Move every legacy key out of the global UNIQUE namespace before
+      // writing any final tuple key. This avoids order-dependent collisions
+      // between a row's new key and another row's still-legacy key.
+      for (const row of migratedTasks) {
+        let stagingKey;
+        do {
+          stagingKey = "migration-v9-" + crypto.randomUUID();
+        } while (
+          finalTaskKeys.has(stagingKey) ||
+          sql.exec(
+            "SELECT 1 FROM orchestrator_tasks WHERE idempotency_key = ?",
+            stagingKey,
+          ).toArray().length > 0
+        );
+        sql.exec(
+          "UPDATE orchestrator_tasks SET idempotency_key = ? WHERE task_id = ?",
+          stagingKey, row.task_id,
+        );
+      }
+      for (const row of migratedTasks) {
+        sql.exec(
+          "UPDATE orchestrator_tasks SET idempotency_key = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+          row.migratedIdempotencyKey, row.task_id, row.tenant_id, row.project_id,
+        );
+      }
+
+      const events = sql.exec(
+        "SELECT event_id, idempotency_key, tenant_id, project_id FROM orchestrator_outbox_events",
+      ).toArray();
+      const migratedEvents = events.map(row => ({
+        ...row,
+        migratedIdempotencyKey: tenantProjectIdempotencyKey(
+          row.tenant_id, row.project_id, row.idempotency_key,
+        ),
+      }));
+      const finalEventKeys = new Set(migratedEvents.map(row => row.migratedIdempotencyKey));
+      // Stage all old outbox keys before assigning final tuple keys, avoiding
+      // transient collisions under the legacy global UNIQUE constraint.
+      for (const row of migratedEvents) {
+        let stagingKey;
+        do {
+          stagingKey = "migration-v9-" + crypto.randomUUID();
+        } while (
+          finalEventKeys.has(stagingKey) ||
+          sql.exec(
+            "SELECT 1 FROM orchestrator_outbox_events WHERE idempotency_key = ?",
+            stagingKey,
+          ).toArray().length > 0
+        );
+        sql.exec(
+          "UPDATE orchestrator_outbox_events SET idempotency_key = ? WHERE event_id = ?",
+          stagingKey, row.event_id,
+        );
+      }
+      for (const row of migratedEvents) {
+        sql.exec(
+          "UPDATE orchestrator_outbox_events SET idempotency_key = ? WHERE event_id = ? AND tenant_id = ? AND project_id = ?",
+          row.migratedIdempotencyKey, row.event_id, row.tenant_id, row.project_id,
+        );
+      }
+
+      sql.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project_idempotency ON orchestrator_tasks(tenant_id, project_id, idempotency_key)",
+      );
+      sql.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS orchestrator_outbox_by_tenant_project_idempotency ON orchestrator_outbox_events(tenant_id, project_id, idempotency_key)",
+      );
+      sql.exec(
+        "CREATE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_scope_executor_order ON orchestrator_claim_candidates(executor_id, tenant_id, project_id, created_at, task_id)",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (9, ?, ?)",
+        Date.now(),
+        "Namespace task and outbox idempotency keys by injective tenant/project tuple; preserve existing identifiers and rows",
+      );
+    }); 
+}
+
 export class OrchestratorLedger extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
@@ -667,101 +766,7 @@ export class OrchestratorLedger extends DurableObject {
       );
     });
 
-    // Schema v9: encode caller idempotency keys as an injective tenant/project
-    // tuple. This preserves old global UNIQUE constraints and all primary keys,
-    // while allowing independent tenants to reuse the same caller-supplied key.
-    this.ctx.storage.transactionSync(() => {
-      const applied = sql.exec(
-        "SELECT version FROM orchestrator_schema_migrations WHERE version = 9",
-      ).toArray()[0];
-      if (applied) return;
-
-      const tasks = sql.exec(
-        "SELECT task_id, idempotency_key, tenant_id, project_id FROM orchestrator_tasks",
-      ).toArray();
-      const migratedTasks = tasks.map(row => ({
-        ...row,
-        migratedIdempotencyKey: tenantProjectIdempotencyKey(
-          row.tenant_id, row.project_id, row.idempotency_key,
-        ),
-      }));
-      const finalTaskKeys = new Set(migratedTasks.map(row => row.migratedIdempotencyKey));
-      // Move every legacy key out of the global UNIQUE namespace before
-      // writing any final tuple key. This avoids order-dependent collisions
-      // between a row's new key and another row's still-legacy key.
-      for (const row of migratedTasks) {
-        let stagingKey;
-        do {
-          stagingKey = "migration-v9-" + crypto.randomUUID();
-        } while (
-          finalTaskKeys.has(stagingKey) ||
-          sql.exec(
-            "SELECT 1 FROM orchestrator_tasks WHERE idempotency_key = ?",
-            stagingKey,
-          ).toArray().length > 0
-        );
-        sql.exec(
-          "UPDATE orchestrator_tasks SET idempotency_key = ? WHERE task_id = ?",
-          stagingKey, row.task_id,
-        );
-      }
-      for (const row of migratedTasks) {
-        sql.exec(
-          "UPDATE orchestrator_tasks SET idempotency_key = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
-          row.migratedIdempotencyKey, row.task_id, row.tenant_id, row.project_id,
-        );
-      }
-
-      const events = sql.exec(
-        "SELECT event_id, idempotency_key, tenant_id, project_id FROM orchestrator_outbox_events",
-      ).toArray();
-      const migratedEvents = events.map(row => ({
-        ...row,
-        migratedIdempotencyKey: tenantProjectIdempotencyKey(
-          row.tenant_id, row.project_id, row.idempotency_key,
-        ),
-      }));
-      const finalEventKeys = new Set(migratedEvents.map(row => row.migratedIdempotencyKey));
-      // Stage all old outbox keys before assigning final tuple keys, avoiding
-      // transient collisions under the legacy global UNIQUE constraint.
-      for (const row of migratedEvents) {
-        let stagingKey;
-        do {
-          stagingKey = "migration-v9-" + crypto.randomUUID();
-        } while (
-          finalEventKeys.has(stagingKey) ||
-          sql.exec(
-            "SELECT 1 FROM orchestrator_outbox_events WHERE idempotency_key = ?",
-            stagingKey,
-          ).toArray().length > 0
-        );
-        sql.exec(
-          "UPDATE orchestrator_outbox_events SET idempotency_key = ? WHERE event_id = ?",
-          stagingKey, row.event_id,
-        );
-      }
-      for (const row of migratedEvents) {
-        sql.exec(
-          "UPDATE orchestrator_outbox_events SET idempotency_key = ? WHERE event_id = ? AND tenant_id = ? AND project_id = ?",
-          row.migratedIdempotencyKey, row.event_id, row.tenant_id, row.project_id,
-        );
-      }
-
-      sql.exec(
-        "CREATE UNIQUE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project_idempotency ON orchestrator_tasks(tenant_id, project_id, idempotency_key)",
-      );
-      sql.exec(
-        "CREATE UNIQUE INDEX IF NOT EXISTS orchestrator_outbox_by_tenant_project_idempotency ON orchestrator_outbox_events(tenant_id, project_id, idempotency_key)",
-      );
-      sql.exec(
-        "CREATE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_scope_executor_order ON orchestrator_claim_candidates(executor_id, tenant_id, project_id, created_at, task_id)",
-      );
-      sql.exec(
-        "INSERT INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (9, ?, ?)",
-        Date.now(),
-        "Namespace task and outbox idempotency keys by injective tenant/project tuple; preserve existing identifiers and rows",
-      );
-    }); 
+    migrateV9IdempotencyKeys(this.ctx.storage);
 
     // Schema v10: scope the bounded legacy-task discovery scan before executor
     // ordering. The v9 executor-only index can walk other tenants' rows before

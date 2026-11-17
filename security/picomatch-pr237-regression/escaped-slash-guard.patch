@@ -1,11 +1,10 @@
 diff --git a/lib/parse.js b/lib/parse.js
-index 0000000..0000000 100644
 --- a/lib/parse.js
 +++ b/lib/parse.js
-@@
+@@ -273,1 +273,1 @@
 -const isSelfRepeatingStarBranch = branch => {
 +const isSelfRepeatingStarBranch = (branch, options) => {
-@@
+@@ -281,4 +281,8 @@
      if (escaped === true) {
 +      // Escaped '/' is still a path separator unless Bash mode is enabled.
 +      // Do not collapse a repeated branch across a separator the parser treats structurally.
@@ -14,6 +13,6 @@ index 0000000..0000000 100644
 +      }
        escaped = false;
        continue;
-@@
+@@ -389,1 +393,1 @@
 -  if (branches.length === 1 && isSelfRepeatingStarBranch(branches[0])) {
 +  if (branches.length === 1 && isSelfRepeatingStarBranch(branches[0], options)) {

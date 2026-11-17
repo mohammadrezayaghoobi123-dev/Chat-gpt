@@ -21,6 +21,30 @@ namespace_id = "78294163"
 limit = 60
 period = 60
 
+[[durable_objects.bindings]]
+name = "KNOWLEDGE_STORE"
+class_name = "KnowledgeStore"
+
+[[durable_objects.bindings]]
+name = "ORCHESTRATOR_LEDGER"
+class_name = "OrchestratorLedger"
+
+[[durable_objects.bindings]]
+name = "TENANT_DIRECTORY"
+class_name = "TenantDirectory"
+
+[exports.KnowledgeStore]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.OrchestratorLedger]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.TenantDirectory]
+type = "durable-object"
+storage = "sqlite"
+
 [env.staging.vars]
 SERVICE_MODE = "cloud"
 OAUTH_ISSUER = "https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev"
@@ -38,53 +62,34 @@ namespace_id = "78294164"
 limit = 60
 period = 60
 
-
-[[durable_objects.bindings]]
-name = "KNOWLEDGE_STORE"
-class_name = "KnowledgeStore"
-
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["KnowledgeStore"]
-
 [[env.staging.durable_objects.bindings]]
 name = "KNOWLEDGE_STORE"
 class_name = "KnowledgeStore"
-
-[[env.staging.migrations]]
-tag = "v1"
-new_sqlite_classes = ["KnowledgeStore"]
-
-
-[[durable_objects.bindings]]
-name = "ORCHESTRATOR_LEDGER"
-class_name = "OrchestratorLedger"
-
-[[migrations]]
-tag = "v2"
-new_sqlite_classes = ["OrchestratorLedger"]
 
 [[env.staging.durable_objects.bindings]]
 name = "ORCHESTRATOR_LEDGER"
 class_name = "OrchestratorLedger"
 
-[[env.staging.migrations]]
-tag = "v2"
-new_sqlite_classes = ["OrchestratorLedger"]
-
-
-[[durable_objects.bindings]]
-name = "TENANT_DIRECTORY"
-class_name = "TenantDirectory"
-
-[[migrations]]
-tag = "v3"
-new_sqlite_classes = ["TenantDirectory"]
-
 [[env.staging.durable_objects.bindings]]
 name = "TENANT_DIRECTORY"
 class_name = "TenantDirectory"
 
-[[env.staging.migrations]]
-tag = "v3"
-new_sqlite_classes = ["TenantDirectory"]
+[[env.staging.durable_objects.bindings]]
+name = "WRITE_CONTROL"
+class_name = "WriteControl"
+
+[env.staging.exports.KnowledgeStore]
+type = "durable-object"
+storage = "sqlite"
+
+[env.staging.exports.OrchestratorLedger]
+type = "durable-object"
+storage = "sqlite"
+
+[env.staging.exports.TenantDirectory]
+type = "durable-object"
+storage = "sqlite"
+
+[env.staging.exports.WriteControl]
+type = "durable-object"
+storage = "sqlite"

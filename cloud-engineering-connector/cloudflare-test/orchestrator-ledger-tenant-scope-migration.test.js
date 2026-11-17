@@ -24,6 +24,29 @@ const SCOPED_TABLES = [
   "orchestrator_audit_events",
 ];
 
+function rewindScopeMigrationToV7(sql) {
+  for (const table of SCOPED_TABLES) {
+    const indexes = sql.exec(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?",
+      table,
+    ).toArray().map(row => row.name).filter(name => !name.startsWith("sqlite_"));
+    for (const indexName of indexes) {
+      const indexedColumns = sql.exec("PRAGMA index_info(" + indexName + ")")
+        .toArray().map(column => column.name);
+      if (indexedColumns.some(name => name === "tenant_id" || name === "project_id")) {
+        sql.exec("DROP INDEX IF EXISTS " + indexName);
+      }
+    }
+
+    const columns = new Set(
+      sql.exec("PRAGMA table_info(" + table + ")").toArray().map(column => column.name),
+    );
+    if (columns.has("tenant_id")) sql.exec("ALTER TABLE " + table + " DROP COLUMN tenant_id");
+    if (columns.has("project_id")) sql.exec("ALTER TABLE " + table + " DROP COLUMN project_id");
+  }
+  rewindScopeMigrationToV7(sql);
+}
+
 describe("OrchestratorLedger tenant/project scope schema migration", () => {
   it("adds explicit tenant and project scope to every persisted ledger table", async () => {
     const ledger = ledgerFor("tenant-scope-schema-v8");
@@ -77,7 +100,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       );
 
       // Rewind the complete v8-v12 migration chain to model a v7 database.
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
+      rewindScopeMigrationToV7(sql);
       instance.ensureSchema();
       const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", task.taskId).toArray()[0];
       expect(row).toMatchObject({
@@ -180,7 +203,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       );
 
       // Rewind the complete v8-v12 migration chain to model a v7 database.
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
+      rewindScopeMigrationToV7(sql);
       instance.ensureSchema();
       for (const table of [
         "orchestrator_processed_messages",
@@ -584,7 +607,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
           updated_at INTEGER NOT NULL
         )
       `);
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
+      rewindScopeMigrationToV7(sql);
       sql.exec(
         "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         task.taskId, "v8-rollback-idem", "9".repeat(64), task.state,
@@ -869,7 +892,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
           updated_at INTEGER NOT NULL
         )
       `);
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
+      rewindScopeMigrationToV7(sql);
 
       const task = {
         taskId: "invalid-scope-task",

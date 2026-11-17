@@ -821,5 +821,80 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
     });
   });
 
+  it("maps non-string legacy tenant/project attributes to the reserved legacy scope", async () => {
+    const ledger = ledgerFor("tenant-scope-v8-invalid-attribute-fallback");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      sql.exec("DROP TABLE orchestrator_claim_candidates");
+      sql.exec("DROP TABLE orchestrator_tasks");
+      sql.exec(`
+        CREATE TABLE orchestrator_tasks (
+          task_id TEXT PRIMARY KEY,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          input_hash TEXT NOT NULL CHECK(length(input_hash) = 64),
+          state TEXT NOT NULL,
+          version INTEGER NOT NULL CHECK(version > 0),
+          task_json TEXT NOT NULL CHECK(json_valid(task_json)),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
+
+      const task = {
+        taskId: "invalid-scope-task",
+        tenantId: 0,
+        projectId: false,
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 1700,
+        updatedAt: 1700,
+      };
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, "legacy-key", "b".repeat(64), task.state, task.version,
+        JSON.stringify(task), task.createdAt, task.updatedAt,
+      );
+      const malformedStringTask = {
+        taskId: "invalid-string-scope-task",
+        tenantId: "tenant with spaces",
+        projectId: "project-valid",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 1701,
+        updatedAt: 1701,
+      };
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        malformedStringTask.taskId, "invalid-string-key", "c".repeat(64),
+        malformedStringTask.state, malformedStringTask.version,
+        JSON.stringify(malformedStringTask), malformedStringTask.createdAt, malformedStringTask.updatedAt,
+      );
+
+      instance.ensureSchema();
+
+      const rows = sql.exec(
+        "SELECT task_id, tenant_id, project_id, idempotency_key, task_json FROM orchestrator_tasks WHERE task_id IN (?, ?) ORDER BY task_id",
+        task.taskId, malformedStringTask.taskId,
+      ).toArray();
+      expect(rows).toEqual([
+        {
+          task_id: "invalid-scope-task",
+          tenant_id: "__legacy__",
+          project_id: "__legacy__",
+          idempotency_key: "tp1:10:__legacy__:10:__legacy__:10:legacy-key",
+          task_json: JSON.stringify(task),
+        },
+        {
+          task_id: "invalid-string-scope-task",
+          tenant_id: "__legacy__",
+          project_id: "project-valid",
+          idempotency_key: "tp1:10:__legacy__:13:project-valid:18:invalid-string-key",
+          task_json: JSON.stringify(malformedStringTask),
+        },
+      ]);
+    });
+  });
+
 
 });

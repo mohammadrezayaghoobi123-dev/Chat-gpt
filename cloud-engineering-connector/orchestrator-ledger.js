@@ -559,10 +559,20 @@ export class OrchestratorLedger extends DurableObject {
 
       // Recover explicit scope only from already-persisted task projections.
       // Missing/invalid legacy attributes never inherit a caller-supplied scope.
+      const validLegacyScopeExpression = jsonPath => `
+        CASE
+          WHEN json_type(task_json, '${jsonPath}') = 'text'
+            AND length(json_extract(task_json, '${jsonPath}')) BETWEEN 1 AND 160
+            AND substr(json_extract(task_json, '${jsonPath}'), 1, 1) GLOB '[A-Za-z0-9]'
+            AND json_extract(task_json, '${jsonPath}') NOT GLOB '*[^A-Za-z0-9._:-]*'
+          THEN json_extract(task_json, '${jsonPath}')
+          ELSE '__legacy__'
+        END
+      `;
       sql.exec(`
         UPDATE orchestrator_tasks
-        SET tenant_id = COALESCE(NULLIF(CAST(json_extract(task_json, '$.tenantId') AS TEXT), ''), '__legacy__'),
-            project_id = COALESCE(NULLIF(CAST(json_extract(task_json, '$.projectId') AS TEXT), ''), '__legacy__')
+        SET tenant_id = ${validLegacyScopeExpression('$.tenantId')},
+            project_id = ${validLegacyScopeExpression('$.projectId')}
       `);
       const taskScopedTables = [
         "orchestrator_processed_messages",

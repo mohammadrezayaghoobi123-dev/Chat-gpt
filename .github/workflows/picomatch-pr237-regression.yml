@@ -38,6 +38,9 @@ jobs:
           git -C "$RUNNER_TEMP/picomatch-base" checkout --detach 9fab7bf61913ea334c4203ed321c426cfde44a42
           git clone --filter=blob:none --no-checkout https://github.com/seeibt/picomatch.git "$RUNNER_TEMP/picomatch-candidate"
           git -C "$RUNNER_TEMP/picomatch-candidate" checkout --detach 1bf0d04563cb9ce568cf36efc5f6b7187d9911d5
-      - name: Execute differential semantic regression
+          cp -a "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
+          git -C "$RUNNER_TEMP/picomatch-candidate-fixed" apply --check "$GITHUB_WORKSPACE/security/picomatch-pr237-regression/escaped-slash-guard.patch"
+          git -C "$RUNNER_TEMP/picomatch-candidate-fixed" apply "$GITHUB_WORKSPACE/security/picomatch-pr237-regression/escaped-slash-guard.patch"
+      - name: Execute baseline, upstream candidate, and corrected differential
         run: |
-          node security/picomatch-pr237-regression/differential.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate"
+          node security/picomatch-pr237-regression/differential.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"

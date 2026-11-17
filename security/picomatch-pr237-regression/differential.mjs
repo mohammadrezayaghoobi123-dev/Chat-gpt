@@ -3,8 +3,8 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { createRequire } from "node:module";
 
-const [baseDir, candidateDir] = process.argv.slice(2);
-assert.ok(baseDir && candidateDir, "pass base and candidate checkout directories");
+const [baseDir, candidateDir, fixedDir] = process.argv.slice(2);
+assert.ok(baseDir && candidateDir && fixedDir, "pass baseline, upstream candidate, and corrected candidate directories");
 
 const BASE_SHA = "9fab7bf61913ea334c4203ed321c426cfde44a42";
 const CANDIDATE_SHA = "1bf0d04563cb9ce568cf36efc5f6b7187d9911d5";
@@ -18,6 +18,9 @@ const git = (cwd, ...args) => execFileSync("git", args, {
 assert.equal(git(baseDir, "rev-parse", "HEAD"), BASE_SHA, "baseline must be the exact upstream parent");
 assert.equal(git(candidateDir, "rev-parse", "HEAD"), CANDIDATE_SHA, "candidate must be the exact PR #237 commit");
 assert.equal(git(candidateDir, "rev-parse", "HEAD^"), BASE_SHA, "candidate parent must equal baseline");
+assert.equal(git(fixedDir, "rev-parse", "HEAD"), CANDIDATE_SHA, "corrected candidate must start at exact PR #237 commit");
+assert.equal(git(fixedDir, "diff", "--name-only"), "lib/parse.js", "candidate correction must touch only the parser");
+git(fixedDir, "diff", "--check");
 
 const load = directory => {
   const requireFromPackage = createRequire(path.join(directory, "package.json"));
@@ -28,44 +31,31 @@ const load = directory => {
 
 const baseline = load(baseDir);
 const candidate = load(candidateDir);
+const corrected = load(fixedDir);
 
-// The backslash is part of the actual glob input, not a JavaScript escape for '/'.
-// Picomatch's parser treats escaped '/' as a path separator when bash !== true.
+// Exactly one literal backslash precedes slash in the glob. The parser treats
+// this as a path separator when bash !== true, so collapsing the repetition is unsafe.
 const escapedSeparatorPattern = String.raw`+(foo\/bar*)`;
 const repeatedPathSegments = "foo/bar-onefoo/bar-two";
 const baselineMatch = baseline(escapedSeparatorPattern)(repeatedPathSegments);
 const candidateMatch = candidate(escapedSeparatorPattern)(repeatedPathSegments);
+const correctedMatch = corrected(escapedSeparatorPattern)(repeatedPathSegments);
 
-assert.equal(
-  baselineMatch,
-  true,
-  "upstream baseline must accept two consecutive repetitions of the path-containing branch",
-);
-assert.equal(
-  candidateMatch,
-  false,
-  "PR #237 must not collapse a repeated branch containing an escaped path separator",
-);
+assert.equal(baselineMatch, true, "upstream baseline must match two repetitions of the path-containing branch");
+assert.equal(candidateMatch, false, "unfixed PR #237 must reproduce the semantic regression");
+assert.equal(correctedMatch, true, "minimal guard must preserve baseline matching semantics");
 
-// Negative controls: an ordinary same-segment branch is safely collapsible,
-// while an unescaped path separator must already be rejected by the candidate scanner.
+// Negative controls: plain same-segment branches may still collapse; an unescaped
+// separator is already rejected by the upstream candidate helper.
 const controls = [
-  {
-    name: "plain branch",
-    pattern: "+(foobar*)",
-    input: "foobar-onefoobar-two",
-  },
-  {
-    name: "unescaped separator",
-    pattern: "+(foo/bar*)",
-    input: repeatedPathSegments,
-  },
+  { name: "plain branch", pattern: "+(foobar*)", input: "foobar-onefoobar-two" },
+  { name: "unescaped separator", pattern: "+(foo/bar*)", input: repeatedPathSegments },
 ];
 
 for (const control of controls) {
   const before = baseline(control.pattern)(control.input);
-  const after = candidate(control.pattern)(control.input);
-  assert.equal(before, after, `${control.name}: candidate changed matching semantics`);
+  assert.equal(candidate(control.pattern)(control.input), before, `${control.name}: upstream candidate parity`);
+  assert.equal(corrected(control.pattern)(control.input), before, `${control.name}: corrected candidate parity`);
 }
 
 const optionMatrix = [
@@ -77,24 +67,29 @@ const optionMatrix = [
   { maxExtglobRecursion: false },
 ];
 
-const optionResults = optionMatrix.map(options => ({
-  options,
-  baseline: baseline(escapedSeparatorPattern, options)(repeatedPathSegments),
-  candidate: candidate(escapedSeparatorPattern, options)(repeatedPathSegments),
-}));
+const optionResults = optionMatrix.map(options => {
+  const before = baseline(escapedSeparatorPattern, options)(repeatedPathSegments);
+  const upstreamCandidate = candidate(escapedSeparatorPattern, options)(repeatedPathSegments);
+  const afterFix = corrected(escapedSeparatorPattern, options)(repeatedPathSegments);
+  assert.equal(afterFix, before, `corrected candidate must preserve baseline semantics for ${JSON.stringify(options)}`);
+  return { options, baseline: before, upstreamCandidate, corrected: afterFix };
+});
 
 console.log(JSON.stringify({
-  verdict: "PR237_REJECTED_ESCAPED_SEPARATOR_SEMANTIC_REGRESSION_REPRODUCED",
+  verdict: "PR237_REGRESSION_REPRODUCED_AND_MINIMAL_GUARD_RESTORES_BASELINE_SEMANTICS",
   baselineCommit: BASE_SHA,
-  candidateCommit: CANDIDATE_SHA,
+  upstreamCandidateCommit: CANDIDATE_SHA,
+  correction: "Reject collapse when an escaped slash is encountered and bash !== true",
   pattern: escapedSeparatorPattern,
   input: repeatedPathSegments,
   baselineMatch,
-  candidateMatch,
+  upstreamCandidateMatch: candidateMatch,
+  correctedCandidateMatch: correctedMatch,
   controls: controls.map(control => ({
     name: control.name,
     baseline: baseline(control.pattern)(control.input),
-    candidate: candidate(control.pattern)(control.input),
+    upstreamCandidate: candidate(control.pattern)(control.input),
+    corrected: corrected(control.pattern)(control.input),
   })),
   optionResults,
 }, null, 2));

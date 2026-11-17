@@ -1068,7 +1068,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       ).one().idempotency_key;
 
       expect(errorMessage).toMatch(
-        new RegExp("schema migration history is inconsistent: v" + missingVersion + " schema artifacts exist"),
+        new RegExp("schema migration history is inconsistent: v" + missingVersion + " schema artifacts exist", "i"),
       );
       expect(markerVersionsAfter).toEqual(expectedMarkers);
       expect(taskKeyAfter).toBe(taskKey);

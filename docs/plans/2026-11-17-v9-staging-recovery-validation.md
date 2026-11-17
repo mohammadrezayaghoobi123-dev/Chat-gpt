@@ -246,6 +246,27 @@ The active Cloudflare versions match the declared rate-limit IDs but do **not** 
 
 The latest deployed version timestamps (Production 2026-11-03; Staging 2026-11-02) are older than the current PR #239/#240 work and do not identify the current repository SHA as deployed. No claim is made that the deployed Worker is built from the current candidate branch.
 
+### Historical provenance and timeline
+
+Read-only GitHub history for `cloud-engineering-connector/wrangler.toml` shows the following relevant changes:
+- `0be0a15382ab6291d29c2af76f9854d9262b49b5` (2026-11-01): connector security regression coverage.
+- `e4c66eb0419b5e545e2b07fc018d6a69d82962fb` (2026-11-08): added the tenant-scoped Knowledge Store Durable Object.
+- `5bf7f022e355f89a32e656ef056df94851c01592` (2026-11-08): added the isolated Orchestrator Ledger Durable Object.
+- `a3685dd891c097f8825af25ce7cb53560f30a1b0` (2026-11-08): added Tenant Directory Durable Object.
+- `ecb20648052ff0c8e2a18327903296e671b8a2b0` (2026-11-08): canonical OAuth issuer and SSRF-related config.
+- `92aec6daddcea233e0d3cc28999ae6fae9fd2528` (2026-11-08): added isolated OAuth KV namespaces.
+
+The observed active Production deployment (2026-11-03) and Staging deployment (2026-11-02) both predate the 2026-11-08 repository changes that introduced the current OAuth KV and Ledger/Knowledge/Tenant Directory declarations. This provides a strong temporal explanation for why the deployed Worker versions do not contain those newer bindings. It does **not** establish which exact Git commit produced Production version 35, because that version's metadata did not expose a repository commit SHA.
+
+For Staging, version 29's Cloudflare metadata explicitly annotated candidate commit `f63f17be81c564e1ff2abf30251d145110e72587` and PR #126. The Wrangler file at that commit declares `WRITE_CONTROL` (SQLite) and does not declare `ORCHESTRATOR_LEDGER` or `OAUTH_KV`. The current deployed Staging version 32 is later than that candidate and retains the same WriteControl-only binding/export shape. PR #126 is closed without merge; its candidate deployment history is not evidence that the current repository head was deployed.
+
+**Provenance verdict:**
+- Staging WriteControl-only configuration lineage from the PR #126 candidate: **SUPPORTED** by version annotations and the historical Wrangler file.
+- Staging version 32 built from the exact current repository head: **REJECTED** by its timestamp and binding/export inventory.
+- Production version 35 built from the exact current repository head: **REJECTED** by its timestamp and binding/export inventory.
+- Exact source commit for Production version 35: **UNKNOWN**.
+- Intent that `chat-gpt111` and `chat-gpt111-staging` should now host the newer repository configuration: **UNKNOWN**; requires an explicit product/deployment ownership decision.
+
 ### Migration-history evidence boundary
 
 Cloudflare's documented Get Worker Script Version response exposes `resources.bindings`, `resources.script.named_handlers`, `resources.script_runtime.exports`, and an optional `migration_tag`. The latest version responses expose the binding/export inventory above, but omit `migration_tag`. The current read-only API results therefore do not prove a Durable Object migration tag or migration-history sequence for the missing OrchestratorLedger class.

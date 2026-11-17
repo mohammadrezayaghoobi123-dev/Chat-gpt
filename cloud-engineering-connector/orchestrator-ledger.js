@@ -534,6 +534,41 @@ export class OrchestratorLedger extends DurableObject {
         }
       }
 
+      // Markers and their schema artifacts are written in the same migration
+      // transaction. If a marker is lost while its artifact remains, replaying
+      // v9 would re-encode already-scoped idempotency keys.
+      const schemaIndexes = new Set(
+        sql.exec("SELECT name FROM sqlite_master WHERE type = 'index'").toArray().map(row => row.name),
+      );
+      const missingMarkerArtifacts = [
+        {
+          version: 9,
+          applied: [
+            "orchestrator_tasks_by_tenant_project_idempotency",
+            "orchestrator_outbox_by_tenant_project_idempotency",
+            "orchestrator_claim_candidates_by_scope_executor_order",
+          ].some(name => schemaIndexes.has(name)),
+        },
+        {
+          version: 10,
+          applied: schemaIndexes.has("orchestrator_tasks_by_scope_executor_created"),
+        },
+        {
+          version: 11,
+          applied: schemaIndexes.has("orchestrator_tasks_by_scope_state_executor_created"),
+        },
+        {
+          version: 12,
+          applied: !schemaIndexes.has("orchestrator_tasks_by_tenant_project"),
+        },
+      ].find(artifact => recordedVersions.has(8) && !recordedVersions.has(artifact.version) && artifact.applied);
+      if (missingMarkerArtifacts) {
+        throw fail(
+          `Schema migration history is inconsistent: v${missingMarkerArtifacts.version} schema artifacts exist but the v${missingMarkerArtifacts.version} marker is missing.`,
+          "SCHEMA_MIGRATION_HISTORY_INCONSISTENT",
+        );
+      }
+
       const applied = sql.exec(
         "SELECT version FROM orchestrator_schema_migrations WHERE version = 8",
       ).toArray()[0];

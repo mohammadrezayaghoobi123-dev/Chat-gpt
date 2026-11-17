@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 function ledgerFor(name) {
@@ -240,6 +240,85 @@ describe("Schema v9 migration fault injection and recovery", () => {
       expect(sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_outbox_events",
       ).one().count).toBe(2);
+    });
+  });
+
+  it("recovers from a rolled-back mid-migration failure after Durable Object eviction", async () => {
+    const ledger = ledgerFor("v9-migration-fault-then-eviction-recovery");
+
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      instance.__testOnlyPreEvictionSentinel = "must-disappear";
+
+      sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_tenant_project_idempotency");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_outbox_by_tenant_project_idempotency");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_claim_candidates_by_scope_executor_order");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_scope_executor_created");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_scope_state_executor_created");
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project ON orchestrator_tasks(tenant_id, project_id)");
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version >= 9");
+
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'SCHEDULED', 1, '{}', 1, 1, ?, ?)",
+        "fault-task-a", "legacy-task-a", "0".repeat(64), "tenant-a", "project-a",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'SCHEDULED', 1, '{}', 2, 2, ?, ?)",
+        "fault-task-b", "legacy-task-b", "0".repeat(64), "tenant-b", "project-b",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_worker_id, lease_generation, lease_until, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'TASK_CREATED', '{}', 'PENDING', 0, NULL, 0, 0, 1, 1, ?, ?)",
+        "fault-event-a", "legacy-event-a", "fault-task-a", "tenant-a", "project-a",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_worker_id, lease_generation, lease_until, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'TASK_CREATED', '{}', 'PENDING', 0, NULL, 0, 0, 2, 2, ?, ?)",
+        "fault-event-b", "legacy-event-b", "fault-task-b", "tenant-b", "project-b",
+      );
+
+      expect(readMigrationRows(sql)).toEqual(originalRows);
+      const fault = faults.find(item => item.name === "event_staging");
+      const removeFault = installFault(sql, fault);
+      try {
+        // The trigger fires only after all Tasks have been rewritten and Outbox
+        // staging begins, exercising rollback at the cross-table boundary.
+        expect(() => instance.ensureSchema()).toThrow(
+          "injected event staging failure after task rewrite",
+        );
+      } finally {
+        removeFault();
+      }
+      assertPreMigrationState(sql);
+    });
+
+    // The transaction has rolled back and the fault trigger is gone. Evict the
+    // instance before retrying so the next constructor must recover from the
+    // persisted v8 boundary rather than in-memory state.
+    await evictDurableObject(ledger);
+    const recovered = await ledger.ping();
+    expect(recovered.ok).toBe(true);
+    expect(recovered.schemaVersion).toBe(12);
+
+    await runInDurableObject(ledger, async instance => {
+      expect(instance.__testOnlyPreEvictionSentinel).toBeUndefined();
+      const sql = instance.ctx.storage.sql;
+      expect(readMigrationRows(sql)).toEqual({
+        tasks: [
+          { task_id: "fault-task-a", idempotency_key: "tp1:8:tenant-a:9:project-a:13:legacy-task-a", tenant_id: "tenant-a", project_id: "project-a" },
+          { task_id: "fault-task-b", idempotency_key: "tp1:8:tenant-b:9:project-b:13:legacy-task-b", tenant_id: "tenant-b", project_id: "project-b" },
+        ],
+        events: [
+          { event_id: "fault-event-a", idempotency_key: "tp1:8:tenant-a:9:project-a:14:legacy-event-a", tenant_id: "tenant-a", project_id: "project-a" },
+          { event_id: "fault-event-b", idempotency_key: "tp1:8:tenant-b:9:project-b:14:legacy-event-b", tenant_id: "tenant-b", project_id: "project-b" },
+        ],
+      });
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12 ORDER BY version",
+      ).toArray().map(row => row.version)).toEqual([8, 9, 10, 11, 12]);
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?)",
+        "orchestrator_v9_task_key_staging",
+        "orchestrator_v9_outbox_key_staging",
+      ).toArray()).toHaveLength(0);
     });
   });
 });

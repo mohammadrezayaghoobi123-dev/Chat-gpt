@@ -558,17 +558,40 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         createdAt: 900,
         updatedAt: 901,
       };
-      // Rewind the complete migration chain so this exercises v8 itself.
+      // Reconstruct v7 task/lease tables so the v8 transaction itself is tested.
+      sql.exec("DROP TABLE orchestrator_claim_candidates");
+      sql.exec("DROP TABLE orchestrator_execution_leases");
+      sql.exec("DROP TABLE orchestrator_tasks");
+      sql.exec(`
+        CREATE TABLE orchestrator_tasks (
+          task_id TEXT PRIMARY KEY,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          input_hash TEXT NOT NULL CHECK(length(input_hash) = 64),
+          state TEXT NOT NULL,
+          version INTEGER NOT NULL CHECK(version > 0),
+          task_json TEXT NOT NULL CHECK(json_valid(task_json)),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      sql.exec(`
+        CREATE TABLE orchestrator_execution_leases (
+          task_id TEXT PRIMARY KEY,
+          worker_id TEXT,
+          lease_generation INTEGER NOT NULL CHECK(lease_generation >= 0),
+          lease_until INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
       sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
       sql.exec(
-        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         task.taskId, "v8-rollback-idem", "9".repeat(64), task.state,
         task.version, JSON.stringify(task), task.createdAt, task.updatedAt,
-        "__legacy__", "__legacy__",
       );
       sql.exec(
-        "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        task.taskId, "worker-rollback", 1, 1200, 902, "__legacy__", "__legacy__",
+        "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, ?, ?, ?)",
+        task.taskId, "worker-rollback", 1, 1200, 902,
       );
       sql.exec(`
         CREATE TRIGGER reject_v8_migration_marker
@@ -580,14 +603,20 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       `);
 
       expect(() => instance.ensureSchema()).toThrow(/forced v8 marker failure/);
+      const taskColumnsAfterRollback = new Set(
+        sql.exec("PRAGMA table_info(orchestrator_tasks)").toArray().map(column => column.name),
+      );
+      const leaseColumnsAfterRollback = new Set(
+        sql.exec("PRAGMA table_info(orchestrator_execution_leases)").toArray().map(column => column.name),
+      );
+      expect(taskColumnsAfterRollback.has("tenant_id")).toBe(false);
+      expect(taskColumnsAfterRollback.has("project_id")).toBe(false);
+      expect(leaseColumnsAfterRollback.has("tenant_id")).toBe(false);
+      expect(leaseColumnsAfterRollback.has("project_id")).toBe(false);
       expect(sql.exec(
-        "SELECT tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
+        "SELECT task_json FROM orchestrator_tasks WHERE task_id = ?",
         task.taskId,
-      ).toArray()[0]).toEqual({ tenant_id: "__legacy__", project_id: "__legacy__" });
-      expect(sql.exec(
-        "SELECT tenant_id, project_id FROM orchestrator_execution_leases WHERE task_id = ?",
-        task.taskId,
-      ).toArray()[0]).toEqual({ tenant_id: "__legacy__", project_id: "__legacy__" });
+      ).toArray()[0]?.task_json).toBe(JSON.stringify(task));
       expect(sql.exec(
         "SELECT version FROM orchestrator_schema_migrations WHERE version = 8",
       ).toArray()[0]).toBeUndefined();

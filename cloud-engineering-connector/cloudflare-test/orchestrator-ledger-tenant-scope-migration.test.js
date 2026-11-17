@@ -973,5 +973,52 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
     });
   });
 
+  it("fails closed when v9's marker is missing but its idempotency indexes remain", async () => {
+    const ledger = ledgerFor("tenant-scope-v9-marker-loss");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "v9-marker-loss-task",
+        tenantId: "tenant",
+        projectId: "project",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 1900,
+        updatedAt: 1900,
+      };
+      const taskKey = "tp1:6:tenant:7:project:8:idem-key";
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, taskKey, "e".repeat(64), task.state, task.version,
+        JSON.stringify(task), task.createdAt, task.updatedAt, task.tenantId, task.projectId,
+      );
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 9 AND 12");
+
+      let errorMessage = null;
+      try {
+        instance.ensureSchema();
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
+      const markerVersionsAfter = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations ORDER BY version",
+      ).toArray().map(row => row.version);
+      const taskKeyAfter = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).one().idempotency_key;
+
+      expect({
+        errorMessage,
+        markerVersionsAfter,
+        taskKeyAfter,
+      }).toEqual({
+        errorMessage: expect.stringMatching(/schema migration history.*(?:v9|version 9).*(?:missing|inconsistent)/i),
+        markerVersionsAfter: [8],
+        taskKeyAfter: taskKey,
+      });
+    });
+  });
+
 
 });

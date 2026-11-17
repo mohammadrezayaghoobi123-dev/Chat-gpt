@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync, execFileSync } from "node:child_process";
 import path from "node:path";
+import { isPreservedCounterexample } from "./shrink-invariant.mjs";
 
 const [baseDir,candidateDir,fixedDir]=process.argv.slice(2);
 assert.ok(baseDir&&candidateDir&&fixedDir,"three pinned checkout paths required");
@@ -64,8 +65,12 @@ function mismatch(c){
  return {base,candidate,fixed,diverges:!same(base,candidate),fixedDiffers:!same(base,fixed)};
 }
 function minimize(c){
- let pattern=c.pattern,input=c.input,steps=0,changed=true;
- const preserves=(p,i)=>{if(steps++>=MAX_SHRINK_STEPS)return false;const x={pattern:p,input:i,options:c.options};const m=mismatch(x);return m.diverges&&m.base.outcome==="completed"&&m.candidate.outcome==="completed"&&same(m.base,{outcome:"completed",matched:true})&&same(m.candidate,{outcome:"completed",matched:false});};
+ let pattern=c.pattern,input=c.input,steps=0;
+ const preserves=(p,i)=>{
+  if(steps++>=MAX_SHRINK_STEPS)return false;
+  const m=mismatch({pattern:p,input:i,options:c.options});
+  return isPreservedCounterexample(m);
+ };
  for(const field of ["pattern","input"]){
   let value=field==="pattern"?pattern:input;
   let granularity=2;
@@ -81,7 +86,10 @@ function minimize(c){
   }
   if(field==="pattern")pattern=value;else input=value;
  }
- return {pattern,input,options:c.options,shrinkSteps:steps};
+ const minimized={pattern,input,options:c.options,shrinkSteps:steps};
+ const verification=mismatch(minimized);
+ assert.ok(isPreservedCounterexample(verification),"final minimized counterexample must preserve the baseline behavior in the corrected candidate");
+ return {...minimized,verification};
 }
 const findings=[],timeouts=[],observations=[];
 for(let i=0;i<cases.length;i++){

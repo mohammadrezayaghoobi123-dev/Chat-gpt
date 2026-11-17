@@ -105,6 +105,7 @@ The current repository Wrangler file omits the `observability` block. This is a 
 - Production reports `PUBLIC_READ_ONLY` as `secret_text`; Staging reports it as `plain_text`. The current Wrangler file does not declare `PUBLIC_READ_ONLY`.
 - Existing GitHub/MCP credential binding names remain secret bindings. No secret values were accessed or emitted.
 - The settings API response does not expose the Wrangler `keep_vars` setting. The historical Staging Wrangler file at PR #126 had `keep_vars = true`; whether the active Production/ Staging deployment was created with that setting remains unknown.
+- The active Worker settings response reports compatibility date `2026-10-23` for both Workers and an empty `compatibility_flags` array. The current Wrangler candidate declares `global_fetch_strictly_public`. The settings API response does not prove whether this flag is absent from the deployed script version or omitted by this endpoint; treat the difference as **UNKNOWN** and verify against the exact version metadata/runtime behavior before rollout.
 
 Cloudflare's Wrangler guidance states that dashboard-managed non-secret variables are overridden on a subsequent deploy unless `keep_vars = true`; secrets are not deleted by Wrangler except through explicit secret-deletion operations. Consequently, the candidate must explicitly preserve the active `PUBLIC_READ_ONLY` and other non-secret dashboard variables, avoid a `SERVICE_MODE` type collision, and preserve secret names without reading values.
 

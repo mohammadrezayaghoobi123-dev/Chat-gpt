@@ -69,7 +69,18 @@ describe("OrchestratorLedger tenant/project idempotency isolation", () => {
     const ledger = ledgerFor("task-outbox-idempotency-v8-to-v9");
     await runInDurableObject(ledger, async instance => {
       const sql = instance.ctx.storage.sql;
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 9");
+      // Reconstruct the complete schema-v8 boundary before replaying v9.
+      for (const indexName of [
+        "orchestrator_tasks_by_tenant_project_idempotency",
+        "orchestrator_outbox_by_tenant_project_idempotency",
+        "orchestrator_claim_candidates_by_scope_executor_order",
+        "orchestrator_tasks_by_scope_executor_created",
+        "orchestrator_tasks_by_scope_state_executor_created",
+      ]) {
+        sql.exec("DROP INDEX IF EXISTS " + indexName);
+      }
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 9 AND 12");
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project ON orchestrator_tasks(tenant_id, project_id)");
       const now = 1_800_000_000_000;
       const task = {
         taskId: "v8-legacy-task",

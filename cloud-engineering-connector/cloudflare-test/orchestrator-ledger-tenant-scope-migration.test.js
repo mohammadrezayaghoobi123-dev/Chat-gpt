@@ -1021,5 +1021,59 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
     });
   });
 
+  it.each([
+    { missingVersion: 10, expectedMarkers: [8, 9] },
+    { missingVersion: 11, expectedMarkers: [8, 9, 10] },
+    { missingVersion: 12, expectedMarkers: [8, 9, 10, 11] },
+  ])("fails closed when v$missingVersion marker is missing but its schema artifact remains", async ({
+    missingVersion,
+    expectedMarkers,
+  }) => {
+    const ledger = ledgerFor("tenant-scope-missing-marker-v" + missingVersion);
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const taskId = "missing-marker-v" + missingVersion;
+      const taskKey = "tp1:6:tenant:7:project:8:idem-key";
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        taskId, taskKey, "f".repeat(64), "SCHEDULED", 1,
+        JSON.stringify({
+          taskId,
+          tenantId: "tenant",
+          projectId: "project",
+          state: "SCHEDULED",
+          version: 1,
+          createdAt: 2000,
+          updatedAt: 2000,
+        }),
+        2000, 2000, "tenant", "project",
+      );
+      sql.exec(
+        "DELETE FROM orchestrator_schema_migrations WHERE version >= ?",
+        missingVersion,
+      );
+
+      let errorMessage = null;
+      try {
+        instance.ensureSchema();
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
+      const markerVersionsAfter = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations ORDER BY version",
+      ).toArray().map(row => row.version);
+      const taskKeyAfter = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        taskId,
+      ).one().idempotency_key;
+
+      expect(errorMessage).toMatch(
+        new RegExp("schema migration history is inconsistent: v" + missingVersion + " schema artifacts exist"),
+      );
+      expect(markerVersionsAfter).toEqual(expectedMarkers);
+      expect(taskKeyAfter).toBe(taskKey);
+    });
+  });
+
 
 });

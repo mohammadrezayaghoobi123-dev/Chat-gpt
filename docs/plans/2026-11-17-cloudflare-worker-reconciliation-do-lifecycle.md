@@ -50,6 +50,8 @@ At PR #240 head `91160808dacb4c055a1c7305864b6c1fd8f0f060`:
 - The historical file `cloud-engineering-connector/write-control.js` at the Staging candidate commit defines `WriteControl`. Its SQLite schema contains `write_admissions` and `write_operations` and tracks operation status/phase, request hashes, lease generation, Git commit/PR metadata, and error codes.
 - The current repository no longer contains that class in its entrypoint. This does not prove that the live namespace contains records; the data itself was not read.
 
+The historical `worker.js` at the same Staging candidate commit invokes `env.WRITE_CONTROL` throughout the write/PR workflow and its `/healthz` path. The current repository `worker.js` at PR #240 head contains no `WRITE_CONTROL` references. This confirms that the current application path has moved away from the old ledger, but it does not prove the namespace data is disposable: prior idempotency/admission records may still be required for audit or recovery. The namespace is only bound by the Staging Worker in the current account script inventory; external clients and workflows remain unverified.
+
 ### 2.3 Account-wide binding reference scan
 
 A read-only account script inventory returned three Workers: `chat-gpt111`, `chat-gpt111-staging`, and `master-brain-cloud-agent`. Their Worker settings were inspected for references to the `WriteControl` class, `WRITE_CONTROL` binding, or `chat-gpt111-staging` script. The only matching binding was the Staging Worker itself:

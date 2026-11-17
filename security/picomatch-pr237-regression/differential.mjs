@@ -31,7 +31,7 @@ const candidate = load(candidateDir);
 
 // The backslash is part of the actual glob input, not a JavaScript escape for '/'.
 // Picomatch's parser treats escaped '/' as a path separator when bash !== true.
-const escapedSeparatorPattern = String.raw`+(foo\\/bar*)`;
+const escapedSeparatorPattern = String.raw`+(foo\/bar*)`;
 const repeatedPathSegments = "foo/bar-onefoo/bar-two";
 const baselineMatch = baseline(escapedSeparatorPattern)(repeatedPathSegments);
 const candidateMatch = candidate(escapedSeparatorPattern)(repeatedPathSegments);

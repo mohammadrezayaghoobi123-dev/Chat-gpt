@@ -207,28 +207,57 @@ References:
 
 ## Live Cloudflare read-only preflight observations (2026-11-17)
 
-The Cloudflare account API was queried using GET-only requests. No resources, bindings, secrets, deployments, or data were modified.
+The Cloudflare account API was queried using GET-only requests. No resources, bindings, secrets, deployments, or data were modified. Findings below were cross-checked against the latest deployed Worker version detail, active settings, deployment history, namespace inventory, and the exact repository Wrangler file at PR #240 head `0f7e4e2e1b4df68cc71aa34b43cfeabf6984c4e0`.
 
-- Account listing returned one authorized account.
-- Worker scripts `chat-gpt111` and `chat-gpt111-staging` both exist.
-- KV namespace metadata lists separate resources titled `chat-gpt111-oauth-production` and `chat-gpt111-oauth-staging`, matching the IDs declared in the repository's Wrangler configuration.
-- Rate-limit bindings in active Worker settings report distinct namespace IDs for Production and Staging, matching the corresponding Wrangler declarations.
-- Durable Object namespace listing returned three namespaces total:
-  - `master-brain-cloud-agent_AgentBudget`
-  - `master-brain-cloud-agent_AgentSession`
-  - `chat-gpt111-staging_WriteControl`
-- No namespace named for `OrchestratorLedger` was returned for either `chat-gpt111` or `chat-gpt111-staging`.
-- Active Worker settings for both `chat-gpt111` and `chat-gpt111-staging` did not return bindings named `ORCHESTRATOR_LEDGER` or `OAUTH_KV`. Staging settings returned `WRITE_CONTROL` bound to the existing staging WriteControl namespace; Production settings did not return a Durable Object namespace binding.
-- Deployment metadata confirms both Worker scripts have deployment histories. The newest observed Production deployment is dated 2026-11-03; the newest observed Staging deployment is dated 2026-11-02. These are metadata observations only, not a claim that either deployment matches the current Git branch.
+### Deployed Production Worker: `chat-gpt111`
 
-**Preflight verdict: BLOCKED.** The repository Wrangler configuration and live deployed Worker bindings do not currently reconcile for the OrchestratorLedger and OAuth KV bindings. The staging Durable Object namespace required for this migration test is not present in the account's namespace listing. Do not deploy, create namespaces, alter bindings, or seed data to resolve this mismatch as part of this plan.
+- Latest observed deployment: 2026-11-03, 100% to version 35 (`b4667a11-aa74-49ca-8d29-2f7b62608de0`).
+- The exact version GET response lists bindings for GitHub credentials, allowed origins, MCP auth, rate limiting, read-only mode, and service mode. It does **not** list `OAUTH_KV` or `ORCHESTRATOR_LEDGER`.
+- Its `script.named_handlers` has no Durable Object class handlers, and `script_runtime.exports` does not list `OrchestratorLedger`, `KnowledgeStore`, or `TenantDirectory`.
+- The deployed rate-limit namespace ID is `78294163`, matching the production Wrangler declaration.
+- The deployed version response did not include a `migration_tag` field.
 
-The next permissible operation is a further read-only reconciliation of:
-1. current deployed Worker version metadata and binding inventory;
-2. repository Wrangler configuration at the exact candidate SHA;
-3. Cloudflare Durable Object migration/deployment history for both Worker scripts.
+### Deployed Staging Worker: `chat-gpt111-staging`
 
-If those sources still disagree, stop and request a separate explicit authorization for any resource provisioning or deployment. The absence of a listed namespace must not be "fixed" by creating one without determining the intended lifecycle and data ownership.
+- Latest observed deployment: 2026-11-02, 100% to version 32 (`2a3283f0-f443-4d51-885c-e30e4ff7434a`).
+- The exact version GET response lists the `WRITE_CONTROL` Durable Object binding and its `WriteControl` SQLite export only.
+- It does **not** list `OAUTH_KV` or `ORCHESTRATOR_LEDGER`.
+- The only named Durable Object handler and runtime export is `WriteControl`; no `OrchestratorLedger`, `KnowledgeStore`, or `TenantDirectory` export is present.
+- The deployed rate-limit namespace ID is `78294164`, matching the staging Wrangler declaration.
+- The deployed version response did not include a `migration_tag` field.
+
+### Durable Object namespace inventory
+
+The account namespace listing returned exactly three namespaces:
+- `master-brain-cloud-agent_AgentBudget` — class `AgentBudget`, script `master-brain-cloud-agent`.
+- `master-brain-cloud-agent_AgentSession` — class `AgentSession`, script `master-brain-cloud-agent`.
+- `chat-gpt111-staging_WriteControl` — class `WriteControl`, script `chat-gpt111-staging`.
+
+No namespace for `OrchestratorLedger`, `KnowledgeStore`, or `TenantDirectory` was listed under either `chat-gpt111` or `chat-gpt111-staging`.
+
+### Repository-versus-deployment reconciliation
+
+At the exact PR #240 repository head, `cloud-engineering-connector/wrangler.toml` declares:
+- `OAUTH_KV` for both Production and Staging, with distinct namespace IDs.
+- `ORCHESTRATOR_LEDGER`, `KNOWLEDGE_STORE`, and `TENANT_DIRECTORY` bindings and migration declarations for both environments.
+- Staging and Production rate-limit namespace IDs that match the deployed Worker versions.
+
+The active Cloudflare versions match the declared rate-limit IDs but do **not** match the repository's OAuth KV or Durable Object binding/export inventory. This is a direct, independently observed configuration/deployment divergence, not merely a missing namespace-list result.
+
+The latest deployed version timestamps (Production 2026-11-03; Staging 2026-11-02) are older than the current PR #239/#240 work and do not identify the current repository SHA as deployed. No claim is made that the deployed Worker is built from the current candidate branch.
+
+### Migration-history evidence boundary
+
+Cloudflare's documented Get Worker Script Version response exposes `resources.bindings`, `resources.script.named_handlers`, `resources.script_runtime.exports`, and an optional `migration_tag`. The latest version responses expose the binding/export inventory above, but omit `migration_tag`. The current read-only API results therefore do not prove a Durable Object migration tag or migration-history sequence for the missing OrchestratorLedger class.
+
+Cloudflare API references:
+- https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/get/
+- https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/script_and_version_settings/methods/get/
+- https://developers.cloudflare.com/api/resources/workers/
+
+**Preflight verdict: BLOCKED — confirmed repository/deployment divergence.** The live Staging Worker does not have the `ORCHESTRATOR_LEDGER` binding or its Durable Object export. It also does not have the `OAUTH_KV` binding declared by the repository. Production similarly lacks the repository-declared OAuth KV and OrchestratorLedger bindings. Do not deploy, create namespaces, alter bindings, or seed data to resolve this mismatch as part of this plan.
+
+The next permissible operation is a read-only provenance investigation to identify which source/branch/configuration produced deployed versions 35 and 32, and whether those deployed Worker names are intended to host this repository's current connector. Until provenance is established, do not attempt to reconcile by deploying the repository's Wrangler configuration.
 
 ## Required decision gates before execution
 

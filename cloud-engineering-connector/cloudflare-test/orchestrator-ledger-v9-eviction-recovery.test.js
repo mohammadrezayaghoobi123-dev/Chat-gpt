@@ -54,6 +54,8 @@ function seedV8Boundary(sql) {
   sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_scope_executor_created");
   sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_scope_state_executor_created");
   sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version >= 9");
+  // v8 still owns this task scope index; v12 removes it later.
+  sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project ON orchestrator_tasks(tenant_id, project_id)");
 
   sql.exec(
     "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'SCHEDULED', 1, '{}', 1, 1, ?, ?)",

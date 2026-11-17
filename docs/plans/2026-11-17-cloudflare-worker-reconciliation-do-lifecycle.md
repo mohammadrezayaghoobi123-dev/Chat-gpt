@@ -50,6 +50,13 @@ At PR #240 head `91160808dacb4c055a1c7305864b6c1fd8f0f060`:
 - The historical file `cloud-engineering-connector/write-control.js` at the Staging candidate commit defines `WriteControl`. Its SQLite schema contains `write_admissions` and `write_operations` and tracks operation status/phase, request hashes, lease generation, Git commit/PR metadata, and error codes.
 - The current repository no longer contains that class in its entrypoint. This does not prove that the live namespace contains records; the data itself was not read.
 
+### 2.3 Account-wide binding reference scan
+
+A read-only account script inventory returned three Workers: `chat-gpt111`, `chat-gpt111-staging`, and `master-brain-cloud-agent`. Their Worker settings were inspected for references to the `WriteControl` class, `WRITE_CONTROL` binding, or `chat-gpt111-staging` script. The only matching binding was the Staging Worker itself:
+- `chat-gpt111-staging` → `WRITE_CONTROL` → class `WriteControl` → namespace ID `1d0f4257b609483eba4fc5fdb39ed781`.
+
+No other Worker binding reference was found in the account's returned script inventory. This does **not** prove that no external client, scheduled job, GitHub workflow, or other non-Worker caller uses the namespace. It also does not reveal whether the namespace contains data; no DO storage was read.
+
 ### 2.3 Cloudflare lifecycle semantics (authoritative documentation)
 
 Cloudflare's Durable Object class exports documentation establishes:

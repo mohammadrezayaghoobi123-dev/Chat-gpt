@@ -155,6 +155,39 @@ for(const c of aliasCases){
 }
 console.log(JSON.stringify({verdict:"CAPTURE_RESULTS_AND_UNKNOWN_OPTION_BOUNDARY_CONFIRMED",captureChecks,windowsNoopChecks}));
 
+// Public-contract checks based on the pinned README's documented bash/windows/capture semantics.
+let bashContractChecks=0;
+const bashContractCases=[
+ {name:"bash single-star crosses multiple path segments",pattern:"a/*/c",input:"a/b/d/c",options:{bash:true},expected:true},
+ {name:"default single-star remains within one path segment",pattern:"a/*/c",input:"a/b/d/c",options:{bash:false},expected:false},
+ {name:"bash treats backslash-star as literal backslash plus star",pattern:"foo\\\\*",input:"foo\\\\*",options:{bash:true},expected:true},
+ {name:"bash backslash is not an escape for star",pattern:"foo\\\\*",input:"foo*",options:{bash:true},expected:false},
+ {name:"default mode lets backslash escape star",pattern:"foo\\\\*",input:"foo*",options:{bash:false},expected:true},
+ {name:"windows option accepts backslash path separators",pattern:"a/*/c",input:"a\\\\b\\\\c",options:{windows:true},expected:true},
+ {name:"POSIX mode does not normalize backslash separators",pattern:"a/*/c",input:"a\\\\b\\\\c",options:{windows:false},expected:false},
+ {name:"bash plus windows plus capture spans nested path segments",pattern:"a/*/c",input:"a\\\\b\\\\d\\\\c",options:{bash:true,windows:true,capture:true},expected:true}
+];
+for(const c of bashContractCases){
+ const results=[];
+ for(const version of [{name:"baseline",dir:baseDir},{name:"upstream",dir:candidateDir},{name:"corrected",dir:fixedDir}]){
+  const detail=runAlias(version.dir,c,c.options);
+  assert.equal(detail.outcome,"completed",version.name+" "+c.name+" must complete");
+  assert.equal(detail.matched,c.expected,version.name+" "+c.name+" expected matcher result");
+  results.push(detail);
+ }
+ assert.deepEqual(results[1],results[0],c.name+" upstream candidate must preserve baseline public behavior");
+ assert.deepEqual(results[2],results[0],c.name+" corrected candidate must preserve baseline public behavior");
+ if(c.options.capture){
+  assert.ok(Array.isArray(results[0].match),"combined bash/windows/capture must expose match array");
+  assert.equal(results[0].match[0],c.input,"capture must preserve original input as full match");
+  assert.ok(results[0].match.length>=2,"capture must expose at least one wildcard capture");
+  assert.equal(results[0].match[1],"b/d","capture must preserve the cross-segment wildcard span");
+ }
+ bashContractChecks++;
+}
+console.log(JSON.stringify({verdict:"BASH_WINDOWS_CAPTURE_PUBLIC_CONTRACT_CONFIRMED",checks:bashContractChecks,cases:bashContractCases.map(({name,expected})=>({name,expected}))}));
+
+
 console.log(JSON.stringify({verdict:"NOEXT_ALIAS_PARITY_CONFIRMED",patterns:aliasCases.length,optionCombinations:optionCombinations.length,implementations:3,aliasComparisons}));
 const findings=[],timeouts=[],observations=[];
 for(let i=0;i<cases.length;i++){

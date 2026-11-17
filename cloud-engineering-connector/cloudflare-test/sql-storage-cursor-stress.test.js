@@ -68,6 +68,15 @@ describe("SQLite cursor migration stress and resource-bound probe", () => {
           });
         }
 
+        expect(() => sql.exec(
+          "INSERT INTO v9_cursor_stress_rows (row_id, final_key) VALUES (?, ?)",
+          100_001,
+          "stress-1",
+        )).toThrow();
+        expect(sql.exec(
+          "SELECT COUNT(*) AS count FROM v9_cursor_stress_rows",
+        ).one().count).toBe(100_000);
+
         console.info(
           "V9_CURSOR_STRESS_METRICS " + JSON.stringify({
             measurements,

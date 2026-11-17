@@ -1075,5 +1075,66 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
     });
   });
 
+  it("fails closed when v8 history is lost but scope columns survive outside tasks", async () => {
+    const ledger = ledgerFor("tenant-scope-marker-loss-nontask-artifact");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "marker-loss-nontask-task",
+        tenantId: "tenant",
+        projectId: "project",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 2100,
+        updatedAt: 2100,
+      };
+      const taskKey = "tp1:6:tenant:7:project:8:idem-key";
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, taskKey, "a".repeat(64), task.state, task.version,
+        JSON.stringify(task), task.createdAt, task.updatedAt, task.tenantId, task.projectId,
+      );
+
+      const taskIndexes = sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'orchestrator_tasks'",
+      ).toArray().map(row => row.name).filter(name => !name.startsWith("sqlite_"));
+      for (const indexName of taskIndexes) {
+        sql.exec("DROP INDEX IF EXISTS " + indexName);
+      }
+      sql.exec("ALTER TABLE orchestrator_tasks DROP COLUMN tenant_id");
+      sql.exec("ALTER TABLE orchestrator_tasks DROP COLUMN project_id");
+      sql.exec("DROP TABLE orchestrator_schema_migrations");
+
+      let errorMessage = null;
+      try {
+        instance.ensureSchema();
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
+
+      const taskColumnsAfter = new Set(
+        sql.exec("PRAGMA table_info(orchestrator_tasks)").toArray().map(column => column.name),
+      );
+      const outboxColumnsAfter = new Set(
+        sql.exec("PRAGMA table_info(orchestrator_outbox_events)").toArray().map(column => column.name),
+      );
+      const markerTable = sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'orchestrator_schema_migrations'",
+      ).toArray()[0];
+      const taskKeyAfter = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).one().idempotency_key;
+
+      expect(errorMessage).toMatch(/schema migration history is inconsistent.*v8/i);
+      expect(taskColumnsAfter.has("tenant_id")).toBe(false);
+      expect(taskColumnsAfter.has("project_id")).toBe(false);
+      expect(outboxColumnsAfter.has("tenant_id")).toBe(true);
+      expect(outboxColumnsAfter.has("project_id")).toBe(true);
+      expect(markerTable).toBeUndefined();
+      expect(taskKeyAfter).toBe(taskKey);
+    });
+  });
+
 
 });

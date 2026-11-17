@@ -182,8 +182,7 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 commits = ["3082b80fbaf71685827ba63de882c3d93083b96f"]
 paths = ['''^docs/MASTER_BRAIN_GATE2P_R1U17_ICU79_SIGNING_IDENTITY_CANDIDATE_RECONCILIATION_2026-11-16\.md$''']
-regexTarget = "line"
+regexTarget = "secret"
 regexes = [
-  '''^- KEYS blob SHA: [0-9A-Fa-f]{40}$''',
-  '''^trusted-key id="[0-9A-Fa-f]{40}" group="com\.ibm\.icu"$'''
+  '''^[0-9A-Fa-f]{40}$'''
 ]

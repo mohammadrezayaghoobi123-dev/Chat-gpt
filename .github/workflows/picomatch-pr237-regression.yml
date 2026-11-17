@@ -21,7 +21,7 @@ concurrency:
 jobs:
   differential:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - name: Checkout audit harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,3 +42,8 @@ jobs:
       - name: Execute baseline, upstream candidate, and corrected differential
         run: |
           node security/picomatch-pr237-regression/differential.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
+      - name: Install upstream test dependencies and run the full Picomatch suite on the corrected temporary candidate
+        working-directory: ${{ runner.temp }}/picomatch-candidate-fixed
+        run: |
+          npm install --ignore-scripts --no-fund
+          npm test

@@ -82,7 +82,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", task.taskId).toArray()[0];
       expect(row).toMatchObject({
         task_id: task.taskId,
-        idempotency_key: "legacy-idem-1",
+        idempotency_key: "tp1:10:__legacy__:10:__legacy__:13:legacy-idem-1",
         input_hash: "a".repeat(64),
         state: "SCHEDULED",
         version: 1,

@@ -25,7 +25,7 @@ const cases=[
  {id:"custom-format-normalize-and-strip-dot",pattern:"C:/workspace/**/*.js",input:"./C:\\workspace\\src\\index.js",format:"normalizeAndStripDot",options:{windows:true},expectedMatch:true,expectedOutput:"C:/workspace/src/index.js"},
  {id:"custom-format-strip-dot-only",pattern:"C:/workspace/**/*.js",input:"./C:\\workspace\\src\\index.js",format:"stripDotOnly",options:{windows:true},expectedMatch:true,expectedOutput:"C:\\workspace\\src\\index.js"},
  {id:"custom-format-identity-windows-separators",pattern:"C:/workspace/**/*.js",input:"C:\\workspace\\src\\index.js",format:"identity",options:{windows:true},expectedMatch:true,expectedOutput:"C:\\workspace\\src\\index.js"},
- {id:"default-format-normalizes-drive-path",pattern:"C:/workspace/**/*.js",input:"C:\\workspace\\src\\index.js",options:{windows:true}}
+ {id:"default-format-normalizes-drive-path",pattern:"C:/workspace/**/*.js",input:"C:\\workspace\\src\\index.js",options:{windows:true},expectedMatch:true,expectedOutput:"C:/workspace/src/index.js"}
 ];
 
 const child = [
@@ -57,7 +57,7 @@ function run(dir,c) {
 }
 
 const versions=[
- {name:"baseline",dir:baseDir,expectedMatch:true,expectedOutput:"C:/workspace/src/index.js"},
+ {name:"baseline",dir:baseDir},
  {name:"upstream-pr237",dir:candidateDir},
  {name:"corrected-disposable",dir:fixedDir}
 ];

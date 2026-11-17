@@ -93,7 +93,7 @@ function minimize(c){
  return {...minimized,verification};
 }
 const aliasCases=[
- {pattern:"+ (foo\\\\/bar*)".replace(" ",""),input:"foo/barxfoo/bary"},
+ {pattern:"+ (foo\\/bar*)".replace(" ",""),input:"foo/barxfoo/bary"},
  {pattern:"+(*a)",input:"aaab"}
 ];
 const optionCombinations=[
@@ -107,7 +107,7 @@ const aliasChild=[
  "const [pattern,input,options]=[process.argv[2],process.argv[3],JSON.parse(process.argv[4])];",
  "try{const matcher=pm(pattern,options);const re=pm.makeRe(pattern,options);process.stdout.write(JSON.stringify({outcome:'completed',matched:matcher(input),regexSource:re&&re.source}));}",
  "catch(e){process.stdout.write(JSON.stringify({outcome:'threw',name:e.name,message:e.message}));}"
-].join("\\n");
+].join("\n");
 function runAlias(dir,c,options){
  const r=spawnSync(process.execPath,["-e",aliasChild,path.join(dir,"index.js"),c.pattern,c.input,JSON.stringify(options)],{
   encoding:"utf8",timeout:TIMEOUT_MS,maxBuffer:4096,killSignal:"SIGKILL",

@@ -6,7 +6,8 @@ on:
       - ".github/workflows/picomatch-pr237-redos.yml"
   push:
     branches:
-      - "security/picomatch-pr237-bounded-redos-matrix-2026-11-17"
+      - "security/picomatch-bounded-redos-matrix-2026-11-17"
+      - "security/picomatch-shrinker-fix-invariant-2026-11-17"
     paths:
       - "security/picomatch-pr237-redos/**"
       - ".github/workflows/picomatch-pr237-redos.yml"
@@ -30,6 +31,8 @@ jobs:
         with:
           node-version: "22"
           package-manager-cache: false
+      - name: Run shrinker invariant unit tests
+        run: node --test security/picomatch-pr237-redos/shrink-invariant.test.mjs
       - name: Fetch exact upstream baseline and PR candidate
         shell: bash
         run: |
@@ -40,14 +43,11 @@ jobs:
           git -C "$RUNNER_TEMP/picomatch-candidate" checkout --detach 1bf0d04563cb9ce568cf36efc5f6b7187d9911d5
           cp -a "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
       - name: Run process-isolated, bounded adversarial matrix
-        run: |
-          node security/picomatch-pr237-redos/bounded-redos.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
+        run: node security/picomatch-pr237-redos/bounded-redos.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
       - name: Run deterministic grammar-based differential fuzz corpus
-        run: |
-          node security/picomatch-pr237-redos/differential-fuzz.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
+        run: node security/picomatch-pr237-redos/differential-fuzz.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
       - name: Run nested grammar differential fuzz and counterexample minimization
-        run: |
-          node security/picomatch-pr237-redos/nested-differential-fuzz.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
+        run: node security/picomatch-pr237-redos/nested-differential-fuzz.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
       - name: Install upstream test dependencies and run the full suite on corrected temporary candidate
         working-directory: ${{ runner.temp }}/picomatch-candidate-fixed
         run: |

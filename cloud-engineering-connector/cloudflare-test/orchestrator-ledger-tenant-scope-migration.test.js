@@ -44,7 +44,7 @@ function rewindScopeMigrationToV7(sql) {
     if (columns.has("tenant_id")) sql.exec("ALTER TABLE " + table + " DROP COLUMN tenant_id");
     if (columns.has("project_id")) sql.exec("ALTER TABLE " + table + " DROP COLUMN project_id");
   }
-  rewindScopeMigrationToV7(sql);
+  sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
 }
 
 describe("OrchestratorLedger tenant/project scope schema migration", () => {

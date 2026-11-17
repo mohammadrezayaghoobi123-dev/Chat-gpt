@@ -415,6 +415,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         sql.exec("DROP INDEX IF EXISTS " + indexName);
       }
       sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version IN (9, 10, 11, 12)");
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project ON orchestrator_tasks(tenant_id, project_id)");
 
       const secondLegacyKey = "tp1:1:a:1:b:1:c";
       for (const [eventId, idempotencyKey, tenantId, projectId, createdAt] of [

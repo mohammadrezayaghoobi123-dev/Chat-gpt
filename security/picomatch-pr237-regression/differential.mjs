@@ -30,7 +30,7 @@ const replaceExactlyOnce = (input, before, after, label) => {
   return input.slice(0, first) + after + input.slice(first + before.length);
 };
 
-// Minimal candidate-only correction: pass options into the branch scanner and
+// Minimal candidate-only correction (test-only; never changes the repository dependency): pass options into the branch scanner and
 // refuse the collapse when escaped '/' is structurally a path separator.
 source = replaceExactlyOnce(
   source,

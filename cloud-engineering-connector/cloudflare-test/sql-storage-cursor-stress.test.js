@@ -36,7 +36,10 @@ describe("SQLite cursor migration stress and resource-bound probe", () => {
             SELECT n, 'stress-' || n FROM seq`,
             rowCount,
           );
-          expect(insertCursor.rowsWritten).toBe(rowCount);
+          const insertedCount = sql.exec(
+            "SELECT COUNT(*) AS count FROM v9_cursor_stress_rows",
+          ).one().count;
+          expect(insertedCount).toBe(rowCount);
 
           const startedAt = performance.now();
           const cursor = sql.exec(
@@ -59,7 +62,7 @@ describe("SQLite cursor migration stress and resource-bound probe", () => {
 
           measurements.push({
             rows: rowCount,
-            rowsWritten: insertCursor.rowsWritten,
+            rowsInserted: insertedCount,
             rowsRead: cursor.rowsRead,
             scanElapsedMs: Number(elapsedMs.toFixed(3)),
           });

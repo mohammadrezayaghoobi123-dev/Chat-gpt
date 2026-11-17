@@ -118,6 +118,7 @@ function runAlias(dir,c,options){
  assert.equal(r.status,0,"alias parity child failed: "+r.stderr);
  return JSON.parse(r.stdout);
 }
+let aliasComparisons=0;
 for(const c of aliasCases){
  for(const extra of optionCombinations){
   for(const version of [{name:"baseline",dir:baseDir},{name:"upstream",dir:candidateDir},{name:"corrected",dir:fixedDir}]){
@@ -125,10 +126,12 @@ for(const c of aliasCases){
    const alias=runAlias(version.dir,c,{...extra,noext:true});
    assert.deepEqual(alias,canonical,version.name+" noext alias must equal noextglob with "+JSON.stringify(extra));
    assert.equal(alias.outcome,"completed",version.name+" alias parity case must complete");
+   aliasComparisons++;
   }
  }
 }
 
+console.log(JSON.stringify({verdict:"NOEXT_ALIAS_PARITY_CONFIRMED",patterns:aliasCases.length,optionCombinations:optionCombinations.length,implementations:3,aliasComparisons}));
 const findings=[],timeouts=[],observations=[];
 for(let i=0;i<cases.length;i++){
  const c=cases[i],m=mismatch(c);

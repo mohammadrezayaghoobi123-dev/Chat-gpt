@@ -105,7 +105,7 @@ const optionCombinations=[
 const aliasChild=[
  "const pm=require(process.argv[1]);",
  "const [pattern,input,options]=[process.argv[2],process.argv[3],JSON.parse(process.argv[4])];",
- "try{const matcher=pm(pattern,options);const re=pm.makeRe(pattern,options);process.stdout.write(JSON.stringify({outcome:'completed',matched:matcher(input),regexSource:re&&re.source}));}",
+ "try{const matcher=pm(pattern,options);const re=pm.makeRe(pattern,options);const detail=matcher(input,true);process.stdout.write(JSON.stringify({outcome:'completed',matched:detail.isMatch,match:Array.isArray(detail.match)?Array.from(detail.match):detail.match,regexSource:re&&re.source}));}",
  "catch(e){process.stdout.write(JSON.stringify({outcome:'threw',name:e.name,message:e.message}));}"
 ].join("\n");
 function runAlias(dir,c,options){
@@ -130,6 +130,30 @@ for(const c of aliasCases){
   }
  }
 }
+
+let captureChecks=0;
+const captureCase={pattern:"foo/*",input:"foo/bar"};
+for(const version of [{name:"baseline",dir:baseDir},{name:"upstream",dir:candidateDir},{name:"corrected",dir:fixedDir}]){
+ const detail=runAlias(version.dir,captureCase,{capture:true});
+ assert.equal(detail.outcome,"completed",version.name+" capture case must complete");
+ assert.equal(detail.matched,true,version.name+" capture case must match");
+ assert.ok(Array.isArray(detail.match),version.name+" capture:true must return a RegExp match array");
+ assert.equal(detail.match[0],captureCase.input,version.name+" capture result must retain full match");
+ assert.ok(detail.match.length>=2,version.name+" capture result must expose at least one capture group");
+ captureChecks++;
+}
+let windowsNoopChecks=0;
+for(const c of aliasCases){
+ for(const extra of optionCombinations){
+  for(const version of [{name:"baseline",dir:baseDir},{name:"upstream",dir:candidateDir},{name:"corrected",dir:fixedDir}]){
+   const without=runAlias(version.dir,c,{...extra,noextglob:true});
+   const withUnknown=runAlias(version.dir,c,{...extra,noextglob:true,windowsPathsNoEscape:true});
+   assert.deepEqual(withUnknown,without,version.name+" undocumented windowsPathsNoEscape must not silently change Picomatch output");
+   windowsNoopChecks++;
+  }
+ }
+}
+console.log(JSON.stringify({verdict:"CAPTURE_RESULTS_AND_UNKNOWN_OPTION_BOUNDARY_CONFIRMED",captureChecks,windowsNoopChecks}));
 
 console.log(JSON.stringify({verdict:"NOEXT_ALIAS_PARITY_CONFIRMED",patterns:aliasCases.length,optionCombinations:optionCombinations.length,implementations:3,aliasComparisons}));
 const findings=[],timeouts=[],observations=[];

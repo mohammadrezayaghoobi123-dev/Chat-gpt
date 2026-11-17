@@ -76,14 +76,13 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         task.updatedAt,
       );
 
-      // The test inserts a v7-shaped row after the DO's initial boot; rewind
-      // only v8's marker so ensureSchema exercises the legacy v7 -> v8 path.
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 8");
+      // Rewind the complete v8-v12 migration chain to model a v7 database.
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
       instance.ensureSchema();
       const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", task.taskId).toArray()[0];
       expect(row).toMatchObject({
         task_id: task.taskId,
-        idempotency_key: "legacy-idem-1",
+        idempotency_key: "tp1:10:__legacy__:10:__legacy__:13:legacy-idem-1",
         input_hash: "a".repeat(64),
         state: "SCHEDULED",
         version: 1,
@@ -180,9 +179,8 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         "audit-backfill", task.taskId, "system", "system", "TASK_CREATED", JSON.stringify({ taskId: task.taskId }), "d".repeat(64), 204,
       );
 
-      // The test inserts v7-shaped rows after initial boot; rewind v8 to
-      // exercise its child-row backfill while leaving later migrations isolated.
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 8");
+      // Rewind the complete v8-v12 migration chain to model a v7 database.
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
       instance.ensureSchema();
       for (const table of [
         "orchestrator_processed_messages",
@@ -560,7 +558,8 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         createdAt: 900,
         updatedAt: 901,
       };
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 8");
+      // Rewind the complete migration chain so this exercises v8 itself.
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
       sql.exec(
         "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         task.taskId, "v8-rollback-idem", "9".repeat(64), task.state,
@@ -751,6 +750,74 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         "SELECT version FROM orchestrator_schema_migrations WHERE version = 12",
       ).toArray()[0]?.version).toBe(12);
       expect(instance.ping().schemaVersion).toBe(12);
+    });
+  });
+
+  it("fails closed when a later schema marker exists but v9 is missing", async () => {
+    const ledger = ledgerFor("tenant-scope-migration-marker-gap");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "marker-gap-task",
+        tenantId: "tenant",
+        projectId: "project",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 1500,
+        updatedAt: 1500,
+      };
+      const taskKey = "tp1:6:tenant:7:project:8:idem-key";
+      const eventKey = "tp1:6:tenant:7:project:7:out-key";
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, taskKey, "a".repeat(64), task.state, task.version,
+        JSON.stringify(task), task.createdAt, task.updatedAt, task.tenantId, task.projectId,
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_worker_id, lease_generation, lease_until, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, 'PENDING', 0, NULL, 0, 0, ?, ?, ?, ?)",
+        "marker-gap-event", eventKey, task.taskId, "TASK_CREATED", "{}",
+        task.createdAt, task.updatedAt, task.tenantId, task.projectId,
+      );
+
+      // Simulate an inconsistent restore: v9's data transformation is already
+      // present, but its marker is absent while later migrations are recorded.
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 9");
+      const markerVersionsBefore = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations ORDER BY version",
+      ).toArray().map(row => row.version);
+
+      let errorMessage = null;
+      try {
+        instance.ensureSchema();
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
+
+      const markerVersionsAfter = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations ORDER BY version",
+      ).toArray().map(row => row.version);
+      const taskKeyAfter = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0]?.idempotency_key;
+      const eventKeyAfter = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_outbox_events WHERE event_id = ?",
+        "marker-gap-event",
+      ).toArray()[0]?.idempotency_key;
+
+      expect({
+        errorMessage,
+        markerVersionsBefore,
+        markerVersionsAfter,
+        taskKeyAfter,
+        eventKeyAfter,
+      }).toEqual({
+        errorMessage: expect.stringMatching(/schema migration history.*(?:gap|missing|inconsistent)/i),
+        markerVersionsBefore: [8, 10, 11, 12],
+        markerVersionsAfter: [8, 10, 11, 12],
+        taskKeyAfter: taskKey,
+        eventKeyAfter: eventKey,
+      });
     });
   });
 

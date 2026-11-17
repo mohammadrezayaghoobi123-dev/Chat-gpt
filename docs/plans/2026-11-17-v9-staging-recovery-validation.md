@@ -205,6 +205,31 @@ References:
   - State separately what was tested locally, in staging, and not tested.
   - Recommend proceeding with Migration v9 only if data integrity, rollback/retry, resource bounds, and isolation gates all pass.
 
+## Live Cloudflare read-only preflight observations (2026-11-17)
+
+The Cloudflare account API was queried using GET-only requests. No resources, bindings, secrets, deployments, or data were modified.
+
+- Account listing returned one authorized account.
+- Worker scripts `chat-gpt111` and `chat-gpt111-staging` both exist.
+- KV namespace metadata lists separate resources titled `chat-gpt111-oauth-production` and `chat-gpt111-oauth-staging`, matching the IDs declared in the repository's Wrangler configuration.
+- Rate-limit bindings in active Worker settings report distinct namespace IDs for Production and Staging, matching the corresponding Wrangler declarations.
+- Durable Object namespace listing returned three namespaces total:
+  - `master-brain-cloud-agent_AgentBudget`
+  - `master-brain-cloud-agent_AgentSession`
+  - `chat-gpt111-staging_WriteControl`
+- No namespace named for `OrchestratorLedger` was returned for either `chat-gpt111` or `chat-gpt111-staging`.
+- Active Worker settings for both `chat-gpt111` and `chat-gpt111-staging` did not return bindings named `ORCHESTRATOR_LEDGER` or `OAUTH_KV`. Staging settings returned `WRITE_CONTROL` bound to the existing staging WriteControl namespace; Production settings did not return a Durable Object namespace binding.
+- Deployment metadata confirms both Worker scripts have deployment histories. The newest observed Production deployment is dated 2026-11-03; the newest observed Staging deployment is dated 2026-11-02. These are metadata observations only, not a claim that either deployment matches the current Git branch.
+
+**Preflight verdict: BLOCKED.** The repository Wrangler configuration and live deployed Worker bindings do not currently reconcile for the OrchestratorLedger and OAuth KV bindings. The staging Durable Object namespace required for this migration test is not present in the account's namespace listing. Do not deploy, create namespaces, alter bindings, or seed data to resolve this mismatch as part of this plan.
+
+The next permissible operation is a further read-only reconciliation of:
+1. current deployed Worker version metadata and binding inventory;
+2. repository Wrangler configuration at the exact candidate SHA;
+3. Cloudflare Durable Object migration/deployment history for both Worker scripts.
+
+If those sources still disagree, stop and request a separate explicit authorization for any resource provisioning or deployment. The absence of a listed namespace must not be "fixed" by creating one without determining the intended lifecycle and data ownership.
+
 ## Required decision gates before execution
 
 1. Staging Durable Object namespace isolation is proven from Cloudflare metadata, not inferred from Wrangler syntax.

@@ -176,7 +176,7 @@ for(const c of bashContractCases){
  assert.deepEqual(results[2],results[0],c.name+" corrected candidate must preserve baseline public behavior");
  if(c.options.capture){
   assert.ok(Array.isArray(results[0].match),"combined bash/windows/capture must expose match array");
-  const expectedOutput=c.options.windows?c.input.replace(/\\\\/g,"/"):c.input;
+  const expectedOutput=c.options.windows?c.input.replace(/\\/g,"/"):c.input;
   assert.equal(results[0].output,expectedOutput,"windows formatting must normalize separators before matching");
   assert.equal(results[0].match[0],expectedOutput,"capture full match must use the formatted matcher input");
   assert.ok(results[0].match.length>=2,"capture must expose at least one wildcard capture");

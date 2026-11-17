@@ -496,6 +496,35 @@ export class OrchestratorLedger extends DurableObject {
           description TEXT NOT NULL
         )
       `);
+      // Migration markers are committed atomically with each version's DDL/data
+      // changes. A gap therefore signals an inconsistent restore or tampering;
+      // replaying an older transformation (notably v9 key encoding) can corrupt
+      // already-migrated identifiers. Reject the history before any migration.
+      const migrationVersions = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations ORDER BY version",
+      ).toArray().map(row => Number(row.version));
+      const unsupportedVersion = migrationVersions.find(
+        version => !Number.isInteger(version) || version < 8 || version > 12,
+      );
+      if (unsupportedVersion !== undefined) {
+        throw fail(
+          `Schema migration history is inconsistent: unsupported version ${unsupportedVersion}.`,
+          "SCHEMA_MIGRATION_HISTORY_INCONSISTENT",
+        );
+      }
+      const recordedVersions = new Set(migrationVersions);
+      const highestRecordedVersion = migrationVersions.length
+        ? migrationVersions[migrationVersions.length - 1]
+        : 7;
+      for (let version = 8; version <= highestRecordedVersion; version += 1) {
+        if (!recordedVersions.has(version)) {
+          throw fail(
+            `Schema migration history is inconsistent: missing version ${version} before recorded version ${highestRecordedVersion}.`,
+            "SCHEMA_MIGRATION_HISTORY_INCONSISTENT",
+          );
+        }
+      }
+
       const applied = sql.exec(
         "SELECT version FROM orchestrator_schema_migrations WHERE version = 8",
       ).toArray()[0];

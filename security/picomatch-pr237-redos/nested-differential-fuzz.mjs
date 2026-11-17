@@ -29,7 +29,7 @@ function atom(depth=0){
  ])();
 }
 const inputs=["a","b","foo","bar","aaab","ab","foo/bar","foo/barxfoo/bary","foo/barx","foo*bar","foo?bar","foo[bar",".env","xay","xyz","src/a.js","a/x/b","foo\\bar","foo/bar/foo","foobar"];
-const optionSets=[{},{dot:true},{bash:true},{windowsPathsNoEscape:true},{capture:true},{dot:true,capture:true},{bash:true,capture:true},{windowsPathsNoEscape:true,dot:true},{noext:true},{nobrace:true},{noglobstar:true},{strictSlashes:true}];
+const optionSets=[{},{dot:true},{bash:true},{windowsPathsNoEscape:true},{capture:true},{dot:true,capture:true},{bash:true,capture:true},{windowsPathsNoEscape:true,dot:true},{noextglob:true},{nobrace:true},{noglobstar:true},{strictSlashes:true}];
 const cases=[
  {pattern:"+((foo\\/bar*)|baz)",input:"foo/barxfoo/bary",options:{}},
  {pattern:"+(@(foo\\/bar*|baz))",input:"foo/barxfoo/bary",options:{}},
@@ -40,7 +40,8 @@ const cases=[
  {pattern:"!(*(@(a|b)))",input:"c",options:{}},
  {pattern:"{+(foo|bar),baz}",input:"foobar",options:{}},
  {pattern:"[a-z]\\/+(foo|bar)",input:"x/foo",options:{}},
- {pattern:"+(foo\\/bar*)",input:"foo/barxfoo/bary",options:{bash:true}}
+ {pattern:"+(foo\\/bar*)",input:"foo/barxfoo/bary",options:{bash:true}},
+ {pattern:"+(*a)",input:"aab",options:{noextglob:true}}
 ];
 while(cases.length<MAX_CASES)cases.push({pattern:atom(),input:pick(inputs),options:pick(optionSets)});
 const child=[
@@ -94,6 +95,13 @@ function minimize(c){
 const findings=[],timeouts=[],observations=[];
 for(let i=0;i<cases.length;i++){
  const c=cases[i],m=mismatch(c);
+ if(c.options.noextglob===true){
+  assert.equal(m.base.outcome,"completed","noextglob baseline must complete");
+  assert.equal(m.candidate.outcome,"completed","noextglob upstream candidate must complete");
+  assert.equal(m.fixed.outcome,"completed","noextglob corrected candidate must complete");
+  assert.equal(m.diverges,false,"noextglob must not activate the extglob-only upstream rewrite");
+  assert.equal(m.fixedDiffers,false,"noextglob corrected candidate must preserve baseline semantics");
+ }
  observations.push({index:i,...c,...m});
  if(m.base.outcome==="timeout")timeouts.push({index:i,side:"baseline",pattern:c.pattern});
  if(m.candidate.outcome==="timeout"||m.fixed.outcome==="timeout")findings.push({index:i,reason:"candidate_or_correction_timeout",...c,...m});

@@ -160,12 +160,12 @@ let bashContractChecks=0;
 const bashContractCases=[
  {name:"bash single-star crosses multiple path segments",pattern:"a/*/c",input:"a/b/d/c",options:{bash:true},expected:true},
  {name:"default single-star remains within one path segment",pattern:"a/*/c",input:"a/b/d/c",options:{bash:false},expected:false},
- {name:"bash treats backslash-star as literal backslash plus star",pattern:"foo\\\\*",input:"foo\\\\*",options:{bash:true},expected:true},
- {name:"bash backslash is not an escape for star",pattern:"foo\\\\*",input:"foo*",options:{bash:true},expected:false},
- {name:"default mode lets backslash escape star",pattern:"foo\\\\*",input:"foo*",options:{bash:false},expected:true},
- {name:"windows option accepts backslash path separators",pattern:"a/*/c",input:"a\\\\b\\\\c",options:{windows:true},expected:true},
- {name:"POSIX mode does not normalize backslash separators",pattern:"a/*/c",input:"a\\\\b\\\\c",options:{windows:false},expected:false},
- {name:"bash plus windows plus capture spans nested path segments",pattern:"a/*/c",input:"a\\\\b\\\\d\\\\c",options:{bash:true,windows:true,capture:true},expected:true}
+ {name:"bash treats backslash-star as literal backslash plus star",pattern:"foo\\*",input:"foo\\*",options:{bash:true},expected:true},
+ {name:"bash backslash is not an escape for star",pattern:"foo\\*",input:"foo*",options:{bash:true},expected:false},
+ {name:"default mode lets backslash escape star",pattern:"foo\\*",input:"foo*",options:{bash:false},expected:true},
+ {name:"windows option accepts backslash path separators",pattern:"a/*/c",input:"a\\b\\c",options:{windows:true},expected:true},
+ {name:"POSIX mode does not normalize backslash separators",pattern:"a/*/c",input:"a\\b\\c",options:{windows:false},expected:false},
+ {name:"bash plus windows plus capture spans nested path segments",pattern:"a/*/c",input:"a\\b\\d\\c",options:{bash:true,windows:true,capture:true},expected:true}
 ];
 for(const c of bashContractCases){
  const results=[];

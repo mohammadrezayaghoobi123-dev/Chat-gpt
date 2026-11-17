@@ -657,7 +657,7 @@ export class OrchestratorLedger extends DurableObject {
             ), '__legacy__')
       `);
 
-      for (const table of scopedTables) {
+      for (const table of scopeMigrationTables) {
         sql.exec(`CREATE INDEX IF NOT EXISTS ${table}_by_tenant_project ON ${table}(tenant_id, project_id)`);
       }
       sql.exec(

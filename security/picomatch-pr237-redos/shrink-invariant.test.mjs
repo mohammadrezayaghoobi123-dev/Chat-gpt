@@ -18,6 +18,10 @@ test("rejects a shrink when the disposable correction still differs from baselin
   assert.equal(isPreservedCounterexample({ ...valid, fixedDiffers: true }), false);
 });
 
+test("rejects a corrected result that is inconsistent even if a stale flag says otherwise", () => {
+  assert.equal(isPreservedCounterexample({ ...valid, fixedDiffers: false, fixed: { outcome: "completed", matched: false } }), false);
+});
+
 test("rejects timeouts and non-counterexamples", () => {
   assert.equal(isPreservedCounterexample({ ...valid, base: { outcome: "timeout" } }), false);
   assert.equal(isPreservedCounterexample({ ...valid, candidate: { outcome: "timeout" } }), false);

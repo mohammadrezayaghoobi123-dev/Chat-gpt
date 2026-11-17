@@ -97,8 +97,8 @@ const optionMatrix = [
   { maxExtglobRecursion: false },
 ];
 
-const windowsBackslashPattern = String.raw`+(foo\\\\bar*)`;
-const windowsBackslashInput = String.raw`foo\\bar-onefoo\\bar-two`;
+const windowsBackslashPattern = String.raw`+(foo\\bar*)`;
+const windowsBackslashInput = String.raw`foo\bar-onefoo\bar-two`;
 const windowsBackslashResult = {
   options: { windows: true },
   pattern: windowsBackslashPattern,

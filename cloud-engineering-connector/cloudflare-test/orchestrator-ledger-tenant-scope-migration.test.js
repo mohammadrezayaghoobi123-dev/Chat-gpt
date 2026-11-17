@@ -896,5 +896,53 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
     });
   });
 
+  it("fails closed when the migration marker table is lost after v8 schema changes", async () => {
+    const ledger = ledgerFor("tenant-scope-migration-marker-table-loss");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "marker-table-loss-task",
+        tenantId: "tenant",
+        projectId: "project",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 1800,
+        updatedAt: 1800,
+      };
+      const taskKey = "tp1:6:tenant:7:project:8:idem-key";
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, taskKey, "d".repeat(64), task.state, task.version,
+        JSON.stringify(task), task.createdAt, task.updatedAt, task.tenantId, task.projectId,
+      );
+      sql.exec("DROP TABLE orchestrator_schema_migrations");
+
+      let errorMessage = null;
+      try {
+        instance.ensureSchema();
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
+
+      const taskKeyAfter = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).one().idempotency_key;
+      const markerTable = sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'orchestrator_schema_migrations'",
+      ).toArray()[0];
+
+      expect({
+        errorMessage,
+        taskKeyAfter,
+        markerTable,
+      }).toEqual({
+        errorMessage: expect.stringMatching(/schema migration history.*(?:missing|inconsistent).*v8|v8.*(?:missing|inconsistent)/i),
+        taskKeyAfter: taskKey,
+        markerTable: undefined,
+      });
+    });
+  });
+
 
 });

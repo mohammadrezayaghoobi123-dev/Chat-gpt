@@ -38,12 +38,13 @@ source = replaceExactlyOnce(
   "const isSelfRepeatingStarBranch = (branch, options) => {",
   "helper signature",
 );
-source = replaceExactlyOnce(
-  source,
-  "    if (escaped === true) {\n      escaped = false;",
-  "    if (escaped === true) {\n      if (ch === '/' && options.bash !== true) {\n        return false;\n      }\n      escaped = false;",
-  "escaped separator guard",
-);
+const helperStart = source.indexOf("const isSelfRepeatingStarBranch = (branch, options) => {");
+assert.notEqual(helperStart, -1, "corrected helper signature must exist");
+const escapedBlock = source.indexOf("    if (escaped === true) {\n      escaped = false;", helperStart);
+assert.notEqual(escapedBlock, -1, "escaped branch block must exist inside the helper");
+const escapedBlockBefore = "    if (escaped === true) {\n      escaped = false;";
+const escapedBlockAfter = "    if (escaped === true) {\n      if (ch === '/' && options.bash !== true) {\n        return false;\n      }\n      escaped = false;";
+source = source.slice(0, escapedBlock) + escapedBlockAfter + source.slice(escapedBlock + escapedBlockBefore.length);
 source = replaceExactlyOnce(
   source,
   "isSelfRepeatingStarBranch(branches[0])",

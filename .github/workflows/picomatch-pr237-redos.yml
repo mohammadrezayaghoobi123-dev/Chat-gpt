@@ -10,6 +10,7 @@ on:
       - "security/picomatch-shrinker-fix-invariant-2026-11-17"
       - "security/picomatch-noextglob-option-coverage-2026-11-17"
       - "security/picomatch-option-alias-parity-2026-11-17"
+      - "security/picomatch-capture-and-option-support-boundary-2026-11-17"
     paths:
       - "security/picomatch-pr237-redos/**"
       - ".github/workflows/picomatch-pr237-redos.yml"

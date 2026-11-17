@@ -1,0 +1,36 @@
+name = "cloud-engineering-connector-test"
+main = "index.js"
+compatibility_date = "2026-10-23"
+compatibility_flags = ["global_fetch_strictly_public"]
+
+[[durable_objects.bindings]]
+name = "KNOWLEDGE_STORE"
+class_name = "KnowledgeStore"
+
+[[durable_objects.bindings]]
+name = "ORCHESTRATOR_LEDGER"
+class_name = "OrchestratorLedger"
+
+[[durable_objects.bindings]]
+name = "TENANT_DIRECTORY"
+class_name = "TenantDirectory"
+
+[[durable_objects.bindings]]
+name = "WRITE_CONTROL"
+class_name = "WriteControl"
+
+[exports.KnowledgeStore]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.OrchestratorLedger]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.TenantDirectory]
+type = "durable-object"
+storage = "sqlite"
+
+[exports.WriteControl]
+type = "durable-object"
+storage = "sqlite"

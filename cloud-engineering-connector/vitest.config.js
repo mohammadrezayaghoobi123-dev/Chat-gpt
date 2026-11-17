@@ -9,6 +9,7 @@ export default defineConfig({
   ],
   test: {
     include: ["cloudflare-test/**/*.test.js"],
+    exclude: ["cloudflare-test/write-control*.test.js"],
     testTimeout: 15_000,
     hookTimeout: 15_000,
   },

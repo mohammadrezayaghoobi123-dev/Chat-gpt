@@ -72,8 +72,13 @@ const faults = [
     createSql: `
       CREATE TRIGGER v9_fault_injection_event_staging
       BEFORE UPDATE OF idempotency_key ON orchestrator_outbox_events
+      -- This fault is reachable only after every task key has been rewritten.
       WHEN NEW.idempotency_key LIKE 'migration-v9-%'
-      BEGIN SELECT RAISE(ABORT, 'injected event staging failure'); END
+       AND NOT EXISTS (
+         SELECT 1 FROM orchestrator_tasks
+         WHERE idempotency_key NOT LIKE 'tp1:%'
+       )
+      BEGIN SELECT RAISE(ABORT, 'injected event staging failure after task rewrite'); END
     `,
   },
   {
@@ -199,8 +204,36 @@ describe("Schema v9 migration fault injection and recovery", () => {
       expect(markers).toEqual([8, 9, 10, 11, 12]);
 
       const firstSuccessfulResult = readMigrationRows(sql);
+      const firstSuccessfulMarkers = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12 ORDER BY version",
+      ).toArray().map(row => row.version);
+      const firstSuccessfulIndexes = sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (?, ?, ?) ORDER BY name",
+        "orchestrator_tasks_by_tenant_project_idempotency",
+        "orchestrator_outbox_by_tenant_project_idempotency",
+        "orchestrator_claim_candidates_by_scope_executor_order",
+      ).toArray().map(row => row.name);
+      const firstSuccessfulStagingTables = sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?) ORDER BY name",
+        "orchestrator_v9_task_key_staging",
+        "orchestrator_v9_outbox_key_staging",
+      ).toArray().map(row => row.name);
       instance.ensureSchema();
       expect(readMigrationRows(sql)).toEqual(firstSuccessfulResult);
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12 ORDER BY version",
+      ).toArray().map(row => row.version)).toEqual(firstSuccessfulMarkers);
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (?, ?, ?) ORDER BY name",
+        "orchestrator_tasks_by_tenant_project_idempotency",
+        "orchestrator_outbox_by_tenant_project_idempotency",
+        "orchestrator_claim_candidates_by_scope_executor_order",
+      ).toArray().map(row => row.name)).toEqual(firstSuccessfulIndexes);
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?) ORDER BY name",
+        "orchestrator_v9_task_key_staging",
+        "orchestrator_v9_outbox_key_staging",
+      ).toArray().map(row => row.name)).toEqual(firstSuccessfulStagingTables);
       expect(sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_tasks",
       ).one().count).toBe(2);

@@ -97,9 +97,9 @@ const optionMatrix = [
   { maxExtglobRecursion: false },
 ];
 
-const windowsBackslashPattern = String.raw`+(foo\\bar*)`;
+const windowsBackslashPattern = "+(foo/bar*)";
 const windowsBackslashInput = String.raw`foo\bar-onefoo\bar-two`;
-const windowsBackslashResult = {
+const windowsPathControl = {
   options: { windows: true },
   pattern: windowsBackslashPattern,
   input: windowsBackslashInput,
@@ -107,6 +107,9 @@ const windowsBackslashResult = {
   upstreamCandidate: candidate(windowsBackslashPattern, { windows: true })(windowsBackslashInput),
   corrected: corrected(windowsBackslashPattern, { windows: true })(windowsBackslashInput),
 };
+assert.equal(windowsPathControl.baseline, true, "Windows path-separator control must match the baseline");
+assert.equal(windowsPathControl.upstreamCandidate, windowsPathControl.baseline, "upstream candidate must preserve Windows path-separator control");
+assert.equal(windowsPathControl.corrected, windowsPathControl.baseline, "corrected candidate must preserve Windows path-separator control");
 
 const optionResults = optionMatrix.map(options => {
   const before = baseline(escapedSeparatorPattern, options)(repeatedPathSegments);
@@ -132,6 +135,6 @@ console.log(JSON.stringify({
     upstreamCandidate: candidate(control.pattern)(control.input),
     corrected: corrected(control.pattern)(control.input),
   })),
-  windowsBackslashResult,
+  windowsPathControl,
   optionResults,
 }, null, 2));

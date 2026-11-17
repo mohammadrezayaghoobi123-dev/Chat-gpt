@@ -629,11 +629,35 @@ export class OrchestratorLedger extends DurableObject {
       const events = sql.exec(
         "SELECT event_id, idempotency_key, tenant_id, project_id FROM orchestrator_outbox_events",
       ).toArray();
-      for (const row of events) {
+      const migratedEvents = events.map(row => ({
+        ...row,
+        migratedIdempotencyKey: tenantProjectIdempotencyKey(
+          row.tenant_id, row.project_id, row.idempotency_key,
+        ),
+      }));
+      const finalEventKeys = new Set(migratedEvents.map(row => row.migratedIdempotencyKey));
+      // Stage all old outbox keys before assigning final tuple keys, avoiding
+      // transient collisions under the legacy global UNIQUE constraint.
+      for (const row of migratedEvents) {
+        let stagingKey;
+        do {
+          stagingKey = "migration-v9-" + crypto.randomUUID();
+        } while (
+          finalEventKeys.has(stagingKey) ||
+          sql.exec(
+            "SELECT 1 FROM orchestrator_outbox_events WHERE idempotency_key = ?",
+            stagingKey,
+          ).toArray().length > 0
+        );
+        sql.exec(
+          "UPDATE orchestrator_outbox_events SET idempotency_key = ? WHERE event_id = ?",
+          stagingKey, row.event_id,
+        );
+      }
+      for (const row of migratedEvents) {
         sql.exec(
           "UPDATE orchestrator_outbox_events SET idempotency_key = ? WHERE event_id = ? AND tenant_id = ? AND project_id = ?",
-          tenantProjectIdempotencyKey(row.tenant_id, row.project_id, row.idempotency_key),
-          row.event_id, row.tenant_id, row.project_id,
+          row.migratedIdempotencyKey, row.event_id, row.tenant_id, row.project_id,
         );
       }
 

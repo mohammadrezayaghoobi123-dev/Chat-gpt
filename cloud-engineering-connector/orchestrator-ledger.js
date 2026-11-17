@@ -513,6 +513,15 @@ export class OrchestratorLedger extends DurableObject {
         );
       }
       const recordedVersions = new Set(migrationVersions);
+      const taskColumns = new Set(
+        sql.exec("PRAGMA table_info(orchestrator_tasks)").toArray().map(column => column.name),
+      );
+      if (!recordedVersions.has(8) && (taskColumns.has("tenant_id") || taskColumns.has("project_id"))) {
+        throw fail(
+          "Schema migration history is inconsistent: v8 tenant/project columns exist but the v8 marker is missing.",
+          "SCHEMA_MIGRATION_HISTORY_INCONSISTENT",
+        );
+      }
       const highestRecordedVersion = migrationVersions.length
         ? migrationVersions[migrationVersions.length - 1]
         : 7;

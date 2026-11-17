@@ -13,18 +13,18 @@ assert.equal(git(candidateDir,"rev-parse","HEAD"),CANDIDATE_SHA);
 assert.equal(git(fixedDir,"rev-parse","HEAD"),CANDIDATE_SHA);
 
 const cases=[
- {id:"drive-absolute-deep-globstar",pattern:"C:/**/path/*.jpg",input:"C:\\Users\\user\\Projects\\project\\path\\image.jpg",options:{windows:true}},
- {id:"drive-globstar-zero-directory",pattern:"C:/workspace/**/file.js",input:"C:\\workspace\\file.js",options:{windows:true}},
- {id:"drive-globstar-many-directories",pattern:"C:/workspace/**/file.js",input:"C:\\workspace\\src\\deep\\file.js",options:{windows:true}},
- {id:"unc-exact-server-share",pattern:"//server/share/**/*.js",input:"\\\\server\\share\\team\\deep\\file.js",options:{windows:true}},
- {id:"unc-globstar-zero-directory",pattern:"//server/share/**/*.js",input:"\\\\server\\share\\file.js",options:{windows:true}},
- {id:"unc-wrong-server-negative-control",pattern:"//other/share/**/*.js",input:"\\\\server\\share\\team\\file.js",options:{windows:true}},
- {id:"unc-wrong-share-negative-control",pattern:"//server/other/**/*.js",input:"\\\\server\\share\\team\\file.js",options:{windows:true}},
- {id:"repeated-separators-literal-pattern",pattern:"C:/workspace//src//file.js",input:"C:\\workspace\\\\src\\\\file.js",options:{windows:true}},
- {id:"repeated-separators-not-collapsed",pattern:"C:/workspace/src/file.js",input:"C:\\workspace\\\\src\\\\file.js",options:{windows:true}},
- {id:"custom-format-normalize-and-strip-dot",pattern:"C:/workspace/**/*.js",input:"./C:\\workspace\\src\\index.js",format:"normalizeAndStripDot",options:{windows:true}},
- {id:"custom-format-strip-dot-only",pattern:"C:/workspace/**/*.js",input:"./C:\\workspace\\src\\index.js",format:"stripDotOnly",options:{windows:true}},
- {id:"custom-format-identity-windows-separators",pattern:"C:/workspace/**/*.js",input:"C:\\workspace\\src\\index.js",format:"identity",options:{windows:true}},
+ {id:"drive-absolute-deep-globstar",pattern:"C:/**/path/*.jpg",input:"C:\\Users\\user\\Projects\\project\\path\\image.jpg",options:{windows:true},expectedMatch:true,expectedOutput:"C:/Users/user/Projects/project/path/image.jpg"},
+ {id:"drive-globstar-zero-directory",pattern:"C:/workspace/**/file.js",input:"C:\\workspace\\file.js",options:{windows:true},expectedMatch:true,expectedOutput:"C:/workspace/file.js"},
+ {id:"drive-globstar-many-directories",pattern:"C:/workspace/**/file.js",input:"C:\\workspace\\src\\deep\\file.js",options:{windows:true},expectedMatch:true,expectedOutput:"C:/workspace/src/deep/file.js"},
+ {id:"unc-exact-server-share",pattern:"//server/share/**/*.js",input:"\\\\server\\share\\team\\deep\\file.js",options:{windows:true},expectedMatch:true,expectedOutput:"//server/share/team/deep/file.js"},
+ {id:"unc-globstar-zero-directory",pattern:"//server/share/**/*.js",input:"\\\\server\\share\\file.js",options:{windows:true},expectedMatch:true,expectedOutput:"//server/share/file.js"},
+ {id:"unc-wrong-server-negative-control",pattern:"//other/share/**/*.js",input:"\\\\server\\share\\team\\file.js",options:{windows:true},expectedMatch:false,expectedOutput:"//server/share/team/file.js"},
+ {id:"unc-wrong-share-negative-control",pattern:"//server/other/**/*.js",input:"\\\\server\\share\\team\\file.js",options:{windows:true},expectedMatch:false,expectedOutput:"//server/share/team/file.js"},
+ {id:"repeated-separators-literal-pattern",pattern:"C:/workspace//src//file.js",input:"C:\\workspace\\\\src\\\\file.js",options:{windows:true},expectedMatch:true,expectedOutput:"C:/workspace//src//file.js"},
+ {id:"repeated-separators-not-collapsed",pattern:"C:/workspace/src/file.js",input:"C:\\workspace\\\\src\\\\file.js",options:{windows:true},expectedMatch:false,expectedOutput:"C:/workspace//src//file.js"},
+ {id:"custom-format-normalize-and-strip-dot",pattern:"C:/workspace/**/*.js",input:"./C:\\workspace\\src\\index.js",format:"normalizeAndStripDot",options:{windows:true},expectedMatch:true,expectedOutput:"C:/workspace/src/index.js"},
+ {id:"custom-format-strip-dot-only",pattern:"C:/workspace/**/*.js",input:"./C:\\workspace\\src\\index.js",format:"stripDotOnly",options:{windows:true},expectedMatch:true,expectedOutput:"C:\\workspace\\src\\index.js"},
+ {id:"custom-format-identity-windows-separators",pattern:"C:/workspace/**/*.js",input:"C:\\workspace\\src\\index.js",format:"identity",options:{windows:true},expectedMatch:true,expectedOutput:"C:\\workspace\\src\\index.js"},
  {id:"default-format-normalizes-drive-path",pattern:"C:/workspace/**/*.js",input:"C:\\workspace\\src\\index.js",options:{windows:true}}
 ];
 
@@ -57,7 +57,7 @@ function run(dir,c) {
 }
 
 const versions=[
- {name:"baseline",dir:baseDir},
+ {name:"baseline",dir:baseDir,expectedMatch:true,expectedOutput:"C:/workspace/src/index.js"},
  {name:"upstream-pr237",dir:candidateDir},
  {name:"corrected-disposable",dir:fixedDir}
 ];
@@ -67,6 +67,12 @@ for(const c of cases) {
  for(const v of versions) observed.versions[v.name]=run(v.dir,c);
  const values=versions.map(v=>observed.versions[v.name]);
  assert.ok(values.every(v=>v.outcome==="completed"),c.id+": all implementations must complete");
+ for(const value of values){
+  assert.equal(value.isMatch,c.expectedMatch,c.id+": public matcher result must match the hand-derived expectation");
+  assert.equal(value.output,c.expectedOutput,c.id+": formatted output must preserve the documented path contract");
+  if(c.expectedMatch) assert.equal(value.match[0],c.expectedOutput,c.id+": full match must equal the formatted input");
+  else assert.equal(value.match,null,c.id+": negative control must not produce a regex match");
+ }
  assert.deepEqual(values[1],values[0],c.id+": upstream candidate must preserve baseline behavior");
  assert.deepEqual(values[2],values[0],c.id+": corrected candidate must preserve baseline behavior");
  results.push(observed);

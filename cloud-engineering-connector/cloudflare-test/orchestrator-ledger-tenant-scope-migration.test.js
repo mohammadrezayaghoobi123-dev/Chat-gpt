@@ -1126,7 +1126,8 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         task.taskId,
       ).one().idempotency_key;
 
-      expect(errorMessage).toMatch(/schema migration history is inconsistent.*v8/i);
+      expect(JSON.stringify(errorMessage).toLowerCase()).toContain("schema migration history is inconsistent");
+      expect(JSON.stringify(errorMessage).toLowerCase()).toContain("v8");
       expect(taskColumnsAfter.has("tenant_id")).toBe(false);
       expect(taskColumnsAfter.has("project_id")).toBe(false);
       expect(outboxColumnsAfter.has("tenant_id")).toBe(true);

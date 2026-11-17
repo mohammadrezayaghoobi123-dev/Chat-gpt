@@ -175,3 +175,14 @@ commits = ["fe0302ea9927936f70c8a4acc577cae0b140e2d7"]
 paths = ['''^cloud-agent/test/memory-sync\.test\.js$''']
 regexTarget = "line"
 regexes = ["api_key = 'abcd1234efgh5678'"]
+
+[[allowlists]]
+description = "Public Git blob SHA and OpenPGP public-key fingerprint in the ICU signing-identity audit; exact historical commit, documentation path, generic-api-key rule, and labeled metadata lines only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["3082b80fbaf71685827ba63de882c3d93083b96f"]
+paths = ['''^docs/MASTER_BRAIN_GATE2P_R1U17_ICU79_SIGNING_IDENTITY_CANDIDATE_RECONCILIATION_2026-11-16\.md$''']
+regexTarget = "secret"
+regexes = [
+  '''^[0-9A-Fa-f]{40}$'''
+]

@@ -44,6 +44,10 @@ describe("OrchestratorLedger tenant/project query plans", () => {
       ).toArray();
       const details = plan.map(row => row.detail).join("\n");
       expect(details).toContain("orchestrator_claim_candidates_by_scope_executor_order");
+      // The index name alone is insufficient: prove SQLite constrains the
+      // complete scope prefix and preserves candidate ordering in the index.
+      expect(details).toMatch(/executor_id=\?.*tenant_id=\?.*project_id=\?/);
+      expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
     });
   });
   it("uses the scope/executor index for both initial and cursor-based bounded legacy backfill batches", async () => {

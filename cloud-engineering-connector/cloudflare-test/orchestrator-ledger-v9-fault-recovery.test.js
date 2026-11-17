@@ -48,6 +48,11 @@ function assertPreMigrationState(sql) {
     "orchestrator_outbox_by_tenant_project_idempotency",
     "orchestrator_claim_candidates_by_scope_executor_order",
   ).toArray()).toHaveLength(0);
+  expect(sql.exec(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?)",
+    "orchestrator_v9_task_key_staging",
+    "orchestrator_v9_outbox_key_staging",
+  ).toArray()).toHaveLength(0);
 }
 
 const faults = [

@@ -76,9 +76,8 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         task.updatedAt,
       );
 
-      // The test inserts a v7-shaped row after the DO's initial boot; rewind
-      // only v8's marker so ensureSchema exercises the legacy v7 -> v8 path.
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 8");
+      // Rewind the complete v8-v12 migration chain to model a v7 database.
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
       instance.ensureSchema();
       const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", task.taskId).toArray()[0];
       expect(row).toMatchObject({
@@ -180,9 +179,8 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         "audit-backfill", task.taskId, "system", "system", "TASK_CREATED", JSON.stringify({ taskId: task.taskId }), "d".repeat(64), 204,
       );
 
-      // The test inserts v7-shaped rows after initial boot; rewind v8 to
-      // exercise its child-row backfill while leaving later migrations isolated.
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 8");
+      // Rewind the complete v8-v12 migration chain to model a v7 database.
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
       instance.ensureSchema();
       for (const table of [
         "orchestrator_processed_messages",
@@ -560,7 +558,8 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         createdAt: 900,
         updatedAt: 901,
       };
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 8");
+      // Rewind the complete migration chain so this exercises v8 itself.
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
       sql.exec(
         "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         task.taskId, "v8-rollback-idem", "9".repeat(64), task.state,

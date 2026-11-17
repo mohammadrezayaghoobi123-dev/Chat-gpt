@@ -11,65 +11,72 @@ describe("SQLite cursor and staging capability for migration v9", () => {
     const ledger = ledgerFor("v9-cursor-capability-iteration");
     await runInDurableObject(ledger, async instance => {
       const sql = instance.ctx.storage.sql;
+      sql.exec("DROP TABLE IF EXISTS v9_cursor_capability_rows");
       sql.exec(`
-        CREATE TEMP TABLE v9_cursor_capability_rows (
+        CREATE TABLE v9_cursor_capability_rows (
           row_id INTEGER PRIMARY KEY,
           final_key TEXT NOT NULL UNIQUE
         )
       `);
 
-      const expectedRows = 512;
-      for (let rowId = 1; rowId <= expectedRows; rowId += 1) {
-        sql.exec(
-          "INSERT INTO v9_cursor_capability_rows (row_id, final_key) VALUES (?, ?)",
-          rowId,
-          "final-" + rowId,
+      try {
+        const expectedRows = 512;
+        for (let rowId = 1; rowId <= expectedRows; rowId += 1) {
+          sql.exec(
+            "INSERT INTO v9_cursor_capability_rows (row_id, final_key) VALUES (?, ?)",
+            rowId,
+            "final-" + rowId,
+          );
+        }
+
+        const cursor = sql.exec(
+          "SELECT row_id, final_key FROM v9_cursor_capability_rows ORDER BY row_id",
         );
+        expect(cursor).toBeDefined();
+        expect(typeof cursor.next).toBe("function");
+        expect(typeof cursor[Symbol.iterator]).toBe("function");
+
+        const first = cursor.next();
+        expect(first.done).toBe(false);
+        expect(first.value).toMatchObject({ row_id: 1, final_key: "final-1" });
+
+        let rowsSeen = 1;
+        let checksum = first.value.row_id;
+        for (const row of cursor) {
+          rowsSeen += 1;
+          checksum += row.row_id;
+        }
+
+        expect(rowsSeen).toBe(expectedRows);
+        expect(checksum).toBe((expectedRows * (expectedRows + 1)) / 2);
+        expect(Number.isInteger(cursor.rowsRead)).toBe(true);
+        expect(cursor.rowsRead).toBeGreaterThanOrEqual(expectedRows);
+
+        expect(() => sql.exec(
+          "INSERT INTO v9_cursor_capability_rows (row_id, final_key) VALUES (?, ?)",
+          expectedRows + 1,
+          "final-1",
+        )).toThrow();
+
+        const count = sql.exec(
+          "SELECT COUNT(*) AS count FROM v9_cursor_capability_rows",
+        ).toArray()[0].count;
+        expect(count).toBe(expectedRows);
+      } finally {
+        sql.exec("DROP TABLE IF EXISTS v9_cursor_capability_rows");
       }
-
-      const cursor = sql.exec(
-        "SELECT row_id, final_key FROM v9_cursor_capability_rows ORDER BY row_id",
-      );
-      expect(cursor).toBeDefined();
-      expect(typeof cursor.next).toBe("function");
-      expect(typeof cursor[Symbol.iterator]).toBe("function");
-
-      const first = cursor.next();
-      expect(first.done).toBe(false);
-      expect(first.value).toMatchObject({ row_id: 1, final_key: "final-1" });
-
-      let rowsSeen = 1;
-      let checksum = first.value.row_id;
-      for (const row of cursor) {
-        rowsSeen += 1;
-        checksum += row.row_id;
-      }
-
-      expect(rowsSeen).toBe(expectedRows);
-      expect(checksum).toBe((expectedRows * (expectedRows + 1)) / 2);
-      expect(Number.isInteger(cursor.rowsRead)).toBe(true);
-      expect(cursor.rowsRead).toBeGreaterThanOrEqual(expectedRows);
-
-      expect(() => sql.exec(
-        "INSERT INTO v9_cursor_capability_rows (row_id, final_key) VALUES (?, ?)",
-        expectedRows + 1,
-        "final-1",
-      )).toThrow();
-
-      const count = sql.exec(
-        "SELECT COUNT(*) AS count FROM v9_cursor_capability_rows",
-      ).toArray()[0].count;
-      expect(count).toBe(expectedRows);
     });
   });
 
-  it("rolls back temporary staging DDL and writes when transactionSync throws", async () => {
+  it("rolls back persistent staging DDL and writes when transactionSync throws", async () => {
     const ledger = ledgerFor("v9-cursor-capability-rollback");
     await runInDurableObject(ledger, async instance => {
       const sql = instance.ctx.storage.sql;
+      sql.exec("DROP TABLE IF EXISTS v9_cursor_capability_rollback");
+
       expect(() => instance.ctx.storage.transactionSync(() => {
         sql.exec(`
-          CREATE TEMP TABLE v9_cursor_capability_rollback (
+          CREATE TABLE v9_cursor_capability_rollback (
             row_id INTEGER PRIMARY KEY,
             final_key TEXT NOT NULL UNIQUE
           )
@@ -83,7 +90,7 @@ describe("SQLite cursor and staging capability for migration v9", () => {
       })).toThrow("intentional capability-spike rollback");
 
       const table = sql.exec(
-        "SELECT name FROM sqlite_temp_master WHERE type = 'table' AND name = ?",
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
         "v9_cursor_capability_rollback",
       ).toArray();
       expect(table).toHaveLength(0);

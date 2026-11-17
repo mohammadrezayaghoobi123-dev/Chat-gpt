@@ -273,6 +273,7 @@ function migrateV9KeyTable(sql, tableName, idColumn, stagingTableName) {
     AND substr(${column}, 1, 1) GLOB '[A-Za-z0-9]'
     AND ${column} NOT GLOB '*[^A-Za-z0-9._:-]*'
   )`;
+  const validScopeIdentifier = column => `(${column} = '__legacy__' OR ${validIdentifier(column)})`;
   const finalKeyExpression = `'tp1:' || length(tenant_id) || ':' || tenant_id
     || ':' || length(project_id) || ':' || project_id
     || ':' || length(idempotency_key) || ':' || idempotency_key`;
@@ -281,8 +282,8 @@ function migrateV9KeyTable(sql, tableName, idColumn, stagingTableName) {
     INSERT INTO ${stagingTableName} (record_id, final_key)
     SELECT ${idColumn}, ${finalKeyExpression}
     FROM ${tableName}
-    WHERE ${validIdentifier("tenant_id")}
-      AND ${validIdentifier("project_id")}
+    WHERE ${validScopeIdentifier("tenant_id")}
+      AND ${validScopeIdentifier("project_id")}
       AND ${validIdentifier("idempotency_key")}
   `);
   const stagedCount = sql.exec(`SELECT COUNT(*) AS count FROM ${stagingTableName}`).one().count;

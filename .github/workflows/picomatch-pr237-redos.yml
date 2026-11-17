@@ -42,6 +42,9 @@ jobs:
       - name: Run process-isolated, bounded adversarial matrix
         run: |
           node security/picomatch-pr237-redos/bounded-redos.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
+      - name: Run deterministic grammar-based differential fuzz corpus
+        run: |
+          node security/picomatch-pr237-redos/differential-fuzz.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
       - name: Install upstream test dependencies and run the full suite on corrected temporary candidate
         working-directory: ${{ runner.temp }}/picomatch-candidate-fixed
         run: |

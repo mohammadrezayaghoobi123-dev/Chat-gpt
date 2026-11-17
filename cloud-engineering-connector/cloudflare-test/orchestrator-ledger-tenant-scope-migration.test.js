@@ -754,5 +754,73 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
     });
   });
 
+  it("fails closed when a later schema marker exists but v9 is missing", async () => {
+    const ledger = ledgerFor("tenant-scope-migration-marker-gap");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "marker-gap-task",
+        tenantId: "tenant",
+        projectId: "project",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 1500,
+        updatedAt: 1500,
+      };
+      const taskKey = "tp1:6:tenant:7:project:8:idem-key";
+      const eventKey = "tp1:6:tenant:7:project:7:out-key";
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, taskKey, "a".repeat(64), task.state, task.version,
+        JSON.stringify(task), task.createdAt, task.updatedAt, task.tenantId, task.projectId,
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_worker_id, lease_generation, lease_until, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, 'PENDING', 0, NULL, 0, 0, ?, ?, ?, ?)",
+        "marker-gap-event", eventKey, task.taskId, "TASK_CREATED", "{}",
+        task.createdAt, task.updatedAt, task.tenantId, task.projectId,
+      );
+
+      // Simulate an inconsistent restore: v9's data transformation is already
+      // present, but its marker is absent while later migrations are recorded.
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 9");
+      const markerVersionsBefore = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations ORDER BY version",
+      ).toArray().map(row => row.version);
+
+      let errorMessage = null;
+      try {
+        instance.ensureSchema();
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
+
+      const markerVersionsAfter = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations ORDER BY version",
+      ).toArray().map(row => row.version);
+      const taskKeyAfter = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).toArray()[0]?.idempotency_key;
+      const eventKeyAfter = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_outbox_events WHERE event_id = ?",
+        "marker-gap-event",
+      ).toArray()[0]?.idempotency_key;
+
+      expect({
+        errorMessage,
+        markerVersionsBefore,
+        markerVersionsAfter,
+        taskKeyAfter,
+        eventKeyAfter,
+      }).toEqual({
+        errorMessage: expect.stringMatching(/schema migration history.*(?:gap|missing|inconsistent)/i),
+        markerVersionsBefore: [8, 10, 11, 12],
+        markerVersionsAfter: [8, 10, 11, 12],
+        taskKeyAfter: taskKey,
+        eventKeyAfter: eventKey,
+      });
+    });
+  });
+
 
 });

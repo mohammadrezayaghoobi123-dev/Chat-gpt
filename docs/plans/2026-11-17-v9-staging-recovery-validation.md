@@ -258,6 +258,8 @@ Read-only GitHub history for `cloud-engineering-connector/wrangler.toml` shows t
 
 The observed active Production deployment (2026-11-03) and Staging deployment (2026-11-02) both predate the 2026-11-08 repository changes that introduced the current OAuth KV and Ledger/Knowledge/Tenant Directory declarations. This provides a strong temporal explanation for why the deployed Worker versions do not contain those newer bindings. It does **not** establish which exact Git commit produced Production version 35, because that version's metadata did not expose a repository commit SHA.
 
+A complete read-only listing of Production versions 1–35 shows that the last observed version with an explicit repository `workers/commit_sha` annotation is version 19 (PR #65, commit `452b66bbe9e999e272bf08784fd76c17b20176f3`). Versions 20–35 do not carry a repository commit SHA annotation. Their metadata records version creation sources and timestamps, but not a verifiable source commit. Thus Production's exact code provenance remains **UNKNOWN**, even though its deployed binding/export shape and timestamp demonstrate that it does not contain the newer declarations from 2026-11-08.
+
 For Staging, version 29's Cloudflare metadata explicitly annotated candidate commit `f63f17be81c564e1ff2abf30251d145110e72587` and PR #126. The Wrangler file at that commit declares `WRITE_CONTROL` (SQLite) and does not declare `ORCHESTRATOR_LEDGER` or `OAUTH_KV`. The current deployed Staging version 32 is later than that candidate and retains the same WriteControl-only binding/export shape. PR #126 is closed without merge; its candidate deployment history is not evidence that the current repository head was deployed.
 
 **Provenance verdict:**

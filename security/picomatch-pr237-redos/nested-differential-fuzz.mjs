@@ -22,7 +22,7 @@ function atom(depth=0){
  const second=atom(depth+1);
  return pick([
   ()=>"+("+inner+")",()=>"*("+inner+")",()=>"@("+inner+")",() => "?("+inner+")",
-  ()=>"! ("+inner+"|"+second+")".replace("! ","!"),()=>"("+inner+"|"+second+")",
+  ()=>"!("+inner+"|"+second+")",()=>"("+inner+"|"+second+")",
   ()=>inner+pick(["/","\\\\",""]) + second,
   ()=>"["+pick(["a-z","ab","!a","^a"])+"]",
   ()=>"{"+inner+","+second+"}"

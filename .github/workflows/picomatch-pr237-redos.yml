@@ -6,7 +6,7 @@ on:
       - ".github/workflows/picomatch-pr237-redos.yml"
   push:
     branches:
-      - "security/picomatch-bounded-redos-matrix-2026-11-17"
+      - "security/picomatch-pr237-bounded-redos-matrix-2026-11-17"
       - "security/picomatch-shrinker-fix-invariant-2026-11-17"
     paths:
       - "security/picomatch-pr237-redos/**"

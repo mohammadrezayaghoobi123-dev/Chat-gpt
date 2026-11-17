@@ -10,13 +10,13 @@ function ledgerFor(name) {
 }
 
 function rejectUnboundedMigrationMaterialization(sql) {
-  // Guard every row-producing SELECT from either migrated source table, not
-  // only the exact historical query strings. COUNT(*) remains scalar and safe.
+  // Guard row-producing reads even when the source table is reached through
+  // a JOIN or nested query. Permit only direct scalar COUNT(*) queries.
   const readsSourceRows = statement => {
     const normalized = String(statement).replace(/\s+/g, " ").trim();
-    return /\bSELECT\b/i.test(normalized)
-      && /\bFROM\s+(?:orchestrator_tasks|orchestrator_outbox_events)\b/i.test(normalized)
-      && !/\bCOUNT\s*\(/i.test(normalized);
+    const referencesSource = /\b(?:FROM|JOIN)\s+(?:orchestrator_tasks|orchestrator_outbox_events)\b/i.test(normalized);
+    const scalarCountOnly = /^SELECT\s+COUNT\s*\(\s*\*\s*\)(?:\s+AS\s+[A-Z_][A-Z0-9_]*)?\s+FROM\s+(?:orchestrator_tasks|orchestrator_outbox_events)(?:\s+WHERE\b[\s\S]*)?$/i.test(normalized);
+    return /\bSELECT\b/i.test(normalized) && referencesSource && !scalarCountOnly;
   };
   let rejectedMaterializations = 0;
   const guardedSql = new Proxy(sql, {
@@ -162,6 +162,57 @@ describe("OrchestratorLedger v9 migration JavaScript memory bound", () => {
         peakMemoryBytes: null,
         peakMemoryLimitation: "Cloudflare Vitest Durable Object runtime does not expose per-isolate heap telemetry",
       }));
+    });
+  });
+
+  it("vacates legacy keys that collide with another row's final scoped key before rewriting", async () => {
+    const ledger = ledgerFor("v9-migration-legacy-final-key-collision");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const collidingTaskKey = "tp1:8:tenant-a:9:project-a:1:x";
+      const collidingEventKey = "tp1:8:tenant-a:9:project-a:1:e";
+
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'SCHEDULED', 1, '{}', 1, 1, ?, ?)",
+        "v9-collision-task-a", "x", "a".repeat(64), "tenant-a", "project-a",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'SCHEDULED', 1, '{}', 2, 2, ?, ?)",
+        "v9-collision-task-b", collidingTaskKey, "b".repeat(64), "tenant-b", "project-b",
+      );
+
+      sql.exec(
+        "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_worker_id, lease_generation, lease_until, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'TASK_CREATED', '{}', 'PENDING', 0, NULL, 0, 0, 1, 1, ?, ?)",
+        "v9-collision-event-a", "e", "v9-collision-task-a", "tenant-a", "project-a",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_worker_id, lease_generation, lease_until, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'TASK_CREATED', '{}', 'PENDING', 0, NULL, 0, 0, 2, 2, ?, ?)",
+        "v9-collision-event-b", collidingEventKey, "v9-collision-task-b", "tenant-b", "project-b",
+      );
+
+      sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_tenant_project_idempotency");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_outbox_by_tenant_project_idempotency");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_claim_candidates_by_scope_executor_order");
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 9");
+
+      expect(() => migrateV9IdempotencyKeys(instance.ctx.storage)).not.toThrow();
+
+      expect(sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        "v9-collision-task-a",
+      ).one().idempotency_key).toBe(collidingTaskKey);
+      expect(sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        "v9-collision-task-b",
+      ).one().idempotency_key).toBe(`tp1:8:tenant-b:9:project-b:${collidingTaskKey.length}:${collidingTaskKey}`);
+      expect(sql.exec(
+        "SELECT idempotency_key FROM orchestrator_outbox_events WHERE event_id = ?",
+        "v9-collision-event-a",
+      ).one().idempotency_key).toBe(collidingEventKey);
+      expect(sql.exec(
+        "SELECT idempotency_key FROM orchestrator_outbox_events WHERE event_id = ?",
+        "v9-collision-event-b",
+      ).one().idempotency_key).toBe(`tp1:8:tenant-b:9:project-b:${collidingEventKey.length}:${collidingEventKey}`);
     });
   });
 

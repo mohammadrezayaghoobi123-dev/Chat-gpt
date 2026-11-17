@@ -855,19 +855,44 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         task.taskId, "legacy-key", "b".repeat(64), task.state, task.version,
         JSON.stringify(task), task.createdAt, task.updatedAt,
       );
+      const malformedStringTask = {
+        taskId: "invalid-string-scope-task",
+        tenantId: "tenant with spaces",
+        projectId: "project-valid",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 1701,
+        updatedAt: 1701,
+      };
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        malformedStringTask.taskId, "invalid-string-key", "c".repeat(64),
+        malformedStringTask.state, malformedStringTask.version,
+        JSON.stringify(malformedStringTask), malformedStringTask.createdAt, malformedStringTask.updatedAt,
+      );
 
       instance.ensureSchema();
 
-      const row = sql.exec(
-        "SELECT tenant_id, project_id, idempotency_key, task_json FROM orchestrator_tasks WHERE task_id = ?",
-        task.taskId,
-      ).one();
-      expect(row).toEqual({
-        tenant_id: "__legacy__",
-        project_id: "__legacy__",
-        idempotency_key: "tp1:10:__legacy__:10:__legacy__:10:legacy-key",
-        task_json: JSON.stringify(task),
-      });
+      const rows = sql.exec(
+        "SELECT task_id, tenant_id, project_id, idempotency_key, task_json FROM orchestrator_tasks WHERE task_id IN (?, ?) ORDER BY task_id",
+        task.taskId, malformedStringTask.taskId,
+      ).toArray();
+      expect(rows).toEqual([
+        {
+          task_id: "invalid-scope-task",
+          tenant_id: "__legacy__",
+          project_id: "__legacy__",
+          idempotency_key: "tp1:10:__legacy__:10:__legacy__:10:legacy-key",
+          task_json: JSON.stringify(task),
+        },
+        {
+          task_id: "invalid-string-scope-task",
+          tenant_id: "__legacy__",
+          project_id: "project-valid",
+          idempotency_key: "tp1:10:__legacy__:13:project-valid:18:invalid-string-key",
+          task_json: JSON.stringify(malformedStringTask),
+        },
+      ]);
     });
   });
 

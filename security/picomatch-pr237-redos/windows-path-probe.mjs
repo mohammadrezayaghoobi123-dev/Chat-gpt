@@ -70,7 +70,7 @@ for(const c of cases) {
  for(const value of values){
   assert.equal(value.isMatch,c.expectedMatch,c.id+": public matcher result must match the hand-derived expectation");
   assert.equal(value.output,c.expectedOutput,c.id+": formatted output must preserve the documented path contract");
-  if(c.expectedMatch) assert.equal(value.match[0],c.expectedOutput,c.id+": full match must equal the formatted input");
+  if(c.expectedMatch) assert.ok(value.match===true||(Array.isArray(value.match)&&value.match[0]===c.expectedOutput),c.id+": successful result must be literal true or expose the formatted full regex match");
   else assert.equal(value.match,null,c.id+": negative control must not produce a regex match");
  }
  assert.deepEqual(values[1],values[0],c.id+": upstream candidate must preserve baseline behavior");

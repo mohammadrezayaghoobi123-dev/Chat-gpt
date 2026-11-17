@@ -3,9 +3,25 @@ main = "index.js"
 compatibility_date = "2026-10-23"
 compatibility_flags = ["global_fetch_strictly_public"]
 workers_dev = true
+keep_vars = true
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+redact_query_string = true
+
+[observability.logs]
+enabled = true
+invocation_logs = false
+head_sampling_rate = 1
+persist = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
 
 [vars]
-SERVICE_MODE = "cloud"
 OAUTH_ISSUER = "https://chat-gpt111.mohammadrezayaghoobi123.workers.dev"
 MCP_RESOURCE_URL = "https://chat-gpt111.mohammadrezayaghoobi123.workers.dev/mcp"
 
@@ -45,8 +61,23 @@ storage = "sqlite"
 type = "durable-object"
 storage = "sqlite"
 
+[env.staging.observability]
+enabled = true
+head_sampling_rate = 1
+redact_query_string = true
+
+[env.staging.observability.logs]
+enabled = true
+invocation_logs = false
+head_sampling_rate = 1
+persist = true
+
+[env.staging.observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
+
 [env.staging.vars]
-SERVICE_MODE = "cloud"
 OAUTH_ISSUER = "https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev"
 MCP_RESOURCE_URL = "https://chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev/mcp"
 

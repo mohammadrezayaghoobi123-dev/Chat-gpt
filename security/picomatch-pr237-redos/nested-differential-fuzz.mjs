@@ -105,7 +105,7 @@ const optionCombinations=[
 const aliasChild=[
  "const pm=require(process.argv[1]);",
  "const [pattern,input,options]=[process.argv[2],process.argv[3],JSON.parse(process.argv[4])];",
- "try{const matcher=pm(pattern,options);const re=pm.makeRe(pattern,options);const detail=matcher(input,true);process.stdout.write(JSON.stringify({outcome:'completed',matched:detail.isMatch,match:Array.isArray(detail.match)?Array.from(detail.match):detail.match,regexSource:re&&re.source}));}",
+ "try{const matcher=pm(pattern,options);const re=pm.makeRe(pattern,options);const detail=matcher(input,true);process.stdout.write(JSON.stringify({outcome:'completed',matched:detail.isMatch,output:detail.output,match:Array.isArray(detail.match)?Array.from(detail.match):detail.match,regexSource:re&&re.source}));}",
  "catch(e){process.stdout.write(JSON.stringify({outcome:'threw',name:e.name,message:e.message}));}"
 ].join("\n");
 function runAlias(dir,c,options){
@@ -154,6 +154,37 @@ for(const c of aliasCases){
  }
 }
 console.log(JSON.stringify({verdict:"CAPTURE_RESULTS_AND_UNKNOWN_OPTION_BOUNDARY_CONFIRMED",captureChecks,windowsNoopChecks}));
+
+// Public-contract checks based on the pinned README's documented bash/windows/capture semantics.
+let bashContractChecks=0;
+const bashContractCases=[
+ {name:"bash single-star crosses multiple path segments",pattern:"a/*/c",input:"a/b/d/c",options:{bash:true},expected:true},
+ {name:"default single-star remains within one path segment",pattern:"a/*/c",input:"a/b/d/c",options:{bash:false},expected:false},
+ {name:"windows option accepts backslash path separators",pattern:"a/*/c",input:"a\\b\\c",options:{windows:true},expected:true},
+ {name:"POSIX mode does not normalize backslash separators",pattern:"a/*/c",input:"a\\b\\c",options:{windows:false},expected:false},
+ {name:"bash plus windows plus capture spans nested path segments",pattern:"a/*/c",input:"a\\b\\d\\c",options:{bash:true,windows:true,capture:true},expected:true}
+];
+for(const c of bashContractCases){
+ const results=[];
+ for(const version of [{name:"baseline",dir:baseDir},{name:"upstream",dir:candidateDir},{name:"corrected",dir:fixedDir}]){
+  const detail=runAlias(version.dir,c,c.options);
+  assert.equal(detail.outcome,"completed",version.name+" "+c.name+" must complete");
+  assert.equal(detail.matched,c.expected,version.name+" "+c.name+" expected matcher result");
+  results.push(detail);
+ }
+ assert.deepEqual(results[1],results[0],c.name+" upstream candidate must preserve baseline public behavior");
+ assert.deepEqual(results[2],results[0],c.name+" corrected candidate must preserve baseline public behavior");
+ if(c.options.capture){
+  assert.ok(Array.isArray(results[0].match),"combined bash/windows/capture must expose match array");
+  const expectedOutput=c.options.windows?c.input.replace(/\\/g,"/"):c.input;
+  assert.equal(results[0].output,expectedOutput,"windows formatting must normalize separators before matching");
+  assert.equal(results[0].match[0],expectedOutput,"capture full match must use the formatted matcher input");
+  assert.ok(results[0].match.length>=1,"capture result must expose the full RegExp match");
+ }
+ bashContractChecks++;
+}
+console.log(JSON.stringify({verdict:"BASH_WINDOWS_CAPTURE_PUBLIC_CONTRACT_CONFIRMED",checks:bashContractChecks,cases:bashContractCases.map(({name,expected})=>({name,expected}))}));
+
 
 console.log(JSON.stringify({verdict:"NOEXT_ALIAS_PARITY_CONFIRMED",patterns:aliasCases.length,optionCombinations:optionCombinations.length,implementations:3,aliasComparisons}));
 const findings=[],timeouts=[],observations=[];

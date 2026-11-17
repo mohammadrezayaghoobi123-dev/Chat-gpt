@@ -400,6 +400,58 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
     });
   });
 
+  it("migrates v8 outbox idempotency keys without transient global-UNIQUE collisions", async () => {
+    const ledger = ledgerFor("tenant-scope-v9-outbox-idempotency-key-collision");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+
+      // Reconstruct the v8 boundary while retaining the legacy global UNIQUE
+      // constraint on orchestrator_outbox_events.idempotency_key.
+      for (const indexName of [
+        "orchestrator_tasks_by_tenant_project_idempotency",
+        "orchestrator_outbox_by_tenant_project_idempotency",
+        "orchestrator_claim_candidates_by_scope_executor_order",
+        "orchestrator_tasks_by_scope_executor_created",
+        "orchestrator_tasks_by_scope_state_executor_created",
+      ]) {
+        sql.exec("DROP INDEX IF EXISTS " + indexName);
+      }
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version IN (9, 10, 11, 12)");
+
+      const secondLegacyKey = "tp1:1:a:1:b:1:c";
+      for (const [eventId, idempotencyKey, tenantId, projectId, createdAt] of [
+        ["collision-event-a", "c", "a", "b", 1100],
+        ["collision-event-b", secondLegacyKey, "x", "y", 1101],
+      ]) {
+        sql.exec(
+          "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_worker_id, lease_generation, lease_until, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, 'PENDING', 0, NULL, 0, 0, ?, ?, ?, ?)",
+          eventId,
+          idempotencyKey,
+          "legacy-task-" + eventId,
+          "TASK_CREATED",
+          "{}",
+          createdAt,
+          createdAt,
+          tenantId,
+          projectId,
+        );
+      }
+
+      expect(() => instance.ensureSchema()).not.toThrow();
+
+      const migrated = sql.exec(
+        "SELECT event_id, idempotency_key FROM orchestrator_outbox_events ORDER BY event_id",
+      ).toArray();
+      expect(migrated).toEqual([
+        { event_id: "collision-event-a", idempotency_key: "tp1:1:a:1:b:1:c" },
+        { event_id: "collision-event-b", idempotency_key: "tp1:1:x:1:y:15:tp1:1:a:1:b:1:c" },
+      ]);
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 9",
+      ).toArray()[0]?.version).toBe(9);
+    });
+  });
+
   it("upgrades a populated schema-v9 ledger to v12 and drops only the task scope index", async () => {
     const ledger = ledgerFor("tenant-scope-v9-to-v12-upgrade");
     await runInDurableObject(ledger, async instance => {

@@ -1,0 +1,102 @@
+import assert from "node:assert/strict";
+import { spawnSync, execFileSync } from "node:child_process";
+import path from "node:path";
+
+const [baseDir,candidateDir,fixedDir]=process.argv.slice(2);
+assert.ok(baseDir&&candidateDir&&fixedDir,"three pinned checkout paths required");
+const BASE_SHA="9fab7bf61913ea334c4203ed321c426cfde44a42";
+const CANDIDATE_SHA="1bf0d04563cb9ce568cf36efc5f6b7187d9911d5";
+const TIMEOUT_MS=300,HEAP_MB=96,MAX_CASES=72,MAX_SHRINK_STEPS=80;
+const git=(cwd,...args)=>execFileSync("git",args,{cwd,encoding:"utf8",stdio:["ignore","pipe","pipe"]}).trim();
+assert.equal(git(baseDir,"rev-parse","HEAD"),BASE_SHA);
+assert.equal(git(candidateDir,"rev-parse","HEAD"),CANDIDATE_SHA);
+assert.equal(git(fixedDir,"rev-parse","HEAD"),CANDIDATE_SHA);
+let seed=0x91e10da5;
+function rand(){seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;return(seed>>>0)/0x100000000;}
+const pick=a=>a[Math.floor(rand()*a.length)];
+const leaves=["a","b","foo","bar","x","*a","?b","[ab]","[!a]","foo/bar","foo\\/bar","foo\\\\bar","."];
+function atom(depth=0){
+ if(depth>=2||rand()<0.38)return pick(leaves);
+ const inner=atom(depth+1);
+ const second=atom(depth+1);
+ return pick([
+  ()=>"+("+inner+")",()=>"*("+inner+")",()=>"@("+inner+")",() => "?("+inner+")",
+  ()=>"!("+inner+"|"+second+")",()=>"("+inner+"|"+second+")",
+  ()=>inner+pick(["/","\\\\",""]) + second,
+  ()=>"["+pick(["a-z","ab","!a","^a"])+"]",
+  ()=>"{"+inner+","+second+"}"
+ ])();
+}
+const inputs=["a","b","foo","bar","aaab","ab","foo/bar","foo/barxfoo/bary","foo/barx","foo*bar","foo?bar","foo[bar",".env","xay","xyz","src/a.js","a/x/b","foo\\bar","foo/bar/foo","foobar"];
+const optionSets=[{},{dot:true},{bash:true},{windowsPathsNoEscape:true},{capture:true},{dot:true,capture:true},{bash:true,capture:true},{windowsPathsNoEscape:true,dot:true},{noext:true},{nobrace:true},{noglobstar:true},{strictSlashes:true}];
+const cases=[
+ {pattern:"+((foo\\/bar*)|baz)",input:"foo/barxfoo/bary",options:{}},
+ {pattern:"+(@(foo\\/bar*|baz))",input:"foo/barxfoo/bary",options:{}},
+ {pattern:"!(@(foo\\/bar*|baz))",input:"not-a-path",options:{}},
+ {pattern:"+(foo\\/bar*)",input:"foo/barxfoo/bary",options:{}},
+ {pattern:"+(foo\\\\bar*)",input:"foo\\barxfoo\\bary",options:{}},
+ {pattern:"@(+(*a)|foo)",input:"aaab",options:{}},
+ {pattern:"!(*(@(a|b)))",input:"c",options:{}},
+ {pattern:"{+(foo|bar),baz}",input:"foobar",options:{}},
+ {pattern:"[a-z]\\/+(foo|bar)",input:"x/foo",options:{}},
+ {pattern:"+(foo\\/bar*)",input:"foo/barxfoo/bary",options:{bash:true}}
+];
+while(cases.length<MAX_CASES)cases.push({pattern:atom(),input:pick(inputs),options:pick(optionSets)});
+const child=[
+ "const pm=require(process.argv[1]);",
+ "const [pattern,input,options]=[process.argv[2],process.argv[3],JSON.parse(process.argv[4])];",
+ "try{const matched=pm(pattern,options)(input);process.stdout.write(JSON.stringify({outcome:'completed',matched}));}",
+ "catch(e){process.stdout.write(JSON.stringify({outcome:'threw',name:e.name,message:e.message}));}"
+].join("\\n");
+const cache=new Map();
+function run(dir,c){
+ const key=[dir,c.pattern,c.input,JSON.stringify(c.options)].join("\\0");
+ if(cache.has(key))return cache.get(key);
+ const r=spawnSync(process.execPath,["-e",child,path.join(dir,"index.js"),c.pattern,c.input,JSON.stringify(c.options)],{encoding:"utf8",timeout:TIMEOUT_MS,maxBuffer:4096,killSignal:"SIGKILL",env:{...process.env,NODE_OPTIONS:"--max-old-space-size="+HEAP_MB}});
+ let value;
+ if(r.error&&r.error.code==="ETIMEDOUT")value={outcome:"timeout"};
+ else {if(r.error)throw r.error;assert.equal(r.status,0,"child process failed: "+r.stderr);value=JSON.parse(r.stdout);}
+ cache.set(key,value);return value;
+}
+function same(a,b){return JSON.stringify(a)===JSON.stringify(b);}
+function mismatch(c){
+ const base=run(baseDir,c),candidate=run(candidateDir,c),fixed=run(fixedDir,c);
+ return {base,candidate,fixed,diverges:!same(base,candidate),fixedDiffers:!same(base,fixed)};
+}
+function minimize(c){
+ let pattern=c.pattern,input=c.input,steps=0,changed=true;
+ const preserves=(p,i)=>{if(steps++>=MAX_SHRINK_STEPS)return false;const x={pattern:p,input:i,options:c.options};const m=mismatch(x);return m.diverges&&m.base.outcome==="completed"&&m.candidate.outcome==="completed"&&same(m.base,{outcome:"completed",matched:true})&&same(m.candidate,{outcome:"completed",matched:false});};
+ for(const field of ["pattern","input"]){
+  let value=field==="pattern"?pattern:input;
+  let granularity=2;
+  while(value.length>=2&&steps<MAX_SHRINK_STEPS){
+   const chunk=Math.ceil(value.length/granularity);let reduced=false;
+   for(let start=0;start<value.length;start+=chunk){
+    const candidate=value.slice(0,start)+value.slice(start+chunk);
+    if(candidate.length&&preserves(field==="pattern"?candidate:pattern,field==="input"?candidate:input)){value=candidate;reduced=true;break;}
+   }
+   if(reduced)granularity=Math.max(2,granularity-1);
+   else if(granularity>=value.length)break;
+   else granularity=Math.min(value.length,granularity*2);
+  }
+  if(field==="pattern")pattern=value;else input=value;
+ }
+ return {pattern,input,options:c.options,shrinkSteps:steps};
+}
+const findings=[],timeouts=[],observations=[];
+for(let i=0;i<cases.length;i++){
+ const c=cases[i],m=mismatch(c);
+ observations.push({index:i,...c,...m});
+ if(m.base.outcome==="timeout")timeouts.push({index:i,side:"baseline",pattern:c.pattern});
+ if(m.candidate.outcome==="timeout"||m.fixed.outcome==="timeout")findings.push({index:i,reason:"candidate_or_correction_timeout",...c,...m});
+ else if(m.fixedDiffers)findings.push({index:i,reason:"corrected_candidate_semantic_divergence",...c,...m});
+ else if(m.diverges){
+  const minimized=minimize(c);
+  findings.push({index:i,reason:"upstream_semantic_divergence",...c,...m,minimized});
+ }
+}
+const exactKnown=findings.filter(x=>x.reason==="upstream_semantic_divergence"&&x.pattern==="+(foo\\/bar*)"&&x.input==="foo/barxfoo/bary"&&JSON.stringify(x.options)==="{}"&&x.base.matched===true&&x.candidate.matched===false&&x.fixed.matched===true);
+const unexpected=findings.filter(x=>x.reason!=="upstream_semantic_divergence"||!(x.pattern==="+(foo\\/bar*)"&&x.input==="foo/barxfoo/bary"&&JSON.stringify(x.options)==="{}"));
+console.log(JSON.stringify({verdict:unexpected.length===0&&exactKnown.length>=1?"NESTED_DIFFERENTIAL_KNOWN_REGRESSION_ONLY":"NESTED_DIFFERENTIAL_NEW_FINDINGS",seed:"0x91e10da5",cases:cases.length,processTimeoutMs:TIMEOUT_MS,heapMb:HEAP_MB,baselineTimeouts:timeouts.length,cacheEntries:cache.size,knownCounterexamples:exactKnown,unexpected:unexpected.slice(0,20),unexpectedCount:unexpected.length,observations},null,2));
+assert.ok(exactKnown.length>=1,"the known escaped-separator regression must remain reproducible");
+assert.equal(unexpected.length,0,"new semantic/security counterexamples require separate triage");

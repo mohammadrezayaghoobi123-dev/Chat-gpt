@@ -105,7 +105,7 @@ const optionCombinations=[
 const aliasChild=[
  "const pm=require(process.argv[1]);",
  "const [pattern,input,options]=[process.argv[2],process.argv[3],JSON.parse(process.argv[4])];",
- "try{const matcher=pm(pattern,options);const re=pm.makeRe(pattern,options);const detail=matcher(input,true);process.stdout.write(JSON.stringify({outcome:'completed',matched:detail.isMatch,match:Array.isArray(detail.match)?Array.from(detail.match):detail.match,regexSource:re&&re.source}));}",
+ "try{const matcher=pm(pattern,options);const re=pm.makeRe(pattern,options);const detail=matcher(input,true);process.stdout.write(JSON.stringify({outcome:'completed',matched:detail.isMatch,output:detail.output,match:Array.isArray(detail.match)?Array.from(detail.match):detail.match,regexSource:re&&re.source}));}",
  "catch(e){process.stdout.write(JSON.stringify({outcome:'threw',name:e.name,message:e.message}));}"
 ].join("\n");
 function runAlias(dir,c,options){
@@ -176,7 +176,9 @@ for(const c of bashContractCases){
  assert.deepEqual(results[2],results[0],c.name+" corrected candidate must preserve baseline public behavior");
  if(c.options.capture){
   assert.ok(Array.isArray(results[0].match),"combined bash/windows/capture must expose match array");
-  assert.equal(results[0].match[0],c.input,"capture must preserve original input as full match");
+  const expectedOutput=c.options.windows?c.input.replace(/\\\\/g,"/"):c.input;
+  assert.equal(results[0].output,expectedOutput,"windows formatting must normalize separators before matching");
+  assert.equal(results[0].match[0],expectedOutput,"capture full match must use the formatted matcher input");
   assert.ok(results[0].match.length>=2,"capture must expose at least one wildcard capture");
   assert.equal(results[0].match[1],"b/d","capture must preserve the cross-segment wildcard span");
  }

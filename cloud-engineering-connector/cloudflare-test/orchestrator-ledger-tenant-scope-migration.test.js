@@ -1109,7 +1109,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       try {
         instance.ensureSchema();
       } catch (error) {
-        errorMessage = error instanceof Error ? error.message : String(error);
+        errorMessage = String(error?.message ?? error);
       }
 
       const taskColumnsAfter = new Set(

@@ -24,6 +24,29 @@ const SCOPED_TABLES = [
   "orchestrator_audit_events",
 ];
 
+function rewindScopeMigrationToV7(sql) {
+  for (const table of SCOPED_TABLES) {
+    const indexes = sql.exec(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?",
+      table,
+    ).toArray().map(row => row.name).filter(name => !name.startsWith("sqlite_"));
+    for (const indexName of indexes) {
+      const indexedColumns = sql.exec("PRAGMA index_info(" + indexName + ")")
+        .toArray().map(column => column.name);
+      if (indexedColumns.some(name => name === "tenant_id" || name === "project_id")) {
+        sql.exec("DROP INDEX IF EXISTS " + indexName);
+      }
+    }
+
+    const columns = new Set(
+      sql.exec("PRAGMA table_info(" + table + ")").toArray().map(column => column.name),
+    );
+    if (columns.has("tenant_id")) sql.exec("ALTER TABLE " + table + " DROP COLUMN tenant_id");
+    if (columns.has("project_id")) sql.exec("ALTER TABLE " + table + " DROP COLUMN project_id");
+  }
+  sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
+}
+
 describe("OrchestratorLedger tenant/project scope schema migration", () => {
   it("adds explicit tenant and project scope to every persisted ledger table", async () => {
     const ledger = ledgerFor("tenant-scope-schema-v8");
@@ -77,7 +100,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       );
 
       // Rewind the complete v8-v12 migration chain to model a v7 database.
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
+      rewindScopeMigrationToV7(sql);
       instance.ensureSchema();
       const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", task.taskId).toArray()[0];
       expect(row).toMatchObject({
@@ -180,7 +203,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       );
 
       // Rewind the complete v8-v12 migration chain to model a v7 database.
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
+      rewindScopeMigrationToV7(sql);
       instance.ensureSchema();
       for (const table of [
         "orchestrator_processed_messages",
@@ -415,6 +438,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         sql.exec("DROP INDEX IF EXISTS " + indexName);
       }
       sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version IN (9, 10, 11, 12)");
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_tenant_project ON orchestrator_tasks(tenant_id, project_id)");
 
       const secondLegacyKey = "tp1:1:a:1:b:1:c";
       for (const [eventId, idempotencyKey, tenantId, projectId, createdAt] of [
@@ -558,17 +582,40 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
         createdAt: 900,
         updatedAt: 901,
       };
-      // Rewind the complete migration chain so this exercises v8 itself.
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
+      // Reconstruct v7 task/lease tables so the v8 transaction itself is tested.
+      sql.exec("DROP TABLE orchestrator_claim_candidates");
+      sql.exec("DROP TABLE orchestrator_execution_leases");
+      sql.exec("DROP TABLE orchestrator_tasks");
+      sql.exec(`
+        CREATE TABLE orchestrator_tasks (
+          task_id TEXT PRIMARY KEY,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          input_hash TEXT NOT NULL CHECK(length(input_hash) = 64),
+          state TEXT NOT NULL,
+          version INTEGER NOT NULL CHECK(version > 0),
+          task_json TEXT NOT NULL CHECK(json_valid(task_json)),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      sql.exec(`
+        CREATE TABLE orchestrator_execution_leases (
+          task_id TEXT PRIMARY KEY,
+          worker_id TEXT,
+          lease_generation INTEGER NOT NULL CHECK(lease_generation >= 0),
+          lease_until INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      rewindScopeMigrationToV7(sql);
       sql.exec(
-        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         task.taskId, "v8-rollback-idem", "9".repeat(64), task.state,
         task.version, JSON.stringify(task), task.createdAt, task.updatedAt,
-        "__legacy__", "__legacy__",
       );
       sql.exec(
-        "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        task.taskId, "worker-rollback", 1, 1200, 902, "__legacy__", "__legacy__",
+        "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, ?, ?, ?)",
+        task.taskId, "worker-rollback", 1, 1200, 902,
       );
       sql.exec(`
         CREATE TRIGGER reject_v8_migration_marker
@@ -580,14 +627,20 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       `);
 
       expect(() => instance.ensureSchema()).toThrow(/forced v8 marker failure/);
+      const taskColumnsAfterRollback = new Set(
+        sql.exec("PRAGMA table_info(orchestrator_tasks)").toArray().map(column => column.name),
+      );
+      const leaseColumnsAfterRollback = new Set(
+        sql.exec("PRAGMA table_info(orchestrator_execution_leases)").toArray().map(column => column.name),
+      );
+      expect(taskColumnsAfterRollback.has("tenant_id")).toBe(false);
+      expect(taskColumnsAfterRollback.has("project_id")).toBe(false);
+      expect(leaseColumnsAfterRollback.has("tenant_id")).toBe(false);
+      expect(leaseColumnsAfterRollback.has("project_id")).toBe(false);
       expect(sql.exec(
-        "SELECT tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
+        "SELECT task_json FROM orchestrator_tasks WHERE task_id = ?",
         task.taskId,
-      ).toArray()[0]).toEqual({ tenant_id: "__legacy__", project_id: "__legacy__" });
-      expect(sql.exec(
-        "SELECT tenant_id, project_id FROM orchestrator_execution_leases WHERE task_id = ?",
-        task.taskId,
-      ).toArray()[0]).toEqual({ tenant_id: "__legacy__", project_id: "__legacy__" });
+      ).toArray()[0]?.task_json).toBe(JSON.stringify(task));
       expect(sql.exec(
         "SELECT version FROM orchestrator_schema_migrations WHERE version = 8",
       ).toArray()[0]).toBeUndefined();
@@ -790,7 +843,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
       try {
         instance.ensureSchema();
       } catch (error) {
-        errorMessage = error instanceof Error ? error.message : String(error);
+        errorMessage = String(error?.message ?? error);
       }
 
       const markerVersionsAfter = sql.exec(
@@ -839,7 +892,7 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
           updated_at INTEGER NOT NULL
         )
       `);
-      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12");
+      rewindScopeMigrationToV7(sql);
 
       const task = {
         taskId: "invalid-scope-task",
@@ -893,6 +946,217 @@ describe("OrchestratorLedger tenant/project scope schema migration", () => {
           task_json: JSON.stringify(malformedStringTask),
         },
       ]);
+    });
+  });
+
+  it("fails closed when the migration marker table is lost after v8 schema changes", async () => {
+    const ledger = ledgerFor("tenant-scope-migration-marker-table-loss");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "marker-table-loss-task",
+        tenantId: "tenant",
+        projectId: "project",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 1800,
+        updatedAt: 1800,
+      };
+      const taskKey = "tp1:6:tenant:7:project:8:idem-key";
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, taskKey, "d".repeat(64), task.state, task.version,
+        JSON.stringify(task), task.createdAt, task.updatedAt, task.tenantId, task.projectId,
+      );
+      sql.exec("DROP TABLE orchestrator_schema_migrations");
+
+      let errorMessage = null;
+      try {
+        instance.ensureSchema();
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
+
+      const taskKeyAfter = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).one().idempotency_key;
+      const markerTable = sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'orchestrator_schema_migrations'",
+      ).toArray()[0];
+
+      expect({
+        errorMessage,
+        taskKeyAfter,
+        markerTable,
+      }).toEqual({
+        errorMessage: expect.stringMatching(/schema migration history.*(?:missing|inconsistent).*v8|v8.*(?:missing|inconsistent)/i),
+        taskKeyAfter: taskKey,
+        markerTable: undefined,
+      });
+    });
+  });
+
+  it("fails closed when v9's marker is missing but its idempotency indexes remain", async () => {
+    const ledger = ledgerFor("tenant-scope-v9-marker-loss");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "v9-marker-loss-task",
+        tenantId: "tenant",
+        projectId: "project",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 1900,
+        updatedAt: 1900,
+      };
+      const taskKey = "tp1:6:tenant:7:project:8:idem-key";
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, taskKey, "e".repeat(64), task.state, task.version,
+        JSON.stringify(task), task.createdAt, task.updatedAt, task.tenantId, task.projectId,
+      );
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version BETWEEN 9 AND 12");
+
+      let errorMessage = null;
+      try {
+        instance.ensureSchema();
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
+      const markerVersionsAfter = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations ORDER BY version",
+      ).toArray().map(row => row.version);
+      const taskKeyAfter = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).one().idempotency_key;
+
+      expect({
+        errorMessage,
+        markerVersionsAfter,
+        taskKeyAfter,
+      }).toEqual({
+        errorMessage: expect.stringMatching(/schema migration history.*(?:v9|version 9).*(?:missing|inconsistent)/i),
+        markerVersionsAfter: [8],
+        taskKeyAfter: taskKey,
+      });
+    });
+  });
+
+  it.each([
+    { missingVersion: 10, expectedMarkers: [8, 9] },
+    { missingVersion: 11, expectedMarkers: [8, 9, 10] },
+    { missingVersion: 12, expectedMarkers: [8, 9, 10, 11] },
+  ])("fails closed when v$missingVersion marker is missing but its schema artifact remains", async ({
+    missingVersion,
+    expectedMarkers,
+  }) => {
+    const ledger = ledgerFor("tenant-scope-missing-marker-v" + missingVersion);
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const taskId = "missing-marker-v" + missingVersion;
+      const taskKey = "tp1:6:tenant:7:project:8:idem-key";
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        taskId, taskKey, "f".repeat(64), "SCHEDULED", 1,
+        JSON.stringify({
+          taskId,
+          tenantId: "tenant",
+          projectId: "project",
+          state: "SCHEDULED",
+          version: 1,
+          createdAt: 2000,
+          updatedAt: 2000,
+        }),
+        2000, 2000, "tenant", "project",
+      );
+      sql.exec(
+        "DELETE FROM orchestrator_schema_migrations WHERE version >= ?",
+        missingVersion,
+      );
+
+      let errorMessage = null;
+      try {
+        instance.ensureSchema();
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
+      const markerVersionsAfter = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations ORDER BY version",
+      ).toArray().map(row => row.version);
+      const taskKeyAfter = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        taskId,
+      ).one().idempotency_key;
+
+      expect(errorMessage).toMatch(
+        new RegExp("schema migration history is inconsistent: v" + missingVersion + " schema artifacts exist", "i"),
+      );
+      expect(markerVersionsAfter).toEqual(expectedMarkers);
+      expect(taskKeyAfter).toBe(taskKey);
+    });
+  });
+
+  it("fails closed when v8 history is lost but scope columns survive outside tasks", async () => {
+    const ledger = ledgerFor("tenant-scope-marker-loss-nontask-artifact");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      const task = {
+        taskId: "marker-loss-nontask-task",
+        tenantId: "tenant",
+        projectId: "project",
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: 2100,
+        updatedAt: 2100,
+      };
+      const taskKey = "tp1:6:tenant:7:project:8:idem-key";
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        task.taskId, taskKey, "a".repeat(64), task.state, task.version,
+        JSON.stringify(task), task.createdAt, task.updatedAt, task.tenantId, task.projectId,
+      );
+
+      const taskIndexes = sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'orchestrator_tasks'",
+      ).toArray().map(row => row.name).filter(name => !name.startsWith("sqlite_"));
+      for (const indexName of taskIndexes) {
+        sql.exec("DROP INDEX IF EXISTS " + indexName);
+      }
+      sql.exec("ALTER TABLE orchestrator_tasks DROP COLUMN tenant_id");
+      sql.exec("ALTER TABLE orchestrator_tasks DROP COLUMN project_id");
+      sql.exec("DROP TABLE orchestrator_schema_migrations");
+
+      let errorMessage = null;
+      try {
+        instance.ensureSchema();
+      } catch (error) {
+        errorMessage = String(error?.message ?? error);
+      }
+
+      const taskColumnsAfter = new Set(
+        sql.exec("PRAGMA table_info(orchestrator_tasks)").toArray().map(column => column.name),
+      );
+      const outboxColumnsAfter = new Set(
+        sql.exec("PRAGMA table_info(orchestrator_outbox_events)").toArray().map(column => column.name),
+      );
+      const markerTable = sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'orchestrator_schema_migrations'",
+      ).toArray()[0];
+      const taskKeyAfter = sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        task.taskId,
+      ).one().idempotency_key;
+
+      expect(JSON.stringify(errorMessage).toLowerCase()).toContain("schema migration history is inconsistent");
+      expect(JSON.stringify(errorMessage).toLowerCase()).toContain("v8");
+      expect(taskColumnsAfter.has("tenant_id")).toBe(false);
+      expect(taskColumnsAfter.has("project_id")).toBe(false);
+      expect(outboxColumnsAfter.has("tenant_id")).toBe(true);
+      expect(outboxColumnsAfter.has("project_id")).toBe(true);
+      expect(markerTable).toBeUndefined();
+      expect(taskKeyAfter).toBe(taskKey);
     });
   });
 

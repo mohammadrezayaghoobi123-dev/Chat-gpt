@@ -270,6 +270,23 @@ export class OrchestratorLedger extends DurableObject {
 
   ensureSchema() {
     const sql = this.ctx.storage.sql;
+    const scopeMigrationTables = [
+      "orchestrator_tasks",
+      "orchestrator_processed_messages",
+      "orchestrator_execution_leases",
+      "orchestrator_claim_candidates",
+      "orchestrator_claim_scan_cursors",
+      "orchestrator_outbox_events",
+      "orchestrator_outbox_receipts",
+      "orchestrator_outbox_dead_letters",
+      "orchestrator_consumed_assertions",
+      "orchestrator_consumed_reconciliation_evidence",
+      "orchestrator_github_webhook_deliveries",
+      "orchestrator_github_business_idempotency",
+      "orchestrator_owner_consumed_assertions",
+      "orchestrator_owner_command_receipts",
+      "orchestrator_audit_events",
+    ];
     sql.exec("PRAGMA foreign_keys = ON");
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_tasks (
@@ -513,6 +530,18 @@ export class OrchestratorLedger extends DurableObject {
         );
       }
       const recordedVersions = new Set(migrationVersions);
+      const hasV8ScopeArtifacts = scopeMigrationTables.some(table => {
+        const columns = new Set(
+          sql.exec("PRAGMA table_info(" + table + ")").toArray().map(column => column.name),
+        );
+        return columns.has("tenant_id") || columns.has("project_id");
+      });
+      if (!recordedVersions.has(8) && hasV8ScopeArtifacts) {
+        throw fail(
+          "Schema migration history is inconsistent: v8 tenant/project scope columns exist but the v8 marker is missing.",
+          "SCHEMA_MIGRATION_HISTORY_INCONSISTENT",
+        );
+      }
       const highestRecordedVersion = migrationVersions.length
         ? migrationVersions[migrationVersions.length - 1]
         : 7;
@@ -525,29 +554,47 @@ export class OrchestratorLedger extends DurableObject {
         }
       }
 
+      // Markers and their schema artifacts are written in the same migration
+      // transaction. If a marker is lost while its artifact remains, replaying
+      // v9 would re-encode already-scoped idempotency keys.
+      const schemaIndexes = new Set(
+        sql.exec("SELECT name FROM sqlite_master WHERE type = 'index'").toArray().map(row => row.name),
+      );
+      const missingMarkerArtifacts = [
+        {
+          version: 9,
+          applied: [
+            "orchestrator_tasks_by_tenant_project_idempotency",
+            "orchestrator_outbox_by_tenant_project_idempotency",
+            "orchestrator_claim_candidates_by_scope_executor_order",
+          ].some(name => schemaIndexes.has(name)),
+        },
+        {
+          version: 10,
+          applied: schemaIndexes.has("orchestrator_tasks_by_scope_executor_created"),
+        },
+        {
+          version: 11,
+          applied: schemaIndexes.has("orchestrator_tasks_by_scope_state_executor_created"),
+        },
+        {
+          version: 12,
+          applied: !schemaIndexes.has("orchestrator_tasks_by_tenant_project"),
+        },
+      ].find(artifact => recordedVersions.has(8) && !recordedVersions.has(artifact.version) && artifact.applied);
+      if (missingMarkerArtifacts) {
+        throw fail(
+          `Schema migration history is inconsistent: v${missingMarkerArtifacts.version} schema artifacts exist but the v${missingMarkerArtifacts.version} marker is missing.`,
+          "SCHEMA_MIGRATION_HISTORY_INCONSISTENT",
+        );
+      }
+
       const applied = sql.exec(
         "SELECT version FROM orchestrator_schema_migrations WHERE version = 8",
       ).toArray()[0];
       if (applied) return;
 
-      const scopedTables = [
-        "orchestrator_tasks",
-        "orchestrator_processed_messages",
-        "orchestrator_execution_leases",
-        "orchestrator_claim_candidates",
-        "orchestrator_claim_scan_cursors",
-        "orchestrator_outbox_events",
-        "orchestrator_outbox_receipts",
-        "orchestrator_outbox_dead_letters",
-        "orchestrator_consumed_assertions",
-        "orchestrator_consumed_reconciliation_evidence",
-        "orchestrator_github_webhook_deliveries",
-        "orchestrator_github_business_idempotency",
-        "orchestrator_owner_consumed_assertions",
-        "orchestrator_owner_command_receipts",
-        "orchestrator_audit_events",
-      ];
-      for (const table of scopedTables) {
+      for (const table of scopeMigrationTables) {
         const columns = new Set(sql.exec(`PRAGMA table_info(${table})`).toArray().map(column => column.name));
         if (!columns.has("tenant_id")) {
           sql.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '__legacy__'`);
@@ -610,7 +657,7 @@ export class OrchestratorLedger extends DurableObject {
             ), '__legacy__')
       `);
 
-      for (const table of scopedTables) {
+      for (const table of scopeMigrationTables) {
         sql.exec(`CREATE INDEX IF NOT EXISTS ${table}_by_tenant_project ON ${table}(tenant_id, project_id)`);
       }
       sql.exec(

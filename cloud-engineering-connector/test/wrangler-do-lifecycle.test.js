@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 
 const wrangler = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
 const testWrangler = readFileSync(new URL("../wrangler.test.toml", import.meta.url), "utf8");
+const vitestConfig = readFileSync(new URL("../vitest.config.js", import.meta.url), "utf8");
+const writeControlVitestConfig = readFileSync(new URL("../vitest.write-control.config.js", import.meta.url), "utf8");
 
 test("Worker DO lifecycle uses exports and never mixes legacy migrations", () => {
   assert.doesNotMatch(wrangler, /^\s*\[\[?(?:env\.staging\.)?migrations\]\]?\s*$/m);
@@ -35,4 +37,10 @@ test("WriteControl test harness is isolated from deploy environment config", () 
   assert.match(testWrangler, /name = "WRITE_CONTROL"\s*\nclass_name = "WriteControl"/);
   assert.doesNotMatch(testWrangler, /^\s*\[\[?(?:env\.staging\.)?migrations\]\]?\s*$/m);
   assert.doesNotMatch(testWrangler, /OAUTH_KV|MCP_RATE_LIMITER/);
+});
+
+test("WriteControl suites run only under the isolated test config", () => {
+  assert.match(vitestConfig, /exclude:\s*\["cloudflare-test\/write-control\*\.test\.js"\]/);
+  assert.match(writeControlVitestConfig, /configPath:\s*"\.\/wrangler\.test\.toml"/);
+  assert.match(writeControlVitestConfig, /include:\s*\["cloudflare-test\/write-control\*\.test\.js"\]/);
 });

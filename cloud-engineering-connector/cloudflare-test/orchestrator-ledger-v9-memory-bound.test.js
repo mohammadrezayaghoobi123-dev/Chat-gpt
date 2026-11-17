@@ -10,10 +10,14 @@ function ledgerFor(name) {
 }
 
 function rejectUnboundedMigrationMaterialization(sql) {
-  const guardedQueries = new Set([
-    "SELECT task_id, idempotency_key, tenant_id, project_id FROM orchestrator_tasks",
-    "SELECT event_id, idempotency_key, tenant_id, project_id FROM orchestrator_outbox_events",
-  ]);
+  // Guard every row-producing SELECT from either migrated source table, not
+  // only the exact historical query strings. COUNT(*) remains scalar and safe.
+  const readsSourceRows = statement => {
+    const normalized = String(statement).replace(/\s+/g, " ").trim();
+    return /\bSELECT\b/i.test(normalized)
+      && /\bFROM\s+(?:orchestrator_tasks|orchestrator_outbox_events)\b/i.test(normalized)
+      && !/\bCOUNT\s*\(/i.test(normalized);
+  };
   let rejectedMaterializations = 0;
   const guardedSql = new Proxy(sql, {
     get(target, property) {
@@ -23,8 +27,7 @@ function rejectUnboundedMigrationMaterialization(sql) {
       }
       return (statement, ...bindings) => {
         const cursor = target.exec(statement, ...bindings);
-        const normalized = String(statement).replace(/\s+/g, " ").trim();
-        if (!guardedQueries.has(normalized)) return cursor;
+        if (!readsSourceRows(statement)) return cursor;
         return new Proxy(cursor, {
           get(cursorTarget, key) {
             if (key === "toArray") {

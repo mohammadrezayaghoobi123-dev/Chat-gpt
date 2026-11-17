@@ -12,6 +12,7 @@ on:
       - "security/picomatch-option-alias-parity-2026-11-17"
       - "security/picomatch-capture-and-option-support-boundary-2026-11-17"
       - "security/picomatch-bash-windows-capture-contract-2026-11-17"
+      - "security/picomatch-unc-drive-format-audit-2026-11-17"
     paths:
       - "security/picomatch-pr237-redos/**"
       - ".github/workflows/picomatch-pr237-redos.yml"
@@ -52,6 +53,8 @@ jobs:
         run: node security/picomatch-pr237-redos/differential-fuzz.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
       - name: Run nested grammar differential fuzz and counterexample minimization
         run: node security/picomatch-pr237-redos/nested-differential-fuzz.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
+      - name: Probe UNC, drive, repeated-separator, globstar, and format contracts
+        run: node security/picomatch-pr237-redos/windows-path-probe.mjs "$RUNNER_TEMP/picomatch-base" "$RUNNER_TEMP/picomatch-candidate" "$RUNNER_TEMP/picomatch-candidate-fixed"
       - name: Install upstream test dependencies and run the full suite on corrected temporary candidate
         working-directory: ${{ runner.temp }}/picomatch-candidate-fixed
         run: |

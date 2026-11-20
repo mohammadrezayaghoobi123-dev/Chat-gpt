@@ -23,7 +23,7 @@
 
 ## Repository Evidence and Current Boundaries
 
-Observed at PR #239 head `e509f225d0366d073180dbf5a7706c479c3cac93`:
+Observed at PR #239 head `f19d14b9703d25564bdab27446f66cd0848913e8`:
 
 - `cloud-engineering-connector/package.json` defines:
   - `npm run test:node`
@@ -33,7 +33,7 @@ Observed at PR #239 head `e509f225d0366d073180dbf5a7706c479c3cac93`:
 - `cloud-engineering-connector/vitest.config.js` uses `@cloudflare/vitest-plugin` and `./wrangler.toml`.
 - `cloud-engineering-connector/wrangler.toml` defines Worker `chat-gpt111`, staging Worker URL `chat-gpt111-staging.mohammadrezayaghoobi123.workers.dev`, a separate staging KV namespace ID and rate-limit namespace ID, and staging Durable Object bindings/migrations.
 - The staging Durable Object binding is expressed through Wrangler environment configuration and migration declarations; the file does not itself provide a directly inspectable Durable Object namespace ID. Its actual isolation must be verified read-only through Cloudflare account metadata before staging writes.
-- PR #239 adds a Vitest eviction test. Its latest observed head is `e509f225d0366d073180dbf5a7706c479c3cac93`; the Cloud Engineering Connector CI run succeeded with 20 test files and 78 tests. Full-history Gitleaks remains failing on two pre-existing findings outside this PR's diff.
+- PR #239 adds a Vitest eviction test. Its latest observed head is `f19d14b9703d25564bdab27446f66cd0848913e8`; the Cloud Engineering Connector CI run succeeded with 20 test files and 78 tests. Full-history Gitleaks remains failing on two pre-existing findings outside this PR's diff.
 
 Cloudflare documentation establishes:
 - Workers Vitest integration runs tests in `workerd`; storage isolation is per test file and Workers/processes may be reused.

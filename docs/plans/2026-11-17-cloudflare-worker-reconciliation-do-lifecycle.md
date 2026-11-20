@@ -3,7 +3,7 @@
 Date: 2026-11-17
 Status: design / audit-only; execution blocked
 Scope: `chat-gpt111` (Production) and `chat-gpt111-staging` (Staging)
-Repository baseline: PR #240 head `91160808dacb4c055a1c7305864b6c1fd8f0f060`
+Repository baseline: PR #240 head `34b69f336425dd62a5d59d4cac40ba1353360808`
 Ownership: the repository owner explicitly confirmed both Worker names are the intended destinations for the current `Chat-gpt` connector.
 Execution authorization: **not granted**. This document does not authorize deployment, provisioning, binding changes, secret operations, or data writes.
 
@@ -39,7 +39,7 @@ Read-only Cloudflare version metadata:
 
 ### 2.2 Current repository candidate
 
-At PR #240 head `91160808dacb4c055a1c7305864b6c1fd8f0f060`:
+At PR #240 head `34b69f336425dd62a5d59d4cac40ba1353360808`:
 - `cloud-engineering-connector/wrangler.toml` declares the legacy `migrations` array:
   - tag `v1`: `KnowledgeStore`
   - tag `v2`: `OrchestratorLedger`

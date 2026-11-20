@@ -26,11 +26,14 @@ fallback to unsandboxed execution. ``isolation="none"`` exists for code the oper
 wrote and reviewed; it only applies RLIMITs, a private temp dir and process-group kill,
 and is recorded as such in the chain.
 
-Not provided: cgroup CPU/memory/pids accounting (RLIMIT_AS/CPU/FSIZE only), seccomp
-syscall filtering, protection from a kernel exploit, or protection from a host
-administrator. A re-run on the same host by a different key is *identity* separation,
-not environment independence; the chain says so. Output is assumed deterministic:
-non-deterministic tests will legitimately end as ``not_reproduced``.
+Not provided: cgroup CPU accounting, protection from a kernel exploit, protection
+from a host administrator, or an independent execution environment. Cgroup memory
+and pids limits and the size-limited work tmpfs are best-effort, host-dependent, and
+recorded in each execution's ``environment.kernel_limits``. The seccomp filter is
+required by the sandbox probe and the runner fails closed if it cannot be installed.
+A re-run on the same host by a different key is *identity* separation, not environment
+independence; the chain says so. Output is assumed deterministic: non-deterministic
+tests will legitimately end as ``not_reproduced``.
 """
 from __future__ import annotations
 
@@ -933,7 +936,7 @@ def run_test(spec: TestSpec, *, case_id: str, test_id: str, runner_id: str,
 
 _LIMITATIONS = (
     "Executed on the same host as the recorder; not an attested environment.",
-    "Isolation is namespaces + rlimits only (no cgroups, no seccomp) when isolation=sandbox; none otherwise.",
+    "Sandbox isolation uses namespaces, no_new_privs, seccomp and RLIMITs; cgroup memory/pids and size-limited work tmpfs are best-effort and recorded in environment.kernel_limits. No cgroup CPU accounting or protection from kernel/host compromise; isolation=none has no namespace/seccomp/cgroup isolation.",
     "Result is provisional until independently re-run (at least MIN_INDEPENDENT_RUNS executions in total) and signed by a different identity.",
 )
 

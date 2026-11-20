@@ -1,11 +1,27 @@
 # Cloudflare Worker reconciliation and Durable Object lifecycle plan
 
-Date: 2026-11-17
+Date: 2026-11-20 (initial plan: 2026-11-17; live revalidation: 2026-11-20)
 Status: design / audit-only; execution blocked
 Scope: `chat-gpt111` (Production) and `chat-gpt111-staging` (Staging)
 Repository baseline: PR #240 head `34b69f336425dd62a5d59d4cac40ba1353360808`
 Ownership: the repository owner explicitly confirmed both Worker names are the intended destinations for the current `Chat-gpt` connector.
 Execution authorization: **not granted**. This document does not authorize deployment, provisioning, binding changes, secret operations, or data writes.
+
+## 0. Current live snapshot — 2026-11-20
+
+A fresh read-only Cloudflare account inspection was performed on 2026-11-20. No secret values, Durable Object records, or stored operation payloads were read.
+
+- The account script inventory still contains exactly three Workers: `chat-gpt111`, `chat-gpt111-staging`, and `master-brain-cloud-agent`.
+- Production `chat-gpt111` is on version 35 (`b4667a11-aa74-49ca-8d29-2f7b62608de0`), deployed at 100%. Its settings report `SERVICE_MODE` and `PUBLIC_READ_ONLY` as `secret_text`; no Durable Object binding is present.
+- Staging `chat-gpt111-staging` is on version 32 (`2a3283f0-f443-4d51-885c-e30e4ff7434a`), deployed at 100%. Its `WRITE_CONTROL` binding still targets SQLite-backed `WriteControl` namespace `1d0f4257b609483eba4fc5fdb39ed781`. Staging reports `SERVICE_MODE` and `PUBLIC_READ_ONLY` as `plain_text`.
+- The separate `master-brain-cloud-agent` Worker is on version 5 (`b5a8f54d-e2bc-4e3f-8a4b-b2172b739e2c`), deployed at 100%. It has the `AI` binding, SQLite-backed `AgentBudget` and `AgentSession` namespaces, and the `AGENT_AUTH_TOKEN` secret binding. No `AGENT_USER_KEYS` binding is present, so additional principals are not configured in the current Worker settings. Its GitHub tools remain read-only; no live model inference was invoked during this audit.
+- The account-wide Durable Object namespace inventory has exactly three entries: `AgentBudget` (`0abb663bc2f54886a228975a7636f12f`), `AgentSession` (`500eaf99522443499c6dc303ec737581`), and `WriteControl` (`1d0f4257b609483eba4fc5fdb39ed781`). No `KnowledgeStore`, `OrchestratorLedger`, or `TenantDirectory` namespace is currently provisioned.
+- Current Production and Staging settings both have observability enabled, query-string redaction enabled, persistent logs enabled, invocation logs disabled, and traces disabled. Their head-sampling rate is 1.0. The separate Cloud Agent has the same redaction/logging posture with a 0.1 head-sampling rate. The current repository Wrangler file still omits the observability declarations; `keep_vars` remains unobservable through the settings response.
+- The current Production/ Staging binding-type split is unchanged: Production uses secret bindings for `SERVICE_MODE` and `PUBLIC_READ_ONLY`, while Staging uses plain-text bindings. The repository Wrangler config still declares `SERVICE_MODE` as a plain `vars` value in both environments and does not declare `PUBLIC_READ_ONLY`. This remains a Production configuration collision.
+- The current repository `cloud-engineering-connector/wrangler.toml` blob is `6c81ef6761497f6e8889a1ed8aa715b70922a949`; it still declares legacy `migrations` for `KnowledgeStore`, `OrchestratorLedger`, and `TenantDirectory`. The current `index.js` blob is `1a8a3f50cc4bbd2d1522311f48d21a36bf5adc33`; it exports those three classes but not `WriteControl`.
+- The Cloud Agent runtime files in current `main` match the source commit recorded on its deployed Worker (`347f74f27a76f97aa3792da98d362fe773a5962e`). The current `cloud-agent/wrangler.toml` adds observability settings that are also visible in the live Worker settings. This separate Worker does not provide code execution or repository write capability.
+
+The new snapshot confirms that the WriteControl namespace remains live and that the candidate's three new Durable Object classes are not yet provisioned. It does not establish whether WriteControl contains records; its storage contents remain uninspected. The existing no-deploy decision is unchanged.
 
 ## 1. Executive decision
 

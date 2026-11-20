@@ -1267,8 +1267,10 @@ class ChainForgeries(ChainBase):
         rec = self.execute()
         p = R.store_event_payload(self.store, rec.execution_id)
         text = " ".join(p["limitations"])
-        for needle in ("same host", "namespaces", "provisional"):
+        for needle in ("same host", "namespaces", "provisional", "seccomp", "cgroup memory/pids", "best-effort"):
             self.assertIn(needle, text)
+        self.assertNotIn("no cgroups", text)
+        self.assertNotIn("no seccomp", text)
         self.assertEqual(len(p["limitations"]), 3)
         self.assertEqual(p["verification"], "unverified")
 

@@ -25,9 +25,10 @@ test("Staging and Production Rate Limiting namespaces are distinct positive inte
   assert.notEqual(stagingId, productionId);
 });
 
-test("Staging explicitly declares non-inherited runtime variables", () => {
+test("dashboard-managed runtime variables are preserved without a SERVICE_MODE type collision", () => {
+  assert.match(config, /^keep_vars = true$/m);
   assert.match(staging, /\[env\.staging\.vars\]/);
-  assert.match(staging, /SERVICE_MODE\s*=\s*"cloud"/);
+  assert.doesNotMatch(config, /^\s*SERVICE_MODE\s*=/m);
 });
 
 test("Production and Staging declare isolated OAuth KV namespaces", () => {

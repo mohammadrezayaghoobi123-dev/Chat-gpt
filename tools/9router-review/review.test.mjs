@@ -897,3 +897,41 @@ test("oversized 9Router HTTP bodies are stopped while streaming before JSON pars
   );
   assert.equal(commentListCalls, 0, "an oversized HTTP body must be rejected before comment-history retrieval");
 });
+
+
+test("nested Markdown labels cannot preserve protocol-relative external destinations", async () => {
+  const headSha = "d".repeat(40);
+  const baseSha = "e".repeat(40);
+  const hostileReport = "Click [a [nested label]](//attacker.example/collect?token=probe) now.";
+  let publishedBody = "";
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/278")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/278/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: hostileReport } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/278/comments?")) return new Response(JSON.stringify([]), { status: 200 });
+    if (target.endsWith("/issues/278/comments") && options.method === "POST") publishedBody = JSON.parse(options.body).body;
+    return new Response(JSON.stringify({ id: 904 }), { status: 201 });
+  };
+
+  await runReview({
+    repository: "owner/repo",
+    pullRequest: 278,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  assert.ok(!publishedBody.includes("//attacker.example"), "protocol-relative destinations must not reach the published comment");
+  assert.ok(!publishedBody.includes("](//"), "nested Markdown labels must not preserve an active external link");
+});

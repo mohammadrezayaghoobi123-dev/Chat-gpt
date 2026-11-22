@@ -62,7 +62,7 @@ const faults = [
     createSql: `
       CREATE TRIGGER v9_fault_injection_task_staging
       BEFORE UPDATE OF idempotency_key ON orchestrator_tasks
-      WHEN NEW.idempotency_key LIKE 'migration-v9-%'
+      WHEN NEW.idempotency_key LIKE '~migration-v9-stage-%'
       BEGIN SELECT RAISE(ABORT, 'injected task staging failure'); END
     `,
   },
@@ -73,7 +73,7 @@ const faults = [
       CREATE TRIGGER v9_fault_injection_event_staging
       BEFORE UPDATE OF idempotency_key ON orchestrator_outbox_events
       -- This fault is reachable only after every task key has been rewritten.
-      WHEN NEW.idempotency_key LIKE 'migration-v9-%'
+      WHEN NEW.idempotency_key LIKE '~migration-v9-stage-%'
        AND NOT EXISTS (
          SELECT 1 FROM orchestrator_tasks
          WHERE idempotency_key NOT LIKE 'tp1:%'

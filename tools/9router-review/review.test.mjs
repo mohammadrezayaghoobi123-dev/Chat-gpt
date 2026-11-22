@@ -1624,6 +1624,7 @@ test("pull_request_target signal workflow is inert and grants no repository perm
   const signal = readFileSync(new URL("../../.github/workflows/9router-pr-review-signal.yml", import.meta.url), "utf8");
 
   assert.match(signal, /^on:\s*\n\s+pull_request_target:/m);
+  assert.match(signal, /types:\s*\[[^\]]*\bedited\b[^\]]*\]/, "base-branch edits must emit a fresh review signal");
   assert.match(signal, /^permissions:\s*\{\s*\}\s*$/m);
   assert.match(signal, /^\s+permissions:\s*\{\s*\}\s*$/m);
   assert.doesNotMatch(signal, /^\s+uses:\s+actions\/(?:checkout|download-artifact)@/m);

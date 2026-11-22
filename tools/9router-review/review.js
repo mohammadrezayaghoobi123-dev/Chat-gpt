@@ -16,8 +16,9 @@ function neutralizeGitHubMentions(value) {
 
 function escapeMarkdownText(value) {
   const safeText = String(value ?? "").replace(/\b(?:javascript|data|vbscript|file|mailto|ftp|ssh|tel):[^\s<>()]*/gi, "[unsafe URL omitted]");
+  const htmlSafeText = safeText.replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const special = new Set(["\\", String.fromCharCode(96), "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", "-", ".", "!", "|", ">", "~"]);
-  return Array.from(safeText, character => special.has(character) ? "\\" + character : character).join("");
+  return Array.from(htmlSafeText, character => special.has(character) ? "\\" + character : character).join("");
 }
 
 function maximumRunLength(value, character) {

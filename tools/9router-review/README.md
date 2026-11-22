@@ -125,3 +125,15 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 - Full-history secret scans on this exact head: PASS, runs `45042192082` and `45042198111`.
 - The privileged review job was skipped on push by design. The default branch lacks both required 9Router workflow files; live `workflow_run` / 9Router E2E remains UNKNOWN.
 - Main remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`; PR #261 remains Draft/Open/Unmerged.
+
+
+## Final trust-boundary contract verification — 2026-11-22
+
+- Verified PR head: `a6d5ae9d1231266e26561a3334dca75312c29770`; base: `919b19ca3d3887352cdef06b03c668ead04fbce7`.
+- Added static workflow-contract tests for the `pull_request_target` signal and privileged `workflow_run` boundary. The tests assert empty signal permissions, no signal checkout/artifact/secret use, exact trusted workflow provenance gates, least-privilege reviewer permissions, default-branch-only checkout, disabled persisted checkout credentials, and no artifact consumption.
+- The first test run on intermediate head `d5f44903394b2ef58fc181e08ed466cf261d6f78` failed at JavaScript module parsing because the new regular-expression literals were over-escaped. This was a test-source syntax error, not a product-behavior failure. The literals were corrected; no production workflow or reviewer code was changed in that correction.
+- Final contract test run `45043676869`, job `137273440355`: **43/43 PASS**, zero failures, cancellations, or skips.
+- Full-history secret scan on push: run `45043676892`, job `137273440747`: PASS.
+- Full-history secret scan on pull request: run `45043681136`, job `137273454020`: PASS.
+- The privileged review job was skipped on push by design. These results do not prove a live `workflow_run`, 9Router request, report publication, or hosted ambiguous-POST recovery.
+- PR #261 remains Draft/Open/Unmerged. The default branch remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`; no repository settings, secrets, `main`, or Production resources were changed.

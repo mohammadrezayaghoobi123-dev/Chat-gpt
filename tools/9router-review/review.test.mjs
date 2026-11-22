@@ -935,3 +935,44 @@ test("nested Markdown labels cannot preserve protocol-relative external destinat
   assert.ok(!publishedBody.includes("//attacker.example"), "protocol-relative destinations must not reach the published comment");
   assert.ok(!publishedBody.includes("](//"), "nested Markdown labels must not preserve an active external link");
 });
+
+
+test("stops fetching file pages immediately when the patch budget is exceeded", async () => {
+  const headSha = "f".repeat(40);
+  const baseSha = "a".repeat(40);
+  let filePageCalls = 0;
+  const oversizedFirstPage = Array.from({ length: 100 }, (_, index) => ({
+    filename: "src/file-" + index + ".js",
+    status: "modified",
+    additions: 1,
+    deletions: 1,
+    patch: "P".repeat(500),
+  }));
+  const fakeFetch = async (url) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/279")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/279/files?")) {
+      filePageCalls += 1;
+      return new Response(JSON.stringify(filePageCalls === 1 ? oversizedFirstPage : []), { status: 200 });
+    }
+    throw new Error("No model request or comment operation is expected for an oversized patch.");
+  };
+
+  await assert.rejects(
+    runReview({
+      repository: "owner/repo",
+      pullRequest: 279,
+      expectedHeadSha: headSha,
+      expectedBaseSha: baseSha,
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }),
+    /patch exceeds the safe review size/i,
+  );
+  assert.equal(filePageCalls, 1, "the reviewer must stop pagination as soon as the cumulative patch budget is exceeded");
+});

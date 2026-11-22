@@ -2,7 +2,7 @@ const MAX_PATCH_CHARS = 45000;
 const REVIEW_MARKER = "<!-- 9router-independent-review:";
 
 export function resolveWorkflowRunTarget({
-  eventName, workflowPath, triggerEvent, workflowConclusion, repository, headRepository, pullRequests,
+  eventName, workflowPath, triggerEvent, workflowConclusion, repository, headRepository, runHeadSha, pullRequests,
 }) {
   if (
     eventName !== "workflow_run" ||
@@ -20,10 +20,10 @@ export function resolveWorkflowRunTarget({
     throw new Error("Workflow run must identify exactly one pull request.");
   }
   const target = pullRequests[0];
-  if (!Number.isSafeInteger(target.number) || target.number < 1 || !/^[a-f0-9]{40}$/i.test(target.head?.sha ?? "")) {
-    throw new Error("Workflow run contains invalid pull-request metadata.");
+  if (!Number.isSafeInteger(target.number) || target.number < 1 || !/^[a-f0-9]{40}$/i.test(runHeadSha ?? "")) {
+    throw new Error("Workflow run contains invalid pull-request metadata or commit SHA.");
   }
-  return { pullRequest: target.number, expectedHeadSha: target.head.sha };
+  return { pullRequest: target.number, expectedHeadSha: runHeadSha };
 }
 
 export function buildReviewMessages({ repository, pullRequest, headSha, patch }) {

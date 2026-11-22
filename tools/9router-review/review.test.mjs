@@ -1297,6 +1297,7 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
     "- second item",
     "> quoted **detail**",
     "| left | right |",
+    "| left\\|injected | right |",
     "| --- | --- |",
     "| one | two |",
     "```js",
@@ -1348,6 +1349,11 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
   const reportEnd = publishedBody.lastIndexOf("\n\n---\n");
   const sanitizedReport = publishedBody.slice(reportStart, reportEnd);
   const tokens = collectMarkdownTokenTypes(marked.lexer(sanitizedReport, { gfm: true }));
+  const parsedSanitized = marked.lexer(sanitizedReport, { gfm: true });
+  const sanitizedTable = parsedSanitized.find(token => token.type === "table");
+  assert.ok(sanitizedTable, "sanitized report must retain its table");
+  assert.equal(sanitizedTable.header.length, 2, "escaped pipes must not create extra table columns");
+  assert.equal(sanitizedTable.rows[0].length, 2, "escaped pipes inside cells must remain inside the original cell");
   const activeTypes = tokens.filter(type => ["link", "image", "html", "url", "autolink"].includes(type));
   assert.deepEqual(activeTypes, [], "published report must contain no active link, image, HTML, or autolink AST nodes");
   assert.ok(sanitizedReport.includes("Comparison: a &lt; b and c &gt; d"), "literal angle brackets in prose must be encoded to prevent Markdown renderer differentials");

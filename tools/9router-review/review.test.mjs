@@ -1292,6 +1292,30 @@ test("does not misclassify an ambiguous GitHub 403 as a confirmed permission fai
     rateLimitResetEpochSeconds: null,
   });
 });
+test("rate-limit header parsing rejects malformed delta-seconds and reset values", () => {
+  assert.deepEqual(reviewer.classifyGitHubApiFailure(new Response("private error body", {
+    status: 429,
+    headers: { "retry-after": "1.5", "x-ratelimit-reset": "2e3" },
+  }), 1000000), {
+    kind: "rate-limit-unspecified",
+    status: 429,
+    retryAfterSeconds: null,
+    rateLimitResetEpochSeconds: null,
+  });
+});
+
+test("parses HTTP-date Retry-After values deterministically", () => {
+  assert.deepEqual(reviewer.classifyGitHubApiFailure(new Response("private error body", {
+    status: 429,
+    headers: { "retry-after": "Thu, 01 Jan 1970 00:17:10 GMT" },
+  }), 1000000), {
+    kind: "secondary-rate-limit",
+    status: 429,
+    retryAfterSeconds: 30,
+    rateLimitResetEpochSeconds: null,
+  });
+});
+
 test("GitHub rate-limit responses fail closed without automatic retries", async () => {
   let calls = 0;
   const fakeFetch = async () => {

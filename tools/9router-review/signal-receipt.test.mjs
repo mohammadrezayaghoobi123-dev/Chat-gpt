@@ -57,6 +57,7 @@ test("receipt parser accepts only a bounded, exact v1 schema", () => {
     "", "{", " ".repeat(16 * 1024 + 1),
     JSON.stringify({ ...receipt, schemaVersion: 2 }),
     JSON.stringify(receipt).replace('"schemaVersion":1', '"schemaVersion":1,"schemaVersion":1'),
+    JSON.stringify(receipt).replace('"schemaVersion":1', '"schemaVersion":1,"schema\\u0056ersion":1'),
     JSON.stringify({ ...receipt, extra: true }),
     JSON.stringify({ ...receipt, pullRequestNumber: 0 }),
     JSON.stringify({ ...receipt, headSha: "bad" }),

@@ -71,23 +71,23 @@ jobs:
           echo "::warning::9Router review NOT RUN: repository secrets NINE_ROUTER_API_URL, NINE_ROUTER_API_KEY, and NINE_ROUTER_REVIEW_MARKER_KEY plus variable NINE_ROUTER_MODEL are required."
           echo "9Router review was not run because the endpoint, API key, marker-signing key, or model is not configured." >> "$GITHUB_STEP_SUMMARY"
       - name: Checkout trusted default-branch reviewer code only
-        if: env.ROUTER_BASE_URL != '' && env.ROUTER_API_KEY != '' && env.ROUTER_MODEL != ''
+        if: env.ROUTER_BASE_URL != '' && env.ROUTER_API_KEY != '' && env.REVIEW_MARKER_KEY != '' && env.ROUTER_MODEL != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
       - name: Set up Node.js 22
-        if: env.ROUTER_BASE_URL != '' && env.ROUTER_API_KEY != '' && env.ROUTER_MODEL != ''
+        if: env.ROUTER_BASE_URL != '' && env.ROUTER_API_KEY != '' && env.REVIEW_MARKER_KEY != '' && env.ROUTER_MODEL != ''
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           package-manager-cache: false
       - name: Install locked reviewer dependencies
-        if: env.ROUTER_BASE_URL != '' && env.ROUTER_API_KEY != '' && env.ROUTER_MODEL != ''
+        if: env.ROUTER_BASE_URL != '' && env.ROUTER_API_KEY != '' && env.REVIEW_MARKER_KEY != '' && env.ROUTER_MODEL != ''
         run: npm ci --ignore-scripts --prefix tools/9router-review
       - name: Verify npm registry signatures
-        if: env.ROUTER_BASE_URL != '' && env.ROUTER_API_KEY != '' && env.ROUTER_MODEL != ''
+        if: env.ROUTER_BASE_URL != '' && env.ROUTER_API_KEY != '' && env.REVIEW_MARKER_KEY != '' && env.ROUTER_MODEL != ''
         run: npm audit signatures --prefix tools/9router-review
       - name: Run report-only independent review
-        if: env.ROUTER_BASE_URL != '' && env.ROUTER_API_KEY != '' && env.ROUTER_MODEL != ''
+        if: env.ROUTER_BASE_URL != '' && env.ROUTER_API_KEY != '' && env.REVIEW_MARKER_KEY != '' && env.ROUTER_MODEL != ''
         run: node tools/9router-review/run-review.mjs

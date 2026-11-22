@@ -255,8 +255,8 @@ No merge, deployment, repository setting, ruleset, Actions policy, or secret was
 
 
 ### Final ABC branch verification — 2026-11-22
-- Final work-branch HEAD after implementation and documentation: `310b67a821cf9c29dbc85ed5eec60168d3998b08`.
-- Contract tests after the Finding 35 README update: run `45053182612`, job `137302593898`: **47/47 PASS**, zero failures, cancellations, or skips. The subsequent commit changed only the implementation plan document.
-- Final full-history Gitleaks scan: run `45053210347`, job `137302682517`: **3,949 commits scanned**, approximately **12.37 MB**, no leaks found.
+- Verified implementation head: `a8c815680957603194cb1c20ef2dc242fa8d2ea6`.
+- Contract tests on that exact head: run `45053302511`, job `137302965636`: **47/47 PASS**, zero failures, cancellations, or skips.
+- Full-history Gitleaks scan: run `45053210347`, job `137302682517`: **3,949 commits scanned**, approximately **12.37 MB**, no leaks found. Final PR-diff scan on the verified implementation head: run `45053302479`, job `137302965513`: **1 commit / 861 bytes**, no leaks found.
 - Both privileged jobs (`resolve-signal` and `review`) were skipped on Push by design. No hosted signal artifact round trip or privileged reviewer E2E is claimed.
-- The main branch remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`. PR #261 remains Draft/Open/Unmerged. No merge, deploy, secret, policy, ruleset, or Production change.
+- The main branch remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`. PR #261 remains Draft/Open/Unmerged. PR #262 is Draft/Open and targets the work branch underlying PR #261. No merge, deploy, secret, policy, ruleset, or Production change.

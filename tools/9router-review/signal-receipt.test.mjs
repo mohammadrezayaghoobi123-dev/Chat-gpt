@@ -178,6 +178,19 @@ test("privileged workflow resolves identity before per-PR concurrency and never 
   assert.match(resolverJob, /GITHUB_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
 });
 
+test("workflow-run SHA binds to the trusted workflow revision, not a non-default PR base SHA", () => {
+  const workflowSha = "c".repeat(40);
+  const signalReceipt = { ...receipt, workflowSha };
+  const targetContext = { ...context, runHeadSha: workflowSha, signalReceipt };
+  assert.deepEqual(resolveWorkflowRunTarget(targetContext), {
+    pullRequest: 42,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    expectedWorkflowSha: workflowSha,
+    baseRef: "main",
+  });
+});
+
 test("only HTTPS API origins or explicit loopback HTTP are accepted", async () => {
   const target = resolveWorkflowRunTarget(context);
   const common = {

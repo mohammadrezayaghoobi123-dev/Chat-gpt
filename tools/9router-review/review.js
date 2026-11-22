@@ -6,6 +6,7 @@ const MAX_REPORT_CHARS = 30000;
 const MAX_ROUTER_RESPONSE_BYTES = 512 * 1024;
 const MAX_GITHUB_API_RESPONSE_BYTES = 1024 * 1024;
 const REVIEW_MARKER = "<!-- 9router-independent-review:v2:";
+const GITHUB_ACTIONS_BOT_USER_ID = 41898282;
 const REVIEW_MARKER_PATTERN = /^<!-- 9router-independent-review:v2:([a-f0-9]{40}):([a-f0-9]{40}):([a-f0-9]{64}) -->$/i;
 const MAX_COMMENT_HISTORY_PAGES = 10;
 const MAX_COMMENT_HISTORY_BYTES = 4 * 1024 * 1024;
@@ -393,7 +394,7 @@ async function findMatchingReviewComments({ fetchImpl, base, repoPath, repositor
         throw new Error("GitHub returned an incomplete comment-history record; refusing to publish.");
       }
       const firstLine = comment.body.split(/\r?\n/, 1)[0];
-      if (comment.user.login === "github-actions[bot]" && hasValidReviewMarker(firstLine, { repository, pullRequest, headSha: expectedHeadSha, baseSha: expectedBaseSha, keys: reviewMarkerKeys })) {
+      if (comment.user.login === "github-actions[bot]" && comment.user.id === GITHUB_ACTIONS_BOT_USER_ID && comment.user.type === "Bot" && hasValidReviewMarker(firstLine, { repository, pullRequest, headSha: expectedHeadSha, baseSha: expectedBaseSha, keys: reviewMarkerKeys })) {
         matches.push(comment);
         if (matches.length > 1) {
           throw new Error("Multiple matching reports exist for this exact head/base pair; refusing to publish.");

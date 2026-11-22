@@ -712,8 +712,8 @@ test("multiple matching bot reports fail closed without choosing one", async () 
     if (target.includes("/issues/274/comments?")) {
       commentHistoryReads += 1;
       return new Response(JSON.stringify([
-        { id: 801, body: marker + "\\nfirst report", user: { login: "github-actions[bot]" } },
-        { id: 802, body: marker + "\\nsecond report", user: { login: "github-actions[bot]" } },
+        { id: 801, body: marker + "\nfirst report", user: { login: "github-actions[bot]" } },
+        { id: 802, body: marker + "\nsecond report", user: { login: "github-actions[bot]" } },
       ]), { status: 200 });
     }
     if (target.includes("/issues/comments/") && options.method === "PATCH") patchCalls += 1;
@@ -1191,7 +1191,7 @@ test("a single matching bot report suppresses a duplicate without mutation", asy
   const existingComment = {
     id: 999,
     user: { login: "github-actions[bot]" },
-    body: "<!-- 9router-independent-review:" + headSha + ":" + baseSha + " -->\\nExisting report",
+    body: "<!-- 9router-independent-review:" + headSha + ":" + baseSha + " -->\nExisting report",
   };
   const fakeFetch = async (url, options = {}) => {
     const target = String(url);

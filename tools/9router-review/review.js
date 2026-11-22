@@ -402,6 +402,21 @@ async function findMatchingReviewComments({ fetchImpl, base, repoPath, repositor
   throw new Error("Pull request comment history exceeds the safe reconciliation page limit; refusing to publish.");
 }
 
+function assertReviewablePullRequest(pr, { expectedHeadSha, expectedBaseSha, phase }) {
+  if (pr?.state !== "open") {
+    throw new Error("Pull request is not open during " + phase + "; refusing to continue.");
+  }
+  if (pr.draft !== false) {
+    throw new Error("Pull request is draft or its draft state is unavailable during " + phase + "; refusing to continue.");
+  }
+  if (pr.head?.sha !== expectedHeadSha) {
+    throw new Error("Pull request head changed during " + phase + "; refusing to review or publish a different commit.");
+  }
+  if (pr.base?.sha !== expectedBaseSha) {
+    throw new Error("Pull request base branch changed during " + phase + "; refusing to review or publish a different diff.");
+  }
+}
+
 export async function runReview({
   repository, pullRequest, expectedHeadSha, expectedBaseSha, githubToken, routerBaseUrl, routerApiKey, model,
   fetchImpl = fetch, githubApiBase = "https://api.github.com", reviewTimeoutMs = 8 * 60 * 1000, reviewMarkerKey,
@@ -419,10 +434,7 @@ export async function runReview({
   const base = new URL(githubApiBase);
   const repoPath = "/repos/" + repository;
   const pr = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
-  if (pr.state !== "open") throw new Error("Pull request is not open; refusing to review it.");
-  if (pr.head?.sha !== expectedHeadSha) throw new Error("Pull request head changed; refusing to review a different commit.");
-  if (pr.base?.sha !== expectedBaseSha) throw new Error("Pull request base branch changed; refusing to review a different diff.");
-  if (pr.draft) return { status: "skipped-draft", reviewedHeadSha: expectedHeadSha };
+  assertReviewablePullRequest(pr, { expectedHeadSha, expectedBaseSha, phase: "initial validation" });
   const files = [];
   let patchChars = 0;
   for (let page = 1; page <= 10; page += 1) {
@@ -454,12 +466,7 @@ export async function runReview({
   ].join("\n")).join("\n\n");
 
   const currentBeforeModel = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
-  if (currentBeforeModel.head?.sha !== expectedHeadSha) {
-    throw new Error("Pull request head changed during patch retrieval; refusing to send a stale diff.");
-  }
-  if (currentBeforeModel.base?.sha !== expectedBaseSha) {
-    throw new Error("Pull request base branch changed during patch retrieval; refusing to send a different diff.");
-  }
+  assertReviewablePullRequest(currentBeforeModel, { expectedHeadSha, expectedBaseSha, phase: "patch retrieval" });
 
   const matchingReports = await findMatchingReviewComments({
     fetchImpl,
@@ -475,9 +482,7 @@ export async function runReview({
   });
   if (matchingReports.length === 1) {
     const currentBeforeSkip = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
-    if (currentBeforeSkip.head?.sha !== expectedHeadSha || currentBeforeSkip.base?.sha !== expectedBaseSha) {
-      throw new Error("Pull request changed during duplicate reconciliation; refusing to skip a review for a different diff.");
-    }
+    assertReviewablePullRequest(currentBeforeSkip, { expectedHeadSha, expectedBaseSha, phase: "duplicate reconciliation" });
     return {
       status: "already-published",
       reviewedHeadSha: expectedHeadSha,
@@ -516,12 +521,7 @@ export async function runReview({
   }
 
   const currentBeforeComment = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
-  if (currentBeforeComment.head?.sha !== expectedHeadSha) {
-    throw new Error("Pull request head changed during model review; refusing to publish a stale report.");
-  }
-  if (currentBeforeComment.base?.sha !== expectedBaseSha) {
-    throw new Error("Pull request base branch changed during model review; refusing to publish a report for a different diff.");
-  }
+  assertReviewablePullRequest(currentBeforeComment, { expectedHeadSha, expectedBaseSha, phase: "model review" });
 
   const marker = createReviewMarker({ repository, pullRequest, headSha: expectedHeadSha, baseSha: expectedBaseSha, key: reviewMarkerKey });
   const body = [
@@ -537,12 +537,7 @@ export async function runReview({
   ].join("\n");
 
   const currentBeforePublish = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
-  if (currentBeforePublish.head?.sha !== expectedHeadSha) {
-    throw new Error("Pull request head changed during comment reconciliation; refusing to publish a stale report.");
-  }
-  if (currentBeforePublish.base?.sha !== expectedBaseSha) {
-    throw new Error("Pull request base branch changed during comment reconciliation; refusing to publish a report for a different diff.");
-  }
+  assertReviewablePullRequest(currentBeforePublish, { expectedHeadSha, expectedBaseSha, phase: "final publication gate" });
   await requestJson(fetchImpl, base.origin + repoPath + "/issues/" + pullRequest + "/comments", {
     method: "POST",
     token: githubToken,

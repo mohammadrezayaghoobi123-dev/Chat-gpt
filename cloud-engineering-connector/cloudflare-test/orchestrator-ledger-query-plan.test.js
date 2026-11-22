@@ -45,7 +45,7 @@ describe("OrchestratorLedger tenant/project query plans", () => {
       const details = plan.map(row => row.detail).join("\n");
       expect(details).toContain("orchestrator_claim_candidates_by_scope_executor_order");
       // The index name alone is insufficient: prove SQLite constrains the complete scope prefix.
-      expect(details).toMatch(/executor_id=\\?.*tenant_id=\\?.*project_id=\\?/);
+      expect(details).toMatch(/executor_id=\?.*tenant_id=\?.*project_id=\?/);
     });
   });
   it("uses the scope/executor index for both initial and cursor-based bounded legacy backfill batches", async () => {

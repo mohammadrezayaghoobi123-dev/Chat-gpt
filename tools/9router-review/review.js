@@ -92,27 +92,10 @@ function renderInlineTokens(tokens) {
   return output;
 }
 
-function escapeTablePipes(value) {
-  let output = "";
-  let consecutiveBackslashes = 0;
-  for (const character of value) {
-    if (character === "|") {
-      if (consecutiveBackslashes % 2 === 0) output += "\\";
-      output += character;
-      consecutiveBackslashes = 0;
-      continue;
-    }
-    output += character;
-    consecutiveBackslashes = character === "\\" ? consecutiveBackslashes + 1 : 0;
-  }
-  return output;
-}
-
 function renderTableCell(cell) {
-  return escapeTablePipes(
-    renderInlineTokens(cell.tokens ?? [{ type: "text", text: cell.text ?? "" }])
-      .replace(/\r?\n/g, " "),
-  );
+  return renderInlineTokens(cell.tokens ?? [{ type: "text", text: cell.text ?? "" }])
+    .replace(/\r?\n/g, " ")
+    .replace(/\|/g, "\\|");
 }
 
 function renderBlockTokens(tokens, allowHtmlReparse = true) {

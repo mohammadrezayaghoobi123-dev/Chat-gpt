@@ -1700,7 +1700,7 @@ test("published report explicitly expires when either reviewed snapshot SHA chan
     fetchImpl: fakeFetch,
   });
 
-  assert.match(publishedBody, /\\*\\*Snapshot validity:\\*\\*/);
+  assert.ok(publishedBody.includes("**Snapshot validity:**"));
   assert.match(publishedBody, /superseded/i);
   assert.match(publishedBody, /either the reviewed head SHA or base SHA changes/i);
   assert.ok(publishedBody.includes("**Reviewed head SHA:** " + headSha));

@@ -1894,6 +1894,7 @@ test("a report signed by the expired previous marker key cannot suppress a dupli
   let prReads = 0;
   let routerCalls = 0;
   let postCalls = 0;
+  let postedBody = "";
   const fakeFetch = async (url, options = {}) => {
     const target = String(url);
     if (target.endsWith("/pulls/293")) {
@@ -1930,6 +1931,7 @@ test("a report signed by the expired previous marker key cannot suppress a dupli
     }
     if (target.endsWith("/issues/293/comments") && options.method === "POST") {
       postCalls += 1;
+      postedBody = JSON.parse(options.body).body;
       return new Response(JSON.stringify({ id: 1293 }), { status: 201 });
     }
     throw new Error("Unexpected API operation in marker-key rotation test: " + target);
@@ -1954,4 +1956,32 @@ test("a report signed by the expired previous marker key cannot suppress a dupli
   assert.equal(routerCalls, 1, "an expired previous key must not authenticate old reports");
   assert.equal(postCalls, 1, "expired previous-key reports must not be treated as currently authenticated");
   assert.equal(prReads, 4, "expired previous-key reports must continue through publication");
+  assert.equal(postedBody.split(String.fromCharCode(10), 1)[0],
+    reviewer.createReviewMarker({ repository: "owner/repo", pullRequest: 293, headSha, baseSha, key: currentKey }),
+    "new reports must always be signed with the current key, never the previous key");
+});
+
+
+test("a configured previous marker key without an explicit expiry is rejected before API access", async () => {
+  let fetchCalls = 0;
+  const fakeFetch = async () => {
+    fetchCalls += 1;
+    throw new Error("Unexpected network access for invalid previous-key configuration");
+  };
+
+  await assert.rejects(runReview({
+    repository: "owner/repo",
+    pullRequest: 294,
+    expectedHeadSha: "9".repeat(40),
+    expectedBaseSha: "a".repeat(40),
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: "current-marker-key-".repeat(3),
+    previousReviewMarkerKeys: ["previous-marker-key-".repeat(3)],
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  }), /previous.*expiry|expiry.*previous/i);
+
+  assert.equal(fetchCalls, 0, "an unbounded previous key must be rejected before network access");
 });

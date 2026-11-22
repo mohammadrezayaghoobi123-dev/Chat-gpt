@@ -245,10 +245,10 @@ git commit -m "docs: record 9router abc provenance controls"
 - C: Resolver failure prevents the dependent reviewer job from starting. Artifact data is bounded, parsed only as JSON, and never executed.
 - Per-PR concurrency is derived from the validated resolver output.
 - The old `resolveWorkflowRunTarget` implementation in `review.js` was removed; `run-review.mjs` now consumes only the validated outputs.
-- GitHub contract run `45053100603`: **47/47 passed**, zero failures/cancellations/skips.
+- GitHub contract run `45053620593`: **48/48 passed**, zero failures/cancellations/skips. A targeted RED run `45053551213` first reproduced the API-origin guard defect: FTP on localhost passed the prior guard and reached fetch; the follow-up implementation rejects it and the same test passes.
 - Gitleaks run `45053100500`: **3,949 commits**, approximately **12.37 MB**, no leaks found.
 - The contract workflow run was a branch Push: `resolve-signal` and `review` were skipped by their event guards. No live artifact round trip, privileged `workflow_run` execution, or 9Router call has been demonstrated.
-- The formal failing-test (RED) phase was not captured as a separate hosted run before implementation. Negative regression cases are present and pass, but a complete recorded RED/GREEN cycle must not be claimed.
+- A targeted, separately recorded RED/GREEN cycle was completed for the API-origin protocol guard. The broader provenance implementation was not developed through a separate RED commit for every test; do not claim every feature followed a complete RED/GREEN cycle.
 - `git diff --check` was not independently run in a full local checkout; this remains unverified.
 
 **Current code checkpoint:** `af7f529477cde0d8ce6f20ce17fc4ef7fbb11def`. Documentation is updated in the subsequent branch commit.

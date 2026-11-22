@@ -351,3 +351,14 @@ No merge, deployment, repository setting, ruleset, Actions policy, or secret was
 - **Adversarial parser-boundary coverage:** test-only commits added explicit nested-object duplicate detection, sibling-object scope isolation, arrays containing objects, JSON-looking text inside string values, and exact UTF-8 byte-limit behavior. The final Linux contract run `45064038362`, job `137336090626`, passed **58/58** with zero failures, cancellations, or skips. The test also verifies a multibyte UTF-8 receipt at exactly 16 KiB is accepted and one additional byte is rejected.
 - **Scope and limits:** these follow-up commits add tests only; the parser implementation did not change after the 56/56 GREEN checkpoint. The 58-test result supports the bounded scanner's exercised behavior, not a formal proof of all JSON parser behavior.
 - **Scope:** parser and tests only; no workflow, secret, repository setting, ruleset, Actions policy, merge, deployment, or Production change. Hosted `pull_request_target → workflow_run` artifact E2E remains unverified.
+
+
+### Finding 43 — strict UTF-8 decoding for artifact receipts (2026-11-22)
+
+- **Threat:** artifact receipt files are bytes. Node's `readFileSync(path, 'utf8')` uses replacement decoding for malformed UTF-8, which can turn invalid byte sequences into U+FFFD and still produce a syntactically valid JSON string. The parser must reject malformed UTF-8 rather than silently normalize it.
+- **TDD RED:** test-only commit `adddebbde49351f989e82d4ddfc0260ff7bc1f13`; Linux contract run `45064434801`, job `137337306724`: **58 passed / 1 failed**. The new invalid-byte fixture was accepted by the prior reader; the assertion failed with `Missing expected exception`.
+- **Fix:** `readSignalReceiptFile` now reads the bounded file as bytes and decodes with `TextDecoder('utf-8', { fatal: true })`. Invalid UTF-8 is rejected with a fixed, non-sensitive error before JSON parsing.
+- **TDD GREEN:** implementation commit `0a449db871a7566c82758b5ce01c49ea074b5437`; Linux contract run `45064486440`, job `137337466058`: **59/59 PASS**, zero failures, cancellations, or skips. `npm ci --ignore-scripts` and `npm audit signatures` completed; one locked package registry signature was verified.
+- **Secret scans:** full-history Gitleaks push run `45064486461` and PR run `45064492152` both completed successfully.
+- **Scope:** one production parser file and one regression test file changed for the fix; documentation records the evidence. No workflow, secret, repository setting, ruleset, Actions policy, merge, deployment, or Production change.
+- **Disposition:** malformed UTF-8 acceptance is a reproduced input-validation defect and is now rejected. This does not establish a hosted artifact round trip or prove resistance to a compromised GitHub control plane.

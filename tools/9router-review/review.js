@@ -11,7 +11,9 @@ function sanitizeModelReport(value) {
       .replace(/!\[([^\]]*)\](?:\([^)]*\)|\[[^\]]*\])/g, (_, alt) =>
         alt ? alt + " [image omitted]" : "[image omitted]")
       .replace(/\[([^\]]+)\](?:\([^)]*\)|\[[^\]]*\])/g, "$1 [link omitted]")
+      .replace(/^\s*\[[^\]]+\]:\s*.*$/gm, "[link target omitted]")
       .replace(/<[^>]*>/g, "")
+      .replace(/\bwww\.[^\s<>()]+/gi, "[external URL omitted]")
       .replace(/https?:\/\/[^\s<>()]+/gi, "[external URL omitted]"),
   );
 }

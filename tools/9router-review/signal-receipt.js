@@ -65,7 +65,7 @@ function rejectDuplicateJsonObjectKeys(input) {
     if (character === '"') {
       const start = index++;
       while (index < input.length) {
-        if (input[index] === '\\\\') {
+        if (input[index] === '\\') {
           index += 2;
           continue;
         }
@@ -77,7 +77,7 @@ function rejectDuplicateJsonObjectKeys(input) {
       }
       const token = input.slice(start, index);
       let next = index;
-      while (next < input.length && /\\s/.test(input[next])) next += 1;
+      while (next < input.length && /\s/.test(input[next])) next += 1;
       if (input[next] === ':' && objectKeys.length > 0) {
         let key;
         try {

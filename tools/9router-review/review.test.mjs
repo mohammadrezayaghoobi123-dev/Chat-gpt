@@ -871,13 +871,13 @@ test("review workflow keeps per-PR serialization and bounded queue semantics exp
     "configuration validation must not receive previous marker key material");
   assert.ok(!configStep.includes("PREVIOUS_REVIEW_MARKER_KEY_EXPIRES_AT"),
     "configuration validation must not receive previous marker key expiry metadata");
-  assert.equal((workflow.match(/^\\s+REVIEW_MARKER_KEY:/gm) || []).length, 1,
+  assert.equal(workflow.split("\n").filter((line) => line.trimStart().startsWith("REVIEW_MARKER_KEY:")).length, 1,
     "the active marker secret must be scoped only to the final reviewer step");
   assert.equal(workflow.split("PREVIOUS_REVIEW_MARKER_KEY:").length - 1, 1,
     "the optional previous marker key must be scoped only to the final reviewer step");
   assert.equal(workflow.split("PREVIOUS_REVIEW_MARKER_KEY_EXPIRES_AT:").length - 1, 1,
     "the previous key expiry variable must be scoped only to the final reviewer step");
-  assert.equal((workflow.match(/^\\s+ROUTER_API_KEY:/gm) || []).length, 1,
+  assert.equal(workflow.split("\n").filter((line) => line.trimStart().startsWith("ROUTER_API_KEY:")).length, 1,
     "the router API key must be scoped only to the final reviewer step");
   const runner = readFileSync(new URL("./run-review.mjs", import.meta.url), "utf8");
   assert.ok(runner.includes("previousReviewMarkerKeyValidUntil: process.env.PREVIOUS_REVIEW_MARKER_KEY_EXPIRES_AT"));

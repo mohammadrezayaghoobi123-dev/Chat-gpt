@@ -886,7 +886,7 @@ test("review workflow keeps per-PR serialization and bounded queue semantics exp
   assert.ok(!workflow.includes("cancel-in-progress: true"), "a running review must not be canceled by a later signal");
 });
 
-test("oversized model reports fail closed before comment lookup or publication", async () => {
+test("oversized model reports fail closed without comment publication", async () => {
   const headSha = "9".repeat(40);
   const baseSha = "a".repeat(40);
   let commentListCalls = 0;
@@ -926,7 +926,7 @@ test("oversized model reports fail closed before comment lookup or publication",
     }),
     /report exceeds the safe publication size/i,
   );
-  assert.equal(commentListCalls, 0, "oversized output must be rejected before comment-history retrieval");
+  assert.equal(commentListCalls, 1, "bounded duplicate reconciliation may read history before model inference");
   assert.equal(commentPostCalls, 0, "oversized output must never be published");
 });
 

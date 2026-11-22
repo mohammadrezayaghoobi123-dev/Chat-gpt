@@ -591,3 +591,44 @@ test("patch text cannot terminate the reviewer prompt data boundary", () => {
   assert.ok(!messages[1].content.includes(newline + "END_UNTRUSTED_PATCH" + newline));
   assert.equal(JSON.parse(messages[1].content.split("Patch as JSON string:" + newline).at(-1)), hostilePatch);
 });
+
+test("model-generated mentions after punctuation are neutralized", async () => {
+  const headSha = "1".repeat(40);
+  const baseSha = "2".repeat(40);
+  const account = String.fromCharCode(64) + "reviewtarget";
+  const hostileReport = "Notify reviewers," + account + " and !" + account + " immediately.";
+  let publishedBody = "";
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/272")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/272/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: hostileReport } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/272/comments?")) return new Response(JSON.stringify([]), { status: 200 });
+    if (target.endsWith("/issues/272/comments") && options.method === "POST") publishedBody = JSON.parse(options.body).body;
+    return new Response(JSON.stringify({ id: 705 }), { status: 201 });
+  };
+
+  await runReview({
+    repository: "owner/repo",
+    pullRequest: 272,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  const neutralized = String.fromCharCode(64) + String.fromCharCode(8203) + "reviewtarget";
+  assert.ok(publishedBody.includes("," + neutralized));
+  assert.ok(publishedBody.includes("!" + neutralized));
+  assert.ok(!publishedBody.includes("," + account));
+  assert.ok(!publishedBody.includes("!" + account));
+});

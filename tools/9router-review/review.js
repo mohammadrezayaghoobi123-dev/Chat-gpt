@@ -396,7 +396,7 @@ async function findMatchingReviewComments({ fetchImpl, base, repoPath, pullReque
       if (!comment || typeof comment.body !== "string" || typeof comment.user?.login !== "string") {
         throw new Error("GitHub returned an incomplete comment-history record; refusing to publish.");
       }
-      const firstLine = comment.body.split(/\\r?\\n/, 1)[0];
+      const firstLine = comment.body.split(/\r?\n/, 1)[0];
       if (comment.user.login === "github-actions[bot]" && firstLine === marker) {
         matches.push(comment);
         if (matches.length > 1) {

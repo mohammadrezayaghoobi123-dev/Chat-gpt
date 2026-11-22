@@ -829,3 +829,11 @@ No merge, deployment, repository setting, ruleset, Actions policy, or secret was
 - **Decision:** documentation-only evidence update. No patch-retrieval code, test, workflow, dependency, Actions policy, secret, permission, Ruleset, PR state, default branch, merge, deployment, or Production change.
 - **Sources:** GitHub Compare two commits: https://docs.github.com/en/rest/commits/commits#compare-two-commits ; GitHub List pull request files: https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files .
 
+#### Finding 73 follow-up — immutable tree/blob retrieval was verified for the missing README patch
+
+- **Exact Git-object probe on current PR #262 head:** fetched commit objects for base `d28641c374615c56d85d07ddb8f487ff3f4798f1` and head `2843e9565a62ed22195ff72e33576a1e1856902b`, then fetched each exact commit tree recursively. Both tree responses reported `truncated=false`.
+- **Base object chain:** commit tree `19d2398359fcf1775ca07c869da594d2a556fecf` resolved `tools/9router-review/README.md` to blob `5b4f7b2af8dd121580420e2cb4cd56db88d01710` (44,392 bytes in the tree).
+- **Head object chain:** commit tree `1da381e1f7ba4ce489ae83e4a5a1616126268feb` resolved the same path to blob `dfb9c936dabe406edc9b5d973e679ced61240eb1` (212,883 bytes in the tree).
+- **Blob retrieval:** GitHub's Git Blob API returned the full UTF-8 contents for both exact blob SHAs (44,345 and 212,542 JavaScript string code units, respectively). The head blob contains this Finding 73 record. This independently demonstrates that the missing patch's immutable before/after file objects are retrievable without using the mutable PR-files endpoint.
+- **Boundary:** this proves exact commit → tree → blob retrieval for this README on the current PR snapshot. It does not yet prove a correct, bounded unified-diff generator, safe handling of binary/renamed/submodule files, or repository-wide tree traversal under all size limits. Those require a deterministic implementation test before any fallback is enabled.
+- **Disposition update:** **SUPPORTED** — both exact blob objects for the omitted-patch file are accessible and their SHAs match the Contents API blob identities. **UNKNOWN** — complete patch reconstruction and resource-bounded behavior across other file types. The implementation must still fail closed until those behaviors are tested.

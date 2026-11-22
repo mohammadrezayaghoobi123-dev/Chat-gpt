@@ -57,9 +57,50 @@ function requireRepoName(value, label) {
   }
 }
 
+function rejectDuplicateJsonObjectKeys(input) {
+  const objectKeys = [];
+  let index = 0;
+  while (index < input.length) {
+    const character = input[index];
+    if (character === '"') {
+      const start = index++;
+      while (index < input.length) {
+        if (input[index] === '\\\\') {
+          index += 2;
+          continue;
+        }
+        if (input[index] === '"') {
+          index += 1;
+          break;
+        }
+        index += 1;
+      }
+      const token = input.slice(start, index);
+      let next = index;
+      while (next < input.length && /\\s/.test(input[next])) next += 1;
+      if (input[next] === ':' && objectKeys.length > 0) {
+        let key;
+        try {
+          key = JSON.parse(token);
+        } catch {
+          continue;
+        }
+        const keys = objectKeys[objectKeys.length - 1];
+        if (keys.has(key)) throw new Error('Signal receipt contains duplicate JSON object keys.');
+        keys.add(key);
+      }
+      continue;
+    }
+    if (character === '{') objectKeys.push(new Set());
+    else if (character === '}') objectKeys.pop();
+    index += 1;
+  }
+}
+
 export function parseSignalReceipt(input) {
   if (typeof input !== 'string' || input.length === 0) throw new Error('Signal receipt is missing or empty.');
   if (Buffer.byteLength(input, 'utf8') > MAX_RECEIPT_BYTES) throw new Error('Signal receipt exceeds the 16 KiB size limit.');
+  rejectDuplicateJsonObjectKeys(input);
   let receipt;
   try {
     receipt = JSON.parse(input);

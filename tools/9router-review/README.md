@@ -261,3 +261,14 @@ No merge, deployment, repository setting, ruleset, Actions policy, or secret was
 - Full-history Gitleaks run `45053210347`: **3,949 commits scanned**, approximately **12.37 MB**, no leaks found. Final Gitleaks run `45053620560` passed on the implementation head.
 - The `resolve-signal` and `review` jobs were skipped on Push by design. No hosted signal artifact round trip or privileged reviewer E2E is claimed.
 - The main branch remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`. PR #261 remains Draft/Open/Unmerged. PR #262 is Draft/Open/Mergeable and targets the work branch underlying PR #261. No merge, deploy, secret, policy, ruleset, or Production change.
+
+
+### Finding 36 — workflow-run SHA is distinct from the PR base snapshot
+
+- **Defect:** The first ABC resolver version required `workflow_run.head_sha === receipt.baseSha`. This conflated the commit associated with the trusted default-branch workflow execution and the independently captured PR target-branch snapshot. GitHub documents that `pull_request_target` runs in the base repository's default-branch context, while `workflow_run` executes from the default branch. A PR targeting a non-default base branch can therefore have a valid `baseSha` distinct from the workflow revision SHA.
+- **Impact:** The old equality could reject a legitimate signal before PR reconciliation. This is a fail-closed availability defect, not evidence of provenance bypass.
+- **TDD RED:** Test-only commit `2af1e536272ff52826d859fbbb2fb99750cfac42`; run `45054489016`; contract suite: **48 passed / 1 failed**. The new test failed because the receipt schema did not carry a distinct workflow revision SHA.
+- **Remediation:** The signal receipt now captures `github.sha` as `workflowSha`. The resolver binds `workflow_run.head_sha` to this workflow revision SHA. The PR's `baseSha` remains a separate immutable event snapshot and is independently compared with the live PR API response.
+- **TDD GREEN:** run `45054598879`, contract job `137306920053`: **49/49 PASS**, zero failures, cancellations, or skips. Dependency installation and `npm audit signatures` also succeeded.
+- **Residual UNKNOWN:** No hosted `pull_request_target → workflow_run` execution or artifact round trip has been run because both workflows remain absent from `main`. The exact `github.sha` / `workflow_run.head_sha` relationship remains to be confirmed by that future hosted run.
+- **Scope:** Only `feature/9router-abc-provenance` was changed. No main, secrets, Actions policy, rulesets, merge, deployment, or Production resources were modified.

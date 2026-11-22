@@ -252,3 +252,11 @@ git commit -m "docs: record 9router abc provenance controls"
 - `git diff --check` was not independently run in a full local checkout; this remains unverified.
 
 **Current code checkpoint:** `af7f529477cde0d8ce6f20ce17fc4ef7fbb11def`. Documentation is updated in the subsequent branch commit.
+
+
+## Finding 36 execution record — distinct workflow revision SHA
+
+- TDD RED: test-only commit `2af1e536272ff52826d859fbbb2fb99750cfac42`; CI run `45054489016`: 48 passed / 1 failed on the expected missing `workflowSha` receipt field.
+- Implementation: signal workflow captures `github.sha` as `workflowSha`; resolver binds `workflow_run.head_sha` to that value rather than to the PR's `baseSha`. The live PR API check continues to bind the PR base snapshot independently.
+- TDD GREEN: CI run `45054598879`, job `137306920053`: 49/49 passed, zero failures/cancellations/skips. Locked dependency installation and npm signature verification succeeded.
+- Hosted `pull_request_target → workflow_run` artifact round-trip remains UNKNOWN because the workflow files are not on the default branch. Do not infer hosted activation from the Push contract run.

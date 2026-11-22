@@ -532,7 +532,7 @@ export async function runReview({
     "## Independent 9Router review",
     "**Reviewed head SHA:** " + expectedHeadSha,
     "**Reviewed base SHA:** " + expectedBaseSha,
-    "**Snapshot validity:** This report applies only to the exact head/base SHAs above. It is superseded when either the reviewed head SHA or base SHA changes; re-review the new snapshot before relying on it.",
+    "**Snapshot validity:** This report applies only to the exact head/base SHAs above. Treat it as SUPERSEDED if either the reviewed head SHA or base SHA changes; treat current validity as UNKNOWN if live PR SHAs cannot be verified. Re-review the new snapshot before relying on it.",
     "",
     sanitizedReport,
     "",

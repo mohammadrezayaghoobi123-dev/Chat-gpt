@@ -14,6 +14,7 @@ try {
     routerBaseUrl: process.env.ROUTER_BASE_URL,
     routerApiKey: process.env.ROUTER_API_KEY,
     reviewMarkerKey: process.env.REVIEW_MARKER_KEY,
+    previousReviewMarkerKeys: process.env.PREVIOUS_REVIEW_MARKER_KEY ? [process.env.PREVIOUS_REVIEW_MARKER_KEY] : [],
     model: process.env.ROUTER_MODEL,
   });
   console.log(JSON.stringify({ status: result.status ?? "commented", ...result, credentialsLogged: false }));

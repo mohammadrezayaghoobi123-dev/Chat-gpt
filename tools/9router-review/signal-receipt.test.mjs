@@ -76,6 +76,32 @@ test("receipt parser rejects duplicate and escaped-equivalent JSON object keys",
   }
 });
 
+test("receipt parser scopes duplicate-key detection to nested JSON objects", () => {
+  const nestedDuplicate = JSON.stringify(receipt).replace(
+    '"baseRef":"main"}',
+    '"baseRef":"main","ignored":{"scope":{"duplicate":1,"duplicate":2}}}',
+  );
+  assert.throws(() => parseSignalReceipt(nestedDuplicate), /duplicate JSON object keys/);
+
+  const siblingObjects = JSON.stringify(receipt).replace(
+    '"baseRef":"main"}',
+    '"baseRef":"main","ignored":{"same":1},"other":{"same":2}}',
+  );
+  assert.throws(() => parseSignalReceipt(siblingObjects), /missing or unexpected schema fields/);
+
+  const arrayObjects = JSON.stringify(receipt).replace(
+    '"baseRef":"main"}',
+    '"baseRef":"main","ignored":[{"same":1},{"same":2}]}',
+  );
+  assert.throws(() => parseSignalReceipt(arrayObjects), /missing or unexpected schema fields/);
+
+  const duplicateLookingText = {
+    ...receipt,
+    baseRef: 'release {"duplicate":1,"duplicate":2}',
+  };
+  assert.deepEqual(parseSignalReceipt(JSON.stringify(duplicateLookingText)), duplicateLookingText);
+});
+
 test("resolver binds the receipt to the exact workflow run and PR snapshot", () => {
   assert.deepEqual(resolveWorkflowRunTarget(context), {
     pullRequest: 42, expectedHeadSha: headSha, expectedBaseSha: baseSha, expectedWorkflowSha: workflowSha, baseRef: "main",

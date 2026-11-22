@@ -29,33 +29,39 @@ function rejectUnboundedMigrationMaterialization(sql) {
         const cursor = target.exec(statement, ...bindings);
         if (!readsSourceRows(statement)) return cursor;
         let rowsRead = 0;
-        const readNext = () => {
-          rowsRead += 1;
-          if (rowsRead > 1) {
-            rejectedMaterializations += 1;
-            throw new Error("V9 migration must not iterate a source-table cursor beyond one row");
-          }
-          return cursor.next();
+        const wrapCursor = cursorTarget => {
+          const readNext = () => {
+            rowsRead += 1;
+            if (rowsRead > 1) {
+              rejectedMaterializations += 1;
+              throw new Error("V9 migration must not iterate a source-table cursor beyond one row");
+            }
+            return Reflect.apply(cursorTarget.next, cursorTarget, []);
+          };
+          return new Proxy(cursorTarget, {
+            get(targetCursor, key) {
+              if (key === "raw") {
+                return (...args) => wrapCursor(Reflect.apply(targetCursor.raw, targetCursor, args));
+              }
+              if (key === "toArray") {
+                return () => {
+                  rejectedMaterializations += 1;
+                  throw new Error("V9 migration must not materialize a full-table row collection");
+                };
+              }
+              if (key === "next") return readNext;
+              if (key === Symbol.iterator) {
+                return () => ({
+                  next: readNext,
+                  [Symbol.iterator]() { return this; },
+                });
+              }
+              const value = Reflect.get(targetCursor, key, targetCursor);
+              return typeof value === "function" ? value.bind(targetCursor) : value;
+            },
+          });
         };
-        return new Proxy(cursor, {
-          get(cursorTarget, key) {
-            if (key === "toArray") {
-              return () => {
-                rejectedMaterializations += 1;
-                throw new Error("V9 migration must not materialize a full-table row collection");
-              };
-            }
-            if (key === "next") return readNext;
-            if (key === Symbol.iterator) {
-              return () => ({
-                next: readNext,
-                [Symbol.iterator]() { return this; },
-              });
-            }
-            const value = Reflect.get(cursorTarget, key, cursorTarget);
-            return typeof value === "function" ? value.bind(cursorTarget) : value;
-          },
-        });
+        return wrapCursor(cursor);
       };
     },
   });
@@ -97,6 +103,30 @@ describe("OrchestratorLedger v9 migration JavaScript memory bound", () => {
         for (const row of iteratorCursor) void row;
       }).toThrow("V9 migration must not iterate a source-table cursor beyond one row");
       expect(guard.rejectedMaterializations).toBe(2);
+    });
+  });
+
+  it("rejects raw cursor materialization for source-table reads", async () => {
+    const ledger = ledgerFor("v9-migration-raw-cursor-guard");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'SCHEDULED', 1, '{}', 1, 1, ?, ?)",
+        "v9-raw-guard-a", "raw-guard-a", "a".repeat(64), "tenant-a", "project-a",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'SCHEDULED', 1, '{}', 2, 2, ?, ?)",
+        "v9-raw-guard-b", "raw-guard-b", "b".repeat(64), "tenant-a", "project-a",
+      );
+
+      const guard = rejectUnboundedMigrationMaterialization(sql);
+      const rawCursor = guard.sql.exec(
+        "SELECT task_id FROM orchestrator_tasks ORDER BY task_id",
+      ).raw();
+      expect(() => rawCursor.toArray()).toThrow(
+        "V9 migration must not materialize a full-table row collection",
+      );
+      expect(guard.rejectedMaterializations).toBe(1);
     });
   });
 

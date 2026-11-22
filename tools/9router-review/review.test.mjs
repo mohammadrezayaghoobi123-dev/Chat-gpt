@@ -878,6 +878,8 @@ test("review workflow keeps per-PR serialization and bounded queue semantics exp
     "each review must share a concurrency group keyed by PR number",
   );
   assert.ok(workflow.includes("queue: max"), "pending reviews must use the bounded multi-run queue");
+  assert.ok(workflow.includes("REVIEW_MARKER_KEY: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_KEY }}"), "the privileged reviewer must receive the dedicated marker-signing secret");
+  assert.ok(workflow.includes("REVIEW_MARKER_KEY == "), "the reviewer must not run without its marker-signing key");
   assert.ok(!workflow.includes("cancel-in-progress: true"), "a running review must not be canceled by a later signal");
 });
 

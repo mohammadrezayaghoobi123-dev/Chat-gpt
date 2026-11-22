@@ -57,6 +57,7 @@ test("receipt parser accepts only a bounded, exact v1 schema", () => {
     JSON.stringify({ ...receipt, extra: true }),
     JSON.stringify({ ...receipt, pullRequestNumber: 0 }),
     JSON.stringify({ ...receipt, headSha: "bad" }),
+    JSON.stringify({ ...receipt, workflowSha: "bad" }),
     JSON.stringify({ ...receipt, action: "unknown" }),
   ]) assert.throws(() => parseSignalReceipt(invalid));
 });
@@ -75,7 +76,7 @@ test("resolver binds the receipt to the exact workflow run and PR snapshot", () 
     { headRepository: "attacker/repo" },
     { runId: 7 },
     { runAttempt: 1 },
-    { runHeadSha: "c".repeat(40) },
+    { runHeadSha: "d".repeat(40) },
     { signalReceipt: { ...receipt, pullRequestNumber: 0 } },
     { signalReceipt: { ...receipt, baseRepository: "attacker/repo" } },
     { signalReceipt: { ...receipt, runAttempt: 1 } },
@@ -148,6 +149,7 @@ test("signal workflow emits an exact run-specific receipt without checkout or se
   assert.match(signal, /RECEIPT_PULL_REQUEST_NUMBER: \$\{\{ github\.event\.pull_request\.number \}\}/);
   assert.match(signal, /RECEIPT_HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
   assert.match(signal, /RECEIPT_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
+  assert.match(signal, /RECEIPT_WORKFLOW_SHA: \$\{\{ github\.sha \}\}/);
   assert.match(signal, /RECEIPT_RUN_ID: \$\{\{ github\.run_id \}\}/);
   assert.match(signal, /RECEIPT_RUN_ATTEMPT: \$\{\{ github\.run_attempt \}\}/);
   assert.match(signal, /actions\/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9/);

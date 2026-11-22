@@ -426,7 +426,7 @@ function assertReviewablePullRequest(pr, { expectedHeadSha, expectedBaseSha, pha
 
 export async function runReview({
   repository, pullRequest, expectedHeadSha, expectedBaseSha, githubToken, routerBaseUrl, routerApiKey, model,
-  fetchImpl = fetch, githubApiBase = "https://api.github.com", reviewTimeoutMs = 8 * 60 * 1000, reviewMarkerKey, previousReviewMarkerKeys = [],
+  fetchImpl = fetch, githubApiBase = "https://api.github.com", reviewTimeoutMs = 8 * 60 * 1000, reviewMarkerKey, previousReviewMarkerKeys = [], previousReviewMarkerKeyValidUntil,
 }) {
   if (!githubToken || !routerApiKey || !model || !routerBaseUrl || typeof reviewMarkerKey !== "string" || Buffer.byteLength(reviewMarkerKey, "utf8") < 32) {
     throw new Error("Required reviewer configuration is missing or the review marker key is shorter than 32 bytes.");
@@ -438,7 +438,28 @@ export async function runReview({
   ) {
     throw new Error("At most one distinct previous review marker key of at least 32 bytes may be configured.");
   }
-  const reviewMarkerKeys = [reviewMarkerKey, ...previousReviewMarkerKeys];
+  let previousReviewMarkerKeyExpiry = null;
+  if (previousReviewMarkerKeys.length === 1) {
+    if (
+      typeof previousReviewMarkerKeyValidUntil !== "string" ||
+      !/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/.test(previousReviewMarkerKeyValidUntil)
+    ) {
+      throw new Error("A previous review marker key requires an explicit UTC expiry timestamp.");
+    }
+    previousReviewMarkerKeyExpiry = Date.parse(previousReviewMarkerKeyValidUntil);
+    if (
+      !Number.isFinite(previousReviewMarkerKeyExpiry) ||
+      new Date(previousReviewMarkerKeyExpiry).toISOString() !== previousReviewMarkerKeyValidUntil
+    ) {
+      throw new Error("The previous review marker key expiry must be a valid canonical UTC timestamp.");
+    }
+  } else if (previousReviewMarkerKeyValidUntil !== undefined && previousReviewMarkerKeyValidUntil !== null && previousReviewMarkerKeyValidUntil !== "") {
+    throw new Error("A previous review marker key expiry cannot be configured without a previous key.");
+  }
+  const previousKeysStillValid = previousReviewMarkerKeys.length === 1 && Date.now() <= previousReviewMarkerKeyExpiry
+    ? previousReviewMarkerKeys
+    : [];
+  const reviewMarkerKeys = [reviewMarkerKey, ...previousKeysStillValid];
   if (!Number.isSafeInteger(reviewTimeoutMs) || reviewTimeoutMs < 1 || reviewTimeoutMs > 8 * 60 * 1000) {
     throw new TypeError("Review timeout must be an integer between 1 ms and 8 minutes.");
   }

@@ -72,3 +72,14 @@
 - Gitleaks PR run 45081755361, job 137391257196: no leaks; 30 PR commits and 4,097 fetched commits scanned.
 - push-triggered resolve-signal/review jobs skipped by design; hosted workflow_run and live 9Router E2E remain UNKNOWN.
 - Step 3 remains open for the remaining negative boundary classes above.
+
+## Latest hostile coverage update — 2026-11-23
+
+- Coverage-only commits: b66d1d688d979d40e8830c78d59b5ea965976e4b added fail-closed fixtures; 0d4a3439e25e068afec3e6dc9152b6558aa30193 added the exact-300 acceptance case; 24e1870c8193624f30243757c9f5a46a33083549 corrected a test regex syntax error using literal string assertions.
+- Final test evidence for code/test head 24e1870c8193624f30243757c9f5a46a33083549: contract run 45082823175, job 137394588391, 80/80 PASS, zero failures, cancellations, or skips. npm ci --ignore-scripts and npm audit signatures succeeded.
+- Gitleaks Push run 45082823155, job 137394588344, and PR run 45082828822, job 137394604877: both success; each scanned 4,103 fetched commits and reported no leaks.
+- Covered cases now include truncated tree, mismatched returned blob SHA, malformed base64, non-NUL invalid UTF-8, binary/NUL data, symlink mode, submodule/gitlink type, missing blob, individual blob over 512 KiB, cumulative 4 MiB blob budget, Git diff output-buffer exhaustion, exactly 300 accepted fallback patches, and rejection of the 301st fallback. These are test-fixture proofs of fail-closed behavior, not live service guarantees.
+- The first exact-300 test attempt failed because the test file contained an invalid regular-expression literal; the CI log identified a SyntaxError: Invalid regular expression flags. The assertions were changed to direct string inclusion. The subsequent full suite passed 80/80. No production implementation was changed in this correction.
+- Still UNKNOWN: API blob size mismatch, canonical base64 that decodes to bytes with the wrong Git blob hash, Git process timeout distinct from output-buffer exhaustion, Compare API 300-file ceiling, 1,000 changed-path ceiling, 50,000 tree-entry ceiling, and immutable formatted-patch character-budget boundary.
+- Hosted workflow_run / artifact roundtrip / live 9Router / comment publication remain UNKNOWN; push-triggered resolve-signal and review were skipped by design.
+- Step 3 remains open until the remaining negative boundaries above are either covered or explicitly deferred under a documented engineering decision. No architecture, workflow, permission, secret, Actions policy, Ruleset, PR state, main, merge, deployment, or Production changes were made.

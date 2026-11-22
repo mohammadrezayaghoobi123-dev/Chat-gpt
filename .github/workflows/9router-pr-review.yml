@@ -1,0 +1,45 @@
+name: Independent 9Router PR Review
+
+on:
+  push:
+    branches:
+      - feature/independent-9router-pr-review
+    paths:
+      - "tools/9router-review/**"
+      - ".github/workflows/9router-pr-review.yml"
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: 9router-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract-tests:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - name: Run reviewer contract tests
+        run: node --test tools/9router-review/review.test.mjs
+
+  review:
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Explain safe bootstrap boundary
+        run: |
+          echo "The review job is intentionally disabled until the trusted reviewer implementation is present on the base branch."
+          echo "No untrusted pull-request code is checked out or executed."

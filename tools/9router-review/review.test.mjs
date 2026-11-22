@@ -1173,7 +1173,10 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
   const sanitizedReport = publishedBody.slice(reportStart, reportEnd);
   const tokens = collectMarkdownTokenTypes(marked.lexer(sanitizedReport, { gfm: true }));
   const activeTypes = tokens.filter(type => ["link", "image", "html", "url", "autolink"].includes(type));
-  assert.deepEqual(activeTypes, [], "published report must contain no active link, image, HTML, or autolink AST nodes");
+  const activeTokens = [];
+  const collectActive = values => { for (const token of values ?? []) { if (["link", "image", "html", "url", "autolink"].includes(token.type)) activeTokens.push({ type: token.type, raw: token.raw, href: token.href, text: token.text }); for (const value of Object.values(token)) if (Array.isArray(value)) collectActive(value); } };
+  collectActive(marked.lexer(sanitizedReport, { gfm: true }));
+  assert.deepEqual(activeTypes, [], JSON.stringify({ sanitizedReport, activeTokens }));
   assert.ok(publishedBody.includes("**bold**"), "safe emphasis formatting should be preserved");
   assert.ok(publishedBody.includes("`inline code`"), "safe inline code formatting should be preserved");
 });

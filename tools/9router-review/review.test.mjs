@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { marked } from "marked";
 import { readFileSync } from "node:fs";
 import * as reviewer from "./review.js";
 const { buildReviewMessages, runReview } = reviewer;
@@ -1104,4 +1105,71 @@ test("non-success GitHub responses cancel unread bodies", async () => {
     /Remote API request failed with HTTP 503/i,
   );
   assert.equal(bodyCanceled, true, "non-success response bodies must be canceled rather than left unread");
+});
+
+
+function collectMarkdownTokenTypes(tokens, found = []) {
+  for (const token of tokens ?? []) {
+    if (!token || typeof token !== "object") continue;
+    if (typeof token.type === "string") found.push(token.type);
+    for (const [key, value] of Object.entries(token)) {
+      if (key === "type" || key === "raw") continue;
+      if (Array.isArray(value)) collectMarkdownTokenTypes(value, found);
+      else if (value && typeof value === "object") collectMarkdownTokenTypes([value], found);
+    }
+  }
+  return found;
+}
+
+test("model report sanitizer removes active nodes from the parsed GitHub-flavored Markdown AST", async () => {
+  const headSha = "1".repeat(40);
+  const baseSha = "2".repeat(40);
+  const hostileReport = [
+    "## Safe heading",
+    "**bold** and `inline code`",
+    "Click [a [nested label]](//attacker.example/collect?token=probe).",
+    "![tracking [nested alt]](https://attacker.example/pixel)",
+    '<img src="https://attacker.example/raw" />',
+    "<https://attacker.example/autolink>",
+    "https://attacker.example/bare",
+    "[reference][tracker]",
+    "[tracker]: https://attacker.example/reference",
+  ].join(String.fromCharCode(10));
+  let publishedBody = "";
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/283")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/283/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: hostileReport } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/283/comments?")) return new Response(JSON.stringify([]), { status: 200 });
+    if (target.endsWith("/issues/283/comments") && options.method === "POST") {
+      publishedBody = JSON.parse(options.body).body;
+      return new Response(JSON.stringify({ id: 906 }), { status: 201 });
+    }
+    throw new Error("Unexpected API operation in Markdown AST security test.");
+  };
+
+  await runReview({
+    repository: "owner/repo",
+    pullRequest: 283,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  const tokens = collectMarkdownTokenTypes(marked.lexer(publishedBody, { gfm: true }));
+  const activeTypes = tokens.filter(type => ["link", "image", "html", "url", "autolink"].includes(type));
+  assert.deepEqual(activeTypes, [], "published report must contain no active link, image, HTML, or autolink AST nodes");
+  assert.ok(publishedBody.includes("**bold**"), "safe emphasis formatting should be preserved");
+  assert.ok(publishedBody.includes("`inline code`"), "safe inline code formatting should be preserved");
 });

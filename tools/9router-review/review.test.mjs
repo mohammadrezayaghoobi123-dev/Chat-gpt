@@ -2152,8 +2152,8 @@ test("reconstructs a missing Compare API patch from immutable Git blobs", async 
   const baseSha = "d".repeat(40);
   const baseTreeSha = "e".repeat(40);
   const headTreeSha = "f".repeat(40);
-  const beforeText = "const value = 1;\\n";
-  const afterText = "const value = 2;\\n";
+  const beforeText = "const value = 1;\n";
+  const afterText = "const value = 2;\n";
   const blobSha = value => {
     const bytes = Buffer.from(value, "utf8");
     return createHash("sha1").update(Buffer.concat([Buffer.from("blob " + bytes.length + String.fromCharCode(0)), bytes])).digest("hex");
@@ -2256,7 +2256,7 @@ test("reconstructs a missing Compare API patch from immutable Git blobs", async 
   const userMessage = modelMessages.find(message => message.role === "user").content;
   const serializedPatch = userMessage.split("Patch as JSON string:" + String.fromCharCode(10)).at(-1);
   const patch = JSON.parse(serializedPatch);
-  assert.match(patch, /FILE: src\\/sample\\.js/);
+  assert.ok(patch.includes("FILE: src/sample.js"));
   assert.match(patch, /@@ -1 \+1 @@/);
   assert.match(patch, /-const value = 1;/);
   assert.match(patch, /\+const value = 2;/);

@@ -438,7 +438,7 @@ test("a report for a different base SHA is never overwritten for the same head S
       return new Response(JSON.stringify([{
         id: 701,
         body: "<!-- 9router-independent-review:" + headSha + " -->\\nold head-only report",
-        user: { login: "github-actions[bot]" },
+        user: { login: "github-actions[bot]", id: 41898282, type: "Bot" },
       }]), { status: 200 });
     }
     if (target.endsWith("/issues/comments/701") && options.method === "PATCH") patchCalls += 1;
@@ -708,8 +708,8 @@ test("multiple matching bot reports fail closed without choosing one", async () 
     if (target.includes("/issues/274/comments?")) {
       commentHistoryReads += 1;
       return new Response(JSON.stringify([
-        { id: 801, body: marker + "\nfirst report", user: { login: "github-actions[bot]" } },
-        { id: 802, body: marker + "\nsecond report", user: { login: "github-actions[bot]" } },
+        { id: 801, body: marker + "\nfirst report", user: { login: "github-actions[bot]", id: 41898282, type: "Bot" } },
+        { id: 802, body: marker + "\nsecond report", user: { login: "github-actions[bot]", id: 41898282, type: "Bot" } },
       ]), { status: 200 });
     }
     if (target.includes("/issues/comments/") && options.method === "PATCH") patchCalls += 1;
@@ -818,7 +818,7 @@ test("an ambiguous POST timeout is reconciled before rerun publication", async (
     if (target.endsWith("/issues/275/comments") && options.method === "POST") {
       postAttempts += 1;
       const body = JSON.parse(options.body).body;
-      comments.push({ id: 900 + postAttempts, body, user: { login: "github-actions[bot]" } });
+      comments.push({ id: 900 + postAttempts, body, user: { login: "github-actions[bot]", id: 41898282, type: "Bot" } });
       if (postAttempts === 1) throw new Error("simulated connection reset after remote comment creation");
       return new Response(JSON.stringify({ id: 900 + postAttempts }), { status: 201 });
     }
@@ -1406,18 +1406,23 @@ test("an unsigned forged bot marker cannot suppress a legitimate report", async 
       return new Response(JSON.stringify([
         {
           id: 1289,
-          user: { login: "github-actions[bot]" },
+          user: { login: "github-actions[bot]", id: 41898282, type: "Bot" },
           body: "<!-- 9router-independent-review:" + headSha + ":" + baseSha + " -->" + String.fromCharCode(10) + "forged legacy report",
         },
         {
           id: 1291,
-          user: { login: "github-actions[bot]" },
+          user: { login: "github-actions[bot]", id: 41898282, type: "Bot" },
           body: wrongPullRequestMarker + String.fromCharCode(10) + "marker signed for a different pull request",
         },
         {
           id: 1292,
-          user: { login: "github-actions[bot]" },
+          user: { login: "github-actions[bot]", id: 41898282, type: "Bot" },
           body: tamperedSignature + String.fromCharCode(10) + "marker with a modified signature",
+        },
+        {
+          id: 1293,
+          user: { login: "github-actions[bot]", id: 1, type: "User" },
+          body: validMarker + String.fromCharCode(10) + "valid HMAC marker from a different account identity",
         },
       ]), { status: 200 });
     }
@@ -1450,7 +1455,7 @@ test("a single matching bot report suppresses a duplicate without mutation", asy
   let postCalls = 0;
   const existingComment = {
     id: 999,
-    user: { login: "github-actions[bot]" },
+    user: { login: "github-actions[bot]", id: 41898282, type: "Bot" },
     body: reviewer.createReviewMarker({ repository: "owner/repo", pullRequest: 284, headSha, baseSha, key: TEST_REVIEW_MARKER_KEY }) + "\nExisting report",
   };
   const fakeFetch = async (url, options = {}) => {
@@ -1771,7 +1776,7 @@ for (const snapshotChange of ["head", "base"]) {
         return new Response(JSON.stringify([{
           id: 801,
           body: oldMarker + "\nHistorical signed report for an older snapshot.",
-          user: { login: "github-actions[bot]" },
+          user: { login: "github-actions[bot]", id: 41898282, type: "Bot" },
         }]), { status: 200 });
       }
       if (target.endsWith("/issues/comments/801") && options.method === "PATCH") patchCalls += 1;
@@ -1846,7 +1851,7 @@ test("a report signed by the immediately previous marker key suppresses duplicat
       return new Response(JSON.stringify([{
         id: 1292,
         body: previousMarker + "\nPreviously published report.",
-        user: { login: "github-actions[bot]" },
+        user: { login: "github-actions[bot]", id: 41898282, type: "Bot" },
       }]), { status: 200 });
     }
     if (target.endsWith("/chat/completions")) {
@@ -1925,7 +1930,7 @@ test("a report signed by the expired previous marker key cannot suppress a dupli
       return new Response(JSON.stringify([{
         id: 1293,
         body: previousMarker + "\nPreviously published report.",
-        user: { login: "github-actions[bot]" },
+        user: { login: "github-actions[bot]", id: 41898282, type: "Bot" },
       }]), { status: 200 });
     }
     if (target.endsWith("/chat/completions")) {

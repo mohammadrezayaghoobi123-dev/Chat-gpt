@@ -330,7 +330,7 @@ function formatGitHubApiFailure(response) {
 }
 
 
-async function requestJson(fetchImpl, url, { method = "GET", token, body, accept = "application/vnd.github+json", deadlineAt }) {
+async function requestJson(fetchImpl, url, { method = "GET", token, body, accept = "application/vnd.github+json", deadlineAt, expectedStatus }) {
   const signal = createRequestSignal(deadlineAt);
   let response;
   try {
@@ -358,6 +358,14 @@ async function requestJson(fetchImpl, url, { method = "GET", token, body, accept
       // Preserve the generic HTTP error even if transport cancellation fails.
     }
     throw new Error(formatGitHubApiFailure(response));
+  }
+  if (expectedStatus !== undefined && response.status !== expectedStatus) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Preserve the expected-status error even if transport cancellation fails.
+    }
+    throw new Error("GitHub API returned HTTP " + response.status + "; expected HTTP " + expectedStatus + "; publication state is UNKNOWN.");
   }
   if (response.status === 204) return null;
   try {
@@ -406,6 +414,20 @@ async function findMatchingReviewComments({ fetchImpl, base, repoPath, repositor
   }
 
   throw new Error("Pull request comment history exceeds the safe reconciliation page limit; refusing to publish.");
+}
+
+function isSameApiResourceUrl(actualValue, expectedValue) {
+  if (typeof actualValue !== "string" || typeof expectedValue !== "string") return false;
+  try {
+    const actual = new URL(actualValue);
+    const expected = new URL(expectedValue);
+    return actual.origin === expected.origin &&
+      actual.pathname.toLowerCase() === expected.pathname.toLowerCase() &&
+      actual.search === "" && actual.hash === "" &&
+      actual.username === "" && actual.password === "";
+  } catch {
+    return false;
+  }
 }
 
 function assertReviewablePullRequest(pr, { expectedHeadSha, expectedBaseSha, phase, allowDraft = false }) {
@@ -577,11 +599,24 @@ export async function runReview({
 
   const currentBeforePublish = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
   assertReviewablePullRequest(currentBeforePublish, { expectedHeadSha, expectedBaseSha, phase: "final publication gate" });
-  await requestJson(fetchImpl, base.origin + repoPath + "/issues/" + pullRequest + "/comments", {
+  const createdComment = await requestJson(fetchImpl, base.origin + repoPath + "/issues/" + pullRequest + "/comments", {
     method: "POST",
     token: githubToken,
     body: { body },
     deadlineAt,
+    expectedStatus: 201,
   });
+  const expectedIssueUrl = base.origin + repoPath + "/issues/" + pullRequest;
+  if (
+    !createdComment || typeof createdComment !== "object" || Array.isArray(createdComment) ||
+    !Number.isSafeInteger(createdComment.id) || createdComment.id < 1 ||
+    createdComment.body !== body ||
+    !isSameApiResourceUrl(createdComment.issue_url, expectedIssueUrl) ||
+    createdComment.user?.login !== "github-actions[bot]" ||
+    createdComment.user?.id !== GITHUB_ACTIONS_BOT_USER_ID ||
+    createdComment.user?.type !== "Bot"
+  ) {
+    throw new Error("GitHub publication response does not match the expected issue comment; publication state is UNKNOWN.");
+  }
   return { reviewedHeadSha: expectedHeadSha, reviewedBaseSha: expectedBaseSha, publishedNewComment: true };
 }

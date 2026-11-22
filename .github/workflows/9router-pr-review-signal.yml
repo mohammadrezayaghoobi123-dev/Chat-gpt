@@ -24,6 +24,7 @@ jobs:
           RECEIPT_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
           RECEIPT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RECEIPT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          RECEIPT_WORKFLOW_SHA: ${{ github.sha }}
           RECEIPT_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           RECEIPT_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
           RECEIPT_BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -42,6 +43,7 @@ jobs:
             pullRequestNumber: Number(process.env.RECEIPT_PULL_REQUEST_NUMBER),
             headSha: process.env.RECEIPT_HEAD_SHA,
             baseSha: process.env.RECEIPT_BASE_SHA,
+            workflowSha: process.env.RECEIPT_WORKFLOW_SHA,
             headRepository: process.env.RECEIPT_HEAD_REPOSITORY,
             baseRepository: process.env.RECEIPT_BASE_REPOSITORY,
             baseRef: process.env.RECEIPT_BASE_REF,
@@ -54,6 +56,7 @@ jobs:
             !Number.isSafeInteger(receipt.runAttempt) || receipt.runAttempt < 1 ||
             !Number.isSafeInteger(receipt.pullRequestNumber) || receipt.pullRequestNumber < 1 ||
             !shaPattern.test(receipt.headSha || "") || !shaPattern.test(receipt.baseSha || "") ||
+            !shaPattern.test(receipt.workflowSha || "") ||
             !receipt.repository || !receipt.headRepository || !receipt.baseRepository || !receipt.baseRef
           ) {
             throw new Error("Trusted pull-request event payload is incomplete.");

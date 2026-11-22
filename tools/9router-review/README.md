@@ -100,17 +100,11 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 - **Disposition:** B is implemented as bounded, read-only reconciliation. Live privileged workflow / 9Router end-to-end behavior and a real ambiguous hosted POST remain `UNKNOWN`.
 
 
-## Latest verification — current documentation state
-- Documentation update is isolated to `feature/independent-9router-pr-review`; no workflow activation, merge, deployment, or main-branch change is performed.
-- Latest recorded code/test head before this documentation correction: `02325547c170ee1ef14cfc933b5530d5f8957975`.
-- Contract tests: 37/37 PASS, run `45039740999`, job `137261295864`.
-- Gitleaks PR-diff and all fetched refs: PASS, run `45039745228`, job `137261307654`.
+## Latest verification — Finding 26 and hostile history coverage
+- Verified code/test head: `b07a6c44d2ae5ee2a935eca648acd4ec8d6e4ac6`.
+- Contract tests on this exact head: **39/39 PASS**, run `45040112641`, job `137262429806`; zero failures, cancellations, or skips.
+- Coverage includes ambiguous POST recovery, exact head/base marker matching, duplicate bot reports, user-authored marker spoofing, malformed history pages/records, cumulative 4 MiB history budget, 10-page completeness limit, and no-mutation assertions.
+- Dependency installation and npm registry signature verification: PASS.
+- Full-history secret scans on this exact head: PASS, runs `45040117075` and `45040112648`.
 - The privileged review job was skipped on push by design; live 9Router / `workflow_run` E2E remains UNKNOWN.
-
-
-## Latest verification — current test head
-- Test head: `5b4263f865590e8bd0896772a502be423a1568fe`.
-- Contract tests: 38/38 PASS, run `45040018235`, job `137262143875`.
-- Gitleaks PR-diff and all fetched refs: PASS, run `45040025470`, job `137262164394`.
-- Dependency installation and npm registry signature verification: PASS in the contract-test job.
-- The privileged review job was skipped on push by design; live 9Router / `workflow_run` E2E remains UNKNOWN.
+- Main remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`; PR #261 remains Draft/Open/Unmerged.

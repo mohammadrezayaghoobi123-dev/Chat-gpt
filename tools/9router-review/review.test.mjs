@@ -696,3 +696,49 @@ test("model report cannot publish active HTML, remote images, or clickable links
   assert.ok(!publishedBody.includes("mailto:tracker@"), "mailto schemes must not create clickable addresses");
   assert.ok(publishedBody.includes("[image omitted]"), "removed images should leave an explicit placeholder");
 });
+
+test("duplicate bot reports for the same diff fail closed instead of updating an arbitrary comment", async () => {
+  const headSha = "5".repeat(40);
+  const baseSha = "6".repeat(40);
+  const marker = "<!-- 9router-independent-review:" + headSha + ":" + baseSha + " -->";
+  let patchCalls = 0;
+  let postCalls = 0;
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/274")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/274/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/274/comments?")) {
+      return new Response(JSON.stringify([
+        { id: 801, body: marker + "\\nfirst report", user: { login: "github-actions[bot]" } },
+        { id: 802, body: marker + "\\nsecond report", user: { login: "github-actions[bot]" } },
+      ]), { status: 200 });
+    }
+    if (target.includes("/issues/comments/") && options.method === "PATCH") patchCalls += 1;
+    if (target.endsWith("/issues/274/comments") && options.method === "POST") postCalls += 1;
+    return new Response(JSON.stringify({ id: 803 }), { status: 201 });
+  };
+
+  await assert.rejects(
+    runReview({
+      repository: "owner/repo",
+      pullRequest: 274,
+      expectedHeadSha: headSha,
+      expectedBaseSha: baseSha,
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }),
+    /multiple.*report comments|ambiguous.*comment/i,
+  );
+  assert.equal(patchCalls, 0, "ambiguous ownership must never update an arbitrary bot comment");
+  assert.equal(postCalls, 0, "ambiguous ownership must not create another duplicate report");
+});

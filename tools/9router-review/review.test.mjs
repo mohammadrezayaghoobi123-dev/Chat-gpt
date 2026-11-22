@@ -1707,3 +1707,89 @@ test("published report states its exact snapshot scope and stale or unverifiable
   assert.ok(publishedBody.includes("**Reviewed head SHA:** " + headSha));
   assert.ok(publishedBody.includes("**Reviewed base SHA:** " + baseSha));
 });
+
+
+for (const snapshotChange of ["head", "base"]) {
+  test("a valid signed historical marker after a " + snapshotChange + " SHA change cannot suppress a new report", async () => {
+    const currentHeadSha = snapshotChange === "head" ? "c".repeat(40) : "a".repeat(40);
+    const currentBaseSha = snapshotChange === "base" ? "d".repeat(40) : "b".repeat(40);
+    const oldHeadSha = snapshotChange === "head" ? "a".repeat(40) : currentHeadSha;
+    const oldBaseSha = snapshotChange === "base" ? "b".repeat(40) : currentBaseSha;
+    const oldMarker = reviewer.createReviewMarker({
+      repository: "owner/repo",
+      pullRequest: 271,
+      headSha: oldHeadSha,
+      baseSha: oldBaseSha,
+      key: TEST_REVIEW_MARKER_KEY,
+    });
+    const currentMarker = reviewer.createReviewMarker({
+      repository: "owner/repo",
+      pullRequest: 271,
+      headSha: currentHeadSha,
+      baseSha: currentBaseSha,
+      key: TEST_REVIEW_MARKER_KEY,
+    });
+    let routerCalls = 0;
+    let patchCalls = 0;
+    let postCalls = 0;
+    let publishedBody = "";
+    const fakeFetch = async (url, options = {}) => {
+      const target = String(url);
+      if (target.endsWith("/pulls/271")) {
+        return new Response(JSON.stringify({
+          state: "open",
+          draft: false,
+          head: { sha: currentHeadSha },
+          base: { sha: currentBaseSha },
+        }), { status: 200 });
+      }
+      if (target.includes("/pulls/271/files?")) {
+        return new Response(JSON.stringify([{
+          filename: "src/a.js",
+          status: "modified",
+          additions: 1,
+          deletions: 1,
+          patch: "@@ -1 +1 @@\n-old\n+new",
+        }]), { status: 200 });
+      }
+      if (target.endsWith("/chat/completions")) {
+        routerCalls += 1;
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: "A sufficiently long placeholder review report." } }],
+        }), { status: 200 });
+      }
+      if (target.includes("/issues/271/comments?")) {
+        return new Response(JSON.stringify([{
+          id: 801,
+          body: oldMarker + "\nHistorical signed report for an older snapshot.",
+          user: { login: "github-actions[bot]" },
+        }]), { status: 200 });
+      }
+      if (target.endsWith("/issues/comments/801") && options.method === "PATCH") patchCalls += 1;
+      if (target.endsWith("/issues/271/comments") && options.method === "POST") {
+        postCalls += 1;
+        publishedBody = JSON.parse(options.body).body;
+      }
+      return new Response(JSON.stringify({ id: 802 }), { status: 201 });
+    };
+
+    await runReview({
+      repository: "owner/repo",
+      pullRequest: 271,
+      expectedHeadSha: currentHeadSha,
+      expectedBaseSha: currentBaseSha,
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    });
+
+    assert.equal(routerCalls, 1, "a historical marker must not suppress current-snapshot inference");
+    assert.equal(patchCalls, 0, "historical reports must remain append-only and immutable");
+    assert.equal(postCalls, 1, "a changed head/base snapshot must receive a distinct report");
+    assert.equal(publishedBody.split(String.fromCharCode(10), 1)[0], currentMarker);
+    assert.notEqual(currentMarker, oldMarker);
+  });
+}

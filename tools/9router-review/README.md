@@ -327,3 +327,13 @@ No merge, deployment, repository setting, ruleset, Actions policy, or secret was
 - **Verification:** focused reviewer suite **44/44 PASS** on Windows Node 24.22.0 for exact commit `333516d8919174c622da49ae72dc1a26f4dc11f8`. Full suite **54/55 PASS** on Windows; the one failure is the expected platform capability guard for `O_NOFOLLOW`. Hosted `ubuntu-24.04` contract job result for this exact commit remains **UNKNOWN** through the connected run query. The Gitleaks PR scan on the same commit passed (run `45062291955`, job `137330676006`).
 - **Disposition:** coverage gap addressed; production logic supported by focused tests and source inspection. Linux-hosted full-suite verification remains UNKNOWN.
 - **Safety boundary:** test and documentation changes only on `feature/9router-abc-provenance`. No production code, workflow, secrets, repository settings, rulesets, `main`, merge, or deployment changes.
+
+
+## Latest verification checkpoint — Linux contract suite (2026-11-22)
+
+- Exact audited commit: `6fad985fdcf5ac9d517b0a3d8bb1304ca55acda8` on `feature/9router-abc-provenance`.
+- GitHub Actions push run `45063068444`, job `137333077877` (`contract-tests`): **55/55 PASS**, zero failures, cancellations, or skips. This is the complete Linux `ubuntu-24.04` suite, including both reviewer and signal-receipt tests. It resolves the earlier Windows-only `O_NOFOLLOW` limitation for this exact commit; the Windows 54/55 result remains a platform-specific observation, not a Linux failure.
+- The same job completed `npm ci --ignore-scripts` and `npm audit signatures`; one locked package registry signature was verified.
+- Full-history Gitleaks push run `45063068460` and PR run `45063073952`: both completed successfully.
+- The `resolve-signal` and `review` jobs were skipped on the push event by design. These results prove the Linux contract suite and secret scans only; they do **not** prove a hosted `pull_request_target → workflow_run` artifact round trip, privileged review execution, live 9Router inference, or report publication.
+- PR #262 remains Draft/Open/Unmerged and targets `feature/independent-9router-pr-review`. `main` remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`. No merge, deployment, secret, repository setting, ruleset, Actions policy, or Production change was made.

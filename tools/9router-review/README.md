@@ -22,7 +22,7 @@ Never commit these values or paste the API key into issues, pull requests, or ch
 - The privileged workflow does not download or consume artifacts from the unprivileged run. It fetches PR metadata and patches directly from GitHub's API as data.
 - Fork-originated PRs are intentionally skipped. This first version reviews same-repository branches only.
 - The privileged job checks out only the trusted default branch; it never checks out or executes pull-request code.
-- Uses the immutable head SHA attached to the completed signal workflow run (not the mutable PR association metadata), then rechecks the live PR head before sending the patch to 9Router and again before publishing the report. If the PR advanced after the signal run, the stale review is rejected.
+- Uses the immutable PR head SHA snapshot from `workflow_run.pull_requests[0].head.sha`; it does not mistake `workflow_run.head_sha` (which can represent the `pull_request` merge ref) for the PR branch head. It rechecks the live PR head before sending the patch to 9Router and again before publishing the report. If the PR advanced after the signal run, the stale review is rejected.
 - Missing file patches, empty diffs, oversized patches, invalid event provenance, and stale head SHAs stop the review instead of producing a partial or stale report.
 - Patch content and filenames are untrusted prompt data.
 - Posts or updates a single report comment per exact head SHA. It updates only comments authored by `github-actions[bot]`, and scans at most 1000 comments before failing closed.

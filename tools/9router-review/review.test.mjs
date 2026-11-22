@@ -1625,6 +1625,8 @@ test("pull_request_target signal workflow is inert and grants no repository perm
 
   assert.match(signal, /^on:\s*\n\s+pull_request_target:/m);
   assert.match(signal, /types:\s*\[[^\]]*\bedited\b[^\]]*\]/, "base-branch edits must emit a fresh review signal");
+  assert.match(signal, /^\s+if:\s+github\.event\.action != 'edited' \|\| github\.event\.changes\.base != null$/m,
+    "edited events must be limited to base-branch changes to avoid unnecessary model calls");
   assert.match(signal, /^permissions:\s*\{\s*\}\s*$/m);
   assert.match(signal, /^\s+permissions:\s*\{\s*\}\s*$/m);
   assert.doesNotMatch(signal, /^\s+uses:\s+actions\/(?:checkout|download-artifact)@/m);

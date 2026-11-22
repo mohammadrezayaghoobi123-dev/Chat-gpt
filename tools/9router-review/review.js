@@ -190,6 +190,14 @@ export async function runReview({
   const prior = comments.find(comment =>
     comment.user?.login === "github-actions[bot]" && comment.body?.startsWith(marker)
   ) ?? null;
+
+  const currentBeforePublish = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken });
+  if (currentBeforePublish.head?.sha !== expectedHeadSha) {
+    throw new Error("Pull request head changed during comment lookup; refusing to publish a stale report.");
+  }
+  if (currentBeforePublish.base?.sha !== expectedBaseSha) {
+    throw new Error("Pull request base branch changed during comment lookup; refusing to publish a report for a different diff.");
+  }
   const commentUrl = prior
     ? base.origin + repoPath + "/issues/comments/" + prior.id
     : base.origin + repoPath + "/issues/" + pullRequest + "/comments";

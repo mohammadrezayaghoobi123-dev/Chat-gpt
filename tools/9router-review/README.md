@@ -102,11 +102,18 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 
 
 
-## Latest verification — HMAC provenance hardening
-- Verified code/test head: `0684072ce56de622d23928973b0c8b25453a5eee`.
-- Contract tests on this exact head: **41/41 PASS**, run `45041183744`, job `137265779028`; zero failures, cancellations, or skips.
-- Tests verify that unsigned legacy bot markers, signatures for a different PR, and tampered signatures cannot suppress publication; a valid HMAC marker suppresses a duplicate; missing signing key fails before network access; every privileged reviewer step is gated on the dedicated secret.
+### Finding 27: Marker-signing secret was exposed to every job step — scoped to two steps
+- **Finding:** The dedicated HMAC key was defined in the privileged job-level environment, making it available to setup and dependency-installation steps that do not need it. This unnecessarily expanded the secret exposure surface.
+- **TDD RED:** run `45041484659`, contract-tests job `137266692745`: **40 passed, 1 failed**. The workflow contract expected two scoped declarations (configuration validation and final review) but found one job-level declaration.
+- **Remediation:** Removed all credentials and router secrets from the job-level environment. The configuration-validation step receives only the values needed to check readiness and exports a boolean output. Checkout, Node setup, dependency installation, and signature verification receive no marker key or router credentials. Only the final report step receives `GITHUB_TOKEN`, router credentials, and `NINE_ROUTER_REVIEW_MARKER_KEY`. All five privileged steps after configuration validation are gated on the readiness output.
+- **TDD GREEN:** run `45041593586`, contract-tests job `137267029196`: **41/41 PASS**, zero failures, cancellations, or skips.
+- **Residual trust boundary:** The configuration-validation step must read the marker secret to establish readiness, but it does not print or persist the value. The final report step is the only step that needs the key to sign and verify report markers.
+
+
+## Latest verification — scoped HMAC provenance hardening
+- Verified branch head: `b7315b8bb306cf1e0c18cdd12fc3decf77fd70b1`.
+- Contract tests on this exact head: **41/41 PASS**, run `45041593586`, job `137267029196`; zero failures, cancellations, or skips.
 - Dependency installation and npm registry signature verification: PASS.
-- Full-history secret scans on this exact head: PASS, runs `45041183732` and `45041187409`.
+- Full-history secret scans on this exact head: PASS, runs `45041567213` and `45041571265`.
 - The privileged review job was skipped on push by design; live 9Router / `workflow_run` E2E remains UNKNOWN.
 - Main remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`; PR #261 remains Draft/Open/Unmerged.

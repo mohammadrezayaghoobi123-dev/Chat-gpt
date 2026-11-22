@@ -100,6 +100,30 @@ describe("OrchestratorLedger v9 migration JavaScript memory bound", () => {
     });
   });
 
+  it("rejects raw cursor materialization for source-table reads", async () => {
+    const ledger = ledgerFor("v9-migration-raw-cursor-guard");
+    await runInDurableObject(ledger, async instance => {
+      const sql = instance.ctx.storage.sql;
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'SCHEDULED', 1, '{}', 1, 1, ?, ?)",
+        "v9-raw-guard-a", "raw-guard-a", "a".repeat(64), "tenant-a", "project-a",
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'SCHEDULED', 1, '{}', 2, 2, ?, ?)",
+        "v9-raw-guard-b", "raw-guard-b", "b".repeat(64), "tenant-a", "project-a",
+      );
+
+      const guard = rejectUnboundedMigrationMaterialization(sql);
+      const rawCursor = guard.sql.exec(
+        "SELECT task_id FROM orchestrator_tasks ORDER BY task_id",
+      ).raw();
+      expect(() => rawCursor.toArray()).toThrow(
+        "V9 migration must not materialize a full-table row collection",
+      );
+      expect(guard.rejectedMaterializations).toBe(1);
+    });
+  });
+
   it("migrates 10k task and outbox keys without materializing full-table result arrays", async () => {
     const ledger = ledgerFor("v9-migration-js-memory-bound-10k");
     await runInDurableObject(ledger, async instance => {

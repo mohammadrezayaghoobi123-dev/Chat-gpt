@@ -288,6 +288,17 @@ test("workflow-run metadata requires and returns the immutable PR base SHA", () 
     }),
     /invalid.*metadata|base.*SHA/i,
   );
+  assert.throws(
+    () => reviewer.resolveWorkflowRunTarget({
+      ...base,
+      pullRequests: [{
+        number: 44,
+        head: { sha: "a".repeat(40) },
+        base: { sha: "c".repeat(40), repo: { full_name: "attacker/repo" } },
+      }],
+    }),
+    /invalid.*metadata|repository identity/i,
+  );
 });
 
 test("a base-branch change after patch retrieval aborts before the model request", async () => {

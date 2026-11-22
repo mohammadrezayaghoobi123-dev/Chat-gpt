@@ -2,7 +2,18 @@ const MAX_PATCH_CHARS = 45000;
 const REVIEW_MARKER = "<!-- 9router-independent-review:";
 
 function neutralizeGitHubMentions(value) {
-  return value.replace(/(^|[^A-Za-z0-9_])@([A-Za-z0-9-]+(?:\/[A-Za-z0-9_-]+)?)/g, "$1@\u200b$2");
+  return value.replace(/(^|[^A-Za-z0-9_])@([A-Za-z0-9-]+(?:\\/[A-Za-z0-9_-]+)?)/g, "$1@\\u200b$2");
+}
+
+function sanitizeModelReport(value) {
+  return neutralizeGitHubMentions(
+    value
+      .replace(/!\\[([^\\]]*)\\](?:\\([^)]*\\)|\\[[^]]*\\])/g, (_, alt) =>
+        alt ? alt + " [image omitted]" : "[image omitted]")
+      .replace(/\\[([^\\]]+)\\](?:\\([^)]*\\)|\\[[^]]*\\])/g, "$1 [link omitted]")
+      .replace(/<[^>]*>/g, "")
+      .replace(/https?:\\/\\/[^\\s<>()]+/gi, "[external URL omitted]"),
+  );
 }
 
 export function resolveWorkflowRunTarget({
@@ -172,7 +183,7 @@ export async function runReview({
     "**Reviewed head SHA:** " + expectedHeadSha,
     "**Reviewed base SHA:** " + expectedBaseSha,
     "",
-    neutralizeGitHubMentions(report.trim()),
+    sanitizeModelReport(report.trim()),
     "",
     "---",
     "_Automated model-assisted review only; not a human approval or proof of correctness. Findings require independent verification._",

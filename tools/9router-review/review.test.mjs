@@ -166,7 +166,7 @@ test("workflow-run metadata resolves only a trusted same-repository PR signal", 
     headRepository: "owner/repo",
     pullRequests: [{ number: 42, head: { sha: "a".repeat(40) } }],
   });
-  assert.deepEqual(target, { pullRequest: 42, expectedHeadSha: "b".repeat(40) });
+  assert.deepEqual(target, { pullRequest: 42, expectedHeadSha: "a".repeat(40) });
 });
 
 test("workflow-run metadata rejects forked, spoofed, or malformed signals", () => {
@@ -190,6 +190,7 @@ test("workflow-run metadata rejects forked, spoofed, or malformed signals", () =
     { headRepository: "attacker/fork" },
     { pullRequests: [] },
     { pullRequests: [{ number: 0, head: { sha: "a".repeat(40) } }] },
+    { pullRequests: [{ number: 42, head: { sha: "invalid" } }] },
   ]) {
     assert.throws(() => reviewer.resolveWorkflowRunTarget({ ...base, ...override }));
   }

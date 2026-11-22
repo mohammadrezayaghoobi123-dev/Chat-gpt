@@ -108,6 +108,7 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ github.event.workflow_run.id }}
           path: ${{ runner.temp }}/9router-signal
+          digest-mismatch: error
       - name: Validate receipt and independently reconcile GitHub state
         id: resolve
         env:

@@ -448,7 +448,7 @@ test("a report for a different base SHA is never overwritten for the same head S
     if (target.includes("/issues/268/comments?")) {
       return new Response(JSON.stringify([{
         id: 701,
-        body: "<!-- 9router-independent-review:" + headSha + ":" + previousBaseSha + " -->\\nold base report",
+        body: "<!-- 9router-independent-review:" + headSha + " -->\\nold head-only report",
         user: { login: "github-actions[bot]" },
       }]), { status: 200 });
     }

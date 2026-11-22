@@ -93,7 +93,7 @@ function renderTableCell(cell) {
     .replace(/\|/g, "\\|");
 }
 
-function renderBlockTokens(tokens) {
+function renderBlockTokens(tokens, allowHtmlReparse = true) {
   const blocks = [];
   for (const token of tokens ?? []) {
     switch (token.type) {
@@ -141,8 +141,16 @@ function renderBlockTokens(tokens) {
         blocks.push("| " + header.join(" | ") + " |\n| " + alignments.join(" | ") + " |" + (rows.length ? "\n" + rows.join("\n") : ""));
         break;
       }
-      case "html":
+      case "html": {
+        const rawHtmlText = String(token.text ?? token.raw ?? "");
+        const textWithoutTags = rawHtmlText.replace(/<!--[\\s\\S]*?-->/g, "").replace(/<[^>]*>/g, " ");
+        if (allowHtmlReparse && textWithoutTags.trim()) {
+          blocks.push(renderBlockTokens(marked.lexer(textWithoutTags, { gfm: true }), false));
+        } else if (textWithoutTags.trim()) {
+          blocks.push(escapeMarkdownText(textWithoutTags.trim()));
+        }
         break;
+      }
       default:
         throw new Error("Unsupported Markdown block token; refusing to publish an unverified report.");
     }

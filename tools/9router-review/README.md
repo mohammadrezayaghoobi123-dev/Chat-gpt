@@ -155,3 +155,16 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 - **Secret scans:** Full-history Gitleaks push scan run `45044512703`, job `137276064779`: PASS; PR scan run `45044517686`, job `137276079624`: PASS.
 - **Residual limitation:** The workflow contract verifies the gate expression, but a real GitHub `edited` payload with `changes.base` has not been observed through the activated privileged chain. Live end-to-end behavior remains UNKNOWN until the trusted workflow exists on `main` and event policy allows it.
 - **Safety boundary:** No `main`, repository policy, secrets, branch rules, or Production changes.
+
+
+### Finding 31: Duplicate authenticated reports triggered unnecessary model inference — remediated
+
+- **Finding:** The reviewer previously generated a 9Router report before checking whether an exact HMAC-authenticated report already existed for the same repository, PR, head SHA, and base SHA. A rerun or repeated signal for an unchanged diff could therefore incur another model request even though publication would later be suppressed.
+- **TDD RED:** Commit `8541045f696b7a93b5bc16572d6e4e5eb7531a79` added an assertion that a matching signed report must short-circuit before model inference. Run `45045637365`, contract-tests job `137279518084`: **42 passed / 1 failed**. The failure was the expected `routerCalls: 1` versus `0`, proving the unnecessary inference path.
+- **Remediation:** The reviewer now performs the existing bounded, read-only HMAC reconciliation after fetching and validating the complete patch and rechecking the live head/base SHAs, but before calling 9Router. If exactly one valid report exists, it revalidates both SHAs once more and returns `already-published` without model inference, comment mutation, or a new POST. If no report exists, it proceeds to inference and retains the final head/base revalidation immediately before append-only publication.
+- **Concurrency assumption:** The reviewer workflow serializes jobs by PR number using its bounded GitHub Actions concurrency group. This prevents two instances of this reviewer workflow from racing through the pre-model reconciliation and publication path. It does not protect against a separate trusted writer that has access to the HMAC key.
+- **TDD GREEN:** Exact final head `e73a890f71daa85e7ba140adc0071803d027d5aa`. Run `45045889016`, contract-tests job: **43/43 PASS**, zero failures, cancellations, or skips.
+- **Secret scans:** Full-history Gitleaks push scan run `45045889018`: PASS; pull-request scan run `45045896452`: PASS.
+- **Trade-off:** The bounded comment-history read now occurs before inference. Oversized or invalid patch inputs still fail before that read; oversized model responses still fail before publication. The change does not add retries, edit/delete existing comments, or claim exactly-once delivery.
+- **Residual limitations:** A comment that is not yet visible during reconciliation can still lead to a duplicate after an ambiguous POST outcome. The final SHA read and comment POST are not transactional. Live 9Router execution, hosted `workflow_run` activation, and real ambiguous-POST recovery remain `UNKNOWN`.
+- **Safety boundary:** No changes to `main`, repository Actions policies, secrets, branch rules, or Production resources.

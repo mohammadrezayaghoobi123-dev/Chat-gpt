@@ -33,7 +33,14 @@ export function readSignalReceiptFile(receiptPath) {
     if (!fileStat.isFile() || fileStat.size < 1 || fileStat.size > MAX_RECEIPT_BYTES) {
       throw new Error('Signal receipt file is not a regular file or exceeds the 16 KiB size limit.');
     }
-    return parseSignalReceipt(readFileSync(descriptor, 'utf8'));
+    const bytes = readFileSync(descriptor);
+    let input;
+    try {
+      input = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      throw new Error('Signal receipt is not valid UTF-8.');
+    }
+    return parseSignalReceipt(input);
   } finally {
     closeSync(descriptor);
   }

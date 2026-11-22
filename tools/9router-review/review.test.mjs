@@ -1539,29 +1539,29 @@ test("pull_request_target signal workflow is inert and grants no repository perm
 
 test("privileged workflow validates the exact source run before report-only review", () => {
   const workflow = readFileSync(new URL("../../.github/workflows/9router-pr-review.yml", import.meta.url), "utf8");
-  const resolverJob = workflow.split("  resolve-signal:\\n")[1]?.split("  review:\\n")[0];
-  const reviewJob = workflow.split("  review:\\n")[1];
+  const resolverJob = workflow.split("  resolve-signal:\n")[1]?.split("  review:\n")[0];
+  const reviewJob = workflow.split("  review:\n")[1];
   assert.ok(resolverJob, "the read-only signal resolver job must exist");
   assert.ok(reviewJob, "the privileged reviewer job must exist");
-  const reviewConfiguration = reviewJob.split("    steps:\\n")[0];
-  const reviewSteps = reviewJob.split("    steps:\\n")[1];
+  const reviewConfiguration = reviewJob.split("    steps:\n")[0];
+  const reviewSteps = reviewJob.split("    steps:\n")[1];
 
-  assert.match(workflow, /^  workflow_run:\\s*\\n/m);
-  assert.match(resolverJob, /github\\.event_name == 'workflow_run'/);
-  assert.match(resolverJob, /github\\.event\\.workflow_run\\.event == 'pull_request_target'/);
-  assert.match(resolverJob, /github\\.event\\.workflow_run\\.conclusion == 'success'/);
-  assert.match(resolverJob, /github\\.event\\.workflow_run\\.path == '\\.github\\/workflows\\/9router-pr-review-signal\\.yml'/);
-  assert.match(resolverJob, /actions\\/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333/);
+  assert.match(workflow, /^  workflow_run:\s*\n/m);
+  assert.match(resolverJob, /github\.event_name == 'workflow_run'/);
+  assert.match(resolverJob, /github\.event\.workflow_run\.event == 'pull_request_target'/);
+  assert.match(resolverJob, /github\.event\.workflow_run\.conclusion == 'success'/);
+  assert.match(resolverJob, /github\.event\.workflow_run\.path == '\.github\/workflows\/9router-pr-review-signal\.yml'/);
+  assert.match(resolverJob, /actions\/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333/);
   assert.match(resolverJob, /actions: read/);
   assert.match(resolverJob, /pull-requests: read/);
   assert.match(resolverJob, /persist-credentials: false/);
   assert.doesNotMatch(resolverJob, /NINE_ROUTER_API_KEY|NINE_ROUTER_REVIEW_MARKER_KEY|NINE_ROUTER_API_URL/);
-  assert.match(reviewConfiguration, /group: 9router-pr-review-\\$\\{\\{ needs\\.resolve-signal\\.outputs\\.pull_request \\}\\}/);
+  assert.match(reviewConfiguration, /group: 9router-pr-review-\$\{\{ needs\.resolve-signal\.outputs\.pull_request \}\}/);
   assert.match(reviewConfiguration, /pull-requests: write/);
-  assert.match(reviewSteps, /ref: \\$\\{\\{ github\\.event\\.repository\\.default_branch \\}\\}/);
+  assert.match(reviewSteps, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
   assert.match(reviewSteps, /persist-credentials: false/);
-  assert.doesNotMatch(reviewSteps, /actions\\/download-artifact@/);
-  assert.doesNotMatch(workflow, /workflow_run\\.pull_requests/);
-  assert.equal((reviewSteps.match(/uses: actions\\/checkout@/g) || []).length, 1,
+  assert.doesNotMatch(reviewSteps, /actions\/download-artifact@/);
+  assert.doesNotMatch(workflow, /workflow_run\.pull_requests/);
+  assert.equal((reviewSteps.match(/uses: actions\/checkout@/g) || []).length, 1,
     "the privileged job must have exactly one checkout, for trusted default-branch code");
-});;
+});

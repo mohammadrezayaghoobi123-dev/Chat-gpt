@@ -168,3 +168,14 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 - **Trade-off:** The bounded comment-history read now occurs before inference. Oversized or invalid patch inputs still fail before that read; oversized model responses still fail before publication. The change does not add retries, edit/delete existing comments, or claim exactly-once delivery.
 - **Residual limitations:** A comment that is not yet visible during reconciliation can still lead to a duplicate after an ambiguous POST outcome. The final SHA read and comment POST are not transactional. Live 9Router execution, hosted `workflow_run` activation, and real ambiguous-POST recovery remain `UNKNOWN`.
 - **Safety boundary:** No changes to `main`, repository Actions policies, secrets, branch rules, or Production resources.
+
+
+### Finding 32: Literal angle brackets in report prose were not entity-encoded — defense-in-depth remediation
+
+- **Finding classification:** Defensive hardening / parser-differential risk. The prior renderer escaped Markdown punctuation and removed recognized HTML AST nodes, but ordinary text tokens could still preserve literal `<` and `>` characters. This was not demonstrated to be an exploitable XSS path under the pinned Marked parser; it left avoidable raw delimiters at the boundary between Marked and GitHub's Markdown renderer.
+- **TDD RED:** Test-only commit `3494222f3e359c6c94b8a4eb44b958ca272251ba` added a real `runReview` publication-path assertion for the prose `Comparison: a < b and c > d`. Run `45046831125`, contract-tests job `137283181324`: **42 passed / 1 failed**. The decisive failure was the expected missing `&lt;` / `&gt;` encoding assertion; setup and dependency-signature verification succeeded.
+- **Remediation:** `escapeMarkdownText` now converts literal angle brackets in text-bearing tokens to `&lt;` and `&gt;` before Markdown punctuation escaping. This applies to ordinary prose, HTML-stripped text, and image alt text. Fenced and inline code remain code-formatted and are not rewritten by this text-token path.
+- **TDD GREEN:** Final implementation commit `911f686f7da35896e9b2ae4d27b856cbf90fd7f6`. Run `45046891175`, contract-tests job `137283369971`: **43/43 PASS**, zero failures, cancellations, or skips.
+- **Secret scans:** Full-history Gitleaks push scan run `45046891179`: PASS; pull-request scan run `45046896130`: PASS.
+- **Security conclusion:** The change reduces raw HTML delimiter exposure and parser-differential ambiguity. It is defense in depth, not evidence that the previous implementation allowed executable HTML or XSS.
+- **Safety boundary:** No changes to `main`, repository Actions policies, secrets, branch rules, or Production resources. Live 9Router and privileged `workflow_run` E2E remain UNKNOWN.

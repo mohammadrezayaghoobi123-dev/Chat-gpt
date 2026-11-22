@@ -1030,10 +1030,10 @@ test("cumulative comment-history response budget stops pagination before publica
   const baseSha = "f".repeat(40);
   let commentPageCalls = 0;
   let commentPosts = 0;
-  const commentPage = Array.from({ length: 50 }, (_, index) => ({
+  const commentPage = Array.from({ length: 100 }, (_, index) => ({
     id: index + 1,
     user: { login: "ordinary-contributor" },
-    body: "C".repeat(17_500),
+    body: "C".repeat(9_500),
   }));
   const fakeFetch = async (url, options = {}) => {
     const target = String(url);

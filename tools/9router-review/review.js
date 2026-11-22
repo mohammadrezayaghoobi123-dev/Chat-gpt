@@ -1,6 +1,10 @@
 const MAX_PATCH_CHARS = 45000;
 const REVIEW_MARKER = "<!-- 9router-independent-review:";
 
+function neutralizeGitHubMentions(value) {
+  return value.replace(/(^|[\\s([{])@([A-Za-z0-9-]+(?:\\/[A-Za-z0-9_-]+)?)/g, "$1@\\u200b$2");
+}
+
 export function resolveWorkflowRunTarget({
   eventName, workflowPath, triggerEvent, workflowConclusion, repository, headRepository, runHeadSha, pullRequests,
 }) {
@@ -169,7 +173,7 @@ export async function runReview({
     "**Reviewed head SHA:** " + expectedHeadSha,
     "**Reviewed base SHA:** " + expectedBaseSha,
     "",
-    report.trim(),
+    neutralizeGitHubMentions(report.trim()),
     "",
     "---",
     "_Automated model-assisted review only; not a human approval or proof of correctness. Findings require independent verification._",

@@ -37,7 +37,7 @@ jobs:
       queue: max
     if: >-
       github.event_name == 'workflow_run' &&
-      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.event == 'pull_request_target' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.path == '.github/workflows/9router-pr-review-signal.yml' &&
       github.event.workflow_run.head_repository.full_name == github.repository

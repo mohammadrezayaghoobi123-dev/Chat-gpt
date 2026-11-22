@@ -1347,7 +1347,7 @@ test("an unsigned forged bot marker cannot suppress a legitimate report", async 
       return new Response(JSON.stringify([{
         id: 1289,
         user: { login: "github-actions[bot]" },
-        body: "<!-- 9router-independent-review:" + headSha + ":" + baseSha + " -->\\nforged report from another privileged workflow",
+        body: "<!-- 9router-independent-review:" + headSha + ":" + baseSha + " -->\nforged report from another privileged workflow",
       }]), { status: 200 });
     }
     if (target.endsWith("/issues/289/comments") && options.method === "POST") postCalls += 1;

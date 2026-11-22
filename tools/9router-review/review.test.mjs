@@ -641,7 +641,12 @@ test("model report cannot publish active HTML, remote images, or clickable links
     '![tracking pixel](https://attacker.example/markdown-pixel)',
     '[run this](javascript:alert(1))',
     '[external](https://attacker.example/redirect)',
+    '![reference tracker][tracker]',
+    '[reference link][external]',
+    '[tracker]: https://attacker.example/reference-pixel',
+    '[external]: javascript:alert(1)',
     'https://attacker.example/bare-tracker',
+    'www.attacker.example/bare-www-tracker',
     '<script>alert("x")</script>',
   ].join("\\n");
   let publishedBody = "";
@@ -679,5 +684,9 @@ test("model report cannot publish active HTML, remote images, or clickable links
   assert.ok(!publishedBody.includes("](javascript:"), "javascript links must not remain clickable");
   assert.ok(!publishedBody.includes("](https://"), "external Markdown links must not remain clickable");
   assert.ok(!publishedBody.includes("https://attacker.example/bare-tracker"), "bare external URLs must not auto-link");
+  assert.ok(!publishedBody.includes("![reference tracker]"), "reference-style Markdown images must be removed");
+  assert.ok(!publishedBody.includes("[reference link][external]"), "reference-style Markdown links must be removed");
+  assert.ok(!publishedBody.includes("www.attacker.example"), "www-prefixed URLs must not auto-link");
+  assert.ok(!publishedBody.includes("javascript:alert"), "reference destinations must not retain executable schemes");
   assert.ok(publishedBody.includes("[image omitted]"), "removed images should leave an explicit placeholder");
 });

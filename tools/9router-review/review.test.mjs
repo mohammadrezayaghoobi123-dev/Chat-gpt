@@ -236,3 +236,19 @@ test("draft pull requests are skipped and closed pull requests are rejected", as
   );
   assert.equal(closedCalls, 1, "closed PRs must stop before file retrieval and model use");
 });
+
+
+test("workflow-run target uses the immutable PR head snapshot, not the pull_request merge SHA", () => {
+  const target = reviewer.resolveWorkflowRunTarget({
+    eventName: "workflow_run",
+    workflowPath: ".github/workflows/9router-pr-review-signal.yml",
+    triggerEvent: "pull_request",
+    workflowConclusion: "success",
+    runHeadSha: "b".repeat(40),
+    repository: "owner/repo",
+    headRepository: "owner/repo",
+    pullRequests: [{ number: 43, head: { sha: "a".repeat(40) } }],
+  });
+
+  assert.deepEqual(target, { pullRequest: 43, expectedHeadSha: "a".repeat(40) });
+});

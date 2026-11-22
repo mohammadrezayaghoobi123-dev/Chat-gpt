@@ -1,3 +1,6 @@
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { basename, dirname, resolve } from 'node:path';
+
 const MAX_RECEIPT_BYTES = 16 * 1024;
 const MAX_API_RESPONSE_BYTES = 1024 * 1024;
 const SIGNAL_WORKFLOW_PATH = '.github/workflows/9router-pr-review-signal.yml';
@@ -6,6 +9,35 @@ const RECEIPT_KEYS = [
   'schemaVersion', 'repository', 'repositoryId', 'runId', 'runAttempt', 'eventName', 'action',
   'pullRequestNumber', 'headSha', 'baseSha', 'workflowSha', 'headRepository', 'baseRepository', 'baseRef',
 ].sort();
+
+export function readSignalReceiptFile(receiptPath) {
+  if (typeof receiptPath !== 'string' || receiptPath.length === 0 || basename(receiptPath) !== 'signal.json') {
+    throw new Error('Signal artifact must contain the expected signal.json file.');
+  }
+  const absolutePath = resolve(receiptPath);
+  const directoryPath = dirname(absolutePath);
+  const directoryStat = lstatSync(directoryPath);
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || realpathSync(directoryPath) !== directoryPath) {
+    throw new Error('Signal artifact directory is not a canonical, regular directory.');
+  }
+  const entries = readdirSync(directoryPath);
+  if (entries.length !== 1 || entries[0] !== 'signal.json') {
+    throw new Error('Signal artifact directory must contain exactly one signal.json file.');
+  }
+  if (typeof fsConstants.O_NOFOLLOW !== 'number') {
+    throw new Error('Platform does not support no-follow receipt file access.');
+  }
+  const descriptor = openSync(absolutePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const fileStat = fstatSync(descriptor);
+    if (!fileStat.isFile() || fileStat.size < 1 || fileStat.size > MAX_RECEIPT_BYTES) {
+      throw new Error('Signal receipt file is not a regular file or exceeds the 16 KiB size limit.');
+    }
+    return parseSignalReceipt(readFileSync(descriptor, 'utf8'));
+  } finally {
+    closeSync(descriptor);
+  }
+}
 
 function isPositiveSafeInteger(value) {
   return Number.isSafeInteger(value) && value > 0;

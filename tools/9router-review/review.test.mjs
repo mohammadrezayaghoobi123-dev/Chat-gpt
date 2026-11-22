@@ -272,7 +272,7 @@ test("workflow-run metadata requires and returns the immutable PR base SHA", () 
     pullRequests: [{
       number: 44,
       head: { sha: "a".repeat(40) },
-      base: { sha: "c".repeat(40) },
+      base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } },
     }],
   };
 
@@ -327,7 +327,6 @@ test("a base-branch change after patch retrieval aborts before the model request
       repository: "owner/repo",
       pullRequest: 266,
       expectedHeadSha: headSha,
-      expectedBaseSha: "1".repeat(40),
       expectedBaseSha,
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
@@ -338,4 +337,58 @@ test("a base-branch change after patch retrieval aborts before the model request
     /base.*changed|different base/i,
   );
   assert.equal(routerCalls, 0, "a patch based on a changed target branch must never be sent to 9Router");
+});
+
+
+test("a base-branch change during model review aborts before publishing a comment", async () => {
+  const headSha = "d".repeat(40);
+  const expectedBaseSha = "e".repeat(40);
+  let prReads = 0;
+  let postCalls = 0;
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/267")) {
+      prReads += 1;
+      const baseSha = prReads < 3 ? expectedBaseSha : "f".repeat(40);
+      return new Response(JSON.stringify({
+        state: "open",
+        draft: false,
+        head: { sha: headSha },
+        base: { sha: baseSha },
+      }), { status: 200 });
+    }
+    if (target.includes("/pulls/267/files?")) {
+      return new Response(JSON.stringify([{
+        filename: "src/a.js",
+        patch: "@@ -1 +1 @@\\n-old\\n+new",
+      }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "A sufficiently long placeholder review report." } }],
+      }), { status: 200 });
+    }
+    if (target.endsWith("/issues/267/comments") && options.method === "POST") postCalls += 1;
+    if (target.includes("/issues/267/comments?")) {
+      return new Response(JSON.stringify([]), { status: 200 });
+    }
+    return new Response(JSON.stringify({ id: 1 }), { status: 201 });
+  };
+
+  await assert.rejects(
+    runReview({
+      repository: "owner/repo",
+      pullRequest: 267,
+      expectedHeadSha: headSha,
+      expectedBaseSha,
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }),
+    /base.*changed|different diff/i,
+  );
+  assert.equal(prReads, 3, "the base SHA must be revalidated after model generation");
+  assert.equal(postCalls, 0, "a report for a changed PR diff must never be published");
 });

@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseSignalReceipt, resolveWorkflowRunTarget, verifySignalTargetWithGitHub } from "./signal-receipt.js";
 
 const headSha = "a".repeat(40);
@@ -179,6 +181,47 @@ test("privileged workflow resolves identity before per-PR concurrency and never 
   const resolverJob = workflow.split("  resolve-signal:")[1].split("  review:")[0];
   assert.doesNotMatch(resolverJob, /NINE_ROUTER_API_KEY|NINE_ROUTER_REVIEW_MARKER_KEY|NINE_ROUTER_API_URL/);
   assert.match(resolverJob, /GITHUB_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
+});
+
+
+test("artifact receipt reader accepts exactly one regular signal.json and rejects filesystem ambiguity", async () => {
+  const { readSignalReceiptFile } = await import("./signal-receipt.js");
+  assert.equal(typeof readSignalReceiptFile, "function");
+  const root = mkdtempSync(join(tmpdir(), "9router-artifact-"));
+  try {
+    const validDir = join(root, "valid");
+    const extraDir = join(root, "extra");
+    const linkDir = join(root, "link");
+    const oversizedDir = join(root, "oversized");
+    const directoryDir = join(root, "directory");
+    for (const dir of [validDir, extraDir, linkDir, oversizedDir, directoryDir]) {
+      (await import("node:fs")).mkdirSync(dir);
+    }
+    const validPath = join(validDir, "signal.json");
+    writeFileSync(validPath, JSON.stringify(receipt), { flag: "wx" });
+    assert.deepEqual(readSignalReceiptFile(validPath), receipt);
+
+    const extraPath = join(extraDir, "signal.json");
+    writeFileSync(extraPath, JSON.stringify(receipt), { flag: "wx" });
+    writeFileSync(join(extraDir, "unexpected.txt"), "unexpected", { flag: "wx" });
+    assert.throws(() => readSignalReceiptFile(extraPath), /exactly one|unexpected/i);
+
+    const linkPath = join(linkDir, "signal.json");
+    symlinkSync(validPath, linkPath);
+    assert.throws(() => readSignalReceiptFile(linkPath));
+
+    const oversizedPath = join(oversizedDir, "signal.json");
+    writeFileSync(oversizedPath, "x".repeat(16 * 1024 + 1), { flag: "wx" });
+    assert.throws(() => readSignalReceiptFile(oversizedPath), /size|receipt/i);
+
+    const directoryPath = join(directoryDir, "signal.json");
+    (await import("node:fs")).mkdirSync(directoryPath);
+    assert.throws(() => readSignalReceiptFile(directoryPath));
+
+    assert.throws(() => readSignalReceiptFile(join(validDir, "missing.json")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("workflow-run SHA binds to the trusted workflow revision, not a non-default PR base SHA", async () => {

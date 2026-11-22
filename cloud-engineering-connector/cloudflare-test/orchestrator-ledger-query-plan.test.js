@@ -22,7 +22,7 @@ describe("OrchestratorLedger tenant/project query plans", () => {
     expect(() => expectPlanUsesIndexAndPrefix(
       adversarialPlan,
       "expected_scope_index",
-      /tenant_id=\\?.*project_id=\\?.*<expr>=\\?/,
+      /tenant_id=\?.*project_id=\?.*<expr>=\?/,
     )).toThrow();
   });
   it("uses a tenant/project/sequence index for bounded audit-head lookup", async () => {

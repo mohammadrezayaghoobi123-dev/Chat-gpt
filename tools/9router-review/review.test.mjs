@@ -866,7 +866,7 @@ test("review workflow keeps per-PR serialization and bounded queue semantics exp
   assert.equal(workflow.split("PREVIOUS_REVIEW_MARKER_KEY_EXPIRES_AT:").length - 1, 2,
     "the previous key expiry variable must be scoped only to configuration validation and the final reviewer step");
   const runner = readFileSync(new URL("./run-review.mjs", import.meta.url), "utf8");
-  assert.match(runner, /previousReviewMarkerKeyValidUntil: process\\.env\\.PREVIOUS_REVIEW_MARKER_KEY_EXPIRES_AT/);
+  assert.ok(runner.includes("previousReviewMarkerKeyValidUntil: process.env.PREVIOUS_REVIEW_MARKER_KEY_EXPIRES_AT"));
   assert.equal(workflow.split("steps.reviewer-config.outputs.ready == 'true'").length - 1, 5, "every privileged reviewer step must be gated on validated configuration");
   assert.ok(!workflow.includes("cancel-in-progress: true"), "a running review must not be canceled by a later signal");
 });

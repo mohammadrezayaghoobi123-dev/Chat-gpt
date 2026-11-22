@@ -300,9 +300,9 @@ function migrateV9KeyTable(sql, tableName, idColumn, stagingTableName) {
   const stagingPrefix = "~migration-v9-stage-" + crypto.randomUUID() + ":";
 
   // Move every old key out of the global UNIQUE namespace in one SQL statement.
-  // The prefix is checked against all existing keys and rowid makes each staging
-  // key distinct. The staging table's UNIQUE(final_key) rejects collisions before
-  // any source row is changed.
+  // The reserved prefix is disjoint from validated legacy identifiers, and rowid
+  // makes each staging key distinct. The staging table's UNIQUE(final_key) rejects
+  // collisions before any source row is changed.
   sql.exec(`UPDATE ${tableName} SET idempotency_key = ? || rowid`, stagingPrefix);
   sql.exec(`
     UPDATE ${tableName}

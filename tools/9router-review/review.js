@@ -20,10 +20,16 @@ export function resolveWorkflowRunTarget({
     throw new Error("Workflow run must identify exactly one pull request.");
   }
   const target = pullRequests[0];
-  if (!Number.isSafeInteger(target.number) || target.number < 1 || !/^[a-f0-9]{40}$/i.test(runHeadSha ?? "")) {
+  const pullRequestHeadSha = target.head?.sha;
+  if (
+    !Number.isSafeInteger(target.number) ||
+    target.number < 1 ||
+    !/^[a-f0-9]{40}$/i.test(runHeadSha ?? "") ||
+    !/^[a-f0-9]{40}$/i.test(pullRequestHeadSha ?? "")
+  ) {
     throw new Error("Workflow run contains invalid pull-request metadata or commit SHA.");
   }
-  return { pullRequest: target.number, expectedHeadSha: runHeadSha };
+  return { pullRequest: target.number, expectedHeadSha: pullRequestHeadSha };
 }
 
 export function buildReviewMessages({ repository, pullRequest, headSha, patch }) {

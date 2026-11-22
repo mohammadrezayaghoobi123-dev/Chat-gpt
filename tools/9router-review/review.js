@@ -642,10 +642,16 @@ function generateBoundedGitDiff(beforeBytes, afterBytes, { beforeEntry, afterEnt
     if (/^Binary files .* differ$/m.test(output)) {
       throw new Error(label + " produced a binary Git diff; refusing an incomplete review.");
     }
+    const modeChanged = Boolean(beforeEntry && afterEntry && beforeEntry.mode !== afterEntry.mode);
+    const modeChangeNote = modeChanged
+      ? "File mode changed from " + beforeEntry.mode + " to " + afterEntry.mode + "."
+      : "";
     const hunkStart = output.indexOf("@@ ");
-    if (hunkStart >= 0) return output.slice(hunkStart).trimEnd();
-    if (beforeEntry && afterEntry && beforeEntry.sha === afterEntry.sha && beforeEntry.mode !== afterEntry.mode) {
-      return "File mode changed from " + beforeEntry.mode + " to " + afterEntry.mode + "; file content is unchanged.";
+    if (hunkStart >= 0) {
+      return (modeChangeNote ? modeChangeNote + "\n" : "") + output.slice(hunkStart).trimEnd();
+    }
+    if (modeChanged) {
+      return modeChangeNote + " File content is unchanged.";
     }
     if (!beforeEntry && afterEntry && afterBytes.length === 0) return "Added empty file; no content lines exist.";
     if (beforeEntry && !afterEntry && beforeBytes.length === 0) return "Deleted empty file; no content lines exist.";

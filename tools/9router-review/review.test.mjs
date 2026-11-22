@@ -161,11 +161,12 @@ test("workflow-run metadata resolves only a trusted same-repository PR signal", 
     workflowPath: ".github/workflows/9router-pr-review-signal.yml",
     triggerEvent: "pull_request",
     workflowConclusion: "success",
+    runHeadSha: "b".repeat(40),
     repository: "owner/repo",
     headRepository: "owner/repo",
     pullRequests: [{ number: 42, head: { sha: "a".repeat(40) } }],
   });
-  assert.deepEqual(target, { pullRequest: 42, expectedHeadSha: "a".repeat(40) });
+  assert.deepEqual(target, { pullRequest: 42, expectedHeadSha: "b".repeat(40) });
 });
 
 test("workflow-run metadata rejects forked, spoofed, or malformed signals", () => {
@@ -175,6 +176,7 @@ test("workflow-run metadata rejects forked, spoofed, or malformed signals", () =
     workflowPath: ".github/workflows/9router-pr-review-signal.yml",
     triggerEvent: "pull_request",
     workflowConclusion: "success",
+    runHeadSha: "a".repeat(40),
     repository: "owner/repo",
     headRepository: "owner/repo",
     pullRequests: [{ number: 42, head: { sha: "a".repeat(40) } }],
@@ -184,6 +186,7 @@ test("workflow-run metadata rejects forked, spoofed, or malformed signals", () =
     { workflowPath: ".github/workflows/untrusted.yml" },
     { triggerEvent: "push" },
     { workflowConclusion: "failure" },
+    { runHeadSha: "invalid" },
     { headRepository: "attacker/fork" },
     { pullRequests: [] },
     { pullRequests: [{ number: 42, head: { sha: "bad" } }] },

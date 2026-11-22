@@ -292,11 +292,11 @@ async function requestJson(fetchImpl, url, { method = "GET", token, body, accept
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal,
     });
-  } catch {
+  } catch (error) {
     if (Date.now() >= deadlineAt) {
       throw new Error("Review execution deadline exceeded; the request was aborted.");
     }
-    throw new Error("Remote API request failed or its 120-second request timeout elapsed.");
+    throw error;
   }
   if (!response.ok) {
     try {
@@ -309,11 +309,11 @@ async function requestJson(fetchImpl, url, { method = "GET", token, body, accept
   if (response.status === 204) return null;
   try {
     return await readJsonResponseLimited(response, MAX_GITHUB_API_RESPONSE_BYTES, "GitHub API");
-  } catch {
+  } catch (error) {
     if (Date.now() >= deadlineAt) {
       throw new Error("Review execution deadline exceeded while reading the API response.");
     }
-    throw new Error("GitHub API response could not be read safely.");
+    throw error;
   }
 }
 

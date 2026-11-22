@@ -294,14 +294,10 @@ function migrateV9KeyTable(sql, tableName, idColumn, stagingTableName) {
     );
   }
 
-  let stagingPrefix;
-  do {
-    stagingPrefix = "migration-v9-stage-" + crypto.randomUUID() + ":";
-  } while (!sql.exec(
-    `SELECT 1 FROM ${tableName} WHERE substr(idempotency_key, 1, ?) = ? LIMIT 1`,
-    stagingPrefix.length,
-    stagingPrefix,
-  ).next().done);
+  // A leading "~" is outside IDENTIFIER's accepted alphabet. Every source
+  // key has already passed validIdentifier above, so this namespace is
+  // provably disjoint from legacy keys and needs no O(N) collision scan.
+  const stagingPrefix = "~migration-v9-stage-" + crypto.randomUUID() + ":";
 
   // Move every old key out of the global UNIQUE namespace in one SQL statement.
   // The prefix is checked against all existing keys and rowid makes each staging

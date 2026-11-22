@@ -16,6 +16,7 @@ function sanitizeModelReport(value) {
       .replace(/^\s*\[[^\]]+\]:\s*.*$/gm, "[link target omitted]")
       .replace(/\b(?:javascript|data|vbscript|file|mailto|ftp|ssh):[^\s<>()]+/gi, "[unsafe URL omitted]")
       .replace(/<[^>]*>/g, "")
+      .replace(/(^|[\s(])\/\/[A-Za-z0-9.-]+(?::\d+)?(?:\/[^\s<>()]*)?/gm, "$1[external URL omitted]")
       .replace(/\bwww\.[^\s<>()]+/gi, "[external URL omitted]")
       .replace(/https?:\/\/[^\s<>()]+/gi, "[external URL omitted]"),
   );

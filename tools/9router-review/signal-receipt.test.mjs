@@ -243,6 +243,29 @@ test("privileged workflow resolves identity before per-PR concurrency and never 
 });
 
 
+test("artifact receipt reader rejects invalid UTF-8 instead of replacement decoding", async () => {
+  const { readSignalReceiptFile } = await import("./signal-receipt.js");
+  const root = mkdtempSync(join(tmpdir(), "9router-invalid-utf8-"));
+  try {
+    const filePath = join(root, "signal.json");
+    const valid = Buffer.from(JSON.stringify(receipt), "utf8");
+    const needle = Buffer.from('"baseRef":"main"', "utf8");
+    const offset = valid.indexOf(needle);
+    assert.notEqual(offset, -1);
+    const malformed = Buffer.concat([
+      valid.subarray(0, offset),
+      Buffer.from('"baseRef":"ma', "utf8"),
+      Buffer.from([0xff]),
+      Buffer.from('in"', "utf8"),
+      valid.subarray(offset + needle.length),
+    ]);
+    writeFileSync(filePath, malformed, { flag: "wx" });
+    assert.throws(() => readSignalReceiptFile(filePath), /UTF-8/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("artifact receipt reader accepts exactly one regular signal.json and rejects filesystem ambiguity", async () => {
   const { readSignalReceiptFile } = await import("./signal-receipt.js");
   assert.equal(typeof readSignalReceiptFile, "function");

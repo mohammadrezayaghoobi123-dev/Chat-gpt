@@ -272,3 +272,5 @@ No merge, deployment, repository setting, ruleset, Actions policy, or secret was
 - **TDD GREEN:** run `45054598879`, contract job `137306920053`: **49/49 PASS**, zero failures, cancellations, or skips. Dependency installation and `npm audit signatures` also succeeded.
 - **Residual UNKNOWN:** No hosted `pull_request_target → workflow_run` execution or artifact round trip has been run because both workflows remain absent from `main`. The exact `github.sha` / `workflow_run.head_sha` relationship remains to be confirmed by that future hosted run.
 - **Scope:** Only `feature/9router-abc-provenance` was changed. No main, secrets, Actions policy, rulesets, merge, deployment, or Production resources were modified.
+
+- **Additional regression:** the non-default-base scenario now exercises the complete resolver plus live-PR API reconciliation with `baseRef: release/1.x`, while the workflow revision SHA remains distinct. Fresh contract run `45054732371`, job `137307325057`: **49/49 PASS**, zero failures/cancellations/skips.

@@ -1,3 +1,5 @@
+import { marked } from "marked";
+
 const MAX_PATCH_CHARS = 45000;
 const MAX_REPORT_CHARS = 30000;
 const MAX_ROUTER_RESPONSE_BYTES = 512 * 1024;
@@ -9,19 +11,144 @@ function neutralizeGitHubMentions(value) {
   return value.replace(/(^|[^A-Za-z0-9_])@([A-Za-z0-9-]+(?:\/[A-Za-z0-9_-]+)?)/g, "$1@\u200b$2");
 }
 
+function escapeMarkdownText(value) {
+  const special = new Set(["\\", "\`", "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", "-", ".", "!", "|", ">", "~"]);
+  return Array.from(String(value ?? ""), character => special.has(character) ? "\\" + character : character).join("");
+}
+
+function maximumRunLength(value, character) {
+  let maximum = 0;
+  let current = 0;
+  for (const item of String(value ?? "")) {
+    current = item === character ? current + 1 : 0;
+    maximum = Math.max(maximum, current);
+  }
+  return maximum;
+}
+
+function renderInlineCode(value) {
+  const text = String(value ?? "");
+  const fence = "\`".repeat(Math.max(1, maximumRunLength(text, "\`") + 1));
+  const padding = text.startsWith("\`") || text.endsWith("\`") ? " " : "";
+  return fence + padding + text + padding + fence;
+}
+
+function renderCodeBlock(value) {
+  const text = String(value ?? "").replace(/\n$/, "");
+  const fence = "\`".repeat(Math.max(3, maximumRunLength(text, "\`") + 1));
+  return fence + "\n" + text + "\n" + fence;
+}
+
+function renderInlineTokens(tokens) {
+  let output = "";
+  for (const token of tokens ?? []) {
+    switch (token.type) {
+      case "text":
+        output += token.tokens ? renderInlineTokens(token.tokens) : escapeMarkdownText(token.text);
+        break;
+      case "escape":
+        output += escapeMarkdownText(token.text);
+        break;
+      case "strong":
+        output += "**" + renderInlineTokens(token.tokens) + "**";
+        break;
+      case "em":
+        output += "*" + renderInlineTokens(token.tokens) + "*";
+        break;
+      case "del":
+        output += "~~" + renderInlineTokens(token.tokens) + "~~";
+        break;
+      case "codespan":
+        output += renderInlineCode(token.text);
+        break;
+      case "br":
+        output += "  \n";
+        break;
+      case "link":
+        output += renderInlineTokens(token.tokens) + " [link omitted]";
+        break;
+      case "image":
+        output += escapeMarkdownText(token.text) + " [image omitted]";
+        break;
+      case "url":
+      case "autolink":
+        output += "[external URL omitted]";
+        break;
+      case "html":
+        break;
+      default:
+        throw new Error("Unsupported Markdown inline token; refusing to publish an unverified report.");
+    }
+  }
+  return output;
+}
+
+function renderTableCell(cell) {
+  return renderInlineTokens(cell.tokens ?? [{ type: "text", text: cell.text ?? "" }])
+    .replace(/\r?\n/g, " ")
+    .replace(/\|/g, "\\|");
+}
+
+function renderBlockTokens(tokens) {
+  const blocks = [];
+  for (const token of tokens ?? []) {
+    switch (token.type) {
+      case "space":
+      case "def":
+        break;
+      case "heading":
+        blocks.push("#".repeat(Math.max(1, Math.min(6, token.depth))) + " " + renderInlineTokens(token.tokens));
+        break;
+      case "paragraph":
+        blocks.push(renderInlineTokens(token.tokens));
+        break;
+      case "text":
+        blocks.push(token.tokens ? renderInlineTokens(token.tokens) : escapeMarkdownText(token.text));
+        break;
+      case "blockquote": {
+        const quote = renderBlockTokens(token.tokens).trim();
+        if (quote) blocks.push(quote.split("\n").map(line => line ? "> " + line : ">").join("\n"));
+        break;
+      }
+      case "list": {
+        const items = (token.items ?? []).map((item, index) => {
+          const marker = token.ordered ? String((token.start ?? 1) + index) + ". " : "- ";
+          const task = item.task ? (item.checked ? "[x] " : "[ ] ") : "";
+          const body = renderBlockTokens(item.tokens ?? []).trim();
+          const indent = " ".repeat(marker.length + task.length);
+          return marker + task + body.replace(/\n/g, "\n" + indent);
+        });
+        if (items.length) blocks.push(items.join("\n"));
+        break;
+      }
+      case "code":
+        blocks.push(renderCodeBlock(token.text));
+        break;
+      case "hr":
+        blocks.push("---");
+        break;
+      case "table": {
+        const header = (token.header ?? []).map(renderTableCell);
+        const alignments = header.map((_, index) => {
+          const alignment = token.align?.[index];
+          return alignment === "center" ? ":---:" : alignment === "right" ? "---:" : alignment === "left" ? ":---" : "---";
+        });
+        const rows = (token.rows ?? []).map(row => "| " + row.map(renderTableCell).join(" | ") + " |");
+        blocks.push("| " + header.join(" | ") + " |\n| " + alignments.join(" | ") + " |" + (rows.length ? "\n" + rows.join("\n") : ""));
+        break;
+      }
+      case "html":
+        break;
+      default:
+        throw new Error("Unsupported Markdown block token; refusing to publish an unverified report.");
+    }
+  }
+  return blocks.filter(Boolean).join("\n\n");
+}
+
 function sanitizeModelReport(value) {
-  return neutralizeGitHubMentions(
-    value
-      .replace(/!\[([^\]]*)\](?:\([^)]*\)|\[[^\]]*\])/g, (_, alt) =>
-        alt ? alt + " [image omitted]" : "[image omitted]")
-      .replace(/\[([^\]]+)\](?:\([^)]*\)|\[[^\]]*\])/g, "$1 [link omitted]")
-      .replace(/^\s*\[[^\]]+\]:\s*.*$/gm, "[link target omitted]")
-      .replace(/\b(?:javascript|data|vbscript|file|mailto|ftp|ssh):[^\s<>()]+/gi, "[unsafe URL omitted]")
-      .replace(/<[^>]*>/g, "")
-      .replace(/(^|[\s(])\/\/[A-Za-z0-9.-]+(?::\d+)?(?:\/[^\s<>()]*)?/gm, "$1[external URL omitted]")
-      .replace(/\bwww\.[^\s<>()]+/gi, "[external URL omitted]")
-      .replace(/https?:\/\/[^\s<>()]+/gi, "[external URL omitted]"),
-  );
+  const tokens = marked.lexer(String(value), { gfm: true });
+  return neutralizeGitHubMentions(renderBlockTokens(tokens).trim());
 }
 
 export function resolveWorkflowRunTarget({

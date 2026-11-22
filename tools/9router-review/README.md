@@ -25,6 +25,7 @@ Never commit these values or paste the API key into issues, pull requests, or ch
 - Uses immutable PR head and base SHA snapshots from `workflow_run.pull_requests[0].head.sha` and `.base.sha`; it does not mistake `workflow_run.head_sha` (which can represent the `pull_request` merge ref) for the PR branch head. It verifies the base repository identity, then rechecks both live PR SHAs before sending the patch to 9Router and again before publishing the report. If either side of the PR diff changes after the signal snapshot, the stale review is rejected.
 - Missing file patches, empty diffs, oversized patches, invalid event provenance, and stale head SHAs stop the review instead of producing a partial or stale report.
 - Patch content and filenames are untrusted prompt data.
+- Model-generated account mentions are neutralized before publication so an untrusted model response cannot trigger GitHub mention notifications.
 - Posts or updates a report comment per exact head/base SHA pair; a base-branch update creates a distinct report and never overwrites the earlier diff's report. It updates only comments authored by `github-actions[bot]`, and scans at most 1000 comments before failing closed.
 - Uses `GITHUB_TOKEN` only for reading repository contents and PR metadata/files and writing PR comments. No contents write, review approval, merge, or deployment permission is requested.
 - Requires HTTPS for the 9Router endpoint and rejects embedded credentials, query parameters, and URL fragments.

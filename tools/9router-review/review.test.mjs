@@ -4,8 +4,161 @@ import assert from "node:assert/strict";
 import { marked } from "marked";
 import { readFileSync } from "node:fs";
 import * as reviewer from "./review.js";
-const { buildReviewMessages, runReview } = reviewer;
+const { buildReviewMessages, runReview: runImmutableReview } = reviewer;
 const TEST_REVIEW_MARKER_KEY = "test-only-review-marker-key-32-bytes-minimum";
+
+
+async function runReview(options) {
+  const { strictImmutableSnapshot = false, ...reviewOptions } = options;
+  const fetchImpl = strictImmutableSnapshot
+    ? reviewOptions.fetchImpl
+    : createLegacyFixtureFetch(reviewOptions);
+  return runImmutableReview({ ...reviewOptions, fetchImpl });
+}
+
+function createLegacyFixtureFetch(options) {
+  const sourceFetch = options.fetchImpl;
+  if (typeof sourceFetch !== "function") return sourceFetch;
+  const githubApiBase = (options.githubApiBase || "https://api.github.com").replace(/\/+$/, "");
+  const repoPath = "/repos/" + options.repository;
+  const pullRequest = options.pullRequest;
+  const headSha = options.expectedHeadSha;
+  const baseSha = options.expectedBaseSha;
+  const baseTreeSha = createHash("sha1").update("fixture-base-tree:" + baseSha + ":" + headSha).digest("hex");
+  const headTreeSha = createHash("sha1").update("fixture-head-tree:" + baseSha + ":" + headSha).digest("hex");
+  const blobResponses = new Map();
+  let snapshotPromise = null;
+
+  const json = value => new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+  const blobObject = value => {
+    const bytes = Buffer.from(value, "utf8");
+    const sha = createHash("sha1")
+      .update(Buffer.concat([Buffer.from("blob " + bytes.length + String.fromCharCode(0)), bytes]))
+      .digest("hex");
+    blobResponses.set(sha, {
+      sha,
+      size: bytes.length,
+      encoding: "base64",
+      content: bytes.toString("base64"),
+    });
+    return { sha, size: bytes.length };
+  };
+
+  async function readLegacyFileSnapshot() {
+    const files = [];
+    let patchChars = 0;
+    let budgetExceeded = false;
+    let fullTenPages = false;
+    for (let page = 1; page <= 10; page += 1) {
+      const target = githubApiBase + repoPath + "/pulls/" + pullRequest + "/files?per_page=100&page=" + page;
+      const response = await sourceFetch(target, {});
+      if (!response || !response.ok) throw new Error("Legacy test fixture could not provide its source file page.");
+      const batch = await response.json();
+      if (!Array.isArray(batch)) throw new Error("Legacy test fixture returned a malformed source file page.");
+      for (const file of batch) {
+        files.push(file);
+        const pathText = typeof file.filename === "string" ? file.filename : "";
+        const entry = [
+          "FILE: " + pathText + " | status: " + file.status + " | additions: " + file.additions + " | deletions: " + file.deletions,
+          typeof file.patch === "string" ? file.patch : "",
+        ].join("\n");
+        patchChars += entry.length + (files.length > 1 ? 2 : 0);
+        if (patchChars > 45000) {
+          budgetExceeded = true;
+          break;
+        }
+      }
+      if (budgetExceeded) break;
+      if (batch.length < 100) break;
+      if (page === 10) fullTenPages = true;
+    }
+
+    const baseEntries = [];
+    const headEntries = [];
+    const compareFiles = [];
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      const filePath = typeof file.filename === "string" ? file.filename : "fixture-file-" + index + ".txt";
+      const missingPatch = typeof file.patch !== "string" || file.patch.length === 0;
+      const mode = missingPatch ? "120000" : "100644";
+      const beforeValue = "const fixtureValue = " + index + ";\n";
+      const afterValue = "const fixtureValue = " + (index + 1) + ";\n";
+      const before = blobObject(beforeValue);
+      const after = blobObject(afterValue);
+      const status = file.status || "modified";
+      const previousFilename = file.previous_filename;
+
+      if (status === "added") {
+        headEntries.push({ path: filePath, mode, type: "blob", sha: after.sha, size: after.size });
+      } else if (status === "removed" || status === "deleted") {
+        baseEntries.push({ path: filePath, mode, type: "blob", sha: before.sha, size: before.size });
+      } else if (previousFilename) {
+        baseEntries.push({ path: previousFilename, mode: "100644", type: "blob", sha: before.sha, size: before.size });
+        headEntries.push({ path: filePath, mode: "100644", type: "blob", sha: after.sha, size: after.size });
+      } else {
+        baseEntries.push({ path: filePath, mode, type: "blob", sha: before.sha, size: before.size });
+        headEntries.push({ path: filePath, mode, type: "blob", sha: after.sha, size: after.size });
+      }
+
+      compareFiles.push({
+        filename: filePath,
+        status,
+        additions: Number.isSafeInteger(file.additions) ? file.additions : 1,
+        deletions: Number.isSafeInteger(file.deletions) ? file.deletions : 1,
+        patch: file.patch,
+        ...(previousFilename ? { previous_filename: previousFilename } : {}),
+      });
+    }
+
+    if (fullTenPages && !budgetExceeded) {
+      const overflowPath = "fixture-over-limit-" + files.length + ".txt";
+      const before = blobObject("before\n");
+      const after = blobObject("after\n");
+      baseEntries.push({ path: overflowPath, mode: "100644", type: "blob", sha: before.sha, size: before.size });
+      headEntries.push({ path: overflowPath, mode: "100644", type: "blob", sha: after.sha, size: after.size });
+    }
+
+    return {
+      compare: { status: "ahead", base_commit: { sha: baseSha }, files: compareFiles.slice(0, 300) },
+      baseTree: { sha: baseTreeSha, truncated: false, tree: baseEntries },
+      headTree: { sha: headTreeSha, truncated: false, tree: headEntries },
+    };
+  }
+
+  async function getSnapshot() {
+    if (!snapshotPromise) snapshotPromise = readLegacyFileSnapshot();
+    return snapshotPromise;
+  }
+
+  return async (url, init = {}) => {
+    const target = String(url);
+    if (target.includes("/compare/" + baseSha + "..." + headSha)) {
+      return json((await getSnapshot()).compare);
+    }
+    if (target.endsWith("/git/commits/" + baseSha)) {
+      return json({ sha: baseSha, tree: { sha: baseTreeSha } });
+    }
+    if (target.endsWith("/git/commits/" + headSha)) {
+      return json({ sha: headSha, tree: { sha: headTreeSha } });
+    }
+    if (target.includes("/git/trees/" + baseTreeSha)) {
+      return json((await getSnapshot()).baseTree);
+    }
+    if (target.includes("/git/trees/" + headTreeSha)) {
+      return json((await getSnapshot()).headTree);
+    }
+    if (target.includes("/git/blobs/")) {
+      const sha = target.split("/git/blobs/").at(-1);
+      const blob = blobResponses.get(sha);
+      return blob ? json(blob) : new Response(JSON.stringify({ message: "Missing test blob" }), { status: 404 });
+    }
+    return sourceFetch(url, init);
+  };
+}
+
 
 function createdCommentResponse(target, options, id, overrides = {}) {
   if (options?.method !== "POST") {
@@ -1209,6 +1362,7 @@ test("bounded reconciliation completes a large first page before publishing", as
   await runReview({
     repository: "owner/repo",
     pullRequest: 281,
+    strictImmutableSnapshot: true,
     expectedHeadSha: headSha,
     expectedBaseSha: baseSha,
     githubToken: "github-test-token",

@@ -1659,7 +1659,7 @@ test("privileged workflow validates the exact source run before report-only revi
 });
 
 
-test("published report explicitly expires when either reviewed snapshot SHA changes", async () => {
+test("published report states its exact snapshot scope and stale or unverifiable status", async () => {
   const headSha = "e".repeat(40);
   const baseSha = "f".repeat(40);
   let publishedBody = "";

@@ -163,8 +163,10 @@ export async function verifySignalTargetWithGitHub({
   }
   const [owner, name] = repository.split('/');
   const baseUrl = new URL(githubApiBase);
-  if (baseUrl.protocol !== 'https:' && baseUrl.hostname !== '127.0.0.1' && baseUrl.hostname !== 'localhost') {
-    throw new Error('GitHub API base URL must use HTTPS.');
+  const isLoopbackHost = ['127.0.0.1', 'localhost', '[::1]'].includes(baseUrl.hostname);
+  const isAllowedOrigin = baseUrl.protocol === 'https:' || (baseUrl.protocol === 'http:' && isLoopbackHost);
+  if (!isAllowedOrigin || baseUrl.username || baseUrl.password || baseUrl.pathname !== '/' || baseUrl.search || baseUrl.hash) {
+    throw new Error('GitHub API base URL must be an HTTPS origin; HTTP is allowed only for explicit loopback tests.');
   }
   const run = await getGitHubJson(fetchImpl, `${baseUrl.origin}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/actions/runs/${runId}`, githubToken);
   if (

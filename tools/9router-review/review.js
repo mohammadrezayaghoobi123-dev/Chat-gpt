@@ -283,10 +283,10 @@ export function classifyGitHubApiFailure(response, now = Date.now()) {
   const retryAfterValue = headers?.get?.("retry-after");
   let retryAfterSeconds = null;
   if (retryAfterValue !== null && retryAfterValue !== undefined) {
-    const delay = Number(retryAfterValue);
-    if (Number.isFinite(delay) && delay >= 0) {
-      retryAfterSeconds = Math.ceil(delay);
-    } else {
+    if (/^\d+$/.test(retryAfterValue)) {
+      const delay = Number(retryAfterValue);
+      if (Number.isSafeInteger(delay)) retryAfterSeconds = delay;
+    } else if (/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(retryAfterValue)) {
       const retryAt = Date.parse(retryAfterValue);
       if (Number.isFinite(retryAt)) retryAfterSeconds = Math.max(0, Math.ceil((retryAt - now) / 1000));
     }
@@ -294,9 +294,10 @@ export function classifyGitHubApiFailure(response, now = Date.now()) {
 
   const remaining = headers?.get?.("x-ratelimit-remaining");
   const resetValue = headers?.get?.("x-ratelimit-reset");
-  const reset = resetValue !== null && resetValue !== undefined && /^\d+$/.test(resetValue)
+  const resetCandidate = resetValue !== null && resetValue !== undefined && /^\d+$/.test(resetValue)
     ? Number(resetValue)
     : null;
+  const reset = Number.isSafeInteger(resetCandidate) ? resetCandidate : null;
 
   let kind = "http-error";
   if ((status === 403 || status === 429) && remaining === "0") {

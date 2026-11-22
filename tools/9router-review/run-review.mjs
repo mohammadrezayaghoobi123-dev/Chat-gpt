@@ -16,6 +16,7 @@ try {
     repository: process.env.REPOSITORY,
     pullRequest: target.pullRequest,
     expectedHeadSha: target.expectedHeadSha,
+    expectedBaseSha: target.expectedBaseSha,
     githubToken: process.env.GITHUB_TOKEN,
     routerBaseUrl: process.env.ROUTER_BASE_URL,
     routerApiKey: process.env.ROUTER_API_KEY,

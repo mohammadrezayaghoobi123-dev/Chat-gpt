@@ -1,0 +1,104 @@
+name: Independent 9Router PR Review
+
+on:
+  push:
+    branches:
+      - feature/independent-9router-pr-review
+    paths:
+      - "tools/9router-review/**"
+      - ".github/workflows/9router-pr-review.yml"
+      - ".github/workflows/9router-pr-review-signal.yml"
+  workflow_run:
+    workflows:
+      - "9Router PR Review Signal"
+    types: [completed]
+
+permissions:
+  contents: read
+
+
+jobs:
+  contract-tests:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - name: Install locked reviewer dependencies
+        run: npm ci --ignore-scripts --prefix tools/9router-review
+      - name: Verify npm registry signatures
+        run: npm audit signatures --prefix tools/9router-review
+      - name: Run reviewer contract tests
+        run: node --test tools/9router-review/review.test.mjs
+
+  review:
+    concurrency:
+      group: 9router-pr-review-${{ github.event.workflow_run.pull_requests[0].number || github.run_id }}
+      queue: max
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'pull_request_target' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.path == '.github/workflows/9router-pr-review-signal.yml' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      REPOSITORY: ${{ github.repository }}
+      GITHUB_EVENT_NAME: ${{ github.event_name }}
+      WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
+      TRIGGER_EVENT: ${{ github.event.workflow_run.event }}
+      WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+      HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+      PULL_REQUESTS_JSON: ${{ toJSON(github.event.workflow_run.pull_requests) }}
+      RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Check reviewer configuration
+        id: reviewer-config
+        env:
+          ROUTER_BASE_URL: ${{ secrets.NINE_ROUTER_API_URL }}
+          ROUTER_API_KEY: ${{ secrets.NINE_ROUTER_API_KEY }}
+          REVIEW_MARKER_KEY: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_KEY }}
+          ROUTER_MODEL: ${{ vars.NINE_ROUTER_MODEL }}
+        run: |
+          if [ -z "$ROUTER_BASE_URL" ] || [ -z "$ROUTER_API_KEY" ] || [ -z "$REVIEW_MARKER_KEY" ] || [ -z "$ROUTER_MODEL" ]; then
+            echo "::warning::9Router review NOT RUN: repository secrets NINE_ROUTER_API_URL, NINE_ROUTER_API_KEY, and NINE_ROUTER_REVIEW_MARKER_KEY plus variable NINE_ROUTER_MODEL are required."
+            echo "9Router review was not run because required configuration is missing." >> "$GITHUB_STEP_SUMMARY"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Checkout trusted default-branch reviewer code only
+        if: steps.reviewer-config.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Set up Node.js 22
+        if: steps.reviewer-config.outputs.ready == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - name: Install locked reviewer dependencies
+        if: steps.reviewer-config.outputs.ready == 'true'
+        run: npm ci --ignore-scripts --prefix tools/9router-review
+      - name: Verify npm registry signatures
+        if: steps.reviewer-config.outputs.ready == 'true'
+        run: npm audit signatures --prefix tools/9router-review
+      - name: Run report-only independent review
+        if: steps.reviewer-config.outputs.ready == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ROUTER_BASE_URL: ${{ secrets.NINE_ROUTER_API_URL }}
+          ROUTER_API_KEY: ${{ secrets.NINE_ROUTER_API_KEY }}
+          REVIEW_MARKER_KEY: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_KEY }}
+          ROUTER_MODEL: ${{ vars.NINE_ROUTER_MODEL }}
+        run: node tools/9router-review/run-review.mjs

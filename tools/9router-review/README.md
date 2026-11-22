@@ -179,3 +179,14 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 - **Secret scans:** Full-history Gitleaks push scan run `45046891179`: PASS; pull-request scan run `45046896130`: PASS.
 - **Security conclusion:** The change reduces raw HTML delimiter exposure and parser-differential ambiguity. It is defense in depth, not evidence that the previous implementation allowed executable HTML or XSS.
 - **Safety boundary:** No changes to `main`, repository Actions policies, secrets, branch rules, or Production resources. Live 9Router and privileged `workflow_run` E2E remain UNKNOWN.
+
+
+### Finding 33: Escaped-pipe table corruption hypothesis — not reproduced
+
+- **Hypothesis:** The renderer's Markdown table-cell escaping might double-escape a literal pipe and change the table's column structure.
+- **Initial test failures:** Runs `45047168065`, `45047234960`, and `45047353755` failed because the test fixture placed a table immediately after a blockquote without a blank line. The Markdown parser correctly treated the table lines as part of the blockquote; the test incorrectly expected a top-level table. These failures were test-fixture errors, not evidence of a production defect.
+- **Corrected experiment:** The fixture now ends the blockquote explicitly, then includes a GFM table row containing an escaped literal pipe. It reparses the sanitized publication and asserts that the table remains present with exactly two header columns and two cells in the escaped-pipe row.
+- **Result:** The corrected test passes against the original renderer implementation. A temporary alternative escaping helper was reverted; no production code change is retained for this hypothesis.
+- **Classification:** `REJECTED` as a demonstrated defect under the pinned Marked 17.0.1 parser and this test case. This does not establish equivalence with every downstream Markdown renderer.
+- **Validation:** Contract run `45047469769`, job `137285096336`: **43/43 PASS**. Full-history Gitleaks push scan `45047469771` and PR scan `45047473303`: PASS.
+- **Safety boundary:** No changes to `main`, repository Actions policies, secrets, branch rules, or Production resources. Live 9Router and privileged `workflow_run` E2E remain UNKNOWN.

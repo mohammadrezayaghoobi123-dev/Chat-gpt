@@ -72,6 +72,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           REPOSITORY_ID: ${{ github.repository_id }}
           RUN_ID: ${{ github.event.workflow_run.id }}
+          EVENT_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           RUN_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
           WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
@@ -84,6 +85,7 @@ jobs:
           gh api "repos/$REPOSITORY/actions/runs/$RUN_ID" > "$RUN_JSON"
           jq -e \
             --argjson run_id "$RUN_ID" \
+            --argjson event_run_attempt "$EVENT_RUN_ATTEMPT" \
             --argjson repository_id "$REPOSITORY_ID" \
             --arg repository "$REPOSITORY" \
             --arg run_head_sha "$RUN_HEAD_SHA" \
@@ -97,7 +99,8 @@ jobs:
              .head_sha == $run_head_sha and .workflow_id == $workflow_id and
              .path == $workflow_path and .event == $trigger_event and
              .conclusion == $conclusion and
-             (.run_attempt | type == "number" and . > 0)' "$RUN_JSON" > /dev/null
+             (.run_attempt | type == "number" and . > 0) and
+             .run_attempt == $event_run_attempt' "$RUN_JSON" > /dev/null
           RUN_ATTEMPT="$(jq -er '.run_attempt' "$RUN_JSON")"
           echo "run_attempt=$RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - name: Download only the triggering run and API-verified attempt receipt

@@ -94,3 +94,13 @@
 - The tests remain characterization/fail-closed coverage for existing guards; no production code changed in this test-only extension. A prior malformed regex in the first exact-300 test attempt produced a syntax failure; it was corrected to direct string assertions before the green 80-test run.
 - Push-triggered resolve-signal and review jobs skip by design. Hosted workflow_run, artifact transfer, live 9Router inference, and comment publication remain UNKNOWN.
 - Step 3 remains PARTIAL / OPEN for the explicit boundaries above; do not mark the hybrid implementation production-ready on this evidence alone.
+
+## Exact capacity-boundary verification — 2026-11-23
+
+- Test commit b34f23cc7259c6f715fdcbda0064778a34d31d05 initially failed one new assertion: the fixture reused the same byte content across four paths, so the SHA-keyed immutable blob cache correctly fetched two unique blobs, not eight. This was a test-fixture defect, not a production defect. The observed failure was 82 passed / 1 failed; the failing assertion expected 8 blob fetches but observed 2.
+- Corrected fixture commit bc71e3bb22cfe06b88dc74c7cfa6ded6bbe085fe adds a unique, fixed-length prefix per file while keeping every blob exactly 512 KiB. Four modified files then require eight unique blobs, totaling exactly 4 MiB; the diff remains small because only the final line differs.
+- Contract run 45083428942, job 137396525773: **83/83 PASS**, zero failures, cancellations, or skips. Locked npm install and npm registry signature verification succeeded.
+- Gitleaks Push run 45083428951, job 137396526263, and PR run 45083434237, job 137396543077: both successful; each scanned 4,110 fetched commits and reported no leaks.
+- README updated in commit d9add29bbf734f89dcf43c003f72f220dbfe4cf3. Test-only scope: no production implementation changes.
+- Exact per-blob 512 KiB and cumulative 4 MiB acceptance boundaries are now SUPPORTED by integration fixtures. Still UNKNOWN: Git process timeout distinct from output-buffer exhaustion; Compare API 300-file ceiling behavior; 1,000 changed-path and 50,000 tree-entry ceiling behavior; and exact formatted-patch character-budget boundary.
+- The run's privileged review and receipt jobs skipped by design on push. No hosted workflow_run artifact roundtrip, live 9Router inference, or GitHub comment publication was tested.

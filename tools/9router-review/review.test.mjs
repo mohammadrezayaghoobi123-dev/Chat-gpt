@@ -855,3 +855,45 @@ test("oversized model reports fail closed before comment lookup or publication",
   assert.equal(commentListCalls, 0, "oversized output must be rejected before comment-history retrieval");
   assert.equal(commentPostCalls, 0, "oversized output must never be published");
 });
+
+test("oversized 9Router HTTP bodies are stopped while streaming before JSON parsing", async () => {
+  const headSha = "b".repeat(40);
+  const baseSha = "c".repeat(40);
+  let commentListCalls = 0;
+  const oversizedPayload = JSON.stringify({
+    choices: [{ message: { content: "R".repeat(600 * 1024) } }],
+  });
+  const fakeFetch = async (url) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/277")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/277/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(oversizedPayload, { status: 200 });
+    }
+    if (target.includes("/issues/277/comments?")) {
+      commentListCalls += 1;
+      return new Response(JSON.stringify([]), { status: 200 });
+    }
+    return new Response(JSON.stringify({ id: 903 }), { status: 201 });
+  };
+
+  await assert.rejects(
+    runReview({
+      repository: "owner/repo",
+      pullRequest: 277,
+      expectedHeadSha: headSha,
+      expectedBaseSha: baseSha,
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }),
+    /response exceeds the safe response size/i,
+  );
+  assert.equal(commentListCalls, 0, "an oversized HTTP body must be rejected before comment-history retrieval");
+});

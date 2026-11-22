@@ -1048,7 +1048,8 @@ test("cumulative comment-history response budget stops pagination before publica
     }
     if (target.includes("/issues/281/comments?")) {
       commentPageCalls += 1;
-      return new Response(JSON.stringify(commentPage), { status: 200 });
+      const page = Number(new URL(target).searchParams.get("page"));
+      return new Response(JSON.stringify(page <= 5 ? commentPage : []), { status: 200 });
     }
     if (target.includes("/issues/281/comments") && options.method === "POST") {
       commentPosts += 1;

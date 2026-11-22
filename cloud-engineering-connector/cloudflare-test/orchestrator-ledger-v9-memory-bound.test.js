@@ -29,33 +29,39 @@ function rejectUnboundedMigrationMaterialization(sql) {
         const cursor = target.exec(statement, ...bindings);
         if (!readsSourceRows(statement)) return cursor;
         let rowsRead = 0;
-        const readNext = () => {
-          rowsRead += 1;
-          if (rowsRead > 1) {
-            rejectedMaterializations += 1;
-            throw new Error("V9 migration must not iterate a source-table cursor beyond one row");
-          }
-          return cursor.next();
+        const wrapCursor = cursorTarget => {
+          const readNext = () => {
+            rowsRead += 1;
+            if (rowsRead > 1) {
+              rejectedMaterializations += 1;
+              throw new Error("V9 migration must not iterate a source-table cursor beyond one row");
+            }
+            return Reflect.apply(cursorTarget.next, cursorTarget, []);
+          };
+          return new Proxy(cursorTarget, {
+            get(targetCursor, key) {
+              if (key === "raw") {
+                return (...args) => wrapCursor(Reflect.apply(targetCursor.raw, targetCursor, args));
+              }
+              if (key === "toArray") {
+                return () => {
+                  rejectedMaterializations += 1;
+                  throw new Error("V9 migration must not materialize a full-table row collection");
+                };
+              }
+              if (key === "next") return readNext;
+              if (key === Symbol.iterator) {
+                return () => ({
+                  next: readNext,
+                  [Symbol.iterator]() { return this; },
+                });
+              }
+              const value = Reflect.get(targetCursor, key, targetCursor);
+              return typeof value === "function" ? value.bind(targetCursor) : value;
+            },
+          });
         };
-        return new Proxy(cursor, {
-          get(cursorTarget, key) {
-            if (key === "toArray") {
-              return () => {
-                rejectedMaterializations += 1;
-                throw new Error("V9 migration must not materialize a full-table row collection");
-              };
-            }
-            if (key === "next") return readNext;
-            if (key === Symbol.iterator) {
-              return () => ({
-                next: readNext,
-                [Symbol.iterator]() { return this; },
-              });
-            }
-            const value = Reflect.get(cursorTarget, key, cursorTarget);
-            return typeof value === "function" ? value.bind(cursorTarget) : value;
-          },
-        });
+        return wrapCursor(cursor);
       };
     },
   });

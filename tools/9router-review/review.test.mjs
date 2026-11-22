@@ -542,6 +542,9 @@ test("a base-branch change at final pre-publication revalidation aborts append-o
     if (target.endsWith("/chat/completions")) {
       return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
     }
+    if (target.includes("/issues/270/comments?")) {
+      return new Response(JSON.stringify([]), { status: 200 });
+    }
     if (target.endsWith("/issues/270/comments") && options.method === "POST") postCalls += 1;
     throw new Error("Unexpected API operation in final pre-publication race test: " + target);
   };
@@ -792,7 +795,7 @@ test("an ambiguous POST timeout is reconciled before rerun publication", async (
   assert.equal(comments.length, 1, "the remote side effect may exist despite the lost response");
   await runReview(config);
 
-  assert.equal(historyReads, 2, "the rerun must scan the second page before finding the prior report");
+  assert.equal(historyReads, 4, "both attempts must complete paginated reconciliation, including the second-page prior report");
   assert.equal(postAttempts, 1, "a matching report for the exact head/base pair must suppress a duplicate POST");
   assert.equal(patchAttempts, 0, "reconciliation must remain read-only and never update earlier comments");
   assert.equal(comments.length, 1, "an ambiguous first POST must not create a duplicate when its comment is visible");
@@ -1066,6 +1069,50 @@ test("bounded reconciliation completes a large first page before publishing", as
   });
   assert.equal(commentHistoryReads, 2, "the full bounded history must be read through its terminating short page");
   assert.equal(commentPosts, 1, "publication must proceed only after reconciliation completes");
+});
+
+test("comment-history pagination limit fails closed before publication", async () => {
+  const headSha = "c".repeat(40);
+  const baseSha = "d".repeat(40);
+  let historyPages = 0;
+  let commentPosts = 0;
+  const fullPage = Array.from({ length: 100 }, (_, index) => ({
+    id: index + 1,
+    body: "unrelated historical report",
+    user: { login: "ordinary-contributor" },
+  }));
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/285")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/285/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\n-old\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/285/comments?")) {
+      historyPages += 1;
+      return new Response(JSON.stringify(fullPage), { status: 200 });
+    }
+    if (target.endsWith("/issues/285/comments") && options.method === "POST") commentPosts += 1;
+    return new Response(JSON.stringify({ id: 906 }), { status: 201 });
+  };
+
+  await assert.rejects(runReview({
+    repository: "owner/repo",
+    pullRequest: 285,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  }), /comment history exceeds the safe reconciliation page limit/i);
+  assert.equal(historyPages, 10, "the scan must stop at the configured page ceiling");
+  assert.equal(commentPosts, 0, "an incomplete history scan must never fall through to publication");
 });
 
 test("non-success GitHub responses cancel unread bodies", async () => {

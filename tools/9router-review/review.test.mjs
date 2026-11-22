@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import * as reviewer from "./review.js";
 const { buildReviewMessages, runReview } = reviewer;
 
@@ -800,4 +801,15 @@ test("a rerun reconciles an ambiguous POST timeout with the already-created repo
   assert.equal(postAttempts, 1, "the rerun must not create a second comment");
   assert.equal(patchAttempts, 1, "the rerun must reconcile by updating the existing exact-marker comment");
   assert.equal(comments.length, 1, "only one report comment must remain");
+});
+
+test("review workflow keeps per-PR serialization and bounded queue semantics explicit", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/9router-pr-review.yml", import.meta.url), "utf8");
+  assert.match(
+    workflow,
+    /group:\\s*9router-pr-review-\\$\\{\\{\\s*github\\.event\\.workflow_run\\.pull_requests\\[0\\]\\.number\\s*\\|\\|\\s*github\\.run_id\\s*\\}\\}/,
+    "each review must share a concurrency group keyed by PR number",
+  );
+  assert.match(workflow, /queue:\\s*max/, "pending reviews must use the bounded multi-run queue");
+  assert.doesNotMatch(workflow, /cancel-in-progress:\\s*true/, "a running review must not be canceled by a later signal");
 });

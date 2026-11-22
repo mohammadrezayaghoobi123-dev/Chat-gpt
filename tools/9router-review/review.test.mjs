@@ -163,68 +163,6 @@ test("append-only publication never overwrites a user-authored marker comment", 
 });
 
 
-test("workflow-run metadata resolves only a trusted same-repository PR signal", () => {
-  assert.equal(typeof reviewer.resolveWorkflowRunTarget, "function");
-  const target = reviewer.resolveWorkflowRunTarget({
-    eventName: "workflow_run",
-    workflowPath: ".github/workflows/9router-pr-review-signal.yml",
-    triggerEvent: "pull_request_target",
-    workflowConclusion: "success",
-    runHeadSha: "c".repeat(40),
-    repository: "owner/repo",
-    headRepository: "owner/repo",
-    pullRequests: [{ number: 42, head: { sha: "a".repeat(40), repo: { full_name: "owner/repo" } }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
-  });
-  assert.deepEqual(target, { pullRequest: 42, expectedHeadSha: "a".repeat(40), expectedBaseSha: "c".repeat(40) });
-});
-
-test("workflow-run metadata rejects a PR association not bound to the signal run SHA", () => {
-  const base = {
-    eventName: "workflow_run",
-    workflowPath: ".github/workflows/9router-pr-review-signal.yml",
-    triggerEvent: "pull_request_target",
-    workflowConclusion: "success",
-    runHeadSha: "c".repeat(40),
-    repository: "owner/repo",
-    headRepository: "owner/repo",
-    pullRequests: [{ number: 42, head: { sha: "a".repeat(40), repo: { full_name: "owner/repo" } }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
-  };
-
-  assert.throws(
-    () => reviewer.resolveWorkflowRunTarget({ ...base, runHeadSha: "d".repeat(40) }),
-    /run SHA.*base SHA|base SHA.*run SHA/i,
-  );
-});
-
-test("workflow-run metadata rejects forked, spoofed, or malformed signals", () => {
-  assert.equal(typeof reviewer.resolveWorkflowRunTarget, "function");
-  const base = {
-    eventName: "workflow_run",
-    workflowPath: ".github/workflows/9router-pr-review-signal.yml",
-    triggerEvent: "pull_request_target",
-    workflowConclusion: "success",
-    runHeadSha: "c".repeat(40),
-    repository: "owner/repo",
-    headRepository: "owner/repo",
-    pullRequests: [{ number: 42, head: { sha: "a".repeat(40), repo: { full_name: "owner/repo" } }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
-  };
-  for (const override of [
-    { eventName: "push" },
-    { workflowPath: ".github/workflows/untrusted.yml" },
-    { triggerEvent: "pull_request" },
-    { triggerEvent: "push" },
-    { workflowConclusion: "failure" },
-    { runHeadSha: "invalid" },
-    { headRepository: "attacker/fork" },
-    { pullRequests: [] },
-    { pullRequests: [{ number: 0, head: { sha: "a".repeat(40) } }] },
-    { pullRequests: [{ number: 42, head: { sha: "invalid" } }] },
-  ]) {
-    assert.throws(() => reviewer.resolveWorkflowRunTarget({ ...base, ...override }));
-  }
-});
-
-
 test("draft pull requests are skipped and closed pull requests are rejected", async () => {
   const headSha = "9".repeat(40);
   let draftCalls = 0;
@@ -270,75 +208,6 @@ test("draft pull requests are skipped and closed pull requests are rejected", as
   assert.equal(closedCalls, 1, "closed PRs must stop before file retrieval and model use");
 });
 
-
-test("workflow-run target uses the immutable PR head snapshot, not the pull_request merge SHA", () => {
-  const target = reviewer.resolveWorkflowRunTarget({
-    eventName: "workflow_run",
-    workflowPath: ".github/workflows/9router-pr-review-signal.yml",
-    triggerEvent: "pull_request_target",
-    workflowConclusion: "success",
-    runHeadSha: "c".repeat(40),
-    repository: "owner/repo",
-    headRepository: "owner/repo",
-    pullRequests: [{ number: 43, head: { sha: "a".repeat(40), repo: { full_name: "owner/repo" } }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
-  });
-
-  assert.deepEqual(target, { pullRequest: 43, expectedHeadSha: "a".repeat(40), expectedBaseSha: "c".repeat(40) });
-});
-
-
-test("workflow-run metadata requires and returns the immutable PR base SHA", () => {
-  const base = {
-    eventName: "workflow_run",
-    workflowPath: ".github/workflows/9router-pr-review-signal.yml",
-    triggerEvent: "pull_request_target",
-    workflowConclusion: "success",
-    runHeadSha: "c".repeat(40),
-    repository: "owner/repo",
-    headRepository: "owner/repo",
-    pullRequests: [{
-      number: 44,
-      head: { sha: "a".repeat(40), repo: { full_name: "owner/repo" } },
-      base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } },
-    }],
-  };
-
-  assert.deepEqual(reviewer.resolveWorkflowRunTarget(base), {
-    pullRequest: 44,
-    expectedHeadSha: "a".repeat(40),
-    expectedBaseSha: "c".repeat(40),
-  });
-  assert.throws(
-    () => reviewer.resolveWorkflowRunTarget({
-      ...base,
-      pullRequests: [{ number: 44, head: { sha: "a".repeat(40), repo: { full_name: "owner/repo" } }, base: { repo: { full_name: "owner/repo" } } }],
-    }),
-    /invalid.*metadata|base.*SHA/i,
-  );
-  assert.throws(
-    () => reviewer.resolveWorkflowRunTarget({
-      ...base,
-      pullRequests: [{
-        number: 44,
-        head: { sha: "a".repeat(40) },
-        base: { sha: "c".repeat(40), repo: { full_name: "attacker/repo" } },
-      }],
-    }),
-    /invalid.*metadata|repository identity/i,
-  );
-
-  assert.throws(
-    () => reviewer.resolveWorkflowRunTarget({
-      ...base,
-      pullRequests: [{
-        number: 44,
-        head: { sha: "a".repeat(40), repo: { full_name: "attacker/fork" } },
-        base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } },
-      }],
-    }),
-    /invalid.*metadata|head repository/i,
-  );
-});
 
 test("a base-branch change after patch retrieval aborts before the model request", async () => {
   const headSha = "a".repeat(40);
@@ -893,7 +762,7 @@ test("an ambiguous POST timeout is reconciled before rerun publication", async (
 test("review workflow keeps per-PR serialization and bounded queue semantics explicit", () => {
   const workflow = readFileSync(new URL("../../.github/workflows/9router-pr-review.yml", import.meta.url), "utf8");
   assert.ok(
-    workflow.includes("group: 9router-pr-review-${{ github.event.workflow_run.pull_requests[0].number || github.run_id }}"),
+    workflow.includes("group: 9router-pr-review-${{ needs.resolve-signal.outputs.pull_request }}"),
     "each review must share a concurrency group keyed by PR number",
   );
   assert.ok(workflow.includes("queue: max"), "pending reviews must use the bounded multi-run queue");
@@ -1661,30 +1530,38 @@ test("pull_request_target signal workflow is inert and grants no repository perm
   assert.match(signal, /^\s+permissions:\s*\{\s*\}\s*$/m);
   assert.doesNotMatch(signal, /^\s+uses:\s+actions\/(?:checkout|download-artifact)@/m);
   assert.doesNotMatch(signal, /\$\{\{\s*secrets\./i);
-  assert.doesNotMatch(signal, /\b(?:npm|node|bash|sh)\s+(?:install|run|exec)/i);
-  assert.match(signal, /run: echo "Unprivileged PR signal completed/);
+  assert.doesNotMatch(signal, /\b(?:npm|curl|wget|git clone)\b/i);
+  assert.match(signal, /actions\/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9/);
+  assert.match(signal, /retention-days: 1/);
+  assert.match(signal, /9router-pr-signal-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/);
+  assert.match(signal, /node <<'NODE'/);
 });
 
-test("privileged workflow_run checks trusted provenance and checks out only default-branch code", () => {
+test("privileged workflow validates the exact source run before report-only review", () => {
   const workflow = readFileSync(new URL("../../.github/workflows/9router-pr-review.yml", import.meta.url), "utf8");
-  const reviewJob = workflow.split("  review:\n")[1];
-  assert.ok(reviewJob, "the privileged review job must exist");
-  const jobConfiguration = reviewJob.split("    steps:\n")[0];
-  const reviewSteps = reviewJob.split("    steps:\n")[1];
+  const resolverJob = workflow.split("  resolve-signal:\\n")[1]?.split("  review:\\n")[0];
+  const reviewJob = workflow.split("  review:\\n")[1];
+  assert.ok(resolverJob, "the read-only signal resolver job must exist");
+  assert.ok(reviewJob, "the privileged reviewer job must exist");
+  const reviewConfiguration = reviewJob.split("    steps:\\n")[0];
+  const reviewSteps = reviewJob.split("    steps:\\n")[1];
 
-  assert.match(workflow, /^  workflow_run:\s*\n/m);
-  assert.match(jobConfiguration, /github\.event_name == 'workflow_run'/);
-  assert.match(jobConfiguration, /github\.event\.workflow_run\.event == 'pull_request_target'/);
-  assert.match(jobConfiguration, /github\.event\.workflow_run\.conclusion == 'success'/);
-  assert.match(jobConfiguration, /github\.event\.workflow_run\.path == '\.github\/workflows\/9router-pr-review-signal\.yml'/);
-  assert.match(jobConfiguration, /github\.event\.workflow_run\.head_repository\.full_name == github\.repository/);
-  assert.match(jobConfiguration, /pull-requests: write/);
-  assert.match(jobConfiguration, /contents: read/);
-  assert.doesNotMatch(jobConfiguration, /\$\{\{\s*secrets\./, "job-level configuration must not expose secrets");
-  assert.match(reviewSteps, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
+  assert.match(workflow, /^  workflow_run:\\s*\\n/m);
+  assert.match(resolverJob, /github\\.event_name == 'workflow_run'/);
+  assert.match(resolverJob, /github\\.event\\.workflow_run\\.event == 'pull_request_target'/);
+  assert.match(resolverJob, /github\\.event\\.workflow_run\\.conclusion == 'success'/);
+  assert.match(resolverJob, /github\\.event\\.workflow_run\\.path == '\\.github\\/workflows\\/9router-pr-review-signal\\.yml'/);
+  assert.match(resolverJob, /actions\\/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333/);
+  assert.match(resolverJob, /actions: read/);
+  assert.match(resolverJob, /pull-requests: read/);
+  assert.match(resolverJob, /persist-credentials: false/);
+  assert.doesNotMatch(resolverJob, /NINE_ROUTER_API_KEY|NINE_ROUTER_REVIEW_MARKER_KEY|NINE_ROUTER_API_URL/);
+  assert.match(reviewConfiguration, /group: 9router-pr-review-\\$\\{\\{ needs\\.resolve-signal\\.outputs\\.pull_request \\}\\}/);
+  assert.match(reviewConfiguration, /pull-requests: write/);
+  assert.match(reviewSteps, /ref: \\$\\{\\{ github\\.event\\.repository\\.default_branch \\}\\}/);
   assert.match(reviewSteps, /persist-credentials: false/);
-  assert.doesNotMatch(reviewSteps, /actions\/download-artifact@/);
-  assert.doesNotMatch(reviewSteps, /ref: \$\{\{[^}]*pull_request[^}]*head/);
-  assert.equal((reviewSteps.match(/uses: actions\/checkout@/g) || []).length, 1,
+  assert.doesNotMatch(reviewSteps, /actions\\/download-artifact@/);
+  assert.doesNotMatch(workflow, /workflow_run\\.pull_requests/);
+  assert.equal((reviewSteps.match(/uses: actions\\/checkout@/g) || []).length, 1,
     "the privileged job must have exactly one checkout, for trusted default-branch code");
 });

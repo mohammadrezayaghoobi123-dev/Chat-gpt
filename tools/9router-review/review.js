@@ -21,15 +21,24 @@ export function resolveWorkflowRunTarget({
   }
   const target = pullRequests[0];
   const pullRequestHeadSha = target.head?.sha;
+  const pullRequestBaseSha = target.base?.sha;
+  const baseRepository = target.base?.repo?.full_name;
   if (
     !Number.isSafeInteger(target.number) ||
     target.number < 1 ||
     !/^[a-f0-9]{40}$/i.test(runHeadSha ?? "") ||
-    !/^[a-f0-9]{40}$/i.test(pullRequestHeadSha ?? "")
+    !/^[a-f0-9]{40}$/i.test(pullRequestHeadSha ?? "") ||
+    !/^[a-f0-9]{40}$/i.test(pullRequestBaseSha ?? "") ||
+    typeof baseRepository !== "string" ||
+    baseRepository.toLowerCase() !== repository.toLowerCase()
   ) {
-    throw new Error("Workflow run contains invalid pull-request metadata or commit SHA.");
+    throw new Error("Workflow run contains invalid pull-request metadata, repository identity, or commit SHA.");
   }
-  return { pullRequest: target.number, expectedHeadSha: pullRequestHeadSha };
+  return {
+    pullRequest: target.number,
+    expectedHeadSha: pullRequestHeadSha,
+    expectedBaseSha: pullRequestBaseSha,
+  };
 }
 
 export function buildReviewMessages({ repository, pullRequest, headSha, patch }) {
@@ -79,19 +88,21 @@ async function requestJson(fetchImpl, url, { method = "GET", token, body, accept
 }
 
 export async function runReview({
-  repository, pullRequest, expectedHeadSha, githubToken, routerBaseUrl, routerApiKey, model,
+  repository, pullRequest, expectedHeadSha, expectedBaseSha, githubToken, routerBaseUrl, routerApiKey, model,
   fetchImpl = fetch, githubApiBase = "https://api.github.com",
 }) {
   if (!githubToken || !routerApiKey || !model || !routerBaseUrl) {
     throw new Error("Required reviewer configuration is missing.");
   }
   if (!/^[a-f0-9]{40}$/i.test(expectedHeadSha ?? "")) throw new Error("Expected head SHA is invalid.");
+  if (!/^[a-f0-9]{40}$/i.test(expectedBaseSha ?? "")) throw new Error("Expected base SHA is invalid.");
 
   const base = new URL(githubApiBase);
   const repoPath = "/repos/" + repository;
   const pr = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken });
   if (pr.state !== "open") throw new Error("Pull request is not open; refusing to review it.");
   if (pr.head?.sha !== expectedHeadSha) throw new Error("Pull request head changed; refusing to review a different commit.");
+  if (pr.base?.sha !== expectedBaseSha) throw new Error("Pull request base branch changed; refusing to review a different diff.");
   if (pr.draft) return { status: "skipped-draft", reviewedHeadSha: expectedHeadSha };
 
   const files = [];
@@ -118,6 +129,9 @@ export async function runReview({
   if (currentBeforeModel.head?.sha !== expectedHeadSha) {
     throw new Error("Pull request head changed during patch retrieval; refusing to send a stale diff.");
   }
+  if (currentBeforeModel.base?.sha !== expectedBaseSha) {
+    throw new Error("Pull request base branch changed during patch retrieval; refusing to send a different diff.");
+  }
 
   const messages = buildReviewMessages({ repository, pullRequest, headSha: expectedHeadSha, patch });
   const routerUrl = new URL(routerBaseUrl.endsWith("/") ? routerBaseUrl : routerBaseUrl + "/");
@@ -140,6 +154,9 @@ export async function runReview({
   const currentBeforeComment = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken });
   if (currentBeforeComment.head?.sha !== expectedHeadSha) {
     throw new Error("Pull request head changed during model review; refusing to publish a stale report.");
+  }
+  if (currentBeforeComment.base?.sha !== expectedBaseSha) {
+    throw new Error("Pull request base branch changed during model review; refusing to publish a report for a different diff.");
   }
 
   const marker = REVIEW_MARKER + expectedHeadSha + " -->";

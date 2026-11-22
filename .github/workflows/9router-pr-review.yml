@@ -149,14 +149,12 @@ jobs:
       - name: Check reviewer configuration
         id: reviewer-config
         env:
-          ROUTER_BASE_URL: ${{ secrets.NINE_ROUTER_API_URL }}
-          ROUTER_API_KEY: ${{ secrets.NINE_ROUTER_API_KEY }}
-          REVIEW_MARKER_KEY: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_KEY }}
-          PREVIOUS_REVIEW_MARKER_KEY: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_PREVIOUS_KEY }}
-          PREVIOUS_REVIEW_MARKER_KEY_EXPIRES_AT: ${{ vars.NINE_ROUTER_REVIEW_MARKER_PREVIOUS_KEY_EXPIRES_AT }}
+          ROUTER_BASE_URL_CONFIGURED: ${{ secrets.NINE_ROUTER_API_URL != '' }}
+          ROUTER_API_KEY_CONFIGURED: ${{ secrets.NINE_ROUTER_API_KEY != '' }}
+          REVIEW_MARKER_KEY_CONFIGURED: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_KEY != '' }}
           ROUTER_MODEL: ${{ vars.NINE_ROUTER_MODEL }}
         run: |
-          if [ -z "$ROUTER_BASE_URL" ] || [ -z "$ROUTER_API_KEY" ] || [ -z "$REVIEW_MARKER_KEY" ] || [ -z "$ROUTER_MODEL" ]; then
+          if [ "$ROUTER_BASE_URL_CONFIGURED" != "true" ] || [ "$ROUTER_API_KEY_CONFIGURED" != "true" ] || [ "$REVIEW_MARKER_KEY_CONFIGURED" != "true" ] || [ -z "$ROUTER_MODEL" ]; then
             echo "::warning::9Router review NOT RUN: required repository configuration is missing."
             echo "9Router review was not run because required configuration is missing." >> "$GITHUB_STEP_SUMMARY"
             echo "ready=false" >> "$GITHUB_OUTPUT"

@@ -17,12 +17,13 @@ on:
 permissions:
   contents: read
 
-
 jobs:
   contract-tests:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -34,12 +35,9 @@ jobs:
       - name: Verify npm registry signatures
         run: npm audit signatures --prefix tools/9router-review
       - name: Run reviewer contract tests
-        run: node --test tools/9router-review/review.test.mjs
+        run: node --test tools/9router-review/*.test.mjs
 
-  review:
-    concurrency:
-      group: 9router-pr-review-${{ github.event.workflow_run.pull_requests[0].number || github.run_id }}
-      queue: max
+  resolve-signal:
     if: >-
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.event == 'pull_request_target' &&
@@ -47,19 +45,67 @@ jobs:
       github.event.workflow_run.path == '.github/workflows/9router-pr-review-signal.yml' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      pull_request: ${{ steps.resolve.outputs.pull_request }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
+    steps:
+      - name: Checkout trusted default-branch resolver only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Set up Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - name: Download only the triggering run and attempt receipt
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: 9router-pr-signal-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: ${{ runner.temp }}/9router-signal
+      - name: Validate receipt and independently reconcile GitHub state
+        id: resolve
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
+          WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
+          TRIGGER_EVENT: ${{ github.event.workflow_run.event }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          SIGNAL_RECEIPT_PATH: ${{ runner.temp }}/9router-signal/signal.json
+        run: node tools/9router-review/resolve-signal.mjs
+
+  review:
+    needs: resolve-signal
+    if: needs.resolve-signal.result == 'success'
+    concurrency:
+      group: 9router-pr-review-${{ needs.resolve-signal.outputs.pull_request }}
+      queue: max
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write
     env:
       REPOSITORY: ${{ github.repository }}
-      GITHUB_EVENT_NAME: ${{ github.event_name }}
-      WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
-      TRIGGER_EVENT: ${{ github.event.workflow_run.event }}
-      WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-      HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
-      PULL_REQUESTS_JSON: ${{ toJSON(github.event.workflow_run.pull_requests) }}
-      RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      PULL_REQUEST_NUMBER: ${{ needs.resolve-signal.outputs.pull_request }}
+      EXPECTED_HEAD_SHA: ${{ needs.resolve-signal.outputs.head_sha }}
+      EXPECTED_BASE_SHA: ${{ needs.resolve-signal.outputs.base_sha }}
     steps:
       - name: Check reviewer configuration
         id: reviewer-config
@@ -70,7 +116,7 @@ jobs:
           ROUTER_MODEL: ${{ vars.NINE_ROUTER_MODEL }}
         run: |
           if [ -z "$ROUTER_BASE_URL" ] || [ -z "$ROUTER_API_KEY" ] || [ -z "$REVIEW_MARKER_KEY" ] || [ -z "$ROUTER_MODEL" ]; then
-            echo "::warning::9Router review NOT RUN: repository secrets NINE_ROUTER_API_URL, NINE_ROUTER_API_KEY, and NINE_ROUTER_REVIEW_MARKER_KEY plus variable NINE_ROUTER_MODEL are required."
+            echo "::warning::9Router review NOT RUN: required repository configuration is missing."
             echo "9Router review was not run because required configuration is missing." >> "$GITHUB_STEP_SUMMARY"
             echo "ready=false" >> "$GITHUB_OUTPUT"
           else

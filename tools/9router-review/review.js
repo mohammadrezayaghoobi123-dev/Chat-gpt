@@ -70,11 +70,21 @@ export async function runReview({
     if (page === 10) throw new Error("Pull request exceeds the supported 1000-file review limit.");
   }
 
+  if (files.length === 0) throw new Error("Pull request has no changed files; refusing an empty review.");
+  if (files.some(file => typeof file.patch !== "string" || file.patch.length === 0)) {
+    throw new Error("Pull request contains unavailable file patches; refusing an incomplete review.");
+  }
+
   const patch = files.map(file => [
     "FILE: " + file.filename + " | status: " + file.status + " | additions: " + file.additions + " | deletions: " + file.deletions,
-    file.patch ?? "[Patch unavailable for this file; review coverage is incomplete.]",
+    file.patch,
   ].join("\n")).join("\n\n");
   if (patch.length > MAX_PATCH_CHARS) throw new Error("Pull request patch exceeds the safe review size; no partial review was sent.");
+
+  const currentBeforeModel = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken });
+  if (currentBeforeModel.head?.sha !== expectedHeadSha) {
+    throw new Error("Pull request head changed during patch retrieval; refusing to send a stale diff.");
+  }
 
   const messages = buildReviewMessages({ repository, pullRequest, headSha: expectedHeadSha, patch });
   const routerUrl = new URL(routerBaseUrl.endsWith("/") ? routerBaseUrl : routerBaseUrl + "/");
@@ -93,6 +103,11 @@ export async function runReview({
   const result = await completion.json();
   const report = result.choices?.[0]?.message?.content;
   if (typeof report !== "string" || report.trim().length < 20) throw new Error("9Router returned an empty or invalid review.");
+
+  const currentBeforeComment = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken });
+  if (currentBeforeComment.head?.sha !== expectedHeadSha) {
+    throw new Error("Pull request head changed during model review; refusing to publish a stale report.");
+  }
 
   const marker = REVIEW_MARKER + expectedHeadSha + " -->";
   const body = [

@@ -1564,4 +1564,4 @@ test("privileged workflow validates the exact source run before report-only revi
   assert.doesNotMatch(workflow, /workflow_run\\.pull_requests/);
   assert.equal((reviewSteps.match(/uses: actions\\/checkout@/g) || []).length, 1,
     "the privileged job must have exactly one checkout, for trusted default-branch code");
-});
+});;

@@ -1262,3 +1262,33 @@ test("the overall review deadline aborts an in-flight GitHub request", async () 
   assert.equal(calls, 1, "the first request should start within the global budget");
   assert.equal(capturedSignal.aborted, true, "the global deadline must abort an in-flight request");
 });
+test("classifies primary and secondary GitHub rate limits from response headers", () => {
+  assert.deepEqual(reviewer.classifyGitHubApiFailure(new Response("private error body", {
+    status: 403,
+    headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "2000" },
+  }), 1000000), {
+    kind: "primary-rate-limit",
+    status: 403,
+    retryAfterSeconds: null,
+    rateLimitResetEpochSeconds: 2000,
+  });
+
+  assert.deepEqual(reviewer.classifyGitHubApiFailure(new Response("private error body", {
+    status: 429,
+    headers: { "retry-after": "30", "x-ratelimit-remaining": "42" },
+  }), 1000000), {
+    kind: "secondary-rate-limit",
+    status: 429,
+    retryAfterSeconds: 30,
+    rateLimitResetEpochSeconds: null,
+  });
+});
+
+test("does not misclassify an ambiguous GitHub 403 as a confirmed permission failure", () => {
+  assert.deepEqual(reviewer.classifyGitHubApiFailure(new Response("private error body", { status: 403 }), 1000000), {
+    kind: "forbidden-or-secondary-rate-limit",
+    status: 403,
+    retryAfterSeconds: null,
+    rateLimitResetEpochSeconds: null,
+  });
+});

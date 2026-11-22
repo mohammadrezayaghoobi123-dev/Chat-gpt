@@ -1023,3 +1023,54 @@ test("oversized GitHub API bodies are rejected while streaming", async () => {
   assert.equal(fileListCalls, 0, "oversized PR metadata must be rejected before file pagination");
   assert.equal(routerCalls, 0, "oversized GitHub data must never be sent to the model");
 });
+
+
+test("cumulative comment-history response budget stops pagination before publication", async () => {
+  const headSha = "e".repeat(40);
+  const baseSha = "f".repeat(40);
+  let commentPageCalls = 0;
+  let commentPosts = 0;
+  const commentPage = Array.from({ length: 50 }, (_, index) => ({
+    id: index + 1,
+    user: { login: "ordinary-contributor" },
+    body: "C".repeat(17_500),
+  }));
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/281")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/281/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/281/comments?")) {
+      commentPageCalls += 1;
+      return new Response(JSON.stringify(commentPage), { status: 200 });
+    }
+    if (target.includes("/issues/281/comments") && options.method === "POST") {
+      commentPosts += 1;
+      return new Response(JSON.stringify({ id: 905 }), { status: 201 });
+    }
+    throw new Error("Unexpected API operation after the comment-history budget is exceeded.");
+  };
+
+  await assert.rejects(
+    runReview({
+      repository: "owner/repo",
+      pullRequest: 281,
+      expectedHeadSha: headSha,
+      expectedBaseSha: baseSha,
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }),
+    /GitHub comment history exceeds the cumulative response budget/i,
+  );
+  assert.equal(commentPageCalls, 5, "the aggregate budget must stop the fifth oversized cumulative page");
+  assert.equal(commentPosts, 0, "no report may be published after an incomplete comment-history scan");
+});

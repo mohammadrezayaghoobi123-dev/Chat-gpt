@@ -465,6 +465,32 @@ export async function runReview({
   if (pr.head?.sha !== expectedHeadSha) throw new Error("Pull request head changed; refusing to review a different commit.");
   if (pr.base?.sha !== expectedBaseSha) throw new Error("Pull request base branch changed; refusing to review a different diff.");
   if (pr.draft) return { status: "skipped-draft", reviewedHeadSha: expectedHeadSha };
+  const matchingReports = await findMatchingReviewComments({
+    fetchImpl,
+    base,
+    repoPath,
+    repository,
+    pullRequest,
+    token: githubToken,
+    deadlineAt,
+    expectedHeadSha,
+    expectedBaseSha,
+    reviewMarkerKey,
+  });
+  if (matchingReports.length === 1) {
+    const currentBeforeSkip = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
+    if (currentBeforeSkip.head?.sha !== expectedHeadSha || currentBeforeSkip.base?.sha !== expectedBaseSha) {
+      throw new Error("Pull request changed during duplicate reconciliation; refusing to skip a review for a different diff.");
+    }
+    return {
+      status: "already-published",
+      reviewedHeadSha: expectedHeadSha,
+      reviewedBaseSha: expectedBaseSha,
+      existingCommentId: Number.isSafeInteger(matchingReports[0].id) ? matchingReports[0].id : null,
+      publishedNewComment: false,
+    };
+  }
+
 
   const files = [];
   let patchChars = 0;
@@ -552,19 +578,6 @@ export async function runReview({
     "_Automated model-assisted review only; not a human approval or proof of correctness. Findings require independent verification._",
   ].join("\n");
 
-  const matchingReports = await findMatchingReviewComments({
-    fetchImpl,
-    base,
-    repoPath,
-    repository,
-    pullRequest,
-    token: githubToken,
-    deadlineAt,
-    expectedHeadSha,
-    expectedBaseSha,
-    reviewMarkerKey,
-  });
-
   const currentBeforePublish = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
   if (currentBeforePublish.head?.sha !== expectedHeadSha) {
     throw new Error("Pull request head changed during comment reconciliation; refusing to publish a stale report.");
@@ -572,16 +585,6 @@ export async function runReview({
   if (currentBeforePublish.base?.sha !== expectedBaseSha) {
     throw new Error("Pull request base branch changed during comment reconciliation; refusing to publish a report for a different diff.");
   }
-  if (matchingReports.length === 1) {
-    return {
-      status: "already-published",
-      reviewedHeadSha: expectedHeadSha,
-      reviewedBaseSha: expectedBaseSha,
-      existingCommentId: Number.isSafeInteger(matchingReports[0].id) ? matchingReports[0].id : null,
-      publishedNewComment: false,
-    };
-  }
-
   await requestJson(fetchImpl, base.origin + repoPath + "/issues/" + pullRequest + "/comments", {
     method: "POST",
     token: githubToken,

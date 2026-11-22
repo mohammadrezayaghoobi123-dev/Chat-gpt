@@ -1,6 +1,31 @@
 const MAX_PATCH_CHARS = 45000;
 const REVIEW_MARKER = "<!-- 9router-independent-review:";
 
+export function resolveWorkflowRunTarget({
+  eventName, workflowPath, triggerEvent, workflowConclusion, repository, headRepository, pullRequests,
+}) {
+  if (
+    eventName !== "workflow_run" ||
+    workflowPath !== ".github/workflows/9router-pr-review-signal.yml" ||
+    triggerEvent !== "pull_request" ||
+    workflowConclusion !== "success" ||
+    !repository ||
+    !headRepository ||
+    repository.toLowerCase() !== headRepository.toLowerCase()
+  ) {
+    throw new Error("Untrusted workflow-run provenance; refusing privileged review.");
+  }
+
+  if (!Array.isArray(pullRequests) || pullRequests.length !== 1) {
+    throw new Error("Workflow run must identify exactly one pull request.");
+  }
+  const target = pullRequests[0];
+  if (!Number.isSafeInteger(target.number) || target.number < 1 || !/^[a-f0-9]{40}$/i.test(target.head?.sha ?? "")) {
+    throw new Error("Workflow run contains invalid pull-request metadata.");
+  }
+  return { pullRequest: target.number, expectedHeadSha: target.head.sha };
+}
+
 export function buildReviewMessages({ repository, pullRequest, headSha, patch }) {
   if (!repository || !Number.isInteger(pullRequest) || !/^[a-f0-9]{40}$/i.test(headSha ?? "")) {
     throw new TypeError("A repository, pull request number, and exact 40-character head SHA are required.");

@@ -1451,6 +1451,7 @@ test("a single matching bot report suppresses a duplicate without mutation", asy
   const headSha = "a".repeat(40);
   const baseSha = "b".repeat(40);
   let commentHistoryReads = 0;
+  let routerCalls = 0;
   let patchCalls = 0;
   let postCalls = 0;
   const existingComment = {
@@ -1467,6 +1468,7 @@ test("a single matching bot report suppresses a duplicate without mutation", asy
       return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\\\n-old\\\\n+new" }]), { status: 200 });
     }
     if (target.endsWith("/chat/completions")) {
+      routerCalls += 1;
       return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
     }
     if (target.includes("/issues/284/comments?")) {
@@ -1500,6 +1502,7 @@ test("a single matching bot report suppresses a duplicate without mutation", asy
   assert.equal(result.status, "already-published", "a matching report must be reported as reconciled");
   assert.equal(result.existingCommentId, 999, "the existing comment identifier should be returned when valid");
   assert.equal(commentHistoryReads, 1, "the exact head/base report marker must be reconciled");
+  assert.equal(routerCalls, 0, "an already-published report must short-circuit before model inference");
   assert.equal(patchCalls, 0, "an existing matching bot comment must never be updated");
   assert.equal(postCalls, 0, "a single matching report must suppress duplicate publication");
 });

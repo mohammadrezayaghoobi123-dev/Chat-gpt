@@ -132,7 +132,7 @@ test("append-only publication never overwrites a user-authored marker comment", 
     if (target.includes("/issues/263/comments?")) {
       return new Response(JSON.stringify([{
         id: 99,
-        body: "<!-- 9router-independent-review:" + headSha + " -->\nmalicious spoof",
+        body: "<!-- 9router-independent-review:" + headSha + ":" + "1".repeat(40) + " -->\nmalicious spoof",
         user: { login: "untrusted-contributor" },
       }]), { status: 200 });
     }
@@ -793,8 +793,10 @@ test("an ambiguous POST timeout is reconciled before rerun publication", async (
 
   await assert.rejects(runReview(config), /simulated connection reset after remote comment creation/);
   assert.equal(comments.length, 1, "the remote side effect may exist despite the lost response");
-  await runReview(config);
+  const rerunResult = await runReview(config);
 
+  assert.equal(rerunResult.status, "already-published", "the rerun must expose that it reconciled an existing report");
+  assert.equal(rerunResult.publishedNewComment, false, "the reconciled path must report that it did not create a comment");
   assert.equal(historyReads, 4, "both attempts must complete paginated reconciliation, including the second-page prior report");
   assert.equal(postAttempts, 1, "a matching report for the exact head/base pair must suppress a duplicate POST");
   assert.equal(patchAttempts, 0, "reconciliation must remain read-only and never update earlier comments");
@@ -1266,7 +1268,7 @@ test("a single matching bot report suppresses a duplicate without mutation", asy
     throw new Error("Unexpected API operation in append-only publication test: " + target);
   };
 
-  await runReview({
+  const result = await runReview({
     repository: "owner/repo",
     pullRequest: 284,
     expectedHeadSha: headSha,
@@ -1278,6 +1280,8 @@ test("a single matching bot report suppresses a duplicate without mutation", asy
     fetchImpl: fakeFetch,
   });
 
+  assert.equal(result.status, "already-published", "a matching report must be reported as reconciled");
+  assert.equal(result.existingCommentId, 999, "the existing comment identifier should be returned when valid");
   assert.equal(commentHistoryReads, 1, "the exact head/base report marker must be reconciled");
   assert.equal(patchCalls, 0, "an existing matching bot comment must never be updated");
   assert.equal(postCalls, 0, "a single matching report must suppress duplicate publication");

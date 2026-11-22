@@ -119,10 +119,9 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 - **Decision:** No repository settings, branch rules, secrets, main-branch files, or production resources were changed. Keep PR #261 Draft until the default-branch bootstrap, policy applicability, and privileged E2E are separately authorized and verified.
 - **Evidence:** GitHub REST read of default-branch workflow directory and ruleset `26740429`; GitHub documentation: <https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows> and <https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target>.
 
-## Latest verification — scoped HMAC provenance hardening
-- Verified branch head: `b7315b8bb306cf1e0c18cdd12fc3decf77fd70b1`.
-- Contract tests on this exact head: **41/41 PASS**, run `45041593586`, job `137267029196`; zero failures, cancellations, or skips.
-- Dependency installation and npm registry signature verification: PASS.
-- Full-history secret scans on this exact head: PASS, runs `45041567213` and `45041571265`.
-- The privileged review job was skipped on push by design; live 9Router / `workflow_run` E2E remains UNKNOWN.
+## Latest verification — workflow bootstrap and trust-boundary audit
+- Verified audit/documentation head: `e935ccb5c5f888e663b54ba1e9325cfe9414f561`.
+- Contract tests on this exact head: **41/41 PASS**, run `45042191981`, job `137268882624`; zero failures, cancellations, or skips.
+- Full-history secret scans on this exact head: PASS, runs `45042192082` and `45042198111`.
+- The privileged review job was skipped on push by design. The default branch lacks both required 9Router workflow files; live `workflow_run` / 9Router E2E remains UNKNOWN.
 - Main remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`; PR #261 remains Draft/Open/Unmerged.

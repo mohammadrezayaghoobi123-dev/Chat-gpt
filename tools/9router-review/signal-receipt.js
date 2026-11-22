@@ -4,7 +4,7 @@ const SIGNAL_WORKFLOW_PATH = '.github/workflows/9router-pr-review-signal.yml';
 const ALLOWED_ACTIONS = new Set(['opened', 'edited', 'synchronize', 'reopened', 'ready_for_review']);
 const RECEIPT_KEYS = [
   'schemaVersion', 'repository', 'repositoryId', 'runId', 'runAttempt', 'eventName', 'action',
-  'pullRequestNumber', 'headSha', 'baseSha', 'headRepository', 'baseRepository', 'baseRef',
+  'pullRequestNumber', 'headSha', 'baseSha', 'workflowSha', 'headRepository', 'baseRepository', 'baseRef',
 ].sort();
 
 function isPositiveSafeInteger(value) {
@@ -49,7 +49,7 @@ export function parseSignalReceipt(input) {
   if (receipt.eventName !== 'pull_request_target') throw new Error('Signal receipt event is not pull_request_target.');
   if (!ALLOWED_ACTIONS.has(receipt.action)) throw new Error('Signal receipt action is invalid.');
   if (!isPositiveSafeInteger(receipt.pullRequestNumber)) throw new Error('Signal receipt pull request number is invalid.');
-  if (!isSha(receipt.headSha) || !isSha(receipt.baseSha)) throw new Error('Signal receipt head or base SHA is invalid.');
+  if (!isSha(receipt.headSha) || !isSha(receipt.baseSha) || !isSha(receipt.workflowSha)) throw new Error('Signal receipt head, base, or workflow SHA is invalid.');
   if (typeof receipt.baseRef !== 'string' || receipt.baseRef.length < 1 || receipt.baseRef.length > 255) {
     throw new Error('Signal receipt base ref is invalid.');
   }
@@ -86,13 +86,14 @@ export function resolveWorkflowRunTarget(context) {
   if (!sameText(validated.headRepository, context.repository) || !sameText(validated.baseRepository, context.repository)) {
     throw new Error('Signal receipt head/base repository identity is not same-repository.');
   }
-  if (context.runHeadSha.toLowerCase() !== validated.baseSha.toLowerCase()) {
-    throw new Error('Workflow run SHA does not match the signal receipt base SHA.');
+  if (context.runHeadSha.toLowerCase() !== validated.workflowSha.toLowerCase()) {
+    throw new Error('Workflow run SHA does not match the trusted workflow revision SHA.');
   }
   return {
     pullRequest: validated.pullRequestNumber,
     expectedHeadSha: validated.headSha,
     expectedBaseSha: validated.baseSha,
+    expectedWorkflowSha: validated.workflowSha,
     baseRef: validated.baseRef,
   };
 }
@@ -152,7 +153,7 @@ export async function verifySignalTargetWithGitHub({
   target, repository, repositoryId, runId, runAttempt, runHeadSha, workflowId, githubToken,
   fetchImpl = fetch, githubApiBase = 'https://api.github.com',
 }) {
-  if (!target || !isPositiveSafeInteger(target.pullRequest) || !isSha(target.expectedHeadSha) || !isSha(target.expectedBaseSha)) {
+  if (!target || !isPositiveSafeInteger(target.pullRequest) || !isSha(target.expectedHeadSha) || !isSha(target.expectedBaseSha) || !isSha(target.expectedWorkflowSha)) {
     throw new Error('Verified signal target is invalid.');
   }
   requireRepoName(repository, 'Repository');
@@ -173,7 +174,7 @@ export async function verifySignalTargetWithGitHub({
     run.id !== runId || run.run_attempt !== runAttempt || run.event !== 'pull_request_target' ||
     run.path !== SIGNAL_WORKFLOW_PATH || run.conclusion !== 'success' || run.workflow_id !== workflowId ||
     run.head_sha?.toLowerCase() !== runHeadSha.toLowerCase() ||
-    run.head_sha?.toLowerCase() !== target.expectedBaseSha.toLowerCase() ||
+    run.head_sha?.toLowerCase() !== target.expectedWorkflowSha.toLowerCase() ||
     run.repository?.id !== repositoryId || !sameText(run.repository?.full_name, repository) ||
     run.head_repository?.id !== repositoryId || !sameText(run.head_repository?.full_name, repository)
   ) {

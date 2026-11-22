@@ -860,11 +860,25 @@ test("review workflow keeps per-PR serialization and bounded queue semantics exp
   assert.ok(workflow.includes("queue: max"), "pending reviews must use the bounded multi-run queue");
   assert.ok(workflow.includes("REVIEW_MARKER_KEY: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_KEY }}"), "the privileged reviewer must receive the dedicated marker-signing secret");
   assert.ok(workflow.includes("id: reviewer-config"), "configuration validation must publish a readiness output");
-  assert.equal((workflow.match(/^\s+REVIEW_MARKER_KEY:/gm) || []).length, 2, "the active marker secret must be scoped only to configuration validation and the final reviewer step");
-  assert.equal(workflow.split("PREVIOUS_REVIEW_MARKER_KEY:").length - 1, 2,
-    "the optional previous marker key must be scoped only to configuration validation and the final reviewer step");
-  assert.equal(workflow.split("PREVIOUS_REVIEW_MARKER_KEY_EXPIRES_AT:").length - 1, 2,
-    "the previous key expiry variable must be scoped only to configuration validation and the final reviewer step");
+  const configStep = workflow.split("      - name: Check reviewer configuration")[1].split("      - name: Checkout trusted default-branch reviewer code only")[0];
+  assert.ok(configStep.includes("ROUTER_BASE_URL_CONFIGURED: ${{ secrets.NINE_ROUTER_API_URL != '' }}"),
+    "configuration validation must receive only a boolean for router URL presence");
+  assert.ok(configStep.includes("ROUTER_API_KEY_CONFIGURED: ${{ secrets.NINE_ROUTER_API_KEY != '' }}"),
+    "configuration validation must receive only a boolean for router API key presence");
+  assert.ok(configStep.includes("REVIEW_MARKER_KEY_CONFIGURED: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_KEY != '' }}"),
+    "configuration validation must receive only a boolean for marker key presence");
+  assert.ok(!configStep.includes("PREVIOUS_REVIEW_MARKER_KEY"),
+    "configuration validation must not receive previous marker key material");
+  assert.ok(!configStep.includes("PREVIOUS_REVIEW_MARKER_KEY_EXPIRES_AT"),
+    "configuration validation must not receive previous marker key expiry metadata");
+  assert.equal((workflow.match(/^\\s+REVIEW_MARKER_KEY:/gm) || []).length, 1,
+    "the active marker secret must be scoped only to the final reviewer step");
+  assert.equal(workflow.split("PREVIOUS_REVIEW_MARKER_KEY:").length - 1, 1,
+    "the optional previous marker key must be scoped only to the final reviewer step");
+  assert.equal(workflow.split("PREVIOUS_REVIEW_MARKER_KEY_EXPIRES_AT:").length - 1, 1,
+    "the previous key expiry variable must be scoped only to the final reviewer step");
+  assert.equal((workflow.match(/^\\s+ROUTER_API_KEY:/gm) || []).length, 1,
+    "the router API key must be scoped only to the final reviewer step");
   const runner = readFileSync(new URL("./run-review.mjs", import.meta.url), "utf8");
   assert.ok(runner.includes("previousReviewMarkerKeyValidUntil: process.env.PREVIOUS_REVIEW_MARKER_KEY_EXPIRES_AT"));
   assert.equal(workflow.split("steps.reviewer-config.outputs.ready == 'true'").length - 1, 5, "every privileged reviewer step must be gated on validated configuration");

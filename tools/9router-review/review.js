@@ -269,18 +269,35 @@ async function readJsonResponseLimited(response, maxBytes, source = "9Router") {
   }
 }
 
-async function requestJson(fetchImpl, url, { method = "GET", token, body, accept = "application/vnd.github+json" }) {
-  const response = await fetchImpl(url, {
-    method,
-    headers: {
-      Accept: accept,
-      Authorization: "Bearer " + token,
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...(body ? { "Content-Type": "application/json" } : {}),
-    },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-    signal: AbortSignal.timeout(120000),
-  });
+function createRequestSignal(deadlineAt) {
+  const remainingMs = deadlineAt - Date.now();
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+    throw new Error("Review execution deadline exceeded; stopping before another request.");
+  }
+  return AbortSignal.timeout(Math.max(1, Math.min(120000, Math.ceil(remainingMs))));
+}
+
+async function requestJson(fetchImpl, url, { method = "GET", token, body, accept = "application/vnd.github+json", deadlineAt }) {
+  const signal = createRequestSignal(deadlineAt);
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method,
+      headers: {
+        Accept: accept,
+        Authorization: "Bearer " + token,
+        "X-GitHub-Api-Version": "2022-11-28",
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal,
+    });
+  } catch {
+    if (Date.now() >= deadlineAt) {
+      throw new Error("Review execution deadline exceeded; the request was aborted.");
+    }
+    throw new Error("Remote API request failed or its 120-second request timeout elapsed.");
+  }
   if (!response.ok) {
     try {
       await response.body?.cancel();
@@ -289,22 +306,34 @@ async function requestJson(fetchImpl, url, { method = "GET", token, body, accept
     }
     throw new Error("Remote API request failed with HTTP " + response.status + ".");
   }
-  return response.status === 204 ? null : readJsonResponseLimited(response, MAX_GITHUB_API_RESPONSE_BYTES, "GitHub API");
+  if (response.status === 204) return null;
+  try {
+    return await readJsonResponseLimited(response, MAX_GITHUB_API_RESPONSE_BYTES, "GitHub API");
+  } catch {
+    if (Date.now() >= deadlineAt) {
+      throw new Error("Review execution deadline exceeded while reading the API response.");
+    }
+    throw new Error("GitHub API response could not be read safely.");
+  }
 }
 
 export async function runReview({
   repository, pullRequest, expectedHeadSha, expectedBaseSha, githubToken, routerBaseUrl, routerApiKey, model,
-  fetchImpl = fetch, githubApiBase = "https://api.github.com",
+  fetchImpl = fetch, githubApiBase = "https://api.github.com", reviewTimeoutMs = 8 * 60 * 1000,
 }) {
   if (!githubToken || !routerApiKey || !model || !routerBaseUrl) {
     throw new Error("Required reviewer configuration is missing.");
   }
+  if (!Number.isSafeInteger(reviewTimeoutMs) || reviewTimeoutMs < 1 || reviewTimeoutMs > 8 * 60 * 1000) {
+    throw new TypeError("Review timeout must be an integer between 1 ms and 8 minutes.");
+  }
+  const deadlineAt = Date.now() + reviewTimeoutMs;
   if (!/^[a-f0-9]{40}$/i.test(expectedHeadSha ?? "")) throw new Error("Expected head SHA is invalid.");
   if (!/^[a-f0-9]{40}$/i.test(expectedBaseSha ?? "")) throw new Error("Expected base SHA is invalid.");
 
   const base = new URL(githubApiBase);
   const repoPath = "/repos/" + repository;
-  const pr = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken });
+  const pr = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
   if (pr.state !== "open") throw new Error("Pull request is not open; refusing to review it.");
   if (pr.head?.sha !== expectedHeadSha) throw new Error("Pull request head changed; refusing to review a different commit.");
   if (pr.base?.sha !== expectedBaseSha) throw new Error("Pull request base branch changed; refusing to review a different diff.");
@@ -359,7 +388,12 @@ export async function runReview({
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: "Bearer " + routerApiKey },
     body: JSON.stringify({ model, messages, temperature: 0.1, stream: false, max_tokens: 5000 }),
-    signal: AbortSignal.timeout(120000),
+    signal: createRequestSignal(deadlineAt),
+  }).catch(() => {
+    if (Date.now() >= deadlineAt) {
+      throw new Error("Review execution deadline exceeded; the 9Router request was aborted.");
+    }
+    throw new Error("9Router request failed or its 120-second request timeout elapsed; response body was suppressed.");
   });
   if (!completion.ok) throw new Error("9Router request failed with HTTP " + completion.status + "; response body was suppressed.");
   const result = await readJsonResponseLimited(completion, MAX_ROUTER_RESPONSE_BYTES);

@@ -1623,35 +1623,35 @@ test("GitHub rate-limit responses fail closed without automatic retries", async 
 test("pull_request_target signal workflow is inert and grants no repository permissions", () => {
   const signal = readFileSync(new URL("../../.github/workflows/9router-pr-review-signal.yml", import.meta.url), "utf8");
 
-  assert.match(signal, /^on:\\s*\\n\\s+pull_request_target:/m);
-  assert.match(signal, /^permissions:\\s*\\{\\s*\\}\\s*$/m);
-  assert.match(signal, /^\\s+permissions:\\s*\\{\\s*\\}\\s*$/m);
-  assert.doesNotMatch(signal, /^\\s+uses:\\s+actions\\/(?:checkout|download-artifact)@/m);
-  assert.doesNotMatch(signal, /\\$\\{\\{\\s*secrets\\./i);
-  assert.doesNotMatch(signal, /\\b(?:npm|node|bash|sh)\\s+(?:install|run|exec)/i);
+  assert.match(signal, /^on:\s*\n\s+pull_request_target:/m);
+  assert.match(signal, /^permissions:\s*\{\s*\}\s*$/m);
+  assert.match(signal, /^\s+permissions:\s*\{\s*\}\s*$/m);
+  assert.doesNotMatch(signal, /^\s+uses:\s+actions\/(?:checkout|download-artifact)@/m);
+  assert.doesNotMatch(signal, /\$\{\{\s*secrets\./i);
+  assert.doesNotMatch(signal, /\b(?:npm|node|bash|sh)\s+(?:install|run|exec)/i);
   assert.match(signal, /run: echo "Unprivileged PR signal completed/);
 });
 
 test("privileged workflow_run checks trusted provenance and checks out only default-branch code", () => {
   const workflow = readFileSync(new URL("../../.github/workflows/9router-pr-review.yml", import.meta.url), "utf8");
-  const reviewJob = workflow.split("  review:\\n")[1];
+  const reviewJob = workflow.split("  review:\n")[1];
   assert.ok(reviewJob, "the privileged review job must exist");
-  const jobConfiguration = reviewJob.split("    steps:\\n")[0];
-  const reviewSteps = reviewJob.split("    steps:\\n")[1];
+  const jobConfiguration = reviewJob.split("    steps:\n")[0];
+  const reviewSteps = reviewJob.split("    steps:\n")[1];
 
-  assert.match(workflow, /^  workflow_run:\\s*\\n/m);
-  assert.match(jobConfiguration, /github\\.event_name == 'workflow_run'/);
-  assert.match(jobConfiguration, /github\\.event\\.workflow_run\\.event == 'pull_request_target'/);
-  assert.match(jobConfiguration, /github\\.event\\.workflow_run\\.conclusion == 'success'/);
-  assert.match(jobConfiguration, /github\\.event\\.workflow_run\\.path == '\\.github\\/workflows\\/9router-pr-review-signal\\.yml'/);
-  assert.match(jobConfiguration, /github\\.event\\.workflow_run\\.head_repository\\.full_name == github\\.repository/);
+  assert.match(workflow, /^  workflow_run:\s*\n/m);
+  assert.match(jobConfiguration, /github\.event_name == 'workflow_run'/);
+  assert.match(jobConfiguration, /github\.event\.workflow_run\.event == 'pull_request_target'/);
+  assert.match(jobConfiguration, /github\.event\.workflow_run\.conclusion == 'success'/);
+  assert.match(jobConfiguration, /github\.event\.workflow_run\.path == '\.github\/workflows\/9router-pr-review-signal\.yml'/);
+  assert.match(jobConfiguration, /github\.event\.workflow_run\.head_repository\.full_name == github\.repository/);
   assert.match(jobConfiguration, /pull-requests: write/);
   assert.match(jobConfiguration, /contents: read/);
-  assert.doesNotMatch(jobConfiguration, /\\$\\{\\{\\s*secrets\\./, "job-level configuration must not expose secrets");
-  assert.match(reviewSteps, /ref: \\$\\{\\{ github\\.event\\.repository\\.default_branch \\}\\}/);
+  assert.doesNotMatch(jobConfiguration, /\$\{\{\s*secrets\./, "job-level configuration must not expose secrets");
+  assert.match(reviewSteps, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
   assert.match(reviewSteps, /persist-credentials: false/);
-  assert.doesNotMatch(reviewSteps, /actions\\/download-artifact@/);
-  assert.doesNotMatch(reviewSteps, /ref: \\$\\{\\{[^}]*pull_request[^}]*head/);
-  assert.equal((reviewSteps.match(/uses: actions\\/checkout@/g) || []).length, 1,
+  assert.doesNotMatch(reviewSteps, /actions\/download-artifact@/);
+  assert.doesNotMatch(reviewSteps, /ref: \$\{\{[^}]*pull_request[^}]*head/);
+  assert.equal((reviewSteps.match(/uses: actions\/checkout@/g) || []).length, 1,
     "the privileged job must have exactly one checkout, for trusted default-branch code");
 });

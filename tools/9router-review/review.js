@@ -342,7 +342,7 @@ export async function runReview({
   const files = [];
   let patchChars = 0;
   for (let page = 1; page <= 10; page += 1) {
-    const batch = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest + "/files?per_page=100&page=" + page, { token: githubToken });
+    const batch = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest + "/files?per_page=100&page=" + page, { token: githubToken, deadlineAt });
     if (!Array.isArray(batch)) throw new Error("GitHub returned an invalid pull request file list.");
     for (const file of batch) {
       if (typeof file.patch !== "string" || file.patch.length === 0) {
@@ -369,7 +369,7 @@ export async function runReview({
     file.patch,
   ].join("\n")).join("\n\n");
 
-  const currentBeforeModel = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken });
+  const currentBeforeModel = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
   if (currentBeforeModel.head?.sha !== expectedHeadSha) {
     throw new Error("Pull request head changed during patch retrieval; refusing to send a stale diff.");
   }
@@ -404,7 +404,7 @@ export async function runReview({
     throw new Error("9Router report exceeds the safe publication size; no comment was written.");
   }
 
-  const currentBeforeComment = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken });
+  const currentBeforeComment = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
   if (currentBeforeComment.head?.sha !== expectedHeadSha) {
     throw new Error("Pull request head changed during model review; refusing to publish a stale report.");
   }
@@ -425,7 +425,7 @@ export async function runReview({
     "_Automated model-assisted review only; not a human approval or proof of correctness. Findings require independent verification._",
   ].join("\n");
 
-  const currentBeforePublish = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken });
+  const currentBeforePublish = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
   if (currentBeforePublish.head?.sha !== expectedHeadSha) {
     throw new Error("Pull request head changed during comment lookup; refusing to publish a stale report.");
   }
@@ -436,6 +436,7 @@ export async function runReview({
     method: "POST",
     token: githubToken,
     body: { body },
+    deadlineAt,
   });
   return { reviewedHeadSha: expectedHeadSha, reviewedBaseSha: expectedBaseSha, publishedNewComment: true };
 }

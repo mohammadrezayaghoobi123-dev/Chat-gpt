@@ -62,3 +62,13 @@
 - Final GREEN evidence before this plan-status update: contract run 45081384862, job 137390092179, 65/65 PASS; Gitleaks Push run 45081384863 and PR run 45081391096 both succeeded.
 - Hosted workflow_run / artifact / live 9Router E2E remains UNKNOWN. Push runs skip resolve-signal and review by design.
 - This plan is not fully closed until Step 3's negative regression coverage is complete and reverified on the latest head.
+
+
+## Latest verification after negative-coverage extension
+
+- Current PR #262 head at verification: 2888c6d1b3c8a0929625a778179ab0de4b3002b8.
+- Contract run 45081750372, job 137391242560: 69/69 PASS; locked install and npm signature verification passed.
+- Gitleaks Push run 45081750496, job 137391242934: no leaks; 4,097 fetched commits scanned.
+- Gitleaks PR run 45081755361, job 137391257196: no leaks; 30 PR commits and 4,097 fetched commits scanned.
+- push-triggered resolve-signal/review jobs skipped by design; hosted workflow_run and live 9Router E2E remain UNKNOWN.
+- Step 3 remains open for the remaining negative boundary classes above.

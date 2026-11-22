@@ -228,6 +228,7 @@ export function resolveWorkflowRunTarget({
     !/^[a-f0-9]{40}$/i.test(runHeadSha ?? "") ||
     !/^[a-f0-9]{40}$/i.test(pullRequestHeadSha ?? "") ||
     !/^[a-f0-9]{40}$/i.test(pullRequestBaseSha ?? "") ||
+    runHeadSha.toLowerCase() !== pullRequestBaseSha.toLowerCase() ||
     typeof headRepositoryFullName !== "string" ||
     headRepositoryFullName.toLowerCase() !== repository.toLowerCase() ||
     typeof baseRepository !== "string" ||

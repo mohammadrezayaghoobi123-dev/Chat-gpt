@@ -2365,7 +2365,7 @@ test("reconstructs a missing Compare API patch from immutable Git blobs", async 
       return json({
         sha: headTreeSha,
         truncated: false,
-        tree: [{ path: "src/sample.js", mode: "100644", type: "blob", sha: headBlobSha, size: Buffer.byteLength(afterText) }],
+        tree: [{ path: "src/sample.js", mode: "100755", type: "blob", sha: headBlobSha, size: Buffer.byteLength(afterText) }],
       });
     }
     if (target.endsWith("/git/blobs/" + baseBlobSha)) {
@@ -2411,6 +2411,7 @@ test("reconstructs a missing Compare API patch from immutable Git blobs", async 
   const serializedPatch = userMessage.split("Patch as JSON string:" + String.fromCharCode(10)).at(-1);
   const patch = JSON.parse(serializedPatch);
   assert.ok(patch.includes("FILE: src/sample.js"));
+  assert.match(patch, /File mode changed from 100644 to 100755/);
   assert.match(patch, /@@ -1 \+1 @@/);
   assert.match(patch, /-const value = 1;/);
   assert.match(patch, /\+const value = 2;/);

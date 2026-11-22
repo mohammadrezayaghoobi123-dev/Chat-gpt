@@ -737,7 +737,7 @@ test("append-only publication ignores duplicate matching bot comments and posts 
   assert.equal(postCalls, 1, "the current execution must create a new report");
 });
 
-test("an ambiguous POST timeout may produce a duplicate on append-only rerun", async () => {
+test("an ambiguous POST timeout is reconciled before rerun publication", async () => {
   const headSha = "7".repeat(40);
   const baseSha = "8".repeat(40);
   const comments = [];
@@ -786,10 +786,10 @@ test("an ambiguous POST timeout may produce a duplicate on append-only rerun", a
   assert.equal(comments.length, 1, "the remote side effect may exist despite the lost response");
   await runReview(config);
 
-  assert.equal(historyReads, 0, "append-only reruns must not scan history to deduplicate");
-  assert.equal(postAttempts, 2, "the rerun creates a fresh report rather than reconciling the uncertain POST");
-  assert.equal(patchAttempts, 0, "append-only publication never updates earlier comments");
-  assert.equal(comments.length, 2, "a duplicate report is an accepted at-least-once delivery limitation");
+  assert.equal(historyReads, 1, "the rerun must reconcile the PR comment history before publication");
+  assert.equal(postAttempts, 1, "a matching report for the exact head/base pair must suppress a duplicate POST");
+  assert.equal(patchAttempts, 0, "reconciliation must remain read-only and never update earlier comments");
+  assert.equal(comments.length, 1, "an ambiguous first POST must not create a duplicate when its comment is visible");
 });
 
 test("review workflow keeps per-PR serialization and bounded queue semantics explicit", () => {

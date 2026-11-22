@@ -970,7 +970,7 @@ test("oversized 9Router HTTP bodies are stopped while streaming before JSON pars
     }),
     /response exceeds the safe response size/i,
   );
-  assert.equal(commentListCalls, 0, "an oversized HTTP body must be rejected before comment-history retrieval");
+  assert.equal(commentListCalls, 1, "bounded duplicate reconciliation occurs before the 9Router request");
 });
 
 

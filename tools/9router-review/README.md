@@ -252,3 +252,11 @@ The reviewer job depends on successful receipt verification. Missing or malforme
 7. B is implemented as independent read-only GitHub API reconciliation, not a durable external registry. No paid service, database, or additional infrastructure is introduced.
 
 No merge, deployment, repository setting, ruleset, Actions policy, or secret was changed.
+
+
+### Final ABC branch verification — 2026-11-22
+- Final work-branch HEAD after implementation and documentation: `310b67a821cf9c29dbc85ed5eec60168d3998b08`.
+- Contract tests after the Finding 35 README update: run `45053182612`, job `137302593898`: **47/47 PASS**, zero failures, cancellations, or skips. The subsequent commit changed only the implementation plan document.
+- Final full-history Gitleaks scan: run `45053210347`, job `137302682517`: **3,949 commits scanned**, approximately **12.37 MB**, no leaks found.
+- Both privileged jobs (`resolve-signal` and `review`) were skipped on Push by design. No hosted signal artifact round trip or privileged reviewer E2E is claimed.
+- The main branch remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`. PR #261 remains Draft/Open/Unmerged. No merge, deploy, secret, policy, ruleset, or Production change.

@@ -202,3 +202,53 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 - **Fixture correction:** all positive resolver fixtures now use `runHeadSha === pullRequests[0].base.sha`; the negative regression explicitly tests a mismatch. No test was weakened.
 - **Residual UNKNOWN:** no `pull_request_target` signal run is available in the repository's current Actions history (query returned zero runs), so the exact hosted `workflow_run.head_sha` / PR base snapshot equality has not been validated against a real delivery. This implementation intentionally fails closed if GitHub supplies inconsistent metadata. No live 9Router call or privileged E2E is claimed.
 - **Disposition:** the previously accepted mismatch is rejected by code and contract tests. Keep the privileged workflow inactive until a trusted default-branch bootstrap and hosted E2E can verify the payload contract.
+
+
+## Finding 35 — `workflow_run.pull_requests` is not causal PR provenance
+
+**Disposition:** The ambiguous PR-selection path is removed from the runtime and replaced by the ABC provenance chain. Hosted end-to-end activation remains **UNKNOWN** until the workflows are present on the default branch and a real `pull_request_target` → `workflow_run` round trip is observed.
+
+### A — Event-bound signal receipt
+
+The trusted `pull_request_target` signal workflow writes a fixed-schema `signal.json` using only values from the trusted GitHub event context. The receipt binds:
+
+- repository name and numeric repository ID;
+- workflow run ID and run attempt;
+- event name and action;
+- exact PR number;
+- PR head and base SHAs;
+- head/base repository names and base ref.
+
+The workflow uploads only this file as `9router-pr-signal-<run_id>-<run_attempt>`, with one-day retention. The signal workflow has no checkout, no PR-code execution, no secrets, no router access, and no external network calls other than the GitHub artifact upload.
+
+### B — Independent GitHub API reconciliation
+
+Before downloading the artifact, the privileged workflow reads the authoritative `run_attempt` from `GET /repos/{owner}/{repo}/actions/runs/{run_id}` and checks run identity, event, workflow path, conclusion, repository identity, workflow ID, and head SHA. It downloads only the artifact belonging to that exact run ID and API-verified attempt.
+
+The resolver then parses the bounded receipt and independently re-fetches both the workflow run and the PR. It checks the receipt against run ID/attempt, repository identity, workflow metadata, run SHA, PR number, open/non-draft state, head/base SHAs, base ref, and repository identities. It never reads or selects from the API's `pull_requests` array. The verified PR number becomes the downstream job output and is the only source for per-PR concurrency.
+
+The resolver job has read-only `actions`, `contents`, and `pull-requests` permissions. Router credentials and the review-marker key are not available to it.
+
+### C — Fail-closed execution gate
+
+The reviewer job depends on successful receipt verification. Missing or malformed receipts, wrong run/attempt, wrong workflow, repository mismatch, stale PR snapshots, closed/draft PRs, API errors, or any SHA mismatch stop the chain before model inference and comment publication. The downloaded artifact is parsed as data only; it is never executed or checked out.
+
+### Implementation and verification evidence
+
+- Work branch: `feature/9router-abc-provenance`.
+- Implementation HEAD at this checkpoint: `af7f529477cde0d8ce6f20ce17fc4ef7fbb11def`.
+- Contract workflow run `45053100603`: `contract-tests` passed, **47/47**, zero failures, cancellations, or skips.
+- Secret scan run `45053100500`: Gitleaks scanned **3,949 commits** / approximately **12.37 MB**; no leaks found.
+- The `resolve-signal` and `review` jobs were skipped on the push event by design. These results prove the contract suite and secret scan only; they do not prove artifact round-trip behavior, privileged workflow activation, or a live 9Router request.
+
+### Residual limitations and explicit UNKNOWNs
+
+1. The signal and privileged workflow files are not yet on the default branch. GitHub's `workflow_run` trigger requires the referenced workflow to exist on the default branch; no default-branch change is made in this work.
+2. The hosted behavior of `workflow_run.head_sha` versus the PR base SHA has not been observed for this repository. The resolver preserves the Finding 34 equality check and fails closed on mismatch.
+3. A real artifact upload/download round trip and privileged `workflow_run` execution remain **UNKNOWN** until a separately approved default-branch bootstrap.
+4. The receipt is not independently cryptographically signed. Its provenance depends on the trusted default-branch signal workflow, exact run/attempt artifact retrieval, GitHub artifact integrity, and independent API reconciliation.
+5. JavaScript `JSON.parse` does not report duplicate object keys; duplicate keys therefore follow its last-key-wins behavior. The exact-key schema, trusted producer, and independent GitHub API checks reduce exposure, but this parser limitation remains documented.
+6. Fork PRs are intentionally rejected by the same-repository identity checks. Supporting fork PRs requires a separate threat-model and permission review.
+7. B is implemented as independent read-only GitHub API reconciliation, not a durable external registry. No paid service, database, or additional infrastructure is introduced.
+
+No merge, deployment, repository setting, ruleset, Actions policy, or secret was changed.

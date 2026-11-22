@@ -1873,7 +1873,7 @@ test("a report signed by the immediately previous marker key suppresses duplicat
   });
 
   assert.equal(historyReads, 1);
-  assert.equal(prReads, 3, "duplicate reconciliation must return before inference or publication");
   assert.equal(routerCalls, 0, "a previous-key report must suppress unnecessary model inference");
   assert.equal(postCalls, 0, "key rotation must not duplicate the same snapshot report");
+  assert.equal(prReads, 3, "duplicate reconciliation must return before inference or publication");
 });

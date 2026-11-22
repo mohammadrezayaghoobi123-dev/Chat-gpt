@@ -1371,7 +1371,7 @@ test("review refuses to run without the dedicated marker-signing key", async () 
   assert.equal(networkCalls, 0, "missing marker key must fail before any external request");
 });
 
-test("an unsigned forged bot marker cannot suppress a legitimate report", async () => {
+test("unsigned, tampered, and mismatched-identity bot markers cannot suppress a legitimate report", async () => {
   const headSha = "c".repeat(40);
   const baseSha = "d".repeat(40);
   const markerKey = "test-only-marker-key-with-at-least-32-bytes";
@@ -1423,6 +1423,11 @@ test("an unsigned forged bot marker cannot suppress a legitimate report", async 
           id: 1293,
           user: { login: "github-actions[bot]", id: 1, type: "User" },
           body: validMarker + String.fromCharCode(10) + "valid HMAC marker from a different account identity",
+        },
+        {
+          id: 1294,
+          user: { login: "github-actions[bot]", id: 41898282, type: "User" },
+          body: validMarker + String.fromCharCode(10) + "valid HMAC marker with an invalid account type",
         },
       ]), { status: 200 });
     }

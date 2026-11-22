@@ -1190,3 +1190,58 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
   assert.ok(publishedBody.includes("| left | right |"), "safe table structure should be preserved");
   assert.ok(publishedBody.includes("const safe = 1;"), "safe fenced code content should be preserved");
 });
+
+
+test("append-only publication never scans or updates an existing matching bot comment", async () => {
+  const headSha = "a".repeat(40);
+  const baseSha = "b".repeat(40);
+  let commentHistoryReads = 0;
+  let patchCalls = 0;
+  let postCalls = 0;
+  const existingComment = {
+    id: 999,
+    user: { login: "github-actions[bot]" },
+    body: "<!-- 9router-independent-review:" + headSha + ":" + baseSha + " -->\\nExisting report",
+  };
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/284")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/284/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\\\n-old\\\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/284/comments?")) {
+      commentHistoryReads += 1;
+      return new Response(JSON.stringify([existingComment]), { status: 200 });
+    }
+    if (target.includes("/issues/comments/999") && options.method === "PATCH") {
+      patchCalls += 1;
+      return new Response(JSON.stringify({ id: 999 }), { status: 200 });
+    }
+    if (target.endsWith("/issues/284/comments") && options.method === "POST") {
+      postCalls += 1;
+      return new Response(JSON.stringify({ id: 1000 }), { status: 201 });
+    }
+    throw new Error("Unexpected API operation in append-only publication test: " + target);
+  };
+
+  await runReview({
+    repository: "owner/repo",
+    pullRequest: 284,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  assert.equal(commentHistoryReads, 0, "append-only publication must not inspect existing comments");
+  assert.equal(patchCalls, 0, "an existing matching bot comment must never be updated");
+  assert.equal(postCalls, 1, "every successful review execution must create a fresh comment");
+});

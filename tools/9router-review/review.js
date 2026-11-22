@@ -8,9 +8,9 @@ function neutralizeGitHubMentions(value) {
 function sanitizeModelReport(value) {
   return neutralizeGitHubMentions(
     value
-      .replace(/!\[([^\]]*)\](?:\([^)]*\)|\[[^]]*\])/g, (_, alt) =>
+      .replace(/!\[([^\]]*)\](?:\([^)]*\)|\[[^\]]*\])/g, (_, alt) =>
         alt ? alt + " [image omitted]" : "[image omitted]")
-      .replace(/\[([^\]]+)\](?:\([^)]*\)|\[[^]]*\])/g, "$1 [link omitted]")
+      .replace(/\[([^\]]+)\](?:\([^)]*\)|\[[^\]]*\])/g, "$1 [link omitted]")
       .replace(/<[^>]*>/g, "")
       .replace(/https?:\/\/[^\s<>()]+/gi, "[external URL omitted]"),
   );

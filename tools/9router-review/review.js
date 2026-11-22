@@ -294,7 +294,7 @@ export function classifyGitHubApiFailure(response, now = Date.now()) {
 
   const remaining = headers?.get?.("x-ratelimit-remaining");
   const resetValue = headers?.get?.("x-ratelimit-reset");
-  const reset = resetValue !== null && resetValue !== undefined && /^\\d+$/.test(resetValue)
+  const reset = resetValue !== null && resetValue !== undefined && /^\d+$/.test(resetValue)
     ? Number(resetValue)
     : null;
 

@@ -416,3 +416,64 @@ test("a base-branch change during model review aborts before publishing a commen
   assert.equal(prReads, 3, "the base SHA must be revalidated after model generation");
   assert.equal(postCalls, 0, "a report for a changed PR diff must never be published");
 });
+
+test("a report for a different base SHA is never overwritten for the same head SHA", async () => {
+  const headSha = "a".repeat(40);
+  const expectedBaseSha = "b".repeat(40);
+  const previousBaseSha = "c".repeat(40);
+  let patchCalls = 0;
+  let postCalls = 0;
+  let postBody = "";
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/268")) {
+      return new Response(JSON.stringify({
+        state: "open",
+        draft: false,
+        head: { sha: headSha },
+        base: { sha: expectedBaseSha },
+      }), { status: 200 });
+    }
+    if (target.includes("/pulls/268/files?")) {
+      return new Response(JSON.stringify([{
+        filename: "src/a.js",
+        patch: "@@ -1 +1 @@\\n-old\\n+new",
+      }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "A sufficiently long placeholder review report." } }],
+      }), { status: 200 });
+    }
+    if (target.includes("/issues/268/comments?")) {
+      return new Response(JSON.stringify([{
+        id: 701,
+        body: "<!-- 9router-independent-review:" + headSha + ":" + previousBaseSha + " -->\\nold base report",
+        user: { login: "github-actions[bot]" },
+      }]), { status: 200 });
+    }
+    if (target.endsWith("/issues/comments/701") && options.method === "PATCH") patchCalls += 1;
+    if (target.endsWith("/issues/268/comments") && options.method === "POST") {
+      postCalls += 1;
+      postBody = JSON.parse(options.body).body;
+    }
+    return new Response(JSON.stringify({ id: 702 }), { status: 201 });
+  };
+
+  await runReview({
+    repository: "owner/repo",
+    pullRequest: 268,
+    expectedHeadSha: headSha,
+    expectedBaseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  assert.equal(patchCalls, 0, "a report for an older base SHA must not be overwritten");
+  assert.equal(postCalls, 1, "a distinct head/base pair must receive a distinct report comment");
+  assert.ok(postBody.startsWith("<!-- 9router-independent-review:" + headSha + ":" + expectedBaseSha + " -->"));
+  assert.match(postBody, new RegExp("Reviewed base SHA: " + expectedBaseSha));
+});

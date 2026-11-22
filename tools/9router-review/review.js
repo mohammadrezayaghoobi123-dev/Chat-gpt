@@ -1,4 +1,5 @@
 const MAX_PATCH_CHARS = 45000;
+const MAX_REPORT_CHARS = 30000;
 const REVIEW_MARKER = "<!-- 9router-independent-review:";
 
 function neutralizeGitHubMentions(value) {
@@ -170,6 +171,10 @@ export async function runReview({
   const result = await completion.json();
   const report = result.choices?.[0]?.message?.content;
   if (typeof report !== "string" || report.trim().length < 20) throw new Error("9Router returned an empty or invalid review.");
+  const sanitizedReport = sanitizeModelReport(report.trim());
+  if (sanitizedReport.length > MAX_REPORT_CHARS) {
+    throw new Error("9Router report exceeds the safe publication size; no comment was written.");
+  }
 
   const currentBeforeComment = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken });
   if (currentBeforeComment.head?.sha !== expectedHeadSha) {
@@ -186,7 +191,7 @@ export async function runReview({
     "**Reviewed head SHA:** " + expectedHeadSha,
     "**Reviewed base SHA:** " + expectedBaseSha,
     "",
-    sanitizeModelReport(report.trim()),
+    sanitizedReport,
     "",
     "---",
     "_Automated model-assisted review only; not a human approval or proof of correctness. Findings require independent verification._",

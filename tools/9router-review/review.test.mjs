@@ -2734,10 +2734,10 @@ test("exact 512 KiB blobs and the cumulative 4 MiB Git blob budget remain review
   const blobSha = bytes => createHash("sha1")
     .update(Buffer.concat([Buffer.from("blob " + bytes.length + String.fromCharCode(0)), bytes]))
     .digest("hex");
-  const commonLines = Buffer.from("same-line\n".repeat(52428));
-  assert.equal(commonLines.length, 524280);
   for (let index = 0; index < 4; index += 1) {
     const path = "src/exact-budget-" + String(index).padStart(2, "0") + ".txt";
+    const commonLines = Buffer.from("id-" + String(index).padStart(6, "0") + "\n" + "same-line\n".repeat(52427));
+    assert.equal(commonLines.length, 524280);
     const before = Buffer.concat([commonLines, Buffer.from("oldline\n")]);
     const after = Buffer.concat([commonLines, Buffer.from("newline\n")]);
     assert.equal(before.length, 512 * 1024);

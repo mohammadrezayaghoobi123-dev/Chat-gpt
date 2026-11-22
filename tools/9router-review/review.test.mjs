@@ -70,3 +70,38 @@ test("missing file patches stop the review before sending source to 9Router", as
   );
   assert.equal(routerCalls, 0, "incomplete source must never be sent to 9Router");
 });
+
+
+test("a head change during patch retrieval aborts before the model request", async () => {
+  let prReads = 0;
+  let routerCalls = 0;
+  const fakeFetch = async (url) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/262")) {
+      prReads += 1;
+      const sha = prReads === 1 ? "d".repeat(40) : "e".repeat(40);
+      return new Response(JSON.stringify({ head: { sha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/262/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/safe.js", patch: "@@ -1 +1 @@\n-old\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) routerCalls += 1;
+    return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
+  };
+
+  await assert.rejects(
+    runReview({
+      repository: "owner/repo",
+      pullRequest: 262,
+      expectedHeadSha: "d".repeat(40),
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }),
+    /head changed/i,
+  );
+  assert.equal(prReads, 2, "the PR head must be revalidated after patch retrieval");
+  assert.equal(routerCalls, 0, "a stale patch must never be sent to 9Router");
+});

@@ -105,3 +105,49 @@ test("a head change during patch retrieval aborts before the model request", asy
   assert.equal(prReads, 2, "the PR head must be revalidated after patch retrieval");
   assert.equal(routerCalls, 0, "a stale patch must never be sent to 9Router");
 });
+
+
+test("a user-authored marker comment is never overwritten by the reviewer", async () => {
+  const headSha = "f".repeat(40);
+  let patchCalls = 0;
+  let postCalls = 0;
+  let prReads = 0;
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/263")) {
+      prReads += 1;
+      return new Response(JSON.stringify({ head: { sha: headSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/263/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\n-old\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/263/comments?")) {
+      return new Response(JSON.stringify([{
+        id: 99,
+        body: "<!-- 9router-independent-review:" + headSha + " -->\nmalicious spoof",
+        user: { login: "untrusted-contributor" },
+      }]), { status: 200 });
+    }
+    if (target.endsWith("/issues/comments/99") && options.method === "PATCH") patchCalls += 1;
+    if (target.endsWith("/issues/263/comments") && options.method === "POST") postCalls += 1;
+    return new Response(JSON.stringify({ id: 100 }), { status: 201 });
+  };
+
+  await runReview({
+    repository: "owner/repo",
+    pullRequest: 263,
+    expectedHeadSha: headSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  assert.equal(prReads, 3, "the head must be checked before model use and before publishing");
+  assert.equal(patchCalls, 0, "the reviewer must not edit comments authored by another user");
+  assert.equal(postCalls, 1, "the reviewer must create its own report comment");
+});

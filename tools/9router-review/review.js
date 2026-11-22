@@ -402,12 +402,9 @@ async function findMatchingReviewComments({ fetchImpl, base, repoPath, repositor
   throw new Error("Pull request comment history exceeds the safe reconciliation page limit; refusing to publish.");
 }
 
-function assertReviewablePullRequest(pr, { expectedHeadSha, expectedBaseSha, phase }) {
+function assertReviewablePullRequest(pr, { expectedHeadSha, expectedBaseSha, phase, allowDraft = false }) {
   if (pr?.state !== "open") {
     throw new Error("Pull request is not open during " + phase + "; refusing to continue.");
-  }
-  if (pr.draft !== false) {
-    throw new Error("Pull request is draft or its draft state is unavailable during " + phase + "; refusing to continue.");
   }
   if (pr.head?.sha !== expectedHeadSha) {
     throw new Error("Pull request head changed during " + phase + "; refusing to review or publish a different commit.");
@@ -415,6 +412,11 @@ function assertReviewablePullRequest(pr, { expectedHeadSha, expectedBaseSha, pha
   if (pr.base?.sha !== expectedBaseSha) {
     throw new Error("Pull request base branch changed during " + phase + "; refusing to review or publish a different diff.");
   }
+  if (pr.draft === true && allowDraft) return false;
+  if (pr.draft !== false) {
+    throw new Error("Pull request is draft or its draft state is unavailable during " + phase + "; refusing to continue.");
+  }
+  return true;
 }
 
 export async function runReview({
@@ -434,7 +436,8 @@ export async function runReview({
   const base = new URL(githubApiBase);
   const repoPath = "/repos/" + repository;
   const pr = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
-  assertReviewablePullRequest(pr, { expectedHeadSha, expectedBaseSha, phase: "initial validation" });
+  const initiallyReviewable = assertReviewablePullRequest(pr, { expectedHeadSha, expectedBaseSha, phase: "initial validation", allowDraft: true });
+  if (!initiallyReviewable) return { status: "skipped-draft", reviewedHeadSha: expectedHeadSha };
   const files = [];
   let patchChars = 0;
   for (let page = 1; page <= 10; page += 1) {

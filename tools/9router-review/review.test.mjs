@@ -1229,13 +1229,16 @@ test("append-only publication never scans or updates an existing matching bot co
   assert.equal(postCalls, 1, "every successful review execution must create a fresh comment");
 });
 
-test("the overall review deadline is propagated to the first GitHub request", async () => {
+test("the overall review deadline aborts an in-flight GitHub request", async () => {
   let calls = 0;
+  let capturedSignal;
   const fakeFetch = async (_url, options = {}) => {
     calls += 1;
-    assert.ok(options.signal, "every outbound request must receive an abort signal");
-    assert.equal(options.signal.aborted, true, "an exhausted review deadline must abort before network work");
-    throw options.signal.reason ?? new Error("review deadline elapsed");
+    capturedSignal = options.signal;
+    assert.ok(capturedSignal, "every outbound request must receive an abort signal");
+    return new Promise((resolve, reject) => {
+      capturedSignal.addEventListener("abort", () => reject(capturedSignal.reason), { once: true });
+    });
   };
 
   await assert.rejects(
@@ -1248,9 +1251,10 @@ test("the overall review deadline is propagated to the first GitHub request", as
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
       model: "test-model",
-      reviewTimeoutMs: 0,
+      reviewTimeoutMs: 10,
       fetchImpl: fakeFetch,
     }),
   );
-  assert.equal(calls, 1, "an exhausted global budget must stop before later API or model calls");
+  assert.equal(calls, 1, "the first request should start within the global budget");
+  assert.equal(capturedSignal.aborted, true, "the global deadline must abort an in-flight request");
 });

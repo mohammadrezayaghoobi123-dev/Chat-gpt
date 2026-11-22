@@ -32,7 +32,7 @@ Never commit these values or paste the API key into issues, pull requests, or ch
 - **Bot identity limitation:** `github-actions[bot]` plus a marker is not cryptographic provenance. Another workflow with `pull-requests: write` could post a spoofed marker as the same bot and cause this reviewer to update that comment. The four workflows currently present on `main` were inspected: none requests `pull-requests: write`; the existing Pages workflow requests Pages and OIDC permissions only. Any future workflow granted PR-comment write access must trigger a renewed trust-boundary review. Stronger isolation would require a dedicated GitHub App identity/token or independently protected signed provenance.
 - Uses `GITHUB_TOKEN` only for reading repository contents and PR metadata/files and writing PR comments. No contents write, review approval, merge, or deployment permission is requested.
 - Requires HTTPS for the 9Router endpoint and rejects embedded credentials, query parameters, and URL fragments.
-- Suppresses API response bodies on errors to avoid leaking provider diagnostics or credentials into logs.
+- Suppresses API response bodies on errors to avoid leaking provider diagnostics or credentials into logs, and explicitly cancels unread non-success response streams to release transport resources.
 
 ## Activation boundary
 

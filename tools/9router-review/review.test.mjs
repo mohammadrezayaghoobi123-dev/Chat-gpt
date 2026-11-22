@@ -164,9 +164,9 @@ test("workflow-run metadata resolves only a trusted same-repository PR signal", 
     runHeadSha: "b".repeat(40),
     repository: "owner/repo",
     headRepository: "owner/repo",
-    pullRequests: [{ number: 42, head: { sha: "a".repeat(40) } }],
+    pullRequests: [{ number: 42, head: { sha: "a".repeat(40) }, base: { sha: "c".repeat(40) } }],
   });
-  assert.deepEqual(target, { pullRequest: 42, expectedHeadSha: "a".repeat(40) });
+  assert.deepEqual(target, { pullRequest: 42, expectedHeadSha: "a".repeat(40), expectedBaseSha: "c".repeat(40) });
 });
 
 test("workflow-run metadata rejects forked, spoofed, or malformed signals", () => {
@@ -179,7 +179,7 @@ test("workflow-run metadata rejects forked, spoofed, or malformed signals", () =
     runHeadSha: "a".repeat(40),
     repository: "owner/repo",
     headRepository: "owner/repo",
-    pullRequests: [{ number: 42, head: { sha: "a".repeat(40) } }],
+    pullRequests: [{ number: 42, head: { sha: "a".repeat(40) }, base: { sha: "c".repeat(40) } }],
   };
   for (const override of [
     { eventName: "push" },
@@ -252,4 +252,84 @@ test("workflow-run target uses the immutable PR head snapshot, not the pull_requ
   });
 
   assert.deepEqual(target, { pullRequest: 43, expectedHeadSha: "a".repeat(40) });
+});
+
+
+test("workflow-run metadata requires and returns the immutable PR base SHA", () => {
+  const base = {
+    eventName: "workflow_run",
+    workflowPath: ".github/workflows/9router-pr-review-signal.yml",
+    triggerEvent: "pull_request",
+    workflowConclusion: "success",
+    runHeadSha: "b".repeat(40),
+    repository: "owner/repo",
+    headRepository: "owner/repo",
+    pullRequests: [{
+      number: 44,
+      head: { sha: "a".repeat(40) },
+      base: { sha: "c".repeat(40) },
+    }],
+  };
+
+  assert.deepEqual(reviewer.resolveWorkflowRunTarget(base), {
+    pullRequest: 44,
+    expectedHeadSha: "a".repeat(40),
+    expectedBaseSha: "c".repeat(40),
+  });
+  assert.throws(
+    () => reviewer.resolveWorkflowRunTarget({
+      ...base,
+      pullRequests: [{ number: 44, head: { sha: "a".repeat(40) }, base: {} }],
+    }),
+    /invalid.*metadata|base.*SHA/i,
+  );
+});
+
+test("a base-branch change after patch retrieval aborts before the model request", async () => {
+  const headSha = "a".repeat(40);
+  const expectedBaseSha = "b".repeat(40);
+  let prReads = 0;
+  let routerCalls = 0;
+  const fakeFetch = async (url) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/266")) {
+      prReads += 1;
+      const baseSha = prReads === 1 ? expectedBaseSha : "c".repeat(40);
+      return new Response(JSON.stringify({
+        state: "open",
+        draft: false,
+        head: { sha: headSha },
+        base: { sha: baseSha },
+      }), { status: 200 });
+    }
+    if (target.includes("/pulls/266/files?")) {
+      return new Response(JSON.stringify([{
+        filename: "src/a.js",
+        patch: "@@ -1 +1 @@\\n-old\\n+new",
+      }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      routerCalls += 1;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "A sufficiently long placeholder review report." } }],
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify([]), { status: 200 });
+  };
+
+  await assert.rejects(
+    runReview({
+      repository: "owner/repo",
+      pullRequest: 266,
+      expectedHeadSha: headSha,
+      expectedBaseSha,
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }),
+    /base.*changed|different base/i,
+  );
+  assert.equal(routerCalls, 0, "a patch based on a changed target branch must never be sent to 9Router");
 });

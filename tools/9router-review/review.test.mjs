@@ -812,3 +812,46 @@ test("review workflow keeps per-PR serialization and bounded queue semantics exp
   assert.ok(workflow.includes("queue: max"), "pending reviews must use the bounded multi-run queue");
   assert.ok(!workflow.includes("cancel-in-progress: true"), "a running review must not be canceled by a later signal");
 });
+
+test("oversized model reports fail closed before comment lookup or publication", async () => {
+  const headSha = "9".repeat(40);
+  const baseSha = "a".repeat(40);
+  let commentListCalls = 0;
+  let commentPostCalls = 0;
+  const oversizedReport = "R".repeat(30001);
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/276")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/276/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: oversizedReport } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/276/comments?")) {
+      commentListCalls += 1;
+      return new Response(JSON.stringify([]), { status: 200 });
+    }
+    if (target.endsWith("/issues/276/comments") && options.method === "POST") commentPostCalls += 1;
+    return new Response(JSON.stringify({ id: 902 }), { status: 201 });
+  };
+
+  await assert.rejects(
+    runReview({
+      repository: "owner/repo",
+      pullRequest: 276,
+      expectedHeadSha: headSha,
+      expectedBaseSha: baseSha,
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }),
+    /report exceeds the safe publication size/i,
+  );
+  assert.equal(commentListCalls, 0, "oversized output must be rejected before comment-history retrieval");
+  assert.equal(commentPostCalls, 0, "oversized output must never be published");
+});

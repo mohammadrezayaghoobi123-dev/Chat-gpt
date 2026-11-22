@@ -1,5 +1,5 @@
-import { appendFileSync, lstatSync, readFileSync } from "node:fs";
-import { parseSignalReceipt, resolveWorkflowRunTarget, verifySignalTargetWithGitHub } from "./signal-receipt.js";
+import { appendFileSync } from "node:fs";
+import { readSignalReceiptFile, resolveWorkflowRunTarget, verifySignalTargetWithGitHub } from "./signal-receipt.js";
 
 function positiveInteger(value, name) {
   const parsed = Number(value);
@@ -10,11 +10,7 @@ function positiveInteger(value, name) {
 try {
   const receiptPath = process.env.SIGNAL_RECEIPT_PATH;
   if (!receiptPath) throw new Error("Signal receipt path is missing.");
-  const receiptStat = lstatSync(receiptPath);
-  if (!receiptStat.isFile() || receiptStat.isSymbolicLink() || receiptStat.size < 1 || receiptStat.size > 16 * 1024) {
-    throw new Error("Signal receipt file is not a regular file or exceeds 16 KiB.");
-  }
-  const receipt = parseSignalReceipt(readFileSync(receiptPath, "utf8"));
+  const receipt = readSignalReceiptFile(receiptPath);
   const context = {
     eventName: process.env.GITHUB_EVENT_NAME,
     workflowPath: process.env.WORKFLOW_PATH,

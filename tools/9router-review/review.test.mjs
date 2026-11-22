@@ -1296,6 +1296,7 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
     "- first item",
     "- second item",
     "> quoted **detail**",
+    "",
     "| left | right |",
     "| --- | --- |",
     "| left\\|injected | right |",
@@ -1351,7 +1352,7 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
   const tokens = collectMarkdownTokenTypes(marked.lexer(sanitizedReport, { gfm: true }));
   const parsedSanitized = marked.lexer(sanitizedReport, { gfm: true });
   const sanitizedTable = parsedSanitized.find(token => token.type === "table");
-  assert.ok(sanitizedTable, "sanitized report must retain its table: " + sanitizedReport);
+  assert.ok(sanitizedTable, "sanitized report must retain its table");
   assert.equal(sanitizedTable.header.length, 2, "escaped pipes must not create extra table columns");
   assert.equal(sanitizedTable.rows[0].length, 2, "escaped pipes inside cells must remain inside the original cell");
   const activeTypes = tokens.filter(type => ["link", "image", "html", "url", "autolink"].includes(type));

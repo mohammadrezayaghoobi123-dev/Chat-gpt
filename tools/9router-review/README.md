@@ -331,9 +331,9 @@ No merge, deployment, repository setting, ruleset, Actions policy, or secret was
 
 ## Latest verification checkpoint — Linux contract suite (2026-11-22)
 
-- Exact audited commit: `6fad985fdcf5ac9d517b0a3d8bb1304ca55acda8` on `feature/9router-abc-provenance`.
-- GitHub Actions push run `45063068444`, job `137333077877` (`contract-tests`): **55/55 PASS**, zero failures, cancellations, or skips. This is the complete Linux `ubuntu-24.04` suite, including both reviewer and signal-receipt tests. It resolves the earlier Windows-only `O_NOFOLLOW` limitation for this exact commit; the Windows 54/55 result remains a platform-specific observation, not a Linux failure.
+- Exact audited commit: `e56829a7fdea85e4de91c152b16c36f50da3e61b` on `feature/9router-abc-provenance`.
+- GitHub Actions push run `45063177066`, job `137333418069` (`contract-tests`): **55/55 PASS**, zero failures, cancellations, or skips. This is the complete Linux `ubuntu-24.04` suite, including both reviewer and signal-receipt tests. It resolves the earlier Windows-only `O_NOFOLLOW` limitation for this exact commit; the Windows 54/55 result remains a platform-specific observation, not a Linux failure.
 - The same job completed `npm ci --ignore-scripts` and `npm audit signatures`; one locked package registry signature was verified.
-- Full-history Gitleaks push run `45063068460` and PR run `45063073952`: both completed successfully.
+- Full-history Gitleaks push run `45063177089` and PR run `45063182308`: both completed successfully.
 - The `resolve-signal` and `review` jobs were skipped on the push event by design. These results prove the Linux contract suite and secret scans only; they do **not** prove a hosted `pull_request_target → workflow_run` artifact round trip, privileged review execution, live 9Router inference, or report publication.
 - PR #262 remains Draft/Open/Unmerged and targets `feature/independent-9router-pr-review`. `main` remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`. No merge, deployment, secret, repository setting, ruleset, Actions policy, or Production change was made.

@@ -54,6 +54,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ROUTER_BASE_URL: ${{ secrets.NINE_ROUTER_API_URL }}
       ROUTER_API_KEY: ${{ secrets.NINE_ROUTER_API_KEY }}
+      REVIEW_MARKER_KEY: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_KEY }}
       ROUTER_MODEL: ${{ vars.NINE_ROUTER_MODEL }}
       REPOSITORY: ${{ github.repository }}
       GITHUB_EVENT_NAME: ${{ github.event_name }}
@@ -65,10 +66,10 @@ jobs:
       RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - name: Check reviewer configuration
-        if: env.ROUTER_BASE_URL == '' || env.ROUTER_API_KEY == '' || env.ROUTER_MODEL == ''
+        if: env.ROUTER_BASE_URL == '' || env.ROUTER_API_KEY == '' || env.REVIEW_MARKER_KEY == '' || env.ROUTER_MODEL == ''
         run: |
-          echo "::warning::9Router review NOT RUN: repository secrets NINE_ROUTER_API_URL and NINE_ROUTER_API_KEY and variable NINE_ROUTER_MODEL are required."
-          echo "9Router review was not run because the endpoint, API key, or model is not configured." >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::9Router review NOT RUN: repository secrets NINE_ROUTER_API_URL, NINE_ROUTER_API_KEY, and NINE_ROUTER_REVIEW_MARKER_KEY plus variable NINE_ROUTER_MODEL are required."
+          echo "9Router review was not run because the endpoint, API key, marker-signing key, or model is not configured." >> "$GITHUB_STEP_SUMMARY"
       - name: Checkout trusted default-branch reviewer code only
         if: env.ROUTER_BASE_URL != '' && env.ROUTER_API_KEY != '' && env.ROUTER_MODEL != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

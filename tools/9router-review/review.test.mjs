@@ -1237,7 +1237,11 @@ test("the overall review deadline aborts an in-flight GitHub request", async () 
     capturedSignal = options.signal;
     assert.ok(capturedSignal, "every outbound request must receive an abort signal");
     return new Promise((resolve, reject) => {
-      capturedSignal.addEventListener("abort", () => reject(capturedSignal.reason), { once: true });
+      const keepAlive = setTimeout(() => resolve(new Response("{}", { status: 200 })), 100);
+      capturedSignal.addEventListener("abort", () => {
+        clearTimeout(keepAlive);
+        reject(capturedSignal.reason);
+      }, { once: true });
     });
   };
 

@@ -2532,6 +2532,8 @@ test("truncated trees, forged blobs, and binary content stop before inference", 
 test("malformed and unsupported immutable Git blobs fail closed before inference or publication", async t => {
   const scenarios = [
     { name: "malformed-base64", bytes: Buffer.from("safe text\n"), mode: "100644", type: "blob", error: /malformed base64/i },
+    { name: "base64-content-hash-mismatch", bytes: Buffer.from("safe text\n"), mutateContent: Buffer.from("bad! text\n"), mode: "100644", type: "blob", error: /size or content hash is invalid/i },
+    { name: "blob-size-mismatch", bytes: Buffer.from("safe text\n"), responseSizeMismatch: true, mode: "100644", type: "blob", error: /does not match the exact tree object/i },
     { name: "invalid-utf8", bytes: Buffer.from([0xc3, 0x28]), mode: "100644", type: "blob", error: /not valid UTF-8/i },
     { name: "symlink-mode", bytes: Buffer.from("target\n"), mode: "120000", type: "blob", error: /symlink|unsupported Git object mode/i },
     { name: "submodule-object", bytes: Buffer.from(""), mode: "160000", type: "commit", error: /symlink|submodule|unsupported Git object/i },
@@ -2551,7 +2553,7 @@ test("malformed and unsupported immutable Git blobs fail closed before inference
         .update(Buffer.concat([Buffer.from("blob " + bytes.length + String.fromCharCode(0)), bytes]))
         .digest("hex");
       const entrySha = scenario.oversized ? "e".repeat(40) : expectedBlobSha;
-      const entrySize = scenario.oversized ? 512 * 1024 + 1 : bytes.length;
+      const entrySize = scenario.oversized ? 512 * 1024 + 1 : scenario.responseSizeMismatch ? bytes.length + 1 : bytes.length;
       let blobCalls = 0;
       let modelCalls = 0;
       let commentPosts = 0;
@@ -2597,7 +2599,7 @@ test("malformed and unsupported immutable Git blobs fail closed before inference
             sha: expectedBlobSha,
             size: bytes.length,
             encoding: "base64",
-            content: scenario.name === "malformed-base64" ? "%%%invalid%%%" : bytes.toString("base64"),
+            content: scenario.name === "malformed-base64" ? "%%%invalid%%%" : (scenario.mutateContent ?? bytes).toString("base64"),
           });
         }
         if (target.endsWith("/chat/completions")) {

@@ -515,3 +515,58 @@ test("model-generated account mentions are neutralized before comment publicatio
   assert.ok(publishedBody.includes(neutralizedMention));
   assert.ok(!publishedBody.includes(mention));
 });
+
+test("a base-branch change during comment-history retrieval aborts before publishing", async () => {
+  const headSha = "a".repeat(40);
+  const expectedBaseSha = "b".repeat(40);
+  let prReads = 0;
+  let postCalls = 0;
+  let baseChanged = false;
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/270")) {
+      prReads += 1;
+      return new Response(JSON.stringify({
+        state: "open",
+        draft: false,
+        head: { sha: headSha },
+        base: { sha: baseChanged ? "c".repeat(40) : expectedBaseSha },
+      }), { status: 200 });
+    }
+    if (target.includes("/pulls/270/files?")) {
+      return new Response(JSON.stringify([{
+        filename: "src/a.js",
+        patch: "@@ -1 +1 @@\\n-old\\n+new",
+      }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "A sufficiently long placeholder review report." } }],
+      }), { status: 200 });
+    }
+    if (target.includes("/issues/270/comments?")) {
+      baseChanged = true;
+      return new Response(JSON.stringify([]), { status: 200 });
+    }
+    if (target.endsWith("/issues/270/comments") && options.method === "POST") postCalls += 1;
+    return new Response(JSON.stringify({ id: 704 }), { status: 201 });
+  };
+
+  await assert.rejects(
+    runReview({
+      repository: "owner/repo",
+      pullRequest: 270,
+      expectedHeadSha: headSha,
+      expectedBaseSha,
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }),
+    /base.*changed|different diff/i,
+  );
+
+  assert.equal(prReads, 4, "the live head and base must be revalidated after comment-history retrieval");
+  assert.equal(postCalls, 0, "a report must not be published after the diff changes during comment lookup");
+});

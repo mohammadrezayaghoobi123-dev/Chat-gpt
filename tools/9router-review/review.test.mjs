@@ -189,7 +189,7 @@ test("workflow-run metadata rejects forked, spoofed, or malformed signals", () =
     { runHeadSha: "invalid" },
     { headRepository: "attacker/fork" },
     { pullRequests: [] },
-    { pullRequests: [{ number: 42, head: { sha: "bad" } }] },
+    { pullRequests: [{ number: 0, head: { sha: "a".repeat(40) } }] },
   ]) {
     assert.throws(() => reviewer.resolveWorkflowRunTarget({ ...base, ...override }));
   }

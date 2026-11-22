@@ -2528,3 +2528,339 @@ test("truncated trees, forged blobs, and binary content stop before inference", 
     });
   }
 });
+
+test("malformed and unsupported immutable Git blobs fail closed before inference or publication", async t => {
+  const scenarios = [
+    { name: "malformed-base64", bytes: Buffer.from("safe text\n"), mode: "100644", type: "blob", error: /malformed base64/i },
+    { name: "invalid-utf8", bytes: Buffer.from([0xc3, 0x28]), mode: "100644", type: "blob", error: /not valid UTF-8/i },
+    { name: "symlink-mode", bytes: Buffer.from("target\n"), mode: "120000", type: "blob", error: /symlink|unsupported Git object mode/i },
+    { name: "submodule-object", bytes: Buffer.from(""), mode: "160000", type: "commit", error: /symlink|submodule|unsupported Git object/i },
+    { name: "missing-blob", bytes: Buffer.from("missing\n"), mode: "100644", type: "blob", missing: true, error: /404|HTTP/i },
+    { name: "oversized-blob", bytes: Buffer.from(""), mode: "100644", type: "blob", oversized: true, error: /individual object size/i },
+  ];
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async () => {
+      const headSha = "a".repeat(40);
+      const baseSha = "b".repeat(40);
+      const baseTreeSha = "c".repeat(40);
+      const headTreeSha = "d".repeat(40);
+      const filePath = "src/guarded-file.txt";
+      const bytes = scenario.bytes;
+      const expectedBlobSha = createHash("sha1")
+        .update(Buffer.concat([Buffer.from("blob " + bytes.length + String.fromCharCode(0)), bytes]))
+        .digest("hex");
+      const entrySha = scenario.oversized ? "e".repeat(40) : expectedBlobSha;
+      const entrySize = scenario.oversized ? 512 * 1024 + 1 : bytes.length;
+      let blobCalls = 0;
+      let modelCalls = 0;
+      let commentPosts = 0;
+
+      const json = (value, status = 200) => new Response(JSON.stringify(value), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+      const fakeFetch = async (url, options = {}) => {
+        const target = String(url);
+        if (target.endsWith("/pulls/283")) {
+          return json({
+            number: 283,
+            state: "open",
+            draft: false,
+            head: { sha: headSha, repo: { id: 1, full_name: "owner/repo" } },
+            base: { sha: baseSha, repo: { id: 1, full_name: "owner/repo" } },
+          });
+        }
+        if (target.includes("/compare/" + baseSha + "..." + headSha)) {
+          return json({
+            status: "ahead",
+            base_commit: { sha: baseSha },
+            files: [{ filename: filePath, status: "added", additions: 1, deletions: 0, patch: null }],
+          });
+        }
+        if (target.endsWith("/git/commits/" + baseSha)) return json({ sha: baseSha, tree: { sha: baseTreeSha } });
+        if (target.endsWith("/git/commits/" + headSha)) return json({ sha: headSha, tree: { sha: headTreeSha } });
+        if (target.includes("/git/trees/" + baseTreeSha)) {
+          return json({ sha: baseTreeSha, truncated: false, tree: [] });
+        }
+        if (target.includes("/git/trees/" + headTreeSha)) {
+          return json({
+            sha: headTreeSha,
+            truncated: false,
+            tree: [{ path: filePath, mode: scenario.mode, type: scenario.type, sha: entrySha, size: entrySize }],
+          });
+        }
+        if (target.endsWith("/git/blobs/" + entrySha)) {
+          blobCalls += 1;
+          if (scenario.missing) return json({ message: "Not Found" }, 404);
+          return json({
+            sha: expectedBlobSha,
+            size: bytes.length,
+            encoding: "base64",
+            content: scenario.name === "malformed-base64" ? "%%%invalid%%%" : bytes.toString("base64"),
+          });
+        }
+        if (target.endsWith("/chat/completions")) {
+          modelCalls += 1;
+          return json({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] });
+        }
+        if (target.endsWith("/issues/283/comments") && options.method === "POST") {
+          commentPosts += 1;
+          return createdCommentResponse(target, options, 1283);
+        }
+        if (target.includes("/issues/283/comments?")) return json([]);
+        throw new Error("Unexpected API request in immutable-blob negative test: " + target);
+      };
+
+      await assert.rejects(runReview({
+        repository: "owner/repo",
+        pullRequest: 283,
+        strictImmutableSnapshot: true,
+        expectedHeadSha: headSha,
+        expectedBaseSha: baseSha,
+        githubToken: "github-test-token",
+        routerBaseUrl: "https://router.example/v1",
+        routerApiKey: "router-test-token",
+        reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+        model: "test-model",
+        fetchImpl: fakeFetch,
+      }), scenario.error);
+      assert.equal(modelCalls, 0, "invalid or unsupported Git objects must not reach inference");
+      assert.equal(commentPosts, 0, "invalid or unsupported Git objects must not publish a comment");
+      if (["symlink-mode", "submodule-object", "oversized-blob"].includes(scenario.name)) {
+        assert.equal(blobCalls, 0, "unsupported object metadata must be rejected before blob retrieval");
+      } else {
+        assert.equal(blobCalls, 1, "the exact referenced blob must be requested once");
+      }
+    });
+  }
+});
+
+test("cumulative immutable Git blob budget stops before inference or publication", async () => {
+  const headSha = "1".repeat(40);
+  const baseSha = "2".repeat(40);
+  const baseTreeSha = "3".repeat(40);
+  const headTreeSha = "4".repeat(40);
+  const beforeBlobs = new Map();
+  const afterBlobs = new Map();
+  const baseEntries = [];
+  const headEntries = [];
+  const changedFiles = [];
+  const blobSha = bytes => createHash("sha1")
+    .update(Buffer.concat([Buffer.from("blob " + bytes.length + String.fromCharCode(0)), bytes]))
+    .digest("hex");
+
+  for (let index = 0; index < 9; index += 1) {
+    const path = "src/budget-" + String(index).padStart(2, "0") + ".txt";
+    const before = Buffer.from("file-" + index + "\n" + "same-line\n".repeat(24000) + "old\n");
+    const after = Buffer.from("file-" + index + "\n" + "same-line\n".repeat(24000) + "new\n");
+    const beforeSha = blobSha(before);
+    const afterSha = blobSha(after);
+    beforeBlobs.set(beforeSha, before);
+    afterBlobs.set(afterSha, after);
+    baseEntries.push({ path, mode: "100644", type: "blob", sha: beforeSha, size: before.length });
+    headEntries.push({ path, mode: "100644", type: "blob", sha: afterSha, size: after.length });
+    changedFiles.push({ filename: path, status: "modified", additions: 1, deletions: 1, patch: null });
+  }
+
+  let modelCalls = 0;
+  let commentPosts = 0;
+  const json = value => new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/284")) {
+      return json({
+        number: 284,
+        state: "open",
+        draft: false,
+        head: { sha: headSha, repo: { id: 1, full_name: "owner/repo" } },
+        base: { sha: baseSha, repo: { id: 1, full_name: "owner/repo" } },
+      });
+    }
+    if (target.includes("/compare/" + baseSha + "..." + headSha)) {
+      return json({ status: "ahead", base_commit: { sha: baseSha }, files: changedFiles });
+    }
+    if (target.endsWith("/git/commits/" + baseSha)) return json({ sha: baseSha, tree: { sha: baseTreeSha } });
+    if (target.endsWith("/git/commits/" + headSha)) return json({ sha: headSha, tree: { sha: headTreeSha } });
+    if (target.includes("/git/trees/" + baseTreeSha)) return json({ sha: baseTreeSha, truncated: false, tree: baseEntries });
+    if (target.includes("/git/trees/" + headTreeSha)) return json({ sha: headTreeSha, truncated: false, tree: headEntries });
+    if (target.includes("/git/blobs/")) {
+      const sha = target.slice(target.lastIndexOf("/") + 1);
+      const bytes = beforeBlobs.get(sha) ?? afterBlobs.get(sha);
+      if (!bytes) throw new Error("Unexpected blob request in cumulative budget fixture.");
+      return json({ sha, size: bytes.length, encoding: "base64", content: bytes.toString("base64") });
+    }
+    if (target.endsWith("/chat/completions")) {
+      modelCalls += 1;
+      return json({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] });
+    }
+    if (target.endsWith("/issues/284/comments") && options.method === "POST") commentPosts += 1;
+    if (target.includes("/issues/284/comments?")) return json([]);
+    throw new Error("Unexpected API request in cumulative blob budget fixture: " + target);
+  };
+
+  await assert.rejects(runReview({
+    repository: "owner/repo",
+    pullRequest: 284,
+    strictImmutableSnapshot: true,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  }), /cumulative 4 MiB review budget/i);
+  assert.equal(modelCalls, 0);
+  assert.equal(commentPosts, 0);
+});
+
+test("bounded Git diff output exhaustion fails closed before inference or publication", async () => {
+  const headSha = "5".repeat(40);
+  const baseSha = "6".repeat(40);
+  const baseTreeSha = "7".repeat(40);
+  const headTreeSha = "8".repeat(40);
+  const path = "src/large-diff.txt";
+  const before = Buffer.from("old-line\n".repeat(30000));
+  const after = Buffer.from("new-line\n".repeat(30000));
+  const blobSha = bytes => createHash("sha1")
+    .update(Buffer.concat([Buffer.from("blob " + bytes.length + String.fromCharCode(0)), bytes]))
+    .digest("hex");
+  const beforeSha = blobSha(before);
+  const afterSha = blobSha(after);
+  let modelCalls = 0;
+  let commentPosts = 0;
+  const json = value => new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/285")) {
+      return json({
+        number: 285,
+        state: "open",
+        draft: false,
+        head: { sha: headSha, repo: { id: 1, full_name: "owner/repo" } },
+        base: { sha: baseSha, repo: { id: 1, full_name: "owner/repo" } },
+      });
+    }
+    if (target.includes("/compare/" + baseSha + "..." + headSha)) {
+      return json({
+        status: "ahead",
+        base_commit: { sha: baseSha },
+        files: [{ filename: path, status: "modified", additions: 30000, deletions: 30000, patch: null }],
+      });
+    }
+    if (target.endsWith("/git/commits/" + baseSha)) return json({ sha: baseSha, tree: { sha: baseTreeSha } });
+    if (target.endsWith("/git/commits/" + headSha)) return json({ sha: headSha, tree: { sha: headTreeSha } });
+    if (target.includes("/git/trees/" + baseTreeSha)) {
+      return json({ sha: baseTreeSha, truncated: false, tree: [{ path, mode: "100644", type: "blob", sha: beforeSha, size: before.length }] });
+    }
+    if (target.includes("/git/trees/" + headTreeSha)) {
+      return json({ sha: headTreeSha, truncated: false, tree: [{ path, mode: "100644", type: "blob", sha: afterSha, size: after.length }] });
+    }
+    if (target.endsWith("/git/blobs/" + beforeSha)) {
+      return json({ sha: beforeSha, size: before.length, encoding: "base64", content: before.toString("base64") });
+    }
+    if (target.endsWith("/git/blobs/" + afterSha)) {
+      return json({ sha: afterSha, size: after.length, encoding: "base64", content: after.toString("base64") });
+    }
+    if (target.endsWith("/chat/completions")) {
+      modelCalls += 1;
+      return json({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] });
+    }
+    if (target.endsWith("/issues/285/comments") && options.method === "POST") commentPosts += 1;
+    if (target.includes("/issues/285/comments?")) return json([]);
+    throw new Error("Unexpected API request in diff-output budget fixture: " + target);
+  };
+
+  await assert.rejects(runReview({
+    repository: "owner/repo",
+    pullRequest: 285,
+    strictImmutableSnapshot: true,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  }), /bounded Git diff generation failed or timed out/i);
+  assert.equal(modelCalls, 0);
+  assert.equal(commentPosts, 0);
+});
+
+test("the Git-object fallback limit rejects the 301st missing Compare patch before inference", async () => {
+  const headSha = "9".repeat(40);
+  const baseSha = "a".repeat(40);
+  const baseTreeSha = "b".repeat(40);
+  const headTreeSha = "c".repeat(40);
+  const emptyBlobSha = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+  const treeEntries = Array.from({ length: 301 }, (_, index) => ({
+    path: "src/empty-" + String(index).padStart(3, "0") + ".txt",
+    mode: "100644",
+    type: "blob",
+    sha: emptyBlobSha,
+    size: 0,
+  }));
+  let blobCalls = 0;
+  let modelCalls = 0;
+  let commentPosts = 0;
+  const json = value => new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/286")) {
+      return json({
+        number: 286,
+        state: "open",
+        draft: false,
+        head: { sha: headSha, repo: { id: 1, full_name: "owner/repo" } },
+        base: { sha: baseSha, repo: { id: 1, full_name: "owner/repo" } },
+      });
+    }
+    if (target.includes("/compare/" + baseSha + "..." + headSha)) {
+      return json({ status: "ahead", base_commit: { sha: baseSha }, files: [] });
+    }
+    if (target.endsWith("/git/commits/" + baseSha)) return json({ sha: baseSha, tree: { sha: baseTreeSha } });
+    if (target.endsWith("/git/commits/" + headSha)) return json({ sha: headSha, tree: { sha: headTreeSha } });
+    if (target.includes("/git/trees/" + baseTreeSha)) return json({ sha: baseTreeSha, truncated: false, tree: [] });
+    if (target.includes("/git/trees/" + headTreeSha)) return json({ sha: headTreeSha, truncated: false, tree: treeEntries });
+    if (target.endsWith("/git/blobs/" + emptyBlobSha)) {
+      blobCalls += 1;
+      return json({ sha: emptyBlobSha, size: 0, encoding: "base64", content: "" });
+    }
+    if (target.endsWith("/chat/completions")) {
+      modelCalls += 1;
+      return json({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] });
+    }
+    if (target.endsWith("/issues/286/comments") && options.method === "POST") commentPosts += 1;
+    if (target.includes("/issues/286/comments?")) return json([]);
+    throw new Error("Unexpected API request in fallback-count fixture: " + target);
+  };
+
+  await assert.rejects(runReview({
+    repository: "owner/repo",
+    pullRequest: 286,
+    strictImmutableSnapshot: true,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  }), /300-file Git-object fallback limit/i);
+  assert.equal(blobCalls, 1, "identical empty Git blobs should be fetched once and safely cached");
+  assert.equal(modelCalls, 0);
+  assert.equal(commentPosts, 0);
+});

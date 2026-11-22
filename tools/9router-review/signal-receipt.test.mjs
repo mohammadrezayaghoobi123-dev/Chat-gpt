@@ -102,7 +102,7 @@ test("run metadata mismatches are rejected even when pull_requests contains a ca
   ]) {
     await assert.rejects(verifySignalTargetWithGitHub({
       target, repository, repositoryId: 123456, runId: 987654, runAttempt: 2,
-      runHeadSha: baseSha, workflowId: 426787988, githubToken: "test-token",
+      runHeadSha: workflowSha, workflowId: 426787988, githubToken: "test-token",
       fetchImpl: apiFetch({ run }),
     }));
   }
@@ -120,7 +120,7 @@ test("stale, draft, closed, changed, or forked PR snapshots are rejected", async
   ]) {
     await assert.rejects(verifySignalTargetWithGitHub({
       target, repository, repositoryId: 123456, runId: 987654, runAttempt: 2,
-      runHeadSha: baseSha, workflowId: 426787988, githubToken: "test-token",
+      runHeadSha: workflowSha, workflowId: 426787988, githubToken: "test-token",
       fetchImpl: apiFetch({ pull }),
     }));
   }
@@ -131,13 +131,13 @@ test("GitHub authorization, rate-limit, server, and malformed responses fail clo
   for (const status of [401, 403, 404, 429, 500, 503]) {
     await assert.rejects(verifySignalTargetWithGitHub({
       target, repository, repositoryId: 123456, runId: 987654, runAttempt: 2,
-      runHeadSha: baseSha, workflowId: 426787988, githubToken: "test-token",
+      runHeadSha: workflowSha, workflowId: 426787988, githubToken: "test-token",
       fetchImpl: async () => new Response("private error body", { status }),
     }), error => !error.message.includes("private error body"));
   }
   await assert.rejects(verifySignalTargetWithGitHub({
     target, repository, repositoryId: 123456, runId: 987654, runAttempt: 2,
-    runHeadSha: baseSha, workflowId: 426787988, githubToken: "test-token",
+    runHeadSha: workflowSha, workflowId: 426787988, githubToken: "test-token",
     fetchImpl: async () => new Response("{invalid", { status: 200 }),
   }));
 });
@@ -195,7 +195,7 @@ test("only HTTPS API origins or explicit loopback HTTP are accepted", async () =
   const target = resolveWorkflowRunTarget(context);
   const common = {
     target, repository, repositoryId: 123456, runId: 987654, runAttempt: 2,
-    runHeadSha: baseSha, workflowId: 426787988, githubToken: "test-token",
+    runHeadSha: workflowSha, workflowId: 426787988, githubToken: "test-token",
   };
   for (const githubApiBase of ["ftp://localhost", "http://api.example.com"]) {
     await assert.rejects(verifySignalTargetWithGitHub({

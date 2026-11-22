@@ -277,6 +277,59 @@ function createRequestSignal(deadlineAt) {
   return AbortSignal.timeout(Math.max(1, Math.min(120000, Math.ceil(remainingMs))));
 }
 
+export function classifyGitHubApiFailure(response, now = Date.now()) {
+  const status = Number(response?.status);
+  const headers = response?.headers;
+  const retryAfterValue = headers?.get?.("retry-after");
+  let retryAfterSeconds = null;
+  if (retryAfterValue !== null && retryAfterValue !== undefined) {
+    const delay = Number(retryAfterValue);
+    if (Number.isFinite(delay) && delay >= 0) {
+      retryAfterSeconds = Math.ceil(delay);
+    } else {
+      const retryAt = Date.parse(retryAfterValue);
+      if (Number.isFinite(retryAt)) retryAfterSeconds = Math.max(0, Math.ceil((retryAt - now) / 1000));
+    }
+  }
+
+  const remaining = headers?.get?.("x-ratelimit-remaining");
+  const resetValue = headers?.get?.("x-ratelimit-reset");
+  const reset = resetValue !== null && resetValue !== undefined && /^\\d+$/.test(resetValue)
+    ? Number(resetValue)
+    : null;
+
+  let kind = "http-error";
+  if ((status === 403 || status === 429) && remaining === "0") {
+    kind = "primary-rate-limit";
+  } else if ((status === 403 || status === 429) && retryAfterSeconds !== null) {
+    kind = "secondary-rate-limit";
+  } else if (status === 429) {
+    kind = "rate-limit-unspecified";
+  } else if (status === 403) {
+    kind = "forbidden-or-secondary-rate-limit";
+  } else if (status === 401) {
+    kind = "authentication-failure";
+  } else if (status >= 500 && status <= 599) {
+    kind = "server-error";
+  }
+
+  return {
+    kind,
+    status,
+    retryAfterSeconds,
+    rateLimitResetEpochSeconds: reset,
+  };
+}
+
+function formatGitHubApiFailure(response) {
+  const failure = classifyGitHubApiFailure(response);
+  const details = ["GitHub API " + failure.kind + " (HTTP " + failure.status + ")."];
+  if (failure.retryAfterSeconds !== null) details.push("Retry-After: " + failure.retryAfterSeconds + " seconds.");
+  if (failure.rateLimitResetEpochSeconds !== null) details.push("Rate-limit reset epoch: " + failure.rateLimitResetEpochSeconds + ".");
+  return details.join(" ");
+}
+
+
 async function requestJson(fetchImpl, url, { method = "GET", token, body, accept = "application/vnd.github+json", deadlineAt }) {
   const signal = createRequestSignal(deadlineAt);
   let response;
@@ -304,7 +357,7 @@ async function requestJson(fetchImpl, url, { method = "GET", token, body, accept
     } catch {
       // Preserve the generic HTTP error even if transport cancellation fails.
     }
-    throw new Error("Remote API request failed with HTTP " + response.status + ".");
+    throw new Error(formatGitHubApiFailure(response));
   }
   if (response.status === 204) return null;
   try {

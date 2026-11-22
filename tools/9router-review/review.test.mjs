@@ -66,7 +66,7 @@ test("missing file patches stop the review before sending source to 9Router", as
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
-    /incomplete patch|patch unavailable/i,
+    /unavailable file patches|incomplete review/i,
   );
   assert.equal(routerCalls, 0, "incomplete source must never be sent to 9Router");
 });

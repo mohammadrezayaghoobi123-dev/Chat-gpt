@@ -485,7 +485,8 @@ test("a report for a different base SHA is never overwritten for the same head S
 
   assert.equal(patchCalls, 0, "a report for an older base SHA must not be overwritten");
   assert.equal(postCalls, 1, "a distinct head/base pair must receive a distinct report comment");
-  assert.ok(postBody.startsWith("<!-- 9router-independent-review:" + headSha + ":" + expectedBaseSha + " -->"));
+  assert.ok(postBody.startsWith("<!-- 9router-independent-review:v2:" + headSha + ":" + expectedBaseSha + ":"));
+  assert.match(postBody.split("\\n", 1)[0], /^<!-- 9router-independent-review:v2:[a-f0-9]{40}:[a-f0-9]{40}:[a-f0-9]{64} -->$/);
   assert.ok(postBody.includes("**Reviewed base SHA:** " + expectedBaseSha));
 });
 

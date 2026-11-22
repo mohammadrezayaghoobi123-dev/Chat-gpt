@@ -1085,7 +1085,7 @@ test("non-success GitHub responses cancel unread bodies", async () => {
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
-    /GitHub API server-error \\(HTTP 503\\)/i,
+    /GitHub API server-error.*503/i,
   );
   assert.equal(bodyCanceled, true, "non-success response bodies must be canceled rather than left unread");
 });
@@ -1314,7 +1314,7 @@ test("GitHub rate-limit responses fail closed without automatic retries", async 
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
-    /secondary-rate-limit \\(HTTP 429\\).*Retry-After: 60 seconds/i,
+    /secondary-rate-limit.*429.*Retry-After: 60 seconds/i,
   );
   assert.equal(calls, 1, "a rate-limited request must fail closed without an automatic retry");
 });

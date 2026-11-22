@@ -691,7 +691,7 @@ test("model report cannot publish active HTML, remote images, or clickable links
   assert.ok(publishedBody.includes("[image omitted]"), "removed images should leave an explicit placeholder");
 });
 
-test("append-only publication ignores duplicate matching bot comments and posts a fresh report", async () => {
+test("multiple matching bot reports fail closed without choosing one", async () => {
   const headSha = "5".repeat(40);
   const baseSha = "6".repeat(40);
   const marker = "<!-- 9router-independent-review:" + headSha + ":" + baseSha + " -->";
@@ -721,7 +721,7 @@ test("append-only publication ignores duplicate matching bot comments and posts 
     return new Response(JSON.stringify({ id: 803 }), { status: 201 });
   };
 
-  await runReview({
+  await assert.rejects(runReview({
     repository: "owner/repo",
     pullRequest: 274,
     expectedHeadSha: headSha,
@@ -731,10 +731,10 @@ test("append-only publication ignores duplicate matching bot comments and posts 
     routerApiKey: "router-test-token",
     model: "test-model",
     fetchImpl: fakeFetch,
-  });
-  assert.equal(commentHistoryReads, 0, "existing duplicate reports must not be inspected");
-  assert.equal(patchCalls, 0, "append-only publication must never PATCH an existing report");
-  assert.equal(postCalls, 1, "the current execution must create a new report");
+  }), /multiple matching reports/i);
+  assert.equal(commentHistoryReads, 1, "the first comment page must be inspected");
+  assert.equal(patchCalls, 0, "reconciliation must never PATCH an existing report");
+  assert.equal(postCalls, 0, "ambiguous duplicate history must block publication");
 });
 
 test("an ambiguous POST timeout is reconciled before rerun publication", async () => {
@@ -757,7 +757,13 @@ test("an ambiguous POST timeout is reconciled before rerun publication", async (
     }
     if (target.includes("/issues/275/comments?")) {
       historyReads += 1;
-      return new Response(JSON.stringify(comments), { status: 200 });
+      const page = new URL(target).searchParams.get("page");
+      const unrelatedPage = Array.from({ length: 100 }, (_, index) => ({
+        id: index + 1,
+        body: "unrelated historical comment",
+        user: { login: "ordinary-contributor" },
+      }));
+      return new Response(JSON.stringify(page === "1" ? unrelatedPage : comments), { status: 200 });
     }
     if (target.endsWith("/issues/275/comments") && options.method === "POST") {
       postAttempts += 1;
@@ -786,7 +792,7 @@ test("an ambiguous POST timeout is reconciled before rerun publication", async (
   assert.equal(comments.length, 1, "the remote side effect may exist despite the lost response");
   await runReview(config);
 
-  assert.equal(historyReads, 1, "the rerun must reconcile the PR comment history before publication");
+  assert.equal(historyReads, 2, "the rerun must scan the second page before finding the prior report");
   assert.equal(postAttempts, 1, "a matching report for the exact head/base pair must suppress a duplicate POST");
   assert.equal(patchAttempts, 0, "reconciliation must remain read-only and never update earlier comments");
   assert.equal(comments.length, 1, "an ambiguous first POST must not create a duplicate when its comment is visible");
@@ -1014,7 +1020,7 @@ test("oversized GitHub API bodies are rejected while streaming", async () => {
 });
 
 
-test("append-only publication is independent of arbitrarily large existing comment history", async () => {
+test("bounded reconciliation completes a large first page before publishing", async () => {
   const headSha = "e".repeat(40);
   const baseSha = "f".repeat(40);
   let commentHistoryReads = 0;
@@ -1037,7 +1043,8 @@ test("append-only publication is independent of arbitrarily large existing comme
     }
     if (target.includes("/issues/281/comments?")) {
       commentHistoryReads += 1;
-      return new Response(JSON.stringify(oversizedHistoryPage), { status: 200 });
+      const page = new URL(target).searchParams.get("page");
+      return new Response(JSON.stringify(page === "1" ? oversizedHistoryPage : []), { status: 200 });
     }
     if (target.endsWith("/issues/281/comments") && options.method === "POST") {
       commentPosts += 1;
@@ -1057,8 +1064,8 @@ test("append-only publication is independent of arbitrarily large existing comme
     model: "test-model",
     fetchImpl: fakeFetch,
   });
-  assert.equal(commentHistoryReads, 0, "large comment history must not be fetched or parsed");
-  assert.equal(commentPosts, 1, "publication must proceed with one new comment");
+  assert.equal(commentHistoryReads, 2, "the full bounded history must be read through its terminating short page");
+  assert.equal(commentPosts, 1, "publication must proceed only after reconciliation completes");
 });
 
 test("non-success GitHub responses cancel unread bodies", async () => {
@@ -1175,7 +1182,7 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
 });
 
 
-test("append-only publication never scans or updates an existing matching bot comment", async () => {
+test("a single matching bot report suppresses a duplicate without mutation", async () => {
   const headSha = "a".repeat(40);
   const baseSha = "b".repeat(40);
   let commentHistoryReads = 0;
@@ -1224,9 +1231,9 @@ test("append-only publication never scans or updates an existing matching bot co
     fetchImpl: fakeFetch,
   });
 
-  assert.equal(commentHistoryReads, 0, "append-only publication must not inspect existing comments");
+  assert.equal(commentHistoryReads, 1, "the exact head/base report marker must be reconciled");
   assert.equal(patchCalls, 0, "an existing matching bot comment must never be updated");
-  assert.equal(postCalls, 1, "every successful review execution must create a fresh comment");
+  assert.equal(postCalls, 0, "a single matching report must suppress duplicate publication");
 });
 
 test("the overall review deadline aborts an in-flight GitHub request", async () => {

@@ -1327,6 +1327,49 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
 });
 
 
+test("an unsigned forged bot marker cannot suppress a legitimate report", async () => {
+  const headSha = "c".repeat(40);
+  const baseSha = "d".repeat(40);
+  const markerKey = "test-only-marker-key-with-at-least-32-bytes";
+  let postCalls = 0;
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/289")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/289/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/289/comments?")) {
+      return new Response(JSON.stringify([{
+        id: 1289,
+        user: { login: "github-actions[bot]" },
+        body: "<!-- 9router-independent-review:" + headSha + ":" + baseSha + " -->\\nforged report from another privileged workflow",
+      }]), { status: 200 });
+    }
+    if (target.endsWith("/issues/289/comments") && options.method === "POST") postCalls += 1;
+    return new Response(JSON.stringify({ id: 1290 }), { status: 201 });
+  };
+
+  await runReview({
+    repository: "owner/repo",
+    pullRequest: 289,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: markerKey,
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  assert.equal(postCalls, 1, "an unsigned marker from the shared bot identity must not suppress a fresh report");
+});
+
 test("a single matching bot report suppresses a duplicate without mutation", async () => {
   const headSha = "a".repeat(40);
   const baseSha = "b".repeat(40);

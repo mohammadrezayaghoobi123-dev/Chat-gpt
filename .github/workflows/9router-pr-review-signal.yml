@@ -13,5 +13,59 @@ jobs:
     timeout-minutes: 2
     permissions: {}
     steps:
-      - name: Emit unprivileged PR signal
-        run: echo "Unprivileged PR signal completed. No pull-request code or artifacts are checked out or executed."
+      - name: Create event-bound signal receipt
+        env:
+          RECEIPT_REPOSITORY: ${{ github.repository }}
+          RECEIPT_REPOSITORY_ID: ${{ github.repository_id }}
+          RECEIPT_RUN_ID: ${{ github.run_id }}
+          RECEIPT_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RECEIPT_EVENT_NAME: ${{ github.event_name }}
+          RECEIPT_ACTION: ${{ github.event.action }}
+          RECEIPT_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+          RECEIPT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RECEIPT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          RECEIPT_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          RECEIPT_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          RECEIPT_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const receipt = {
+            schemaVersion: 1,
+            repository: process.env.RECEIPT_REPOSITORY,
+            repositoryId: Number(process.env.RECEIPT_REPOSITORY_ID),
+            runId: Number(process.env.RECEIPT_RUN_ID),
+            runAttempt: Number(process.env.RECEIPT_RUN_ATTEMPT),
+            eventName: process.env.RECEIPT_EVENT_NAME,
+            action: process.env.RECEIPT_ACTION,
+            pullRequestNumber: Number(process.env.RECEIPT_PULL_REQUEST_NUMBER),
+            headSha: process.env.RECEIPT_HEAD_SHA,
+            baseSha: process.env.RECEIPT_BASE_SHA,
+            headRepository: process.env.RECEIPT_HEAD_REPOSITORY,
+            baseRepository: process.env.RECEIPT_BASE_REPOSITORY,
+            baseRef: process.env.RECEIPT_BASE_REF,
+          };
+          const shaPattern = /^[a-f0-9]{40}$/i;
+          if (
+            receipt.eventName !== "pull_request_target" ||
+            !Number.isSafeInteger(receipt.repositoryId) || receipt.repositoryId < 1 ||
+            !Number.isSafeInteger(receipt.runId) || receipt.runId < 1 ||
+            !Number.isSafeInteger(receipt.runAttempt) || receipt.runAttempt < 1 ||
+            !Number.isSafeInteger(receipt.pullRequestNumber) || receipt.pullRequestNumber < 1 ||
+            !shaPattern.test(receipt.headSha || "") || !shaPattern.test(receipt.baseSha || "") ||
+            !receipt.repository || !receipt.headRepository || !receipt.baseRepository || !receipt.baseRef
+          ) {
+            throw new Error("Trusted pull-request event payload is incomplete.");
+          }
+          const outputPath = path.join(process.env.RUNNER_TEMP, "signal.json");
+          fs.writeFileSync(outputPath, JSON.stringify(receipt), { flag: "wx", mode: 0o600 });
+          NODE
+      - name: Upload run-specific signal receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: 9router-pr-signal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signal.json
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0

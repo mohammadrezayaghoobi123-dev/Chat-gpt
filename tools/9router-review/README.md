@@ -96,7 +96,7 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 - **TDD RED:** run `45039307101`, contract-tests job `137259950593`: **35 passed, 1 failed**. The new ambiguous-POST regression failed because the rerun made zero comment-history reads (`historyReads = 0`) instead of reconciling before publication.
 - **Additional hostile coverage:** Tests cover a matching report on page 2 after a full first page, duplicate matching bot reports, a single matching report, user-authored marker spoofing, completion of a large page, and the 10-page ceiling.
 - **Remediation:** The reviewer now performs sequential GET-only reconciliation after model generation. It reads up to 10 pages of 100 comments and enforces a 4 MiB cumulative serialized-data budget, in addition to the existing 1 MiB per-response limit and overall 8-minute deadline. Only an exact first-line head/base marker authored by `github-actions[bot]` is considered a match. One match returns `already-published` without a POST; multiple matches, malformed records, API errors, or an incomplete scan fail closed. Zero matches permit one append-only POST after a final live head/base SHA revalidation.
-- **TDD GREEN:** run `45039495532`, contract-tests job `137260542030`: **37 passed, 0 failed, 0 cancelled, 0 skipped**. The test run used the implementation commit `4c4e94be37384c0b9494a886ccdee80f1aaffd19` and test head `70798ba9334c4befa3d2a37715a12d01f759b871`.
+- **TDD GREEN:** run `45039740999`, contract-tests job `137261295864`: **37 passed, 0 failed, 0 cancelled, 0 skipped**. The test run used implementation commit `4c4e94be37384c0b9494a886ccdee80f1aaffd19` and test head `02325547c170ee1ef14cfc933b5530d5f8957975`.
 - **Safety boundary:** Existing comments are never edited or deleted. A matching report is a duplicate-suppression signal only, not proof of cryptographic provenance. Another privileged workflow able to post as `github-actions[bot]` can forge a marker and suppress publication; this remains a documented denial-of-service / attribution risk.
 - **Residual delivery risk:** The scan is intentionally bounded to 1,000 comments / 4 MiB. If the tenth page is full or any limit/error prevents proving scan completeness, publication stops. A race remains between history reconciliation and POST, and a comment may not be observable during an ambiguous transport outcome. This is not exactly-once delivery, a durable outbox, or a guaranteed-delivery mechanism.
 - **Disposition:** B is implemented as bounded, read-only reconciliation. Live privileged workflow / 9Router end-to-end behavior and a real ambiguous hosted POST remain `UNKNOWN`.
@@ -107,3 +107,11 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 - Contract tests: 37/37 PASS, run `45039546295`, job `137260705816`.
 - Gitleaks PR-diff and fetched-ref scan: PASS, run `45039551080`, job `137260721681`.
 - The privileged review job was skipped on push by design; no live 9Router or `workflow_run` execution is claimed.
+
+
+## Latest verification — current test head
+- Test head: `02325547c170ee1ef14cfc933b5530d5f8957975`.
+- Contract tests: 37/37 PASS, run `45039740999`, job `137261295864`.
+- Gitleaks PR-diff and all fetched refs: PASS, run `45039745228`, job `137261307654`.
+- Dependency installation and npm registry signature verification: PASS in the contract-test job.
+- The privileged review job was skipped on push by design; live 9Router / `workflow_run` E2E remains UNKNOWN.

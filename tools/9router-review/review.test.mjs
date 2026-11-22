@@ -2721,6 +2721,107 @@ test("cumulative immutable Git blob budget stops before inference or publication
   assert.equal(commentPosts, 0);
 });
 
+test("exact 512 KiB blobs and the cumulative 4 MiB Git blob budget remain reviewable", async () => {
+  const headSha = "a".repeat(40);
+  const baseSha = "b".repeat(40);
+  const baseTreeSha = "c".repeat(40);
+  const headTreeSha = "d".repeat(40);
+  const beforeBlobs = new Map();
+  const afterBlobs = new Map();
+  const baseEntries = [];
+  const headEntries = [];
+  const changedFiles = [];
+  const blobSha = bytes => createHash("sha1")
+    .update(Buffer.concat([Buffer.from("blob " + bytes.length + String.fromCharCode(0)), bytes]))
+    .digest("hex");
+  const commonLines = Buffer.from("same-line\n".repeat(52428));
+  assert.equal(commonLines.length, 524280);
+  for (let index = 0; index < 4; index += 1) {
+    const path = "src/exact-budget-" + String(index).padStart(2, "0") + ".txt";
+    const before = Buffer.concat([commonLines, Buffer.from("oldline\n")]);
+    const after = Buffer.concat([commonLines, Buffer.from("newline\n")]);
+    assert.equal(before.length, 512 * 1024);
+    assert.equal(after.length, 512 * 1024);
+    const beforeSha = blobSha(before);
+    const afterSha = blobSha(after);
+    beforeBlobs.set(beforeSha, before);
+    afterBlobs.set(afterSha, after);
+    baseEntries.push({ path, mode: "100644", type: "blob", sha: beforeSha, size: before.length });
+    headEntries.push({ path, mode: "100644", type: "blob", sha: afterSha, size: after.length });
+    changedFiles.push({ filename: path, status: "modified", additions: 1, deletions: 1, patch: null });
+  }
+
+  let blobCalls = 0;
+  let modelCalls = 0;
+  let commentPosts = 0;
+  let modelPatch = "";
+  const json = value => new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/288")) {
+      return json({
+        number: 288,
+        state: "open",
+        draft: false,
+        head: { sha: headSha, repo: { id: 1, full_name: "owner/repo" } },
+        base: { sha: baseSha, repo: { id: 1, full_name: "owner/repo" } },
+      });
+    }
+    if (target.includes("/compare/" + baseSha + "..." + headSha)) {
+      return json({ status: "ahead", base_commit: { sha: baseSha }, files: changedFiles });
+    }
+    if (target.endsWith("/git/commits/" + baseSha)) return json({ sha: baseSha, tree: { sha: baseTreeSha } });
+    if (target.endsWith("/git/commits/" + headSha)) return json({ sha: headSha, tree: { sha: headTreeSha } });
+    if (target.includes("/git/trees/" + baseTreeSha)) return json({ sha: baseTreeSha, truncated: false, tree: baseEntries });
+    if (target.includes("/git/trees/" + headTreeSha)) return json({ sha: headTreeSha, truncated: false, tree: headEntries });
+    if (target.includes("/git/blobs/")) {
+      blobCalls += 1;
+      const sha = target.slice(target.lastIndexOf("/") + 1);
+      const bytes = beforeBlobs.get(sha) ?? afterBlobs.get(sha);
+      if (!bytes) throw new Error("Unexpected blob request in exact-budget fixture.");
+      return json({ sha, size: bytes.length, encoding: "base64", content: bytes.toString("base64") });
+    }
+    if (target.endsWith("/chat/completions")) {
+      modelCalls += 1;
+      const messages = JSON.parse(options.body).messages;
+      modelPatch = JSON.parse(messages.find(message => message.role === "user").content
+        .split("Patch as JSON string:" + String.fromCharCode(10)).at(-1));
+      return json({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] });
+    }
+    if (target.includes("/issues/288/comments?")) return json([]);
+    if (target.endsWith("/issues/288/comments") && options.method === "POST") {
+      commentPosts += 1;
+      return createdCommentResponse(target, options, 1288);
+    }
+    throw new Error("Unexpected API request in exact-budget fixture: " + target);
+  };
+
+  const result = await runReview({
+    repository: "owner/repo",
+    pullRequest: 288,
+    strictImmutableSnapshot: true,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  assert.equal(result.publishedNewComment, true);
+  assert.equal(blobCalls, 8, "four changed files require eight distinct exact-SHA blob reads");
+  assert.equal(modelCalls, 1);
+  assert.equal(commentPosts, 1);
+  assert.equal((modelPatch.match(/FILE: /g) ?? []).length, 4);
+  assert.ok(modelPatch.includes("FILE: src/exact-budget-00.txt"));
+  assert.ok(modelPatch.includes("FILE: src/exact-budget-03.txt"));
+});
+
 test("bounded Git diff output exhaustion fails closed before inference or publication", async () => {
   const headSha = "5".repeat(40);
   const baseSha = "6".repeat(40);

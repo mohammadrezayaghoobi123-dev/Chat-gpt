@@ -83,3 +83,14 @@
 - Still UNKNOWN: API blob size mismatch, canonical base64 that decodes to bytes with the wrong Git blob hash, Git process timeout distinct from output-buffer exhaustion, Compare API 300-file ceiling, 1,000 changed-path ceiling, 50,000 tree-entry ceiling, and immutable formatted-patch character-budget boundary.
 - Hosted workflow_run / artifact roundtrip / live 9Router / comment publication remain UNKNOWN; push-triggered resolve-signal and review were skipped by design.
 - Step 3 remains open until the remaining negative boundaries above are either covered or explicitly deferred under a documented engineering decision. No architecture, workflow, permission, secret, Actions policy, Ruleset, PR state, main, merge, deployment, or Production changes were made.
+
+## Latest integrity-fixture verification — 2026-11-23
+
+- Test commit 68306b267e8adbdf9d8c6d39f7abed480859b7b1 added two independent fixtures: canonical base64 whose decoded bytes do not match the requested Git blob SHA, and a Blob response size that disagrees with the immutable Tree entry.
+- Contract run 45083063969, job 137395347527: **82/82 PASS**, zero failures, cancellations, or skips. Locked dependency installation and npm audit signatures succeeded.
+- Gitleaks Push run 45083063982, job 137395347838, and PR run 45083069058, job 137395363523: both successful; each scanned 4,106 fetched commits and reported no leaks.
+- The tested fail-closed matrix now includes malformed base64, canonical-but-corrupted base64 content, API blob-size mismatch, returned blob-SHA mismatch, non-NUL invalid UTF-8, binary/NUL content, truncated trees, symlink and gitlink modes/types, missing blob, individual blob over 512 KiB, cumulative blob budget over 4 MiB, Git diff output-buffer exhaustion, exact-300 fallback acceptance, and 301st fallback rejection. Every negative fixture asserts zero model calls and zero comment POSTs where applicable.
+- Still UNKNOWN: Git process timeout distinct from output-buffer exhaustion; exact per-blob 512 KiB acceptance; exact cumulative 4 MiB acceptance; Compare API 300-file ceiling behavior; 1,000 changed-path ceiling; 50,000 tree-entry ceiling; and exact formatted-patch character-budget boundary.
+- The tests remain characterization/fail-closed coverage for existing guards; no production code changed in this test-only extension. A prior malformed regex in the first exact-300 test attempt produced a syntax failure; it was corrected to direct string assertions before the green 80-test run.
+- Push-triggered resolve-signal and review jobs skip by design. Hosted workflow_run, artifact transfer, live 9Router inference, and comment publication remain UNKNOWN.
+- Step 3 remains PARTIAL / OPEN for the explicit boundaries above; do not mark the hybrid implementation production-ready on this evidence alone.

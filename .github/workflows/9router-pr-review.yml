@@ -16,9 +16,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: 9router-review-${{ github.event.workflow_run.pull_requests[0].number || github.ref }}
-  cancel-in-progress: true
 
 jobs:
   contract-tests:

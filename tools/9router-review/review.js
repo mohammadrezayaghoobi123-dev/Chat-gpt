@@ -4,7 +4,6 @@ const MAX_PATCH_CHARS = 45000;
 const MAX_REPORT_CHARS = 30000;
 const MAX_ROUTER_RESPONSE_BYTES = 512 * 1024;
 const MAX_GITHUB_API_RESPONSE_BYTES = 1024 * 1024;
-const MAX_GITHUB_COMMENT_HISTORY_BYTES = 4 * 1024 * 1024;
 const REVIEW_MARKER = "<!-- 9router-independent-review:";
 
 function neutralizeGitHubMentions(value) {
@@ -236,7 +235,7 @@ export function buildReviewMessages({ repository, pullRequest, headSha, patch })
   return [{ role: "system", content: system }, { role: "user", content: user }];
 }
 
-async function readJsonResponseLimited(response, maxBytes, source = "9Router", budget = null) {
+async function readJsonResponseLimited(response, maxBytes, source = "9Router") {
   const reader = response.body?.getReader();
   if (!reader) throw new Error(source + " returned an unreadable response; no comment was written.");
 
@@ -247,13 +246,6 @@ async function readJsonResponseLimited(response, maxBytes, source = "9Router", b
       const { done, value } = await reader.read();
       if (done) break;
       totalBytes += value.byteLength;
-      if (budget) {
-        budget.totalBytes += value.byteLength;
-        if (budget.totalBytes > budget.maxBytes) {
-          await reader.cancel();
-          throw new Error(source + " comment history exceeds the cumulative response budget; no comment was written.");
-        }
-      }
       if (totalBytes > maxBytes) {
         await reader.cancel();
         throw new Error(source + " response exceeds the safe response size; no comment was written.");
@@ -277,7 +269,7 @@ async function readJsonResponseLimited(response, maxBytes, source = "9Router", b
   }
 }
 
-async function requestJson(fetchImpl, url, { method = "GET", token, body, accept = "application/vnd.github+json", budget = null }) {
+async function requestJson(fetchImpl, url, { method = "GET", token, body, accept = "application/vnd.github+json" }) {
   const response = await fetchImpl(url, {
     method,
     headers: {
@@ -297,7 +289,7 @@ async function requestJson(fetchImpl, url, { method = "GET", token, body, accept
     }
     throw new Error("Remote API request failed with HTTP " + response.status + ".");
   }
-  return response.status === 204 ? null : readJsonResponseLimited(response, MAX_GITHUB_API_RESPONSE_BYTES, "GitHub API", budget);
+  return response.status === 204 ? null : readJsonResponseLimited(response, MAX_GITHUB_API_RESPONSE_BYTES, "GitHub API");
 }
 
 export async function runReview({
@@ -399,28 +391,6 @@ export async function runReview({
     "_Automated model-assisted review only; not a human approval or proof of correctness. Findings require independent verification._",
   ].join("\n");
 
-  const commentHistoryBudget = {
-    maxBytes: MAX_GITHUB_COMMENT_HISTORY_BYTES,
-    totalBytes: 0,
-  };
-  let prior = null;
-  for (let page = 1; page <= 10; page += 1) {
-    const batch = await requestJson(fetchImpl, base.origin + repoPath + "/issues/" + pullRequest + "/comments?per_page=100&page=" + page, {
-      token: githubToken,
-      budget: commentHistoryBudget,
-    });
-    if (!Array.isArray(batch)) throw new Error("GitHub returned an invalid pull request comment list.");
-    const matchingReports = batch.filter(comment =>
-      comment.user?.login === "github-actions[bot]" && comment.body?.startsWith(marker)
-    );
-    if (matchingReports.length > 1 || (prior && matchingReports.length > 0)) {
-      throw new Error("Multiple matching reviewer report comments found; refusing an ambiguous update.");
-    }
-    if (matchingReports.length === 1) prior = matchingReports[0];
-    if (batch.length < 100) break;
-    if (page === 10) throw new Error("Pull request comment history exceeds the supported 1000-comment scan limit.");
-  }
-
   const currentBeforePublish = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken });
   if (currentBeforePublish.head?.sha !== expectedHeadSha) {
     throw new Error("Pull request head changed during comment lookup; refusing to publish a stale report.");
@@ -428,13 +398,10 @@ export async function runReview({
   if (currentBeforePublish.base?.sha !== expectedBaseSha) {
     throw new Error("Pull request base branch changed during comment lookup; refusing to publish a report for a different diff.");
   }
-  const commentUrl = prior
-    ? base.origin + repoPath + "/issues/comments/" + prior.id
-    : base.origin + repoPath + "/issues/" + pullRequest + "/comments";
-  await requestJson(fetchImpl, commentUrl, {
-    method: prior ? "PATCH" : "POST",
+  await requestJson(fetchImpl, base.origin + repoPath + "/issues/" + pullRequest + "/comments", {
+    method: "POST",
     token: githubToken,
     body: { body },
   });
-  return { reviewedHeadSha: expectedHeadSha, reviewedBaseSha: expectedBaseSha, updatedExistingComment: Boolean(prior) };
+  return { reviewedHeadSha: expectedHeadSha, reviewedBaseSha: expectedBaseSha, publishedNewComment: true };
 }

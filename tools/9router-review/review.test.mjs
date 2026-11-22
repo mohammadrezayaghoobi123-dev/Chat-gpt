@@ -949,6 +949,56 @@ test("oversized model reports fail closed without comment publication", async ()
   assert.equal(commentPostCalls, 0, "oversized output must never be published");
 });
 
+test("invalid UTF-8 9Router responses are rejected before comment publication", async () => {
+  const headSha = "b".repeat(40);
+  const baseSha = "c".repeat(40);
+  let routerCalls = 0;
+  let commentPosts = 0;
+  const prefix = Buffer.from('{"choices":[{"message":{"content":"A sufficiently long placeholder ');
+  const suffix = Buffer.from(' review report."}}]}');
+  const malformedJsonBytes = Buffer.concat([prefix, Buffer.from([0xff]), suffix]);
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/987")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/987/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.includes("/issues/987/comments?")) {
+      return new Response(JSON.stringify([]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      routerCalls += 1;
+      return new Response(malformedJsonBytes, { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (target.endsWith("/issues/987/comments") && options.method === "POST") {
+      commentPosts += 1;
+      return createdCommentResponse(target, options, 9870 + commentPosts);
+    }
+    throw new Error("Unexpected API operation in invalid UTF-8 response test: " + target);
+  };
+
+  await assert.rejects(
+    runReview({
+      repository: "owner/repo",
+      pullRequest: 987,
+      expectedHeadSha: headSha,
+      expectedBaseSha: baseSha,
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }),
+    /invalid JSON|UTF-8/i,
+  );
+  assert.equal(routerCalls, 1, "the malformed response must be rejected at the router response boundary");
+  assert.equal(commentPosts, 0, "replacement-decoded model output must never be published");
+});
+
+
 test("oversized 9Router HTTP bodies are stopped while streaming before JSON parsing", async () => {
   const headSha = "b".repeat(40);
   const baseSha = "c".repeat(40);

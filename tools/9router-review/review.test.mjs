@@ -805,11 +805,10 @@ test("a rerun reconciles an ambiguous POST timeout with the already-created repo
 
 test("review workflow keeps per-PR serialization and bounded queue semantics explicit", () => {
   const workflow = readFileSync(new URL("../../.github/workflows/9router-pr-review.yml", import.meta.url), "utf8");
-  assert.match(
-    workflow,
-    /group:\\s*9router-pr-review-\\$\\{\\{\\s*github\\.event\\.workflow_run\\.pull_requests\\[0\\]\\.number\\s*\\|\\|\\s*github\\.run_id\\s*\\}\\}/,
+  assert.ok(
+    workflow.includes("group: 9router-pr-review-${{ github.event.workflow_run.pull_requests[0].number || github.run_id }}"),
     "each review must share a concurrency group keyed by PR number",
   );
-  assert.match(workflow, /queue:\\s*max/, "pending reviews must use the bounded multi-run queue");
-  assert.doesNotMatch(workflow, /cancel-in-progress:\\s*true/, "a running review must not be canceled by a later signal");
+  assert.ok(workflow.includes("queue: max"), "pending reviews must use the bounded multi-run queue");
+  assert.ok(!workflow.includes("cancel-in-progress: true"), "a running review must not be canceled by a later signal");
 });

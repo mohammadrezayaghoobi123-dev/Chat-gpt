@@ -4,6 +4,7 @@ import { marked } from "marked";
 import { readFileSync } from "node:fs";
 import * as reviewer from "./review.js";
 const { buildReviewMessages, runReview } = reviewer;
+const TEST_REVIEW_MARKER_KEY = "test-only-review-marker-key-32-bytes-minimum";
 
 test("review prompt binds the exact PR head SHA and requires evidence-based verdicts", () => {
   const messages = buildReviewMessages({
@@ -67,6 +68,7 @@ test("missing file patches stop the review before sending source to 9Router", as
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
@@ -102,6 +104,7 @@ test("a head change during patch retrieval aborts before the model request", asy
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
@@ -149,6 +152,7 @@ test("append-only publication never overwrites a user-authored marker comment", 
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
     model: "test-model",
     fetchImpl: fakeFetch,
   });
@@ -218,6 +222,7 @@ test("draft pull requests are skipped and closed pull requests are rejected", as
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
     model: "test-model",
     fetchImpl: draftFetch,
   });
@@ -238,6 +243,7 @@ test("draft pull requests are skipped and closed pull requests are rejected", as
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
       model: "test-model",
       fetchImpl: closedFetch,
     }),
@@ -357,6 +363,7 @@ test("a base-branch change after patch retrieval aborts before the model request
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
@@ -410,6 +417,7 @@ test("a base-branch change during model review aborts before publishing a commen
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
@@ -470,6 +478,7 @@ test("a report for a different base SHA is never overwritten for the same head S
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
     model: "test-model",
     fetchImpl: fakeFetch,
   });
@@ -509,6 +518,7 @@ test("model-generated account mentions are neutralized before comment publicatio
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
     model: "test-model",
     fetchImpl: fakeFetch,
   });
@@ -558,6 +568,7 @@ test("a base-branch change at final pre-publication revalidation aborts append-o
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
@@ -619,6 +630,7 @@ test("model-generated mentions after punctuation are neutralized", async () => {
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
     model: "test-model",
     fetchImpl: fakeFetch,
   });
@@ -674,6 +686,7 @@ test("model report cannot publish active HTML, remote images, or clickable links
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
     model: "test-model",
     fetchImpl: fakeFetch,
   });
@@ -697,7 +710,7 @@ test("model report cannot publish active HTML, remote images, or clickable links
 test("multiple matching bot reports fail closed without choosing one", async () => {
   const headSha = "5".repeat(40);
   const baseSha = "6".repeat(40);
-  const marker = "<!-- 9router-independent-review:" + headSha + ":" + baseSha + " -->";
+  const marker = reviewer.createReviewMarker({ repository: "owner/repo", pullRequest: 274, headSha, baseSha, key: TEST_REVIEW_MARKER_KEY });
   let commentHistoryReads = 0;
   let patchCalls = 0;
   let postCalls = 0;
@@ -732,6 +745,7 @@ test("multiple matching bot reports fail closed without choosing one", async () 
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
     model: "test-model",
     fetchImpl: fakeFetch,
   }), /multiple matching reports/i);
@@ -783,6 +797,7 @@ test("malformed comment-history pages and records fail closed before publication
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
       model: "test-model",
       fetchImpl: fakeFetch,
     }), /invalid comment-history page|incomplete comment-history record/i);
@@ -839,6 +854,7 @@ test("an ambiguous POST timeout is reconciled before rerun publication", async (
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
     model: "test-model",
     fetchImpl: fakeFetch,
   };
@@ -899,6 +915,7 @@ test("oversized model reports fail closed before comment lookup or publication",
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
@@ -942,6 +959,7 @@ test("oversized 9Router HTTP bodies are stopped while streaming before JSON pars
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
@@ -980,6 +998,7 @@ test("nested Markdown labels cannot preserve protocol-relative external destinat
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
     model: "test-model",
     fetchImpl: fakeFetch,
   });
@@ -1021,6 +1040,7 @@ test("stops fetching file pages immediately when the patch budget is exceeded", 
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
@@ -1067,6 +1087,7 @@ test("oversized GitHub API bodies are rejected while streaming", async () => {
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
@@ -1118,6 +1139,7 @@ test("bounded reconciliation completes a large first page before publishing", as
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
     model: "test-model",
     fetchImpl: fakeFetch,
   });
@@ -1162,6 +1184,7 @@ test("comment-history pagination limit fails closed before publication", async (
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
     model: "test-model",
     fetchImpl: fakeFetch,
   }), /comment history exceeds the safe reconciliation page limit/i);
@@ -1206,6 +1229,7 @@ test("cumulative comment-history byte budget fails closed before publication", a
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
     model: "test-model",
     fetchImpl: fakeFetch,
   }), /comment history exceeds the safe reconciliation byte budget/i);
@@ -1234,6 +1258,7 @@ test("non-success GitHub responses cancel unread bodies", async () => {
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
@@ -1308,6 +1333,7 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
     model: "test-model",
     fetchImpl: fakeFetch,
   });
@@ -1379,7 +1405,7 @@ test("a single matching bot report suppresses a duplicate without mutation", asy
   const existingComment = {
     id: 999,
     user: { login: "github-actions[bot]" },
-    body: "<!-- 9router-independent-review:" + headSha + ":" + baseSha + " -->\nExisting report",
+    body: reviewer.createReviewMarker({ repository: "owner/repo", pullRequest: 284, headSha, baseSha, key: TEST_REVIEW_MARKER_KEY }) + "\nExisting report",
   };
   const fakeFetch = async (url, options = {}) => {
     const target = String(url);
@@ -1415,6 +1441,7 @@ test("a single matching bot report suppresses a duplicate without mutation", asy
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
     model: "test-model",
     fetchImpl: fakeFetch,
   });
@@ -1451,6 +1478,7 @@ test("the overall review deadline aborts an in-flight GitHub request", async () 
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
       model: "test-model",
       reviewTimeoutMs: 10,
       fetchImpl: fakeFetch,
@@ -1532,6 +1560,7 @@ test("GitHub rate-limit responses fail closed without automatic retries", async 
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
       model: "test-model",
       fetchImpl: fakeFetch,
     }),

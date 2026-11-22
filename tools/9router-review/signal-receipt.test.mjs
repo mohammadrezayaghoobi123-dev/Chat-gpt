@@ -181,16 +181,29 @@ test("privileged workflow resolves identity before per-PR concurrency and never 
   assert.match(resolverJob, /GITHUB_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
 });
 
-test("workflow-run SHA binds to the trusted workflow revision, not a non-default PR base SHA", () => {
-  const signalReceipt = { ...receipt };
+test("workflow-run SHA binds to the trusted workflow revision, not a non-default PR base SHA", async () => {
+  const signalReceipt = { ...receipt, baseRef: "release/1.x" };
   const targetContext = { ...context, runHeadSha: workflowSha, signalReceipt };
-  assert.deepEqual(resolveWorkflowRunTarget(targetContext), {
+  const target = resolveWorkflowRunTarget(targetContext);
+  assert.deepEqual(target, {
     pullRequest: 42,
     expectedHeadSha: headSha,
     expectedBaseSha: baseSha,
     expectedWorkflowSha: workflowSha,
-    baseRef: "main",
+    baseRef: "release/1.x",
   });
+  const result = await verifySignalTargetWithGitHub({
+    target, repository, repositoryId: 123456, runId: 987654, runAttempt: 2,
+    runHeadSha: workflowSha, workflowId: 426787988, githubToken: "test-token",
+    fetchImpl: apiFetch({
+      pull: {
+        number: 42, state: "open", draft: false,
+        head: { sha: headSha, repo: { id: 123456, full_name: repository } },
+        base: { sha: baseSha, ref: "release/1.x", repo: { id: 123456, full_name: repository } },
+      },
+    }),
+  });
+  assert.deepEqual(result, target);
 });
 
 test("only HTTPS API origins or explicit loopback HTTP are accepted", async () => {

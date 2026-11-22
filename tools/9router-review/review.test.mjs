@@ -1228,3 +1228,29 @@ test("append-only publication never scans or updates an existing matching bot co
   assert.equal(patchCalls, 0, "an existing matching bot comment must never be updated");
   assert.equal(postCalls, 1, "every successful review execution must create a fresh comment");
 });
+
+test("the overall review deadline is propagated to the first GitHub request", async () => {
+  let calls = 0;
+  const fakeFetch = async (_url, options = {}) => {
+    calls += 1;
+    assert.ok(options.signal, "every outbound request must receive an abort signal");
+    assert.equal(options.signal.aborted, true, "an exhausted review deadline must abort before network work");
+    throw options.signal.reason ?? new Error("review deadline elapsed");
+  };
+
+  await assert.rejects(
+    runReview({
+      repository: "owner/repo",
+      pullRequest: 285,
+      expectedHeadSha: "a".repeat(40),
+      expectedBaseSha: "b".repeat(40),
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      model: "test-model",
+      reviewTimeoutMs: 0,
+      fetchImpl: fakeFetch,
+    }),
+  );
+  assert.equal(calls, 1, "an exhausted global budget must stop before later API or model calls");
+});

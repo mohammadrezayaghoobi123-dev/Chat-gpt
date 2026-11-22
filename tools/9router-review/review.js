@@ -7,7 +7,7 @@ export function resolveWorkflowRunTarget({
   if (
     eventName !== "workflow_run" ||
     workflowPath !== ".github/workflows/9router-pr-review-signal.yml" ||
-    triggerEvent !== "pull_request" ||
+    triggerEvent !== "pull_request_target" ||
     workflowConclusion !== "success" ||
     !repository ||
     !headRepository ||
@@ -22,6 +22,7 @@ export function resolveWorkflowRunTarget({
   const target = pullRequests[0];
   const pullRequestHeadSha = target.head?.sha;
   const pullRequestBaseSha = target.base?.sha;
+  const headRepositoryFullName = target.head?.repo?.full_name;
   const baseRepository = target.base?.repo?.full_name;
   if (
     !Number.isSafeInteger(target.number) ||
@@ -29,10 +30,12 @@ export function resolveWorkflowRunTarget({
     !/^[a-f0-9]{40}$/i.test(runHeadSha ?? "") ||
     !/^[a-f0-9]{40}$/i.test(pullRequestHeadSha ?? "") ||
     !/^[a-f0-9]{40}$/i.test(pullRequestBaseSha ?? "") ||
+    typeof headRepositoryFullName !== "string" ||
+    headRepositoryFullName.toLowerCase() !== repository.toLowerCase() ||
     typeof baseRepository !== "string" ||
     baseRepository.toLowerCase() !== repository.toLowerCase()
   ) {
-    throw new Error("Workflow run contains invalid pull-request metadata, repository identity, or commit SHA.");
+    throw new Error("Workflow run contains invalid pull-request metadata, head/base repository identity, or commit SHA.");
   }
   return {
     pullRequest: target.number,

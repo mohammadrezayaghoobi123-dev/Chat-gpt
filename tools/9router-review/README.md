@@ -146,3 +146,12 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 - **Secret scan:** Full-history Gitleaks push scan run `45044313030`, job `137275438766`: PASS.
 - **Residual behavior:** The added event is covered by a static workflow contract and hosted test suite. A live base-branch-edit event flowing through the privileged `workflow_run` reviewer remains UNKNOWN until the workflow definition is present on the default branch and the required event policy permits execution.
 - **Safety boundary:** No changes to `main`, repository Actions policies, secrets, branch rules, or Production resources. PR #261 remains Draft/Open/Unmerged.
+## Finding 30 — edited-event cost amplification
+
+- **Finding:** Adding the broad `edited` activity alone would also enqueue reviews for title/body edits. The reviewer currently generates the model report before bounded duplicate reconciliation, so repeated metadata-only edits could incur repeated 9Router calls even when the head/base SHA pair is unchanged.
+- **TDD RED:** Commit `179d304bd46ff2655412622ec7df4f05c9136681` added a contract assertion requiring the signal job to gate `edited` events on `github.event.changes.base`. Run `45044479415`, job `137275956062`: **42 passed / 1 failed**. The expected failure showed that the signal job had no base-change gate.
+- **Remediation:** The signal job now runs for all existing non-`edited` activities, but for `edited` only when `github.event.changes.base != null`. Title/body-only edits therefore produce a skipped signal job; the privileged reviewer already rejects non-success workflow conclusions. A base-branch edit still emits a successful signal. No secrets or permissions were added.
+- **TDD GREEN:** Commit `1273a81e07cae6d9ab6ad24e691b767add7f470e`. Run `45044512717`, job `137276064599`: **43/43 PASS**, zero failures, cancellations, or skips.
+- **Secret scans:** Full-history Gitleaks push scan run `45044512703`, job `137276064779`: PASS; PR scan run `45044517686`, job `137276079624`: PASS.
+- **Residual limitation:** The workflow contract verifies the gate expression, but a real GitHub `edited` payload with `changes.base` has not been observed through the activated privileged chain. Live end-to-end behavior remains UNKNOWN until the trusted workflow exists on `main` and event policy allows it.
+- **Safety boundary:** No `main`, repository policy, secrets, branch rules, or Production changes.

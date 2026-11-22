@@ -162,12 +162,12 @@ test("workflow-run metadata resolves only a trusted same-repository PR signal", 
   const target = reviewer.resolveWorkflowRunTarget({
     eventName: "workflow_run",
     workflowPath: ".github/workflows/9router-pr-review-signal.yml",
-    triggerEvent: "pull_request",
+    triggerEvent: "pull_request_target",
     workflowConclusion: "success",
     runHeadSha: "b".repeat(40),
     repository: "owner/repo",
     headRepository: "owner/repo",
-    pullRequests: [{ number: 42, head: { sha: "a".repeat(40) }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
+    pullRequests: [{ number: 42, head: { sha: "a".repeat(40), repo: { full_name: "owner/repo" } }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
   });
   assert.deepEqual(target, { pullRequest: 42, expectedHeadSha: "a".repeat(40), expectedBaseSha: "c".repeat(40) });
 });
@@ -177,16 +177,17 @@ test("workflow-run metadata rejects forked, spoofed, or malformed signals", () =
   const base = {
     eventName: "workflow_run",
     workflowPath: ".github/workflows/9router-pr-review-signal.yml",
-    triggerEvent: "pull_request",
+    triggerEvent: "pull_request_target",
     workflowConclusion: "success",
     runHeadSha: "a".repeat(40),
     repository: "owner/repo",
     headRepository: "owner/repo",
-    pullRequests: [{ number: 42, head: { sha: "a".repeat(40) }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
+    pullRequests: [{ number: 42, head: { sha: "a".repeat(40), repo: { full_name: "owner/repo" } }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
   };
   for (const override of [
     { eventName: "push" },
     { workflowPath: ".github/workflows/untrusted.yml" },
+    { triggerEvent: "pull_request" },
     { triggerEvent: "push" },
     { workflowConclusion: "failure" },
     { runHeadSha: "invalid" },
@@ -248,12 +249,12 @@ test("workflow-run target uses the immutable PR head snapshot, not the pull_requ
   const target = reviewer.resolveWorkflowRunTarget({
     eventName: "workflow_run",
     workflowPath: ".github/workflows/9router-pr-review-signal.yml",
-    triggerEvent: "pull_request",
+    triggerEvent: "pull_request_target",
     workflowConclusion: "success",
     runHeadSha: "b".repeat(40),
     repository: "owner/repo",
     headRepository: "owner/repo",
-    pullRequests: [{ number: 43, head: { sha: "a".repeat(40) }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
+    pullRequests: [{ number: 43, head: { sha: "a".repeat(40), repo: { full_name: "owner/repo" } }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
   });
 
   assert.deepEqual(target, { pullRequest: 43, expectedHeadSha: "a".repeat(40), expectedBaseSha: "c".repeat(40) });
@@ -264,14 +265,14 @@ test("workflow-run metadata requires and returns the immutable PR base SHA", () 
   const base = {
     eventName: "workflow_run",
     workflowPath: ".github/workflows/9router-pr-review-signal.yml",
-    triggerEvent: "pull_request",
+    triggerEvent: "pull_request_target",
     workflowConclusion: "success",
     runHeadSha: "b".repeat(40),
     repository: "owner/repo",
     headRepository: "owner/repo",
     pullRequests: [{
       number: 44,
-      head: { sha: "a".repeat(40) },
+      head: { sha: "a".repeat(40), repo: { full_name: "owner/repo" } },
       base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } },
     }],
   };
@@ -284,7 +285,7 @@ test("workflow-run metadata requires and returns the immutable PR base SHA", () 
   assert.throws(
     () => reviewer.resolveWorkflowRunTarget({
       ...base,
-      pullRequests: [{ number: 44, head: { sha: "a".repeat(40) }, base: { repo: { full_name: "owner/repo" } } }],
+      pullRequests: [{ number: 44, head: { sha: "a".repeat(40), repo: { full_name: "owner/repo" } }, base: { repo: { full_name: "owner/repo" } } }],
     }),
     /invalid.*metadata|base.*SHA/i,
   );
@@ -298,6 +299,18 @@ test("workflow-run metadata requires and returns the immutable PR base SHA", () 
       }],
     }),
     /invalid.*metadata|repository identity/i,
+  );
+
+  assert.throws(
+    () => reviewer.resolveWorkflowRunTarget({
+      ...base,
+      pullRequests: [{
+        number: 44,
+        head: { sha: "a".repeat(40), repo: { full_name: "attacker/fork" } },
+        base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } },
+      }],
+    }),
+    /invalid.*metadata|head repository/i,
   );
 });
 

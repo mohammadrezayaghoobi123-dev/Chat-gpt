@@ -6,7 +6,25 @@ function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
 }
 
+function expectPlanUsesIndexAndPrefix(plan, indexName, prefixPattern) {
+  const indexedRow = plan.find(row => String(row.detail).includes(indexName));
+  expect(indexedRow, "Expected query plan to use " + indexName).toBeDefined();
+  expect(indexedRow.detail).toMatch(prefixPattern);
+}
+
 describe("OrchestratorLedger tenant/project query plans", () => {
+  it("rejects index and equality-prefix evidence split across different plan rows", () => {
+    const adversarialPlan = [
+      { detail: "SEARCH orchestrator_tasks USING INDEX expected_scope_index (tenant_id=?)" },
+      { detail: "SEARCH other_table USING INDEX unrelated_index (project_id=? AND <expr>=?)" },
+    ];
+
+    expect(() => expectPlanUsesIndexAndPrefix(
+      adversarialPlan,
+      "expected_scope_index",
+      /tenant_id=\?.*project_id=\?.*<expr>=\?/,
+    )).toThrow();
+  });
   it("uses a tenant/project/sequence index for bounded audit-head lookup", async () => {
     const ledger = ledgerFor("audit-chain-scope-query-plan");
     await runInDurableObject(ledger, async instance => {
@@ -42,10 +60,11 @@ describe("OrchestratorLedger tenant/project query plans", () => {
          LIMIT 1`,
         "worker-a", "tenant-alpha", "project-red", "tenant-alpha", "project-red",
       ).toArray();
-      const details = plan.map(row => row.detail).join("\n");
-      expect(details).toContain("orchestrator_claim_candidates_by_scope_executor_order");
-      // The index name alone is insufficient: prove SQLite constrains the complete scope prefix.
-      expect(details).toMatch(/executor_id=\?.*tenant_id=\?.*project_id=\?/);
+      expectPlanUsesIndexAndPrefix(
+        plan,
+        "orchestrator_claim_candidates_by_scope_executor_order",
+        /executor_id=\?.*tenant_id=\?.*project_id=\?/,
+      );
     });
   });
   it("uses the scope/executor index for both initial and cursor-based bounded legacy backfill batches", async () => {
@@ -77,9 +96,12 @@ describe("OrchestratorLedger tenant/project query plans", () => {
       ).toArray();
 
       for (const plan of [initialBatchPlan, cursorBatchPlan]) {
-        const details = plan.map(row => row.detail).join("\\n");
-        expect(details).toContain("orchestrator_tasks_by_scope_executor_created");
-        expect(details).toMatch(/tenant_id=\?.*project_id=\?.*<expr>=\?/);
+        expectPlanUsesIndexAndPrefix(
+          plan,
+          "orchestrator_tasks_by_scope_executor_created",
+          /tenant_id=\?.*project_id=\?.*<expr>=\?/,
+        );
+        const details = plan.map(row => row.detail).join("\n");
         expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
       }
     });
@@ -99,9 +121,11 @@ describe("OrchestratorLedger tenant/project query plans", () => {
          LIMIT 1`,
         "tenant-alpha", "project-red", "worker-a",
       ).toArray();
-      const details = plan.map(row => row.detail).join("\\n");
-      expect(details).toContain("orchestrator_tasks_by_scope_state_executor_created");
-      expect(details).toMatch(/tenant_id=\?.*project_id=\?.*state=\?.*<expr>=\?/);
+      expectPlanUsesIndexAndPrefix(
+        plan,
+        "orchestrator_tasks_by_scope_state_executor_created",
+        /tenant_id=\?.*project_id=\?.*state=\?.*<expr>=\?/,
+      );
     });
   });
 
@@ -118,9 +142,11 @@ describe("OrchestratorLedger tenant/project query plans", () => {
          LIMIT 1`,
         "tenant-alpha", "project-red",
       ).toArray();
-      const details = plan.map(row => row.detail).join("\\n");
-      expect(details).toContain("orchestrator_tasks_by_scope_state_executor_created");
-      expect(details).toMatch(/tenant_id=\?.*project_id=\?.*state=\?/);
+      expectPlanUsesIndexAndPrefix(
+        plan,
+        "orchestrator_tasks_by_scope_state_executor_created",
+        /tenant_id=\?.*project_id=\?.*state=\?/,
+      );
     });
   });
 
@@ -145,9 +171,11 @@ describe("OrchestratorLedger tenant/project query plans", () => {
         "tenant-alpha", "project-red", "tenant-alpha", "project-red",
         "worker-a", 1000, 0, "", -1,
       ).toArray();
-      const details = plan.map(row => row.detail).join("\\n");
-      expect(details).toContain("orchestrator_tasks_by_scope_state_executor_created");
-      expect(details).toMatch(/tenant_id=\?.*project_id=\?.*state=\?.*<expr>=\?/);
+      expectPlanUsesIndexAndPrefix(
+        plan,
+        "orchestrator_tasks_by_scope_state_executor_created",
+        /tenant_id=\?.*project_id=\?.*state=\?.*<expr>=\?/,
+      );
     });
   });
 

@@ -264,6 +264,39 @@ describe("OrchestratorLedger v9 migration JavaScript memory bound", () => {
     });
   });
 
+  it("rejects keys in the reserved staging namespace before any rewrite", async () => {
+    const ledger = ledgerFor("v9-migration-reserved-staging-namespace");
+    await runInDurableObject(ledger, async instance => {
+      const storage = instance.ctx.storage;
+      const sql = storage.sql;
+      const reservedKey = "~migration-v9-stage-collision:1";
+      sql.exec(
+        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, 'SCHEDULED', 1, '{}', 1, 1, ?, ?)",
+        "v9-reserved-prefix-task", reservedKey, "a".repeat(64), "tenant-a", "project-a",
+      );
+      sql.exec("DROP INDEX IF EXISTS orchestrator_tasks_by_tenant_project_idempotency");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_outbox_by_tenant_project_idempotency");
+      sql.exec("DROP INDEX IF EXISTS orchestrator_claim_candidates_by_scope_executor_order");
+      sql.exec("DELETE FROM orchestrator_schema_migrations WHERE version = 9");
+
+      expect(() => migrateV9IdempotencyKeys(storage)).toThrow(
+        "Schema v9 cannot encode every orchestrator_tasks idempotency key; source and staging row counts differ.",
+      );
+      expect(sql.exec(
+        "SELECT idempotency_key FROM orchestrator_tasks WHERE task_id = ?",
+        "v9-reserved-prefix-task",
+      ).one().idempotency_key).toBe(reservedKey);
+      expect(sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 9",
+      ).toArray()).toHaveLength(0);
+      expect(sql.exec(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?)",
+        "orchestrator_v9_task_key_staging",
+        "orchestrator_v9_outbox_key_staging",
+      ).toArray()).toHaveLength(0);
+    });
+  });
+
   it("fails closed and rolls back when a legacy idempotency key is not encodable", async () => {
     const ledger = ledgerFor("v9-migration-invalid-idempotency-key");
     await runInDurableObject(ledger, async instance => {

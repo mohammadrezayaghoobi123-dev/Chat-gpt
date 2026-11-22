@@ -648,7 +648,7 @@ test("model report cannot publish active HTML, remote images, or clickable links
     'https://attacker.example/bare-tracker',
     'www.attacker.example/bare-www-tracker',
     '<script>alert("x")</script>',
-  ].join("\\n");
+  ].join(String.fromCharCode(10));
   let publishedBody = "";
   const fakeFetch = async (url, options = {}) => {
     const target = String(url);

@@ -7,7 +7,7 @@ function ledgerFor(name) {
 }
 
 function expectPlanUsesIndexAndPrefix(plan, indexName, prefixPattern) {
-  const details = plan.map(row => row.detail).join("\\\\n");
+  const details = plan.map(row => row.detail).join("\\n");
   expect(details).toContain(indexName);
   expect(details).toMatch(prefixPattern);
 }

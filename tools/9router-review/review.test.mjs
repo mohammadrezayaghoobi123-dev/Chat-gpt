@@ -1872,6 +1872,7 @@ test("a report signed by the immediately previous marker key suppresses duplicat
     routerApiKey: "router-test-token",
     reviewMarkerKey: currentKey,
     previousReviewMarkerKeys: [previousKey],
+    previousReviewMarkerKeyValidUntil: "2099-01-01T00:00:00.000Z",
     model: "test-model",
     fetchImpl: fakeFetch,
   });

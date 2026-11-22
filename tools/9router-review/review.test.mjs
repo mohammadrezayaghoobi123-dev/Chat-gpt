@@ -511,7 +511,7 @@ test("model-generated account mentions are neutralized before comment publicatio
     fetchImpl: fakeFetch,
   });
 
-  const neutralizedMention = String.fromCharCode(64) + "\\u200b" + "reviewtarget";
+  const neutralizedMention = String.fromCharCode(64) + String.fromCharCode(8203) + "reviewtarget";
   assert.ok(publishedBody.includes(neutralizedMention));
   assert.ok(!publishedBody.includes(mention));
 });

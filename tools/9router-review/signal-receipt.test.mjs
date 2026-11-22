@@ -102,6 +102,22 @@ test("receipt parser scopes duplicate-key detection to nested JSON objects", () 
   assert.deepEqual(parseSignalReceipt(JSON.stringify(duplicateLookingText)), duplicateLookingText);
 });
 
+test("receipt parser enforces the UTF-8 byte limit and scans objects inside arrays", () => {
+  const nestedArrayDuplicate = JSON.stringify(receipt).replace(
+    '"baseRef":"main"}',
+    '"baseRef":"main","ignored":[{"nested":{"duplicate":1,"duplicate":2}}]}',
+  );
+  assert.throws(() => parseSignalReceipt(nestedArrayDuplicate), /duplicate JSON object keys/);
+
+  const unicodeReceipt = { ...receipt, baseRef: "é".repeat(255) };
+  const serialized = JSON.stringify(unicodeReceipt);
+  const byteLength = Buffer.byteLength(serialized, "utf8");
+  const atLimit = serialized + " ".repeat(16 * 1024 - byteLength);
+  assert.equal(Buffer.byteLength(atLimit, "utf8"), 16 * 1024);
+  assert.deepEqual(parseSignalReceipt(atLimit), unicodeReceipt);
+  assert.throws(() => parseSignalReceipt(atLimit + " "), /16 KiB size limit/);
+});
+
 test("resolver binds the receipt to the exact workflow run and PR snapshot", () => {
   assert.deepEqual(resolveWorkflowRunTarget(context), {
     pullRequest: 42, expectedHeadSha: headSha, expectedBaseSha: baseSha, expectedWorkflowSha: workflowSha, baseRef: "main",

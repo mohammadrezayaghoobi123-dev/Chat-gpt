@@ -442,7 +442,7 @@ export async function runReview({
   if (previousReviewMarkerKeys.length === 1) {
     if (
       typeof previousReviewMarkerKeyValidUntil !== "string" ||
-      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\\.\d{3}Z$/.test(previousReviewMarkerKeyValidUntil)
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(previousReviewMarkerKeyValidUntil)
     ) {
       throw new Error("A previous review marker key requires an explicit UTC expiry timestamp.");
     }

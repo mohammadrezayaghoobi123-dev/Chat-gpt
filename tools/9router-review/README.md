@@ -137,3 +137,12 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 - Full-history secret scan on pull request: run `45043681136`, job `137273454020`: PASS.
 - The privileged review job was skipped on push by design. These results do not prove a live `workflow_run`, 9Router request, report publication, or hosted ambiguous-POST recovery.
 - PR #261 remains Draft/Open/Unmerged. The default branch remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`; no repository settings, secrets, `main`, or Production resources were changed.
+## Finding 29 — pull request base-branch edits did not emit a review signal
+
+- **Finding:** The unprivileged `pull_request_target` signal workflow listened for `opened`, `synchronize`, `reopened`, and `ready_for_review`, but omitted the `edited` activity. GitHub documents `edited` as a supported `pull_request_target` activity; changing the PR base branch emits this activity. A base-branch change could therefore leave the reviewer without a fresh workflow signal even though the diff identity changes.
+- **TDD RED:** Commit `3d43c31f4195e0c3d8071da20587985d586662df` added a workflow-contract assertion requiring `edited`. Run `45044265306`, job `137275287357`: **42 passed / 1 failed**. The failure was the expected missing activity in the signal workflow, not a test setup or syntax failure.
+- **Remediation:** Added `edited` to the existing `pull_request_target.types` list. No permissions, secrets, checkout behavior, or privileged workflow logic changed.
+- **TDD GREEN:** Commit `ccc20b6d6e1984d488aac0db1ee44bd83d98c7fa`. Run `45044313106`, job `137275439163`: **43/43 PASS**, zero failures, cancellations, or skips.
+- **Secret scan:** Full-history Gitleaks push scan run `45044313030`, job `137275438766`: PASS.
+- **Residual behavior:** The added event is covered by a static workflow contract and hosted test suite. A live base-branch-edit event flowing through the privileged `workflow_run` reviewer remains UNKNOWN until the workflow definition is present on the default branch and the required event policy permits execution.
+- **Safety boundary:** No changes to `main`, repository Actions policies, secrets, branch rules, or Production resources. PR #261 remains Draft/Open/Unmerged.

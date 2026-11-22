@@ -1797,3 +1797,76 @@ for (const snapshotChange of ["head", "base"]) {
     assert.notEqual(currentMarker, oldMarker);
   });
 }
+
+
+test("a report signed by the immediately previous marker key suppresses duplicate publication during rotation", async () => {
+  const headSha = "7".repeat(40);
+  const baseSha = "8".repeat(40);
+  const previousKey = "previous-test-marker-key-with-at-least-32-bytes";
+  const currentKey = "current-test-marker-key-with-at-least-32-bytes";
+  const previousMarker = reviewer.createReviewMarker({
+    repository: "owner/repo",
+    pullRequest: 292,
+    headSha,
+    baseSha,
+    key: previousKey,
+  });
+  let historyReads = 0;
+  let prReads = 0;
+  let routerCalls = 0;
+  let postCalls = 0;
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/292")) {
+      prReads += 1;
+      return new Response(JSON.stringify({
+        state: "open",
+        draft: false,
+        head: { sha: headSha },
+        base: { sha: baseSha },
+      }), { status: 200 });
+    }
+    if (target.includes("/pulls/292/files?")) {
+      return new Response(JSON.stringify([{
+        filename: "src/a.js",
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        patch: "@@ -1 +1 @@\\n-old\\n+new",
+      }]), { status: 200 });
+    }
+    if (target.includes("/issues/292/comments?")) {
+      historyReads += 1;
+      return new Response(JSON.stringify([{
+        id: 1292,
+        body: previousMarker + "\\nPreviously published report.",
+        user: { login: "github-actions[bot]" },
+      }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) routerCalls += 1;
+    if (target.endsWith("/issues/292/comments") && options.method === "POST") postCalls += 1;
+    throw new Error("Unexpected API operation in marker-key rotation test: " + target);
+  };
+
+  const result = await runReview({
+    repository: "owner/repo",
+    pullRequest: 292,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: currentKey,
+    previousReviewMarkerKeys: [previousKey],
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  assert.equal(result.status, "already-published");
+  assert.equal(result.existingCommentId, 1292);
+  assert.equal(result.publishedNewComment, false);
+  assert.equal(historyReads, 1);
+  assert.equal(prReads, 3);
+  assert.equal(routerCalls, 0, "a previous-key report must suppress unnecessary model inference");
+  assert.equal(postCalls, 0, "key rotation must not duplicate the same snapshot report");
+});

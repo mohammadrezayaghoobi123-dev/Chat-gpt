@@ -115,6 +115,98 @@ test("a head change during patch retrieval aborts before the model request", asy
 });
 
 
+test("a PR closed after patch retrieval is rejected before 9Router inference", async () => {
+  const headSha = "a".repeat(40);
+  const baseSha = "b".repeat(40);
+  let prReads = 0;
+  let routerCalls = 0;
+  let postCalls = 0;
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/269")) {
+      prReads += 1;
+      return new Response(JSON.stringify({
+        state: prReads === 1 ? "open" : "closed",
+        draft: false,
+        head: { sha: headSha },
+        base: { sha: baseSha },
+      }), { status: 200 });
+    }
+    if (target.includes("/pulls/269/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      routerCalls += 1;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/269/comments?")) return new Response(JSON.stringify([]), { status: 200 });
+    if (target.endsWith("/issues/269/comments") && options.method === "POST") postCalls += 1;
+    return new Response(JSON.stringify({ id: 1 }), { status: 201 });
+  };
+
+  await assert.rejects(runReview({
+    repository: "owner/repo",
+    pullRequest: 269,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  }), /not open|closed/i);
+  assert.equal(prReads, 2, "PR state must be checked again after patch retrieval");
+  assert.equal(routerCalls, 0, "a closed PR must not incur model inference");
+  assert.equal(postCalls, 0, "a closed PR must never receive a report");
+});
+
+test("a PR converted to draft during model review is not published", async () => {
+  const headSha = "c".repeat(40);
+  const baseSha = "d".repeat(40);
+  let prReads = 0;
+  let routerCalls = 0;
+  let postCalls = 0;
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/270")) {
+      prReads += 1;
+      return new Response(JSON.stringify({
+        state: "open",
+        draft: prReads < 3 ? false : true,
+        head: { sha: headSha },
+        base: { sha: baseSha },
+      }), { status: 200 });
+    }
+    if (target.includes("/pulls/270/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.includes("/issues/270/comments?")) return new Response(JSON.stringify([]), { status: 200 });
+    if (target.endsWith("/chat/completions")) {
+      routerCalls += 1;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
+    }
+    if (target.endsWith("/issues/270/comments") && options.method === "POST") postCalls += 1;
+    return new Response(JSON.stringify({ id: 1 }), { status: 201 });
+  };
+
+  await assert.rejects(runReview({
+    repository: "owner/repo",
+    pullRequest: 270,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  }), /draft/i);
+  assert.equal(routerCalls, 1, "the PR becomes draft only after the model has started");
+  assert.equal(prReads, 3, "PR draft state must be revalidated after model generation");
+  assert.equal(postCalls, 0, "a draft PR must never receive a report");
+});
+
 test("append-only publication never overwrites a user-authored marker comment", async () => {
   const headSha = "f".repeat(40);
   let patchCalls = 0;

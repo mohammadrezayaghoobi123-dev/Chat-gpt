@@ -742,3 +742,62 @@ test("duplicate bot reports for the same diff fail closed instead of updating an
   assert.equal(patchCalls, 0, "ambiguous ownership must never update an arbitrary bot comment");
   assert.equal(postCalls, 0, "ambiguous ownership must not create another duplicate report");
 });
+
+test("a rerun reconciles an ambiguous POST timeout with the already-created report comment", async () => {
+  const headSha = "7".repeat(40);
+  const baseSha = "8".repeat(40);
+  const comments = [];
+  let postAttempts = 0;
+  let patchAttempts = 0;
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/275")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/275/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/275/comments?")) {
+      return new Response(JSON.stringify(comments), { status: 200 });
+    }
+    if (target.endsWith("/issues/275/comments") && options.method === "POST") {
+      postAttempts += 1;
+      const body = JSON.parse(options.body).body;
+      comments.push({ id: 900, body, user: { login: "github-actions[bot]" } });
+      throw new Error("simulated connection reset after remote comment creation");
+    }
+    if (target.endsWith("/issues/comments/900") && options.method === "PATCH") {
+      patchAttempts += 1;
+      comments[0].body = JSON.parse(options.body).body;
+      return new Response(JSON.stringify({ id: 900 }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ id: 901 }), { status: 201 });
+  };
+
+  const config = {
+    repository: "owner/repo",
+    pullRequest: 275,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  };
+
+  await assert.rejects(
+    runReview(config),
+    /simulated connection reset after remote comment creation/,
+  );
+  assert.equal(comments.length, 1, "the simulated remote side effect must exist despite the lost response");
+
+  await runReview(config);
+
+  assert.equal(postAttempts, 1, "the rerun must not create a second comment");
+  assert.equal(patchAttempts, 1, "the rerun must reconcile by updating the existing exact-marker comment");
+  assert.equal(comments.length, 1, "only one report comment must remain");
+});

@@ -1841,7 +1841,7 @@ test("a report signed by the immediately previous marker key suppresses duplicat
       historyReads += 1;
       return new Response(JSON.stringify([{
         id: 1292,
-        body: previousMarker + "\\nPreviously published report.",
+        body: previousMarker + "\nPreviously published report.",
         user: { login: "github-actions[bot]" },
       }]), { status: 200 });
     }
@@ -1873,7 +1873,7 @@ test("a report signed by the immediately previous marker key suppresses duplicat
   });
 
   assert.equal(historyReads, 1);
-  assert.equal(prReads, 4, "publication must proceed after the old marker is rejected");
+  assert.equal(prReads, 3, "duplicate reconciliation must return before inference or publication");
   assert.equal(routerCalls, 0, "a previous-key report must suppress unnecessary model inference");
   assert.equal(postCalls, 0, "key rotation must not duplicate the same snapshot report");
 });

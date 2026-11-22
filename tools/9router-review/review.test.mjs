@@ -647,6 +647,9 @@ test("model report cannot publish active HTML, remote images, or clickable links
     '[external]: javascript:alert(1)',
     'https://attacker.example/bare-tracker',
     'www.attacker.example/bare-www-tracker',
+    'javascript:alert(2)',
+    'data:text/html,<svg/onload=alert(1)>',
+    'mailto:tracker@attacker.example',
     '<script>alert("x")</script>',
   ].join(String.fromCharCode(10));
   let publishedBody = "";
@@ -688,5 +691,8 @@ test("model report cannot publish active HTML, remote images, or clickable links
   assert.ok(!publishedBody.includes("[reference link][external]"), "reference-style Markdown links must be removed");
   assert.ok(!publishedBody.includes("www.attacker.example"), "www-prefixed URLs must not auto-link");
   assert.ok(!publishedBody.includes("javascript:alert"), "reference destinations must not retain executable schemes");
+  assert.ok(!publishedBody.includes("javascript:alert(2)"), "bare javascript schemes must not auto-link");
+  assert.ok(!publishedBody.includes("data:text/html"), "data schemes must not reach the rendered report");
+  assert.ok(!publishedBody.includes("mailto:tracker@"), "mailto schemes must not create clickable addresses");
   assert.ok(publishedBody.includes("[image omitted]"), "removed images should leave an explicit placeholder");
 });

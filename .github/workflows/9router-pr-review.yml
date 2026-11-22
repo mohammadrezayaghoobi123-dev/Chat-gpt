@@ -152,6 +152,7 @@ jobs:
           ROUTER_BASE_URL: ${{ secrets.NINE_ROUTER_API_URL }}
           ROUTER_API_KEY: ${{ secrets.NINE_ROUTER_API_KEY }}
           REVIEW_MARKER_KEY: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_KEY }}
+          PREVIOUS_REVIEW_MARKER_KEY: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_PREVIOUS_KEY }}
           ROUTER_MODEL: ${{ vars.NINE_ROUTER_MODEL }}
         run: |
           if [ -z "$ROUTER_BASE_URL" ] || [ -z "$ROUTER_API_KEY" ] || [ -z "$REVIEW_MARKER_KEY" ] || [ -z "$ROUTER_MODEL" ]; then
@@ -186,5 +187,6 @@ jobs:
           ROUTER_BASE_URL: ${{ secrets.NINE_ROUTER_API_URL }}
           ROUTER_API_KEY: ${{ secrets.NINE_ROUTER_API_KEY }}
           REVIEW_MARKER_KEY: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_KEY }}
+          PREVIOUS_REVIEW_MARKER_KEY: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_PREVIOUS_KEY }}
           ROUTER_MODEL: ${{ vars.NINE_ROUTER_MODEL }}
         run: node tools/9router-review/run-review.mjs

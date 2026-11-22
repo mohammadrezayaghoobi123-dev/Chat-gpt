@@ -17,10 +17,10 @@ Never commit these values or paste the API key into issues, pull requests, or ch
 
 ## Workflow trust boundaries
 
-- `9router-pr-review-signal.yml` runs on the unprivileged `pull_request` event with an empty permission set. It does not check out pull-request code, download artifacts, or execute repository scripts.
-- `9router-pr-review.yml` runs later on `workflow_run`, using its copy from the trusted default branch. It accepts only successful runs from the exact signal workflow path and only when the PR head repository is this repository.
+- `9router-pr-review-signal.yml` runs on `pull_request_target`, whose workflow definition is taken from the base repository's default branch rather than the PR merge commit. Its workflow and job permissions are empty; it performs only a fixed echo and does not check out pull-request code, download artifacts, execute repository scripts, or reference secrets. A PR cannot replace this signal workflow definition through its own diff.
+- `9router-pr-review.yml` runs later on `workflow_run`, using its copy from the trusted default branch. It accepts only successful `pull_request_target` runs from the exact signal workflow path and verifies that both the PR head and base repositories are this repository.
 - The privileged workflow does not download or consume artifacts from the unprivileged run. It fetches PR metadata and patches directly from GitHub's API as data.
-- Fork-originated PRs are intentionally skipped. This first version reviews same-repository branches only.
+- Fork-originated PRs are intentionally skipped by checking the associated PR's `head.repo.full_name`, not merely the workflow-run repository metadata. This first version reviews same-repository branches only.
 - The privileged job checks out only the trusted default branch; it never checks out or executes pull-request code.
 - Uses immutable PR head and base SHA snapshots from `workflow_run.pull_requests[0].head.sha` and `.base.sha`; it does not mistake `workflow_run.head_sha` (which can represent the `pull_request` merge ref) for the PR branch head. It verifies the base repository identity, then rechecks both live PR SHAs before sending the patch to 9Router and again before publishing the report. If either side of the PR diff changes after the signal snapshot, the stale review is rejected.
 - Missing file patches, empty diffs, oversized patches, invalid event provenance, and stale head SHAs stop the review instead of producing a partial or stale report.

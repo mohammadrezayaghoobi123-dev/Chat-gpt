@@ -1,5 +1,9 @@
 import { marked } from "marked";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const MAX_PATCH_CHARS = 45000;
 const MAX_REPORT_CHARS = 30000;
@@ -447,6 +451,346 @@ function assertReviewablePullRequest(pr, { expectedHeadSha, expectedBaseSha, pha
   return true;
 }
 
+
+const MAX_CHANGED_FILES = 1000;
+const MAX_GIT_TREE_ENTRIES = 50000;
+const MAX_GIT_BLOB_BYTES = 512 * 1024;
+const MAX_GIT_BLOB_TOTAL_BYTES = 4 * 1024 * 1024;
+const MAX_GIT_FALLBACK_FILES = 300;
+
+function validateGitPath(value, label) {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    Buffer.byteLength(value, "utf8") > 1024 ||
+    value.startsWith("/") ||
+    value.includes("\0") ||
+    value.split("/").some(part => part.length === 0 || part === "." || part === "..")
+  ) {
+    throw new Error(label + " is invalid; refusing an incomplete immutable review.");
+  }
+  return value;
+}
+
+function validateGitSha(value, label) {
+  if (typeof value !== "string" || !/^[a-f0-9]{40}$/i.test(value)) {
+    throw new Error(label + " is invalid; refusing an incomplete immutable review.");
+  }
+  return value.toLowerCase();
+}
+
+async function fetchImmutableGitTree({ fetchImpl, base, repoPath, token, deadlineAt, commitSha, label }) {
+  const requestedCommitSha = validateGitSha(commitSha, label + " commit SHA");
+  const commit = await requestJson(
+    fetchImpl,
+    base.origin + repoPath + "/git/commits/" + requestedCommitSha,
+    { token, deadlineAt },
+  );
+  if (!commit || validateGitSha(commit.sha, label + " returned commit SHA") !== requestedCommitSha) {
+    throw new Error(label + " commit object does not match the expected immutable SHA.");
+  }
+  const treeSha = validateGitSha(commit.tree?.sha, label + " tree SHA");
+  const tree = await requestJson(
+    fetchImpl,
+    base.origin + repoPath + "/git/trees/" + treeSha + "?recursive=1",
+    { token, deadlineAt },
+  );
+  if (
+    !tree ||
+    validateGitSha(tree.sha, label + " returned tree SHA") !== treeSha ||
+    tree.truncated !== false ||
+    !Array.isArray(tree.tree) ||
+    tree.tree.length > MAX_GIT_TREE_ENTRIES
+  ) {
+    throw new Error(label + " Git tree is malformed, truncated, or exceeds the safe entry limit.");
+  }
+
+  const entries = new Map();
+  for (const entry of tree.tree) {
+    if (!entry || typeof entry !== "object") {
+      throw new Error(label + " Git tree contains a malformed entry.");
+    }
+    if (entry.type === "tree" && entry.mode === "040000") continue;
+    const filePath = validateGitPath(entry.path, label + " Git tree path");
+    if (entry.type !== "blob" && entry.type !== "commit") {
+      throw new Error(label + " Git tree contains an unsupported object type.");
+    }
+    const sha = validateGitSha(entry.sha, label + " Git tree blob SHA");
+    if (typeof entry.mode !== "string" || !/^[0-7]{6}$/.test(entry.mode)) {
+      throw new Error(label + " Git tree contains an invalid file mode.");
+    }
+    if (entries.has(filePath)) {
+      throw new Error(label + " Git tree contains a duplicate path.");
+    }
+    entries.set(filePath, {
+      path: filePath,
+      mode: entry.mode,
+      type: entry.type,
+      sha,
+      size: entry.size,
+    });
+  }
+  return entries;
+}
+
+function verifyGitBlobSha(bytes, expectedSha) {
+  const header = Buffer.from("blob " + bytes.length + String.fromCharCode(0), "utf8");
+  return createHash("sha1").update(header).update(bytes).digest("hex") === expectedSha.toLowerCase();
+}
+
+async function fetchImmutableGitBlob({
+  fetchImpl, base, repoPath, token, deadlineAt, entry, label, budget, cache,
+}) {
+  if (!entry) return Buffer.alloc(0);
+  if (entry.type !== "blob" || (entry.mode !== "100644" && entry.mode !== "100755")) {
+    throw new Error(label + " is a symlink, submodule, or unsupported Git object mode; refusing an incomplete review.");
+  }
+  if (
+    !Number.isSafeInteger(entry.size) ||
+    entry.size < 0 ||
+    entry.size > MAX_GIT_BLOB_BYTES
+  ) {
+    throw new Error(label + " Git blob exceeds the safe individual object size.");
+  }
+  if (cache.has(entry.sha)) return cache.get(entry.sha);
+  if (budget.totalBytes + entry.size > MAX_GIT_BLOB_TOTAL_BYTES) {
+    throw new Error("Immutable Git blobs exceed the cumulative 4 MiB review budget.");
+  }
+
+  const blob = await requestJson(
+    fetchImpl,
+    base.origin + repoPath + "/git/blobs/" + entry.sha,
+    { token, deadlineAt },
+  );
+  if (
+    !blob ||
+    validateGitSha(blob.sha, label + " returned Git blob SHA") !== entry.sha ||
+    blob.encoding !== "base64" ||
+    blob.size !== entry.size ||
+    typeof blob.content !== "string"
+  ) {
+    throw new Error(label + " Git blob response does not match the exact tree object.");
+  }
+
+  const encoded = blob.content.replace(/\s+/g, "");
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    throw new Error(label + " Git blob contains malformed base64.");
+  }
+  const bytes = Buffer.from(encoded, "base64");
+  if (
+    bytes.length !== entry.size ||
+    bytes.toString("base64") !== encoded ||
+    !verifyGitBlobSha(bytes, entry.sha)
+  ) {
+    throw new Error(label + " Git blob size or content hash is invalid.");
+  }
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error(label + " Git blob is not valid UTF-8; binary or malformed source is unsupported.");
+  }
+  if (bytes.includes(0)) {
+    throw new Error(label + " Git blob contains binary data; refusing an incomplete text review.");
+  }
+  budget.totalBytes += bytes.length;
+  cache.set(entry.sha, bytes);
+  return bytes;
+}
+
+function generateBoundedGitDiff(beforeBytes, afterBytes, { beforeEntry, afterEntry, deadlineAt, label }) {
+  if (beforeBytes.includes(0) || afterBytes.includes(0)) {
+    throw new Error(label + " contains binary data; refusing an incomplete text review.");
+  }
+  const remainingMs = deadlineAt - Date.now();
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+    throw new Error("Review execution deadline exceeded before immutable diff generation.");
+  }
+
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), "9router-review-diff-"));
+  try {
+    writeFileSync(join(temporaryDirectory, "before"), beforeBytes, { mode: 0o600 });
+    writeFileSync(join(temporaryDirectory, "after"), afterBytes, { mode: 0o600 });
+    let output = "";
+    try {
+      output = execFileSync(
+        "git",
+        ["diff", "--no-index", "--no-ext-diff", "--no-textconv", "--unified=3", "--", "before", "after"],
+        {
+          cwd: temporaryDirectory,
+          encoding: "utf8",
+          maxBuffer: MAX_PATCH_CHARS * 4,
+          timeout: Math.max(1, Math.min(15000, remainingMs)),
+          windowsHide: true,
+          env: {
+            PATH: process.env.PATH || "/usr/bin:/bin",
+            HOME: process.env.HOME || temporaryDirectory,
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_TERMINAL_PROMPT: "0",
+            LC_ALL: "C",
+            LANG: "C",
+          },
+        },
+      );
+    } catch (error) {
+      if (error?.status === 1 && typeof error.stdout === "string") {
+        output = error.stdout;
+      } else {
+        throw new Error(label + " bounded Git diff generation failed or timed out.");
+      }
+    }
+    if (/^Binary files .* differ$/m.test(output)) {
+      throw new Error(label + " produced a binary Git diff; refusing an incomplete review.");
+    }
+    const hunkStart = output.indexOf("@@ ");
+    if (hunkStart >= 0) return output.slice(hunkStart).trimEnd();
+    if (beforeEntry && afterEntry && beforeEntry.sha === afterEntry.sha && beforeEntry.mode !== afterEntry.mode) {
+      return "File mode changed from " + beforeEntry.mode + " to " + afterEntry.mode + "; file content is unchanged.";
+    }
+    if (!beforeEntry && afterEntry && afterBytes.length === 0) return "Added empty file; no content lines exist.";
+    if (beforeEntry && !afterEntry && beforeBytes.length === 0) return "Deleted empty file; no content lines exist.";
+    throw new Error(label + " did not produce a complete textual diff.");
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
+async function buildImmutableReviewPatch({
+  repository, pullRequest, expectedHeadSha, expectedBaseSha, pullRequestMetadata,
+  fetchImpl, base, repoPath, token, deadlineAt,
+}) {
+  const comparisonUrl = base.origin + repoPath + "/compare/" +
+    expectedBaseSha + "..." + expectedHeadSha + "?per_page=100&page=1";
+  const comparison = await requestJson(fetchImpl, comparisonUrl, { token, deadlineAt });
+  if (
+    !comparison ||
+    validateGitSha(comparison.base_commit?.sha, "Compare API base SHA") !== expectedBaseSha.toLowerCase() ||
+    !Array.isArray(comparison.files) ||
+    comparison.files.length > 300
+  ) {
+    throw new Error("Exact-SHA Compare API response is incomplete or does not match the expected base commit.");
+  }
+
+  const [baseTree, headTree] = await Promise.all([
+    fetchImmutableGitTree({
+      fetchImpl, base, repoPath, token, deadlineAt, commitSha: expectedBaseSha, label: "Base",
+    }),
+    fetchImmutableGitTree({
+      fetchImpl, base, repoPath, token, deadlineAt, commitSha: expectedHeadSha, label: "Head",
+    }),
+  ]);
+
+  const changedPaths = new Set();
+  for (const filePath of new Set([...baseTree.keys(), ...headTree.keys()])) {
+    const beforeEntry = baseTree.get(filePath);
+    const afterEntry = headTree.get(filePath);
+    if (
+      !beforeEntry ||
+      !afterEntry ||
+      beforeEntry.sha !== afterEntry.sha ||
+      beforeEntry.mode !== afterEntry.mode ||
+      beforeEntry.type !== afterEntry.type
+    ) {
+      changedPaths.add(filePath);
+    }
+  }
+  if (changedPaths.size === 0) throw new Error("Exact base/head Git trees contain no changed files.");
+  if (changedPaths.size > MAX_CHANGED_FILES) {
+    throw new Error("Immutable Git tree diff exceeds the supported 1000 changed-path limit.");
+  }
+
+  const compareByPath = new Map();
+  for (const record of comparison.files) {
+    if (!record || typeof record !== "object") {
+      throw new Error("Exact-SHA Compare API contains a malformed file record.");
+    }
+    const filePath = validateGitPath(record.filename, "Compare API filename");
+    if (!changedPaths.has(filePath) || compareByPath.has(filePath)) {
+      throw new Error("Exact-SHA Compare API file records are inconsistent with the immutable Git trees.");
+    }
+    if (record.previous_filename !== undefined && record.previous_filename !== null) {
+      const previousPath = validateGitPath(record.previous_filename, "Compare API previous filename");
+      if (!changedPaths.has(previousPath) || previousPath === filePath) {
+        throw new Error("Exact-SHA Compare API rename metadata is inconsistent with the immutable Git trees.");
+      }
+    }
+    compareByPath.set(filePath, record);
+  }
+
+  const blobCache = new Map();
+  const blobBudget = { totalBytes: 0 };
+  let fallbackFiles = 0;
+  let patchChars = 0;
+  const formattedFiles = [];
+
+  for (const filePath of changedPaths) {
+    const beforeEntry = baseTree.get(filePath);
+    const afterEntry = headTree.get(filePath);
+    const entries = [beforeEntry, afterEntry].filter(Boolean);
+    for (const entry of entries) {
+      if (entry.type !== "blob" || (entry.mode !== "100644" && entry.mode !== "100755")) {
+        throw new Error("Changed path " + JSON.stringify(filePath) + " is a symlink, submodule, or unsupported Git object.");
+      }
+    }
+
+    const record = compareByPath.get(filePath);
+    const renamed = Boolean(record?.previous_filename) || record?.status === "renamed";
+    const sameContentModeChange = Boolean(
+      beforeEntry && afterEntry && beforeEntry.sha === afterEntry.sha && beforeEntry.mode !== afterEntry.mode,
+    );
+    let filePatch;
+
+    if (!renamed && !sameContentModeChange && typeof record?.patch === "string" && record.patch.length > 0) {
+      filePatch = record.patch;
+    } else {
+      fallbackFiles += 1;
+      if (fallbackFiles > MAX_GIT_FALLBACK_FILES) {
+        throw new Error("Missing Compare patches exceed the safe 300-file Git-object fallback limit.");
+      }
+      if (sameContentModeChange) {
+        filePatch = generateBoundedGitDiff(Buffer.alloc(0), Buffer.alloc(0), {
+          beforeEntry, afterEntry, deadlineAt, label: JSON.stringify(filePath),
+        });
+      } else {
+        const beforeBytes = await fetchImmutableGitBlob({
+          fetchImpl, base, repoPath, token, deadlineAt, entry: beforeEntry,
+          label: "Base blob for " + JSON.stringify(filePath), budget: blobBudget, cache: blobCache,
+        });
+        const afterBytes = await fetchImmutableGitBlob({
+          fetchImpl, base, repoPath, token, deadlineAt, entry: afterEntry,
+          label: "Head blob for " + JSON.stringify(filePath), budget: blobBudget, cache: blobCache,
+        });
+        filePatch = generateBoundedGitDiff(beforeBytes, afterBytes, {
+          beforeEntry, afterEntry, deadlineAt, label: JSON.stringify(filePath),
+        });
+      }
+    }
+
+    const status = !beforeEntry ? "added" : !afterEntry ? "deleted" : "modified";
+    const additions = Number.isSafeInteger(record?.additions) ? record.additions : "unknown";
+    const deletions = Number.isSafeInteger(record?.deletions) ? record.deletions : "unknown";
+    const safePath = JSON.stringify(filePath).slice(1, -1);
+    const entry = [
+      "FILE: " + safePath + " | status: " + status + " | additions: " + additions + " | deletions: " + deletions,
+      filePatch,
+    ].join("\n");
+    patchChars += entry.length + (formattedFiles.length > 0 ? 2 : 0);
+    if (patchChars > MAX_PATCH_CHARS) {
+      throw new Error("Pull request patch exceeds the safe review size; no partial review was sent.");
+    }
+    formattedFiles.push(entry);
+  }
+
+  if (formattedFiles.length === 0) throw new Error("Immutable Git trees contain no reviewable changed files.");
+  return {
+    patch: formattedFiles.join("\n\n"),
+    changedPathCount: changedPaths.size,
+    comparePatchCount: changedPaths.size - fallbackFiles,
+    fallbackFileCount: fallbackFiles,
+    gitBlobBytes: blobBudget.totalBytes,
+  };
+}
+
 export async function runReview({
   repository, pullRequest, expectedHeadSha, expectedBaseSha, githubToken, routerBaseUrl, routerApiKey, model,
   fetchImpl = fetch, githubApiBase = "https://api.github.com", reviewTimeoutMs = 8 * 60 * 1000, reviewMarkerKey, previousReviewMarkerKeys = [], previousReviewMarkerKeyValidUntil,
@@ -495,35 +839,19 @@ export async function runReview({
   const pr = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
   const initiallyReviewable = assertReviewablePullRequest(pr, { expectedHeadSha, expectedBaseSha, phase: "initial validation", allowDraft: true });
   if (!initiallyReviewable) return { status: "skipped-draft", reviewedHeadSha: expectedHeadSha };
-  const files = [];
-  let patchChars = 0;
-  for (let page = 1; page <= 10; page += 1) {
-    const batch = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest + "/files?per_page=100&page=" + page, { token: githubToken, deadlineAt });
-    if (!Array.isArray(batch)) throw new Error("GitHub returned an invalid pull request file list.");
-    for (const file of batch) {
-      if (typeof file.patch !== "string" || file.patch.length === 0) {
-        throw new Error("Pull request contains unavailable file patches; refusing an incomplete review.");
-      }
-      const entry = [
-        "FILE: " + file.filename + " | status: " + file.status + " | additions: " + file.additions + " | deletions: " + file.deletions,
-        file.patch,
-      ].join("\n");
-      patchChars += entry.length + (files.length > 0 ? 2 : 0);
-      if (patchChars > MAX_PATCH_CHARS) {
-        throw new Error("Pull request patch exceeds the safe review size; no partial review was sent.");
-      }
-      files.push(file);
-    }
-    if (batch.length < 100) break;
-    if (page === 10) throw new Error("Pull request exceeds the supported 1000-file review limit.");
-  }
-
-  if (files.length === 0) throw new Error("Pull request has no changed files; refusing an empty review.");
-
-  const patch = files.map(file => [
-    "FILE: " + file.filename + " | status: " + file.status + " | additions: " + file.additions + " | deletions: " + file.deletions,
-    file.patch,
-  ].join("\n")).join("\n\n");
+  const immutableReview = await buildImmutableReviewPatch({
+    repository,
+    pullRequest,
+    expectedHeadSha,
+    expectedBaseSha,
+    pullRequestMetadata: pr,
+    fetchImpl,
+    base,
+    repoPath,
+    token: githubToken,
+    deadlineAt,
+  });
+  const patch = immutableReview.patch;
 
   const currentBeforeModel = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
   assertReviewablePullRequest(currentBeforeModel, { expectedHeadSha, expectedBaseSha, phase: "patch retrieval" });

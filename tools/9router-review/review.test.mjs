@@ -856,7 +856,10 @@ test("an ambiguous POST timeout is reconciled before rerun publication", async (
     fetchImpl: fakeFetch,
   };
 
-  await assert.rejects(runReview(config), /simulated connection reset after remote comment creation/);
+  await assert.rejects(runReview(config), (error) => {
+    assert.match(error.message, /publication state is UNKNOWN/i);
+    return true;
+  });
   assert.equal(comments.length, 1, "the remote side effect may exist despite the lost response");
   const rerunResult = await runReview(config);
 

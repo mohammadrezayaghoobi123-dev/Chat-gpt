@@ -66,6 +66,16 @@ test("receipt parser accepts only a bounded, exact v1 schema", () => {
   ]) assert.throws(() => parseSignalReceipt(invalid));
 });
 
+test("receipt parser rejects duplicate and escaped-equivalent JSON object keys", () => {
+  const duplicateKeys = [
+    JSON.stringify(receipt).replace('"schemaVersion":1', '"schemaVersion":1,"schemaVersion":1'),
+    JSON.stringify(receipt).replace('"schemaVersion":1', '"schemaVersion":1,"schema\\u0056ersion":1'),
+  ];
+  for (const input of duplicateKeys) {
+    assert.throws(() => parseSignalReceipt(input), /duplicate JSON object keys/);
+  }
+});
+
 test("resolver binds the receipt to the exact workflow run and PR snapshot", () => {
   assert.deepEqual(resolveWorkflowRunTarget(context), {
     pullRequest: 42, expectedHeadSha: headSha, expectedBaseSha: baseSha, expectedWorkflowSha: workflowSha, baseRef: "main",

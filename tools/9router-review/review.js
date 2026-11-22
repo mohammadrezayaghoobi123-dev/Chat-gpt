@@ -2,7 +2,7 @@ const MAX_PATCH_CHARS = 45000;
 const REVIEW_MARKER = "<!-- 9router-independent-review:";
 
 function neutralizeGitHubMentions(value) {
-  return value.replace(/(^|[^A-Za-z0-9_])@([A-Za-z0-9-]+(?:\\/[A-Za-z0-9_-]+)?)/g, "$1@\\u200b$2");
+  return value.replace(/(^|[^A-Za-z0-9_])@([A-Za-z0-9-]+(?:\/[A-Za-z0-9_-]+)?)/g, "$1@\u200b$2");
 }
 
 function sanitizeModelReport(value) {

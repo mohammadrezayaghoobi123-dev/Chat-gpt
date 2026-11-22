@@ -632,3 +632,52 @@ test("model-generated mentions after punctuation are neutralized", async () => {
   assert.ok(!publishedBody.includes("," + account));
   assert.ok(!publishedBody.includes("!" + account));
 });
+
+test("model report cannot publish active HTML, remote images, or clickable links", async () => {
+  const headSha = "3".repeat(40);
+  const baseSha = "4".repeat(40);
+  const hostileReport = [
+    '<img src="https://attacker.example/pixel" onerror="alert(1)">',
+    '![tracking pixel](https://attacker.example/markdown-pixel)',
+    '[run this](javascript:alert(1))',
+    '[external](https://attacker.example/redirect)',
+    'https://attacker.example/bare-tracker',
+    '<script>alert("x")</script>',
+  ].join("\\n");
+  let publishedBody = "";
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/273")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/273/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: hostileReport } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/273/comments?")) return new Response(JSON.stringify([]), { status: 200 });
+    if (target.endsWith("/issues/273/comments") && options.method === "POST") publishedBody = JSON.parse(options.body).body;
+    return new Response(JSON.stringify({ id: 706 }), { status: 201 });
+  };
+
+  await runReview({
+    repository: "owner/repo",
+    pullRequest: 273,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  assert.ok(!publishedBody.includes("<img"), "raw HTML image tags must not reach GitHub Markdown");
+  assert.ok(!publishedBody.includes("<script"), "raw script tags must not reach GitHub Markdown");
+  assert.ok(!publishedBody.includes("![tracking pixel]"), "Markdown images must be removed");
+  assert.ok(!publishedBody.includes("](javascript:"), "javascript links must not remain clickable");
+  assert.ok(!publishedBody.includes("](https://"), "external Markdown links must not remain clickable");
+  assert.ok(!publishedBody.includes("https://attacker.example/bare-tracker"), "bare external URLs must not auto-link");
+  assert.ok(publishedBody.includes("[image omitted]"), "removed images should leave an explicit placeholder");
+});

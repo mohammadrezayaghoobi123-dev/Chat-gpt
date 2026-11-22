@@ -228,13 +228,15 @@ export function resolveWorkflowRunTarget({
     !/^[a-f0-9]{40}$/i.test(runHeadSha ?? "") ||
     !/^[a-f0-9]{40}$/i.test(pullRequestHeadSha ?? "") ||
     !/^[a-f0-9]{40}$/i.test(pullRequestBaseSha ?? "") ||
-    runHeadSha.toLowerCase() !== pullRequestBaseSha.toLowerCase() ||
     typeof headRepositoryFullName !== "string" ||
     headRepositoryFullName.toLowerCase() !== repository.toLowerCase() ||
     typeof baseRepository !== "string" ||
     baseRepository.toLowerCase() !== repository.toLowerCase()
   ) {
     throw new Error("Workflow run contains invalid pull-request metadata, head/base repository identity, or commit SHA.");
+  }
+  if (runHeadSha.toLowerCase() !== pullRequestBaseSha.toLowerCase()) {
+    throw new Error("Workflow run SHA does not match the PR base SHA; refusing ambiguous signal association.");
   }
   return {
     pullRequest: target.number,

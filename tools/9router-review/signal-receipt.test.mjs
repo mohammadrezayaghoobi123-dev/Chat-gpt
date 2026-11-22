@@ -177,3 +177,20 @@ test("privileged workflow resolves identity before per-PR concurrency and never 
   assert.doesNotMatch(resolverJob, /NINE_ROUTER_API_KEY|NINE_ROUTER_REVIEW_MARKER_KEY|NINE_ROUTER_API_URL/);
   assert.match(resolverJob, /GITHUB_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
 });
+
+test("only HTTPS API origins or explicit loopback HTTP are accepted", async () => {
+  const target = resolveWorkflowRunTarget(context);
+  const common = {
+    target, repository, repositoryId: 123456, runId: 987654, runAttempt: 2,
+    runHeadSha: baseSha, workflowId: 426787988, githubToken: "test-token",
+  };
+  for (const githubApiBase of ["ftp://localhost", "http://api.example.com"]) {
+    await assert.rejects(verifySignalTargetWithGitHub({
+      ...common, githubApiBase, fetchImpl: async () => { throw new Error("must not be called"); },
+    }), /HTTPS/);
+  }
+  const result = await verifySignalTargetWithGitHub({
+    ...common, githubApiBase: "http://localhost", fetchImpl: apiFetch(),
+  });
+  assert.deepEqual(result, target);
+});

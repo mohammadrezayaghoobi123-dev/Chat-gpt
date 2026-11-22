@@ -70,5 +70,6 @@ jobs:
           name: 9router-pr-signal-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/signal.json
           if-no-files-found: error
+          overwrite: false
           retention-days: 1
           compression-level: 0

@@ -6,7 +6,25 @@ function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
 }
 
+function expectPlanUsesIndexAndPrefix(plan, indexName, prefixPattern) {
+  const details = plan.map(row => row.detail).join("\\\\n");
+  expect(details).toContain(indexName);
+  expect(details).toMatch(prefixPattern);
+}
+
 describe("OrchestratorLedger tenant/project query plans", () => {
+  it("rejects index and equality-prefix evidence split across different plan rows", () => {
+    const adversarialPlan = [
+      { detail: "SEARCH orchestrator_tasks USING INDEX expected_scope_index (tenant_id=?)" },
+      { detail: "SEARCH other_table USING INDEX unrelated_index (project_id=? AND <expr>=?)" },
+    ];
+
+    expect(() => expectPlanUsesIndexAndPrefix(
+      adversarialPlan,
+      "expected_scope_index",
+      /tenant_id=\\?.*project_id=\\?.*<expr>=\\?/,
+    )).toThrow();
+  });
   it("uses a tenant/project/sequence index for bounded audit-head lookup", async () => {
     const ledger = ledgerFor("audit-chain-scope-query-plan");
     await runInDurableObject(ledger, async instance => {

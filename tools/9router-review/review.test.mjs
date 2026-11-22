@@ -2941,7 +2941,7 @@ test("the 300-file Git-object fallback boundary remains reviewable", async () =>
   assert.equal(blobCalls, 1, "the identical empty blob must be fetched once and cached across 300 paths");
   assert.equal(modelCalls, 1, "exactly 300 fallback files must reach inference once");
   assert.equal(commentPosts, 1, "a complete 300-file snapshot may be published once");
-  assert.match(modelPatch, /FILE: src\\/empty-000\\.txt/);
-  assert.match(modelPatch, /FILE: src\\/empty-299\\.txt/);
+  assert.ok(modelPatch.includes("FILE: src/empty-000.txt"));
+  assert.ok(modelPatch.includes("FILE: src/empty-299.txt"));
   assert.equal((modelPatch.match(/FILE: /g) ?? []).length, 300, "all 300 changed paths must be represented exactly once");
 });

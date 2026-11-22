@@ -190,3 +190,15 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 - **Classification:** `REJECTED` as a demonstrated defect under the pinned Marked 17.0.1 parser and this test case. This does not establish equivalence with every downstream Markdown renderer.
 - **Validation:** Contract run `45047469769`, job `137285096336`: **43/43 PASS**. Full-history Gitleaks push scan `45047469771` and PR scan `45047473303`: PASS.
 - **Safety boundary:** No changes to `main`, repository Actions policies, secrets, branch rules, or Production resources. Live 9Router and privileged `workflow_run` E2E remain UNKNOWN.
+
+
+### Finding 34 — workflow-run SHA was format-checked but not bound to the PR base snapshot
+- **Classification:** SUPPORTED as a provenance-validation defect in the resolver; exploitability against a hosted `pull_request_target` delivery remains unproven because no such signal run exists in this repository's available run history.
+- **Finding:** `resolveWorkflowRunTarget` validated that `workflow_run.head_sha` was a 40-character SHA but did not require it to equal the associated PR's `base.sha`. The previous positive fixture explicitly accepted three unrelated values: run SHA `b…b`, PR head SHA `a…a`, and PR base SHA `c…c`. Thus the resolver could accept an associated PR record without proving that the PR base snapshot corresponded to the triggering `pull_request_target` run.
+- **Platform contract:** GitHub documents that `pull_request_target` runs against the base repository's default-branch context and that its `GITHUB_SHA` is the last commit on the base branch. The privileged `workflow_run` event is dispatched after the signal run and exposes that run's SHA. The resolver now requires the run SHA to equal the associated PR base SHA; mismatches fail closed before the reviewer uses the PR number.
+- **TDD RED:** test-only commit `21ae4b9b9674059e456615b7c6e9b38d1bf90dbd`; run `45050518174`, contract-tests job `137294381334`: **43 passed / 1 failed**. The new test supplied a different run SHA and expected rejection; the resolver accepted it.
+- **TDD GREEN:** implementation head `0c17db41ef905b80cc935e8d93bbcde4ee94c355`; run `45050631606`, contract-tests job `137294735458`: **44/44 PASS**, zero failures, cancellations, or skips.
+- **Secret scans:** push run `45050631599` and PR run `45050636379`: PASS.
+- **Fixture correction:** all positive resolver fixtures now use `runHeadSha === pullRequests[0].base.sha`; the negative regression explicitly tests a mismatch. No test was weakened.
+- **Residual UNKNOWN:** no `pull_request_target` signal run is available in the repository's current Actions history (query returned zero runs), so the exact hosted `workflow_run.head_sha` / PR base snapshot equality has not been validated against a real delivery. This implementation intentionally fails closed if GitHub supplies inconsistent metadata. No live 9Router call or privileged E2E is claimed.
+- **Disposition:** the previously accepted mismatch is rejected by code and contract tests. Keep the privileged workflow inactive until a trusted default-branch bootstrap and hosted E2E can verify the payload contract.

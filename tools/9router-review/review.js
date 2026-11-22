@@ -149,7 +149,14 @@ async function requestJson(fetchImpl, url, { method = "GET", token, body, accept
     ...(body ? { body: JSON.stringify(body) } : {}),
     signal: AbortSignal.timeout(120000),
   });
-  if (!response.ok) throw new Error("Remote API request failed with HTTP " + response.status + ".");
+  if (!response.ok) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Preserve the generic HTTP error even if transport cancellation fails.
+    }
+    throw new Error("Remote API request failed with HTTP " + response.status + ".");
+  }
   return response.status === 204 ? null : readJsonResponseLimited(response, MAX_GITHUB_API_RESPONSE_BYTES, "GitHub API", budget);
 }
 

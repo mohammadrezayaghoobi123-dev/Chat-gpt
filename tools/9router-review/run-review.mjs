@@ -6,6 +6,7 @@ try {
     workflowPath: process.env.WORKFLOW_PATH,
     triggerEvent: process.env.TRIGGER_EVENT,
     workflowConclusion: process.env.WORKFLOW_CONCLUSION,
+    runHeadSha: process.env.RUN_HEAD_SHA,
     repository: process.env.REPOSITORY,
     headRepository: process.env.HEAD_REPOSITORY,
     pullRequests: JSON.parse(process.env.PULL_REQUESTS_JSON ?? "null"),

@@ -170,12 +170,30 @@ test("workflow-run metadata resolves only a trusted same-repository PR signal", 
     workflowPath: ".github/workflows/9router-pr-review-signal.yml",
     triggerEvent: "pull_request_target",
     workflowConclusion: "success",
-    runHeadSha: "b".repeat(40),
+    runHeadSha: "c".repeat(40),
     repository: "owner/repo",
     headRepository: "owner/repo",
     pullRequests: [{ number: 42, head: { sha: "a".repeat(40), repo: { full_name: "owner/repo" } }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
   });
   assert.deepEqual(target, { pullRequest: 42, expectedHeadSha: "a".repeat(40), expectedBaseSha: "c".repeat(40) });
+});
+
+test("workflow-run metadata rejects a PR association not bound to the signal run SHA", () => {
+  const base = {
+    eventName: "workflow_run",
+    workflowPath: ".github/workflows/9router-pr-review-signal.yml",
+    triggerEvent: "pull_request_target",
+    workflowConclusion: "success",
+    runHeadSha: "c".repeat(40),
+    repository: "owner/repo",
+    headRepository: "owner/repo",
+    pullRequests: [{ number: 42, head: { sha: "a".repeat(40), repo: { full_name: "owner/repo" } }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
+  };
+
+  assert.throws(
+    () => reviewer.resolveWorkflowRunTarget({ ...base, runHeadSha: "d".repeat(40) }),
+    /run SHA.*base SHA|base SHA.*run SHA/i,
+  );
 });
 
 test("workflow-run metadata rejects forked, spoofed, or malformed signals", () => {

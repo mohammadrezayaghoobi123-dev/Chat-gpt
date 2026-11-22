@@ -1877,3 +1877,81 @@ test("a report signed by the immediately previous marker key suppresses duplicat
   assert.equal(postCalls, 0, "key rotation must not duplicate the same snapshot report");
   assert.equal(prReads, 3, "duplicate reconciliation must return before inference or publication");
 });
+
+test("a report signed by the expired previous marker key cannot suppress a duplicate report", async () => {
+  const headSha = "7".repeat(40);
+  const baseSha = "8".repeat(40);
+  const previousKey = "previous-marker-key-".repeat(3);
+  const currentKey = "current-marker-key-".repeat(3);
+  const previousMarker = reviewer.createReviewMarker({
+    repository: "owner/repo",
+    pullRequest: 293,
+    headSha,
+    baseSha,
+    key: previousKey,
+  });
+  let historyReads = 0;
+  let prReads = 0;
+  let routerCalls = 0;
+  let postCalls = 0;
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/293")) {
+      prReads += 1;
+      return new Response(JSON.stringify({
+        state: "open",
+        draft: false,
+        head: { sha: headSha },
+        base: { sha: baseSha },
+      }), { status: 200 });
+    }
+    if (target.includes("/pulls/293/files?")) {
+      return new Response(JSON.stringify([{
+        filename: "src/a.js",
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        patch: "@@ -1 +1 @@\\n-old\\n+new",
+      }]), { status: 200 });
+    }
+    if (target.includes("/issues/293/comments?")) {
+      historyReads += 1;
+      return new Response(JSON.stringify([{
+        id: 1293,
+        body: previousMarker + "\nPreviously published report.",
+        user: { login: "github-actions[bot]" },
+      }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      routerCalls += 1;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "A sufficiently long placeholder review report." } }],
+      }), { status: 200 });
+    }
+    if (target.endsWith("/issues/293/comments") && options.method === "POST") {
+      postCalls += 1;
+      return new Response(JSON.stringify({ id: 1293 }), { status: 201 });
+    }
+    throw new Error("Unexpected API operation in marker-key rotation test: " + target);
+  };
+
+  await runReview({
+    repository: "owner/repo",
+    pullRequest: 293,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: currentKey,
+    previousReviewMarkerKeys: [previousKey],
+    previousReviewMarkerKeyValidUntil: "2000-01-01T00:00:00.000Z",
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  assert.equal(historyReads, 1);
+  assert.equal(routerCalls, 1, "an expired previous key must not authenticate old reports");
+  assert.equal(postCalls, 1, "expired previous-key reports must not be treated as currently authenticated");
+  assert.equal(prReads, 4, "expired previous-key reports must continue through publication");
+});

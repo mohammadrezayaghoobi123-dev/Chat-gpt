@@ -976,3 +976,50 @@ test("stops fetching file pages immediately when the patch budget is exceeded", 
   );
   assert.equal(filePageCalls, 1, "the reviewer must stop pagination as soon as the cumulative patch budget is exceeded");
 });
+
+
+test("oversized GitHub API bodies are rejected while streaming", async () => {
+  const headSha = "c".repeat(40);
+  const baseSha = "d".repeat(40);
+  let fileListCalls = 0;
+  let routerCalls = 0;
+  const oversizedPrMetadata = JSON.stringify({
+    state: "open",
+    draft: false,
+    head: { sha: headSha },
+    base: { sha: baseSha },
+    padding: "X".repeat(1024 * 1024 + 64),
+  });
+  const fakeFetch = async (url) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/280")) {
+      return new Response(oversizedPrMetadata, { status: 200 });
+    }
+    if (target.includes("/pulls/280/files?")) {
+      fileListCalls += 1;
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      routerCalls += 1;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
+    }
+    throw new Error("No later API operation is expected after an oversized GitHub response.");
+  };
+
+  await assert.rejects(
+    runReview({
+      repository: "owner/repo",
+      pullRequest: 280,
+      expectedHeadSha: headSha,
+      expectedBaseSha: baseSha,
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }),
+    /GitHub API response exceeds the safe response size/i,
+  );
+  assert.equal(fileListCalls, 0, "oversized PR metadata must be rejected before file pagination");
+  assert.equal(routerCalls, 0, "oversized GitHub data must never be sent to the model");
+});

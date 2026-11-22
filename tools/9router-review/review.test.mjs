@@ -1070,7 +1070,7 @@ test("cumulative comment-history response budget stops pagination before publica
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
-    /GitHub comment history exceeds the cumulative response budget/i,
+    /GitHub API comment history exceeds the cumulative response budget/i,
   );
   assert.equal(commentPageCalls, 5, "the aggregate budget must stop the fifth oversized cumulative page");
   assert.equal(commentPosts, 0, "no report may be published after an incomplete comment-history scan");

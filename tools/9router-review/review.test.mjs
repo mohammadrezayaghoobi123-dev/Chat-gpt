@@ -1085,7 +1085,7 @@ test("non-success GitHub responses cancel unread bodies", async () => {
       model: "test-model",
       fetchImpl: fakeFetch,
     }),
-    /Remote API request failed with HTTP 503/i,
+    /GitHub API server-error \\(HTTP 503\\)/i,
   );
   assert.equal(bodyCanceled, true, "non-success response bodies must be canceled rather than left unread");
 });
@@ -1291,4 +1291,30 @@ test("does not misclassify an ambiguous GitHub 403 as a confirmed permission fai
     retryAfterSeconds: null,
     rateLimitResetEpochSeconds: null,
   });
+});
+test("GitHub rate-limit responses fail closed without automatic retries", async () => {
+  let calls = 0;
+  const fakeFetch = async () => {
+    calls += 1;
+    return new Response("private rate-limit body", {
+      status: 429,
+      headers: { "retry-after": "60", "x-ratelimit-remaining": "42" },
+    });
+  };
+
+  await assert.rejects(
+    runReview({
+      repository: "owner/repo",
+      pullRequest: 286,
+      expectedHeadSha: "a".repeat(40),
+      expectedBaseSha: "b".repeat(40),
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }),
+    /secondary-rate-limit \\(HTTP 429\\).*Retry-After: 60 seconds/i,
+  );
+  assert.equal(calls, 1, "a rate-limited request must fail closed without an automatic retry");
 });

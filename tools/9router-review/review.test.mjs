@@ -1,4 +1,5 @@
 import test from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { marked } from "marked";
 import { readFileSync } from "node:fs";
@@ -2144,4 +2145,119 @@ test("a successful POST response must confirm the exact issue, body, and bot ide
 
     assert.equal(postCalls, 1, "each malformed 201 response must be rejected after exactly one create attempt");
   }
+});
+
+test("reconstructs a missing Compare API patch from immutable Git blobs", async () => {
+  const headSha = "c".repeat(40);
+  const baseSha = "d".repeat(40);
+  const baseTreeSha = "e".repeat(40);
+  const headTreeSha = "f".repeat(40);
+  const beforeText = "const value = 1;\\n";
+  const afterText = "const value = 2;\\n";
+  const blobSha = value => {
+    const bytes = Buffer.from(value, "utf8");
+    return createHash("sha1").update(Buffer.concat([Buffer.from("blob " + bytes.length + String.fromCharCode(0)), bytes])).digest("hex");
+  };
+  const baseBlobSha = blobSha(beforeText);
+  const headBlobSha = blobSha(afterText);
+  let compareCalls = 0;
+  let mutableFilePageCalls = 0;
+  let routerCalls = 0;
+  let commentPosts = 0;
+  let modelMessages = null;
+
+  const json = (value, status = 200) => new Response(JSON.stringify(value), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/281")) {
+      return json({
+        number: 281,
+        state: "open",
+        draft: false,
+        changed_files: 1,
+        head: { sha: headSha, repo: { id: 1, full_name: "owner/repo" } },
+        base: { sha: baseSha, repo: { id: 1, full_name: "owner/repo" } },
+      });
+    }
+    if (target.includes("/pulls/281/files?")) {
+      mutableFilePageCalls += 1;
+      return json([{ filename: "src/sample.js", status: "modified", additions: 1, deletions: 1, patch: null }]);
+    }
+    if (target.includes("/compare/" + baseSha + "..." + headSha)) {
+      compareCalls += 1;
+      return json({
+        status: "ahead",
+        base_commit: { sha: baseSha },
+        files: [{ filename: "src/sample.js", status: "modified", additions: 1, deletions: 1 }],
+      });
+    }
+    if (target.endsWith("/git/commits/" + baseSha)) {
+      return json({ sha: baseSha, tree: { sha: baseTreeSha } });
+    }
+    if (target.endsWith("/git/commits/" + headSha)) {
+      return json({ sha: headSha, tree: { sha: headTreeSha } });
+    }
+    if (target.includes("/git/trees/" + baseTreeSha)) {
+      return json({
+        sha: baseTreeSha,
+        truncated: false,
+        tree: [{ path: "src/sample.js", mode: "100644", type: "blob", sha: baseBlobSha, size: Buffer.byteLength(beforeText) }],
+      });
+    }
+    if (target.includes("/git/trees/" + headTreeSha)) {
+      return json({
+        sha: headTreeSha,
+        truncated: false,
+        tree: [{ path: "src/sample.js", mode: "100644", type: "blob", sha: headBlobSha, size: Buffer.byteLength(afterText) }],
+      });
+    }
+    if (target.endsWith("/git/blobs/" + baseBlobSha)) {
+      return json({ sha: baseBlobSha, size: Buffer.byteLength(beforeText), encoding: "base64", content: Buffer.from(beforeText).toString("base64") });
+    }
+    if (target.endsWith("/git/blobs/" + headBlobSha)) {
+      return json({ sha: headBlobSha, size: Buffer.byteLength(afterText), encoding: "base64", content: Buffer.from(afterText).toString("base64") });
+    }
+    if (target.includes("/issues/281/comments?")) return json([]);
+    if (target.endsWith("/chat/completions")) {
+      routerCalls += 1;
+      const body = JSON.parse(options.body);
+      modelMessages = body.messages;
+      return json({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] });
+    }
+    if (target.endsWith("/issues/281/comments") && options.method === "POST") {
+      commentPosts += 1;
+      return createdCommentResponse(target, options, 1281);
+    }
+    throw new Error("Unexpected test API request: " + target);
+  };
+
+  const result = await runReview({
+    repository: "owner/repo",
+    pullRequest: 281,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  assert.equal(result.publishedNewComment, true);
+  assert.equal(compareCalls, 1, "one exact-SHA Compare request must define the optional patch source");
+  assert.equal(mutableFilePageCalls, 0, "mutable PR-number file pagination must not supply review source");
+  assert.equal(routerCalls, 1, "complete immutable source must be submitted exactly once");
+  assert.equal(commentPosts, 1, "publication must follow complete immutable patch construction");
+  const userMessage = modelMessages.find(message => message.role === "user").content;
+  const serializedPatch = userMessage.split("Patch as JSON string:" + String.fromCharCode(10)).at(-1);
+  const patch = JSON.parse(serializedPatch);
+  assert.match(patch, /FILE: src\\/sample\\.js/);
+  assert.match(patch, /@@ -1 \+1 @@/);
+  assert.match(patch, /-const value = 1;/);
+  assert.match(patch, /\+const value = 2;/);
 });

@@ -67,8 +67,8 @@ export function resolveWorkflowRunTarget(context) {
     throw new Error('Untrusted workflow-run provenance; refusing privileged review.');
   }
   requireRepoName(context.repository, 'Workflow repository');
-  requireRepoName(context.head_repository, 'Workflow head repository');
-  if (!sameText(context.repository, context.head_repository)) throw new Error('Workflow run is not from the target repository');
+  requireRepoName(context.headRepository, 'Workflow head repository');
+  if (!sameText(context.repository, context.headRepository)) throw new Error('Workflow run is not from the target repository');
   if (!isPositiveSafeInteger(context.repositoryId) || !isPositiveSafeInteger(context.runId) ||
       !isPositiveSafeInteger(context.runAttempt) || !isPositiveSafeInteger(context.workflowId)) {
     throw new Error('Workflow run identity metadata is invalid.');

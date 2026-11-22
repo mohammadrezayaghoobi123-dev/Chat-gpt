@@ -163,7 +163,11 @@ test("privileged workflow resolves identity before per-PR concurrency and never 
   assert.match(workflow, /resolve-signal:/);
   assert.match(workflow, /actions\/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333/);
   assert.match(workflow, /run-id: \$\{\{ github\.event\.workflow_run\.id \}\}/);
-  assert.match(workflow, /name: 9router-pr-signal-\$\{\{ github\.event\.workflow_run\.id \}\}-\$\{\{ github\.event\.workflow_run\.run_attempt \}\}/);
+  assert.match(workflow, /id: run-metadata/);
+  assert.match(workflow, /\.run_attempt/);
+  assert.match(workflow, /steps\.run-metadata\.outputs\.run_attempt/);
+  assert.match(workflow, /name: 9router-pr-signal-\$\{\{ github\.event\.workflow_run\.id \}\}-\$\{\{ steps\.run-metadata\.outputs\.run_attempt \}\}/);
+  assert.doesNotMatch(workflow, /github\.event\.workflow_run\.run_attempt/);
   assert.match(workflow, /actions: read/);
   assert.match(workflow, /pull-requests: read/);
   assert.match(workflow, /group: 9router-pr-review-\$\{\{ needs\.resolve-signal\.outputs\.pull_request \}\}/);

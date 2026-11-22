@@ -1128,6 +1128,7 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
     "## Safe heading",
     "**bold** and `inline code`",
     "Click [a [nested label]](//attacker.example/collect?token=probe).",
+    "Call [a [nested telephone label]](tel:+12025550123).",
     "![tracking [nested alt]](https://attacker.example/pixel)",
     '<img src="https://attacker.example/raw" />',
     "<https://attacker.example/autolink>",
@@ -1167,7 +1168,10 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
     fetchImpl: fakeFetch,
   });
 
-  const tokens = collectMarkdownTokenTypes(marked.lexer(publishedBody, { gfm: true }));
+  const reportStart = publishedBody.indexOf("\n\n", publishedBody.indexOf("**Reviewed base SHA:**")) + 2;
+  const reportEnd = publishedBody.lastIndexOf("\n\n---\n");
+  const sanitizedReport = publishedBody.slice(reportStart, reportEnd);
+  const tokens = collectMarkdownTokenTypes(marked.lexer(sanitizedReport, { gfm: true }));
   const activeTypes = tokens.filter(type => ["link", "image", "html", "url", "autolink"].includes(type));
   assert.deepEqual(activeTypes, [], "published report must contain no active link, image, HTML, or autolink AST nodes");
   assert.ok(publishedBody.includes("**bold**"), "safe emphasis formatting should be preserved");

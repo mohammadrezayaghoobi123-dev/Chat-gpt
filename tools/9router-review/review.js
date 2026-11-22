@@ -1,10 +1,12 @@
 import { marked } from "marked";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 const MAX_PATCH_CHARS = 45000;
 const MAX_REPORT_CHARS = 30000;
 const MAX_ROUTER_RESPONSE_BYTES = 512 * 1024;
 const MAX_GITHUB_API_RESPONSE_BYTES = 1024 * 1024;
-const REVIEW_MARKER = "<!-- 9router-independent-review:";
+const REVIEW_MARKER = "<!-- 9router-independent-review:v2:";
+const REVIEW_MARKER_PATTERN = /^<!-- 9router-independent-review:v2:([a-f0-9]{40}):([a-f0-9]{40}):([a-f0-9]{64}) -->$/i;
 const MAX_COMMENT_HISTORY_PAGES = 10;
 const MAX_COMMENT_HISTORY_BYTES = 4 * 1024 * 1024;
 
@@ -163,6 +165,37 @@ function renderBlockTokens(tokens, allowHtmlReparse = true) {
 function sanitizeModelReport(value) {
   const tokens = marked.lexer(String(value), { gfm: true });
   return neutralizeGitHubMentions(renderBlockTokens(tokens).trim());
+}
+
+export function createReviewMarker({ repository, pullRequest, headSha, baseSha, key }) {
+  if (
+    typeof repository !== "string" ||
+    !repository.includes("/") ||
+    !Number.isSafeInteger(pullRequest) ||
+    pullRequest < 1 ||
+    !/^[a-f0-9]{40}$/i.test(headSha ?? "") ||
+    !/^[a-f0-9]{40}$/i.test(baseSha ?? "") ||
+    typeof key !== "string" ||
+    Buffer.byteLength(key, "utf8") < 32
+  ) {
+    throw new TypeError("A repository, pull request, exact head/base SHAs, and a marker key of at least 32 bytes are required.");
+  }
+  const payload = ["9router-independent-review:v2", repository.toLowerCase(), String(pullRequest), headSha.toLowerCase(), baseSha.toLowerCase()].join("\\n");
+  const signature = createHmac("sha256", key).update(payload, "utf8").digest("hex");
+  return REVIEW_MARKER + headSha.toLowerCase() + ":" + baseSha.toLowerCase() + ":" + signature + " -->";
+}
+
+function hasValidReviewMarker(marker, { repository, pullRequest, headSha, baseSha, key }) {
+  const match = REVIEW_MARKER_PATTERN.exec(marker);
+  if (!match || match[1].toLowerCase() !== headSha.toLowerCase() || match[2].toLowerCase() !== baseSha.toLowerCase()) {
+    return false;
+  }
+  const expected = createReviewMarker({ repository, pullRequest, headSha, baseSha, key });
+  const expectedSignature = REVIEW_MARKER_PATTERN.exec(expected)?.[3];
+  if (!expectedSignature) return false;
+  const suppliedBytes = Buffer.from(match[3], "hex");
+  const expectedBytes = Buffer.from(expectedSignature, "hex");
+  return suppliedBytes.length === expectedBytes.length && timingSafeEqual(suppliedBytes, expectedBytes);
 }
 
 export function resolveWorkflowRunTarget({
@@ -373,7 +406,7 @@ async function requestJson(fetchImpl, url, { method = "GET", token, body, accept
   }
 }
 
-async function findMatchingReviewComments({ fetchImpl, base, repoPath, pullRequest, token, deadlineAt, marker }) {
+async function findMatchingReviewComments({ fetchImpl, base, repoPath, repository, pullRequest, token, deadlineAt, expectedHeadSha, expectedBaseSha, reviewMarkerKey }) {
   const matches = [];
   let totalBytes = 0;
 
@@ -397,7 +430,7 @@ async function findMatchingReviewComments({ fetchImpl, base, repoPath, pullReque
         throw new Error("GitHub returned an incomplete comment-history record; refusing to publish.");
       }
       const firstLine = comment.body.split(/\r?\n/, 1)[0];
-      if (comment.user.login === "github-actions[bot]" && firstLine === marker) {
+      if (comment.user.login === "github-actions[bot]" && hasValidReviewMarker(firstLine, { repository, pullRequest, headSha: expectedHeadSha, baseSha: expectedBaseSha, key: reviewMarkerKey })) {
         matches.push(comment);
         if (matches.length > 1) {
           throw new Error("Multiple matching reports exist for this exact head/base pair; refusing to publish.");
@@ -413,10 +446,10 @@ async function findMatchingReviewComments({ fetchImpl, base, repoPath, pullReque
 
 export async function runReview({
   repository, pullRequest, expectedHeadSha, expectedBaseSha, githubToken, routerBaseUrl, routerApiKey, model,
-  fetchImpl = fetch, githubApiBase = "https://api.github.com", reviewTimeoutMs = 8 * 60 * 1000,
+  fetchImpl = fetch, githubApiBase = "https://api.github.com", reviewTimeoutMs = 8 * 60 * 1000, reviewMarkerKey,
 }) {
-  if (!githubToken || !routerApiKey || !model || !routerBaseUrl) {
-    throw new Error("Required reviewer configuration is missing.");
+  if (!githubToken || !routerApiKey || !model || !routerBaseUrl || typeof reviewMarkerKey !== "string" || Buffer.byteLength(reviewMarkerKey, "utf8") < 32) {
+    throw new Error("Required reviewer configuration is missing or the review marker key is shorter than 32 bytes.");
   }
   if (!Number.isSafeInteger(reviewTimeoutMs) || reviewTimeoutMs < 1 || reviewTimeoutMs > 8 * 60 * 1000) {
     throw new TypeError("Review timeout must be an integer between 1 ms and 8 minutes.");
@@ -506,7 +539,7 @@ export async function runReview({
     throw new Error("Pull request base branch changed during model review; refusing to publish a report for a different diff.");
   }
 
-  const marker = REVIEW_MARKER + expectedHeadSha + ":" + expectedBaseSha + " -->";
+  const marker = createReviewMarker({ repository, pullRequest, headSha: expectedHeadSha, baseSha: expectedBaseSha, key: reviewMarkerKey });
   const body = [
     marker,
     "## Independent 9Router review",
@@ -523,10 +556,13 @@ export async function runReview({
     fetchImpl,
     base,
     repoPath,
+    repository,
     pullRequest,
     token: githubToken,
     deadlineAt,
-    marker,
+    expectedHeadSha,
+    expectedBaseSha,
+    reviewMarkerKey,
   });
 
   const currentBeforePublish = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });

@@ -151,7 +151,7 @@ test("a user-authored marker comment is never overwritten by the reviewer", asyn
     fetchImpl: fakeFetch,
   });
 
-  assert.equal(prReads, 3, "the head must be checked before model use and before publishing");
+  assert.equal(prReads, 4, "the head and base must be checked before model use, before comment lookup, and immediately before publishing");
   assert.equal(patchCalls, 0, "the reviewer must not edit comments authored by another user");
   assert.equal(postCalls, 1, "the reviewer must create its own report comment");
 });

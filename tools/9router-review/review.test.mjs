@@ -3048,3 +3048,124 @@ test("the 300-file Git-object fallback boundary remains reviewable", async () =>
   assert.ok(modelPatch.includes("FILE: src/empty-299.txt"));
   assert.equal((modelPatch.match(/FILE: /g) ?? []).length, 300, "all 300 changed paths must be represented exactly once");
 });
+
+
+test("reconciles all 301 immutable changed paths when Compare API exposes only its first 300 file records", async () => {
+  const headSha = "a".repeat(40);
+  const baseSha = "b".repeat(40);
+  const baseTreeSha = "c".repeat(40);
+  const headTreeSha = "d".repeat(40);
+  const beforeText = "const boundaryValue = 1;\\n";
+  const afterText = "const boundaryValue = 2;\\n";
+  const blobSha = value => {
+    const bytes = Buffer.from(value, "utf8");
+    return createHash("sha1")
+      .update(Buffer.concat([Buffer.from("blob " + bytes.length + String.fromCharCode(0)), bytes]))
+      .digest("hex");
+  };
+  const beforeBlobSha = blobSha(beforeText);
+  const afterBlobSha = blobSha(afterText);
+  const changedPaths = Array.from({ length: 301 }, (_, index) =>
+    "src/compare-boundary-" + String(index).padStart(3, "0") + ".txt");
+  const baseEntries = changedPaths.map(path => ({
+    path, mode: "100644", type: "blob", sha: beforeBlobSha, size: Buffer.byteLength(beforeText),
+  }));
+  const headEntries = changedPaths.map(path => ({
+    path, mode: "100644", type: "blob", sha: afterBlobSha, size: Buffer.byteLength(afterText),
+  }));
+  const compareFiles = changedPaths.slice(0, 300).map(filename => ({
+    filename,
+    status: "modified",
+    additions: 1,
+    deletions: 1,
+    patch: "@@ -1 +1 @@\\n-const boundaryValue = 1;\\n+const boundaryValue = 2;",
+  }));
+  let compareCalls = 0;
+  let blobCalls = 0;
+  let modelCalls = 0;
+  let commentPosts = 0;
+  let modelPatch = "";
+  const json = value => new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/288")) {
+      return json({
+        number: 288,
+        state: "open",
+        draft: false,
+        head: { sha: headSha, repo: { id: 1, full_name: "owner/repo" } },
+        base: { sha: baseSha, repo: { id: 1, full_name: "owner/repo" } },
+      });
+    }
+    if (target.includes("/compare/" + baseSha + "..." + headSha)) {
+      compareCalls += 1;
+      return json({ status: "ahead", base_commit: { sha: baseSha }, files: compareFiles });
+    }
+    if (target.endsWith("/git/commits/" + baseSha)) {
+      return json({ sha: baseSha, tree: { sha: baseTreeSha } });
+    }
+    if (target.endsWith("/git/commits/" + headSha)) {
+      return json({ sha: headSha, tree: { sha: headTreeSha } });
+    }
+    if (target.includes("/git/trees/" + baseTreeSha)) {
+      return json({ sha: baseTreeSha, truncated: false, tree: baseEntries });
+    }
+    if (target.includes("/git/trees/" + headTreeSha)) {
+      return json({ sha: headTreeSha, truncated: false, tree: headEntries });
+    }
+    if (target.endsWith("/git/blobs/" + beforeBlobSha)) {
+      blobCalls += 1;
+      return json({
+        sha: beforeBlobSha, size: Buffer.byteLength(beforeText),
+        encoding: "base64", content: Buffer.from(beforeText).toString("base64"),
+      });
+    }
+    if (target.endsWith("/git/blobs/" + afterBlobSha)) {
+      blobCalls += 1;
+      return json({
+        sha: afterBlobSha, size: Buffer.byteLength(afterText),
+        encoding: "base64", content: Buffer.from(afterText).toString("base64"),
+      });
+    }
+    if (target.endsWith("/chat/completions")) {
+      modelCalls += 1;
+      const messages = JSON.parse(options.body).messages;
+      modelPatch = JSON.parse(messages.find(message => message.role === "user").content
+        .split("Patch as JSON string:" + String.fromCharCode(10)).at(-1));
+      return json({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] });
+    }
+    if (target.includes("/issues/288/comments?")) return json([]);
+    if (target.endsWith("/issues/288/comments") && options.method === "POST") {
+      commentPosts += 1;
+      return createdCommentResponse(target, options, 1288);
+    }
+    throw new Error("Unexpected API request in Compare 300-file ceiling test: " + target);
+  };
+
+  const result = await runReview({
+    repository: "owner/repo",
+    pullRequest: 288,
+    strictImmutableSnapshot: true,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  assert.equal(result.publishedNewComment, true);
+  assert.equal(compareCalls, 1, "the exact-SHA Compare endpoint must be queried once");
+  assert.equal(blobCalls, 2, "only the single omitted path must require the two cached immutable blobs");
+  assert.equal(modelCalls, 1, "the complete 301-path snapshot must reach inference exactly once");
+  assert.equal(commentPosts, 1, "publication may occur only after all 301 paths are reconciled");
+  assert.equal((modelPatch.match(/FILE: /g) ?? []).length, 301, "all changed paths must be represented exactly once");
+  assert.ok(modelPatch.includes("FILE: src/compare-boundary-000.txt"));
+  assert.ok(modelPatch.includes("FILE: src/compare-boundary-299.txt"));
+  assert.ok(modelPatch.includes("FILE: src/compare-boundary-300.txt"), "the path omitted by Compare must be reconstructed from immutable Git objects");
+});

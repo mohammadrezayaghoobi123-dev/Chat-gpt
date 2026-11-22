@@ -1703,7 +1703,7 @@ test("published report states its exact snapshot scope and stale or unverifiable
   assert.ok(publishedBody.includes("**Snapshot validity:**"));
   assert.match(publishedBody, /superseded/i);
   assert.match(publishedBody, /either the reviewed head SHA or base SHA changes/i);
-  assert.match(publishedBody, /validity as UNKNOWN if live PR SHAs cannot be verified/i);
+  assert.match(publishedBody, /treat current validity as UNKNOWN if live PR SHAs cannot be verified/i);
   assert.ok(publishedBody.includes("**Reviewed head SHA:** " + headSha));
   assert.ok(publishedBody.includes("**Reviewed base SHA:** " + baseSha));
 });

@@ -4,7 +4,7 @@
 
 **Goal:** Replace the untrusted `workflow_run.pull_requests` PR-selection mechanism with an event-bound signal receipt, independent GitHub API reconciliation, and fail-closed handling.
 
-**Architecture:** The trusted `pull_request_target` signal workflow emits a small JSON receipt derived only from its event payload and uploads it as a run- and attempt-specific artifact. The privileged `workflow_run` workflow downloads only the artifact belonging to the exact triggering run, validates its source metadata and receipt, and independently re-fetches the workflow run and PR through GitHub's API. A separate resolver job exposes the verified PR number as a job output so the reviewer job can retain per-PR concurrency without using the ambiguous `workflow_run.pull_requests` array.
+**Architecture:** The trusted `pull_request_target` signal workflow emits a small JSON receipt derived only from its event payload and uploads it as a run- and attempt-specific artifact. The privileged `workflow_run` workflow first reads the authoritative run attempt from the workflow-runs API, downloads only the artifact belonging to that exact run and attempt, validates its source metadata and receipt, and independently re-fetches the workflow run and PR through GitHub's API. A separate resolver job exposes the verified PR number as a job output so the reviewer job can retain per-PR concurrency without using the ambiguous `workflow_run.pull_requests` array.
 
 **Tech Stack:** GitHub Actions, Node.js 22, native Node.js APIs, existing Node test runner, pinned official GitHub Actions.
 
@@ -15,7 +15,7 @@
 - Never invoke a live 9Router request or publish a PR review comment during tests.
 - Never execute, source, or load code from the downloaded artifact. Treat it as untrusted data and parse only a bounded JSON document.
 - Do not use `workflow_run.pull_requests` to select a PR, derive a concurrency key, or establish provenance.
-- The signal workflow must remain on `pull_request_target`, with no checkout, no PR-code execution, no secrets, no network requests, and no permissions beyond the minimum required for artifact upload.
+- The signal workflow must remain on `pull_request_target`, with no checkout, no PR-code execution, no secrets, no external network requests, and no permissions beyond the minimum required for artifact upload. The artifact upload itself uses GitHub's artifact service.
 - The privileged reviewer must check out only the trusted default branch and must not execute PR content.
 - Missing, malformed, oversized, stale, mismatched, duplicate, or ambiguous signal data must stop before model inference and before comment publication.
 - Preserve existing SHA revalidation, HMAC report-marker behavior, append-only publication, bounded API reads, and timeout limits.
@@ -147,7 +147,7 @@ git commit -m "feat: verify 9router signal receipt provenance"
 
 Assert the privileged workflow:
   - accepts only the exact signal workflow path, `pull_request_target` event, successful conclusion, and same-repository run before artifact download;
-  - downloads only the artifact named for the exact run ID and attempt using the pinned download action;
+  - reads the run attempt from the authoritative workflow-runs API, then downloads only the artifact named for that exact run ID and API-derived attempt using the pinned download action;
   - grants the resolver job only `actions: read`, `contents: read`, and `pull-requests: read`;
   - checks out only the default branch with persisted credentials disabled;
   - derives per-PR concurrency only from the verified resolver job output;
@@ -163,7 +163,7 @@ Expected: the new workflow contract fails because the current workflow derives t
 
 - [ ] **Step 3: Implement the two-job privileged chain**
 
-Add a read-only `resolve-signal` job that checks source workflow metadata, checks out only the trusted default branch, downloads the exact run/attempt artifact to `$RUNNER_TEMP`, and invokes the receipt/API verifier. Expose only validated outputs. Make the privileged `review` job depend on it and use the validated PR number in the concurrency group. Keep existing credential gating and final reviewer step boundaries. Update `run-review.mjs` to consume only verified outputs and remove parsing of `PULL_REQUESTS_JSON`.
+Add a read-only `resolve-signal` job that checks source workflow metadata, queries the workflow-runs API for the authoritative `run_attempt`, checks out only the trusted default branch, downloads the exact run/attempt artifact to `$RUNNER_TEMP`, and invokes the receipt/API verifier. Do not rely on `workflow_run.run_attempt` from the event payload for artifact naming. Expose only validated outputs. Make the privileged `review` job depend on it and use the validated PR number in the concurrency group. Keep existing credential gating and final reviewer step boundaries. Update `run-review.mjs` to consume only verified outputs and remove parsing of `PULL_REQUESTS_JSON`.
 
 - [ ] **Step 4: Verify the focused pass**
 
@@ -231,6 +231,24 @@ git commit -m "docs: record 9router abc provenance controls"
 
 - Whether the repository's public-repository Actions event policy permits `pull_request_target` remains UNKNOWN until checked in repository Actions settings; no settings are changed here.
 - Whether the signal-to-review chain activates on GitHub-hosted runners remains UNKNOWN until the workflow files are present on the default branch through a separately approved merge.
-- Whether the live `workflow_run.head_sha` equals the receipt's PR base SHA for all supported base-branch configurations must be confirmed by a hosted, non-privileged signal run before enabling the privileged reviewer. The implementation fails closed on mismatch.
+- Whether the live `workflow_run.head_sha` equals the receipt's PR base SHA for all supported base-branch configurations must be confirmed by a hosted, non-privileged signal run before enabling the privileged reviewer. The implementation fails closed on mismatch. The implementation fails closed on mismatch.
 - Artifact retention, availability, and cross-workflow download behavior are tested statically and through mocked API contracts here; a real hosted artifact round trip remains UNKNOWN until an authorized default-branch run exists.
 - No merge, deployment, secret change, or repository-policy change is authorized by this plan.
+
+
+## Execution record — 2026-11-22
+
+**Implemented on** `feature/9router-abc-provenance` (no changes to `main` or Production).
+
+- A: The signal workflow emits the fixed-schema receipt and uploads a run/attempt-specific artifact using the pinned upload-artifact action.
+- B: The resolver obtains `run_attempt` from the read-only workflow-runs API before artifact download, then independently verifies the run and live PR through GitHub API reads. It does not use `workflow_run.pull_requests`.
+- C: Resolver failure prevents the dependent reviewer job from starting. Artifact data is bounded, parsed only as JSON, and never executed.
+- Per-PR concurrency is derived from the validated resolver output.
+- The old `resolveWorkflowRunTarget` implementation in `review.js` was removed; `run-review.mjs` now consumes only the validated outputs.
+- GitHub contract run `45053100603`: **47/47 passed**, zero failures/cancellations/skips.
+- Gitleaks run `45053100500`: **3,949 commits**, approximately **12.37 MB**, no leaks found.
+- The contract workflow run was a branch Push: `resolve-signal` and `review` were skipped by their event guards. No live artifact round trip, privileged `workflow_run` execution, or 9Router call has been demonstrated.
+- The formal failing-test (RED) phase was not captured as a separate hosted run before implementation. Negative regression cases are present and pass, but a complete recorded RED/GREEN cycle must not be claimed.
+- `git diff --check` was not independently run in a full local checkout; this remains unverified.
+
+**Current code checkpoint:** `af7f529477cde0d8ce6f20ce17fc4ef7fbb11def`. Documentation is updated in the subsequent branch commit.

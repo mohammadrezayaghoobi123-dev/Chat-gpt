@@ -57,7 +57,7 @@
 ## Execution Status — 2026-11-23
 
 - Steps 1 and 2: completed. The strict immutable-snapshot test was observed failing for the old implementation (64/65 tests passed; the new missing-patch regression failed before inference).
-- Step 3: **OPEN**. Targeted negative tests for truncated trees, malformed/corrupt Git blobs, binary and invalid-UTF-8 blobs, mode-only changes, and 300/301 fallback boundaries have not yet been added. Source guards exist, but these guard behaviors are not independently proven by the current test suite.
+- Step 3: **PARTIAL / OPEN**. Added passing strict integration subtests for truncated trees, a forged returned blob SHA, and binary/NUL-containing content; also covered simultaneous content and executable-mode changes. Remaining negative cases include malformed base64, invalid UTF-8 without NUL, symlink/submodule modes, missing objects, individual/cumulative blob budgets, Git diff timeout/output exhaustion, and 300/301 changed-file/fallback boundaries. These remain UNKNOWN.
 - Steps 4–8: completed. Hybrid retrieval is implemented; focused integration test and full contract suite pass; audit documentation updated; work remains confined to this feature branch.
 - Final GREEN evidence before this plan-status update: contract run 45081384862, job 137390092179, 65/65 PASS; Gitleaks Push run 45081384863 and PR run 45081391096 both succeeded.
 - Hosted workflow_run / artifact / live 9Router E2E remains UNKNOWN. Push runs skip resolve-signal and review by design.

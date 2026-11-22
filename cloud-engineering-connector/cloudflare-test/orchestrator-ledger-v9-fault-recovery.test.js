@@ -53,6 +53,21 @@ function assertPreMigrationState(sql) {
     "orchestrator_v9_task_key_staging",
     "orchestrator_v9_outbox_key_staging",
   ).toArray()).toHaveLength(0);
+
+  // A failed v9 transaction must stop the constructor's sequential migration
+  // chain at the v8 boundary. No later migration marker or schema artifact may
+  // be visible, and the v12 removal must not have run.
+  expect(sql.exec(
+    "SELECT version FROM orchestrator_schema_migrations WHERE version BETWEEN 8 AND 12 ORDER BY version",
+  ).toArray().map(row => row.version)).toEqual([8]);
+  expect(sql.exec(
+    "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (?, ?, ?)",
+    "orchestrator_tasks_by_scope_executor_created",
+    "orchestrator_tasks_by_scope_state_executor_created",
+    "orchestrator_tasks_by_tenant_project",
+  ).toArray().map(row => row.name).sort()).toEqual([
+    "orchestrator_tasks_by_tenant_project",
+  ]);
 }
 
 const faults = [

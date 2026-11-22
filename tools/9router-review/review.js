@@ -729,7 +729,7 @@ async function buildImmutableReviewPatch({
     const entries = [beforeEntry, afterEntry].filter(Boolean);
     for (const entry of entries) {
       if (entry.type !== "blob" || (entry.mode !== "100644" && entry.mode !== "100755")) {
-        throw new Error("Changed path " + JSON.stringify(filePath) + " is a symlink, submodule, or unsupported Git object.");
+        throw new Error("Changed path " + JSON.stringify(filePath) + " is a symlink, submodule, or unsupported Git object; refusing an incomplete review.");
       }
     }
 

@@ -2864,3 +2864,84 @@ test("the Git-object fallback limit rejects the 301st missing Compare patch befo
   assert.equal(modelCalls, 0);
   assert.equal(commentPosts, 0);
 });
+
+test("the 300-file Git-object fallback boundary remains reviewable", async () => {
+  const headSha = "f".repeat(40);
+  const baseSha = "0".repeat(40);
+  const baseTreeSha = "1".repeat(40);
+  const headTreeSha = "2".repeat(40);
+  const emptyBlobSha = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+  const changedFiles = Array.from({ length: 300 }, (_, index) => ({
+    path: "src/empty-" + String(index).padStart(3, "0") + ".txt",
+    mode: "100644",
+    type: "blob",
+    sha: emptyBlobSha,
+    size: 0,
+  }));
+  let blobCalls = 0;
+  let modelCalls = 0;
+  let commentPosts = 0;
+  let modelPatch = "";
+  const json = value => new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/287")) {
+      return json({
+        number: 287,
+        state: "open",
+        draft: false,
+        head: { sha: headSha, repo: { id: 1, full_name: "owner/repo" } },
+        base: { sha: baseSha, repo: { id: 1, full_name: "owner/repo" } },
+      });
+    }
+    if (target.includes("/compare/" + baseSha + "..." + headSha)) {
+      return json({ status: "ahead", base_commit: { sha: baseSha }, files: [] });
+    }
+    if (target.endsWith("/git/commits/" + baseSha)) return json({ sha: baseSha, tree: { sha: baseTreeSha } });
+    if (target.endsWith("/git/commits/" + headSha)) return json({ sha: headSha, tree: { sha: headTreeSha } });
+    if (target.includes("/git/trees/" + baseTreeSha)) return json({ sha: baseTreeSha, truncated: false, tree: [] });
+    if (target.includes("/git/trees/" + headTreeSha)) return json({ sha: headTreeSha, truncated: false, tree: changedFiles });
+    if (target.endsWith("/git/blobs/" + emptyBlobSha)) {
+      blobCalls += 1;
+      return json({ sha: emptyBlobSha, size: 0, encoding: "base64", content: "" });
+    }
+    if (target.endsWith("/chat/completions")) {
+      modelCalls += 1;
+      const messages = JSON.parse(options.body).messages;
+      modelPatch = JSON.parse(messages.find(message => message.role === "user").content
+        .split("Patch as JSON string:" + String.fromCharCode(10)).at(-1));
+      return json({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] });
+    }
+    if (target.includes("/issues/287/comments?")) return json([]);
+    if (target.endsWith("/issues/287/comments") && options.method === "POST") {
+      commentPosts += 1;
+      return createdCommentResponse(target, options, 1287);
+    }
+    throw new Error("Unexpected API request in 300-file fallback acceptance test: " + target);
+  };
+
+  const result = await runReview({
+    repository: "owner/repo",
+    pullRequest: 287,
+    strictImmutableSnapshot: true,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  assert.equal(result.publishedNewComment, true);
+  assert.equal(blobCalls, 1, "the identical empty blob must be fetched once and cached across 300 paths");
+  assert.equal(modelCalls, 1, "exactly 300 fallback files must reach inference once");
+  assert.equal(commentPosts, 1, "a complete 300-file snapshot may be published once");
+  assert.match(modelPatch, /FILE: src\\/empty-000\\.txt/);
+  assert.match(modelPatch, /FILE: src\\/empty-299\\.txt/);
+  assert.equal((modelPatch.match(/FILE: /g) ?? []).length, 300, "all 300 changed paths must be represented exactly once");
+});

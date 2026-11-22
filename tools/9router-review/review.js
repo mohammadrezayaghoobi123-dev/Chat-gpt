@@ -163,24 +163,34 @@ export async function runReview({
   if (pr.draft) return { status: "skipped-draft", reviewedHeadSha: expectedHeadSha };
 
   const files = [];
+  let patchChars = 0;
   for (let page = 1; page <= 10; page += 1) {
     const batch = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest + "/files?per_page=100&page=" + page, { token: githubToken });
     if (!Array.isArray(batch)) throw new Error("GitHub returned an invalid pull request file list.");
-    files.push(...batch);
+    for (const file of batch) {
+      if (typeof file.patch !== "string" || file.patch.length === 0) {
+        throw new Error("Pull request contains unavailable file patches; refusing an incomplete review.");
+      }
+      const entry = [
+        "FILE: " + file.filename + " | status: " + file.status + " | additions: " + file.additions + " | deletions: " + file.deletions,
+        file.patch,
+      ].join("\n");
+      patchChars += entry.length + (files.length > 0 ? 2 : 0);
+      if (patchChars > MAX_PATCH_CHARS) {
+        throw new Error("Pull request patch exceeds the safe review size; no partial review was sent.");
+      }
+      files.push(file);
+    }
     if (batch.length < 100) break;
     if (page === 10) throw new Error("Pull request exceeds the supported 1000-file review limit.");
   }
 
   if (files.length === 0) throw new Error("Pull request has no changed files; refusing an empty review.");
-  if (files.some(file => typeof file.patch !== "string" || file.patch.length === 0)) {
-    throw new Error("Pull request contains unavailable file patches; refusing an incomplete review.");
-  }
 
   const patch = files.map(file => [
     "FILE: " + file.filename + " | status: " + file.status + " | additions: " + file.additions + " | deletions: " + file.deletions,
     file.patch,
   ].join("\n")).join("\n\n");
-  if (patch.length > MAX_PATCH_CHARS) throw new Error("Pull request patch exceeds the safe review size; no partial review was sent.");
 
   const currentBeforeModel = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken });
   if (currentBeforeModel.head?.sha !== expectedHeadSha) {

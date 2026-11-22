@@ -158,6 +158,8 @@ test("signal workflow emits an exact run-specific receipt without checkout or se
   assert.match(signal, /9router-pr-signal-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/);
   assert.match(signal, /retention-days: 1/);
   assert.match(signal, /if-no-files-found: error/);
+  assert.match(signal, /path: \$\{\{ runner\.temp \}\}\/signal\.json/);
+  assert.doesNotMatch(signal, /overwrite:\s*true/);
   assert.match(signal, /^permissions: \{\}$/m);
   assert.doesNotMatch(signal, /actions\/checkout|secrets\.|curl\s|wget\s|git clone|npm install|npm ci/);
   assert.match(signal, /node <<'NODE'/);
@@ -172,6 +174,8 @@ test("privileged workflow resolves identity before per-PR concurrency and never 
   assert.match(workflow, /\.run_attempt/);
   assert.match(workflow, /steps\.run-metadata\.outputs\.run_attempt/);
   assert.match(workflow, /name: 9router-pr-signal-\$\{\{ github\.event\.workflow_run\.id \}\}-\$\{\{ steps\.run-metadata\.outputs\.run_attempt \}\}/);
+  assert.match(workflow, /digest-mismatch: error/);
+  assert.match(workflow, /path: \$\{\{ runner\.temp \}\}\/9router-signal/);
   assert.doesNotMatch(workflow, /github\.event\.workflow_run\.run_attempt/);
   assert.match(workflow, /actions: read/);
   assert.match(workflow, /pull-requests: read/);

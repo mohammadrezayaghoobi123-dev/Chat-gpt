@@ -1362,7 +1362,6 @@ test("bounded reconciliation completes a large first page before publishing", as
   await runReview({
     repository: "owner/repo",
     pullRequest: 281,
-    strictImmutableSnapshot: true,
     expectedHeadSha: headSha,
     expectedBaseSha: baseSha,
     githubToken: "github-test-token",
@@ -2392,6 +2391,7 @@ test("reconstructs a missing Compare API patch from immutable Git blobs", async 
   const result = await runReview({
     repository: "owner/repo",
     pullRequest: 281,
+    strictImmutableSnapshot: true,
     expectedHeadSha: headSha,
     expectedBaseSha: baseSha,
     githubToken: "github-test-token",

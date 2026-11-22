@@ -1117,6 +1117,50 @@ test("comment-history pagination limit fails closed before publication", async (
   assert.equal(commentPosts, 0, "an incomplete history scan must never fall through to publication");
 });
 
+test("cumulative comment-history byte budget fails closed before publication", async () => {
+  const headSha = "e".repeat(40);
+  const baseSha = "f".repeat(40);
+  let historyPages = 0;
+  let commentPosts = 0;
+  const largePage = Array.from({ length: 100 }, (_, index) => ({
+    id: index + 1,
+    body: "B".repeat(9000),
+    user: { login: "ordinary-contributor" },
+  }));
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/286")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/286/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\n-old\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/286/comments?")) {
+      historyPages += 1;
+      return new Response(JSON.stringify(largePage), { status: 200 });
+    }
+    if (target.endsWith("/issues/286/comments") && options.method === "POST") commentPosts += 1;
+    return new Response(JSON.stringify({ id: 907 }), { status: 201 });
+  };
+
+  await assert.rejects(runReview({
+    repository: "owner/repo",
+    pullRequest: 286,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  }), /comment history exceeds the safe reconciliation byte budget/i);
+  assert.equal(historyPages, 5, "the cumulative byte ceiling must stop scanning at the first page that crosses 4 MiB");
+  assert.equal(commentPosts, 0, "a byte-budget failure must never fall through to publication");
+});
+
 test("non-success GitHub responses cancel unread bodies", async () => {
   let bodyCanceled = false;
   const errorBody = new ReadableStream({

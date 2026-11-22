@@ -599,13 +599,18 @@ export async function runReview({
 
   const currentBeforePublish = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
   assertReviewablePullRequest(currentBeforePublish, { expectedHeadSha, expectedBaseSha, phase: "final publication gate" });
-  const createdComment = await requestJson(fetchImpl, base.origin + repoPath + "/issues/" + pullRequest + "/comments", {
-    method: "POST",
-    token: githubToken,
-    body: { body },
-    deadlineAt,
-    expectedStatus: 201,
-  });
+  let createdComment;
+  try {
+    createdComment = await requestJson(fetchImpl, base.origin + repoPath + "/issues/" + pullRequest + "/comments", {
+      method: "POST",
+      token: githubToken,
+      body: { body },
+      deadlineAt,
+      expectedStatus: 201,
+    });
+  } catch {
+    throw new Error("GitHub comment publication request failed; the remote side effect may have occurred; publication state is UNKNOWN.");
+  }
   const expectedIssueUrl = base.origin + repoPath + "/issues/" + pullRequest;
   if (
     !createdComment || typeof createdComment !== "object" || Array.isArray(createdComment) ||

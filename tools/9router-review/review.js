@@ -5,6 +5,8 @@ const MAX_REPORT_CHARS = 30000;
 const MAX_ROUTER_RESPONSE_BYTES = 512 * 1024;
 const MAX_GITHUB_API_RESPONSE_BYTES = 1024 * 1024;
 const REVIEW_MARKER = "<!-- 9router-independent-review:";
+const MAX_COMMENT_HISTORY_PAGES = 10;
+const MAX_COMMENT_HISTORY_BYTES = 4 * 1024 * 1024;
 
 function neutralizeGitHubMentions(value) {
   return value.replace(/(^|[^A-Za-z0-9_])@([A-Za-z0-9-]+(?:\/[A-Za-z0-9_-]+)?)/g, "$1@\u200b$2");
@@ -371,6 +373,44 @@ async function requestJson(fetchImpl, url, { method = "GET", token, body, accept
   }
 }
 
+async function findMatchingReviewComments({ fetchImpl, base, repoPath, pullRequest, token, deadlineAt, marker }) {
+  const matches = [];
+  let totalBytes = 0;
+
+  for (let page = 1; page <= MAX_COMMENT_HISTORY_PAGES; page += 1) {
+    const comments = await requestJson(
+      fetchImpl,
+      base.origin + repoPath + "/issues/" + pullRequest + "/comments?per_page=100&page=" + page,
+      { token, deadlineAt },
+    );
+    if (!Array.isArray(comments)) {
+      throw new Error("GitHub returned an invalid comment-history page; refusing to publish.");
+    }
+
+    totalBytes += Buffer.byteLength(JSON.stringify(comments), "utf8");
+    if (totalBytes > MAX_COMMENT_HISTORY_BYTES) {
+      throw new Error("Pull request comment history exceeds the safe reconciliation byte budget; refusing to publish.");
+    }
+
+    for (const comment of comments) {
+      if (!comment || typeof comment.body !== "string" || typeof comment.user?.login !== "string") {
+        throw new Error("GitHub returned an incomplete comment-history record; refusing to publish.");
+      }
+      const firstLine = comment.body.split(/\\r?\\n/, 1)[0];
+      if (comment.user.login === "github-actions[bot]" && firstLine === marker) {
+        matches.push(comment);
+        if (matches.length > 1) {
+          throw new Error("Multiple matching reports exist for this exact head/base pair; refusing to publish.");
+        }
+      }
+    }
+
+    if (comments.length < 100) return matches;
+  }
+
+  throw new Error("Pull request comment history exceeds the safe reconciliation page limit; refusing to publish.");
+}
+
 export async function runReview({
   repository, pullRequest, expectedHeadSha, expectedBaseSha, githubToken, routerBaseUrl, routerApiKey, model,
   fetchImpl = fetch, githubApiBase = "https://api.github.com", reviewTimeoutMs = 8 * 60 * 1000,
@@ -479,13 +519,33 @@ export async function runReview({
     "_Automated model-assisted review only; not a human approval or proof of correctness. Findings require independent verification._",
   ].join("\n");
 
+  const matchingReports = await findMatchingReviewComments({
+    fetchImpl,
+    base,
+    repoPath,
+    pullRequest,
+    token: githubToken,
+    deadlineAt,
+    marker,
+  });
+
   const currentBeforePublish = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
   if (currentBeforePublish.head?.sha !== expectedHeadSha) {
-    throw new Error("Pull request head changed during comment lookup; refusing to publish a stale report.");
+    throw new Error("Pull request head changed during comment reconciliation; refusing to publish a stale report.");
   }
   if (currentBeforePublish.base?.sha !== expectedBaseSha) {
-    throw new Error("Pull request base branch changed during comment lookup; refusing to publish a report for a different diff.");
+    throw new Error("Pull request base branch changed during comment reconciliation; refusing to publish a report for a different diff.");
   }
+  if (matchingReports.length === 1) {
+    return {
+      status: "already-published",
+      reviewedHeadSha: expectedHeadSha,
+      reviewedBaseSha: expectedBaseSha,
+      existingCommentId: Number.isSafeInteger(matchingReports[0].id) ? matchingReports[0].id : null,
+      publishedNewComment: false,
+    };
+  }
+
   await requestJson(fetchImpl, base.origin + repoPath + "/issues/" + pullRequest + "/comments", {
     method: "POST",
     token: githubToken,

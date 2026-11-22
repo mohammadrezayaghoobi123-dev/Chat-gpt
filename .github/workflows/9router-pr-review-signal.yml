@@ -9,6 +9,7 @@ permissions: {}
 jobs:
   signal:
     runs-on: ubuntu-24.04
+    if: github.event.action != 'edited' || github.event.changes.base != null
     timeout-minutes: 2
     permissions: {}
     steps:

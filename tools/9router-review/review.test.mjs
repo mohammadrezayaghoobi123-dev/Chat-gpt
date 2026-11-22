@@ -2416,3 +2416,115 @@ test("reconstructs a missing Compare API patch from immutable Git blobs", async 
   assert.match(patch, /-const value = 1;/);
   assert.match(patch, /\+const value = 2;/);
 });
+
+test("truncated trees, forged blobs, and binary content stop before inference", async t => {
+  const headSha = "a".repeat(40);
+  const baseSha = "b".repeat(40);
+  const baseTreeSha = "c".repeat(40);
+  const headTreeSha = "d".repeat(40);
+  const textBytes = Buffer.from("const safe = true;\n", "utf8");
+  const binaryBytes = Buffer.from([0x63, 0x6f, 0x6e, 0x73, 0x74, 0x20, 0x00, 0x3b]);
+  const gitBlobSha = bytes => createHash("sha1")
+    .update(Buffer.concat([Buffer.from("blob " + bytes.length + String.fromCharCode(0)), bytes]))
+    .digest("hex");
+
+  for (const scenario of ["truncated-tree", "forged-blob-sha", "binary-blob"]) {
+    await t.test(scenario, async () => {
+      const validBlobSha = gitBlobSha(textBytes);
+      const binaryBlobSha = gitBlobSha(binaryBytes);
+      const baseEntrySha = scenario === "forged-blob-sha" ? "e".repeat(40) : validBlobSha;
+      let modelCalls = 0;
+      let commentPosts = 0;
+
+      const json = value => new Response(JSON.stringify(value), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+      const baseTree = {
+        sha: baseTreeSha,
+        truncated: scenario === "truncated-tree",
+        tree: [{ path: "src/guard.js", mode: "100644", type: "blob", sha: baseEntrySha, size: textBytes.length }],
+      };
+      const headTree = {
+        sha: headTreeSha,
+        truncated: false,
+        tree: [{
+          path: "src/guard.js",
+          mode: "100644",
+          type: "blob",
+          sha: scenario === "binary-blob" ? binaryBlobSha : validBlobSha,
+          size: scenario === "binary-blob" ? binaryBytes.length : textBytes.length,
+        }],
+      };
+
+      const fakeFetch = async (url, options = {}) => {
+        const target = String(url);
+        if (target.endsWith("/pulls/282")) {
+          return json({
+            number: 282,
+            state: "open",
+            draft: false,
+            head: { sha: headSha, repo: { id: 1, full_name: "owner/repo" } },
+            base: { sha: baseSha, repo: { id: 1, full_name: "owner/repo" } },
+          });
+        }
+        if (target.includes("/compare/" + baseSha + "..." + headSha)) {
+          return json({
+            status: "ahead",
+            base_commit: { sha: baseSha },
+            files: [{ filename: "src/guard.js", status: "modified", additions: 1, deletions: 1, patch: null }],
+          });
+        }
+        if (target.endsWith("/git/commits/" + baseSha)) return json({ sha: baseSha, tree: { sha: baseTreeSha } });
+        if (target.endsWith("/git/commits/" + headSha)) return json({ sha: headSha, tree: { sha: headTreeSha } });
+        if (target.includes("/git/trees/" + baseTreeSha)) return json(baseTree);
+        if (target.includes("/git/trees/" + headTreeSha)) return json(headTree);
+        if (target.endsWith("/git/blobs/" + baseEntrySha)) {
+          return json({
+            sha: scenario === "forged-blob-sha" ? "f".repeat(40) : baseEntrySha,
+            size: textBytes.length,
+            encoding: "base64",
+            content: textBytes.toString("base64"),
+          });
+        }
+        if (target.endsWith("/git/blobs/" + binaryBlobSha)) {
+          return json({
+            sha: binaryBlobSha,
+            size: binaryBytes.length,
+            encoding: "base64",
+            content: binaryBytes.toString("base64"),
+          });
+        }
+        if (target.endsWith("/chat/completions")) {
+          modelCalls += 1;
+          return json({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] });
+        }
+        if (target.includes("/issues/282/comments") && options.method === "POST") commentPosts += 1;
+        if (target.includes("/issues/282/comments?")) return json([]);
+        throw new Error("Unexpected API request in negative immutable snapshot test: " + target);
+      };
+
+      const expectedError = {
+        "truncated-tree": /malformed, truncated, or exceeds the safe entry limit/i,
+        "forged-blob-sha": /does not match the exact tree object/i,
+        "binary-blob": /binary data|not valid UTF-8/i,
+      }[scenario];
+
+      await assert.rejects(runReview({
+        repository: "owner/repo",
+        pullRequest: 282,
+        strictImmutableSnapshot: true,
+        expectedHeadSha: headSha,
+        expectedBaseSha: baseSha,
+        githubToken: "github-test-token",
+        routerBaseUrl: "https://router.example/v1",
+        routerApiKey: "router-test-token",
+        reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+        model: "test-model",
+        fetchImpl: fakeFetch,
+      }), expectedError);
+      assert.equal(modelCalls, 0, "an invalid immutable snapshot must never reach model inference");
+      assert.equal(commentPosts, 0, "an invalid immutable snapshot must never publish a GitHub comment");
+    });
+  }
+});

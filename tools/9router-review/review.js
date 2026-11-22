@@ -70,9 +70,8 @@ export function buildReviewMessages({ repository, pullRequest, headSha, patch })
     "Pull request: #" + pullRequest,
     "Exact reviewed head SHA: " + headSha,
     "Review scope: only the patch below. If the patch is incomplete, say so and classify conclusions as UNKNOWN.",
-    "BEGIN_UNTRUSTED_PATCH",
-    patch,
-    "END_UNTRUSTED_PATCH",
+    "Patch as JSON string:",
+    JSON.stringify(patch),
   ].join("\n");
 
   return [{ role: "system", content: system }, { role: "user", content: user }];

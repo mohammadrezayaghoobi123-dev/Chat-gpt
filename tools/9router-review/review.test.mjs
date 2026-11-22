@@ -1075,3 +1075,33 @@ test("cumulative comment-history response budget stops pagination before publica
   assert.equal(commentPageCalls, 5, "the aggregate budget must stop the fifth oversized cumulative page");
   assert.equal(commentPosts, 0, "no report may be published after an incomplete comment-history scan");
 });
+
+
+test("non-success GitHub responses cancel unread bodies", async () => {
+  let bodyCanceled = false;
+  const errorBody = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("X".repeat(256 * 1024)));
+    },
+    cancel() {
+      bodyCanceled = true;
+    },
+  });
+  const fakeFetch = async () => new Response(errorBody, { status: 503 });
+
+  await assert.rejects(
+    runReview({
+      repository: "owner/repo",
+      pullRequest: 282,
+      expectedHeadSha: "a".repeat(40),
+      expectedBaseSha: "b".repeat(40),
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }),
+    /Remote API request failed with HTTP 503/i,
+  );
+  assert.equal(bodyCanceled, true, "non-success response bodies must be canceled rather than left unread");
+});

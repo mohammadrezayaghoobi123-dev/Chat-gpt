@@ -6,6 +6,23 @@ import * as reviewer from "./review.js";
 const { buildReviewMessages, runReview } = reviewer;
 const TEST_REVIEW_MARKER_KEY = "test-only-review-marker-key-32-bytes-minimum";
 
+function createdCommentResponse(target, options, id, overrides = {}) {
+  if (options?.method !== "POST") {
+    return new Response(JSON.stringify({ id }), { status: 201 });
+  }
+  const requestBody = JSON.parse(options.body);
+  const targetUrl = new URL(target);
+  const issueUrl = targetUrl.origin + targetUrl.pathname.slice(0, -"/comments".length);
+  return new Response(JSON.stringify({
+    id,
+    body: requestBody.body,
+    issue_url: issueUrl,
+    user: { login: "github-actions[bot]", id: 41898282, type: "Bot" },
+    ...overrides,
+  }), { status: 201 });
+}
+
+
 test("review prompt binds the exact PR head SHA and requires evidence-based verdicts", () => {
   const messages = buildReviewMessages({
     repository: "owner/repo",
@@ -56,7 +73,7 @@ test("missing file patches stop the review before sending source to 9Router", as
     if (target.includes("/issues/261/comments")) {
       return new Response(JSON.stringify([]), { status: 200 });
     }
-    return new Response(JSON.stringify({ id: 1 }), { status: 201 });
+    return createdCommentResponse(target, options, 1);
   };
 
   await assert.rejects(
@@ -141,7 +158,7 @@ test("a PR closed after patch retrieval is rejected before 9Router inference", a
     }
     if (target.includes("/issues/269/comments?")) return new Response(JSON.stringify([]), { status: 200 });
     if (target.endsWith("/issues/269/comments") && options.method === "POST") postCalls += 1;
-    return new Response(JSON.stringify({ id: 1 }), { status: 201 });
+    return createdCommentResponse(target, options, 1);
   };
 
   await assert.rejects(runReview({
@@ -187,7 +204,7 @@ test("a PR converted to draft during model review is not published", async () =>
       return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
     }
     if (target.endsWith("/issues/270/comments") && options.method === "POST") postCalls += 1;
-    return new Response(JSON.stringify({ id: 1 }), { status: 201 });
+    return createdCommentResponse(target, options, 1);
   };
 
   await assert.rejects(runReview({
@@ -233,7 +250,7 @@ test("append-only publication never overwrites a user-authored marker comment", 
     }
     if (target.endsWith("/issues/comments/99") && options.method === "PATCH") patchCalls += 1;
     if (target.endsWith("/issues/263/comments") && options.method === "POST") postCalls += 1;
-    return new Response(JSON.stringify({ id: 100 }), { status: 201 });
+    return createdCommentResponse(target, options, 100);
   };
 
   await runReview({
@@ -384,7 +401,7 @@ test("a base-branch change during model review aborts before publishing a commen
     if (target.includes("/issues/267/comments?")) {
       return new Response(JSON.stringify([]), { status: 200 });
     }
-    return new Response(JSON.stringify({ id: 1 }), { status: 201 });
+    return createdCommentResponse(target, options, 1);
   };
 
   await assert.rejects(
@@ -446,7 +463,7 @@ test("a report for a different base SHA is never overwritten for the same head S
       postCalls += 1;
       postBody = JSON.parse(options.body).body;
     }
-    return new Response(JSON.stringify({ id: 702 }), { status: 201 });
+    return createdCommentResponse(target, options, 702);
   };
 
   await runReview({
@@ -487,7 +504,7 @@ test("model-generated account mentions are neutralized before comment publicatio
     }
     if (target.includes("/issues/269/comments?")) return new Response(JSON.stringify([]), { status: 200 });
     if (target.endsWith("/issues/269/comments") && options.method === "POST") publishedBody = JSON.parse(options.body).body;
-    return new Response(JSON.stringify({ id: 703 }), { status: 201 });
+    return createdCommentResponse(target, options, 703);
   };
 
   await runReview({
@@ -599,7 +616,7 @@ test("model-generated mentions after punctuation are neutralized", async () => {
     }
     if (target.includes("/issues/272/comments?")) return new Response(JSON.stringify([]), { status: 200 });
     if (target.endsWith("/issues/272/comments") && options.method === "POST") publishedBody = JSON.parse(options.body).body;
-    return new Response(JSON.stringify({ id: 705 }), { status: 201 });
+    return createdCommentResponse(target, options, 705);
   };
 
   await runReview({
@@ -655,7 +672,7 @@ test("model report cannot publish active HTML, remote images, or clickable links
     }
     if (target.includes("/issues/273/comments?")) return new Response(JSON.stringify([]), { status: 200 });
     if (target.endsWith("/issues/273/comments") && options.method === "POST") publishedBody = JSON.parse(options.body).body;
-    return new Response(JSON.stringify({ id: 706 }), { status: 201 });
+    return createdCommentResponse(target, options, 706);
   };
 
   await runReview({
@@ -714,7 +731,7 @@ test("multiple matching bot reports fail closed without choosing one", async () 
     }
     if (target.includes("/issues/comments/") && options.method === "PATCH") patchCalls += 1;
     if (target.endsWith("/issues/274/comments") && options.method === "POST") postCalls += 1;
-    return new Response(JSON.stringify({ id: 803 }), { status: 201 });
+    return createdCommentResponse(target, options, 803);
   };
 
   await assert.rejects(runReview({
@@ -766,7 +783,7 @@ test("malformed comment-history pages and records fail closed before publication
       if (target.endsWith("/issues/" + invalidCase.pullRequest + "/comments") && options.method === "POST") {
         commentPosts += 1;
       }
-      return new Response(JSON.stringify({ id: 908 }), { status: 201 });
+      return createdCommentResponse(target, options, 908);
     };
 
     await assert.rejects(runReview({
@@ -820,10 +837,10 @@ test("an ambiguous POST timeout is reconciled before rerun publication", async (
       const body = JSON.parse(options.body).body;
       comments.push({ id: 900 + postAttempts, body, user: { login: "github-actions[bot]", id: 41898282, type: "Bot" } });
       if (postAttempts === 1) throw new Error("simulated connection reset after remote comment creation");
-      return new Response(JSON.stringify({ id: 900 + postAttempts }), { status: 201 });
+      return createdCommentResponse(target, options, 900 + postAttempts);
     }
     if (target.includes("/issues/comments/") && options.method === "PATCH") patchAttempts += 1;
-    return new Response(JSON.stringify({ id: 901 }), { status: 201 });
+    return createdCommentResponse(target, options, 901);
   };
 
   const config = {
@@ -907,7 +924,7 @@ test("oversized model reports fail closed without comment publication", async ()
       return new Response(JSON.stringify([]), { status: 200 });
     }
     if (target.endsWith("/issues/276/comments") && options.method === "POST") commentPostCalls += 1;
-    return new Response(JSON.stringify({ id: 902 }), { status: 201 });
+    return createdCommentResponse(target, options, 902);
   };
 
   await assert.rejects(
@@ -951,7 +968,7 @@ test("oversized 9Router HTTP bodies are stopped while streaming before JSON pars
       commentListCalls += 1;
       return new Response(JSON.stringify([]), { status: 200 });
     }
-    return new Response(JSON.stringify({ id: 903 }), { status: 201 });
+    return createdCommentResponse(target, options, 903);
   };
 
   await assert.rejects(
@@ -991,7 +1008,7 @@ test("nested Markdown labels cannot preserve protocol-relative external destinat
     }
     if (target.includes("/issues/278/comments?")) return new Response(JSON.stringify([]), { status: 200 });
     if (target.endsWith("/issues/278/comments") && options.method === "POST") publishedBody = JSON.parse(options.body).body;
-    return new Response(JSON.stringify({ id: 904 }), { status: 201 });
+    return createdCommentResponse(target, options, 904);
   };
 
   await runReview({
@@ -1130,7 +1147,7 @@ test("bounded reconciliation completes a large first page before publishing", as
     }
     if (target.endsWith("/issues/281/comments") && options.method === "POST") {
       commentPosts += 1;
-      return new Response(JSON.stringify({ id: 905 }), { status: 201 });
+      return createdCommentResponse(target, options, 905);
     }
     throw new Error("Unexpected API operation in append-only history-independence test: " + target);
   };
@@ -1177,7 +1194,7 @@ test("comment-history pagination limit fails closed before publication", async (
       return new Response(JSON.stringify(fullPage), { status: 200 });
     }
     if (target.endsWith("/issues/285/comments") && options.method === "POST") commentPosts += 1;
-    return new Response(JSON.stringify({ id: 906 }), { status: 201 });
+    return createdCommentResponse(target, options, 906);
   };
 
   await assert.rejects(runReview({
@@ -1222,7 +1239,7 @@ test("cumulative comment-history byte budget fails closed before publication", a
       return new Response(JSON.stringify(largePage), { status: 200 });
     }
     if (target.endsWith("/issues/286/comments") && options.method === "POST") commentPosts += 1;
-    return new Response(JSON.stringify({ id: 907 }), { status: 201 });
+    return createdCommentResponse(target, options, 907);
   };
 
   await assert.rejects(runReview({
@@ -1327,7 +1344,7 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
     if (target.includes("/issues/283/comments?")) return new Response(JSON.stringify([]), { status: 200 });
     if (target.endsWith("/issues/283/comments") && options.method === "POST") {
       publishedBody = JSON.parse(options.body).body;
-      return new Response(JSON.stringify({ id: 906 }), { status: 201 });
+      return createdCommentResponse(target, options, 906);
     }
     throw new Error("Unexpected API operation in Markdown AST security test.");
   };
@@ -1446,7 +1463,7 @@ test("unsigned, tampered, and mismatched-identity bot markers cannot suppress a 
       ]), { status: 200 });
     }
     if (target.endsWith("/issues/289/comments") && options.method === "POST") postCalls += 1;
-    return new Response(JSON.stringify({ id: 1290 }), { status: 201 });
+    return createdCommentResponse(target, options, 1290);
   };
 
   await runReview({
@@ -1499,7 +1516,7 @@ test("a single matching bot report suppresses a duplicate without mutation", asy
     }
     if (target.endsWith("/issues/284/comments") && options.method === "POST") {
       postCalls += 1;
-      return new Response(JSON.stringify({ id: 1000 }), { status: 201 });
+      return createdCommentResponse(target, options, 1000);
     }
     throw new Error("Unexpected API operation in append-only publication test: " + target);
   };
@@ -1712,7 +1729,7 @@ test("published report states its exact snapshot scope and stale or unverifiable
     if (target.includes("/issues/291/comments?")) return new Response(JSON.stringify([]), { status: 200 });
     if (target.endsWith("/issues/291/comments") && options.method === "POST") {
       publishedBody = JSON.parse(options.body).body;
-      return new Response(JSON.stringify({ id: 1291 }), { status: 201 });
+      return createdCommentResponse(target, options, 1291);
     }
     throw new Error("Unexpected API operation in snapshot-validity test: " + target);
   };
@@ -1803,7 +1820,7 @@ for (const snapshotChange of ["head", "base"]) {
         postCalls += 1;
         publishedBody = JSON.parse(options.body).body;
       }
-      return new Response(JSON.stringify({ id: 802 }), { status: 201 });
+      return createdCommentResponse(target, options, 802);
     };
 
     await runReview({
@@ -1881,7 +1898,7 @@ test("a report signed by the immediately previous marker key suppresses duplicat
     }
     if (target.endsWith("/issues/292/comments") && options.method === "POST") {
       postCalls += 1;
-      return new Response(JSON.stringify({ id: 1293 }), { status: 201 });
+      return createdCommentResponse(target, options, 1293);
     }
     throw new Error("Unexpected API operation in marker-key rotation test: " + target);
   };
@@ -1961,7 +1978,7 @@ test("a report signed by the expired previous marker key cannot suppress a dupli
     if (target.endsWith("/issues/293/comments") && options.method === "POST") {
       postCalls += 1;
       postedBody = JSON.parse(options.body).body;
-      return new Response(JSON.stringify({ id: 1293 }), { status: 201 });
+      return createdCommentResponse(target, options, 1293);
     }
     throw new Error("Unexpected API operation in marker-key rotation test: " + target);
   };
@@ -2013,4 +2030,65 @@ test("a configured previous marker key without an explicit expiry is rejected be
   }), /previous.*expiry|expiry.*previous/i);
 
   assert.equal(fetchCalls, 0, "an unbounded previous key must be rejected before network access");
+});
+
+
+test("a successful POST response must confirm the exact issue, body, and bot identity", async () => {
+  const headSha = "e".repeat(40);
+  const baseSha = "f".repeat(40);
+  const invalidResponses = [
+    { name: "different body", overrides: { body: "a different report body" } },
+    { name: "different issue", overrides: { issue_url: "https://api.github.com/repos/owner/repo/issues/999" } },
+    { name: "different author", overrides: { user: { login: "attacker", id: 7, type: "User" } } },
+    { name: "invalid comment ID", overrides: { id: 0 } },
+  ];
+
+  for (const invalidResponse of invalidResponses) {
+    let postCalls = 0;
+    const fakeFetch = async (url, options = {}) => {
+      const target = String(url);
+      if (target.endsWith("/pulls/294")) {
+        return new Response(JSON.stringify({
+          state: "open",
+          draft: false,
+          head: { sha: headSha },
+          base: { sha: baseSha },
+        }), { status: 200 });
+      }
+      if (target.includes("/pulls/294/files?")) {
+        return new Response(JSON.stringify([{
+          filename: "src/a.js",
+          patch: "@@ -1 +1 @@\\n-old\\n+new",
+        }]), { status: 200 });
+      }
+      if (target.endsWith("/chat/completions")) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: "A sufficiently long placeholder review report." } }],
+        }), { status: 200 });
+      }
+      if (target.includes("/issues/294/comments?")) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (target.endsWith("/issues/294/comments") && options.method === "POST") {
+        postCalls += 1;
+        return createdCommentResponse(target, options, 1600, invalidResponse.overrides);
+      }
+      throw new Error("Unexpected API operation in publication response test: " + target);
+    };
+
+    await assert.rejects(runReview({
+      repository: "owner/repo",
+      pullRequest: 294,
+      expectedHeadSha: headSha,
+      expectedBaseSha: baseSha,
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }), /publication response does not match the expected issue comment/i, invalidResponse.name);
+
+    assert.equal(postCalls, 1, "each malformed 201 response must be rejected after exactly one create attempt");
+  }
 });

@@ -84,7 +84,9 @@ export async function runReview({
   const base = new URL(githubApiBase);
   const repoPath = "/repos/" + repository;
   const pr = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken });
+  if (pr.state !== "open") throw new Error("Pull request is not open; refusing to review it.");
   if (pr.head?.sha !== expectedHeadSha) throw new Error("Pull request head changed; refusing to review a different commit.");
+  if (pr.draft) return { status: "skipped-draft", reviewedHeadSha: expectedHeadSha };
 
   const files = [];
   for (let page = 1; page <= 10; page += 1) {

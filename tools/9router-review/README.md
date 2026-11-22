@@ -44,13 +44,11 @@ The privileged `workflow_run` automation becomes active only after this setup PR
 Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. `UNKNOWN` is not a pass or fail. The model is not a human reviewer and its report is not proof of correctness; findings require independent verification.
 
 
-### Finding 21: Existing bot-comment identity was not a trustworthy update target — remediated with append-only publication
-- **Finding:** Matching `github-actions[bot]` plus a predictable head/base marker did not prove that a comment was created by this exact reviewer workflow. The reviewer could PATCH a forged or unrelated matching comment.
-- **TDD RED:** run `45033942148`, 29 passed / 1 failed. A synthetic existing bot comment with the exact head/base marker caused a comment-history read, violating the required append-only contract.
-- **Remediation:** Every successful run performs a fresh comment POST. The implementation has no comment-history GET, marker-based deduplication, comment PATCH, or delete path. The report marker remains trace metadata only.
-- **TDD GREEN:** run `45034129815`, 30/30 contract tests passed. Tests verify that existing matching comments and duplicate matching comments are ignored, no history request or PATCH occurs, and a new report is POSTed.
-- **Trade-off:** A POST whose response is lost may be duplicated by a rerun. This is accepted at-least-once behavior; no exactly-once guarantee is claimed.
-- **Residual limitation:** A separate privileged workflow could still post a misleading lookalike comment as `github-actions[bot]`. The reviewer no longer consumes that comment as program state, so it cannot alter the reviewer's publication behavior; human attribution still requires independent verification.
+### Finding 21: Existing bot-comment identity was not a trustworthy update target — historical remediation superseded by Finding 26
+- **Original finding:** Matching `github-actions[bot]` plus a predictable head/base marker did not prove that a comment was created by this exact reviewer workflow. Updating a matching comment could therefore mutate a forged or unrelated comment.
+- **Historical TDD evidence:** run `45033942148`, 29 passed / 1 failed; run `45034129815`, 30/30 passed. At that stage, the selected mitigation was strict append-only publication with no history reads, PATCH, or deletion.
+- **Superseding decision:** Finding 26 later approved bounded read-only reconciliation to suppress duplicates after ambiguous POST outcomes. The current implementation may GET comment history and use an exact bot-authored head/base marker only as a duplicate-suppression signal. It still never PATCHes or deletes existing comments.
+- **Current residual risk:** `github-actions[bot]` is not cryptographic provenance. Another privileged workflow with comment-write permission could forge a matching marker and suppress publication. See Finding 26 for current limits and failure behavior.
 
 
 ### Finding 22: Per-PR concurrency is bounded serialization, not guaranteed delivery — residual operational risk
@@ -102,11 +100,12 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 - **Disposition:** B is implemented as bounded, read-only reconciliation. Live privileged workflow / 9Router end-to-end behavior and a real ambiguous hosted POST remain `UNKNOWN`.
 
 
-## Latest verification — documentation head
-- Branch head: `f0f618c24e8bf6b69fa9ba5dee41f8e1bff0bec3`.
-- Contract tests: 37/37 PASS, run `45039546295`, job `137260705816`.
-- Gitleaks PR-diff and fetched-ref scan: PASS, run `45039551080`, job `137260721681`.
-- The privileged review job was skipped on push by design; no live 9Router or `workflow_run` execution is claimed.
+## Latest verification — current documentation state
+- Documentation update is isolated to `feature/independent-9router-pr-review`; no workflow activation, merge, deployment, or main-branch change is performed.
+- Latest recorded code/test head before this documentation correction: `02325547c170ee1ef14cfc933b5530d5f8957975`.
+- Contract tests: 37/37 PASS, run `45039740999`, job `137261295864`.
+- Gitleaks PR-diff and all fetched refs: PASS, run `45039745228`, job `137261307654`.
+- The privileged review job was skipped on push by design; live 9Router / `workflow_run` E2E remains UNKNOWN.
 
 
 ## Latest verification — current test head

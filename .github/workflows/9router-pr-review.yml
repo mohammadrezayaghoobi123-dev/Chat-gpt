@@ -58,6 +58,7 @@ jobs:
       WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
       HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
       PULL_REQUESTS_JSON: ${{ toJSON(github.event.workflow_run.pull_requests) }}
+      RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - name: Check reviewer configuration
         if: env.ROUTER_BASE_URL == '' || env.ROUTER_API_KEY == '' || env.ROUTER_MODEL == ''

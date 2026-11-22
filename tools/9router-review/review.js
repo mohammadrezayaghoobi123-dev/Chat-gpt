@@ -88,8 +88,8 @@ export async function runReview({
 
   const messages = buildReviewMessages({ repository, pullRequest, headSha: expectedHeadSha, patch });
   const routerUrl = new URL(routerBaseUrl.endsWith("/") ? routerBaseUrl : routerBaseUrl + "/");
-  if (routerUrl.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(routerUrl.hostname)) {
-    throw new Error("The 9Router endpoint must use HTTPS.");
+  if (routerUrl.protocol !== "https:" || routerUrl.username || routerUrl.password || routerUrl.search || routerUrl.hash) {
+    throw new Error("The 9Router endpoint must use HTTPS and must not contain embedded credentials, query parameters, or fragments.");
   }
   routerUrl.pathname = routerUrl.pathname.replace(/\/$/, "") + "/chat/completions";
 
@@ -121,8 +121,17 @@ export async function runReview({
     "_Automated model-assisted review only; not a human approval or proof of correctness. Findings require independent verification._",
   ].join("\n");
 
-  const comments = await requestJson(fetchImpl, base.origin + repoPath + "/issues/" + pullRequest + "/comments?per_page=100", { token: githubToken });
-  const prior = Array.isArray(comments) ? comments.find(comment => comment.body?.includes(marker)) : null;
+  const comments = [];
+  for (let page = 1; page <= 10; page += 1) {
+    const batch = await requestJson(fetchImpl, base.origin + repoPath + "/issues/" + pullRequest + "/comments?per_page=100&page=" + page, { token: githubToken });
+    if (!Array.isArray(batch)) throw new Error("GitHub returned an invalid pull request comment list.");
+    comments.push(...batch);
+    if (batch.length < 100) break;
+    if (page === 10) throw new Error("Pull request comment history exceeds the supported 1000-comment scan limit.");
+  }
+  const prior = comments.find(comment =>
+    comment.user?.login === "github-actions[bot]" && comment.body?.startsWith(marker)
+  ) ?? null;
   const commentUrl = prior
     ? base.origin + repoPath + "/issues/comments/" + prior.id
     : base.origin + repoPath + "/issues/" + pullRequest + "/comments";

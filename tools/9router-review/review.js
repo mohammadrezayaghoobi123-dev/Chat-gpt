@@ -1,5 +1,6 @@
 const MAX_PATCH_CHARS = 45000;
 const MAX_REPORT_CHARS = 30000;
+const MAX_ROUTER_RESPONSE_BYTES = 512 * 1024;
 const REVIEW_MARKER = "<!-- 9router-independent-review:";
 
 function neutralizeGitHubMentions(value) {
@@ -92,6 +93,40 @@ export function buildReviewMessages({ repository, pullRequest, headSha, patch })
   return [{ role: "system", content: system }, { role: "user", content: user }];
 }
 
+async function readJsonResponseLimited(response, maxBytes) {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("9Router returned an unreadable response; no comment was written.");
+
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel();
+        throw new Error("9Router response exceeds the safe response size; no comment was written.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new Error("9Router returned invalid JSON; no comment was written.");
+  }
+}
+
 async function requestJson(fetchImpl, url, { method = "GET", token, body, accept = "application/vnd.github+json" }) {
   const response = await fetchImpl(url, {
     method,
@@ -168,7 +203,7 @@ export async function runReview({
     signal: AbortSignal.timeout(120000),
   });
   if (!completion.ok) throw new Error("9Router request failed with HTTP " + completion.status + "; response body was suppressed.");
-  const result = await completion.json();
+  const result = await readJsonResponseLimited(completion, MAX_ROUTER_RESPONSE_BYTES);
   const report = result.choices?.[0]?.message?.content;
   if (typeof report !== "string" || report.trim().length < 20) throw new Error("9Router returned an empty or invalid review.");
   const sanitizedReport = sanitizeModelReport(report.trim());

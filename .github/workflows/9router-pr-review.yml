@@ -7,14 +7,17 @@ on:
     paths:
       - "tools/9router-review/**"
       - ".github/workflows/9router-pr-review.yml"
-  pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+      - ".github/workflows/9router-pr-review-signal.yml"
+  workflow_run:
+    workflows:
+      - "9Router PR Review Signal"
+    types: [completed]
 
 permissions:
   contents: read
 
 concurrency:
-  group: 9router-review-${{ github.event.pull_request.number || github.ref }}
+  group: 9router-review-${{ github.event.workflow_run.pull_requests[0].number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -32,7 +35,12 @@ jobs:
         run: node --test tools/9router-review/review.test.mjs
 
   review:
-    if: github.event_name == 'pull_request_target' && github.event.pull_request.draft == false
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.path == '.github/workflows/9router-pr-review-signal.yml' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -44,14 +52,19 @@ jobs:
       ROUTER_API_KEY: ${{ secrets.NINE_ROUTER_API_KEY }}
       ROUTER_MODEL: ${{ vars.NINE_ROUTER_MODEL }}
       REPOSITORY: ${{ github.repository }}
-      PULL_REQUEST: ${{ github.event.pull_request.number }}
-      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      GITHUB_EVENT_NAME: ${{ github.event_name }}
+      WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
+      TRIGGER_EVENT: ${{ github.event.workflow_run.event }}
+      WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+      HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+      PULL_REQUESTS_JSON: ${{ toJSON(github.event.workflow_run.pull_requests) }}
     steps:
       - name: Check reviewer configuration
         if: env.ROUTER_BASE_URL == '' || env.ROUTER_API_KEY == '' || env.ROUTER_MODEL == ''
         run: |
-          echo "::notice::9Router review is not configured. Add NINE_ROUTER_API_URL and NINE_ROUTER_API_KEY secrets and NINE_ROUTER_MODEL repository variable. No review was attempted."
-      - name: Checkout trusted base-branch reviewer code only
+          echo "::warning::9Router review NOT RUN: repository secrets NINE_ROUTER_API_URL and NINE_ROUTER_API_KEY and variable NINE_ROUTER_MODEL are required."
+          echo "9Router review was not run because the endpoint, API key, or model is not configured." >> "$GITHUB_STEP_SUMMARY"
+      - name: Checkout trusted default-branch reviewer code only
         if: env.ROUTER_BASE_URL != '' && env.ROUTER_API_KEY != '' && env.ROUTER_MODEL != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -696,7 +696,7 @@ test("model report cannot publish active HTML, remote images, or clickable links
   assert.ok(!publishedBody.includes("javascript:alert(2)"), "bare javascript schemes must not auto-link");
   assert.ok(!publishedBody.includes("data:text/html"), "data schemes must not reach the rendered report");
   assert.ok(!publishedBody.includes("mailto:tracker@"), "mailto schemes must not create clickable addresses");
-  assert.ok(publishedBody.includes("[image omitted]"), "removed images should leave an explicit placeholder: " + publishedBody);
+  assert.ok(publishedBody.includes("[image omitted]"), "removed images should leave an explicit placeholder");
 });
 
 test("duplicate bot reports for the same diff fail closed instead of updating an arbitrary comment", async () => {
@@ -1127,6 +1127,15 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
   const hostileReport = [
     "## Safe heading",
     "**bold** and `inline code`",
+    "- first item",
+    "- second item",
+    "> quoted **detail**",
+    "| left | right |",
+    "| --- | --- |",
+    "| one | two |",
+    "```js",
+    "const safe = 1;",
+    "```",
     "Click [a [nested label]](//attacker.example/collect?token=probe).",
     "Call [a [nested telephone label]](tel:+12025550123).",
     "![tracking [nested alt]](https://attacker.example/pixel)",
@@ -1176,4 +1185,8 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
   assert.deepEqual(activeTypes, [], "published report must contain no active link, image, HTML, or autolink AST nodes");
   assert.ok(publishedBody.includes("**bold**"), "safe emphasis formatting should be preserved");
   assert.ok(publishedBody.includes("`inline code`"), "safe inline code formatting should be preserved");
+  assert.ok(publishedBody.includes("- first item"), "safe list structure should be preserved");
+  assert.ok(publishedBody.includes("> quoted **detail**"), "safe blockquote structure should be preserved");
+  assert.ok(publishedBody.includes("| left | right |"), "safe table structure should be preserved");
+  assert.ok(publishedBody.includes("const safe = 1;"), "safe fenced code content should be preserved");
 });

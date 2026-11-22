@@ -200,9 +200,13 @@ export async function runReview({
     if (batch.length < 100) break;
     if (page === 10) throw new Error("Pull request comment history exceeds the supported 1000-comment scan limit.");
   }
-  const prior = comments.find(comment =>
+  const matchingReports = comments.filter(comment =>
     comment.user?.login === "github-actions[bot]" && comment.body?.startsWith(marker)
-  ) ?? null;
+  );
+  if (matchingReports.length > 1) {
+    throw new Error("Multiple matching reviewer report comments found; refusing an ambiguous update.");
+  }
+  const prior = matchingReports[0] ?? null;
 
   const currentBeforePublish = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken });
   if (currentBeforePublish.head?.sha !== expectedHeadSha) {

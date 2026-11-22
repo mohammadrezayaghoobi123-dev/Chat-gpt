@@ -5,17 +5,18 @@ import { parseSignalReceipt, resolveWorkflowRunTarget, verifySignalTargetWithGit
 
 const headSha = "a".repeat(40);
 const baseSha = "b".repeat(40);
+const workflowSha = "c".repeat(40);
 const repository = "owner/repo";
 const receipt = {
   schemaVersion: 1, repository, repositoryId: 123456, runId: 987654, runAttempt: 2,
   eventName: "pull_request_target", action: "synchronize", pullRequestNumber: 42,
-  headSha, baseSha, headRepository: repository, baseRepository: repository, baseRef: "main",
+  headSha, baseSha, workflowSha, headRepository: repository, baseRepository: repository, baseRef: "main",
 };
 const context = {
   eventName: "workflow_run", workflowPath: ".github/workflows/9router-pr-review-signal.yml",
   triggerEvent: "pull_request_target", workflowConclusion: "success", repository,
   repositoryId: 123456, headRepository: repository, runId: 987654, runAttempt: 2,
-  runHeadSha: baseSha, workflowId: 426787988, signalReceipt: receipt,
+  runHeadSha: workflowSha, workflowId: 426787988, signalReceipt: receipt,
 };
 
 function response(value, status = 200) {
@@ -29,7 +30,7 @@ function apiFetch(overrides = {}) {
       return response({
         id: 987654, run_attempt: 2, event: "pull_request_target",
         path: ".github/workflows/9router-pr-review-signal.yml", conclusion: "success",
-        head_sha: baseSha, workflow_id: 426787988,
+        head_sha: workflowSha, workflow_id: 426787988,
         repository: { id: 123456, full_name: repository },
         head_repository: { id: 123456, full_name: repository },
         pull_requests: [{ number: 999 }],
@@ -62,7 +63,7 @@ test("receipt parser accepts only a bounded, exact v1 schema", () => {
 
 test("resolver binds the receipt to the exact workflow run and PR snapshot", () => {
   assert.deepEqual(resolveWorkflowRunTarget(context), {
-    pullRequest: 42, expectedHeadSha: headSha, expectedBaseSha: baseSha, baseRef: "main",
+    pullRequest: 42, expectedHeadSha: headSha, expectedBaseSha: baseSha, expectedWorkflowSha: workflowSha, baseRef: "main",
   });
   for (const mutation of [
     { eventName: "push" },
@@ -85,7 +86,7 @@ test("independent GitHub API reconciliation succeeds without consulting pull_req
   const target = resolveWorkflowRunTarget(context);
   const result = await verifySignalTargetWithGitHub({
     target, repository, repositoryId: 123456, runId: 987654, runAttempt: 2,
-    runHeadSha: baseSha, workflowId: 426787988, githubToken: "test-token", fetchImpl: apiFetch(),
+    runHeadSha: workflowSha, workflowId: 426787988, githubToken: "test-token", fetchImpl: apiFetch(),
   });
   assert.deepEqual(result, target);
 });
@@ -95,7 +96,7 @@ test("run metadata mismatches are rejected even when pull_requests contains a ca
   for (const run of [
     { id: 7 }, { run_attempt: 1 }, { event: "pull_request" },
     { path: ".github/workflows/attacker.yml" }, { conclusion: "failure" },
-    { head_sha: "c".repeat(40) }, { workflow_id: 7 },
+    { head_sha: "d".repeat(40) }, { workflow_id: 7 },
     { repository: { id: 7, full_name: repository } },
     { head_repository: { id: 7, full_name: repository } },
   ]) {
@@ -179,8 +180,7 @@ test("privileged workflow resolves identity before per-PR concurrency and never 
 });
 
 test("workflow-run SHA binds to the trusted workflow revision, not a non-default PR base SHA", () => {
-  const workflowSha = "c".repeat(40);
-  const signalReceipt = { ...receipt, workflowSha };
+  const signalReceipt = { ...receipt };
   const targetContext = { ...context, runHeadSha: workflowSha, signalReceipt };
   assert.deepEqual(resolveWorkflowRunTarget(targetContext), {
     pullRequest: 42,

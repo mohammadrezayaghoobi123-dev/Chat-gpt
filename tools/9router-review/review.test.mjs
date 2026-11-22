@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildReviewMessages, runReview } from "./review.js";
+import * as reviewer from "./review.js";
+const { buildReviewMessages, runReview } = reviewer;
 
 test("review prompt binds the exact PR head SHA and requires evidence-based verdicts", () => {
   const messages = buildReviewMessages({
@@ -150,4 +151,43 @@ test("a user-authored marker comment is never overwritten by the reviewer", asyn
   assert.equal(prReads, 3, "the head must be checked before model use and before publishing");
   assert.equal(patchCalls, 0, "the reviewer must not edit comments authored by another user");
   assert.equal(postCalls, 1, "the reviewer must create its own report comment");
+});
+
+
+test("workflow-run metadata resolves only a trusted same-repository PR signal", () => {
+  assert.equal(typeof reviewer.resolveWorkflowRunTarget, "function");
+  const target = reviewer.resolveWorkflowRunTarget({
+    eventName: "workflow_run",
+    workflowPath: ".github/workflows/9router-pr-review-signal.yml",
+    triggerEvent: "pull_request",
+    workflowConclusion: "success",
+    repository: "owner/repo",
+    headRepository: "owner/repo",
+    pullRequests: [{ number: 42, head: { sha: "a".repeat(40) } }],
+  });
+  assert.deepEqual(target, { pullRequest: 42, expectedHeadSha: "a".repeat(40) });
+});
+
+test("workflow-run metadata rejects forked, spoofed, or malformed signals", () => {
+  assert.equal(typeof reviewer.resolveWorkflowRunTarget, "function");
+  const base = {
+    eventName: "workflow_run",
+    workflowPath: ".github/workflows/9router-pr-review-signal.yml",
+    triggerEvent: "pull_request",
+    workflowConclusion: "success",
+    repository: "owner/repo",
+    headRepository: "owner/repo",
+    pullRequests: [{ number: 42, head: { sha: "a".repeat(40) } }],
+  };
+  for (const override of [
+    { eventName: "push" },
+    { workflowPath: ".github/workflows/untrusted.yml" },
+    { triggerEvent: "push" },
+    { workflowConclusion: "failure" },
+    { headRepository: "attacker/fork" },
+    { pullRequests: [] },
+    { pullRequests: [{ number: 42, head: { sha: "bad" } }] },
+  ]) {
+    assert.throws(() => reviewer.resolveWorkflowRunTarget({ ...base, ...override }));
+  }
 });

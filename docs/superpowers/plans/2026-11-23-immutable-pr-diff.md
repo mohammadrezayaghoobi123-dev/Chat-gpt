@@ -42,13 +42,23 @@
 - Consumes: runReview({ repository, pullRequest, expectedHeadSha, expectedBaseSha, ... })
 - Produces: a complete formatted patch derived only from the exact expected base/head trees; throws before model inference when completeness cannot be proved.
 
-- [ ] Step 1: Add a failing runReview regression fixture where exact-SHA Compare returns a changed file without patch, while commit/tree/blob APIs return valid exact Git objects; assert the model input contains the reconstructed unified diff and publication occurs only after full snapshot validation.
-- [ ] Step 2: Run the focused test and verify RED because current code still calls mutable /pulls/{number}/files and rejects the missing patch without object fallback.
+- [x] Step 1: Add a failing runReview regression fixture where exact-SHA Compare returns a changed file without patch, while commit/tree/blob APIs return valid exact Git objects; assert the model input contains the reconstructed unified diff and publication occurs only after full snapshot validation.
+- [x] Step 2: Run the focused test and verify RED because current code still calls mutable /pulls/{number}/files and rejects the missing patch without object fallback.
 - [ ] Step 3: Add fail-closed regression cases for truncated trees, bad blob SHA/base64/size, binary or invalid UTF-8 content, unsupported mode/type, and cumulative blob/patch budget exhaustion; assert zero model calls and zero comment POSTs.
-- [ ] Step 4: Implement exact-SHA Compare lookup, exact commit/tree enumeration, complete path-set derivation, verified blob retrieval, and bounded no-shell Git diff fallback.
-- [ ] Step 5: Run focused tests; verify the missing-patch case is GREEN and all fail-closed cases stop before inference/publication.
-- [ ] Step 6: Run the complete Node contract suite and verify zero failures.
-- [ ] Step 7: Update README with actual limits, exact-snapshot behavior, unsupported file types, and evidence references; do not claim hosted E2E.
-- [ ] Step 8: Commit the atomic implementation and documentation change on the feature branch.
+- [x] Step 4: Implement exact-SHA Compare lookup, exact commit/tree enumeration, complete path-set derivation, verified blob retrieval, and bounded no-shell Git diff fallback.
+- [x] Step 5: Run focused tests; verify the missing-patch case is GREEN and all fail-closed cases stop before inference/publication.
+- [x] Step 6: Run the complete Node contract suite and verify zero failures.
+- [x] Step 7: Update README with actual limits, exact-snapshot behavior, unsupported file types, and evidence references; do not claim hosted E2E.
+- [x] Step 8: Commit the atomic implementation and documentation change on the feature branch.
 
 **Expected verification:** focused regression RED before implementation; focused and full Node suites GREEN after implementation; final-head GitHub Actions contract workflow and Gitleaks runs successful. The signal/reviewer jobs are expected to skip on push and must not be reported as E2E.
+
+
+## Execution Status — 2026-11-23
+
+- Steps 1 and 2: completed. The strict immutable-snapshot test was observed failing for the old implementation (64/65 tests passed; the new missing-patch regression failed before inference).
+- Step 3: **OPEN**. Targeted negative tests for truncated trees, malformed/corrupt Git blobs, binary and invalid-UTF-8 blobs, mode-only changes, and 300/301 fallback boundaries have not yet been added. Source guards exist, but these guard behaviors are not independently proven by the current test suite.
+- Steps 4–8: completed. Hybrid retrieval is implemented; focused integration test and full contract suite pass; audit documentation updated; work remains confined to this feature branch.
+- Final GREEN evidence before this plan-status update: contract run 45081384862, job 137390092179, 65/65 PASS; Gitleaks Push run 45081384863 and PR run 45081391096 both succeeded.
+- Hosted workflow_run / artifact / live 9Router E2E remains UNKNOWN. Push runs skip resolve-signal and review by design.
+- This plan is not fully closed until Step 3's negative regression coverage is complete and reverified on the latest head.

@@ -41,7 +41,7 @@ test("missing file patches stop the review before sending source to 9Router", as
   const fakeFetch = async (url, options = {}) => {
     const target = String(url);
     if (target.endsWith("/pulls/261")) {
-      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: "c".repeat(40) } }), { status: 200 });
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: "c".repeat(40) }, base: { sha: "1".repeat(40) } }), { status: 200 });
     }
     if (target.includes("/pulls/261/files?")) {
       return new Response(JSON.stringify([{ filename: "large.bin", patch: null }]), { status: 200 });
@@ -61,6 +61,7 @@ test("missing file patches stop the review before sending source to 9Router", as
       repository: "owner/repo",
       pullRequest: 261,
       expectedHeadSha: "c".repeat(40),
+      expectedBaseSha: "1".repeat(40),
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
@@ -81,7 +82,7 @@ test("a head change during patch retrieval aborts before the model request", asy
     if (target.endsWith("/pulls/262")) {
       prReads += 1;
       const sha = prReads === 1 ? "d".repeat(40) : "e".repeat(40);
-      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha } }), { status: 200 });
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha }, base: { sha: "1".repeat(40) } }), { status: 200 });
     }
     if (target.includes("/pulls/262/files?")) {
       return new Response(JSON.stringify([{ filename: "src/safe.js", patch: "@@ -1 +1 @@\n-old\n+new" }]), { status: 200 });
@@ -95,6 +96,7 @@ test("a head change during patch retrieval aborts before the model request", asy
       repository: "owner/repo",
       pullRequest: 262,
       expectedHeadSha: "d".repeat(40),
+      expectedBaseSha: "1".repeat(40),
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
@@ -117,7 +119,7 @@ test("a user-authored marker comment is never overwritten by the reviewer", asyn
     const target = String(url);
     if (target.endsWith("/pulls/263")) {
       prReads += 1;
-      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha } }), { status: 200 });
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: "1".repeat(40) } }), { status: 200 });
     }
     if (target.includes("/pulls/263/files?")) {
       return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\n-old\n+new" }]), { status: 200 });
@@ -141,6 +143,7 @@ test("a user-authored marker comment is never overwritten by the reviewer", asyn
     repository: "owner/repo",
     pullRequest: 263,
     expectedHeadSha: headSha,
+      expectedBaseSha: "1".repeat(40),
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
@@ -164,7 +167,7 @@ test("workflow-run metadata resolves only a trusted same-repository PR signal", 
     runHeadSha: "b".repeat(40),
     repository: "owner/repo",
     headRepository: "owner/repo",
-    pullRequests: [{ number: 42, head: { sha: "a".repeat(40) }, base: { sha: "c".repeat(40) } }],
+    pullRequests: [{ number: 42, head: { sha: "a".repeat(40) }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
   });
   assert.deepEqual(target, { pullRequest: 42, expectedHeadSha: "a".repeat(40), expectedBaseSha: "c".repeat(40) });
 });
@@ -179,7 +182,7 @@ test("workflow-run metadata rejects forked, spoofed, or malformed signals", () =
     runHeadSha: "a".repeat(40),
     repository: "owner/repo",
     headRepository: "owner/repo",
-    pullRequests: [{ number: 42, head: { sha: "a".repeat(40) }, base: { sha: "c".repeat(40) } }],
+    pullRequests: [{ number: 42, head: { sha: "a".repeat(40) }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
   };
   for (const override of [
     { eventName: "push" },
@@ -202,12 +205,13 @@ test("draft pull requests are skipped and closed pull requests are rejected", as
   let draftCalls = 0;
   const draftFetch = async () => {
     draftCalls += 1;
-    return new Response(JSON.stringify({ state: "open", draft: true, head: { sha: headSha } }), { status: 200 });
+    return new Response(JSON.stringify({ state: "open", draft: true, head: { sha: headSha }, base: { sha: "1".repeat(40) } }), { status: 200 });
   };
   const draftResult = await runReview({
     repository: "owner/repo",
     pullRequest: 264,
     expectedHeadSha: headSha,
+      expectedBaseSha: "1".repeat(40),
     githubToken: "github-test-token",
     routerBaseUrl: "https://router.example/v1",
     routerApiKey: "router-test-token",
@@ -220,13 +224,14 @@ test("draft pull requests are skipped and closed pull requests are rejected", as
   let closedCalls = 0;
   const closedFetch = async () => {
     closedCalls += 1;
-    return new Response(JSON.stringify({ state: "closed", draft: false, head: { sha: headSha } }), { status: 200 });
+    return new Response(JSON.stringify({ state: "closed", draft: false, head: { sha: headSha }, base: { sha: "1".repeat(40) } }), { status: 200 });
   };
   await assert.rejects(
     runReview({
       repository: "owner/repo",
       pullRequest: 265,
       expectedHeadSha: headSha,
+      expectedBaseSha: "1".repeat(40),
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",
       routerApiKey: "router-test-token",
@@ -248,10 +253,10 @@ test("workflow-run target uses the immutable PR head snapshot, not the pull_requ
     runHeadSha: "b".repeat(40),
     repository: "owner/repo",
     headRepository: "owner/repo",
-    pullRequests: [{ number: 43, head: { sha: "a".repeat(40) } }],
+    pullRequests: [{ number: 43, head: { sha: "a".repeat(40) }, base: { sha: "c".repeat(40), repo: { full_name: "owner/repo" } } }],
   });
 
-  assert.deepEqual(target, { pullRequest: 43, expectedHeadSha: "a".repeat(40) });
+  assert.deepEqual(target, { pullRequest: 43, expectedHeadSha: "a".repeat(40), expectedBaseSha: "c".repeat(40) });
 });
 
 
@@ -279,7 +284,7 @@ test("workflow-run metadata requires and returns the immutable PR base SHA", () 
   assert.throws(
     () => reviewer.resolveWorkflowRunTarget({
       ...base,
-      pullRequests: [{ number: 44, head: { sha: "a".repeat(40) }, base: {} }],
+      pullRequests: [{ number: 44, head: { sha: "a".repeat(40) }, base: { repo: { full_name: "owner/repo" } } }],
     }),
     /invalid.*metadata|base.*SHA/i,
   );
@@ -322,6 +327,7 @@ test("a base-branch change after patch retrieval aborts before the model request
       repository: "owner/repo",
       pullRequest: 266,
       expectedHeadSha: headSha,
+      expectedBaseSha: "1".repeat(40),
       expectedBaseSha,
       githubToken: "github-test-token",
       routerBaseUrl: "https://router.example/v1",

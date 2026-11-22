@@ -255,8 +255,9 @@ No merge, deployment, repository setting, ruleset, Actions policy, or secret was
 
 
 ### Final ABC branch verification — 2026-11-22
-- Verified implementation head: `a8c815680957603194cb1c20ef2dc242fa8d2ea6`.
-- Contract tests on that exact head: run `45053302511`, job `137302965636`: **47/47 PASS**, zero failures, cancellations, or skips.
-- Full-history Gitleaks scan: run `45053210347`, job `137302682517`: **3,949 commits scanned**, approximately **12.37 MB**, no leaks found. Final PR-diff scan on the verified implementation head: run `45053302479`, job `137302965513`: **1 commit / 861 bytes**, no leaks found.
-- Both privileged jobs (`resolve-signal` and `review`) were skipped on Push by design. No hosted signal artifact round trip or privileged reviewer E2E is claimed.
-- The main branch remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`. PR #261 remains Draft/Open/Unmerged. PR #262 is Draft/Open and targets the work branch underlying PR #261. No merge, deploy, secret, policy, ruleset, or Production change.
+- Implementation head: `eabe0ddffa2af964b65147740572546f1651274c`.
+- Targeted TDD RED: run `45053551213`, job `137303723388`; the new regression test failed because `ftp://localhost` passed the prior origin guard and reached the fetch layer.
+- Targeted TDD GREEN: run `45053620593`, job `137303934725`: **48/48 PASS**, zero failures, cancellations, or skips. The guard now permits HTTPS origins and HTTP only for explicit loopback test hosts, rejecting FTP, external HTTP, credentials, path, query, and fragment.
+- Full-history Gitleaks run `45053210347`: **3,949 commits scanned**, approximately **12.37 MB**, no leaks found. Final Gitleaks run `45053620560` passed on the implementation head.
+- The `resolve-signal` and `review` jobs were skipped on Push by design. No hosted signal artifact round trip or privileged reviewer E2E is claimed.
+- The main branch remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`. PR #261 remains Draft/Open/Unmerged. PR #262 is Draft/Open/Mergeable and targets the work branch underlying PR #261. No merge, deploy, secret, policy, ruleset, or Production change.

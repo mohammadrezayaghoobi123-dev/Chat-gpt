@@ -477,3 +477,41 @@ test("a report for a different base SHA is never overwritten for the same head S
   assert.ok(postBody.startsWith("<!-- 9router-independent-review:" + headSha + ":" + expectedBaseSha + " -->"));
   assert.ok(postBody.includes("**Reviewed base SHA:** " + expectedBaseSha));
 });
+
+test("model-generated account mentions are neutralized before comment publication", async () => {
+  const headSha = "d".repeat(40);
+  const baseSha = "e".repeat(40);
+  const mention = String.fromCharCode(64) + "reviewtarget";
+  let publishedBody = "";
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/269")) {
+      return new Response(JSON.stringify({ state: "open", draft: false, head: { sha: headSha }, base: { sha: baseSha } }), { status: 200 });
+    }
+    if (target.includes("/pulls/269/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: "Please notify " + mention + " about this finding." } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/269/comments?")) return new Response(JSON.stringify([]), { status: 200 });
+    if (target.endsWith("/issues/269/comments") && options.method === "POST") publishedBody = JSON.parse(options.body).body;
+    return new Response(JSON.stringify({ id: 703 }), { status: 201 });
+  };
+
+  await runReview({
+    repository: "owner/repo",
+    pullRequest: 269,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  const neutralizedMention = String.fromCharCode(64) + "\\u200b" + "reviewtarget";
+  assert.ok(publishedBody.includes(neutralizedMention));
+  assert.ok(!publishedBody.includes(mention));
+});

@@ -186,22 +186,17 @@ export function createReviewMarker({ repository, pullRequest, headSha, baseSha, 
   return REVIEW_MARKER + headSha.toLowerCase() + ":" + baseSha.toLowerCase() + ":" + signature + " -->";
 }
 
-function hasValidReviewMarker(marker, { repository, pullRequest, headSha, baseSha, keys }) {
+function hasValidReviewMarker(marker, { repository, pullRequest, headSha, baseSha, key }) {
   const match = REVIEW_MARKER_PATTERN.exec(marker);
   if (!match || match[1].toLowerCase() !== headSha.toLowerCase() || match[2].toLowerCase() !== baseSha.toLowerCase()) {
     return false;
   }
+  const expected = createReviewMarker({ repository, pullRequest, headSha, baseSha, key });
+  const expectedSignature = REVIEW_MARKER_PATTERN.exec(expected)?.[3];
+  if (!expectedSignature) return false;
   const suppliedBytes = Buffer.from(match[3], "hex");
-  let valid = false;
-  for (const key of keys) {
-    const expected = createReviewMarker({ repository, pullRequest, headSha, baseSha, key });
-    const expectedSignature = REVIEW_MARKER_PATTERN.exec(expected)?.[3];
-    if (!expectedSignature) continue;
-    const expectedBytes = Buffer.from(expectedSignature, "hex");
-    const matches = suppliedBytes.length === expectedBytes.length && timingSafeEqual(suppliedBytes, expectedBytes);
-    valid = matches || valid;
-  }
-  return valid;
+  const expectedBytes = Buffer.from(expectedSignature, "hex");
+  return suppliedBytes.length === expectedBytes.length && timingSafeEqual(suppliedBytes, expectedBytes);
 }
 
 export function buildReviewMessages({ repository, pullRequest, headSha, patch }) {
@@ -369,7 +364,7 @@ async function requestJson(fetchImpl, url, { method = "GET", token, body, accept
   }
 }
 
-async function findMatchingReviewComments({ fetchImpl, base, repoPath, repository, pullRequest, token, deadlineAt, expectedHeadSha, expectedBaseSha, reviewMarkerKeys }) {
+async function findMatchingReviewComments({ fetchImpl, base, repoPath, repository, pullRequest, token, deadlineAt, expectedHeadSha, expectedBaseSha, reviewMarkerKey }) {
   const matches = [];
   let totalBytes = 0;
 
@@ -393,7 +388,7 @@ async function findMatchingReviewComments({ fetchImpl, base, repoPath, repositor
         throw new Error("GitHub returned an incomplete comment-history record; refusing to publish.");
       }
       const firstLine = comment.body.split(/\r?\n/, 1)[0];
-      if (comment.user.login === "github-actions[bot]" && hasValidReviewMarker(firstLine, { repository, pullRequest, headSha: expectedHeadSha, baseSha: expectedBaseSha, keys: reviewMarkerKeys })) {
+      if (comment.user.login === "github-actions[bot]" && hasValidReviewMarker(firstLine, { repository, pullRequest, headSha: expectedHeadSha, baseSha: expectedBaseSha, key: reviewMarkerKey })) {
         matches.push(comment);
         if (matches.length > 1) {
           throw new Error("Multiple matching reports exist for this exact head/base pair; refusing to publish.");
@@ -426,19 +421,11 @@ function assertReviewablePullRequest(pr, { expectedHeadSha, expectedBaseSha, pha
 
 export async function runReview({
   repository, pullRequest, expectedHeadSha, expectedBaseSha, githubToken, routerBaseUrl, routerApiKey, model,
-  fetchImpl = fetch, githubApiBase = "https://api.github.com", reviewTimeoutMs = 8 * 60 * 1000, reviewMarkerKey, previousReviewMarkerKeys = [],
+  fetchImpl = fetch, githubApiBase = "https://api.github.com", reviewTimeoutMs = 8 * 60 * 1000, reviewMarkerKey,
 }) {
   if (!githubToken || !routerApiKey || !model || !routerBaseUrl || typeof reviewMarkerKey !== "string" || Buffer.byteLength(reviewMarkerKey, "utf8") < 32) {
     throw new Error("Required reviewer configuration is missing or the review marker key is shorter than 32 bytes.");
   }
-  if (
-    !Array.isArray(previousReviewMarkerKeys) ||
-    previousReviewMarkerKeys.length > 1 ||
-    previousReviewMarkerKeys.some(key => typeof key !== "string" || Buffer.byteLength(key, "utf8") < 32 || key === reviewMarkerKey)
-  ) {
-    throw new Error("At most one distinct previous review marker key of at least 32 bytes may be configured.");
-  }
-  const reviewMarkerKeys = [reviewMarkerKey, ...previousReviewMarkerKeys];
   if (!Number.isSafeInteger(reviewTimeoutMs) || reviewTimeoutMs < 1 || reviewTimeoutMs > 8 * 60 * 1000) {
     throw new TypeError("Review timeout must be an integer between 1 ms and 8 minutes.");
   }
@@ -494,7 +481,7 @@ export async function runReview({
     deadlineAt,
     expectedHeadSha,
     expectedBaseSha,
-    reviewMarkerKeys,
+    reviewMarkerKey,
   });
   if (matchingReports.length === 1) {
     const currentBeforeSkip = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });

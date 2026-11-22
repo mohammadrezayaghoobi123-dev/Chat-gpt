@@ -65,7 +65,11 @@ function renderInlineTokens(tokens) {
         output += "  \n";
         break;
       case "link":
-        output += renderInlineTokens(token.tokens) + " [link omitted]";
+        if (String(token.raw ?? "").startsWith("[")) {
+          output += renderInlineTokens(token.tokens) + " [link omitted]";
+        } else {
+          output += "[external URL omitted]";
+        }
         break;
       case "image":
         output += escapeMarkdownText(token.text) + " [image omitted]";

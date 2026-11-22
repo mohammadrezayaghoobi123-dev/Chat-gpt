@@ -337,3 +337,15 @@ No merge, deployment, repository setting, ruleset, Actions policy, or secret was
 - Full-history Gitleaks push run `45063177089` and PR run `45063182308`: both completed successfully.
 - The `resolve-signal` and `review` jobs were skipped on the push event by design. These results prove the Linux contract suite and secret scans only; they do **not** prove a hosted `pull_request_target → workflow_run` artifact round trip, privileged review execution, live 9Router inference, or report publication.
 - PR #262 remains Draft/Open/Unmerged and targets `feature/independent-9router-pr-review`. `main` remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`. No merge, deployment, secret, repository setting, ruleset, Actions policy, or Production change was made.
+
+
+## Finding 42 — duplicate JSON object keys (2026-11-22)
+
+- **Observed defect:** `parseSignalReceipt` used `JSON.parse` without rejecting duplicate object property names. JavaScript parsing silently keeps the last value for duplicate names; this creates ambiguous receipt bytes even when the resulting object passes the exact schema check.
+- **False-positive test rejected:** the first negative fixture contained only three fields and failed because of missing schema fields, not because duplicate keys were detected. It did not establish the hypothesis.
+- **Valid RED evidence:** a complete otherwise-valid v1 receipt with a duplicated `schemaVersion` was used. Linux contract run `45063512576`, job `137334461403`, failed exactly one test (54/55) at the receipt parser contract. The failure was the expected missing rejection.
+- **Fix:** `parseSignalReceipt` now scans JSON string tokens, decodes candidate property names with `JSON.parse`, tracks keys independently for each object scope, and rejects repeated decoded names before ordinary JSON parsing. This also rejects escaped-equivalent names such as `schemaVersion` and `schema\\u0056ersion`.
+- **Explicit regression:** test `receipt parser rejects duplicate and escaped-equivalent JSON object keys` asserts the duplicate-key-specific error for both forms.
+- **GREEN evidence:** Linux push run `45063671592`, job `137334965145`: **56/56 PASS**, zero failures/cancellations/skips. `npm ci --ignore-scripts` and `npm audit signatures` completed; one locked package registry signature was verified.
+- **Secret scan:** full-history Gitleaks push run `45063671599` completed successfully. Its PR counterpart was still in progress at the time of this checkpoint; do not infer its result from the push scan.
+- **Scope:** parser and tests only; no workflow, secret, repository setting, ruleset, Actions policy, merge, deployment, or Production change. Hosted `pull_request_target → workflow_run` artifact E2E remains unverified.

@@ -1411,17 +1411,17 @@ test("an unsigned forged bot marker cannot suppress a legitimate report", async 
         {
           id: 1289,
           user: { login: "github-actions[bot]" },
-          body: "<!-- 9router-independent-review:" + headSha + ":" + baseSha + " -->\\nforged legacy report",
+          body: "<!-- 9router-independent-review:" + headSha + ":" + baseSha + " -->" + String.fromCharCode(10) + "forged legacy report",
         },
         {
           id: 1291,
           user: { login: "github-actions[bot]" },
-          body: wrongPullRequestMarker + "\\nmarker signed for a different pull request",
+          body: wrongPullRequestMarker + String.fromCharCode(10) + "marker signed for a different pull request",
         },
         {
           id: 1292,
           user: { login: "github-actions[bot]" },
-          body: tamperedSignature + "\\nmarker with a modified signature",
+          body: tamperedSignature + String.fromCharCode(10) + "marker with a modified signature",
         },
       ]), { status: 200 });
     }

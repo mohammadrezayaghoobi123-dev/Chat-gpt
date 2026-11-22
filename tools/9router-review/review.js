@@ -465,33 +465,6 @@ export async function runReview({
   if (pr.head?.sha !== expectedHeadSha) throw new Error("Pull request head changed; refusing to review a different commit.");
   if (pr.base?.sha !== expectedBaseSha) throw new Error("Pull request base branch changed; refusing to review a different diff.");
   if (pr.draft) return { status: "skipped-draft", reviewedHeadSha: expectedHeadSha };
-  const matchingReports = await findMatchingReviewComments({
-    fetchImpl,
-    base,
-    repoPath,
-    repository,
-    pullRequest,
-    token: githubToken,
-    deadlineAt,
-    expectedHeadSha,
-    expectedBaseSha,
-    reviewMarkerKey,
-  });
-  if (matchingReports.length === 1) {
-    const currentBeforeSkip = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
-    if (currentBeforeSkip.head?.sha !== expectedHeadSha || currentBeforeSkip.base?.sha !== expectedBaseSha) {
-      throw new Error("Pull request changed during duplicate reconciliation; refusing to skip a review for a different diff.");
-    }
-    return {
-      status: "already-published",
-      reviewedHeadSha: expectedHeadSha,
-      reviewedBaseSha: expectedBaseSha,
-      existingCommentId: Number.isSafeInteger(matchingReports[0].id) ? matchingReports[0].id : null,
-      publishedNewComment: false,
-    };
-  }
-
-
   const files = [];
   let patchChars = 0;
   for (let page = 1; page <= 10; page += 1) {
@@ -529,6 +502,33 @@ export async function runReview({
   if (currentBeforeModel.base?.sha !== expectedBaseSha) {
     throw new Error("Pull request base branch changed during patch retrieval; refusing to send a different diff.");
   }
+
+  const matchingReports = await findMatchingReviewComments({
+    fetchImpl,
+    base,
+    repoPath,
+    repository,
+    pullRequest,
+    token: githubToken,
+    deadlineAt,
+    expectedHeadSha,
+    expectedBaseSha,
+    reviewMarkerKey,
+  });
+  if (matchingReports.length === 1) {
+    const currentBeforeSkip = await requestJson(fetchImpl, base.origin + repoPath + "/pulls/" + pullRequest, { token: githubToken, deadlineAt });
+    if (currentBeforeSkip.head?.sha !== expectedHeadSha || currentBeforeSkip.base?.sha !== expectedBaseSha) {
+      throw new Error("Pull request changed during duplicate reconciliation; refusing to skip a review for a different diff.");
+    }
+    return {
+      status: "already-published",
+      reviewedHeadSha: expectedHeadSha,
+      reviewedBaseSha: expectedBaseSha,
+      existingCommentId: Number.isSafeInteger(matchingReports[0].id) ? matchingReports[0].id : null,
+      publishedNewComment: false,
+    };
+  }
+
 
   const messages = buildReviewMessages({ repository, pullRequest, headSha: expectedHeadSha, patch });
   const routerUrl = new URL(routerBaseUrl.endsWith("/") ? routerBaseUrl : routerBaseUrl + "/");

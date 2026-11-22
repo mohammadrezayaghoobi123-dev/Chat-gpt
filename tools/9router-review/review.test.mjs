@@ -1843,8 +1843,16 @@ test("a report signed by the immediately previous marker key suppresses duplicat
         user: { login: "github-actions[bot]" },
       }]), { status: 200 });
     }
-    if (target.endsWith("/chat/completions")) routerCalls += 1;
-    if (target.endsWith("/issues/292/comments") && options.method === "POST") postCalls += 1;
+    if (target.endsWith("/chat/completions")) {
+      routerCalls += 1;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "A sufficiently long placeholder review report." } }],
+      }), { status: 200 });
+    }
+    if (target.endsWith("/issues/292/comments") && options.method === "POST") {
+      postCalls += 1;
+      return new Response(JSON.stringify({ id: 1293 }), { status: 201 });
+    }
     throw new Error("Unexpected API operation in marker-key rotation test: " + target);
   };
 

@@ -860,7 +860,7 @@ test("review workflow keeps per-PR serialization and bounded queue semantics exp
   assert.ok(workflow.includes("queue: max"), "pending reviews must use the bounded multi-run queue");
   assert.ok(workflow.includes("REVIEW_MARKER_KEY: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_KEY }}"), "the privileged reviewer must receive the dedicated marker-signing secret");
   assert.ok(workflow.includes("id: reviewer-config"), "configuration validation must publish a readiness output");
-  assert.equal(workflow.split("REVIEW_MARKER_KEY:").length - 1, 2, "the marker secret must be scoped only to configuration validation and the final reviewer step");
+  assert.equal((workflow.match(/^\\s+REVIEW_MARKER_KEY:/gm) || []).length, 2, "the active marker secret must be scoped only to configuration validation and the final reviewer step");
   assert.equal(workflow.split("PREVIOUS_REVIEW_MARKER_KEY:").length - 1, 2,
     "the optional previous marker key must be scoped only to configuration validation and the final reviewer step");
   assert.equal(workflow.split("steps.reviewer-config.outputs.ready == 'true'").length - 1, 5, "every privileged reviewer step must be gated on validated configuration");

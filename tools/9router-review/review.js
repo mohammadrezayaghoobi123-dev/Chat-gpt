@@ -180,7 +180,7 @@ export function createReviewMarker({ repository, pullRequest, headSha, baseSha, 
   ) {
     throw new TypeError("A repository, pull request, exact head/base SHAs, and a marker key of at least 32 bytes are required.");
   }
-  const payload = ["9router-independent-review:v2", repository.toLowerCase(), String(pullRequest), headSha.toLowerCase(), baseSha.toLowerCase()].join("\\n");
+  const payload = ["9router-independent-review:v2", repository.toLowerCase(), String(pullRequest), headSha.toLowerCase(), baseSha.toLowerCase()].join("\n");
   const signature = createHmac("sha256", key).update(payload, "utf8").digest("hex");
   return REVIEW_MARKER + headSha.toLowerCase() + ":" + baseSha.toLowerCase() + ":" + signature + " -->";
 }

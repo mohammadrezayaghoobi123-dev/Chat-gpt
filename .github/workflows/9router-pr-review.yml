@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/independent-9router-pr-review
+      - feature/9router-abc-provenance
     paths:
       - "tools/9router-review/**"
       - ".github/workflows/9router-pr-review.yml"

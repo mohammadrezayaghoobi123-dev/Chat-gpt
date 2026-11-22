@@ -1291,6 +1291,7 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
   const baseSha = "2".repeat(40);
   const hostileReport = [
     "## Safe heading",
+    "Comparison: a < b and c > d",
     "**bold** and `inline code`",
     "- first item",
     "- second item",
@@ -1349,6 +1350,7 @@ test("model report sanitizer removes active nodes from the parsed GitHub-flavore
   const tokens = collectMarkdownTokenTypes(marked.lexer(sanitizedReport, { gfm: true }));
   const activeTypes = tokens.filter(type => ["link", "image", "html", "url", "autolink"].includes(type));
   assert.deepEqual(activeTypes, [], "published report must contain no active link, image, HTML, or autolink AST nodes");
+  assert.ok(sanitizedReport.includes("Comparison: a &lt; b and c &gt; d"), "literal angle brackets in prose must be encoded to prevent Markdown renderer differentials");
   assert.ok(publishedBody.includes("**bold**"), "safe emphasis formatting should be preserved");
   assert.ok(publishedBody.includes("`inline code`"), "safe inline code formatting should be preserved");
   assert.ok(publishedBody.includes("- first item"), "safe list structure should be preserved");

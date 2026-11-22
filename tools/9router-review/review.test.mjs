@@ -112,7 +112,7 @@ test("a head change during patch retrieval aborts before the model request", asy
 });
 
 
-test("a user-authored marker comment is never overwritten by the reviewer", async () => {
+test("append-only publication never overwrites a user-authored marker comment", async () => {
   const headSha = "f".repeat(40);
   let patchCalls = 0;
   let postCalls = 0;
@@ -153,7 +153,7 @@ test("a user-authored marker comment is never overwritten by the reviewer", asyn
     fetchImpl: fakeFetch,
   });
 
-  assert.equal(prReads, 4, "the head and base must be checked before model use, before comment lookup, and immediately before publishing");
+  assert.equal(prReads, 4, "the head and base must be revalidated before model use and publication");
   assert.equal(patchCalls, 0, "the reviewer must not edit comments authored by another user");
   assert.equal(postCalls, 1, "the reviewer must create its own report comment");
 });
@@ -518,7 +518,7 @@ test("model-generated account mentions are neutralized before comment publicatio
   assert.ok(!publishedBody.includes(mention));
 });
 
-test("a base-branch change during comment-history retrieval aborts before publishing", async () => {
+test("a base-branch change at final pre-publication revalidation aborts append-only publication", async () => {
   const headSha = "a".repeat(40);
   const expectedBaseSha = "b".repeat(40);
   let prReads = 0;
@@ -528,6 +528,7 @@ test("a base-branch change during comment-history retrieval aborts before publis
     const target = String(url);
     if (target.endsWith("/pulls/270")) {
       prReads += 1;
+      if (prReads === 4) baseChanged = true;
       return new Response(JSON.stringify({
         state: "open",
         draft: false,
@@ -536,22 +537,13 @@ test("a base-branch change during comment-history retrieval aborts before publis
       }), { status: 200 });
     }
     if (target.includes("/pulls/270/files?")) {
-      return new Response(JSON.stringify([{
-        filename: "src/a.js",
-        patch: "@@ -1 +1 @@\\n-old\\n+new",
-      }]), { status: 200 });
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
     }
     if (target.endsWith("/chat/completions")) {
-      return new Response(JSON.stringify({
-        choices: [{ message: { content: "A sufficiently long placeholder review report." } }],
-      }), { status: 200 });
-    }
-    if (target.includes("/issues/270/comments?")) {
-      baseChanged = true;
-      return new Response(JSON.stringify([]), { status: 200 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
     }
     if (target.endsWith("/issues/270/comments") && options.method === "POST") postCalls += 1;
-    return new Response(JSON.stringify({ id: 704 }), { status: 201 });
+    throw new Error("Unexpected API operation in final pre-publication race test: " + target);
   };
 
   await assert.rejects(
@@ -569,8 +561,8 @@ test("a base-branch change during comment-history retrieval aborts before publis
     /base.*changed|different diff/i,
   );
 
-  assert.equal(prReads, 4, "the live head and base must be revalidated after comment-history retrieval");
-  assert.equal(postCalls, 0, "a report must not be published after the diff changes during comment lookup");
+  assert.equal(prReads, 4, "the final live head/base read must occur immediately before comment creation");
+  assert.equal(postCalls, 0, "a changed diff must never receive a report");
 });
 
 test("patch text cannot terminate the reviewer prompt data boundary", () => {
@@ -699,10 +691,11 @@ test("model report cannot publish active HTML, remote images, or clickable links
   assert.ok(publishedBody.includes("[image omitted]"), "removed images should leave an explicit placeholder");
 });
 
-test("duplicate bot reports for the same diff fail closed instead of updating an arbitrary comment", async () => {
+test("append-only publication ignores duplicate matching bot comments and posts a fresh report", async () => {
   const headSha = "5".repeat(40);
   const baseSha = "6".repeat(40);
   const marker = "<!-- 9router-independent-review:" + headSha + ":" + baseSha + " -->";
+  let commentHistoryReads = 0;
   let patchCalls = 0;
   let postCalls = 0;
   const fakeFetch = async (url, options = {}) => {
@@ -717,6 +710,7 @@ test("duplicate bot reports for the same diff fail closed instead of updating an
       return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
     }
     if (target.includes("/issues/274/comments?")) {
+      commentHistoryReads += 1;
       return new Response(JSON.stringify([
         { id: 801, body: marker + "\\nfirst report", user: { login: "github-actions[bot]" } },
         { id: 802, body: marker + "\\nsecond report", user: { login: "github-actions[bot]" } },
@@ -727,29 +721,28 @@ test("duplicate bot reports for the same diff fail closed instead of updating an
     return new Response(JSON.stringify({ id: 803 }), { status: 201 });
   };
 
-  await assert.rejects(
-    runReview({
-      repository: "owner/repo",
-      pullRequest: 274,
-      expectedHeadSha: headSha,
-      expectedBaseSha: baseSha,
-      githubToken: "github-test-token",
-      routerBaseUrl: "https://router.example/v1",
-      routerApiKey: "router-test-token",
-      model: "test-model",
-      fetchImpl: fakeFetch,
-    }),
-    /multiple.*report comments|ambiguous.*comment/i,
-  );
-  assert.equal(patchCalls, 0, "ambiguous ownership must never update an arbitrary bot comment");
-  assert.equal(postCalls, 0, "ambiguous ownership must not create another duplicate report");
+  await runReview({
+    repository: "owner/repo",
+    pullRequest: 274,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+  assert.equal(commentHistoryReads, 0, "existing duplicate reports must not be inspected");
+  assert.equal(patchCalls, 0, "append-only publication must never PATCH an existing report");
+  assert.equal(postCalls, 1, "the current execution must create a new report");
 });
 
-test("a rerun reconciles an ambiguous POST timeout with the already-created report comment", async () => {
+test("an ambiguous POST timeout may produce a duplicate on append-only rerun", async () => {
   const headSha = "7".repeat(40);
   const baseSha = "8".repeat(40);
   const comments = [];
   let postAttempts = 0;
+  let historyReads = 0;
   let patchAttempts = 0;
   const fakeFetch = async (url, options = {}) => {
     const target = String(url);
@@ -763,19 +756,17 @@ test("a rerun reconciles an ambiguous POST timeout with the already-created repo
       return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
     }
     if (target.includes("/issues/275/comments?")) {
+      historyReads += 1;
       return new Response(JSON.stringify(comments), { status: 200 });
     }
     if (target.endsWith("/issues/275/comments") && options.method === "POST") {
       postAttempts += 1;
       const body = JSON.parse(options.body).body;
-      comments.push({ id: 900, body, user: { login: "github-actions[bot]" } });
-      throw new Error("simulated connection reset after remote comment creation");
+      comments.push({ id: 900 + postAttempts, body, user: { login: "github-actions[bot]" } });
+      if (postAttempts === 1) throw new Error("simulated connection reset after remote comment creation");
+      return new Response(JSON.stringify({ id: 900 + postAttempts }), { status: 201 });
     }
-    if (target.endsWith("/issues/comments/900") && options.method === "PATCH") {
-      patchAttempts += 1;
-      comments[0].body = JSON.parse(options.body).body;
-      return new Response(JSON.stringify({ id: 900 }), { status: 200 });
-    }
+    if (target.includes("/issues/comments/") && options.method === "PATCH") patchAttempts += 1;
     return new Response(JSON.stringify({ id: 901 }), { status: 201 });
   };
 
@@ -791,17 +782,14 @@ test("a rerun reconciles an ambiguous POST timeout with the already-created repo
     fetchImpl: fakeFetch,
   };
 
-  await assert.rejects(
-    runReview(config),
-    /simulated connection reset after remote comment creation/,
-  );
-  assert.equal(comments.length, 1, "the simulated remote side effect must exist despite the lost response");
-
+  await assert.rejects(runReview(config), /simulated connection reset after remote comment creation/);
+  assert.equal(comments.length, 1, "the remote side effect may exist despite the lost response");
   await runReview(config);
 
-  assert.equal(postAttempts, 1, "the rerun must not create a second comment");
-  assert.equal(patchAttempts, 1, "the rerun must reconcile by updating the existing exact-marker comment");
-  assert.equal(comments.length, 1, "only one report comment must remain");
+  assert.equal(historyReads, 0, "append-only reruns must not scan history to deduplicate");
+  assert.equal(postAttempts, 2, "the rerun creates a fresh report rather than reconciling the uncertain POST");
+  assert.equal(patchAttempts, 0, "append-only publication never updates earlier comments");
+  assert.equal(comments.length, 2, "a duplicate report is an accepted at-least-once delivery limitation");
 });
 
 test("review workflow keeps per-PR serialization and bounded queue semantics explicit", () => {
@@ -1026,12 +1014,12 @@ test("oversized GitHub API bodies are rejected while streaming", async () => {
 });
 
 
-test("cumulative comment-history response budget stops pagination before publication", async () => {
+test("append-only publication is independent of arbitrarily large existing comment history", async () => {
   const headSha = "e".repeat(40);
   const baseSha = "f".repeat(40);
-  let commentPageCalls = 0;
+  let commentHistoryReads = 0;
   let commentPosts = 0;
-  const commentPage = Array.from({ length: 100 }, (_, index) => ({
+  const oversizedHistoryPage = Array.from({ length: 100 }, (_, index) => ({
     id: index + 1,
     user: { login: "ordinary-contributor" },
     body: "C".repeat(9_500),
@@ -1048,35 +1036,30 @@ test("cumulative comment-history response budget stops pagination before publica
       return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
     }
     if (target.includes("/issues/281/comments?")) {
-      commentPageCalls += 1;
-      const page = Number(new URL(target).searchParams.get("page"));
-      return new Response(JSON.stringify(page <= 5 ? commentPage : []), { status: 200 });
+      commentHistoryReads += 1;
+      return new Response(JSON.stringify(oversizedHistoryPage), { status: 200 });
     }
-    if (target.includes("/issues/281/comments") && options.method === "POST") {
+    if (target.endsWith("/issues/281/comments") && options.method === "POST") {
       commentPosts += 1;
       return new Response(JSON.stringify({ id: 905 }), { status: 201 });
     }
-    throw new Error("Unexpected API operation after the comment-history budget is exceeded.");
+    throw new Error("Unexpected API operation in append-only history-independence test: " + target);
   };
 
-  await assert.rejects(
-    runReview({
-      repository: "owner/repo",
-      pullRequest: 281,
-      expectedHeadSha: headSha,
-      expectedBaseSha: baseSha,
-      githubToken: "github-test-token",
-      routerBaseUrl: "https://router.example/v1",
-      routerApiKey: "router-test-token",
-      model: "test-model",
-      fetchImpl: fakeFetch,
-    }),
-    /GitHub API comment history exceeds the cumulative response budget/i,
-  );
-  assert.equal(commentPageCalls, 5, "the aggregate budget must stop the fifth oversized cumulative page");
-  assert.equal(commentPosts, 0, "no report may be published after an incomplete comment-history scan");
+  await runReview({
+    repository: "owner/repo",
+    pullRequest: 281,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+  assert.equal(commentHistoryReads, 0, "large comment history must not be fetched or parsed");
+  assert.equal(commentPosts, 1, "publication must proceed with one new comment");
 });
-
 
 test("non-success GitHub responses cancel unread bodies", async () => {
   let bodyCanceled = false;

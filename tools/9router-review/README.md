@@ -102,11 +102,11 @@ Each finding must use one of `SUPPORTED`, `DISPUTED`, `REJECTED`, or `UNKNOWN`. 
 
 
 
-## Latest verification — Finding 26 and hostile history coverage
-- Verified code/test head: `b07a6c44d2ae5ee2a935eca648acd4ec8d6e4ac6`.
-- Contract tests on this exact head: **39/39 PASS**, run `45040112641`, job `137262429806`; zero failures, cancellations, or skips.
-- Coverage includes ambiguous POST recovery, exact head/base marker matching, duplicate bot reports, user-authored marker spoofing, malformed history pages/records, cumulative 4 MiB history budget, 10-page completeness limit, and no-mutation assertions.
+## Latest verification — HMAC provenance hardening
+- Verified code/test head: `0684072ce56de622d23928973b0c8b25453a5eee`.
+- Contract tests on this exact head: **41/41 PASS**, run `45041183744`, job `137265779028`; zero failures, cancellations, or skips.
+- Tests verify that unsigned legacy bot markers, signatures for a different PR, and tampered signatures cannot suppress publication; a valid HMAC marker suppresses a duplicate; missing signing key fails before network access; every privileged reviewer step is gated on the dedicated secret.
 - Dependency installation and npm registry signature verification: PASS.
-- Full-history secret scans on this exact head: PASS, runs `45040117075` and `45040112648`.
+- Full-history secret scans on this exact head: PASS, runs `45041183732` and `45041187409`.
 - The privileged review job was skipped on push by design; live 9Router / `workflow_run` E2E remains UNKNOWN.
 - Main remains at `919b19ca3d3887352cdef06b03c668ead04fbce7`; PR #261 remains Draft/Open/Unmerged.

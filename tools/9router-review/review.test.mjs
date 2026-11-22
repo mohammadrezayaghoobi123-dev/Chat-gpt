@@ -1657,3 +1657,52 @@ test("privileged workflow validates the exact source run before report-only revi
   assert.equal((reviewSteps.match(/uses: actions\/checkout@/g) || []).length, 1,
     "the privileged job must have exactly one checkout, for trusted default-branch code");
 });
+
+
+test("published report explicitly expires when either reviewed snapshot SHA changes", async () => {
+  const headSha = "e".repeat(40);
+  const baseSha = "f".repeat(40);
+  let publishedBody = "";
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/291")) {
+      return new Response(JSON.stringify({
+        state: "open",
+        draft: false,
+        head: { sha: headSha },
+        base: { sha: baseSha },
+      }), { status: 200 });
+    }
+    if (target.includes("/pulls/291/files?")) {
+      return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+    }
+    if (target.endsWith("/chat/completions")) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
+    }
+    if (target.includes("/issues/291/comments?")) return new Response(JSON.stringify([]), { status: 200 });
+    if (target.endsWith("/issues/291/comments") && options.method === "POST") {
+      publishedBody = JSON.parse(options.body).body;
+      return new Response(JSON.stringify({ id: 1291 }), { status: 201 });
+    }
+    throw new Error("Unexpected API operation in snapshot-validity test: " + target);
+  };
+
+  await runReview({
+    repository: "owner/repo",
+    pullRequest: 291,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  assert.match(publishedBody, /\\*\\*Snapshot validity:\\*\\*/);
+  assert.match(publishedBody, /superseded/i);
+  assert.match(publishedBody, /either the reviewed head SHA or base SHA changes/i);
+  assert.ok(publishedBody.includes("**Reviewed head SHA:** " + headSha));
+  assert.ok(publishedBody.includes("**Reviewed base SHA:** " + baseSha));
+});

@@ -3055,8 +3055,8 @@ test("reconciles all 301 immutable changed paths when Compare API exposes only i
   const baseSha = "b".repeat(40);
   const baseTreeSha = "c".repeat(40);
   const headTreeSha = "d".repeat(40);
-  const beforeText = "const boundaryValue = 1;\\n";
-  const afterText = "const boundaryValue = 2;\\n";
+  const beforeText = "const boundaryValue = 1;\n";
+  const afterText = "const boundaryValue = 2;\n";
   const blobSha = value => {
     const bytes = Buffer.from(value, "utf8");
     return createHash("sha1")
@@ -3078,7 +3078,7 @@ test("reconciles all 301 immutable changed paths when Compare API exposes only i
     status: "modified",
     additions: 1,
     deletions: 1,
-    patch: "@@ -1 +1 @@\\n-const boundaryValue = 1;\\n+const boundaryValue = 2;",
+    patch: "@@ -1 +1 @@\n-const boundaryValue = 1;\n+const boundaryValue = 2;",
   }));
   let compareCalls = 0;
   let blobCalls = 0;

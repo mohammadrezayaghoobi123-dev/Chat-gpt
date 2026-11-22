@@ -740,6 +740,58 @@ test("multiple matching bot reports fail closed without choosing one", async () 
   assert.equal(postCalls, 0, "ambiguous duplicate history must block publication");
 });
 
+test("malformed comment-history pages and records fail closed before publication", async () => {
+  let historyReads = 0;
+  let commentPosts = 0;
+  const invalidCases = [
+    { pullRequest: 287, history: { malformed: true } },
+    { pullRequest: 288, history: [{ id: 1, body: "missing author identity" }] },
+  ];
+
+  for (const invalidCase of invalidCases) {
+    const fakeFetch = async (url, options = {}) => {
+      const target = String(url);
+      if (target.endsWith("/pulls/" + invalidCase.pullRequest)) {
+        return new Response(JSON.stringify({
+          state: "open",
+          draft: false,
+          head: { sha: "a".repeat(40) },
+          base: { sha: "b".repeat(40) },
+        }), { status: 200 });
+      }
+      if (target.includes("/pulls/" + invalidCase.pullRequest + "/files?")) {
+        return new Response(JSON.stringify([{ filename: "src/a.js", patch: "@@ -1 +1 @@\\n-old\\n+new" }]), { status: 200 });
+      }
+      if (target.endsWith("/chat/completions")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] }), { status: 200 });
+      }
+      if (target.includes("/issues/" + invalidCase.pullRequest + "/comments?")) {
+        historyReads += 1;
+        return new Response(JSON.stringify(invalidCase.history), { status: 200 });
+      }
+      if (target.endsWith("/issues/" + invalidCase.pullRequest + "/comments") && options.method === "POST") {
+        commentPosts += 1;
+      }
+      return new Response(JSON.stringify({ id: 908 }), { status: 201 });
+    };
+
+    await assert.rejects(runReview({
+      repository: "owner/repo",
+      pullRequest: invalidCase.pullRequest,
+      expectedHeadSha: "a".repeat(40),
+      expectedBaseSha: "b".repeat(40),
+      githubToken: "github-test-token",
+      routerBaseUrl: "https://router.example/v1",
+      routerApiKey: "router-test-token",
+      model: "test-model",
+      fetchImpl: fakeFetch,
+    }), /invalid comment-history page|incomplete comment-history record/i);
+  }
+
+  assert.equal(historyReads, 2, "each malformed history response must be rejected during reconciliation");
+  assert.equal(commentPosts, 0, "malformed or incomplete history must never be treated as an empty history");
+});
+
 test("an ambiguous POST timeout is reconciled before rerun publication", async () => {
   const headSha = "7".repeat(40);
   const baseSha = "8".repeat(40);

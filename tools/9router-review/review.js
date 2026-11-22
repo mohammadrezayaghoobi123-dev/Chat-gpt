@@ -162,11 +162,12 @@ export async function runReview({
     throw new Error("Pull request base branch changed during model review; refusing to publish a report for a different diff.");
   }
 
-  const marker = REVIEW_MARKER + expectedHeadSha + " -->";
+  const marker = REVIEW_MARKER + expectedHeadSha + ":" + expectedBaseSha + " -->";
   const body = [
     marker,
     "## Independent 9Router review",
     "**Reviewed head SHA:** " + expectedHeadSha,
+    "**Reviewed base SHA:** " + expectedBaseSha,
     "",
     report.trim(),
     "",
@@ -193,5 +194,5 @@ export async function runReview({
     token: githubToken,
     body: { body },
   });
-  return { reviewedHeadSha: expectedHeadSha, updatedExistingComment: Boolean(prior) };
+  return { reviewedHeadSha: expectedHeadSha, reviewedBaseSha: expectedBaseSha, updatedExistingComment: Boolean(prior) };
 }

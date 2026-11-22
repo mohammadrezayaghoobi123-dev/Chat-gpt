@@ -14,7 +14,7 @@ test("review prompt binds the exact PR head SHA and requires evidence-based verd
   assert.match(messages[0].content, /SUPPORTED.*DISPUTED.*REJECTED.*UNKNOWN/s);
   assert.match(messages[0].content, /counter-evidence/i);
   assert.match(messages[0].content, /falsification/i);
-  assert.match(messages[1].content, /owner\\/repo/);
+  assert.ok(messages[1].content.includes("owner/repo"));
   assert.match(messages[1].content, /Pull request: #17/);
   assert.match(messages[1].content, new RegExp("a".repeat(40)));
 });

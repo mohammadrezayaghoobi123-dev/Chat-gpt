@@ -262,9 +262,9 @@ async function readJsonResponseLimited(response, maxBytes, source = "9Router") {
     offset += chunk.byteLength;
   }
   try {
-    return JSON.parse(new TextDecoder().decode(bytes));
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
-    throw new Error("9Router returned invalid JSON; no comment was written.");
+    throw new Error(source + " returned invalid UTF-8 or JSON; no comment was written.");
   }
 }
 

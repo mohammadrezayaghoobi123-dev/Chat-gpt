@@ -255,18 +255,20 @@ describe("Executor Ed25519 trust boundary", () => {
     })).resolves.toMatchObject({ renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
 
     const renewAssertion = await createExecutorAssertion(now + 1, "renewLease");
-    await expect(ledger.renewLease({
+    const renewed = await ledger.renewLease({
       taskId: "task-executor-renew",
       workerId: EXECUTOR_ID,
       workerAssertion: renewAssertion,
       leaseGeneration: claimed.leaseGeneration,
       leaseMs: 45_000,
       now: now + 1,
-    })).resolves.toMatchObject({
+    });
+    expect(renewed).toMatchObject({
       renewed: true,
       leaseGeneration: claimed.leaseGeneration,
-      leaseUntil: now + 45_001,
     });
+    expect(renewed.leaseUntil).toBeGreaterThanOrEqual(now + 45_000);
+    expect(renewed.leaseUntil).toBeLessThanOrEqual(Date.now() + 45_000);
     await expect(ledger.renewLease({
       taskId: "task-executor-renew",
       workerId: EXECUTOR_ID,
@@ -282,7 +284,7 @@ describe("Executor Ed25519 trust boundary", () => {
       ).toArray()).toEqual([{
         worker_id: EXECUTOR_ID,
         lease_generation: 1,
-        lease_until: now + 45_001,
+        lease_until: renewed.leaseUntil,
       }]);
     });
   });

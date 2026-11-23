@@ -868,7 +868,6 @@ describe("Owner command atomic Ledger contract", () => {
     );
     const postReleaseClaimJti = assertionJti(postReleaseClaimAssertion);
     const postReleaseClaim = await ledger.claimTask({
-      taskId,
       workerId,
       workerAssertion: postReleaseClaimAssertion,
       leaseMs: 30_000,

@@ -61,10 +61,12 @@ describe("OrchestratorLedger claim candidate index", () => {
         "SELECT name FROM sqlite_master WHERE type = 'table'",
       ).toArray().map(row => row.name);
       expect(tables).toContain("orchestrator_claim_candidates");
+      expect(tables).toContain("orchestrator_claim_cursors");
       const indexes = state.storage.sql.exec(
         "SELECT name FROM sqlite_master WHERE type = 'index'",
       ).toArray().map(row => row.name);
       expect(indexes).toContain("orchestrator_claim_candidates_by_executor_created");
+      expect(indexes).toContain("orchestrator_claim_cursors_by_expiry");
       const columns = state.storage.sql.exec(
         "PRAGMA table_info(orchestrator_claim_candidates)",
       ).toArray().map(row => row.name);
@@ -498,6 +500,94 @@ describe("OrchestratorLedger cursor integrity", () => {
       cursor: first.nextCursor,
     });
     expect(resumed).toMatchObject({ claimed: true, task: { taskId: "bound-128" } });
+  });
+});
+
+describe("OrchestratorLedger cursor expiry and storage bounds", () => {
+  it("rejects and deletes a continuation token after its fixed lifetime", async () => {
+    const ledger = ledgerFor("claim-candidate-expired-cursor-token");
+    const taskIds = Array.from({ length: 129 }, (_value, index) =>
+      "expiry-" + String(index).padStart(3, "0"),
+    );
+    for (const taskId of taskIds) {
+      await createTask(ledger, taskId, "agent:worker-1");
+    }
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.transactionSync(() => {
+        for (const taskId of taskIds.slice(0, 128)) {
+          state.storage.sql.exec(
+            "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
+            taskId, "agent:other-worker", now + 60_000, now,
+          );
+        }
+      });
+    });
+    const first = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 30_000,
+      now,
+    });
+    expect(first.reason).toBe("CLAIM_SCAN_BUDGET_EXHAUSTED");
+    const cursorHash = await sha256Canonical({ token: first.nextCursor });
+    const expiredAt = now + 15 * 60_000 + 1;
+    const result = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: expiredAt,
+      }),
+      leaseMs: 30_000,
+      now: expiredAt,
+      cursor: first.nextCursor,
+    });
+    expect(result).toEqual({ claimed: false, reason: "INVALID_CLAIM_CURSOR" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_claim_cursors WHERE cursor_hash = ?",
+        cursorHash,
+      ).one().count).toBe(0);
+    });
+  });
+
+  it("deletes no more than 64 expired cursor records in one claim transaction", async () => {
+    const ledger = ledgerFor("claim-candidate-bounded-cursor-cleanup");
+    await ledger.ping();
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.transactionSync(() => {
+        for (let index = 0; index < 65; index++) {
+          state.storage.sql.exec(
+            "INSERT INTO orchestrator_claim_cursors (cursor_hash, executor_id, snapshot_sequence, created_at, task_id, expires_at) VALUES (?, ?, 0, ?, ?, ?)",
+            String(index).padStart(64, "0"), "agent:worker-1", now - 100,
+            "expired-cursor-" + index, now - 1,
+          );
+        }
+      });
+    });
+    const result = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 30_000,
+      now,
+    });
+    expect(result).toEqual({
+      claimed: false,
+      reason: "NO_TASK_AVAILABLE",
+      nextCursor: null,
+      budgetExhausted: false,
+      scanExhausted: true,
+      candidatesExamined: 0,
+      candidateRowsRead: 0,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_claim_cursors WHERE expires_at <= ?",
+        now,
+      ).one().count).toBe(1);
+    });
   });
 });
 

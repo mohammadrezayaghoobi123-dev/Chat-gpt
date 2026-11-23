@@ -982,6 +982,74 @@ it("consumes a signed lease-renewal assertion once and rejects replay", async ()
   });
 });
 
+it("characterizes whether a backdated Agent timestamp can renew a lease after wall-clock expiry", async () => {
+  const ledger = ledgerFor("ledger-agent-lease-renewal-clock-rollback");
+  await createTask(ledger, {
+    task: task(), idempotencyKey: "task-create-agent-lease-clock-rollback",
+    inputHash: "a".repeat(64), now,
+  });
+  const claimed = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(claimed).toMatchObject({ claimed: true, leaseGeneration: 1, leaseUntil: now + 30_000 });
+
+  const wallClockAfterExpiry = now + 60_000;
+  const backdatedLedgerTime = now + 10_000;
+  const wallClock = vi.spyOn(Date, "now").mockReturnValue(wallClockAfterExpiry);
+  try {
+    const assertion = await createWorkerAssertion({
+      subject: "agent:worker-1",
+      role: "agent",
+      operation: "renewLease",
+      nowMs: backdatedLedgerTime,
+      jti: "jti-agent-lease-clock-rollback-0001",
+    });
+    expect(Date.now()).toBe(wallClockAfterExpiry);
+
+    const renewal = await ledger.renewLease({
+      taskId: "task-0001",
+      workerId: "agent:worker-1",
+      workerAssertion: assertion,
+      leaseGeneration: claimed.leaseGeneration,
+      leaseMs: 60_000,
+      now: backdatedLedgerTime,
+    });
+
+    // This records the current contract, not an endorsement: the Ledger accepts
+    // caller time for ordinary Agents, so a backdated timestamp sees the lease
+    // as live even though the actual runtime wall clock is beyond lease expiry.
+    expect(renewal).toMatchObject({
+      renewed: true,
+      leaseGeneration: 1,
+      leaseUntil: backdatedLedgerTime + 60_000,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until, updated_at FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-0001",
+      ).one()).toEqual({
+        worker_id: "agent:worker-1",
+        lease_generation: 1,
+        lease_until: backdatedLedgerTime + 60_000,
+        updated_at: backdatedLedgerTime,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
+        "jti-agent-lease-clock-rollback-0001",
+      ).toArray()).toHaveLength(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+        "task-0001",
+      ).one().count).toBe(1);
+    });
+  } finally {
+    wallClock.mockRestore();
+  }
+});
+
 it("rejects caller-supplied boolean identity for lease renewal", async () => {
   const ledger = ledgerFor("ledger-renew-forged-identity");
   await createTask(ledger, { task: task(), idempotencyKey: "task-create-renew-forged", inputHash: "f".repeat(64), now });

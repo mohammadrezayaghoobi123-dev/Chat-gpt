@@ -956,4 +956,68 @@ describe("Executor Ed25519 trust boundary", () => {
       resumeLeases: 1,
     });
   });
+
+  it("rejects an Executor claim when its assertion expires during asynchronous signature verification", async () => {
+    const ledger = ledgerFor("executor-ed25519-assertion-expiry-during-verification");
+    const taskId = "task-executor-expiry-during-verification";
+    await expect(createScheduledTask(ledger, taskId, EXECUTOR_ID))
+      .resolves.toMatchObject({ created: true });
+
+    const issuedAt = Math.floor(Date.now() / 1_000) * 1_000;
+    const assertion = await createExecutorAssertion(issuedAt, "claimTask");
+    let ledgerClock = issuedAt + 59_000;
+    const subtle = crypto.subtle;
+    const originalVerify = subtle.verify.bind(subtle);
+    const hadOwnVerify = Object.prototype.hasOwnProperty.call(subtle, "verify");
+    const originalDescriptor = Object.getOwnPropertyDescriptor(subtle, "verify");
+    const realNow = Date.now;
+    let verificationCalls = 0;
+
+    Object.defineProperty(subtle, "verify", {
+      configurable: true,
+      writable: true,
+      value: (...args) => {
+        verificationCalls += 1;
+        const pendingVerification = originalVerify(...args);
+        ledgerClock = issuedAt + 66_000;
+        return pendingVerification;
+      },
+    });
+    Date.now = () => ledgerClock;
+
+    try {
+      const result = await ledger.claimTask({
+        workerId: EXECUTOR_ID,
+        workerAssertion: assertion,
+        leaseMs: 30_000,
+        now: issuedAt,
+        taskId,
+      });
+      Date.now = realNow;
+
+      expect(result).toMatchObject({
+        claimed: false,
+        reason: "AUTHENTICATED_WORKER_REQUIRED",
+      });
+      expect(verificationCalls).toBe(1);
+
+      await runInDurableObject(ledger, async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND operation = ?",
+          EXECUTOR_ID, "claimTask",
+        ).one().count).toBe(0);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ?",
+          taskId,
+        ).one().count).toBe(0);
+      });
+    } finally {
+      Date.now = realNow;
+      if (hadOwnVerify) {
+        Object.defineProperty(subtle, "verify", originalDescriptor);
+      } else {
+        delete subtle.verify;
+      }
+    }
+  });
 });

@@ -138,4 +138,10 @@ test("executor signer fixes its principal and role and permits only the initial 
       error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
     );
   }
+
+  const ambiguousKeySet = JSON.stringify({ undefined: key });
+  await assert.rejects(
+    createExecutorWorkerAssertion(ambiguousKeySet, undefined, { operation: "claimTask", nowMs }),
+    error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
+  );
 });

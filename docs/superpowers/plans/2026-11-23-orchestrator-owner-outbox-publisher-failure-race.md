@@ -90,7 +90,7 @@ Each mutant must start from the exact code-tested candidate and change one invar
 - [x] **Step 2: Verify full CI on the exact final PR head.**
 - [x] **Step 3: Verify Gitleaks PR diff and record full-history findings without disclosing secret values/fingerprints.**
 - [x] **Step 4: Verify PR #307 and predecessor PR #300 remain Draft/open/unmerged and main SHA is unchanged.**
-- [ ] **Step 5: Report exact evidence and residual risks; do not merge or deploy.**
+- [x] **Step 5: Report exact evidence and residual risks; do not merge or deploy.**
 
 
 ## Completed Execution Evidence

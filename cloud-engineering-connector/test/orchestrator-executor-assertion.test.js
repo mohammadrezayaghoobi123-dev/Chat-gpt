@@ -25,7 +25,16 @@ async function fixture() {
 }
 
 async function loadApi() {
-  return import("../orchestrator-executor-assertion.js");
+  try {
+    return await import("../orchestrator-executor-assertion.js");
+  } catch (error) {
+    if (error?.code === "ERR_MODULE_NOT_FOUND") return {};
+    throw error;
+  }
+}
+
+function assertApi(api) {
+  assertApi(api);
 }
 
 test("Executor Ed25519 assertion round-trips with a public-only verifier key set", async () => {

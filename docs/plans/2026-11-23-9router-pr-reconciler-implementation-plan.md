@@ -62,6 +62,7 @@ The plan is grounded in the approved design branch and the inspected implementat
 **Interfaces:**
 - `createReviewMarker({ repository, pullRequest, headSha, baseSha, key }) -> string`
 - `verifyReviewMarker(marker, { repository, pullRequest, keys }) -> { headSha, baseSha } | null`
+- `resolveReviewMarkerKeys({ reviewMarkerKey, previousReviewMarkerKey, previousReviewMarkerKeyValidUntil, now }) -> { keys, previousKeyAccepted }`
 - `readAuthenticatedReviewMarkers({ fetchImpl, githubApiBase, repository, pullRequest, githubToken, reviewMarkerKeys, deadlineAt }) -> { markers, pagesRead, totalBytes }`
 - Extend `runReview` with required `expectedRepositoryId` (positive safe integer).
 - The existing `createReviewMarker` export from `review.js` remains available as a compatibility re-export.
@@ -84,7 +85,7 @@ Expected RED: the test fails because the shared historical tuple-verification in
 
 Move marker format, payload construction, validation, and HMAC verification into `review-marker.js`. Preserve the existing v2 marker bytes and payload exactly; do not introduce a marker-version migration. Validate key length and identity inputs as the current implementation does. Use `timingSafeEqual` only after confirming equal signature byte lengths.
 
-Refactor `review.js` to import the shared implementation and re-export `createReviewMarker`. Replace the private exact-pair predicate with the shared verifier plus an explicit exact-pair comparison.
+Refactor `review.js` to import the shared implementation and re-export `createReviewMarker`. Replace the private exact-pair predicate with the shared verifier plus an explicit exact-pair comparison. Remove the duplicated inline active/previous-key parsing from `runReview` and call `resolveReviewMarkerKeys` instead.
 
 - [ ] **Step 3: Generalize bounded comment-history evidence**
 
@@ -155,7 +156,22 @@ git commit -m "refactor: share signed review marker verification"
 }
 ```
 
-The numeric values above describe field types only; production checkpoint values must be read from verified GitHub context, never copied from this example.
+Checkpoint fields and validation rules:
+
+| Field | Type and invariant |
+|---|---|
+| `schemaVersion` | Integer; exactly `1` for this implementation |
+| `repositoryId` | Positive safe integer from trusted workflow context |
+| `workflowId` | Positive safe integer from GitHub Actions workflow metadata |
+| `workflowPath` | Exact path `.github/workflows/9router-pr-reconciler.yml` |
+| `workflowSha` | Exact 40-character SHA of the trusted workflow source revision |
+| `generationId` | Positive safe integer; the run ID that started the scan generation |
+| `highWaterPullRequestNumber` | Positive safe integer captured at generation start |
+| `afterCursor` | Null only before the first page; otherwise a non-empty opaque GraphQL edge cursor |
+| `afterPullRequestNumber` | Non-negative safe integer for the last fully processed edge |
+| `createdAt` | Canonical UTC ISO-8601 timestamp |
+
+The checkpoint also carries source-run provenance in its enclosing artifact receipt: source run ID, run attempt, repository ID, workflow ID/path, event, conclusion, branch, workflow SHA, artifact name, and GitHub artifact digest. Production values are derived from verified GitHub context and API metadata.
 
 - [ ] **Step 1: Add failing checkpoint contract tests**
 
@@ -228,7 +244,7 @@ git commit -m "feat: add bounded cursor-based PR discovery"
 
 **Interfaces:**
 - `classifyStaleReviewEvidence({ currentHeadSha, currentBaseSha, authenticatedMarkers }) -> { status, reason, candidate }`
-- `discoverReconcilerCandidates({ repository, repositoryId, githubToken, checkpoint, maxRecords: 200, maxReviewAttempts: 3, fetchImpl, now }) -> { candidates, nextCheckpoint, scanStatus, counters }`
+- `discoverReconcilerCandidates({ repository, repositoryId, githubToken, reviewMarkerKeys, checkpoint, maxRecords: 200, maxReviewAttempts: 3, fetchImpl, now }) -> { candidates, nextCheckpoint, scanStatus, counters }`
 - `validateCandidateSnapshot({ candidate, livePullRequest, repositoryId }) -> { valid, reason }`
 - `runReconcilerReview({ candidate, reviewerEnvironment, runReviewImpl }) -> structured disposition`
 
@@ -269,7 +285,7 @@ Use mocked GitHub GraphQL and REST responses plus a stubbed `runReview` boundary
 
 - [ ] **Step 4: Implement orchestration and candidate output**
 
-Implement `reconciler.js` as the coordinator:
+Implement `reconciler.js` as the coordinator. Resolve marker keys through `resolveReviewMarkerKeys`; the discovery job receives only the active and optional previous marker-key secrets plus the expiry variable, never the 9Router endpoint or API key.
 1. Load/validate checkpoint or bootstrap.
 2. Capture or validate scan-generation high-water boundary.
 3. Enumerate no more than 200 PR records.
@@ -279,7 +295,7 @@ Implement `reconciler.js` as the coordinator:
 7. Stop after collecting at most three candidates, leaving the cursor immediately before the next unprocessed candidate.
 8. Return a structured run disposition and counters.
 
-The discovery runner writes a schema-validated candidate JSON output and a proposed checkpoint artifact file under `RUNNER_TEMP`. It must not call 9Router and must not publish comments. Validate all candidate fields before writing GitHub Actions outputs.
+The discovery runner writes a schema-validated candidate JSON output and a proposed checkpoint artifact file under `RUNNER_TEMP`. It must not call 9Router and must not publish comments. Validate all candidate fields before writing GitHub Actions outputs. The marker-key secrets are scoped only to the discovery process step; they must not appear in outputs, artifacts, logs, or error messages.
 
 - [ ] **Step 5: Verify focused orchestration tests**
 
@@ -351,7 +367,7 @@ The recommended initial artifact retention is seven days, sufficient for normal 
 - [ ] **Step 3: Implement the least-privilege workflow jobs**
 
 Create a three-part workflow:
-1. **Discover:** checkout trusted default-branch code, validate prior checkpoint, enumerate candidates, and upload the proposed checkpoint/metadata artifact. This job has read-only permissions and no 9Router secret.
+1. **Discover:** checkout trusted default-branch code, validate prior checkpoint, enumerate candidates, and upload the proposed checkpoint/metadata artifact. This job has read-only permissions and receives only the HMAC marker-key secrets required to authenticate prior reports; it receives no 9Router endpoint or API-key secret.
 2. **Review matrix:** one candidate per job, maximum three parallel jobs, per-PR concurrency group shared with the existing reviewer. This job checks out only trusted default-branch code and invokes `run-review.mjs` with exact candidate values and the expected repository ID. Only this job receives the 9Router and marker secrets.
 3. **Finalize:** run only after discovery and candidate review jobs reach safe terminal outcomes. Download the same-run proposed checkpoint artifact, validate its schema and run metadata, and publish a checkpoint artifact for the next run. If any candidate outcome is uncertain, do not advance past that candidate.
 

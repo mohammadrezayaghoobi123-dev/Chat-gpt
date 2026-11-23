@@ -1414,7 +1414,7 @@ export class OrchestratorLedger extends DurableObject {
       ).toArray()[0];
       if (existing) {
         if (existing.event_type === eventType && existing.schema_version === schemaVersion &&
-            existing.envelope_sha256 === envelopeSha256) {
+            true /* MUTATION: ignore envelope digest */) {
           return { recorded: false, replay: true, eventId };
         }
         return { recorded: false, conflict: true, reason: "OUTBOX_EVENT_ID_CONFLICT" };

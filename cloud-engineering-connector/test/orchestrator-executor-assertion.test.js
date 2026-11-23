@@ -30,7 +30,7 @@ async function fixture() {
       publicKey,
       subject: "orchestrator-executor",
       role: "agent",
-      operations: ["claimTask"],
+      operations: ["claimTask", "renewLease", "releaseLease"],
     },
   });
   return { pair, privateKey, publicKey, publicKeySet };

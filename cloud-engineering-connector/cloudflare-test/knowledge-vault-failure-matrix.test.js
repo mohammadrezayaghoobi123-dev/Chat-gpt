@@ -61,7 +61,7 @@ function authenticatedEnv(overrides = {}) {
   };
 }
 
-async function readProposalState(proposalId, idempotencyKey, keyHash) {
+async function readProposalState(proposalId, idempotencyKey, keyHash, writeControlName = "create-change-pr-global") {
   const knowledgeStore = env.KNOWLEDGE_STORE.get(
     env.KNOWLEDGE_STORE.idFromName("tenant:owner"),
   );
@@ -79,7 +79,7 @@ async function readProposalState(proposalId, idempotencyKey, keyHash) {
   }));
 
   const writeControl = env.WRITE_CONTROL.get(
-    env.WRITE_CONTROL.idFromName("create-change-pr-global"),
+    env.WRITE_CONTROL.idFromName(writeControlName),
   );
   const writes = await runInDurableObject(writeControl, instance => ({
     operations: instance.ctx.storage.sql.exec(
@@ -922,6 +922,16 @@ describe("Knowledge Vault hostile failure matrix", () => {
     const path = "knowledge/tenants/owner/proposal-concurrent-identical.md";
     const content = "# Concurrent identical proposal\nBoth callers carry the exact same payload.\n";
     const prNumber = 991001;
+    const writeControlName = "create-change-pr-global:" + proposalId;
+    const writeControlBinding = {
+      idFromName(name) {
+        if (name !== "create-change-pr-global") throw new Error("Unexpected WriteControl binding name.");
+        return env.WRITE_CONTROL.idFromName(writeControlName);
+      },
+      get(id) {
+        return env.WRITE_CONTROL.get(id);
+      },
+    };
     const originalFetch = globalThis.fetch;
     const github = createGitHubWriteMock({
       filePath: path,
@@ -962,7 +972,7 @@ describe("Knowledge Vault hostile failure matrix", () => {
     try {
       firstPromise = observeRequest(worker.fetch(proposalRequest({
         proposalId, path, content, id: 9801,
-      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding })));
+      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding, WRITE_CONTROL: writeControlBinding })));
 
       await recordGate.firstArrived;
       const githubCallsBeforeReplay = github.calls.length;
@@ -986,6 +996,7 @@ describe("Knowledge Vault hostile failure matrix", () => {
         proposalId,
         "vault-" + proposalId,
         keyHash,
+        writeControlName,
       );
       const firstResult = first.error
         ? null
@@ -1083,6 +1094,16 @@ describe("Knowledge Vault hostile failure matrix", () => {
     const content = "# Concurrent proposal identity\nThe original operation remains authoritative.\n";
     const changedContent = content + "Conflicting concurrent payload.\n";
     const prNumber = 992001;
+    const writeControlName = "create-change-pr-global:" + proposalId;
+    const writeControlBinding = {
+      idFromName(name) {
+        if (name !== "create-change-pr-global") throw new Error("Unexpected WriteControl binding name.");
+        return env.WRITE_CONTROL.idFromName(writeControlName);
+      },
+      get(id) {
+        return env.WRITE_CONTROL.get(id);
+      },
+    };
     const originalFetch = globalThis.fetch;
     const github = createGitHubWriteMock({
       filePath: path,
@@ -1120,7 +1141,7 @@ describe("Knowledge Vault hostile failure matrix", () => {
     try {
       firstPromise = observeRequest(worker.fetch(proposalRequest({
         proposalId, path, content, id: 9811,
-      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding })));
+      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding, WRITE_CONTROL: writeControlBinding })));
 
       await recordGate.firstArrived;
       const githubCallsBeforeConflict = github.calls.length;
@@ -1131,6 +1152,7 @@ describe("Knowledge Vault hostile failure matrix", () => {
         proposalId,
         "vault-" + proposalId,
         keyHash,
+        writeControlName,
       );
       const conflictError = conflict.error
         ? null
@@ -1145,6 +1167,7 @@ describe("Knowledge Vault hostile failure matrix", () => {
         proposalId,
         "vault-" + proposalId,
         keyHash,
+        writeControlName,
       );
 
       expect({

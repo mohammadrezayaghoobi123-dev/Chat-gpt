@@ -204,3 +204,12 @@ commits = ["168a5097fa6c50f4351c5d753ee0358403175a7d"]
 paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger-tenant-scope-migration\.test\.js$''']
 regexTarget = "line"
 regexes = ['''^\s*idempotency_key: "legacy-idempotency-1",$''']
+
+[[allowlists]]
+description = "Synthetic API-key-shaped entropy canary used only by a negative-control Gitleaks experiment; exact commit, test path, rule, and complete comment line only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["04d76f8fd734eaf4053c86461e1204caf18d9c9c"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-owner-command\.test\.js$''']
+regexTarget = "line"
+regexes = ['''^// API_KEY = "0123456789abcdef0123456789abcdef"$''']

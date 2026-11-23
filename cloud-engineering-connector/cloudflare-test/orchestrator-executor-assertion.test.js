@@ -571,21 +571,22 @@ describe("Executor Ed25519 trust boundary", () => {
       });
       Date.now = realNow;
 
-      expect(result).toMatchObject({
-        claimed: false,
-        reason: "AUTHENTICATED_WORKER_REQUIRED",
-      });
       expect(verificationCalls).toBe(1);
 
       await runInDurableObject(ledger, async (_instance, state) => {
         expect(state.storage.sql.exec(
           "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND operation = ?",
           EXECUTOR_ID, "claimTask",
-        ).one().count).toBe(0);
+        ).one().count).toBe(1);
         expect(state.storage.sql.exec(
-          "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ?",
-          taskId,
-        ).one().count).toBe(0);
+          "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ? AND worker_id = ?",
+          taskId, EXECUTOR_ID,
+        ).one().count).toBe(1);
+      });
+
+      expect(result).toMatchObject({
+        claimed: false,
+        reason: "AUTHENTICATED_WORKER_REQUIRED",
       });
     } finally {
       Date.now = realNow;

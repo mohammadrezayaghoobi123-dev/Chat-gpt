@@ -82,7 +82,7 @@ export async function verifyWorkerAssertion(keySet, token, expected) {
 }
 
 const SCHEDULED_SIGNER_POLICY = Object.freeze({
-  "orchestrator-scheduler": Object.freeze({ system: Object.freeze(["createTask"]) }),
+  "orchestrator-scheduler": Object.freeze({ system: Object.freeze(["createTask"]), agent: Object.freeze(["transitionTask"]) }),
   "orchestrator-outbox-publisher": Object.freeze({
     publisher: Object.freeze(["claimOutbox", "failOutbox", "completeOutbox"]),
   }),

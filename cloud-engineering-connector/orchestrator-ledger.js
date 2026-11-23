@@ -1169,7 +1169,6 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
-    now = verifiedAssertion.trustedNow ?? now;
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];

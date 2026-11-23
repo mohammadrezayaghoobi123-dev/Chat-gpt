@@ -16,11 +16,11 @@ const workerKey = Uint8Array.from(
   "3031323334353637383961626364656630313233343536373839616263646566".match(/../g),
   byte => Number.parseInt(byte, 16),
 );
-async function workerAssertion(subject, role, operation, at = now) {
+async function workerAssertion(subject, role, operation, at = now, jti = "worker-jti-" + crypto.randomUUID()) {
   const claims = {
     v: 1, iss: "chat-gpt111-worker", aud: "orchestrator-ledger",
     sub: subject, role, op: operation, iat: Math.floor(at / 1000),
-    exp: Math.floor(at / 1000) + 60, jti: "worker-jti-" + crypto.randomUUID(),
+    exp: Math.floor(at / 1000) + 60, jti,
   };
   const payload = btoa(String.fromCharCode(...new TextEncoder().encode(canonicalJson(claims))))
     .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
@@ -2134,6 +2134,163 @@ describe("Owner command atomic Ledger contract", () => {
         consumer_id: "orchestrator-outbox-consumer",
       }]);
     });
+  });
+
+
+  it("rejects a reused JTI across different worker identities, roles, and operations", async () => {
+    const sharedJti = "worker-jti-cross-domain-00000001";
+    const publisherId = "orchestrator-outbox-publisher";
+    const consumerId = "orchestrator-outbox-consumer";
+
+    async function prepareReceiptLedger(name, taskId, eventId, idempotencyKey) {
+      const ledger = ledgerFor(name);
+      await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+      const payload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
+      await ledger.enqueueOutbox({
+        eventId,
+        idempotencyKey,
+        taskId,
+        eventType: "task.transitioned",
+        payload,
+        workerId: "agent:worker-1",
+        workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox"),
+        now,
+      });
+      return { ledger, payload };
+    }
+
+    // Direction A: publisher assertion consumes the JTI first.
+    {
+      const taskId = "task-cross-domain-publisher-first";
+      const eventId = "event-cross-domain-publisher-first";
+      const idempotencyKey = "key-cross-domain-publisher-first";
+      const { ledger, payload } = await prepareReceiptLedger(
+        "cross-domain-publisher-first", taskId, eventId, idempotencyKey,
+      );
+      const publisherAssertion = await workerAssertion(
+        publisherId, "publisher", "claimOutbox", now + 1, sharedJti,
+      );
+      const consumerAssertion = await workerAssertion(
+        consumerId, "consumer", "recordOutboxReceipt", now + 1, sharedJti,
+      );
+
+      const claimed = await ledger.claimOutbox({
+        workerId: publisherId,
+        workerAssertion: publisherAssertion,
+        leaseMs: 30_000,
+        now: now + 1,
+      });
+      expect(claimed).toMatchObject({ claimed: true, workerId: publisherId, leaseGeneration: 1 });
+
+      const receipt = await ledger.recordOutboxReceipt({
+        eventId,
+        eventType: "task.transitioned",
+        idempotencyKey,
+        taskId,
+        payload,
+        createdAt: now,
+        schemaVersion: 1,
+        envelopeSha256: "a".repeat(64),
+        consumerId,
+        workerAssertion: consumerAssertion,
+        now: now + 2,
+      });
+      expect(receipt).toMatchObject({
+        recorded: false,
+        reason: "AUTHENTICATED_WORKER_REQUIRED",
+      });
+
+      await runInDurableObject(ledger, async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          "SELECT jti, subject, role, operation FROM orchestrator_consumed_assertions WHERE jti = ?",
+          sharedJti,
+        ).toArray()).toEqual([{
+          jti: sharedJti,
+          subject: publisherId,
+          role: "publisher",
+          operation: "claimOutbox",
+        }]);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+          eventId,
+        ).one().count).toBe(0);
+        expect(state.storage.sql.exec(
+          "SELECT status, lease_worker_id, lease_generation FROM orchestrator_outbox_events WHERE event_id = ?",
+          eventId,
+        ).one()).toMatchObject({
+          status: "IN_PROGRESS",
+          lease_worker_id: publisherId,
+          lease_generation: 1,
+        });
+      });
+    }
+
+    // Direction B: consumer assertion consumes the same JTI first.
+    {
+      const taskId = "task-cross-domain-consumer-first";
+      const eventId = "event-cross-domain-consumer-first";
+      const idempotencyKey = "key-cross-domain-consumer-first";
+      const { ledger, payload } = await prepareReceiptLedger(
+        "cross-domain-consumer-first", taskId, eventId, idempotencyKey,
+      );
+      const publisherAssertion = await workerAssertion(
+        publisherId, "publisher", "claimOutbox", now + 1, sharedJti,
+      );
+      const consumerAssertion = await workerAssertion(
+        consumerId, "consumer", "recordOutboxReceipt", now + 1, sharedJti,
+      );
+
+      const receipt = await ledger.recordOutboxReceipt({
+        eventId,
+        eventType: "task.transitioned",
+        idempotencyKey,
+        taskId,
+        payload,
+        createdAt: now,
+        schemaVersion: 1,
+        envelopeSha256: "b".repeat(64),
+        consumerId,
+        workerAssertion: consumerAssertion,
+        now: now + 1,
+      });
+      expect(receipt).toMatchObject({ recorded: true, eventId });
+
+      const claimed = await ledger.claimOutbox({
+        workerId: publisherId,
+        workerAssertion: publisherAssertion,
+        leaseMs: 30_000,
+        now: now + 2,
+      });
+      expect(claimed).toMatchObject({
+        claimed: false,
+        reason: "AUTHENTICATED_WORKER_REQUIRED",
+      });
+
+      await runInDurableObject(ledger, async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          "SELECT jti, subject, role, operation FROM orchestrator_consumed_assertions WHERE jti = ?",
+          sharedJti,
+        ).toArray()).toEqual([{
+          jti: sharedJti,
+          subject: consumerId,
+          role: "consumer",
+          operation: "recordOutboxReceipt",
+        }]);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+          eventId,
+        ).one().count).toBe(1);
+        expect(state.storage.sql.exec(
+          "SELECT status, attempts, lease_worker_id, lease_generation FROM orchestrator_outbox_events WHERE event_id = ?",
+          eventId,
+        ).one()).toMatchObject({
+          status: "PENDING",
+          attempts: 0,
+          lease_worker_id: null,
+          lease_generation: 0,
+        });
+      });
+    }
   });
 
 });

@@ -703,6 +703,27 @@ jobs:
                   self.assertEqual(TLS_CONTEXT.minimum_version, ssl.TLSVersion.TLSv1_2)
 
           class LexicalStructureTests(unittest.TestCase):
+              def test_exact_line_byte_limit_is_inclusive(self):
+                  metrics = measure_lexical_records("PropList.txt", b"A" * 4096)
+                  self.assertEqual(metrics["max_record"]["byte_length"], 4096)
+
+              def test_exact_field_limit_is_measured_without_overflow(self):
+                  raw = b";".join([b"x"] * 32) + b"\n"
+                  metrics = measure_lexical_records("UnicodeData.txt", raw)
+                  self.assertEqual(metrics["field_count_histogram"], {"32": 1})
+                  self.assertEqual(metrics["unexpected_field_count_records"], 1)
+
+              def test_gate_rejects_observed_field_shape_mutation(self):
+                  mutated = b"0041; C # missing mapping\n"
+                  metrics = measure_lexical_records("CaseFolding.txt", mutated)
+                  with self.assertRaisesRegex(ValueError, "field-shape anomaly"):
+                      enforce_lexical_field_shapes("CaseFolding.txt", metrics)
+
+              def test_gate_accepts_expected_field_shape(self):
+                  metrics = measure_lexical_records("CaseFolding.txt", b"0041; C; 0061; # sample\n")
+                  self.assertIsNone(enforce_lexical_field_shapes("CaseFolding.txt", metrics))
+
+
               def test_property_format_counts_records_comments_and_field_shapes(self):
                   raw = (
                       b"0041 ; Alpha # inline comment\n"

@@ -1501,4 +1501,187 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+
+  it("serializes a consumer receipt racing with Owner cancellation into one safe linearized outcome", async () => {
+    const taskId = "task-receipt-cancel-race-0001";
+    const ledger = ledgerFor("receipt-cancel-serialization");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const eventId = "receipt-cancel-race-event-01";
+    const idempotencyKey = "receipt-cancel-race-key-1";
+    const payload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
+    await ledger.enqueueOutbox({
+      eventId,
+      idempotencyKey,
+      taskId,
+      eventType: "task.transitioned",
+      payload,
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox"),
+      now,
+    });
+
+    const body = {
+      attempts: 1,
+      createdAt: now,
+      eventId,
+      eventType: "task.transitioned",
+      idempotencyKey,
+      payload,
+      schemaVersion: 1,
+      taskId,
+    };
+    const consumerEnv = {
+      ORCHESTRATOR_LEDGER: {
+        idFromName: () => "receipt-cancel-serialization",
+        get: () => ledger,
+      },
+      LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: "test-v1",
+    };
+    const message = {
+      body: structuredClone(body),
+      ackCalls: 0,
+      retryCalls: 0,
+      ack() { this.ackCalls += 1; },
+      retry() { this.retryCalls += 1; },
+    };
+
+    const [delivery, cancellation] = await Promise.all([
+      consumeOrchestratorOutbox({ messages: [message] }, consumerEnv),
+      ledger.executeOwnerCommand(await ownerInput({
+        command: {
+          operation: "cancel",
+          taskId,
+          reason: "Race receipt commit against cancellation",
+          eventId: "receipt-cancel-race-owner-command-01",
+        },
+        deliveryId: "delivery-receipt-cancel-race-01",
+        commentId: "123456811",
+      })),
+    ]);
+
+    expect(cancellation).toMatchObject({
+      applied: true,
+      operation: "cancel",
+      task: { taskId, state: "CANCELLED", version: 2 },
+    });
+    expect(delivery).toMatchObject({
+      received: 1, acknowledged: 1, retried: 0,
+    });
+    expect(message).toMatchObject({ ackCalls: 1, retryCalls: 0 });
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+      taskId, state: "CANCELLED", version: 2,
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      const receipts = state.storage.sql.exec(
+        "SELECT event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).toArray();
+      // Both transaction orders are safe: receipt-before-cancel leaves one
+      // historical receipt; cancel-before-receipt blocks the stale event.
+      expect(receipts.length).toBeLessThanOrEqual(1);
+      if (receipts.length === 1) {
+        expect(receipts[0]).toMatchObject({
+          event_id: eventId,
+          event_type: "task.transitioned",
+          schema_version: 1,
+          consumer_id: "orchestrator-outbox-consumer",
+        });
+      }
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ? AND operation = 'cancel'",
+        taskId,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ? AND event_type = 'OWNER_TASK_CANCELLED'",
+        taskId,
+      ).one().count).toBe(1);
+    });
+  });
+
+  it("rejects a same-event receipt with a conflicting envelope digest without replacing the original receipt", async () => {
+    const taskId = "task-receipt-digest-conflict-0001";
+    const ledger = ledgerFor("receipt-digest-conflict");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const eventId = "receipt-digest-conflict-event-01";
+    const idempotencyKey = "receipt-digest-conflict-key-1";
+    const payload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
+    await ledger.enqueueOutbox({
+      eventId,
+      idempotencyKey,
+      taskId,
+      eventType: "task.transitioned",
+      payload,
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox"),
+      now,
+    });
+
+    const body = {
+      attempts: 1,
+      createdAt: now,
+      eventId,
+      eventType: "task.transitioned",
+      idempotencyKey,
+      payload,
+      schemaVersion: 1,
+      taskId,
+    };
+    const consumerEnv = {
+      ORCHESTRATOR_LEDGER: {
+        idFromName: () => "receipt-digest-conflict",
+        get: () => ledger,
+      },
+      LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: "test-v1",
+    };
+    const message = {
+      body: structuredClone(body),
+      ackCalls: 0,
+      retryCalls: 0,
+      ack() { this.ackCalls += 1; },
+      retry() { this.retryCalls += 1; },
+    };
+    const delivery = await consumeOrchestratorOutbox({ messages: [message] }, consumerEnv);
+    expect(delivery).toMatchObject({ acknowledged: 1, retried: 0, duplicates: 0 });
+
+    const original = await runInDurableObject(ledger, async (_instance, state) =>
+      state.storage.sql.exec(
+        "SELECT event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).one(),
+    );
+    const conflict = await ledger.recordOutboxReceipt({
+      eventId,
+      eventType: "task.transitioned",
+      idempotencyKey,
+      taskId,
+      payload,
+      createdAt: now,
+      schemaVersion: 1,
+      envelopeSha256: "f".repeat(64),
+      consumerId: "orchestrator-outbox-consumer",
+      workerAssertion: await workerAssertion("orchestrator-outbox-consumer", "consumer", "recordOutboxReceipt"),
+      now,
+    });
+    expect(conflict).toMatchObject({
+      recorded: false,
+      conflict: true,
+      reason: "OUTBOX_EVENT_ID_CONFLICT",
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      const receipts = state.storage.sql.exec(
+        "SELECT event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).toArray();
+      expect(receipts).toEqual([original]);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = 'orchestrator-outbox-consumer' AND role = 'consumer' AND operation = 'recordOutboxReceipt'",
+      ).one().count).toBe(2);
+    });
+  });
+
 });

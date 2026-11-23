@@ -445,4 +445,22 @@ describe("Executor Ed25519 trust boundary", () => {
       now: now + 5,
     })).resolves.toMatchObject({ released: false, reason: "LEASE_FENCE_MISMATCH" });
   });
+
+  it("rejects the Executor principal from HMAC-only publisher operations", async () => {
+    const ledger = ledgerFor("executor-ed25519-reject-publisher-hmac");
+    await expect(ledger.claimOutbox({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createHmacAssertion({
+        subject: EXECUTOR_ID,
+        role: "publisher",
+        operation: "claimOutbox",
+        nowMs: now,
+      }),
+      leaseMs: 30_000,
+      now,
+    })).resolves.toMatchObject({
+      claimed: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+  });
 });

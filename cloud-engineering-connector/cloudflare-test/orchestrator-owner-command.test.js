@@ -1080,4 +1080,107 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+
+  it("linearizes an active Agent transition against Owner quarantine without leaving a runnable task", async () => {
+    const taskId = "task-owner-transition-linearization-0001";
+    const workerId = "agent:worker-1";
+    const ledger = ledgerFor("owner-transition-linearization-race");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const claim = await ledger.claimTask({
+      taskId,
+      workerId,
+      workerAssertion: await workerAssertion(workerId, "agent", "claimTask", now + 1),
+      leaseMs: 30_000,
+      now: now + 1,
+    });
+    expect(claim).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    const transitionAssertion = await workerAssertion(
+      workerId, "agent", "transitionTask", now + 2,
+    );
+    const transitionJti = assertionJti(transitionAssertion);
+    const quarantineCommand = await ownerInput({
+      command: {
+        operation: "quarantine",
+        taskId,
+        eventId: "owner-transition-linearization-quarantine-01",
+      },
+      deliveryId: "delivery-transition-linearization-quarantine-01",
+      commentId: "123456807",
+      now: now + 2,
+    });
+
+    const [transition, quarantine] = await Promise.all([
+      ledger.transitionTask({
+        taskId,
+        expectedVersion: 1,
+        expectedState: "SCHEDULED",
+        nextState: "RUNNING",
+        actor: { id: workerId, role: "agent" },
+        evidence: { executionStartedAt: now + 2 },
+        now: now + 2,
+        workerId,
+        workerAssertion: transitionAssertion,
+        leaseGeneration: claim.leaseGeneration,
+      }),
+      ledger.executeOwnerCommand(quarantineCommand),
+    ]);
+
+    // Exactly two serializable histories are valid:
+    // 1) Agent commits RUNNING first; Owner retries against v2 and quarantines v3.
+    // 2) Owner quarantines v2 first; Agent loses its task CAS before JTI consumption.
+    // In both histories the final task is quarantined and its Lease is revoked.
+    if (transition.updated) {
+      expect(transition).toMatchObject({
+        updated: true,
+        task: { taskId, state: "RUNNING", version: 2 },
+      });
+      expect(quarantine).toMatchObject({
+        applied: true,
+        operation: "quarantine",
+        task: { taskId, state: "QUARANTINED", version: 3 },
+      });
+    } else {
+      expect(transition).toMatchObject({
+        updated: false,
+        reason: "VERSION_OR_STATE_CONFLICT",
+        task: { taskId, state: "QUARANTINED", version: 2 },
+      });
+      expect(quarantine).toMatchObject({
+        applied: true,
+        operation: "quarantine",
+        task: { taskId, state: "QUARANTINED", version: 2 },
+      });
+    }
+
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+      taskId,
+      state: "QUARANTINED",
+      version: transition.updated ? 3 : 2,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        taskId,
+      ).one()).toMatchObject({
+        worker_id: null,
+        lease_generation: 2,
+        lease_until: 0,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        transitionJti,
+      ).one().count).toBe(transition.updated ? 1 : 0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ? AND operation = 'quarantine'",
+        taskId,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ? AND event_type = 'OWNER_TASK_QUARANTINED'",
+        taskId,
+      ).one().count).toBe(1);
+    });
+  });
+
 });

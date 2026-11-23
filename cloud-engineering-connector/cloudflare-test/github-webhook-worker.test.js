@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import worker from "../worker.js";
 import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.js";
@@ -315,4 +316,129 @@ describe("GitHub webhook Worker route", () => {
     );
     expect(storeResponse.status).toBe(503);
   });
+
+  it("maps Owner command-hash failure to a bounded retryable response before Ledger mutation", async () => {
+    const taskId = "task-webhook-owner-hash-failure-0001";
+    const ledgerBinding = env.ORCHESTRATOR_LEDGER;
+    const ledger = ledgerBinding.get(ledgerBinding.idFromName("orchestrator-ledger-global"));
+    const createdAt = Date.now();
+    await ledger.createTask({
+      task: {
+        taskId, state: "SCHEDULED", version: 1, agentRound: 0,
+        createdAt, updatedAt: createdAt, executorId: "agent:worker-1",
+        commitSha: "b".repeat(40), objective: "Owner webhook hash failure atomicity test",
+      },
+      idempotencyKey: "webhook-owner-hash-failure-create-0001",
+      inputHash: "c".repeat(64),
+      now: createdAt,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: await createScheduledWorkerAssertion(
+        env.LEDGER_WORKER_ASSERTION_KEYS, "test-v1",
+        { subject: "orchestrator-scheduler", role: "system", operation: "createTask", nowMs: createdAt },
+      ),
+    });
+
+    const repository = "mohammadrezayaghoobi123-dev/Chat-gpt";
+    const ownerId = 335530603;
+    const commentId = 900099;
+    const deliveryId = "gh-owner-hash-failure-0001";
+    const event = payload({
+      action: "created",
+      repository: { id: 1398846697, full_name: repository },
+      issue: {
+        ...payload().issue,
+        html_url: "https://github.com/" + repository + "/issues/7",
+      },
+      comment: {
+        id: commentId,
+        body: '/orchestrator cancel ' + taskId + ' --reason "Hash failure must not mutate the Ledger"',
+        created_at: new Date(createdAt).toISOString(),
+        user: { id: ownerId, type: "User" },
+      },
+      sender: { id: ownerId, type: "User" },
+    });
+    const request = await signedRequest(
+      JSON.stringify(event), deliveryId, undefined, "issue_comment",
+    );
+
+    let executeOwnerCommandCalls = 0;
+    const ownerEnv = {
+      ...testEnv(),
+      GITHUB_WEBHOOK_REPOSITORY: repository,
+      GITHUB_WEBHOOK_REPOSITORY_ID: "1398846697",
+      GITHUB_WEBHOOK_OWNER_ID: String(ownerId),
+      ORCHESTRATOR_LEDGER: {
+        idFromName: name => ledgerBinding.idFromName(name),
+        get: name => {
+          const stub = ledgerBinding.get(name);
+          return {
+            executeOwnerCommand: async input => {
+              executeOwnerCommandCalls += 1;
+              return stub.executeOwnerCommand(input);
+            },
+          };
+        },
+      },
+    };
+
+    const subtle = crypto.subtle;
+    const originalDigest = subtle.digest.bind(subtle);
+    const hadOwnDigest = Object.prototype.hasOwnProperty.call(subtle, "digest");
+    const originalDescriptor = Object.getOwnPropertyDescriptor(subtle, "digest");
+    const injectedFailure = new Error("SENSITIVE_OWNER_COMMAND_HASH_FAILURE");
+    let digestCalls = 0;
+    let nativeDigestCalls = 0;
+
+    Object.defineProperty(subtle, "digest", {
+      configurable: true,
+      writable: true,
+      value: (...args) => {
+        digestCalls += 1;
+        if (digestCalls === 2) return Promise.reject(injectedFailure);
+        nativeDigestCalls += 1;
+        return originalDigest(...args);
+      },
+    });
+
+    let response;
+    try {
+      response = await worker.fetch(request, ownerEnv);
+    } finally {
+      if (hadOwnDigest) Object.defineProperty(subtle, "digest", originalDescriptor);
+      else delete subtle.digest;
+    }
+
+    const responseText = await response.text();
+    const responseBody = JSON.parse(responseText);
+    expect(response.status).toBe(503);
+    expect(responseBody).toEqual({ error: "owner_command_unavailable" });
+    expect(responseText).not.toContain(injectedFailure.message);
+    expect(responseText).not.toContain("stack");
+    expect(digestCalls).toBe(2);
+    expect(nativeDigestCalls).toBe(1);
+    expect(executeOwnerCommandCalls).toBe(0);
+
+    expect(await ledger.getTask({ taskId })).toMatchObject({
+      taskId, state: "SCHEDULED", version: 1,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE delivery_id = ? OR comment_id = ?",
+        deliveryId, String(commentId),
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions WHERE delivery_id = ? OR comment_id = ?",
+        deliveryId, String(commentId),
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries WHERE delivery_id = ?",
+        deliveryId,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ?",
+        taskId,
+      ).one().count).toBe(0);
+    });
+  });
+
 });

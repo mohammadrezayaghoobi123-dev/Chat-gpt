@@ -1257,7 +1257,7 @@ describe("Owner command atomic Ledger contract", () => {
     await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
 
     const eventId = "owner-late-publish-cancel-event-01";
-    const idempotencyKey = "owner-late-publish-cancel-key-01";
+    const idempotencyKey = "outbox-key-1";
     const payload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
     const enqueued = await ledger.enqueueOutbox({
       eventId,

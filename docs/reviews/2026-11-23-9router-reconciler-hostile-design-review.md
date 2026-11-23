@@ -210,3 +210,32 @@ After that review:
 The current design is directionally sound but does not yet prove bounded total cost, bounded duplicate inference risk, or mutual exclusion with the event-driven reviewer. **Do not implement or activate the scheduled reconciler until R1–R4 are closed.**
 
 No main or Production state was changed during this review.
+
+
+## 11. Finding R5 — GitHub-native comment reservations do not prove durable uniqueness
+
+### Decision
+
+**NO-GO: PR issue comments are not accepted as the authoritative cross-run attempt ledger under the current permission model.** The signed report marker remains valid as report evidence, but a second signed comment marker cannot be promoted into a durable uniqueness primitive.
+
+### Evidence
+
+- GitHub exposes create, update, and delete operations for issue comments. HMAC authenticates the content of a surviving marker; it cannot establish that a missing marker was never created or was not later removed. The create endpoint does not expose a caller-supplied idempotency key or unique-key constraint for the tuple.
+- A Git-ref ledger with optimistic compare-and-swap is a possible GitHub-native alternative, but it would require `contents: write` and dedicated ref governance. The current reconciler design explicitly prohibits `contents: write`; silently adding that permission would violate the approved least-privilege boundary.
+- GitHub Actions artifacts/checkpoints are not accepted as the attempt ledger because no atomic cross-run compare-and-set or durable uniqueness contract has been established for them.
+
+Official API references: create issue comment (<https://docs.github.com/en/rest/issues/comments?apiVersion=2026-03-10>), update issue comment (<https://docs.github.com/en/rest/issues/comments?apiVersion=2026-03-10>), and GitHub's fine-grained permission matrix (<https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens>).
+
+### Required disposition
+
+1. Keep report comments as human-visible evidence only.
+2. Do not claim at-most-once cross-run dispatch from comment HMAC markers.
+3. Keep scheduled inference blocked; permit discovery-only/dry-run operation only.
+4. Evaluate an external durable ledger with atomic insert-if-absent/CAS, read-after-uncertain-write reconciliation, authenticated append-only history, explicit retention, and fail-closed outage behavior.
+5. Do not provision a vendor, add credentials, change permissions, or implement the integration until a separate option comparison and approval.
+
+### Explicit limit
+
+Even an external reservation ledger cannot guarantee exactly-once model execution across a distributed network boundary. The safe achievable policy is at-most-once automatic dispatch: reserve durably before the request; if the request outcome becomes ambiguous, retain `ATTEMPT_UNKNOWN` and require controlled operator recovery. No automatic retry.
+
+This closes the GitHub-native feasibility question but does not close R1–R4, choose an external provider, or authorize implementation.

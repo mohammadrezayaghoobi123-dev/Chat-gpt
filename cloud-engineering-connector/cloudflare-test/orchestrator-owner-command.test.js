@@ -1134,42 +1134,46 @@ describe("Owner command atomic Ledger contract", () => {
       return originalDigest(algorithm, data);
     });
 
-    let ownerPromise;
     let transition;
     let cancellation;
     try {
-      ownerPromise = ledger.executeOwnerCommand(ownerCommand);
-      const barrierState = await Promise.race([
-        ownerSnapshotReached.then(() => "owner-snapshot-paused"),
-        ownerPromise.then(() => "owner-finished-before-snapshot-barrier"),
-      ]);
-      expect(barrierState).toBe("owner-snapshot-paused");
+      const raceResult = await runInDurableObject(ledger, async instance => {
+        const ownerPromise = instance.executeOwnerCommand(ownerCommand);
+        const barrierState = await Promise.race([
+          ownerSnapshotReached.then(() => "owner-snapshot-paused"),
+          ownerPromise.then(() => "owner-finished-before-snapshot-barrier"),
+        ]);
+        expect(barrierState).toBe("owner-snapshot-paused");
 
-      transition = await ledger.transitionTask({
-        taskId,
-        expectedVersion: 1,
-        expectedState: "SCHEDULED",
-        nextState: "RUNNING",
-        actor: {
-          id: workerId,
-          role: "agent",
-          authenticated: true,
-          identityVerified: true,
-        },
-        evidence: {},
-        now: now + 3,
-        workerId,
-        workerAssertion: transitionAssertion,
-        leaseGeneration: 1,
-        outboxEvent: {
-          eventId: "agent-transition-before-owner-cancel-01",
-          idempotencyKey: "agent-transition-before-owner-cancel-key-01",
-          eventType: "task.running",
-          payload: { taskId, version: 2 },
-        },
+        const agentTransition = await instance.transitionTask({
+          taskId,
+          expectedVersion: 1,
+          expectedState: "SCHEDULED",
+          nextState: "RUNNING",
+          actor: {
+            id: workerId,
+            role: "agent",
+            authenticated: true,
+            identityVerified: true,
+          },
+          evidence: {},
+          now: now + 3,
+          workerId,
+          workerAssertion: transitionAssertion,
+          leaseGeneration: 1,
+          outboxEvent: {
+            eventId: "agent-transition-before-owner-cancel-01",
+            idempotencyKey: "agent-transition-before-owner-cancel-key-01",
+            eventType: "task.running",
+            payload: { taskId, version: 2 },
+          },
+        });
+        releaseOwnerDigest();
+        const ownerCancellation = await ownerPromise;
+        return { transition: agentTransition, cancellation: ownerCancellation };
       });
-      releaseOwnerDigest();
-      cancellation = await ownerPromise;
+      transition = raceResult.transition;
+      cancellation = raceResult.cancellation;
     } finally {
       releaseOwnerDigest();
       digestSpy.mockRestore();

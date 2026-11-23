@@ -2312,6 +2312,51 @@ test("a successful POST response must confirm the exact issue, body, and bot ide
   }
 });
 
+test("missing Compare API merge-base metadata fails closed before inference or publication", async () => {
+  const baseSha = "a".repeat(40);
+  const headSha = "b".repeat(40);
+  let modelCalls = 0;
+  let commentPosts = 0;
+  const json = value => new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/290")) {
+      return json({
+        number: 290,
+        state: "open",
+        draft: false,
+        head: { sha: headSha, repo: { id: 1, full_name: "owner/repo" } },
+        base: { sha: baseSha, repo: { id: 1, full_name: "owner/repo" } },
+      });
+    }
+    if (target.includes("/compare/" + baseSha + "..." + headSha)) {
+      return json({ status: "ahead", base_commit: { sha: baseSha }, files: [] });
+    }
+    if (target.endsWith("/chat/completions")) modelCalls += 1;
+    if (target.endsWith("/issues/290/comments") && options.method === "POST") commentPosts += 1;
+    throw new Error("Unexpected API request in missing merge-base fixture: " + target);
+  };
+
+  await assert.rejects(runImmutableReview({
+    repository: "owner/repo",
+    pullRequest: 290,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  }), /Compare API merge-base SHA is invalid/i);
+
+  assert.equal(modelCalls, 0);
+  assert.equal(commentPosts, 0);
+});
+
 test("reviews only merge-base-to-head changes when the base branch advances independently", async () => {
   const baseSha = "1".repeat(40);
   const headSha = "2".repeat(40);

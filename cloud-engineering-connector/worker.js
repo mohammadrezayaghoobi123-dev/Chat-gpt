@@ -775,8 +775,16 @@ async function knowledgeDocumentPropose(args,env,tenantId){
  if(/(?:gh[pousr]_[A-Za-z0-9]{25,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|-----BEGIN (?:OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{20,})/.test(args.content)){
   throw new ToolError("KNOWLEDGE_VAULT_SECRET_CONTENT_REJECTED");
  }
- const documentId="doc_"+(await sha256Hex(path)).slice(0,32);
- const proposedContentSha256=await sha256Hex(args.content);
+ let documentId;
+ let proposedContentSha256;
+ let eventId;
+ try{
+  documentId="doc_"+(await sha256Hex(path)).slice(0,32);
+  proposedContentSha256=await sha256Hex(args.content);
+  eventId="evt_"+(await sha256Hex(tenantId+"\\n"+args.proposalId)).slice(0,32);
+ }catch{
+  throw new ToolError("KNOWLEDGE_VAULT_HASH_UNAVAILABLE");
+ }
  const stub=knowledgeStoreStub(env,tenantId);
  if(typeof stub.enqueueOutbox!=="function"||typeof stub.recordVaultProposal!=="function")throw new ToolError("KNOWLEDGE_STORE_UNAVAILABLE");
  const vaultSummary=args.summary.trim()+"\n\nVault expected Git blob SHA: "+expectedBlobSha+"\nProposed content SHA-256: "+proposedContentSha256+"\nCanonical branch: main. This PR is review-only; no automatic merge is allowed.";
@@ -798,7 +806,6 @@ async function knowledgeDocumentPropose(args,env,tenantId){
   if(typeof error?.code==="string"&&error.code.startsWith("KNOWLEDGE_"))throw new ToolError(error.code);
   throw new ToolError("KNOWLEDGE_VAULT_PROPOSAL_RECORD_FAILED",{pull_request_url:pullRequestUrl});
  }
- const eventId="evt_"+(await sha256Hex(tenantId+"\\n"+args.proposalId)).slice(0,32);
  try{
   await stub.enqueueOutbox({
    tenantId,eventId,idempotencyKey:"vault-"+args.proposalId,

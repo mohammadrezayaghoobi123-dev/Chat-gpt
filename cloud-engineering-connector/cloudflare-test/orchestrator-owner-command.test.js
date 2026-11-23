@@ -1112,11 +1112,11 @@ describe("Owner command atomic Ledger contract", () => {
     );
     const transitionJti = assertionJti(transitionAssertion);
 
-    // executeOwnerCommand performs two canonical hashes before reading the task,
-    // then hashes the audit event after taking that snapshot. Pause precisely at
-    // that third digest so the Agent can commit between Owner read and Owner CAS.
+    // Pause on the actual Owner cancellation audit hash, which is computed
+    // after the task snapshot and before the Owner write transaction. Matching
+    // semantic audit fields avoids depending on an internal digest call count.
     const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
-    let digestCalls = 0;
+    let ownerAuditHashPaused = false;
     let releaseOwnerDigest;
     let signalOwnerSnapshot;
     const ownerDigestGate = new Promise(resolve => {
@@ -1126,8 +1126,11 @@ describe("Owner command atomic Ledger contract", () => {
       signalOwnerSnapshot = resolve;
     });
     const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(async (algorithm, data) => {
-      digestCalls += 1;
-      if (digestCalls === 3) {
+      const digestInput = new TextDecoder().decode(data);
+      if (!ownerAuditHashPaused &&
+          digestInput.includes('"eventId":"owner-owner-transition-cancel-race-01"') &&
+          digestInput.includes('"eventType":"OWNER_TASK_CANCELLED"')) {
+        ownerAuditHashPaused = true;
         signalOwnerSnapshot();
         await ownerDigestGate;
       }
@@ -1189,7 +1192,7 @@ describe("Owner command atomic Ledger contract", () => {
       operation: "cancel",
       task: { taskId, state: "CANCELLED", version: 3 },
     });
-    expect(digestCalls).toBeGreaterThanOrEqual(4);
+    expect(ownerAuditHashPaused).toBe(true);
 
     await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
       taskId,

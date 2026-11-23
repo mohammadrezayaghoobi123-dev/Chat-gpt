@@ -78,6 +78,12 @@ The signer accepts a timestamp and one operation selected from the fixed three-o
 
 The verifier enforces a 60-second maximum lifetime and five-second clock-skew allowance. The Ledger consumes the JTI transactionally with the corresponding state-changing operation. Reuse of a consumed JTI is rejected.
 
+## Trusted time source
+
+For the fixed Executor principal, the Ledger's own runtime clock is authoritative. The caller-supplied `now` value is not used to validate Executor assertion expiry, lease expiry, lease renewal, or lease release. The Ledger obtains `Date.now()` inside the Durable Object, verifies the assertion against that time, and uses the same trusted timestamp for the state transition and JTI consumption.
+
+This prevents an Executor caller from backdating `now` to make an expired lease appear active. The existing caller-supplied timestamp behavior for Scheduler, Outbox, and non-Executor agent paths is unchanged in this slice. The assertion verifier retains its five-second clock-skew allowance for signer-versus-Ledger clock differences.
+
 ## Ledger compatibility boundary
 
 - When workerId is exactly orchestrator-executor, claimTask, renewLease, and releaseLease must use ORCHESTRATOR_EXECUTOR_VERIFICATION_KEYS and the Ed25519 v2 verifier; the signed operation must exactly match the Ledger method being invoked.

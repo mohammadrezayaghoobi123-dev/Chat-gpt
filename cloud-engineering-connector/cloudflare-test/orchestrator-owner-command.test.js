@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
+import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
@@ -816,5 +817,120 @@ describe("Owner command atomic Ledger contract", () => {
       ).one().count).toBe(2);
     });
   });
+
+  it("keeps a released task fail-closed until a trusted validation authority exists", async () => {
+    const taskId = "task-owner-validation-authority-gap-0001";
+    const workerId = "agent:worker-1";
+    const ledger = ledgerFor("owner-validation-authority-gap");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const claim = await ledger.claimTask({
+      taskId,
+      workerId,
+      workerAssertion: await workerAssertion(workerId, "agent", "claimTask", now + 1),
+      leaseMs: 30_000,
+      now: now + 1,
+    });
+    expect(claim).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    const quarantine = await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        operation: "quarantine",
+        taskId,
+        eventId: "owner-validation-gap-quarantine-01",
+      },
+      deliveryId: "delivery-validation-gap-quarantine-01",
+      commentId: "123456803",
+      now: now + 2,
+    }));
+    expect(quarantine).toMatchObject({
+      applied: true,
+      task: { taskId, state: "QUARANTINED", version: 2 },
+    });
+
+    const release = await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        operation: "release",
+        taskId,
+        eventId: "owner-validation-gap-release-01",
+      },
+      deliveryId: "delivery-validation-gap-release-01",
+      commentId: "123456804",
+      now: now + 3,
+    }));
+    expect(release).toMatchObject({
+      applied: true,
+      task: { taskId, state: "VALIDATING", version: 3 },
+    });
+
+    const schedulerAssertion = await createScheduledWorkerAssertion(
+      env.LEDGER_WORKER_ASSERTION_KEYS,
+      env.LEDGER_WORKER_ASSERTION_ACTIVE_KID,
+      {
+        subject: "orchestrator-scheduler",
+        role: "system",
+        operation: "createTask",
+        nowMs: now + 4,
+      },
+    );
+    const schedulerJti = assertionJti(schedulerAssertion);
+    const schedulerTransition = await ledger.transitionTask({
+      taskId,
+      expectedVersion: 3,
+      expectedState: "VALIDATING",
+      nextState: "READY",
+      actor: {
+        id: "orchestrator-scheduler",
+        role: "agent",
+        authenticated: true,
+        identityVerified: true,
+      },
+      evidence: { ownerResolutionId: "owner-validation-gap-release-01" },
+      now: now + 4,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: schedulerAssertion,
+      leaseGeneration: 3,
+    });
+    expect(schedulerTransition).toMatchObject({
+      updated: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    await expect(createScheduledWorkerAssertion(
+      env.LEDGER_WORKER_ASSERTION_KEYS,
+      env.LEDGER_WORKER_ASSERTION_ACTIVE_KID,
+      {
+        subject: "orchestrator-validator",
+        role: "validator",
+        operation: "validateReleasedTask",
+        nowMs: now + 4,
+      },
+    )).rejects.toMatchObject({ code: "AUTHENTICATED_WORKER_REQUIRED" });
+
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+      taskId,
+      state: "VALIDATING",
+      version: 3,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        taskId,
+      ).one()).toMatchObject({
+        worker_id: null,
+        lease_generation: 3,
+        lease_until: 0,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        schedulerJti,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ? AND event_type IN ('OWNER_TASK_QUARANTINED','OWNER_TASK_RELEASED')",
+        taskId,
+      ).one().count).toBe(2);
+    });
+  });
+
 
 });

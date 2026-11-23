@@ -931,13 +931,27 @@ describe("Executor Ed25519 trust boundary", () => {
       });
 
       try {
-        await expect(ledger.claimTask({
-          workerId: EXECUTOR_ID,
-          workerAssertion: assertion,
-          leaseMs: 30_000,
-          now: assertionTime,
-          cursor: first.nextCursor,
-        })).rejects.toBe(injectedFailure);
+        const failureOutcome = await runInDurableObject(ledger, async instance => {
+          try {
+            await instance.claimTask({
+              workerId: EXECUTOR_ID,
+              workerAssertion: assertion,
+              leaseMs: 30_000,
+              now: assertionTime,
+              cursor: first.nextCursor,
+            });
+            return { rejected: false, message: null };
+          } catch (error) {
+            return {
+              rejected: true,
+              message: typeof error?.message === "string" ? error.message : String(error),
+            };
+          }
+        });
+        expect(failureOutcome).toEqual({
+          rejected: true,
+          message: injectedFailure.message,
+        });
       } finally {
         if (hadOwnDigest) {
           Object.defineProperty(subtle, "digest", originalDescriptor);

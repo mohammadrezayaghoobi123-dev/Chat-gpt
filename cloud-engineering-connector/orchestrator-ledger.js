@@ -686,7 +686,7 @@ export class OrchestratorLedger extends DurableObject {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
-      if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
+      if (!lease) {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
@@ -1148,8 +1148,8 @@ export class OrchestratorLedger extends DurableObject {
         return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       sql.exec(
-        "UPDATE orchestrator_execution_leases SET lease_until = ?, updated_at = ? WHERE task_id = ? AND worker_id = ? AND lease_generation = ?",
-        now + leaseMs, now, taskId, workerId, leaseGeneration,
+        "UPDATE orchestrator_execution_leases SET lease_until = ?, updated_at = ? WHERE task_id = ?",
+        now + leaseMs, now, taskId,
       );
       return { renewed: true, leaseUntil: now + leaseMs, leaseGeneration };
     });

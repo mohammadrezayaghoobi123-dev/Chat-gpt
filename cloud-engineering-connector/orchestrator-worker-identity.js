@@ -22,7 +22,7 @@ function decodeBase64Url(value) {
 
 
 function loadKey(keySet, kid) {
-  if (typeof keySet !== "string" || keySet.length > 4096 || !KID.test(kid)) throw reject();
+  if (typeof keySet !== "string" || keySet.length > 4096 || typeof kid !== "string" || !KID.test(kid)) throw reject();
   let keys;
   try { keys = JSON.parse(keySet); } catch { throw reject(); }
   if (!keys || typeof keys !== "object" || Array.isArray(keys) ||

@@ -1389,4 +1389,116 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+
+  it("acknowledges an identical historical receipt replay after Owner cancellation without creating a new receipt", async () => {
+    const taskId = "task-owner-receipt-replay-cancel-0001";
+    const ledger = ledgerFor("owner-receipt-replay-after-cancel");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const eventId = "owner-receipt-replay-event-01";
+    const idempotencyKey = "receipt-replay-key-1";
+    const payload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
+    await ledger.enqueueOutbox({
+      eventId,
+      idempotencyKey,
+      taskId,
+      eventType: "task.transitioned",
+      payload,
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox"),
+      now,
+    });
+
+    const body = {
+      attempts: 1,
+      createdAt: now,
+      eventId,
+      eventType: "task.transitioned",
+      idempotencyKey,
+      payload,
+      schemaVersion: 1,
+      taskId,
+    };
+    const consumerEnv = {
+      ORCHESTRATOR_LEDGER: {
+        idFromName: () => "owner-receipt-replay-after-cancel",
+        get: () => ledger,
+      },
+      LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: "test-v1",
+    };
+    const makeMessage = () => ({
+      body: structuredClone(body),
+      ackCalls: 0,
+      retryCalls: 0,
+      ack() { this.ackCalls += 1; },
+      retry() { this.retryCalls += 1; },
+    });
+
+    const firstMessage = makeMessage();
+    const firstDelivery = await consumeOrchestratorOutbox(
+      { messages: [firstMessage] },
+      consumerEnv,
+    );
+    expect(firstDelivery).toMatchObject({
+      received: 1, acknowledged: 1, retried: 0, duplicates: 0,
+    });
+    expect(firstMessage).toMatchObject({ ackCalls: 1, retryCalls: 0 });
+
+    const firstReceipt = await runInDurableObject(ledger, async (_instance, state) =>
+      state.storage.sql.exec(
+        "SELECT event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).one(),
+    );
+
+    const cancelled = await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        operation: "cancel",
+        taskId,
+        reason: "Cancel after first consumer receipt",
+        eventId: "owner-receipt-replay-cancel-command-01",
+      },
+      deliveryId: "delivery-receipt-replay-cancel-01",
+      commentId: "123456810",
+    }));
+    expect(cancelled).toMatchObject({
+      applied: true,
+      operation: "cancel",
+      task: { taskId, state: "CANCELLED", version: 2 },
+    });
+
+    const replayMessage = makeMessage();
+    const replayDelivery = await consumeOrchestratorOutbox(
+      { messages: [replayMessage] },
+      consumerEnv,
+    );
+    expect(replayDelivery).toMatchObject({
+      received: 1, acknowledged: 1, retried: 0, duplicates: 1,
+    });
+    expect(replayMessage).toMatchObject({ ackCalls: 1, retryCalls: 0 });
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+      taskId, state: "CANCELLED", version: 2,
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      const receipts = state.storage.sql.exec(
+        "SELECT event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).toArray();
+      expect(receipts).toEqual([firstReceipt]);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = 'orchestrator-outbox-consumer' AND role = 'consumer' AND operation = 'recordOutboxReceipt'",
+      ).one().count).toBe(2);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ? AND operation = 'cancel'",
+        taskId,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ? AND event_type = 'OWNER_TASK_CANCELLED'",
+        taskId,
+      ).one().count).toBe(1);
+    });
+  });
+
 });

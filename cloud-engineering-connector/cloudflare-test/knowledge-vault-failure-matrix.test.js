@@ -392,6 +392,7 @@ describe("Knowledge Vault hostile failure matrix", () => {
       filePath: path,
       blobSha: await gitBlobSha(content),
       baseBranch: "main",
+      prNumber: 988,
     });
     const calls = { recordVaultProposal: 0, enqueueOutbox: 0 };
     const knowledgeBinding = {
@@ -477,14 +478,14 @@ describe("Knowledge Vault hostile failure matrix", () => {
         firstIsToolError: true,
         firstError: {
           error: "KNOWLEDGE_VAULT_OUTBOX_FAILED",
-          pull_request_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/987",
+          pull_request_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/988",
         },
         rawProviderFailureLeaked: false,
         afterFirstProposalRows: [{
           proposal_id: proposalId,
           status: "proposed",
-          pr_number: 987,
-          pr_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/987",
+          pr_number: 988,
+          pr_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/988",
         }],
         afterFirstOutboxRows: [{
           event_id: expect.stringMatching(/^evt_[a-f0-9]{32}$/),
@@ -500,8 +501,8 @@ describe("Knowledge Vault hostile failure matrix", () => {
         finalProposalRows: [{
           proposal_id: proposalId,
           status: "proposed",
-          pr_number: 987,
-          pr_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/987",
+          pr_number: 988,
+          pr_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/988",
         }],
         finalOutboxRows: [{
           event_id: expect.stringMatching(/^evt_[a-f0-9]{32}$/),
@@ -514,7 +515,7 @@ describe("Knowledge Vault hostile failure matrix", () => {
           phase: "PR_CREATED",
           branch_name: "assistant/mcp-" + keyHash,
           commit_sha: "d".repeat(40),
-          pr_number: 987,
+          pr_number: 988,
         }],
         recordVaultProposalCalls: 2,
         enqueueOutboxCalls: 2,

@@ -394,11 +394,11 @@ describe("Owner command atomic Ledger contract", () => {
     await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
 
     const staleEventId = "owner-late-delivery-stale-event-01";
-    const staleIdempotencyKey = "owner-late-delivery-stale-dedupe-01";
+    const staleDedupeId = "owner-late-delivery-stale-dedupe-01";
     const stalePayload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
     const enqueued = await ledger.enqueueOutbox({
       eventId: staleEventId,
-      idempotencyKey: staleIdempotencyKey,
+      idempotencyKey: staleDedupeId,
       taskId,
       eventType: "task.transitioned",
       payload: stalePayload,
@@ -494,7 +494,7 @@ describe("Owner command atomic Ledger contract", () => {
     const staleReceipt = await ledger.recordOutboxReceipt({
       eventId: staleEventId,
       eventType: "task.transitioned",
-      idempotencyKey: staleIdempotencyKey,
+      idempotencyKey: staleDedupeId,
       taskId,
       payload: stalePayload,
       createdAt: now,

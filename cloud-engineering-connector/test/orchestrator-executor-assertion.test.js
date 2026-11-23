@@ -219,3 +219,52 @@ test("Executor verifier rejects private-key fields anywhere in its public key se
     error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
   );
 });
+
+
+test("Executor signer issues only the three explicitly authorized lease lifecycle operations", async () => {
+  const api = await loadApi();
+  assertApi(api);
+  const keys = await fixture();
+  const allowedOperations = ["claimTask", "renewLease", "releaseLease"];
+  const lifecycleKeySet = JSON.stringify({
+    [kid]: {
+      publicKey: keys.publicKey,
+      subject: "orchestrator-executor",
+      role: "agent",
+      operations: allowedOperations,
+    },
+  });
+
+  for (const operation of allowedOperations) {
+    const token = await api.createExecutorWorkerAssertion(keys.privateKey, kid, { nowMs, operation });
+    const verified = await api.verifyExecutorWorkerAssertion(lifecycleKeySet, token, { nowMs });
+    assert.equal(verified.operation, operation);
+  }
+
+  await assert.rejects(
+    api.createExecutorWorkerAssertion(keys.privateKey, kid, { nowMs, operation: "transitionTask" }),
+    error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
+  );
+});
+
+test("Executor verifier rejects a correctly signed operation outside the key-specific allowlist", async () => {
+  const api = await loadApi();
+  assertApi(api);
+  const keys = await fixture();
+  const claims = {
+    v: 2,
+    iss: "orchestrator-executor",
+    aud: "orchestrator-ledger",
+    sub: "orchestrator-executor",
+    role: "agent",
+    op: "renewLease",
+    iat: Math.floor(nowMs / 1000),
+    exp: Math.floor(nowMs / 1000) + 60,
+    jti: "jti-" + encodeBase64Url(crypto.getRandomValues(new Uint8Array(16))),
+  };
+  const token = await signClaims(keys.pair.privateKey, kid, claims);
+  await assert.rejects(
+    api.verifyExecutorWorkerAssertion(keys.publicKeySet, token, { nowMs }),
+    error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
+  );
+});

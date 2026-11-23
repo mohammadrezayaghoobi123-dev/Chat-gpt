@@ -697,7 +697,7 @@ jobs:
               }
               decimal_digit_sets = 0
               decimal_codepoint = None
-              decimal_value = None
+              decimal_run_value = None
               decimal_line = None
               max_decomposition_length = 0
               max_combining_class = 0
@@ -802,7 +802,7 @@ jobs:
                           max_decomposition_length, mapping_length
                       )
 
-                  decimal_value = None
+                  decimal_digit_value = None
                   digit_value = None
                   if fields[6]:
                       if not re.fullmatch(rb"[0-9]+", fields[6]):
@@ -810,8 +810,8 @@ jobs:
                               line_number, "Decimal_Digit_Value",
                               "value must be an integer from 0 through 9",
                           )
-                      decimal_value = int(fields[6])
-                      if decimal_value > 9:
+                      decimal_digit_value = int(fields[6])
+                      if decimal_digit_value > 9:
                           unicode_data_error(
                               line_number, "Decimal_Digit_Value",
                               "value must be an integer from 0 through 9",
@@ -834,23 +834,23 @@ jobs:
                   if fields[8]:
                       numeric_value = parse_unicode_numeric(fields[8], line_number)
 
-                  if decimal_value is not None and digit_value is not None and numeric_value is not None:
+                  if decimal_digit_value is not None and digit_value is not None and numeric_value is not None:
                       numeric_type = "Decimal"
-                      if decimal_value != digit_value or numeric_value != decimal_value:
+                      if decimal_digit_value != digit_value or numeric_value != decimal_digit_value:
                           unicode_data_error(
                               line_number, "Numeric_Value",
                               "decimal, digit, and numeric fields must denote the same value",
                           )
-                  elif decimal_value is None and digit_value is not None and numeric_value is not None:
+                  elif decimal_digit_value is None and digit_value is not None and numeric_value is not None:
                       numeric_type = "Digit"
                       if numeric_value != digit_value:
                           unicode_data_error(
                               line_number, "Numeric_Value",
                               "digit and numeric fields must denote the same value",
                           )
-                  elif decimal_value is None and digit_value is None and numeric_value is not None:
+                  elif decimal_digit_value is None and digit_value is None and numeric_value is not None:
                       numeric_type = "Numeric"
-                  elif decimal_value is None and digit_value is None and numeric_value is None:
+                  elif decimal_digit_value is None and digit_value is None and numeric_value is None:
                       numeric_type = "None"
                   else:
                       unicode_data_error(
@@ -918,7 +918,7 @@ jobs:
                       }
 
                   if category == "Nd":
-                      current_decimal_value = decimal_value
+                      current_decimal_value = decimal_digit_value
                       if decimal_codepoint is None:
                           if current_decimal_value != 0:
                               unicode_data_error(
@@ -926,7 +926,7 @@ jobs:
                                   "decimal digit sequence must begin at zero",
                               )
                       elif codepoint == decimal_codepoint + 1:
-                          expected_value = (decimal_value + 1) % 10
+                          expected_value = (decimal_run_value + 1) % 10
                           if current_decimal_value != expected_value:
                               unicode_data_error(
                                   line_number, "Decimal_Digit_Value",
@@ -935,7 +935,7 @@ jobs:
                           if current_decimal_value == 0:
                               decimal_digit_sets += 1
                       else:
-                          if decimal_value != 9:
+                          if decimal_run_value != 9:
                               unicode_data_error(
                                   decimal_line, "Decimal_Digit_Value",
                                   "decimal digit sequence must end at nine before a gap",
@@ -947,17 +947,17 @@ jobs:
                                   "decimal digit sequence must restart at zero",
                               )
                       decimal_codepoint = codepoint
-                      decimal_value = current_decimal_value
+                      decimal_run_value = current_decimal_value
                       decimal_line = line_number
                   elif decimal_codepoint is not None:
-                      if decimal_value != 9:
+                      if decimal_run_value != 9:
                           unicode_data_error(
                               decimal_line, "Decimal_Digit_Value",
                               "decimal digit sequence must end at nine",
                           )
                       decimal_digit_sets += 1
                       decimal_codepoint = None
-                      decimal_value = None
+                      decimal_run_value = None
                       decimal_line = None
 
                   record_count += 1

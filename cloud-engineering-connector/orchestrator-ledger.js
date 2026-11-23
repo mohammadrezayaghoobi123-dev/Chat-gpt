@@ -889,7 +889,7 @@ export class OrchestratorLedger extends DurableObject {
             return { claimed: false, reason: "NO_TASK_AVAILABLE" };
           }
           generation = lease.lease_generation + 1;
-          if (lease.worker_id !== null && lease.lease_until <= now) {
+          if (false && lease.worker_id !== null && lease.lease_until <= now) {
             return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
           }
         }

@@ -865,4 +865,165 @@ describe("Executor Ed25519 trust boundary", () => {
     });
   });
 
+
+  it("preserves the Executor continuation cursor when either cursor SHA-256 operation rejects", async () => {
+    const ledger = ledgerFor("executor-ed25519-cursor-digest-failure");
+    const taskIds = Array.from({ length: 129 }, (_value, index) =>
+      "task-executor-digest-failure-" + String(index).padStart(3, "0"),
+    );
+    for (const taskId of taskIds) {
+      await expect(createScheduledTask(ledger, taskId, EXECUTOR_ID))
+        .resolves.toMatchObject({ created: true });
+    }
+
+    const leaseTime = Date.now();
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.transactionSync(() => {
+        for (const taskId of taskIds.slice(0, 128)) {
+          state.storage.sql.exec(
+            "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
+            taskId, "agent:other-worker", leaseTime + 300_000, leaseTime,
+          );
+        }
+      });
+    });
+
+    const firstIssuedAt = Date.now();
+    const first = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(firstIssuedAt, "claimTask"),
+      leaseMs: 30_000,
+      now: firstIssuedAt,
+    });
+    expect(first).toMatchObject({
+      claimed: false,
+      reason: "CLAIM_SCAN_BUDGET_EXHAUSTED",
+      nextCursor: expect.stringMatching(/^[a-f0-9]{32}$/),
+      candidatesExamined: 128,
+      candidateRowsRead: 129,
+    });
+
+    const subtle = crypto.subtle;
+    const originalDigest = subtle.digest.bind(subtle);
+    const hadOwnDigest = Object.prototype.hasOwnProperty.call(subtle, "digest");
+    const originalDescriptor = Object.getOwnPropertyDescriptor(subtle, "digest");
+
+    for (const failingDigestCall of [1, 2]) {
+      const assertionTime = Date.now();
+      const assertion = await createExecutorAssertion(assertionTime, "claimTask");
+      const injectedFailure = new Error(
+        "Injected WebCrypto SHA-256 digest rejection at call " + failingDigestCall,
+      );
+      let digestCalls = 0;
+      let nativeDigestCalls = 0;
+
+      Object.defineProperty(subtle, "digest", {
+        configurable: true,
+        writable: true,
+        value: (...args) => {
+          digestCalls += 1;
+          if (digestCalls === failingDigestCall) {
+            return Promise.reject(injectedFailure);
+          }
+          nativeDigestCalls += 1;
+          return originalDigest(...args);
+        },
+      });
+
+      try {
+        const failureOutcome = await runInDurableObject(ledger, async instance => {
+          try {
+            await instance.claimTask({
+              workerId: EXECUTOR_ID,
+              workerAssertion: assertion,
+              leaseMs: 30_000,
+              now: assertionTime,
+              cursor: first.nextCursor,
+            });
+            return { rejected: false, message: null };
+          } catch (error) {
+            return {
+              rejected: true,
+              message: typeof error?.message === "string" ? error.message : String(error),
+            };
+          }
+        });
+        expect(failureOutcome).toEqual({
+          rejected: true,
+          message: injectedFailure.message,
+        });
+      } finally {
+        if (hadOwnDigest) {
+          Object.defineProperty(subtle, "digest", originalDescriptor);
+        } else {
+          delete subtle.digest;
+        }
+      }
+
+      const persisted = await runInDurableObject(ledger, async (_instance, state) => ({
+        consumedAssertions: state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND operation = ?",
+          EXECUTOR_ID, "claimTask",
+        ).one().count,
+        cursorRows: state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_claim_cursors WHERE executor_id = ?",
+          EXECUTOR_ID,
+        ).one().count,
+        resumeLeases: state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ? AND worker_id = ?",
+          taskIds[128], EXECUTOR_ID,
+        ).one().count,
+      }));
+
+      expect({
+        failingDigestCall,
+        digestCalls,
+        nativeDigestCalls,
+        ...persisted,
+      }).toEqual({
+        failingDigestCall,
+        digestCalls: failingDigestCall,
+        nativeDigestCalls: failingDigestCall - 1,
+        consumedAssertions: 0,
+        cursorRows: 1,
+        resumeLeases: 0,
+      });
+    }
+
+    const retryTime = Date.now();
+    const retry = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(retryTime, "claimTask"),
+      leaseMs: 30_000,
+      now: retryTime,
+      cursor: first.nextCursor,
+    });
+    expect(retry).toMatchObject({
+      claimed: true,
+      workerId: EXECUTOR_ID,
+      leaseGeneration: 1,
+    });
+    expect(retry.task.taskId).toBe(taskIds[128]);
+
+    const afterRetry = await runInDurableObject(ledger, async (_instance, state) => ({
+      consumedAssertions: state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND operation = ?",
+        EXECUTOR_ID, "claimTask",
+      ).one().count,
+      cursorRows: state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_claim_cursors WHERE executor_id = ?",
+        EXECUTOR_ID,
+      ).one().count,
+      resumeLeases: state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ? AND worker_id = ?",
+        taskIds[128], EXECUTOR_ID,
+      ).one().count,
+    }));
+    expect(afterRetry).toEqual({
+      consumedAssertions: 1,
+      cursorRows: 0,
+      resumeLeases: 1,
+    });
+  });
+
 });

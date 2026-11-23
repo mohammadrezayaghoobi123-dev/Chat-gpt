@@ -1347,10 +1347,10 @@ export class OrchestratorLedger extends DurableObject {
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
       const row = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", eventId).toArray()[0];
-      if (!row || row.status !== "IN_PROGRESS" || row.lease_worker_id !== workerId ||
-          row.lease_generation !== leaseGeneration || row.lease_until <= now) {
+      if (!row || row.status !== "IN_PROGRESS") {
         return { completed: false, reason: "LEASE_FENCE_MISMATCH" };
       }
+// MUTANT: Owner/Publisher lease ownership, generation, and expiry checks bypassed.
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return { completed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       sql.exec(
         "UPDATE orchestrator_outbox_events SET status = 'COMPLETED', lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND status = 'IN_PROGRESS' AND lease_worker_id = ? AND lease_generation = ?",

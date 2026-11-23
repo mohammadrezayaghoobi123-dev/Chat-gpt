@@ -677,9 +677,13 @@ async function buildImmutableReviewPatch({
     throw new Error("Exact-SHA Compare API response is incomplete or does not match the expected base commit.");
   }
 
-  const [baseTree, headTree] = await Promise.all([
+  const mergeBaseSha = validateGitSha(
+    comparison.merge_base_commit?.sha,
+    "Compare API merge-base SHA",
+  );
+  const [mergeBaseTree, headTree] = await Promise.all([
     fetchImmutableGitTree({
-      fetchImpl, base, repoPath, token, deadlineAt, commitSha: expectedBaseSha, label: "Base",
+      fetchImpl, base, repoPath, token, deadlineAt, commitSha: mergeBaseSha, label: "Merge base",
     }),
     fetchImmutableGitTree({
       fetchImpl, base, repoPath, token, deadlineAt, commitSha: expectedHeadSha, label: "Head",
@@ -687,8 +691,8 @@ async function buildImmutableReviewPatch({
   ]);
 
   const changedPaths = new Set();
-  for (const filePath of new Set([...baseTree.keys(), ...headTree.keys()])) {
-    const beforeEntry = baseTree.get(filePath);
+  for (const filePath of new Set([...mergeBaseTree.keys(), ...headTree.keys()])) {
+    const beforeEntry = mergeBaseTree.get(filePath);
     const afterEntry = headTree.get(filePath);
     if (
       !beforeEntry ||
@@ -730,7 +734,7 @@ async function buildImmutableReviewPatch({
   const formattedFiles = [];
 
   for (const filePath of changedPaths) {
-    const beforeEntry = baseTree.get(filePath);
+    const beforeEntry = mergeBaseTree.get(filePath);
     const afterEntry = headTree.get(filePath);
     const entries = [beforeEntry, afterEntry].filter(Boolean);
     for (const entry of entries) {

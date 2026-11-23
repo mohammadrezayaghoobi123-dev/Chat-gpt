@@ -1209,4 +1209,174 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+
+  it("retries Owner cancellation from a fresh task snapshot when an Agent transition commits after the initial read", async () => {
+    const taskId = "task-owner-cancel-transition-linearizability-0001";
+    const workerId = "agent:worker-1";
+    const ledger = ledgerFor("owner-cancel-transition-linearizability");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const claim = await ledger.claimTask({
+      taskId,
+      workerId,
+      workerAssertion: await workerAssertion(workerId, "agent", "claimTask", now + 1),
+      leaseMs: 30_000,
+      now: now + 1,
+    });
+    expect(claim).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    const ownerCommand = await ownerInput({
+      command: {
+        operation: "cancel",
+        taskId,
+        reason: "Owner cancelled during Agent transition",
+        eventId: "owner-transition-cancel-race-01",
+      },
+      deliveryId: "delivery-transition-cancel-race-01",
+      commentId: "123456807",
+      now: now + 3,
+    });
+    const transitionAssertion = await workerAssertion(
+      workerId, "agent", "transitionTask", now + 3,
+    );
+    const transitionJti = assertionJti(transitionAssertion);
+
+    // Pause on the actual Owner cancellation audit hash, which is computed
+    // after the task snapshot and before the Owner write transaction. Matching
+    // semantic audit fields avoids depending on an internal digest call count.
+    const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+    let ownerAuditHashPaused = false;
+    let releaseOwnerDigest;
+    let signalOwnerSnapshot;
+    const ownerDigestGate = new Promise(resolve => {
+      releaseOwnerDigest = resolve;
+    });
+    const ownerSnapshotReached = new Promise(resolve => {
+      signalOwnerSnapshot = resolve;
+    });
+    const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(async (algorithm, data) => {
+      const digestInput = new TextDecoder().decode(data);
+      if (!ownerAuditHashPaused &&
+          digestInput.includes('"eventId":"owner-owner-transition-cancel-race-01"') &&
+          digestInput.includes('"eventType":"OWNER_TASK_CANCELLED"')) {
+        ownerAuditHashPaused = true;
+        signalOwnerSnapshot();
+        await ownerDigestGate;
+      }
+      return originalDigest(algorithm, data);
+    });
+
+    let transition;
+    let cancellation;
+    try {
+      const raceResult = await runInDurableObject(ledger, async instance => {
+        const ownerPromise = instance.executeOwnerCommand(ownerCommand);
+        const barrierState = await Promise.race([
+          ownerSnapshotReached.then(() => "owner-snapshot-paused"),
+          ownerPromise.then(() => "owner-finished-before-snapshot-barrier"),
+        ]);
+        expect(barrierState).toBe("owner-snapshot-paused");
+
+        const agentTransition = await instance.transitionTask({
+          taskId,
+          expectedVersion: 1,
+          expectedState: "SCHEDULED",
+          nextState: "RUNNING",
+          actor: {
+            id: workerId,
+            role: "agent",
+            authenticated: true,
+            identityVerified: true,
+          },
+          evidence: {},
+          now: now + 3,
+          workerId,
+          workerAssertion: transitionAssertion,
+          leaseGeneration: 1,
+          outboxEvent: {
+            eventId: "agent-transition-before-owner-cancel-01",
+            idempotencyKey: "agent-transition-before-owner-cancel-key-01",
+            eventType: "task.running",
+            payload: { taskId, version: 2 },
+          },
+        });
+        releaseOwnerDigest();
+        const ownerCancellation = await ownerPromise;
+        return { transition: agentTransition, cancellation: ownerCancellation };
+      });
+      transition = raceResult.transition;
+      cancellation = raceResult.cancellation;
+    } finally {
+      releaseOwnerDigest();
+      digestSpy.mockRestore();
+    }
+
+    expect(transition).toMatchObject({
+      updated: true,
+      task: { taskId, state: "RUNNING", version: 2 },
+      outbox: { enqueued: true },
+    });
+    expect(cancellation).toMatchObject({
+      applied: true,
+      operation: "cancel",
+      task: { taskId, state: "CANCELLED", version: 3 },
+    });
+    expect(ownerAuditHashPaused).toBe(true);
+
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+      taskId,
+      state: "CANCELLED",
+      version: 3,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        taskId,
+      ).one()).toMatchObject({
+        worker_id: null,
+        lease_generation: 2,
+        lease_until: 0,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        transitionJti,
+      ).one().count).toBe(1);
+
+      const outbox = state.storage.sql.exec(
+        "SELECT status, retry_state, last_error_code, lease_worker_id, lease_generation, lease_until FROM orchestrator_outbox_events WHERE event_id = ?",
+        "agent-transition-before-owner-cancel-01",
+      ).one();
+      expect(outbox).toMatchObject({
+        status: "PENDING",
+        retry_state: "DEAD_LETTER",
+        last_error_code: "OWNER_CANCELLED",
+        lease_worker_id: null,
+        lease_generation: 1,
+        lease_until: 0,
+      });
+
+      const audit = state.storage.sql.exec(
+        "SELECT event_type, details_json FROM orchestrator_audit_events WHERE task_id = ?",
+        taskId,
+      ).one();
+      expect(audit.event_type).toBe("OWNER_TASK_CANCELLED");
+      expect(JSON.parse(audit.details_json)).toMatchObject({
+        expectedVersion: 2,
+        expectedState: "RUNNING",
+        resultingVersion: 3,
+        resultingState: "CANCELLED",
+        fromState: "RUNNING",
+        toState: "CANCELLED",
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ? AND operation = 'cancel'",
+        taskId,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions WHERE task_id = ? AND operation = 'cancel'",
+        taskId,
+      ).one().count).toBe(1);
+    });
+  });
+
 });

@@ -3,6 +3,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
+import { consumeOrchestratorOutbox } from "../worker.js";
 
 const now = 1_800_000_000_000;
 const ownerId = "335530603";
@@ -266,4 +267,124 @@ describe("Owner command atomic Ledger contract", () => {
         .toMatchObject({ state: "SCHEDULED", version: 1 });
     });
   });
+
+  it.each([
+    ["cancel", "CANCELLED"],
+    ["quarantine", "QUARANTINED"],
+  ])("linearizes duplicate Queue consumers against concurrent Owner %s", async (operation, expectedState) => {
+    const taskId = `task-owner-race-${operation}`;
+    const ledger = ledgerFor(`owner-receipt-race-${operation}`);
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const eventId = `owner-race-${operation}-outbox-01`;
+    const idempotencyKey = `owner-race-${operation}-key-01`;
+    const payload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
+    const enqueued = await ledger.enqueueOutbox({
+      eventId,
+      idempotencyKey,
+      taskId,
+      eventType: "task.transitioned",
+      payload,
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox"),
+      now,
+    });
+    expect(enqueued).toMatchObject({ enqueued: true });
+
+    const body = {
+      attempts: 1,
+      createdAt: now,
+      eventId,
+      eventType: "task.transitioned",
+      idempotencyKey,
+      payload,
+      schemaVersion: 1,
+      taskId,
+    };
+    const makeQueueMessage = () => ({
+      body: structuredClone(body),
+      ackCalls: 0,
+      retryCalls: 0,
+      ack() { this.ackCalls += 1; },
+      retry() { this.retryCalls += 1; },
+    });
+    const messages = [makeQueueMessage(), makeQueueMessage()];
+    const consumerEnv = {
+      ORCHESTRATOR_LEDGER: {
+        idFromName: () => `owner-receipt-race-${operation}`,
+        get: () => ledger,
+      },
+      LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: env.LEDGER_WORKER_ASSERTION_ACTIVE_KID,
+    };
+    const ownerCommand = await ownerInput({
+      command: {
+        operation,
+        taskId,
+        eventId: `owner-race-${operation}-command-01`,
+      },
+      deliveryId: `delivery-owner-race-${operation}-01`,
+      commentId: operation === "cancel" ? "123456793" : "123456794",
+    });
+
+    const [firstConsumer, secondConsumer, ownerResult] = await Promise.all([
+      consumeOrchestratorOutbox({ messages: [messages[0]] }, consumerEnv),
+      consumeOrchestratorOutbox({ messages: [messages[1]] }, consumerEnv),
+      ledger.executeOwnerCommand(ownerCommand),
+    ]);
+
+    expect(ownerResult).toMatchObject({
+      applied: true,
+      operation,
+      task: { taskId, state: expectedState, version: 2 },
+    });
+    expect(firstConsumer).toMatchObject({ received: 1, acknowledged: 1, retried: 0 });
+    expect(secondConsumer).toMatchObject({ received: 1, acknowledged: 1, retried: 0 });
+    expect(messages).toEqual([
+      expect.objectContaining({ ackCalls: 1, retryCalls: 0 }),
+      expect.objectContaining({ ackCalls: 1, retryCalls: 0 }),
+    ]);
+    expect(await ledger.getTask({ taskId })).toMatchObject({
+      taskId, state: expectedState, version: 2,
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      const receipts = state.storage.sql.exec(
+        "SELECT event_id, event_type, schema_version, envelope_sha256, consumer_id FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).toArray();
+      // Linearization is intentionally nondeterministic: both consumers may
+      // commit before Owner, or both may observe Owner's fence. A partially
+      // committed or duplicate receipt is never a valid outcome.
+      expect(receipts.length).toBeLessThanOrEqual(1);
+      if (receipts.length === 1) {
+        expect(receipts[0]).toMatchObject({
+          event_id: eventId,
+          event_type: "task.transitioned",
+          schema_version: 1,
+          consumer_id: "orchestrator-outbox-consumer",
+        });
+        expect(receipts[0].envelope_sha256).toMatch(/^[a-f0-9]{64}$/);
+      }
+
+      expect(state.storage.sql.exec(
+        "SELECT retry_state, lease_generation, lease_worker_id, lease_until FROM orchestrator_outbox_events WHERE event_id = ?",
+        eventId,
+      ).one()).toMatchObject({
+        retry_state: "DEAD_LETTER",
+        lease_generation: 1,
+        lease_worker_id: null,
+        lease_until: 0,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ? AND operation = ?",
+        taskId, operation,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ? AND event_type = ?",
+        taskId, operation === "cancel" ? "OWNER_TASK_CANCELLED" : "OWNER_TASK_QUARANTINED",
+      ).one().count).toBe(1);
+    });
+  });
+
 });

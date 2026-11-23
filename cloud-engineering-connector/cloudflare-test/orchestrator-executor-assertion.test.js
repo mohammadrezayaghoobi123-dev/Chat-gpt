@@ -6,8 +6,6 @@ import { createExecutorWorkerAssertion } from "../orchestrator-executor-assertio
 
 const EXECUTOR_ID = "orchestrator-executor";
 const EXECUTOR_KID = "executor-ed25519-v1";
-const SCHEDULER_MARKER = "test-v1";
-const SCHEDULER_BYTES = new TextEncoder().encode("0123456789abcdef0123456789abcdef");
 const now = 1_800_000_000_000;
 
 function ledgerFor(name) {
@@ -34,12 +32,21 @@ async function createHmacAssertion({ subject, role, operation, nowMs }) {
     jti: "jti-" + base64Url(crypto.getRandomValues(new Uint8Array(16))),
   };
   const payload = base64Url(new TextEncoder().encode(canonicalJson(claims)));
-  const signingInput = "v1." + SCHEDULER_MARKER + "." + payload;
-  const key = await crypto.subtle.importKey(
-    "raw", SCHEDULER_BYTES, { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  const keySet = JSON.parse(env.LEDGER_WORKER_ASSERTION_KEYS);
+  const encodedMaterial = keySet["test-v1"];
+  if (typeof encodedMaterial !== "string" || !/^[a-f0-9]{64,128}$/.test(encodedMaterial)) {
+    throw new Error("Missing test-only Scheduler assertion material.");
+  }
+  const material = Uint8Array.from(
+    encodedMaterial.match(/.{2}/g),
+    pair => Number.parseInt(pair, 16),
+  );
+  const signingInput = "v1.test-v1." + payload;
+  const hmacKey = await crypto.subtle.importKey(
+    "raw", material, { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
   );
   const signature = new Uint8Array(await crypto.subtle.sign(
-    "HMAC", key, new TextEncoder().encode(signingInput),
+    "HMAC", hmacKey, new TextEncoder().encode(signingInput),
   ));
   return signingInput + "." + base64Url(signature);
 }

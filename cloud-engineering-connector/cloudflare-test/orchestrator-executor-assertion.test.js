@@ -625,4 +625,72 @@ describe("Executor Ed25519 trust boundary", () => {
       Date.now = realNow;
     }
   });
+
+  it("atomically rejects concurrent Executor claims that reuse one JTI", async () => {
+    const ledger = ledgerFor("executor-ed25519-concurrent-jti-replay");
+    const taskIds = [
+      "task-executor-concurrent-jti-one",
+      "task-executor-concurrent-jti-two",
+    ];
+    for (const taskId of taskIds) {
+      await expect(createScheduledTask(ledger, taskId, EXECUTOR_ID))
+        .resolves.toMatchObject({ created: true });
+    }
+
+    const assertion = await createExecutorAssertion(now, "claimTask");
+    const subtle = crypto.subtle;
+    const originalVerify = subtle.verify.bind(subtle);
+    const hadOwnVerify = Object.prototype.hasOwnProperty.call(subtle, "verify");
+    const originalDescriptor = Object.getOwnPropertyDescriptor(subtle, "verify");
+    let verificationCalls = 0;
+    let releaseVerificationBarrier;
+    const verificationBarrier = new Promise(resolve => {
+      releaseVerificationBarrier = resolve;
+    });
+
+    Object.defineProperty(subtle, "verify", {
+      configurable: true,
+      writable: true,
+      value: async (...args) => {
+        verificationCalls += 1;
+        if (verificationCalls === 2) releaseVerificationBarrier();
+        await verificationBarrier;
+        return originalVerify(...args);
+      },
+    });
+
+    try {
+      const results = await Promise.all(taskIds.map(taskId => ledger.claimTask({
+        workerId: EXECUTOR_ID,
+        workerAssertion: assertion,
+        leaseMs: 30_000,
+        now,
+        taskId,
+      })));
+
+      expect(verificationCalls).toBe(2);
+      expect(results.filter(result => result.claimed)).toHaveLength(1);
+      expect(results.filter(result =>
+        result.claimed === false && result.reason === "AUTHENTICATED_WORKER_REQUIRED"
+      )).toHaveLength(1);
+
+      await runInDurableObject(ledger, async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND operation = ?",
+          EXECUTOR_ID, "claimTask",
+        ).one().count).toBe(1);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id IN (?, ?) AND worker_id = ?",
+          taskIds[0], taskIds[1], EXECUTOR_ID,
+        ).one().count).toBe(1);
+      });
+    } finally {
+      if (hadOwnVerify) {
+        Object.defineProperty(subtle, "verify", originalDescriptor);
+      } else {
+        delete subtle.verify;
+      }
+    }
+  });
+
 });

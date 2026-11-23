@@ -18,6 +18,17 @@ const CLAIM_CURSOR_TTL_MS = 15 * 60_000;
 const MAX_EXPIRED_CLAIM_CURSORS_PER_CALL = 64;
 const EXECUTOR_PRINCIPAL = "orchestrator-executor";
 const EXECUTOR_OPERATIONS = Object.freeze(["claimTask", "renewLease", "releaseLease"]);
+const EXECUTOR_CLOCK_SKEW_SECONDS = 5;
+
+function executorTrustedNow(assertion) {
+  const trustedNow = Date.now();
+  if (assertion.expiresAt < Math.floor(trustedNow / 1000) - EXECUTOR_CLOCK_SKEW_SECONDS) {
+    throw Object.assign(new Error("Executor assertion expired before the Ledger state transition."), {
+      code: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+  }
+  return trustedNow;
+}
 
 async function verifyLedgerWorkerAssertion(env, workerId, workerAssertion, role, operation, now) {
   if (workerId === EXECUTOR_PRINCIPAL) {
@@ -39,7 +50,7 @@ async function verifyLedgerWorkerAssertion(env, workerId, workerAssertion, role,
         code: "AUTHENTICATED_WORKER_REQUIRED",
       });
     }
-    return Object.freeze({ ...verified, trustedNow });
+    return verified;
   }
   return verifyWorkerAssertion(env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
     subject: workerId, role, operation, nowMs: now,
@@ -807,7 +818,6 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
-    now = verifiedAssertion.trustedNow ?? now;
     if (taskId !== undefined) identifier(taskId, "taskId");
     if (taskId !== undefined && cursor !== undefined) {
       return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
@@ -823,6 +833,15 @@ export class OrchestratorLedger extends DurableObject {
     const nextCursorHash = nextCursorToken === null
       ? null
       : await sha256Canonical({ token: nextCursorToken });
+
+    if (workerId === EXECUTOR_PRINCIPAL) {
+      try {
+        // Sample time after all asynchronous verification and hashing, immediately before the transaction.
+        now = executorTrustedNow(verifiedAssertion);
+      } catch {
+        return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+    }
 
     // Caller-shaped evidence is not an authorization. No trusted reconciliation
     // issuer or claimTask runtime caller exists in this repository, so expired
@@ -1115,10 +1134,10 @@ export class OrchestratorLedger extends DurableObject {
       verifiedAssertion = await verifyLedgerWorkerAssertion(
         this.env, workerId, workerAssertion, "agent", "renewLease", now,
       );
+      if (workerId === EXECUTOR_PRINCIPAL) now = executorTrustedNow(verifiedAssertion);
     } catch {
       return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
-    now = verifiedAssertion.trustedNow ?? now;
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
@@ -1146,6 +1165,7 @@ export class OrchestratorLedger extends DurableObject {
       verifiedAssertion = await verifyLedgerWorkerAssertion(
         this.env, workerId, workerAssertion, "agent", "releaseLease", now,
       );
+      if (workerId === EXECUTOR_PRINCIPAL) now = executorTrustedNow(verifiedAssertion);
     } catch {
       return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }

@@ -1681,8 +1681,8 @@ export class OrchestratorLedger extends DurableObject {
           const currentAuditHead = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
           if ((currentAuditHead?.event_hash ?? null) !== previousHash) return { retry: true };
           const currentRow = sql.exec("SELECT state, version FROM orchestrator_tasks WHERE task_id = ?", command.taskId).toArray()[0] ?? null;
-          if ((currentRow?.version ?? null) !== (taskRow?.version ?? null) ||
-              (currentRow?.state ?? null) !== (taskRow?.state ?? null)) return { retry: true };
+          // Intentional mutation: bypass stale task snapshot fencing.
+          if (false) return { retry: true };
           const claimedDelivery = sql.exec(
             "SELECT * FROM orchestrator_github_webhook_deliveries WHERE delivery_id = ?",
             context.deliveryId,

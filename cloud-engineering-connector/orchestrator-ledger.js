@@ -686,7 +686,7 @@ export class OrchestratorLedger extends DurableObject {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
-      if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
+      if (!lease || lease.lease_generation !== leaseGeneration) {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {

@@ -315,7 +315,7 @@ describe("Owner command atomic Ledger contract", () => {
         get: () => ledger,
       },
       LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
-      LEDGER_WORKER_ASSERTION_ACTIVE_KID: env.LEDGER_WORKER_ASSERTION_ACTIVE_KID,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: "test-v1",
     };
     const ownerCommand = await ownerInput({
       command: {

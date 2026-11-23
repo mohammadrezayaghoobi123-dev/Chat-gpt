@@ -1124,7 +1124,7 @@ describe("Owner command atomic Ledger contract", () => {
       releaseOwnerAuditDigest = resolve;
     });
     const originalDigest = crypto.subtle.digest;
-    const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(async (algorithm, data) => {
+    const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(async function (algorithm, data) {
       const serialized = new TextDecoder().decode(data);
       if (!heldOwnerAuditDigest &&
           serialized.includes('"eventType":"OWNER_TASK_QUARANTINED"') &&
@@ -1133,7 +1133,7 @@ describe("Owner command atomic Ledger contract", () => {
         signalOwnerAuditDigest();
         await ownerAuditDigestGate;
       }
-      return Reflect.apply(originalDigest, crypto.subtle, [algorithm, data]);
+      return Reflect.apply(originalDigest, this, [algorithm, data]);
     });
 
     let transition;

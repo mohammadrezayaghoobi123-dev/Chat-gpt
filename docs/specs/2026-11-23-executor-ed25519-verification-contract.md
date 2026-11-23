@@ -102,6 +102,10 @@ A rotation may temporarily include multiple public key identifiers, up to the ve
 - Existing HMAC agent claims and Scheduler/Outbox tests remain green.
 - No public claim, lease, cursor, or assertion-minting MCP API is introduced.
 
+## Test fixture isolation
+
+The Durable Object test harness derives a deterministic Ed25519 fixture at test runtime from numeric test-only material. The derived signing material is not stored as a literal, is not a production credential, and is never bound into the Ledger Worker environment. The Ledger test environment receives only the corresponding public key. The Scheduler HMAC test material is read from the existing test-only binding rather than duplicated in source.
+
 ## Release boundary
 
 This contract is not evidence that a dedicated Executor Worker is deployed or that a private key has been provisioned. Until the separate Worker is implemented, configured with a dedicated private key, bound privately to the Ledger Durable Object, and independently verified, the Executor runtime remains inactive. Missing public-key configuration fails closed. Merge and deployment remain outside this PR.

@@ -1202,8 +1202,12 @@ test("knowledge_document_propose hashes all deterministic identifiers before any
  const targetBytes=new TextEncoder().encode("owner\\n"+proposalId);
  const injectedFailure=new Error("SENSITIVE_VAULT_EVENT_ID_HASH_FAILURE");
  let targetedDigestCalls=0;
+ const blobSha=createHash("sha1")
+  .update("blob "+Buffer.byteLength(contentText)+"\0")
+  .update(contentText)
+  .digest("hex");
  const fixture=createGitHubWriteMock({
-  filePath:path,blobSha:"e".repeat(40),baseBranch:"main"
+  filePath:path,blobSha,baseBranch:"main"
  });
  const writeControl=createWriteControlBinding();
  knowledgeStore.calls.length=0;

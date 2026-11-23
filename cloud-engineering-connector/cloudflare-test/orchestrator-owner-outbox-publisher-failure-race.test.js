@@ -189,7 +189,7 @@ describe("Owner transition versus in-flight Outbox Publisher callback", () => {
         transition: "created",
         source: "owner-publisher-race",
       };
-      const ledger = ledgerFor("owner-publisher-race-" + operation + "-" + sendOutcome);
+      const ledger = ledgerFor("orchestrator-ledger-global");
 
       try {
         expect(await createTask(ledger, taskId)).toMatchObject({

@@ -53,6 +53,9 @@ The MCP layer may not:
 Use a dedicated job-intake Queue, distinct from the existing outbox and DLQ queues.
 
 A trusted internal scheduler consumer:
+
+**Signer boundary:** the existing `createScheduledWorkerAssertion` helper is documented as deriving authority from a scheduled-event path. A Queue consumer must not inherit that authority by assumption. Implementation must either introduce a narrowly scoped Queue-consumer signer principal/entry point that is reachable only from the dedicated Queue handler, or use a scheduled-only poller with an explicitly designed durable intake store. The existing scheduler signer policy must not be broadened to caller-selected subjects or payload-selected operations.
+
 1. Validates the request envelope again; the MCP boundary is not a trust substitute.
 2. Performs durable idempotency and conflict detection in the Ledger.
 3. Creates a task through the existing fixed scheduler principal.

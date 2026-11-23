@@ -82,7 +82,7 @@ The verifier enforces a 60-second maximum lifetime and five-second clock-skew al
 
 - When workerId is exactly orchestrator-executor, claimTask, renewLease, and releaseLease must use ORCHESTRATOR_EXECUTOR_VERIFICATION_KEYS and the Ed25519 v2 verifier; the signed operation must exactly match the Ledger method being invoked.
 - An HMAC v1 assertion must not authenticate that fixed Executor principal.
-- An Ed25519 Executor assertion must not authenticate Scheduler task creation or other Ledger operations outside the fixed allowlist. The fixed Executor principal is rejected from all other agent-authenticated Ledger methods, including advanceAgentRound, appendAuditEvent, transitionTask, recordMessage, and enqueueOutbox.
+- An Ed25519 or legacy HMAC assertion must not authenticate the fixed Executor principal for Scheduler task creation or any Ledger operation outside the fixed allowlist. The fixed Executor principal is rejected from every Ledger method outside the fixed allowlist, including agent operations (advanceAgentRound, appendAuditEvent, transitionTask, recordMessage, enqueueOutbox) and publisher operations (claimOutbox, failOutbox, completeOutbox).
 - Other existing agent identities retain the current HMAC compatibility path.
 - Scheduler/Outbox HMAC signer and verifier behavior is not migrated or broadened here.
 - The legacy HMAC createExecutorWorkerAssertion export now fails closed; only the Ed25519 signer module can mint a valid Executor assertion.

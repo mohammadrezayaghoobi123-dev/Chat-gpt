@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
 import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
@@ -1075,6 +1075,135 @@ describe("Owner command atomic Ledger contract", () => {
       ).one().count).toBe(2);
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE task_id = ?",
+        taskId,
+      ).one().count).toBe(1);
+    });
+  });
+
+
+  it("linearizes an active Agent transition against Owner quarantine without leaving a runnable task", async () => {
+    const taskId = "task-owner-transition-linearization-0001";
+    const workerId = "agent:worker-1";
+    const ledger = ledgerFor("owner-transition-linearization-race");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const claim = await ledger.claimTask({
+      taskId,
+      workerId,
+      workerAssertion: await workerAssertion(workerId, "agent", "claimTask", now + 1),
+      leaseMs: 30_000,
+      now: now + 1,
+    });
+    expect(claim).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    const transitionAssertion = await workerAssertion(
+      workerId, "agent", "transitionTask", now + 2,
+    );
+    const transitionJti = assertionJti(transitionAssertion);
+    const quarantineCommand = await ownerInput({
+      command: {
+        operation: "quarantine",
+        taskId,
+        eventId: "owner-transition-linearization-quarantine-01",
+      },
+      deliveryId: "delivery-transition-linearization-quarantine-01",
+      commentId: "123456807",
+      now: now + 2,
+    });
+
+    // Hold the Owner's audit hash after its optimistic task snapshot but before
+    // its transaction. This forces the otherwise narrow stale-snapshot window:
+    // Agent commits v2 while Owner still holds its v1 snapshot.
+    let releaseOwnerAuditDigest;
+    let signalOwnerAuditDigest;
+    let heldOwnerAuditDigest = false;
+    const ownerAuditDigestReached = new Promise(resolve => {
+      signalOwnerAuditDigest = resolve;
+    });
+    const ownerAuditDigestGate = new Promise(resolve => {
+      releaseOwnerAuditDigest = resolve;
+    });
+    let transition;
+    let quarantine;
+    await runInDurableObject(ledger, async instance => {
+      // Install the gate inside the Durable Object context. WebCrypto objects
+      // are context-bound by the Workers runtime and must not cross DO contexts.
+      const originalDigest = crypto.subtle.digest;
+      const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(async function (algorithm, data) {
+        const serialized = new TextDecoder().decode(data);
+        if (!heldOwnerAuditDigest &&
+            serialized.includes('"eventType":"OWNER_TASK_QUARANTINED"') &&
+            serialized.includes("owner-transition-linearization-quarantine-01")) {
+          heldOwnerAuditDigest = true;
+          signalOwnerAuditDigest();
+          await ownerAuditDigestGate;
+        }
+        return Reflect.apply(originalDigest, this, [algorithm, data]);
+      });
+      try {
+        const quarantinePromise = instance.executeOwnerCommand(quarantineCommand);
+        await ownerAuditDigestReached;
+        transition = await instance.transitionTask({
+          taskId,
+          expectedVersion: 1,
+          expectedState: "SCHEDULED",
+          nextState: "RUNNING",
+          actor: {
+            id: workerId,
+            role: "agent",
+            authenticated: true,
+            identityVerified: true,
+          },
+          evidence: { executionStartedAt: now + 2 },
+          now: now + 2,
+          workerId,
+          workerAssertion: transitionAssertion,
+          leaseGeneration: claim.leaseGeneration,
+        });
+        releaseOwnerAuditDigest();
+        quarantine = await quarantinePromise;
+      } finally {
+        releaseOwnerAuditDigest?.();
+        digestSpy.mockRestore();
+      }
+    });
+
+    // The gate forces the stale-snapshot history: Agent commits RUNNING v2
+    // after Owner's v1 snapshot, then Owner must retry and quarantine v3.
+    expect(transition).toMatchObject({
+      updated: true,
+      task: { taskId, state: "RUNNING", version: 2 },
+    });
+    expect(quarantine).toMatchObject({
+      applied: true,
+      operation: "quarantine",
+      task: { taskId, state: "QUARANTINED", version: 3 },
+    });
+
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+      taskId,
+      state: "QUARANTINED",
+      version: 3,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        taskId,
+      ).one()).toMatchObject({
+        worker_id: null,
+        lease_generation: 2,
+        lease_until: 0,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        transitionJti,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ? AND operation = 'quarantine'",
+        taskId,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ? AND event_type = 'OWNER_TASK_QUARANTINED'",
         taskId,
       ).one().count).toBe(1);
     });

@@ -709,41 +709,30 @@ describe("Executor Ed25519 trust boundary", () => {
     const originalDescriptor = Object.getOwnPropertyDescriptor(subtle, "verify");
     const realNow = Date.now;
     let verificationCalls = 0;
-    let releaseVerification;
-    let signalVerificationEntered;
-    const verificationEntered = new Promise(resolve => {
-      signalVerificationEntered = resolve;
-    });
-    const verificationBarrier = new Promise(resolve => {
-      releaseVerification = resolve;
-    });
 
     Object.defineProperty(subtle, "verify", {
       configurable: true,
       writable: true,
-      value: async (...args) => {
+      value: (...args) => {
         verificationCalls += 1;
-        signalVerificationEntered();
-        await verificationBarrier;
-        return originalVerify(...args);
+        const pendingVerification = originalVerify(...args);
+        ledgerClock = issuedAt + 66_000;
+        return pendingVerification;
       },
     });
     Date.now = () => ledgerClock;
 
     try {
-      const claimPromise = ledger.claimTask({
+      const result = await ledger.claimTask({
         workerId: EXECUTOR_ID,
         workerAssertion: assertion,
         leaseMs: 30_000,
         now: issuedAt,
         taskId,
       });
+      Date.now = realNow;
 
-      await verificationEntered;
-      ledgerClock = issuedAt + 66_000;
-      releaseVerification();
-
-      await expect(claimPromise).resolves.toMatchObject({
+      expect(result).toMatchObject({
         claimed: false,
         reason: "AUTHENTICATED_WORKER_REQUIRED",
       });
@@ -760,7 +749,6 @@ describe("Executor Ed25519 trust boundary", () => {
         ).one().count).toBe(0);
       });
     } finally {
-      releaseVerification();
       Date.now = realNow;
       if (hadOwnVerify) {
         Object.defineProperty(subtle, "verify", originalDescriptor);

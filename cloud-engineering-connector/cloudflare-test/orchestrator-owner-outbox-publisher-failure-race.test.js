@@ -207,6 +207,21 @@ describe("Owner transition versus in-flight Outbox Publisher callback", () => {
           event: { eventId, status: "PENDING", attempts: 0, leaseGeneration: 0 },
         });
 
+        const assertionBaseline = await runInDurableObject(ledger, (_instance, state) => {
+          const count = (role, operation) => state.storage.sql.exec(
+            "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND role = ? AND operation = ?",
+            role === "publisher" ? publisherId : consumerId,
+            role,
+            operation,
+          ).one().count;
+          return {
+            publisherClaims: count("publisher", "claimOutbox"),
+            publisherCompletions: count("publisher", "completeOutbox"),
+            publisherFailures: count("publisher", "failOutbox"),
+            consumerReceipts: count("consumer", "recordOutboxReceipt"),
+          };
+        });
+
         const queue = {
           send: async (message, options) => {
             queued.push({ message: structuredClone(message), options });
@@ -350,16 +365,19 @@ describe("Owner transition versus in-flight Outbox Publisher callback", () => {
           expect(state.storage.sql.exec(
             "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND role = 'publisher' AND operation = 'claimOutbox'",
             publisherId,
-          ).one().count).toBe(1);
+          ).one().count).toBe(assertionBaseline.publisherClaims + 1);
           expect(state.storage.sql.exec(
-            "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND role = 'publisher' AND operation = ?",
+            "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND role = 'publisher' AND operation = 'completeOutbox'",
             publisherId,
-            sendOutcome === "success" ? "completeOutbox" : "failOutbox",
-          ).one().count).toBe(0);
+          ).one().count).toBe(assertionBaseline.publisherCompletions);
+          expect(state.storage.sql.exec(
+            "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND role = 'publisher' AND operation = 'failOutbox'",
+            publisherId,
+          ).one().count).toBe(assertionBaseline.publisherFailures);
           expect(state.storage.sql.exec(
             "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND role = 'consumer' AND operation = 'recordOutboxReceipt'",
             consumerId,
-          ).one().count).toBe(1);
+          ).one().count).toBe(assertionBaseline.consumerReceipts + 1);
         });
 
         // A lease expiry cannot resurrect a DEAD_LETTER event, even after the
@@ -386,7 +404,7 @@ describe("Owner transition versus in-flight Outbox Publisher callback", () => {
           expect(state.storage.sql.exec(
             "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND role = 'publisher' AND operation = 'claimOutbox'",
             publisherId,
-          ).one().count).toBe(1);
+          ).one().count).toBe(assertionBaseline.publisherClaims + 1);
         });
       } finally {
         releaseQueueSend?.();

@@ -1547,6 +1547,7 @@ test("Queue consumer retries unknown event types without invoking durable receip
  assert.equal(acked,0);
 });
 
+
 test("sanitizes WebCrypto digest failures before exposing create_change_pr results", async () => {
  const subtle = crypto.subtle;
  const originalDigest = subtle.digest.bind(subtle);
@@ -1568,10 +1569,8 @@ test("sanitizes WebCrypto digest failures before exposing create_change_pr resul
   reconcilePrCreated: () => unexpectedRpc("reconcilePrCreated"),
   getOperation: () => unexpectedRpc("getOperation"),
  };
- const writeControlBinding = {
-  idFromName: name => name,
-  get: () => writeControl,
- };
+ const writeControlBinding = { idFromName: name => name, get: () => writeControl };
+ const outcomes = [];
 
  globalThis.fetch = async () => {
   githubCalls += 1;
@@ -1580,6 +1579,8 @@ test("sanitizes WebCrypto digest failures before exposing create_change_pr resul
 
  try {
   for (const failingDigestCall of [1, 2]) {
+   durableCalls.length = 0;
+   githubCalls = 0;
    const marker = "SENSITIVE_INTERNAL_DIGEST_FAILURE_" + failingDigestCall;
    const injectedFailure = new Error(marker);
    let digestCalls = 0;
@@ -1613,24 +1614,55 @@ test("sanitizes WebCrypto digest failures before exposing create_change_pr resul
    });
    const body = await response.json();
    const wire = JSON.stringify(body);
-
-   assert.equal(response.status, 200);
-   assert.equal(body.jsonrpc, "2.0");
-   assert.equal(body.id, 300 + failingDigestCall);
-   assert.equal(body.result?.isError, true);
-   assert.deepEqual(JSON.parse(body.result.content[0].text), {
-    error: "WRITE_CRYPTO_UNAVAILABLE",
+   outcomes.push({
+    failingDigestCall,
+    status: response.status,
+    jsonrpc: body.jsonrpc,
+    id: body.id,
+    isError: body.result?.isError,
+    toolError: JSON.parse(body.result.content[0].text),
+    rawMessageLeaked: wire.includes(marker),
+    stackLeaked: wire.includes("stack"),
+    digestCalls,
+    nativeDigestCalls,
+    durableCalls: [...durableCalls],
+    githubCalls,
    });
-   assert.equal(wire.includes(marker), false, "raw digest exception leaked in MCP response");
-   assert.equal(wire.includes("stack"), false, "stack metadata leaked in MCP response");
-   assert.equal(digestCalls, failingDigestCall);
-   assert.equal(nativeDigestCalls, failingDigestCall - 1);
-   assert.deepEqual(durableCalls, [], "WriteControl must not be called before both hashes complete");
-   assert.equal(githubCalls, 0, "GitHub must not be called before durable admission");
   }
  } finally {
   globalThis.fetch = originalFetch;
   if (hadOwnDigest) Object.defineProperty(subtle, "digest", originalDescriptor);
   else delete subtle.digest;
  }
+
+ assert.deepEqual(outcomes, [
+  {
+   failingDigestCall: 1,
+   status: 200,
+   jsonrpc: "2.0",
+   id: 301,
+   isError: true,
+   toolError: { error: "WRITE_CRYPTO_UNAVAILABLE" },
+   rawMessageLeaked: false,
+   stackLeaked: false,
+   digestCalls: 1,
+   nativeDigestCalls: 0,
+   durableCalls: [],
+   githubCalls: 0,
+  },
+  {
+   failingDigestCall: 2,
+   status: 200,
+   jsonrpc: "2.0",
+   id: 302,
+   isError: true,
+   toolError: { error: "WRITE_CRYPTO_UNAVAILABLE" },
+   rawMessageLeaked: false,
+   stackLeaked: false,
+   digestCalls: 2,
+   nativeDigestCalls: 1,
+   durableCalls: [],
+   githubCalls: 0,
+  },
+ ]);
 });

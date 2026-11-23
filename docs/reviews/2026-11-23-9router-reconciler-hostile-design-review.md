@@ -76,7 +76,7 @@ The design says an uncertain attempt consumes the current run's budget, but it d
 
 ### Required correction
 
-Add an append-only, authenticated attempt-reservation state before the first 9Router request is sent.
+Add an append-only, authenticated reservation to a durable attempt ledger before the first 9Router request is sent. PR comments are report evidence only; they are not the authoritative reservation store.
 
 The reservation must bind at least:
 
@@ -93,10 +93,10 @@ Required behavior:
 
 - A matching final report marker means the tuple is already completed.
 - A valid reservation with no matching final report means `UNKNOWN` / attempt already consumed; automatic inference is forbidden.
-- An ambiguous reservation-comment POST must be reconciled by reading GitHub state. If reservation existence cannot be established exactly, stop before the model request.
+- An ambiguous ledger reservation write must be reconciled by reading the exact tuple key. If reservation existence cannot be established exactly, stop before the model request.
 - A 9Router timeout, lost response, process cancellation, or uncertain request acceptance leaves the tuple reserved. Do not automatically retry it in a later scheduled run.
 - An operator-controlled recovery procedure may re-arm a tuple only after explicitly resolving the previous attempt; that procedure is outside the scheduled reconciler's automatic path.
-- Reservation and report markers are append-only. Do not edit or delete historical reports to make a retry appear safe.
+- Ledger reservation records are append-only. PR report comments remain human-visible evidence and must not be edited or deleted to make a retry appear safe.
 
 This provides at-most-once automatic attempts for a tuple within the marker-retention/trust boundary. It does **not** claim exactly-once model execution or protect against a repository writer deliberately deleting authenticated comments. Those limitations must remain explicit.
 
@@ -173,7 +173,7 @@ The run summary must include budget counters and scan completeness without inclu
 | T28 | API retries occur near the request ceiling | Retries consume the same request budget |
 | T29 | Aggregate response bytes exceed the run ceiling mid-page | `INCOMPLETE_SCAN`; checkpoint does not skip the unfinished record |
 | T30 | 9Router accepts a request but the client loses the response | Durable reservation blocks automatic re-inference on the next run |
-| T31 | Reservation POST response is lost | No inference until the exact reservation is independently reconciled |
+| T31 | Durable-ledger reservation response is lost after commit | Read-after-uncertain-write resolves the exact tuple; no duplicate reservation or inference |
 | T32 | Event and reconciler workflows target the same PR concurrently | Shared PR concurrency group serializes them; second run revalidates |
 | T33 | A queued run starts after head/base/report state changed | Old pre-queue evidence is discarded |
 | T34 | More than 100 runs are queued for one concurrency group | Queue rejection is surfaced as non-success; no false coverage claim |

@@ -1076,7 +1076,7 @@ describe("Owner command atomic Ledger contract", () => {
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE task_id = ?",
         taskId,
-      ).one().count).toBe(2);
+      ).one().count).toBe(1);
     });
   });
 

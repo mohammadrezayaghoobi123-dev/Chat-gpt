@@ -1428,7 +1428,7 @@ export class OrchestratorLedger extends DurableObject {
           "SELECT state, version FROM orchestrator_tasks WHERE task_id = ?",
           taskId,
         ).toArray()[0];
-        if (!currentTask || currentTask.version !== receiptPayload.version ||
+        if (!currentTask ||
             currentTask.state === "CANCELLED" || currentTask.state === "QUARANTINED") {
           return { recorded: false, blocked: true, reason: "TASK_VERSION_FENCED" };
         }

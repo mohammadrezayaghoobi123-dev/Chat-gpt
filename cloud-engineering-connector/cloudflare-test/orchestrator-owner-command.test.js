@@ -1250,4 +1250,143 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+
+  it("fences a late Queue publish and consumer receipt when Owner cancels after Publisher claim", async () => {
+    const taskId = "task-owner-late-publish-cancel-0001";
+    const ledger = ledgerFor("owner-late-publish-cancel-fence");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const eventId = "owner-late-publish-cancel-event-01";
+    const idempotencyKey = "outbox-key-1";
+    const payload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
+    const enqueued = await ledger.enqueueOutbox({
+      eventId,
+      idempotencyKey,
+      taskId,
+      eventType: "task.transitioned",
+      payload,
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox"),
+      now,
+    });
+    expect(enqueued).toMatchObject({ enqueued: true });
+
+    let releaseQueueSend;
+    let signalQueueSend;
+    const queueSendGate = new Promise(resolve => {
+      releaseQueueSend = resolve;
+    });
+    const queueSendEntered = new Promise(resolve => {
+      signalQueueSend = resolve;
+    });
+    const deliveredBodies = [];
+    const runtimeEnv = {
+      ORCHESTRATOR_LEDGER: {
+        idFromName: () => "orchestrator-ledger-global",
+        get: () => ledger,
+      },
+      ORCHESTRATOR_OUTBOX_QUEUE: {
+        send: async (message, options) => {
+          expect(options).toMatchObject({ contentType: "json" });
+          signalQueueSend();
+          await queueSendGate;
+          deliveredBodies.push(structuredClone(message));
+        },
+      },
+      LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: "test-v1",
+    };
+
+    let publishResult;
+    try {
+      const publisherPromise = processOrchestratorOutbox(runtimeEnv, { maxEvents: 1 });
+      await queueSendEntered;
+
+      await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+        taskId, state: "SCHEDULED", version: 1,
+      });
+      const cancelled = await ledger.executeOwnerCommand(await ownerInput({
+        command: {
+          operation: "cancel",
+          taskId,
+          reason: "Cancel while publisher send is pending",
+          eventId: "owner-late-publish-cancel-command-01",
+        },
+        deliveryId: "delivery-late-publish-cancel-01",
+        commentId: "123456809",
+      }));
+      expect(cancelled).toMatchObject({
+        applied: true,
+        operation: "cancel",
+        task: { taskId, state: "CANCELLED", version: 2 },
+      });
+
+      releaseQueueSend();
+      publishResult = await publisherPromise;
+    } finally {
+      releaseQueueSend();
+    }
+
+    expect(publishResult).toMatchObject({
+      processed: 1,
+      published: 1,
+      failed: 0,
+      completionPending: 1,
+    });
+    expect(deliveredBodies).toHaveLength(1);
+    expect(deliveredBodies[0]).toMatchObject({
+      eventId,
+      idempotencyKey,
+      taskId,
+      eventType: "task.transitioned",
+      payload,
+      attempts: 1,
+    });
+
+    const message = {
+      body: deliveredBodies[0],
+      ackCalls: 0,
+      retryCalls: 0,
+      ack() { this.ackCalls += 1; },
+      retry() { this.retryCalls += 1; },
+    };
+    const consumed = await consumeOrchestratorOutbox({ messages: [message] }, runtimeEnv);
+    expect(consumed).toMatchObject({
+      received: 1,
+      acknowledged: 1,
+      retried: 0,
+      duplicates: 0,
+    });
+    expect(message).toMatchObject({ ackCalls: 1, retryCalls: 0 });
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+      taskId, state: "CANCELLED", version: 2,
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT status, retry_state, last_error_code, lease_worker_id, lease_generation, lease_until FROM orchestrator_outbox_events WHERE event_id = ?",
+        eventId,
+      ).one()).toMatchObject({
+        status: "IN_PROGRESS",
+        retry_state: "DEAD_LETTER",
+        last_error_code: "OWNER_CANCELLED",
+        lease_worker_id: null,
+        lease_generation: 2,
+        lease_until: 0,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT event_type, details_json FROM orchestrator_audit_events WHERE task_id = ?",
+        taskId,
+      ).one()).toMatchObject({ event_type: "OWNER_TASK_CANCELLED" });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ? AND operation = 'cancel'",
+        taskId,
+      ).one().count).toBe(1);
+    });
+  });
+
 });

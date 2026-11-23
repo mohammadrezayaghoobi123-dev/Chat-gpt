@@ -832,7 +832,7 @@ export class OrchestratorLedger extends DurableObject {
       if (workerId === EXECUTOR_PRINCIPAL) {
         now = Date.now();
         try {
-          assertExecutorWorkerAssertionTime(verifiedAssertion, now);
+          // MUTANT: omit the post-verification Executor assertion expiry fence.
         } catch {
           return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
         }

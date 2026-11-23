@@ -94,6 +94,10 @@ const SCHEDULED_SIGNER_POLICY = Object.freeze({
   }),
 });
 
+const EXECUTOR_PRINCIPAL = "orchestrator-executor";
+const EXECUTOR_ROLE = "agent";
+const EXECUTOR_OPERATIONS = Object.freeze(["claimTask"]);
+
 function encodeBase64Url(bytes) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -121,6 +125,40 @@ export async function createScheduledWorkerAssertion(keySet, activeKid, expected
       aud: AUDIENCE,
       sub: expected.subject,
       role: expected.role,
+      op: expected.operation,
+      iat: issuedAt,
+      exp: issuedAt + MAX_LIFETIME_SECONDS,
+      jti: "jti-" + encodeBase64Url(crypto.getRandomValues(new Uint8Array(16))),
+    };
+    const payload = encodeBase64Url(new TextEncoder().encode(canonicalJson(claims)));
+    const signingInput = "v1." + activeKid + "." + payload;
+    const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signingInput)));
+    return signingInput + "." + encodeBase64Url(signature);
+  } catch {
+    throw reject();
+  }
+}
+
+/**
+ * Mint the first fixed-executor assertion. The principal and role are constants;
+ * callers may select only an explicitly allowlisted operation. Do not call this
+ * from MCP, webhook, or scheduler-controlled request paths.
+ */
+export async function createExecutorWorkerAssertion(keySet, activeKid, expected) {
+  try {
+    if (!expected || !Number.isSafeInteger(expected.nowMs) || expected.nowMs < 1 ||
+        !EXECUTOR_OPERATIONS.includes(expected.operation) || !KID.test(activeKid)) {
+      throw reject();
+    }
+    const keyBytes = loadKey(keySet, activeKid);
+    const issuedAt = Math.floor(expected.nowMs / 1000);
+    const claims = {
+      v: 1,
+      iss: ISSUER,
+      aud: AUDIENCE,
+      sub: EXECUTOR_PRINCIPAL,
+      role: EXECUTOR_ROLE,
       op: expected.operation,
       iat: issuedAt,
       exp: issuedAt + MAX_LIFETIME_SECONDS,

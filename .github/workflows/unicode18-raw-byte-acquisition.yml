@@ -100,7 +100,7 @@ jobs:
                   "runner_arch": os.environ.get("RUNNER_ARCH", "UNKNOWN"),
                   "image_os": os.environ.get("ImageOS", "NOT_EXPOSED"),
                   "image_version": os.environ.get("ImageVersion", "NOT_EXPOSED"),
-                  "cloud_provider": "NOT_EXPOSED_BY_RUNNER",
+                  "cloud_provider": "NOT_CAPTURED_IN_STEP_ENVIRONMENT; SEE_RUNNER_PROVISIONING_LOG",
               }
 
           def emit_report(report):
@@ -122,7 +122,7 @@ jobs:
                   "- Ref: " + str(environment.get("github_ref", "UNKNOWN")),
                   "- Runner: " + str(environment.get("runner_os", "UNKNOWN")) + " / " + str(environment.get("runner_arch", "UNKNOWN")),
                   "- Runner image: " + str(environment.get("image_os", "NOT_EXPOSED")) + " / " + str(environment.get("image_version", "NOT_EXPOSED")),
-                  "- Cloud provider: NOT_EXPOSED_BY_RUNNER",
+                  "- Cloud provider: not captured in step environment; provider/region are in runner provisioning logs",
                   "",
                   "| File | Exact bytes | SHA-256 | HTTP | Media type | Content-Length | TLS |",
                   "|---|---:|---|---:|---|---:|---|",
@@ -523,7 +523,7 @@ jobs:
           base="https://www.unicode.org/Public/18.0.0/ucd"
           tmp="$(mktemp -d)"
           summary="$GITHUB_STEP_SUMMARY"
-          trap 'rc=$?; if [ "$rc" -eq 0 ]; then result=SUPPORTED; else result=BLOCKED; fi; printf "\n- Final independent-shell status: **%s** (exit %s)\n" "$result" "$rc" >> "$summary"; exit "$rc"' EXIT
+          trap 'rc=$?; if [ "$rc" -eq 0 ]; then result=SUPPORTED; else result=BLOCKED; fi; printf "\n- Final independent-shell status: **%s** (exit %s)\n" "$result" "$rc" >> "$summary"; rm -rf "$tmp"; exit "$rc"' EXIT
           mkdir -p "$tmp/direct" "$tmp/member"
           archive="$tmp/UCD.zip"
           {
@@ -534,7 +534,7 @@ jobs:
             printf -- "- Ref: %s\n" "$GITHUB_REF"
             printf -- "- Runner: %s / %s\n" "$RUNNER_OS" "$RUNNER_ARCH"
             printf -- "- Runner image: %s / %s\n" "$(printenv ImageOS 2>/dev/null || echo NOT_EXPOSED)" "$(printenv ImageVersion 2>/dev/null || echo NOT_EXPOSED)"
-            printf -- "- Cloud provider: NOT_EXPOSED_BY_RUNNER\n"
+            printf -- "- Cloud provider: not captured in step environment; see runner provisioning log header\n"
             printf -- "- Independent scope: distinct curl/unzip implementation and separate job environment; same GitHub Actions control plane\n\n"
             printf "| Requested URL | HTTP | Exact bytes | Content-Length | Media type | TLS verify result | Request interval (UTC) |\n"
             printf "|---|---:|---:|---:|---|---:|---|\n"

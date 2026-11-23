@@ -634,39 +634,135 @@ The implementation is not acceptable until tests prove all of the following:
 
 Required deterministic test fixtures must cover state-transition legality, cooldown boundaries, cross-run accounting, fairness, crash recovery, checkpoint atomicity, and publication ambiguity. The test suite must report each disposition as `PASS`, `FAIL`, `UNKNOWN`, or `NOT TESTED`.
 
-## Adversarial Design-Consistency Finding: Cross-Run Ledger Durability
+## Formal Systems Analysis: Retry Safety, External Side Effects, and Durable State
 
-**Disposition: BLOCKED — the current retry contract cannot be implemented faithfully under the previously approved design's storage and permission constraints.**
+**Disposition: DESIGN BLOCKED — no persistence technology or retry policy is selected by this section.**
 
-The approved design in `docs/specs/2026-11-23-9router-finding-67-reconciler-design.md` defines the checkpoint as a bounded-retention GitHub Actions artifact, requires bootstrap when that artifact is missing or expired, and explicitly excludes `contents: write` and other persistent repository mutation permissions. The existing reviewer documentation also describes bounded duplicate suppression as best-effort rather than durable retry accounting.
+The current proposal combines three distinct distributed-systems problems that must not be collapsed into one counter:
 
-The rewritten retry policy, by contrast, requires all of the following:
-- A cross-run, per-tuple inference-attempt ledger that survives scan generations and workflow reruns.
-- Permanent preservation of `QUARANTINED_UNKNOWN` and unresolved dispatch reservations.
-- No reset to zero when checkpoint provenance or history is lost.
-- A write-ahead reservation durably persisted before 9Router dispatch.
+1. **Inference dispatch accounting** — whether a client request may have crossed the network boundary and consumed provider resources.
+2. **Publication accounting** — whether a GitHub comment-creation side effect may have occurred.
+3. **Durable coordination** — whether concurrent or later workflow runs can establish one authoritative history of reservations, outcomes, and unresolved operations.
 
-A finite-retention artifact cannot prove that an old attempt never occurred after the artifact expires or is deleted. Bootstrapping a new checkpoint cannot reconstruct missing attempt history. Treating the new ledger as empty would violate the cross-run three-attempt ceiling; refusing all future inference would preserve safety but can permanently halt service without a defined recovery path. This is a structural contradiction, not a test-only defect.
+A durable counter alone does not solve the first two problems. A workflow concurrency group alone does not establish a durable, atomic reservation. An immutable artifact alone does not establish a permanent history or conditional uniqueness across runs.
 
-### Required architecture decision before implementation
+### 1. System and failure model
 
-Choose and explicitly approve one of these mutually exclusive directions:
+The system is asynchronous and distributed across GitHub Actions runners, GitHub APIs, the 9Router endpoint, and the GitHub issue-comment API. The following failures are in scope:
 
-1. **Durable GitHub-native attempt ledger (recommended for strong cross-run guarantees).** Amend the approved design to permit a dedicated append-only ledger using GitHub Check Runs (or another explicitly selected GitHub-native durable record), with narrowly scoped read/write permissions, immutable tuple/attempt identifiers, write-ahead reservation, duplicate detection, bounded pagination, provenance validation, and crash-recovery rules. This introduces a new permission and externally visible audit records; it requires a separate threat-model review and must not be silently added.
-2. **Artifact-only bounded guarantee.** Retain the approved artifact-only/least-privilege design, but explicitly weaken the retry guarantee to the verified checkpoint-retention horizon. After checkpoint loss/expiry, inference must remain globally disabled until an independently authorized state-recovery procedure re-establishes continuity. This does not provide a durable cross-run attempt ceiling and must not be described as one.
-3. **No cross-run retry.** Permit only one inference dispatch per candidate tuple and never automatically retry a tuple after a dispatch may have occurred. This still requires a durable write-ahead identity record to prevent redispatch after artifact loss; without a persistent ledger or externally visible reservation, it cannot guarantee at-most-once dispatch across checkpoint loss.
+- Runner termination before dispatch, during request transmission, after remote processing, or before recording the response.
+- Network partition, timeout, connection reset, delayed response, and lost response.
+- API throttling, transient server failure, permission revocation, and partial pagination.
+- Workflow rerun, duplicate event delivery, overlapping schedule/manual triggers, cancellation, and queue saturation.
+- Artifact expiration/deletion, checkpoint corruption, incompatible workflow revision, and incomplete ledger recovery.
+- Concurrent operators or workflows attempting to reserve or reconcile the same tuple.
+- Malicious or compromised PR-controlled data attempting to forge evidence, trigger replay, or influence executable workflow behavior.
 
-### Required proof obligations for any selected direction
+The model does not assume atomic transactions across GitHub and 9Router. It does not assume that a timeout means the remote side did not execute. It does not assume that a successful local write proves an external side effect. It does not assume that GitHub Actions artifacts or workflow concurrency provide a transactional database.
 
-- Demonstrate that a dispatched or possibly dispatched tuple cannot be assigned a fresh attempt budget after workflow rerun, artifact expiry, artifact deletion, branch/workflow revision, or scan-generation rollover.
-- Demonstrate that reservation creation is idempotently discoverable after a lost API response; ambiguous reservation creation must not trigger a second inference.
-- Demonstrate that concurrent workflow runs cannot reserve the same tuple/ordinal.
-- Demonstrate that the persistent ledger cannot be rewritten or erased by PR-controlled code or untrusted artifacts.
-- Define retention, pagination, deletion, API outage, permission revocation, and operator recovery semantics.
-- Prove that ledger failure blocks inference before dispatch and does not advance the scan cursor past an unrecorded candidate.
-- Keep `UNKNOWN` distinct from `FAIL` and `PASS`.
+### 2. Formal identity and operation model
 
-Until this decision is made, the cross-run retry policy is a **proposal only**. Task 1 implementation must not begin, because marker refactoring and runner changes would be built on an unresolved persistence contract.
+Define a review identity:
+
+`K = (repositoryId, pullRequestNumber, headSha, baseSha)`
+
+Define a dispatch ordinal `n ∈ {1,2,3}` and a globally unique operation identifier `O = (K,n)`.
+
+The state machine must distinguish at least:
+
+- `UNRESERVED`: no durable reservation is known.
+- `RESERVATION_COMMITTED`: a unique reservation for `O` is durably committed.
+- `DISPATCH_MAY_HAVE_OCCURRED`: the request may have crossed the external boundary.
+- `REMOTE_OUTCOME_KNOWN`: a definitive provider response was received and recorded.
+- `DISPATCH_OUTCOME_UNKNOWN`: the remote outcome cannot be established.
+- `PUBLICATION_MAY_HAVE_OCCURRED`: comment creation may have crossed the external boundary.
+- `PUBLICATION_OUTCOME_UNKNOWN`: comment creation outcome cannot be established.
+- `RECONCILED`: independently retrieved authenticated evidence establishes the current-pair publication.
+- `QUARANTINED`: safe automatic progress is impossible without an authorized recovery action.
+
+The state machine must not infer `UNRESERVED` from missing, expired, or unreadable history. Absence of evidence is not evidence that an operation did not occur.
+
+### 3. Safety properties versus liveness properties
+
+Safety properties must hold under every modeled crash/interleaving:
+
+- **S1 — Bounded reservation:** no more than three distinct dispatch ordinals may be durably reserved for one exact `K`.
+- **S2 — No ordinal replay:** a committed reservation for `O` is never dispatched again by a later run or rerun.
+- **S3 — Conservative consumption:** once dispatch may have occurred, the ordinal is consumed even if the response is lost.
+- **S4 — Publication non-replay:** an ambiguous comment-creation attempt is never blindly repeated.
+- **S5 — Identity binding:** every reservation, outcome, and publication is bound to the exact repository/PR/head/base tuple and trusted workflow provenance.
+- **S6 — Fail-closed recovery:** missing or contradictory ledger evidence never resets counters or authorizes inference.
+- **S7 — No unauthorized mutation:** no merge, approval, deployment, PR-head execution, secret change, or Production mutation.
+
+Liveness properties are conditional and must not be claimed without assumptions:
+
+- **L1 — Eventual progress:** eligible work eventually proceeds only if GitHub APIs, the chosen ledger, 9Router, and publication API become available within their deadlines.
+- **L2 — Fairness:** a repeatedly failing tuple cannot indefinitely consume all new-candidate capacity.
+- **L3 — Recoverability:** unresolved operations can be reconciled or explicitly quarantined without silently discarding their history.
+
+Safety takes precedence over liveness. If a durable reservation cannot be established, inference is blocked. If the dispatch outcome is ambiguous, the ordinal remains consumed. If publication outcome is ambiguous, no second POST is issued.
+
+### 4. Fundamental external-side-effect boundary
+
+There is no atomic transaction spanning a local runner, 9Router inference, and GitHub comment creation in the current design.
+
+Therefore, the system must choose and state its delivery semantics precisely:
+
+- The client can enforce **at-most-one dispatch attempt per committed ordinal** by durably reserving first and never replaying that ordinal. It cannot claim exactly-once provider execution unless 9Router documents and enforces a compatible idempotency contract.
+- A timeout after request transmission is `DISPATCH_OUTCOME_UNKNOWN`, not proof of failure. Retrying with a new ordinal may cause a second provider execution; the retry budget must count that as a new attempt.
+- The client can enforce **no automatic repeat of an ambiguous comment POST**. It cannot claim exactly-once publication unless the publication API offers a documented idempotency primitive or a stronger reconciliation protocol that proves the first operation's outcome.
+- A read that does not find a marker is conclusive only if the history read is complete, within bounds, and sufficiently consistent for the documented API behavior. Otherwise the outcome remains unknown.
+
+Any proposal claiming exactly-once behavior without an idempotency primitive or transactional boundary is rejected as unsupported.
+
+### 5. Required properties of a persistence/coordination primitive
+
+Candidate technologies must be evaluated against these abstract requirements, not selected by familiarity:
+
+| Property | Required question |
+|---|---|
+| Atomic uniqueness | Can two concurrent writers create the same `O` only once, with a definitive conflict result? |
+| Durability | Does a committed reservation survive runner loss, rerun, scan rollover, and the declared retention horizon? |
+| Read-after-write | Can a later run reliably discover a committed reservation and its state? |
+| Conditional transition | Can state advance only from an allowed prior state, preventing lost updates and replay? |
+| Provenance | Can records be bound to repository ID, workflow identity, trusted revision, run/attempt, and actor? |
+| Tamper resistance | Can PR-controlled code or untrusted artifacts modify or erase records? |
+| Concurrency | Is uniqueness enforced by the storage system, rather than only by an Actions queue convention? |
+| Retention/deletion | Are retention, deletion, restore, and administrative mutation semantics explicit and auditable? |
+| Recovery | Can ambiguous writes be reconciled without creating a second reservation? |
+| Least privilege | Can permissions be scoped to the narrowest resource and operation? |
+| Cost/operability | Are quotas, rate limits, availability, maintenance, and failure modes acceptable? |
+
+A technology that lacks atomic uniqueness or cannot distinguish an ambiguous write from a confirmed absence is not sufficient for the strict cross-run guarantee.
+
+### 6. Architecture-neutral alternatives to evaluate
+
+No option is selected. The next design review must compare at least these classes:
+
+1. **Finite-retention workflow artifacts:** simple and low-permission, but cannot by themselves provide indefinite history, conditional updates, or uniqueness after expiry/deletion. Suitable only for a clearly bounded guarantee with an explicit recovery lockout.
+2. **GitHub-native records:** evaluate Check Runs, deployment/status records, or immutable Git objects/refs individually. Do not assume any of them supplies unique-key constraints, compare-and-swap transitions, immutable retention, or appropriate permissions without API-contract evidence and adversarial tests.
+3. **External transactional coordination store:** potentially supports conditional writes, unique keys, durable state, and atomic transitions; introduces a new service, credentials, availability dependency, cost/operational burden, and additional trust boundary.
+4. **Provider idempotency plus durable local ledger:** if 9Router documents idempotency semantics, evaluate a stable idempotency key derived from `O`; this may reduce duplicate provider execution but does not solve GitHub publication idempotency or ledger durability.
+5. **No automatic retry after uncertain dispatch:** reduces duplicate execution risk but does not remove the need for durable reservation identity if the global attempt cap must survive checkpoint loss.
+
+The comparison must include failure injection, concurrency races, permissions, retention, deletion, recovery, operational cost, and evidence quality. Recommendations must be traceable to documented API guarantees, not assumptions.
+
+### 7. Mandatory decision record and proof package
+
+Before implementation, produce a design decision record containing:
+
+- Exact safety and liveness guarantees, and explicit non-guarantees.
+- Chosen persistence primitive and documented API guarantees.
+- Linearization point for reservation creation and each state transition.
+- Idempotency behavior for reservation writes, 9Router requests, and comment publication.
+- Concurrency protocol and proof that two runs cannot consume the same ordinal.
+- Retention, deletion, corruption, backup, restore, and operator recovery rules.
+- Permission matrix and threat model.
+- Failure-injection matrix covering every crash point before and after each external boundary.
+- A state-transition model test that explores duplicate events and concurrent reservations.
+- A clear `PASS` / `FAIL` / `UNKNOWN` / `NOT TESTED` result for every proof obligation.
+
+Until this decision record is approved, the retry policy remains unselected and implementation remains blocked. The current numerical retry limits are proposals, not a proven operational contract.
 
 ### Approval boundary
 

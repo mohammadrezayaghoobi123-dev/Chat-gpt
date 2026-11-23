@@ -944,4 +944,140 @@ describe("Owner command atomic Ledger contract", () => {
   });
 
 
+  it("does not let a reauthenticated former lease owner use the post-release generation to renew or promote a task", async () => {
+    const taskId = "task-owner-fresh-assertion-after-release-0001";
+    const workerId = "agent:worker-1";
+    const ledger = ledgerFor("owner-fresh-assertion-after-release");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const originalClaim = await ledger.claimTask({
+      taskId,
+      workerId,
+      workerAssertion: await workerAssertion(workerId, "agent", "claimTask", now + 1),
+      leaseMs: 30_000,
+      now: now + 1,
+    });
+    expect(originalClaim).toMatchObject({
+      claimed: true,
+      leaseGeneration: 1,
+    });
+
+    const quarantine = await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        operation: "quarantine",
+        taskId,
+        eventId: "owner-fresh-assertion-quarantine-01",
+      },
+      deliveryId: "delivery-fresh-assertion-quarantine-01",
+      commentId: "123456805",
+      now: now + 2,
+    }));
+    expect(quarantine).toMatchObject({
+      applied: true,
+      task: { taskId, state: "QUARANTINED", version: 2 },
+    });
+
+    const release = await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        operation: "release",
+        taskId,
+        eventId: "owner-fresh-assertion-release-01",
+      },
+      deliveryId: "delivery-fresh-assertion-release-01",
+      commentId: "123456806",
+      now: now + 3,
+    }));
+    expect(release).toMatchObject({
+      applied: true,
+      task: { taskId, state: "VALIDATING", version: 3 },
+    });
+
+    const freshRenewAssertion = await workerAssertion(
+      workerId, "agent", "renewLease", now + 4,
+    );
+    const freshTransitionAssertion = await workerAssertion(
+      workerId, "agent", "transitionTask", now + 4,
+    );
+    const freshJtis = [
+      assertionJti(freshRenewAssertion),
+      assertionJti(freshTransitionAssertion),
+    ];
+
+    // Adversarially submit the current post-release generation, not the
+    // stale generation from the former Lease. Fresh authentication must not
+    // recreate ownership after Owner release cleared worker_id and lease_until.
+    const [renewal, transition] = await Promise.all([
+      ledger.renewLease({
+        taskId,
+        workerId,
+        workerAssertion: freshRenewAssertion,
+        leaseGeneration: 3,
+        leaseMs: 30_000,
+        now: now + 4,
+      }),
+      ledger.transitionTask({
+        taskId,
+        expectedVersion: 3,
+        expectedState: "VALIDATING",
+        nextState: "READY",
+        actor: {
+          id: workerId,
+          role: "agent",
+          authenticated: true,
+          identityVerified: true,
+        },
+        evidence: {
+          validationOutcome: "PASS",
+          evidenceDigest: "e".repeat(64),
+          validationRunId: "untrusted-validation-run-01",
+        },
+        now: now + 4,
+        workerId,
+        workerAssertion: freshTransitionAssertion,
+        leaseGeneration: 3,
+      }),
+    ]);
+
+    expect(renewal).toMatchObject({
+      renewed: false,
+      reason: "LEASE_FENCE_MISMATCH",
+    });
+    expect(transition).toMatchObject({
+      updated: false,
+      reason: "LEASE_FENCE_MISMATCH",
+    });
+
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+      taskId,
+      state: "VALIDATING",
+      version: 3,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        taskId,
+      ).one()).toMatchObject({
+        worker_id: null,
+        lease_generation: 3,
+        lease_until: 0,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti IN (?, ?)",
+        ...freshJtis,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ?",
+        taskId,
+      ).one().count).toBe(2);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ?",
+        taskId,
+      ).one().count).toBe(2);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE task_id = ?",
+        taskId,
+      ).one().count).toBe(2);
+    });
+  });
+
 });

@@ -1488,9 +1488,8 @@ describe("Owner command atomic Ledger contract", () => {
       ).toArray();
       expect(receipts).toEqual([firstReceipt]);
       expect(state.storage.sql.exec(
-        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ? AND subject = 'orchestrator-outbox-consumer' AND role = 'consumer' AND operation = 'recordOutboxReceipt'",
-        conflictingJti,
-      ).one().count).toBe(1);
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = 'orchestrator-outbox-consumer' AND role = 'consumer' AND operation = 'recordOutboxReceipt'",
+      ).one().count).toBe(2);
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ? AND operation = 'cancel'",
         taskId,
@@ -1682,8 +1681,9 @@ describe("Owner command atomic Ledger contract", () => {
       ).toArray();
       expect(receipts).toEqual([original]);
       expect(state.storage.sql.exec(
-        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = 'orchestrator-outbox-consumer' AND role = 'consumer' AND operation = 'recordOutboxReceipt'",
-      ).one().count).toBe(2);
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ? AND subject = 'orchestrator-outbox-consumer' AND role = 'consumer' AND operation = 'recordOutboxReceipt'",
+        conflictingJti,
+      ).one().count).toBe(1);
     });
   });
 

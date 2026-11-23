@@ -2565,4 +2565,120 @@ describe("Owner command atomic Ledger contract", () => {
       ]);
     });
   });
+
+  it("pins future-issued assertion skew to whole-second NumericDate quantization", async () => {
+    const ledger = ledgerFor("worker-assertion-clock-skew-future-quantization");
+    const withinQuantizedBoundary = await ledger.createTask({
+      task: {
+        ...task("task-clock-skew-quantized-future-accepted"),
+        createdAt: now,
+        updatedAt: now,
+      },
+      idempotencyKey: "clock-skew-quantized-future-accepted",
+      inputHash: "2".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: await workerAssertion(
+        "orchestrator-scheduler", "system", "createTask", now + 5_999,
+        "worker-jti-clock-skew-quantized-future-accepted-01",
+      ),
+    });
+    expect(withinQuantizedBoundary).toMatchObject({
+      created: true,
+      task: { taskId: "task-clock-skew-quantized-future-accepted" },
+    });
+
+    const outsideQuantizedBoundary = await ledger.createTask({
+      task: {
+        ...task("task-clock-skew-quantized-future-rejected"),
+        createdAt: now,
+        updatedAt: now,
+      },
+      idempotencyKey: "clock-skew-quantized-future-rejected",
+      inputHash: "3".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: await workerAssertion(
+        "orchestrator-scheduler", "system", "createTask", now + 6_000,
+        "worker-jti-clock-skew-quantized-future-rejected-01",
+      ),
+    });
+    expect(outsideQuantizedBoundary).toMatchObject({
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT task_id FROM orchestrator_tasks WHERE task_id LIKE 'task-clock-skew-quantized-future-%' ORDER BY task_id",
+      ).toArray().map(row => row.task_id)).toEqual([
+        "task-clock-skew-quantized-future-accepted",
+      ]);
+      expect(state.storage.sql.exec(
+        "SELECT jti FROM orchestrator_consumed_assertions WHERE jti LIKE 'worker-jti-clock-skew-quantized-future-%' ORDER BY jti",
+      ).toArray().map(row => row.jti)).toEqual([
+        "worker-jti-clock-skew-quantized-future-accepted-01",
+      ]);
+    });
+  });
+
+  it("pins expired-assertion grace to whole-second NumericDate quantization", async () => {
+    const ledger = ledgerFor("worker-assertion-clock-skew-expiry-quantization");
+    const withinQuantizedBoundaryNow = now + 999;
+    const outsideQuantizedBoundaryNow = now + 1_000;
+
+    const withinQuantizedBoundary = await ledger.createTask({
+      task: {
+        ...task("task-clock-skew-quantized-expiry-accepted"),
+        createdAt: withinQuantizedBoundaryNow,
+        updatedAt: withinQuantizedBoundaryNow,
+      },
+      idempotencyKey: "clock-skew-quantized-expiry-accepted",
+      inputHash: "4".repeat(64),
+      now: withinQuantizedBoundaryNow,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: await workerAssertion(
+        "orchestrator-scheduler", "system", "createTask", now - 65_000,
+        "worker-jti-clock-skew-quantized-expiry-accepted-01",
+      ),
+    });
+    expect(withinQuantizedBoundary).toMatchObject({
+      created: true,
+      task: { taskId: "task-clock-skew-quantized-expiry-accepted" },
+    });
+
+    const outsideQuantizedBoundary = await ledger.createTask({
+      task: {
+        ...task("task-clock-skew-quantized-expiry-rejected"),
+        createdAt: outsideQuantizedBoundaryNow,
+        updatedAt: outsideQuantizedBoundaryNow,
+      },
+      idempotencyKey: "clock-skew-quantized-expiry-rejected",
+      inputHash: "5".repeat(64),
+      now: outsideQuantizedBoundaryNow,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: await workerAssertion(
+        "orchestrator-scheduler", "system", "createTask", now - 65_000,
+        "worker-jti-clock-skew-quantized-expiry-rejected-01",
+      ),
+    });
+    expect(outsideQuantizedBoundary).toMatchObject({
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT task_id FROM orchestrator_tasks WHERE task_id LIKE 'task-clock-skew-quantized-expiry-%' ORDER BY task_id",
+      ).toArray().map(row => row.task_id)).toEqual([
+        "task-clock-skew-quantized-expiry-accepted",
+      ]);
+      expect(state.storage.sql.exec(
+        "SELECT jti FROM orchestrator_consumed_assertions WHERE jti LIKE 'worker-jti-clock-skew-quantized-expiry-%' ORDER BY jti",
+      ).toArray().map(row => row.jti)).toEqual([
+        "worker-jti-clock-skew-quantized-expiry-accepted-01",
+      ]);
+    });
+  });
+
 });

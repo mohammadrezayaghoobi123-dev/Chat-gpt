@@ -78,6 +78,23 @@ async function withClockAdvanceDuringExecutorVerification(initialNow, advancedNo
   }
 }
 
+
+async function withClockAdvanceDuringExecutorDigest(initialNow, advancedNow, action) {
+  const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+  let currentNow = initialNow;
+  const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => currentNow);
+  const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(async (...args) => {
+    currentNow = advancedNow;
+    return originalDigest(...args);
+  });
+  try {
+    return await action();
+  } finally {
+    digestSpy.mockRestore();
+    dateNowSpy.mockRestore();
+  }
+}
+
 async function createScheduledTask(ledger, taskId, executorId) {
   const task = {
     taskId,
@@ -681,6 +698,34 @@ describe("Executor Ed25519 trust boundary", () => {
         "SELECT operation FROM orchestrator_consumed_assertions WHERE subject = ? ORDER BY operation",
         EXECUTOR_ID,
       ).toArray()).toEqual([{ operation: "claimTask" }]);
+    });
+  });
+
+
+  it("revalidates Executor assertion time after asynchronous claim cursor hashing", async () => {
+    const ledger = ledgerFor("executor-ed25519-toctou-claim-cursor-hash");
+    await expect(createScheduledTask(ledger, "task-executor-toctou-claim-hash", EXECUTOR_ID))
+      .resolves.toMatchObject({ created: true });
+    const issuedAt = Math.floor(now / 1000) - 56;
+    const assertion = await createExecutorAssertion(issuedAt * 1000, "claimTask");
+    const result = await withClockAdvanceDuringExecutorDigest(now, now + 10_000, () =>
+      ledger.claimTask({
+        workerId: EXECUTOR_ID,
+        workerAssertion: assertion,
+        leaseMs: 30_000,
+        now,
+      }),
+    );
+    expect(result).toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-executor-toctou-claim-hash",
+      ).toArray()).toEqual([]);
+      expect(state.storage.sql.exec(
+        "SELECT operation FROM orchestrator_consumed_assertions WHERE subject = ? ORDER BY operation",
+        EXECUTOR_ID,
+      ).toArray()).toEqual([]);
     });
   });
 

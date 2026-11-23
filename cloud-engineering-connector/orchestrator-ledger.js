@@ -823,21 +823,20 @@ export class OrchestratorLedger extends DurableObject {
       ? null
       : await sha256Canonical({ token: nextCursorToken });
 
-    if (workerId === EXECUTOR_PRINCIPAL) {
-      now = Date.now();
-      try {
-        assertExecutorWorkerAssertionTime(verifiedAssertion, now);
-      } catch {
-        return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
-      }
-    }
-
     // Caller-shaped evidence is not an authorization. No trusted reconciliation
     // issuer or claimTask runtime caller exists in this repository, so expired
     // leases remain fail-closed until that end-to-end trust path is implemented.
     void reconciliationEvidence;
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      if (workerId === EXECUTOR_PRINCIPAL) {
+        now = Date.now();
+        try {
+          assertExecutorWorkerAssertionTime(verifiedAssertion, now);
+        } catch {
+          return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+        }
+      }
       sql.exec(`
         DELETE FROM orchestrator_claim_cursors
         WHERE cursor_hash IN (
@@ -1126,15 +1125,15 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
-    if (workerId === EXECUTOR_PRINCIPAL) {
-      now = Date.now();
-      try {
-        assertExecutorWorkerAssertionTime(verifiedAssertion, now);
-      } catch {
-        return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
-      }
-    }
     return this.ctx.storage.transactionSync(() => {
+      if (workerId === EXECUTOR_PRINCIPAL) {
+        now = Date.now();
+        try {
+          assertExecutorWorkerAssertionTime(verifiedAssertion, now);
+        } catch {
+          return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+        }
+      }
       const sql = this.ctx.storage.sql;
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
@@ -1164,15 +1163,15 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
-    if (workerId === EXECUTOR_PRINCIPAL) {
-      now = Date.now();
-      try {
-        assertExecutorWorkerAssertionTime(verifiedAssertion, now);
-      } catch {
-        return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
-      }
-    }
     return this.ctx.storage.transactionSync(() => {
+      if (workerId === EXECUTOR_PRINCIPAL) {
+        now = Date.now();
+        try {
+          assertExecutorWorkerAssertionTime(verifiedAssertion, now);
+        } catch {
+          return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+        }
+      }
       const sql = this.ctx.storage.sql;
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {

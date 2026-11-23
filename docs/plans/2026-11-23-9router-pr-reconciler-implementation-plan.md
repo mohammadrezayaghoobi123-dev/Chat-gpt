@@ -747,6 +747,16 @@ No option is selected. The next design review must compare at least these classe
 
 The comparison must include failure injection, concurrency races, permissions, retention, deletion, recovery, operational cost, and evidence quality. Recommendations must be traceable to documented API guarantees, not assumptions.
 
+### 6.1 Preliminary API-contract evidence (not a final technology selection)
+
+Official GitHub REST documentation was checked against the proposed GitHub-native candidates:
+
+- **Checks API:** creating check runs requires a GitHub App and Checks write permission. GitHub documents `external_id` as an integrator reference, not as a unique key or compare-and-swap token. GitHub also documents automatic deletion of older check runs after more than 1,000 check runs with the same name in a check suite. Consequently, a Check Run cannot currently be accepted as the sole durable, unique, permanent attempt ledger. It may still be useful as an observable audit projection, subject to a separate retention and reconciliation design. Source: [GitHub REST Checks API](https://docs.github.com/en/rest/checks/runs).
+- **Git references:** creating a reference requires Contents write permission; the API documents 201 Created, 409 Conflict, and 422 Validation failed/spam responses. Git references can also be updated and deleted, and deletion requires Contents write permission. The API contract therefore exposes a possible deterministic-name reservation primitive, but does not by itself prove immutable retention, protection from authorized deletion, atomic multi-record state transitions, or safe recovery from every ambiguous response. It is a candidate for further proof, not an approved ledger. Sources: [Create a reference](https://docs.github.com/en/rest/git/refs#create-a-reference), [Delete a reference](https://docs.github.com/en/rest/git/refs#delete-a-reference), [Update a reference](https://docs.github.com/en/rest/git/refs#update-a-reference).
+- **GraphQL ref updates:** GitHub documents `updateRefs` as an atomic multi-ref mutation and documents `beforeOid` as a precondition on the current ref value; an all-zero OID can assert that a ref must not yet exist. This is a stronger candidate primitive for conditional ref creation, but it still requires proof of caller permissions, behavior under ambiguous mutation responses, retention/deletion controls, record enumeration, and protection against authorized or compromised writers. Source: [GitHub GraphQL Git reference](https://docs.github.com/en/graphql/reference/git).
+
+These documents establish API capabilities and permission/retention caveats; they do **not** establish a complete ledger design. In particular, the presence of an `external_id`, a conflict response, or an atomic multi-ref mutation must not be promoted into a general exactly-once guarantee.
+
 ### 7. Mandatory decision record and proof package
 
 Before implementation, produce a design decision record containing:

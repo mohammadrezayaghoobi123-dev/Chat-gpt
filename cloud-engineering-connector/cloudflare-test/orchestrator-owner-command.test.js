@@ -2368,8 +2368,11 @@ describe("Owner command atomic Ledger contract", () => {
       created: true,
       task: { taskId: "task-jti-retention-after-boundary" },
     });
-    expect(ledger.getTask({ taskId: "task-jti-retention-after-boundary" })).toMatchObject({
-      taskId: "task-jti-retention-after-boundary",
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT task_id FROM orchestrator_tasks WHERE task_id = ?",
+        "task-jti-retention-after-boundary",
+      ).one().task_id).toBe("task-jti-retention-after-boundary");
     });
 
     await runInDurableObject(ledger, async (_instance, state) => {

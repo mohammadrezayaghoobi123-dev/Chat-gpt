@@ -207,6 +207,7 @@ describe("Owner transition versus in-flight Outbox Publisher callback", () => {
           event: { eventId, status: "PENDING", attempts: 0, leaseGeneration: 0 },
         });
 
+        // Worker callbacks share the global Ledger; compare JTI consumption against this case's baseline.
         const assertionBaseline = await runInDurableObject(ledger, (_instance, state) => {
           const count = (role, operation) => state.storage.sql.exec(
             "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND role = ? AND operation = ?",

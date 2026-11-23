@@ -534,4 +534,359 @@ describe("Knowledge Vault hostile failure matrix", () => {
     }
   });
 
+
+
+  it("recovers a pre-commit proposal-record failure without repeating GitHub writes and rejects payload drift", async () => {
+    const proposalId = "vault-proposal-record-prewrite-20261123";
+    const path = "knowledge/tenants/owner/proposal-record-prewrite.md";
+    const content = "# Proposal record pre-write failure\nA deterministic retry fixture.\n";
+    const marker = "SENSITIVE_PROPOSAL_RECORD_PREWRITE_FAILURE";
+    const prNumber = 989001;
+    const originalFetch = globalThis.fetch;
+    const github = createGitHubWriteMock({
+      filePath: path,
+      blobSha: await gitBlobSha(content),
+      baseBranch: "main",
+      prNumber,
+    });
+    const calls = { recordVaultProposal: 0, enqueueOutbox: 0 };
+    const knowledgeBinding = {
+      idFromName(name) {
+        return env.KNOWLEDGE_STORE.idFromName(name);
+      },
+      get(id) {
+        const actual = env.KNOWLEDGE_STORE.get(id);
+        return {
+          recordVaultProposal(input) {
+            calls.recordVaultProposal += 1;
+            if (calls.recordVaultProposal === 1) throw new Error(marker);
+            return actual.recordVaultProposal(input);
+          },
+          enqueueOutbox(input) {
+            calls.enqueueOutbox += 1;
+            return actual.enqueueOutbox(input);
+          },
+        };
+      },
+    };
+    const keyHash = await sha256Hex(
+      "create_change_pr\nmohammadrezayaghoobi123-dev/chat-gpt\n" + proposalId,
+    );
+
+    globalThis.fetch = github.fetch;
+    let firstResponse;
+    let firstBody;
+    let firstWire;
+    let secondResponse;
+    let secondBody;
+    let driftResponse;
+    let driftBody;
+    try {
+      firstResponse = await worker.fetch(proposalRequest({
+        proposalId, path, content, id: 9601,
+      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding }));
+      firstBody = await firstResponse.json();
+      firstWire = JSON.stringify(firstBody);
+      const afterFirst = await readProposalState(
+        proposalId,
+        "vault-" + proposalId,
+        keyHash,
+      );
+      const writesAfterFirst = github.calls.filter(call => call.method === "POST").length;
+      const githubCallsAfterFirst = github.calls.length;
+
+      secondResponse = await worker.fetch(proposalRequest({
+        proposalId, path, content, id: 9602,
+      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding }));
+      secondBody = await secondResponse.json();
+      const afterSecond = await readProposalState(
+        proposalId,
+        "vault-" + proposalId,
+        keyHash,
+      );
+      const replayCalls = github.calls.slice(githubCallsAfterFirst).map(call => ({
+        method: call.method,
+        path: new URL(call.url).pathname,
+      }));
+      const callsBeforeDrift = github.calls.length;
+
+      driftResponse = await worker.fetch(proposalRequest({
+        proposalId,
+        path,
+        content: content + "changed payload must not be rebound\n",
+        id: 9603,
+      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding }));
+      driftBody = await driftResponse.json();
+      const afterDrift = await readProposalState(
+        proposalId,
+        "vault-" + proposalId,
+        keyHash,
+      );
+      const githubWrites = github.calls
+        .filter(call => call.method === "POST")
+        .map(call => new URL(call.url).pathname);
+      const firstError = JSON.parse(firstBody.result.content[0].text);
+      const secondResult = JSON.parse(secondBody.result.content[0].text);
+      const driftError = JSON.parse(driftBody.result.content[0].text);
+
+      expect(afterDrift).toEqual(afterSecond);
+      expect({
+        firstHttpStatus: firstResponse.status,
+        firstIsToolError: firstBody.result?.isError === true,
+        firstError,
+        rawProviderFailureLeaked: firstWire.includes(marker),
+        afterFirstProposals: afterFirst.knowledge.proposals,
+        afterFirstOutbox: afterFirst.knowledge.outbox,
+        afterFirstWrite: afterFirst.writes.operations,
+        writesAfterFirst,
+        secondHttpStatus: secondResponse.status,
+        secondIsToolError: secondBody.result?.isError === true,
+        secondProposalStatus: secondResult.proposal_status,
+        secondOutboxStatus: secondResult.outbox_status,
+        secondReplayed: secondResult.replayed,
+        secondPullRequestNumber: secondResult.pull_request?.number,
+        finalProposals: afterSecond.knowledge.proposals,
+        finalOutbox: afterSecond.knowledge.outbox,
+        finalWrite: afterSecond.writes.operations,
+        replayCalls,
+        driftHttpStatus: driftResponse.status,
+        driftIsToolError: driftBody.result?.isError === true,
+        driftError,
+        driftCausedNoGitHubCall: github.calls.length === callsBeforeDrift,
+        recordVaultProposalCalls: calls.recordVaultProposal,
+        enqueueOutboxCalls: calls.enqueueOutbox,
+        githubWrites,
+        deleteAttempted: github.deleteAttempted,
+      }).toEqual({
+        firstHttpStatus: 200,
+        firstIsToolError: true,
+        firstError: {
+          error: "KNOWLEDGE_VAULT_PROPOSAL_RECORD_FAILED",
+          pull_request_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/989001",
+        },
+        rawProviderFailureLeaked: false,
+        afterFirstProposals: [],
+        afterFirstOutbox: [],
+        afterFirstWrite: [{
+          status: "SUCCEEDED",
+          phase: "PR_CREATED",
+          branch_name: "assistant/mcp-" + keyHash,
+          commit_sha: "d".repeat(40),
+          pr_number: prNumber,
+        }],
+        writesAfterFirst: 4,
+        secondHttpStatus: 200,
+        secondIsToolError: false,
+        secondProposalStatus: "proposed",
+        secondOutboxStatus: "pending",
+        secondReplayed: true,
+        secondPullRequestNumber: prNumber,
+        finalProposals: [{
+          proposal_id: proposalId,
+          status: "proposed",
+          pr_number: prNumber,
+          pr_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/989001",
+        }],
+        finalOutbox: [{
+          event_id: expect.stringMatching(/^evt_[a-f0-9]{32}$/),
+          idempotency_key: "vault-" + proposalId,
+          status: "pending",
+          attempts: 0,
+        }],
+        finalWrite: [{
+          status: "SUCCEEDED",
+          phase: "PR_CREATED",
+          branch_name: "assistant/mcp-" + keyHash,
+          commit_sha: "d".repeat(40),
+          pr_number: prNumber,
+        }],
+        replayCalls: [{
+          method: "GET",
+          path: "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/pulls/989001",
+        }],
+        driftHttpStatus: 200,
+        driftIsToolError: true,
+        driftError: { error: "IDEMPOTENCY_CONFLICT" },
+        driftCausedNoGitHubCall: true,
+        recordVaultProposalCalls: 2,
+        enqueueOutboxCalls: 1,
+        githubWrites: [
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/trees",
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/commits",
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/refs",
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/pulls",
+        ],
+        deleteAttempted: false,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("recovers a committed proposal record when its RPC acknowledgement is lost", async () => {
+    const proposalId = "vault-proposal-record-ack-loss-20261123";
+    const path = "knowledge/tenants/owner/proposal-record-ack-loss.md";
+    const content = "# Proposal record acknowledgement loss\nCommit before error fixture.\n";
+    const marker = "SENSITIVE_PROPOSAL_RECORD_ACK_LOSS";
+    const prNumber = 990001;
+    const originalFetch = globalThis.fetch;
+    const github = createGitHubWriteMock({
+      filePath: path,
+      blobSha: await gitBlobSha(content),
+      baseBranch: "main",
+      prNumber,
+    });
+    const calls = { recordVaultProposal: 0, enqueueOutbox: 0 };
+    const knowledgeBinding = {
+      idFromName(name) {
+        return env.KNOWLEDGE_STORE.idFromName(name);
+      },
+      get(id) {
+        const actual = env.KNOWLEDGE_STORE.get(id);
+        return {
+          async recordVaultProposal(input) {
+            calls.recordVaultProposal += 1;
+            const committed = await actual.recordVaultProposal(input);
+            if (calls.recordVaultProposal === 1) throw new Error(marker);
+            return committed;
+          },
+          enqueueOutbox(input) {
+            calls.enqueueOutbox += 1;
+            return actual.enqueueOutbox(input);
+          },
+        };
+      },
+    };
+    const keyHash = await sha256Hex(
+      "create_change_pr\nmohammadrezayaghoobi123-dev/chat-gpt\n" + proposalId,
+    );
+
+    globalThis.fetch = github.fetch;
+    let firstResponse;
+    let firstBody;
+    let firstWire;
+    let secondResponse;
+    let secondBody;
+    try {
+      firstResponse = await worker.fetch(proposalRequest({
+        proposalId, path, content, id: 9701,
+      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding }));
+      firstBody = await firstResponse.json();
+      firstWire = JSON.stringify(firstBody);
+      const afterFirst = await readProposalState(
+        proposalId,
+        "vault-" + proposalId,
+        keyHash,
+      );
+      const writesAfterFirst = github.calls.filter(call => call.method === "POST").length;
+      const githubCallsAfterFirst = github.calls.length;
+
+      secondResponse = await worker.fetch(proposalRequest({
+        proposalId, path, content, id: 9702,
+      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding }));
+      secondBody = await secondResponse.json();
+      const afterSecond = await readProposalState(
+        proposalId,
+        "vault-" + proposalId,
+        keyHash,
+      );
+      const replayCalls = github.calls.slice(githubCallsAfterFirst).map(call => ({
+        method: call.method,
+        path: new URL(call.url).pathname,
+      }));
+      const firstError = JSON.parse(firstBody.result.content[0].text);
+      const secondResult = JSON.parse(secondBody.result.content[0].text);
+
+      expect({
+        firstHttpStatus: firstResponse.status,
+        firstIsToolError: firstBody.result?.isError === true,
+        firstError,
+        rawProviderFailureLeaked: firstWire.includes(marker),
+        afterFirstProposals: afterFirst.knowledge.proposals,
+        afterFirstOutbox: afterFirst.knowledge.outbox,
+        afterFirstWrite: afterFirst.writes.operations,
+        writesAfterFirst,
+        secondHttpStatus: secondResponse.status,
+        secondIsToolError: secondBody.result?.isError === true,
+        secondProposalStatus: secondResult.proposal_status,
+        secondOutboxStatus: secondResult.outbox_status,
+        secondReplayed: secondResult.replayed,
+        secondPullRequestNumber: secondResult.pull_request?.number,
+        finalProposals: afterSecond.knowledge.proposals,
+        finalOutbox: afterSecond.knowledge.outbox,
+        finalWrite: afterSecond.writes.operations,
+        replayCalls,
+        recordVaultProposalCalls: calls.recordVaultProposal,
+        enqueueOutboxCalls: calls.enqueueOutbox,
+        githubWrites: github.calls
+          .filter(call => call.method === "POST")
+          .map(call => new URL(call.url).pathname),
+        deleteAttempted: github.deleteAttempted,
+      }).toEqual({
+        firstHttpStatus: 200,
+        firstIsToolError: true,
+        firstError: {
+          error: "KNOWLEDGE_VAULT_PROPOSAL_RECORD_FAILED",
+          pull_request_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/990001",
+        },
+        rawProviderFailureLeaked: false,
+        afterFirstProposals: [{
+          proposal_id: proposalId,
+          status: "proposed",
+          pr_number: prNumber,
+          pr_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/990001",
+        }],
+        afterFirstOutbox: [],
+        afterFirstWrite: [{
+          status: "SUCCEEDED",
+          phase: "PR_CREATED",
+          branch_name: "assistant/mcp-" + keyHash,
+          commit_sha: "d".repeat(40),
+          pr_number: prNumber,
+        }],
+        writesAfterFirst: 4,
+        secondHttpStatus: 200,
+        secondIsToolError: false,
+        secondProposalStatus: "proposed",
+        secondOutboxStatus: "pending",
+        secondReplayed: true,
+        secondPullRequestNumber: prNumber,
+        finalProposals: [{
+          proposal_id: proposalId,
+          status: "proposed",
+          pr_number: prNumber,
+          pr_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/990001",
+        }],
+        finalOutbox: [{
+          event_id: expect.stringMatching(/^evt_[a-f0-9]{32}$/),
+          idempotency_key: "vault-" + proposalId,
+          status: "pending",
+          attempts: 0,
+        }],
+        finalWrite: [{
+          status: "SUCCEEDED",
+          phase: "PR_CREATED",
+          branch_name: "assistant/mcp-" + keyHash,
+          commit_sha: "d".repeat(40),
+          pr_number: prNumber,
+        }],
+        replayCalls: [{
+          method: "GET",
+          path: "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/pulls/990001",
+        }],
+        recordVaultProposalCalls: 2,
+        enqueueOutboxCalls: 1,
+        githubWrites: [
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/trees",
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/commits",
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/refs",
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/pulls",
+        ],
+        deleteAttempted: false,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
 });

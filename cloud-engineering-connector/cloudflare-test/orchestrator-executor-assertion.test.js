@@ -51,7 +51,7 @@ async function createHmacAssertion({ subject, role, operation, nowMs }) {
   return signingInput + "." + base64Url(signature);
 }
 
-async function createExecutorAssertion(nowMs = now) {
+async function createExecutorAssertion(nowMs = now, operation = "claimTask") {
   const seed = Uint8Array.from({ length: 32 }, (_value, index) => index + 1);
   const prefix = Uint8Array.from([
     0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
@@ -59,7 +59,7 @@ async function createExecutorAssertion(nowMs = now) {
   const pkcs8 = new Uint8Array(prefix.length + seed.length);
   pkcs8.set(prefix);
   pkcs8.set(seed, prefix.length);
-  return createExecutorWorkerAssertion(base64Url(pkcs8), EXECUTOR_KID, { nowMs });
+  return createExecutorWorkerAssertion(base64Url(pkcs8), EXECUTOR_KID, { nowMs, operation });
 }
 
 async function createScheduledTask(ledger, taskId, executorId) {
@@ -230,5 +230,152 @@ describe("Executor Ed25519 trust boundary", () => {
       workerId: "agent:worker-1",
       leaseGeneration: 1,
     });
+  });
+
+  it("renews an Executor lease only with a one-time renewLease assertion", async () => {
+    const ledger = ledgerFor("executor-ed25519-renew-lease");
+    await expect(createScheduledTask(ledger, "task-executor-renew", EXECUTOR_ID))
+      .resolves.toMatchObject({ created: true });
+    const claimed = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now, "claimTask"),
+      leaseMs: 30_000,
+      now,
+      taskId: "task-executor-renew",
+    });
+    expect(claimed).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    await expect(ledger.renewLease({
+      taskId: "task-executor-renew",
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now, "claimTask"),
+      leaseGeneration: claimed.leaseGeneration,
+      leaseMs: 45_000,
+      now: now + 1,
+    })).resolves.toMatchObject({ renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+
+    await expect(ledger.renewLease({
+      taskId: "task-executor-renew",
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now + 1, "renewLease"),
+      leaseGeneration: claimed.leaseGeneration,
+      leaseMs: 45_000,
+      now: now + 1,
+    })).resolves.toMatchObject({
+      renewed: true,
+      leaseGeneration: claimed.leaseGeneration,
+      leaseUntil: now + 45_001,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-executor-renew",
+      ).toArray()).toEqual([{
+        worker_id: EXECUTOR_ID,
+        lease_generation: 1,
+        lease_until: now + 45_001,
+      }]);
+    });
+  });
+
+  it("releases an Executor lease only with a one-time releaseLease assertion", async () => {
+    const ledger = ledgerFor("executor-ed25519-release-lease");
+    await expect(createScheduledTask(ledger, "task-executor-release", EXECUTOR_ID))
+      .resolves.toMatchObject({ created: true });
+    const claimed = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now, "claimTask"),
+      leaseMs: 30_000,
+      now,
+      taskId: "task-executor-release",
+    });
+    expect(claimed).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    await expect(ledger.releaseLease({
+      taskId: "task-executor-release",
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now, "renewLease"),
+      leaseGeneration: claimed.leaseGeneration,
+      now: now + 1,
+    })).resolves.toMatchObject({ released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+
+    const releaseAssertion = await createExecutorAssertion(now + 2, "releaseLease");
+    await expect(ledger.releaseLease({
+      taskId: "task-executor-release",
+      workerId: EXECUTOR_ID,
+      workerAssertion: releaseAssertion,
+      leaseGeneration: claimed.leaseGeneration,
+      now: now + 2,
+    })).resolves.toMatchObject({ released: true, leaseGeneration: claimed.leaseGeneration });
+
+    await expect(ledger.releaseLease({
+      taskId: "task-executor-release",
+      workerId: EXECUTOR_ID,
+      workerAssertion: releaseAssertion,
+      leaseGeneration: claimed.leaseGeneration,
+      now: now + 3,
+    })).resolves.toMatchObject({ released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-executor-release",
+      ).toArray()).toEqual([{
+        worker_id: null,
+        lease_generation: 1,
+        lease_until: 0,
+      }]);
+      expect(state.storage.sql.exec(
+        "SELECT operation FROM orchestrator_consumed_assertions WHERE subject = ? ORDER BY operation",
+        EXECUTOR_ID,
+      ).toArray()).toEqual([
+        { operation: "claimTask" },
+        { operation: "releaseLease" },
+      ]);
+    });
+  });
+
+  it("rejects HMAC Executor assertions and denies Executor operations outside the fixed allowlist", async () => {
+    const ledger = ledgerFor("executor-ed25519-reject-hmac-renew-and-disallowed");
+    await expect(createScheduledTask(ledger, "task-executor-hmac-renew", EXECUTOR_ID))
+      .resolves.toMatchObject({ created: true });
+    const claimed = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now, "claimTask"),
+      leaseMs: 30_000,
+      now,
+      taskId: "task-executor-hmac-renew",
+    });
+    expect(claimed).toMatchObject({ claimed: true });
+
+    await expect(ledger.renewLease({
+      taskId: "task-executor-hmac-renew",
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createHmacAssertion({
+        subject: EXECUTOR_ID,
+        role: "agent",
+        operation: "renewLease",
+        nowMs: now + 1,
+      }),
+      leaseGeneration: claimed.leaseGeneration,
+      leaseMs: 30_000,
+      now: now + 1,
+    })).resolves.toMatchObject({ renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+
+    await expect(ledger.advanceAgentRound({
+      taskId: "task-executor-hmac-renew",
+      expectedVersion: 1,
+      expectedRound: 0,
+      nextRound: 1,
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createHmacAssertion({
+        subject: EXECUTOR_ID,
+        role: "agent",
+        operation: "advanceAgentRound",
+        nowMs: now + 2,
+      }),
+      leaseGeneration: claimed.leaseGeneration,
+      now: now + 2,
+    })).resolves.toMatchObject({ advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
   });
 });

@@ -47,11 +47,11 @@
   - Quarantine × Queue success.
   - Quarantine × accepted-send/ack-loss.
 
-- [ ] **Step 2: Run the focused Cloudflare Vitest file.**
+- [x] **Step 2: Run the focused Cloudflare Vitest file.**
   - Command: `npx vitest run --config vitest.config.js cloudflare-test/orchestrator-owner-outbox-publisher-failure-race.test.js`
   - Expected: four histories pass; task remains Owner-terminal, Outbox stays DEAD_LETTER, late callback JTI is not consumed, and Consumer acknowledges stale delivery without storing a receipt.
 
-- [ ] **Step 3: Review all persisted state.**
+- [x] **Step 3: Review all persisted state.**
   - Assert task state/version, Outbox status/attempts/retry state/lease owner/generation/expiry/last error/dead-letter timestamp, Consumer receipt count, Owner receipt/audit counts, and assertion JTI counts.
   - Advance logical time beyond the original Publisher lease and prove the event remains unclaimable.
 
@@ -62,32 +62,37 @@
 - Create: `docs/superpowers/plans/2026-11-23-orchestrator-owner-outbox-publisher-failure-race.md`
 
 - [x] **Step 1: Define the four histories, invariants, mutations, and scope boundaries.**
-- [ ] **Step 2: Verify that every written expectation maps to an executable assertion.**
+- [x] **Step 2: Verify that every written expectation maps to an executable assertion.**
 
 ### Task 3: Run isolated mutation experiments
 
 Each mutant must start from the exact code-tested candidate and change one invariant only.
 
-- [ ] **Step 1: Owner Outbox invalidation mutant.**
+- [x] **Step 1: Owner Outbox invalidation mutant.**
   - Remove Owner's Outbox dead-letter/lease-revocation update.
   - Expected: a late send-failure callback schedules/reopens a retry; the test fails on persisted state or late reclaim.
 
-- [ ] **Step 2: Publisher `failOutbox` lease-fence mutant.**
+- [x] **Step 2: Publisher `failOutbox` lease-fence mutant.**
   - Remove only the pre-consumption owner/generation/expiry fence from `failOutbox`.
   - Expected: the stale failure callback consumes its JTI; the assertion-count check fails.
 
-- [ ] **Step 3: Publisher `completeOutbox` lease-fence mutant.**
+- [x] **Step 3: Publisher `completeOutbox` lease-fence mutant.**
   - Remove only the pre-consumption owner/generation/expiry fence from `completeOutbox`.
   - Expected: the stale callback is treated as completed and/or consumes its JTI; the test fails.
 
-- [ ] **Step 4: Classify each result.**
+- [x] **Step 4: Classify each result.**
   - Killed only when the exact intended assertion fails on the exact mutant CI run.
   - Harness, setup, syntax, or unrelated failures are inconclusive.
 
 ### Task 4: Candidate PR and final verification
 
-- [ ] **Step 1: Open a Draft PR targeting `security/orchestrator-multi-actor-outbox-linearizability-2026-11-23`, not `main`.**
-- [ ] **Step 2: Verify full CI on the exact final PR head.**
-- [ ] **Step 3: Verify Gitleaks PR diff and record full-history findings without disclosing secret values/fingerprints.**
-- [ ] **Step 4: Verify PR #307 and predecessor PR #300 remain Draft/open/unmerged and main SHA is unchanged.**
+- [x] **Step 1: Open a Draft PR targeting `security/orchestrator-multi-actor-outbox-linearizability-2026-11-23`, not `main`.**
+- [x] **Step 2: Verify full CI on the exact final PR head.**
+- [x] **Step 3: Verify Gitleaks PR diff and record full-history findings without disclosing secret values/fingerprints.**
+- [x] **Step 4: Verify PR #307 and predecessor PR #300 remain Draft/open/unmerged and main SHA is unchanged.**
 - [ ] **Step 5: Report exact evidence and residual risks; do not merge or deploy.**
+
+
+## Completed Execution Evidence
+
+Candidate code head `a177c4f40f3ca90684e0bfc66a2291418e12a0b5` passed CI run `45186365668`: 416/416 Node tests, 211/211 Durable Object/Vitest tests across 13 files, 0 npm audit vulnerabilities, syntax checks, and both Wrangler dry-runs. All four deterministic histories passed. Three isolated mutants were killed: Owner Outbox invalidation (#313, run `45186554481`), `failOutbox` lease fence (#314, run `45186576125`), and `completeOutbox` lease fence (#315, run `45186595358`). Temporary mutation PRs are closed unmerged. Gitleaks diff scan `45186365624` was clean; full history still reports 11 unclassified historical findings. Main is unchanged. No deployment, merge, or Production action occurred.

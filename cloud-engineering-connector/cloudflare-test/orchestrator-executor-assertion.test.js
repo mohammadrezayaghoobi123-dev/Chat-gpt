@@ -758,4 +758,111 @@ describe("Executor Ed25519 trust boundary", () => {
     }
   });
 
+  it("rejects a cursor claim when the Executor assertion expires during cursor hashing", async () => {
+    const ledger = ledgerFor("executor-ed25519-cursor-hash-expiry");
+    const taskIds = Array.from({ length: 129 }, (_value, index) =>
+      "task-executor-cursor-hash-" + String(index).padStart(3, "0"),
+    );
+    for (const taskId of taskIds) {
+      await expect(createScheduledTask(ledger, taskId, EXECUTOR_ID))
+        .resolves.toMatchObject({ created: true });
+    }
+
+    const leaseTime = Date.now();
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.transactionSync(() => {
+        for (const taskId of taskIds.slice(0, 128)) {
+          state.storage.sql.exec(
+            "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
+            taskId, "agent:other-worker", leaseTime + 300_000, leaseTime,
+          );
+        }
+      });
+    });
+
+    const firstIssuedAt = Math.floor(Date.now() / 1_000) * 1_000;
+    const first = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(firstIssuedAt, "claimTask"),
+      leaseMs: 30_000,
+      now: firstIssuedAt,
+    });
+    expect(first).toMatchObject({
+      claimed: false,
+      reason: "CLAIM_SCAN_BUDGET_EXHAUSTED",
+      nextCursor: expect.stringMatching(/^[a-f0-9]{32}$/),
+      candidatesExamined: 128,
+      candidateRowsRead: 129,
+    });
+
+    const issuedAt = Math.floor(Date.now() / 1_000) * 1_000;
+    const assertion = await createExecutorAssertion(issuedAt, "claimTask");
+    let ledgerClock = issuedAt + 59_000;
+    const subtle = crypto.subtle;
+    const originalDigest = subtle.digest.bind(subtle);
+    const hadOwnDigest = Object.prototype.hasOwnProperty.call(subtle, "digest");
+    const originalDescriptor = Object.getOwnPropertyDescriptor(subtle, "digest");
+    const realNow = Date.now;
+    let digestCalls = 0;
+
+    Object.defineProperty(subtle, "digest", {
+      configurable: true,
+      writable: true,
+      value: (...args) => {
+        digestCalls += 1;
+        const pendingDigest = originalDigest(...args);
+        if (digestCalls === 1) ledgerClock = issuedAt + 66_000;
+        return pendingDigest;
+      },
+    });
+    Date.now = () => ledgerClock;
+
+    let result;
+    try {
+      result = await ledger.claimTask({
+        workerId: EXECUTOR_ID,
+        workerAssertion: assertion,
+        leaseMs: 30_000,
+        now: issuedAt,
+        cursor: first.nextCursor,
+      });
+    } finally {
+      Date.now = realNow;
+      if (hadOwnDigest) {
+        Object.defineProperty(subtle, "digest", originalDescriptor);
+      } else {
+        delete subtle.digest;
+      }
+    }
+
+    const persisted = await runInDurableObject(ledger, async (_instance, state) => ({
+      consumedAssertions: state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND operation = ?",
+        EXECUTOR_ID, "claimTask",
+      ).one().count,
+      cursorRows: state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_claim_cursors WHERE executor_id = ?",
+        EXECUTOR_ID,
+      ).one().count,
+      resumeLeases: state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ? AND worker_id = ?",
+        taskIds[128], EXECUTOR_ID,
+      ).one().count,
+    }));
+
+    expect({
+      claimed: result.claimed,
+      reason: result.reason ?? null,
+      digestCalls,
+      ...persisted,
+    }).toEqual({
+      claimed: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+      digestCalls: 2,
+      consumedAssertions: 0,
+      cursorRows: 1,
+      resumeLeases: 0,
+    });
+  });
+
 });

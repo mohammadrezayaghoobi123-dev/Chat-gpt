@@ -2293,4 +2293,109 @@ describe("Owner command atomic Ledger contract", () => {
     }
   });
 
+
+  it("retains consumed JTI through expiry plus 600 seconds and prunes it only after the strict boundary", async () => {
+    const ledger = ledgerFor("consumer-jti-retention-boundary");
+    const sharedJti = "worker-jti-retention-boundary-00000001";
+    const subject = "orchestrator-scheduler";
+    const role = "system";
+    const operation = "createTask";
+    const createAt = async (offsetSeconds, taskId) => {
+      const issuedAt = now + offsetSeconds * 1000;
+      return ledger.createTask({
+        task: {
+          ...task(taskId),
+          createdAt: issuedAt,
+          updatedAt: issuedAt,
+        },
+        idempotencyKey: "retention-boundary-key-" + taskId,
+        inputHash: "d".repeat(64),
+        now: issuedAt,
+        workerId: subject,
+        workerAssertion: await workerAssertion(
+          subject, role, operation, issuedAt, sharedJti,
+        ),
+      });
+    };
+
+    const first = await createAt(0, "task-jti-retention-original");
+    expect(first).toMatchObject({ created: true, task: { taskId: "task-jti-retention-original" } });
+
+    const originalToken = await workerAssertion(subject, role, operation, now, sharedJti);
+    const expiredReplay = await ledger.createTask({
+      task: { ...task("task-jti-retention-expired-replay"), createdAt: now + 66_000, updatedAt: now + 66_000 },
+      idempotencyKey: "retention-boundary-expired-replay",
+      inputHash: "e".repeat(64),
+      now: now + 66_000,
+      workerId: subject,
+      workerAssertion: originalToken,
+    });
+    expect(expiredReplay).toMatchObject({
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    const originalExpiry = Math.floor(now / 1000) + 60;
+    const exactBoundary = await createAt(660, "task-jti-retention-exact-boundary");
+    expect(exactBoundary).toMatchObject({
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+        "task-jti-retention-exact-boundary",
+      ).one().count).toBe(0);
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      const rows = state.storage.sql.exec(
+        "SELECT jti, subject, role, operation, issued_at, expires_at FROM orchestrator_consumed_assertions WHERE jti = ?",
+        sharedJti,
+      ).toArray();
+      expect(rows).toEqual([{
+        jti: sharedJti,
+        subject,
+        role,
+        operation,
+        issued_at: Math.floor(now / 1000),
+        expires_at: originalExpiry,
+      }]);
+    });
+
+    const afterBoundary = await createAt(661, "task-jti-retention-after-boundary");
+    expect(afterBoundary).toMatchObject({
+      created: true,
+      task: { taskId: "task-jti-retention-after-boundary" },
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT task_id FROM orchestrator_tasks WHERE task_id = ?",
+        "task-jti-retention-after-boundary",
+      ).one().task_id).toBe("task-jti-retention-after-boundary");
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      const rows = state.storage.sql.exec(
+        "SELECT jti, subject, role, operation, issued_at, expires_at, consumed_at FROM orchestrator_consumed_assertions WHERE jti = ?",
+        sharedJti,
+      ).toArray();
+      expect(rows).toEqual([{
+        jti: sharedJti,
+        subject,
+        role,
+        operation,
+        issued_at: Math.floor((now + 661_000) / 1000),
+        expires_at: Math.floor((now + 661_000) / 1000) + 60,
+        consumed_at: Math.floor((now + 661_000) / 1000),
+      }]);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id IN (?, ?, ?)",
+        "task-jti-retention-original",
+        "task-jti-retention-exact-boundary",
+        "task-jti-retention-after-boundary",
+      ).one().count).toBe(2);
+    });
+  });
+
 });

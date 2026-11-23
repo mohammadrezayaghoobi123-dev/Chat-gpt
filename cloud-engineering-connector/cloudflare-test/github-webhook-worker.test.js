@@ -410,34 +410,48 @@ describe("GitHub webhook Worker route", () => {
 
     const responseText = await response.text();
     const responseBody = JSON.parse(responseText);
-    expect(response.status).toBe(503);
-    expect(responseBody).toEqual({ error: "owner_command_unavailable" });
-    expect(responseText).not.toContain(injectedFailure.message);
-    expect(responseText).not.toContain("stack");
-    expect(digestCalls).toBe(2);
-    expect(nativeDigestCalls).toBe(1);
-    expect(executeOwnerCommandCalls).toBe(0);
-
-    expect(await ledger.getTask({ taskId })).toMatchObject({
-      taskId, state: "SCHEDULED", version: 1,
-    });
-    await runInDurableObject(ledger, async (_instance, state) => {
-      expect(state.storage.sql.exec(
+    const taskAfterFailure = await ledger.getTask({ taskId });
+    const persisted = await runInDurableObject(ledger, async (_instance, state) => ({
+      receipts: state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE delivery_id = ? OR comment_id = ?",
         deliveryId, String(commentId),
-      ).one().count).toBe(0);
-      expect(state.storage.sql.exec(
+      ).one().count,
+      consumedAssertions: state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions WHERE delivery_id = ? OR comment_id = ?",
         deliveryId, String(commentId),
-      ).one().count).toBe(0);
-      expect(state.storage.sql.exec(
+      ).one().count,
+      deliveries: state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries WHERE delivery_id = ?",
         deliveryId,
-      ).one().count).toBe(0);
-      expect(state.storage.sql.exec(
+      ).one().count,
+      auditEvents: state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ?",
         taskId,
-      ).one().count).toBe(0);
+      ).one().count,
+    }));
+    expect({
+      status: response.status,
+      body: responseBody,
+      rawMessageLeaked: responseText.includes(injectedFailure.message),
+      stackLeaked: responseText.includes("stack"),
+      digestCalls,
+      nativeDigestCalls,
+      executeOwnerCommandCalls,
+      taskState: { state: taskAfterFailure.state, version: taskAfterFailure.version },
+      ...persisted,
+    }).toEqual({
+      status: 503,
+      body: { error: "owner_command_unavailable" },
+      rawMessageLeaked: false,
+      stackLeaked: false,
+      digestCalls: 2,
+      nativeDigestCalls: 1,
+      executeOwnerCommandCalls: 0,
+      taskState: { state: "SCHEDULED", version: 1 },
+      receipts: 0,
+      consumedAssertions: 0,
+      deliveries: 0,
+      auditEvents: 0,
     });
   });
 

@@ -44,15 +44,15 @@
   - `linearizes Owner Quarantine after Agent releaseLease and rejects a late Consumer receipt`
   - Parameterized `preserves a valid Consumer receipt committed before Owner cancel/quarantine`
 
-- [ ] **Step 2: Run the focused Cloudflare Vitest test.**
+- [x] **Step 2: Run the focused Cloudflare Vitest test.**
   - Run in CI: `npx vitest run --config vitest.config.js cloudflare-test/orchestrator-multi-actor-linearizability.test.js`
   - Expected: all new deterministic interleavings pass; any failure is investigated from the exact assertion and persisted state, not papered over.
 
-- [ ] **Step 3: Run the complete connector test and check suite.**
+- [x] **Step 3: Run the complete connector test and check suite.**
   - Run: `npm test` and `npm run check`.
   - Expected: zero test failures, zero syntax failures, successful Wrangler dry-runs; staging smoke remains skipped unless separately authorized.
 
-- [ ] **Step 4: Review persisted-state coverage.**
+- [x] **Step 4: Review persisted-state coverage.**
   - Confirm exact Task state/version, execution lease owner/generation/expiry, Outbox status/retry-state/lease fields, receipt cardinality, consumed JTI cardinality, Owner receipt cardinality, and Owner audit cardinality for each interleaving.
 
 ### Task 2: Preserve the protocol and audit rationale
@@ -62,8 +62,8 @@
 - Create: `docs/superpowers/plans/2026-11-23-orchestrator-multi-actor-outbox-linearizability.md`
 
 - [x] **Step 1: Record the three interleaving families, expected outcomes, falsification conditions, and evidence rules.**
-- [ ] **Step 2: Cross-check every documented expected outcome against the exact test assertion and observed CI result.**
-- [ ] **Step 3: Ensure the documents do not imply production readiness or authorize an unimplemented Validator path.**
+- [x] **Step 2: Cross-check every documented expected outcome against the exact test assertion and observed CI result.**
+- [x] **Step 3: Ensure the documents do not imply production readiness or authorize an unimplemented Validator path.**
 
 ### Task 3: Run isolated mutation experiments
 
@@ -71,26 +71,26 @@
 - Create temporary mutant branches from the exact candidate commit; do not merge them.
 - Mutate only one predicate/side effect per mutant branch.
 
-- [ ] **Step 1: Owner stale-snapshot CAS mutant.**
+- [x] **Step 1: Owner stale-snapshot CAS mutant.**
   - Remove the in-transaction task state/version snapshot recheck.
   - Expected: the stale-snapshot linearization test fails because Owner commits from an obsolete version rather than retrying.
 
-- [ ] **Step 2: Outbox Publisher fence mutant.**
+- [x] **Step 2: Outbox Publisher fence mutant.**
   - Remove Owner's Outbox publisher lease invalidation (owner clear/generation advance) for pending/in-progress events.
   - Expected: late `completeOutbox` succeeds or the exact persisted lease invariant fails.
 
-- [ ] **Step 3: Consumer task-version fence mutant.**
+- [x] **Step 3: Consumer task-version fence mutant.**
   - Remove the current task version/state rejection in `recordOutboxReceipt`.
   - Expected: a stale post-Owner receipt is incorrectly inserted and the focused test fails.
 
-- [ ] **Step 4: Classify each mutation outcome.**
+- [x] **Step 4: Classify each mutation outcome.**
   - Mark killed only when the exact mutant CI failure is attributable to the intended new assertion.
   - Mark harness, syntax, setup, or unrelated failures inconclusive.
 
 ### Task 4: Candidate PR and independent verification
 
-- [ ] **Step 1: Open a Draft PR targeting the PR #300 feature branch, never `main`.**
-- [ ] **Step 2: Verify the exact PR head SHA and successful CI run.**
-- [ ] **Step 3: Verify PR diff secret scan; separately record the unresolved full-history Gitleaks findings without disclosing any values.**
-- [ ] **Step 4: Verify all candidate and predecessor PRs remain open/Draft/unmerged and `main` SHA has not changed.**
+- [x] **Step 1: Open a Draft PR targeting the PR #300 feature branch, never `main`.**
+- [x] **Step 2: Verify the exact PR head SHA and successful CI run.**
+- [x] **Step 3: Verify PR diff secret scan; separately record the unresolved full-history Gitleaks findings without disclosing any values.**
+- [x] **Step 4: Verify all candidate and predecessor PRs remain open/Draft/unmerged and `main` SHA has not changed.**
 - [ ] **Step 5: Report exact evidence, residual risks, and skipped checks; do not merge or deploy.**

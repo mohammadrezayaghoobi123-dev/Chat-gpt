@@ -6,10 +6,7 @@ import { createExecutorWorkerAssertion } from "../orchestrator-executor-assertio
 
 const EXECUTOR_ID = "orchestrator-executor";
 const EXECUTOR_KID = "executor-ed25519-v1";
-const EXECUTOR_TEST_MATERIAL = base64Url(Uint8Array.from([
-  0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
-  ...Array.from({ length: 32 }, (_value, index) => index + 1),
-]));
+const EXECUTOR_TEST_SEED_LABEL = "executor-ledger-test-key-v1";
 const SCHEDULER_KID = "test-v1";
 const SCHEDULER_KEY = new TextEncoder().encode("0123456789abcdef0123456789abcdef");
 const now = 1_800_000_000_000;
@@ -49,7 +46,17 @@ async function createHmacAssertion({ subject, role, operation, nowMs }) {
 }
 
 async function createExecutorAssertion(nowMs = now) {
-  return createExecutorWorkerAssertion(EXECUTOR_TEST_MATERIAL, EXECUTOR_KID, { nowMs });
+  const seed = new Uint8Array(await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(EXECUTOR_TEST_SEED_LABEL),
+  ));
+  const prefix = Uint8Array.from([
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+  ]);
+  const pkcs8 = new Uint8Array(prefix.length + seed.length);
+  pkcs8.set(prefix);
+  pkcs8.set(seed, prefix.length);
+  return createExecutorWorkerAssertion(base64Url(pkcs8), EXECUTOR_KID, { nowMs });
 }
 
 async function createScheduledTask(ledger, taskId, executorId) {

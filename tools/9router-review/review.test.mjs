@@ -2300,6 +2300,121 @@ test("a successful POST response must confirm the exact issue, body, and bot ide
   }
 });
 
+test("reviews only merge-base-to-head changes when the base branch advances independently", async () => {
+  const baseSha = "1".repeat(40);
+  const headSha = "2".repeat(40);
+  const mergeBaseSha = "3".repeat(40);
+  const baseTreeSha = "4".repeat(40);
+  const headTreeSha = "5".repeat(40);
+  const mergeBaseTreeSha = "6".repeat(40);
+  const blobSha = value => {
+    const bytes = Buffer.from(value, "utf8");
+    return createHash("sha1")
+      .update(Buffer.concat([Buffer.from("blob " + bytes.length + String.fromCharCode(0)), bytes]))
+      .digest("hex");
+  };
+  const commonText = "common\n";
+  const baseOnlyText = "main-only change\n";
+  const featureText = "feature change\n";
+  const commonBlobSha = blobSha(commonText);
+  const baseOnlyBlobSha = blobSha(baseOnlyText);
+  const featureBlobSha = blobSha(featureText);
+  const treeEntry = (path, sha, size) => ({ path, mode: "100644", type: "blob", sha, size });
+  const mergeBaseEntries = [
+    treeEntry("base-only.txt", commonBlobSha, Buffer.byteLength(commonText)),
+    treeEntry("feature.txt", commonBlobSha, Buffer.byteLength(commonText)),
+  ];
+  const baseEntries = [
+    treeEntry("base-only.txt", baseOnlyBlobSha, Buffer.byteLength(baseOnlyText)),
+    treeEntry("feature.txt", commonBlobSha, Buffer.byteLength(commonText)),
+  ];
+  const headEntries = [
+    treeEntry("base-only.txt", commonBlobSha, Buffer.byteLength(commonText)),
+    treeEntry("feature.txt", featureBlobSha, Buffer.byteLength(featureText)),
+  ];
+  let modelCalls = 0;
+  let commentPosts = 0;
+  let modelPatch = "";
+  const json = value => new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.endsWith("/pulls/289")) {
+      return json({
+        number: 289,
+        state: "open",
+        draft: false,
+        head: { sha: headSha, repo: { id: 1, full_name: "owner/repo" } },
+        base: { sha: baseSha, repo: { id: 1, full_name: "owner/repo" } },
+      });
+    }
+    if (target.includes("/compare/" + baseSha + "..." + headSha)) {
+      return json({
+        status: "ahead",
+        base_commit: { sha: baseSha },
+        merge_base_commit: { sha: mergeBaseSha },
+        files: [{
+          filename: "feature.txt",
+          status: "modified",
+          additions: 1,
+          deletions: 1,
+          patch: "@@ -1 +1 @@\n-common\n+feature change",
+        }],
+      });
+    }
+    if (target.endsWith("/git/commits/" + baseSha)) return json({ sha: baseSha, tree: { sha: baseTreeSha } });
+    if (target.endsWith("/git/commits/" + headSha)) return json({ sha: headSha, tree: { sha: headTreeSha } });
+    if (target.endsWith("/git/commits/" + mergeBaseSha)) return json({ sha: mergeBaseSha, tree: { sha: mergeBaseTreeSha } });
+    if (target.includes("/git/trees/" + baseTreeSha)) return json({ sha: baseTreeSha, truncated: false, tree: baseEntries });
+    if (target.includes("/git/trees/" + headTreeSha)) return json({ sha: headTreeSha, truncated: false, tree: headEntries });
+    if (target.includes("/git/trees/" + mergeBaseTreeSha)) return json({ sha: mergeBaseTreeSha, truncated: false, tree: mergeBaseEntries });
+    if (target.endsWith("/git/blobs/" + baseOnlyBlobSha)) {
+      return json({ sha: baseOnlyBlobSha, size: Buffer.byteLength(baseOnlyText), encoding: "base64", content: Buffer.from(baseOnlyText).toString("base64") });
+    }
+    if (target.endsWith("/git/blobs/" + commonBlobSha)) {
+      return json({ sha: commonBlobSha, size: Buffer.byteLength(commonText), encoding: "base64", content: Buffer.from(commonText).toString("base64") });
+    }
+    if (target.endsWith("/git/blobs/" + featureBlobSha)) {
+      return json({ sha: featureBlobSha, size: Buffer.byteLength(featureText), encoding: "base64", content: Buffer.from(featureText).toString("base64") });
+    }
+    if (target.endsWith("/chat/completions")) {
+      modelCalls += 1;
+      const messages = JSON.parse(options.body).messages;
+      modelPatch = JSON.parse(messages.find(message => message.role === "user").content
+        .split("Patch as JSON string:" + String.fromCharCode(10)).at(-1));
+      return json({ choices: [{ message: { content: "A sufficiently long placeholder review report." } }] });
+    }
+    if (target.includes("/issues/289/comments?")) return json([]);
+    if (target.endsWith("/issues/289/comments") && options.method === "POST") {
+      commentPosts += 1;
+      return createdCommentResponse(target, options, 1289);
+    }
+    throw new Error("Unexpected API request in merge-base isolation fixture: " + target);
+  };
+
+  await runReview({
+    repository: "owner/repo",
+    pullRequest: 289,
+    strictImmutableSnapshot: true,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  });
+
+  assert.equal(modelCalls, 1);
+  assert.equal(commentPosts, 1);
+  assert.equal((modelPatch.match(/FILE: /g) ?? []).length, 1);
+  assert.ok(modelPatch.includes("FILE: feature.txt"));
+  assert.ok(!modelPatch.includes("base-only.txt"), "base-only changes must not be misattributed to the pull request");
+});
+
 test("reconstructs a missing Compare API patch from immutable Git blobs", async () => {
   const headSha = "c".repeat(40);
   const baseSha = "d".repeat(40);

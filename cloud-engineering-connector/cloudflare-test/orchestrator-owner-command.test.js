@@ -1646,8 +1646,11 @@ describe("Owner command atomic Ledger contract", () => {
       retry() { this.retryCalls += 1; },
     };
 
-    const delivery = await consumeOrchestratorOutbox({ messages: [message] }, consumerEnv);
-    const cancellation = await ledger.executeOwnerCommand(await ownerInput({
+    let releaseOwnerCommand;
+    let signalOwnerCommandReady;
+    const ownerCommandGate = new Promise(resolve => { releaseOwnerCommand = resolve; });
+    const ownerCommandReady = new Promise(resolve => { signalOwnerCommandReady = resolve; });
+    const ownerCommandInput = await ownerInput({
       command: {
         operation: "cancel",
         taskId,
@@ -1656,7 +1659,16 @@ describe("Owner command atomic Ledger contract", () => {
       },
       deliveryId: "delivery-receipt-cancel-receipt-first-01",
       commentId: "123456812",
-    }));
+    });
+    const cancellationPromise = (async () => {
+      signalOwnerCommandReady();
+      await ownerCommandGate;
+      return ledger.executeOwnerCommand(ownerCommandInput);
+    })();
+    await ownerCommandReady;
+    const delivery = await consumeOrchestratorOutbox({ messages: [message] }, consumerEnv);
+    releaseOwnerCommand();
+    const cancellation = await cancellationPromise;
 
     expect(cancellation).toMatchObject({
       applied: true,
@@ -1739,6 +1751,19 @@ describe("Owner command atomic Ledger contract", () => {
       retry() { this.retryCalls += 1; },
     };
 
+    let releaseReceiptRpc;
+    let signalReceiptRpcStarted;
+    const receiptRpcGate = new Promise(resolve => { releaseReceiptRpc = resolve; });
+    const receiptRpcStarted = new Promise(resolve => { signalReceiptRpcStarted = resolve; });
+    consumerEnv.ORCHESTRATOR_LEDGER.get = () => ({
+      recordOutboxReceipt: async input => {
+        signalReceiptRpcStarted();
+        await receiptRpcGate;
+        return ledger.recordOutboxReceipt(input);
+      },
+    });
+    const deliveryPromise = consumeOrchestratorOutbox({ messages: [message] }, consumerEnv);
+    await receiptRpcStarted;
     const cancellation = await ledger.executeOwnerCommand(await ownerInput({
       command: {
         operation: "cancel",
@@ -1749,7 +1774,8 @@ describe("Owner command atomic Ledger contract", () => {
       deliveryId: "delivery-receipt-cancel-cancel-first-01",
       commentId: "123456813",
     }));
-    const delivery = await consumeOrchestratorOutbox({ messages: [message] }, consumerEnv);
+    releaseReceiptRpc();
+    const delivery = await deliveryPromise;
 
     expect(cancellation).toMatchObject({
       applied: true,

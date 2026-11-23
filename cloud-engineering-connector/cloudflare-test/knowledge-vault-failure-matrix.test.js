@@ -385,7 +385,7 @@ describe("Knowledge Vault hostile failure matrix", () => {
   it("deduplicates an Outbox retry when the Durable Object committed but the RPC acknowledgement was lost", async () => {
     const proposalId = "vault-outbox-ack-loss-atomicity-20261123";
     const path = "knowledge/tenants/owner/outbox-ack-loss.md";
-    const content = "# Outbox acknowledgement loss\\nA deterministic commit-before-error fixture.\\n";
+    const content = "# Outbox acknowledgement loss\nA deterministic commit-before-error fixture.\n";
     const marker = "SENSITIVE_OUTBOX_ACK_LOSS";
     const originalFetch = globalThis.fetch;
     const github = createGitHubWriteMock({
@@ -415,7 +415,7 @@ describe("Knowledge Vault hostile failure matrix", () => {
       },
     };
     const keyHash = await sha256Hex(
-      "create_change_pr\\nmohammadrezayaghoobi123-dev/chat-gpt\\n" + proposalId,
+      "create_change_pr\nmohammadrezayaghoobi123-dev/chat-gpt\n" + proposalId,
     );
 
     globalThis.fetch = github.fetch;

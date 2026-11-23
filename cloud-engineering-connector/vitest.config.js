@@ -9,6 +9,7 @@ export default defineConfig({
         bindings: {
           // Test-only deterministic key. Never copied into Wrangler or Cloudflare secrets.
           LEDGER_WORKER_ASSERTION_KEYS: JSON.stringify({ "test-v1": "3031323334353637383961626364656630313233343536373839616263646566" }),
+          ORCHESTRATOR_EXECUTOR_VERIFICATION_KEYS: JSON.stringify({ "executor-ed25519-v1": { publicKey: "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ", subject: "orchestrator-executor", role: "agent", operations: ["claimTask"] } }),
           LEDGER_OWNER_ASSERTION_KEYS: JSON.stringify({ "owner-v1": "3031323334353637383961626364656630313233343536373839616263646566" }),
           GITHUB_WEBHOOK_OWNER_ID: "335530603",
           GITHUB_WEBHOOK_REPOSITORY: "mohammadrezayaghoobi123-dev/Chat-gpt",

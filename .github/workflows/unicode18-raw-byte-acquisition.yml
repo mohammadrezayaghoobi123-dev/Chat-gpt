@@ -59,6 +59,37 @@ jobs:
               "DerivedNormalizationProps.txt",
               "NormalizationTest.txt",
           )
+          PINNED_SOURCE_MANIFEST_SHA256 = "965655de97a82e6efc751d4e5f5c577c9c484eaf798af9a90f1a0203516ac27c"
+          PINNED_SOURCE_FILES = {
+              "ReadMe.txt": (729, "b0ea442f29dee90584aacd3665a6e1ce87ffc917a4d31f34e1916d2d6f7f9205"),
+              "PropList.txt": (149040, "f438f532e8737bb8a2702126cdf9c4af5e357c58c7acf9d9eb2fc7c1a1d955d6"),
+              "DerivedCoreProperties.txt": (1159889, "09c928886a178fcafd93c29e4bd59073a058e5a100b716d425cb563ab50f68c9"),
+              "DerivedAge.txt": (142568, "58b04334e3a31f9612694bbc3f6bff4a302b7d424565bca9c47e30aa74f8dbac"),
+              "extracted/DerivedGeneralCategory.txt": (282143, "d6b151d2d40ee9b1876d26f417980f45ffae47b6055ccf7203cb31f07a030f94"),
+              "UnicodeData.txt": (2243593, "0736451de439ae7baf1425136617da495e09ee5afbe6e394374db7009ea08950"),
+              "CaseFolding.txt": (88776, "a004797658a457bec4dc11683e39f69249ea3b595b752dbea6721c4c9f587b0d"),
+              "DerivedNormalizationProps.txt": (1396877, "98ac7f67d985fe781e317f6182e885e94cabb0c314769e6dd73e48b226931ccd"),
+              "NormalizationTest.txt": (2863708, "25a50d816764b04abfb4a646d3eb2b2a803284c3873d9a06757b94fe4513dde3"),
+          }
+          if set(PINNED_SOURCE_FILES) != set(REQUIRED):
+              raise RuntimeError("source-lock inventory does not exactly match required input inventory")
+
+          def verify_source_bytes(raw, expected_length, expected_sha256):
+              if not isinstance(raw, bytes):
+                  raise TypeError("source-lock verification requires immutable raw bytes")
+              if len(raw) != expected_length:
+                  raise ValueError("pinned raw-byte length mismatch")
+              actual = hashlib.sha256(raw).hexdigest()
+              if actual != expected_sha256:
+                  raise ValueError("pinned raw-byte SHA-256 mismatch")
+              return actual
+
+          def verify_pinned_source(path, raw):
+              expected = PINNED_SOURCE_FILES.get(path)
+              if expected is None:
+                  raise ValueError("source path is not in the pinned source-lock inventory")
+              return verify_source_bytes(raw, expected[0], expected[1])
+
           MAX_ARCHIVE = 40 * 1024 * 1024
           MAX_FILE = 25 * 1024 * 1024
           MAX_TOTAL = 100 * 1024 * 1024
@@ -390,6 +421,26 @@ jobs:
                   self.assertEqual(m["nul_byte_count"], 1)
                   self.assertEqual(m["first_nul_byte_offset"], 1)
 
+              def test_source_lock_accepts_exact_raw_bytes(self):
+                  sample = b"locked-source"
+                  digest = hashlib.sha256(sample).hexdigest()
+                  self.assertEqual(verify_source_bytes(sample, len(sample), digest), digest)
+
+              def test_source_lock_rejects_length_mismatch(self):
+                  sample = b"locked-source"
+                  digest = hashlib.sha256(sample).hexdigest()
+                  with self.assertRaisesRegex(ValueError, "length mismatch"):
+                      verify_source_bytes(sample, len(sample) + 1, digest)
+
+              def test_source_lock_rejects_digest_mismatch(self):
+                  sample = b"locked-source"
+                  with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                      verify_source_bytes(sample, len(sample), "0" * 64)
+
+              def test_source_lock_rejects_unlisted_path(self):
+                  with self.assertRaisesRegex(ValueError, "not in the pinned"):
+                      verify_pinned_source("unexpected.txt", b"x")
+
               def test_manifest_encoding_is_stable(self):
                   sample = {"unicode_version": VERSION, "files": [{"path": "A", "sha256": "00"}]}
                   self.assertEqual(canonical_manifest_bytes(sample),
@@ -571,6 +622,10 @@ jobs:
                   for path in REQUIRED:
                       stage = "direct_file_acquisition:" + path
                       body, meta = fetch_exact(ROOT + path, MAX_FILE, "text")
+                      pinned_source_sha256 = verify_pinned_source(path, body)
+                      if meta["byte_length"] != PINNED_SOURCE_FILES[path][0]:
+                          raise ValueError("transport length differs from pinned source-lock length: " + path)
+                      meta["pinned_source_sha256"] = pinned_source_sha256
                       total += len(body)
                       if total > MAX_TOTAL:
                           raise ValueError("aggregate direct-source size limit exceeded")
@@ -604,13 +659,6 @@ jobs:
                               "zip_member_sha256": hashlib.sha256(packaged).hexdigest(),
                               "direct_vs_zip_equal": True,
                           })
-                  for item in results:
-                      raw = direct[item["relative_path"]]
-                      item["raw_structure"] = measure_raw_bytes(raw)
-                      item["raw_sha256_before_metrics"] = hashlib.sha256(raw).hexdigest()
-                      item["raw_sha256_after_metrics"] = hashlib.sha256(raw).hexdigest()
-                      if item["raw_sha256_before_metrics"] != item["raw_sha256_after_metrics"]:
-                          raise ValueError("raw bytes changed during metrics collection")
                   report["files"] = results
                   report["cross_representation_status"] = "SUPPORTED_FOR_ALL_NINE_FILES"
 
@@ -637,6 +685,15 @@ jobs:
                   report["stable_manifest_sha256"] = hashlib.sha256(
                       canonical_manifest_bytes(stable)
                   ).hexdigest()
+                  if report["stable_manifest_sha256"] != PINNED_SOURCE_MANIFEST_SHA256:
+                      raise ValueError("computed semantic source manifest digest does not match pinned R1-U7 source-lock")
+                  for item in results:
+                      raw = direct[item["relative_path"]]
+                      item["raw_structure"] = measure_raw_bytes(raw)
+                      item["raw_sha256_before_metrics"] = hashlib.sha256(raw).hexdigest()
+                      item["raw_sha256_after_metrics"] = hashlib.sha256(raw).hexdigest()
+                      if item["raw_sha256_before_metrics"] != item["raw_sha256_after_metrics"]:
+                          raise ValueError("raw bytes changed during metrics collection")
                   byte_metrics_payload = {
                       "gate_id": "R1-U12-B",
                       "tool_version": "1.0.0",

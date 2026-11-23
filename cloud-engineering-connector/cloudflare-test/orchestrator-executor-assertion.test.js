@@ -463,4 +463,38 @@ describe("Executor Ed25519 trust boundary", () => {
       reason: "AUTHENTICATED_WORKER_REQUIRED",
     });
   });
+
+  it("does not let a backdated caller timestamp resurrect an expired Executor lease", async () => {
+    const ledger = ledgerFor("executor-ed25519-reject-backdated-lease-time");
+    await expect(createScheduledTask(ledger, "task-executor-backdated-time", EXECUTOR_ID))
+      .resolves.toMatchObject({ created: true });
+    const claimed = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now, "claimTask"),
+      leaseMs: 30_000,
+      now,
+      taskId: "task-executor-backdated-time",
+    });
+    expect(claimed).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE orchestrator_execution_leases SET lease_until = ? WHERE task_id = ?",
+        now - 1, "task-executor-backdated-time",
+      );
+    });
+
+    const backdatedNow = now - 1_000;
+    await expect(ledger.renewLease({
+      taskId: "task-executor-backdated-time",
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(backdatedNow, "renewLease"),
+      leaseGeneration: claimed.leaseGeneration,
+      leaseMs: 30_000,
+      now: backdatedNow,
+    })).resolves.toMatchObject({
+      renewed: false,
+      reason: "LEASE_FENCE_MISMATCH",
+    });
+  });
 });

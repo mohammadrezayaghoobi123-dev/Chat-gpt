@@ -346,7 +346,7 @@ Test the workflow source to assert:
 - Every candidate review uses the same per-PR concurrency group as the event-driven reviewer.
 - No step checks out, runs, sources, or downloads executable PR content.
 - The workflow never grants contents write, administration, or repository-settings permissions.
-- Checkpoint artifact upload is bounded and has a finite retention period.
+- Checkpoint, per-attempt reservation, and per-attempt outcome artifact uploads are bounded, provenance-checked, immutable, and have finite retention periods.
 - The schedule is documented as UTC and subject to GitHub scheduling delay.
 
 Run: `node --test tools/9router-review/reconciler-workflow.test.mjs`
@@ -372,7 +372,7 @@ The recommended initial artifact retention is seven days, sufficient for normal 
 
 Create a three-part workflow:
 1. **Discover:** checkout trusted default-branch code, validate prior checkpoint, enumerate candidates, and upload the proposed checkpoint/metadata artifact. This job has read-only permissions and receives only the HMAC marker-key secrets required to authenticate prior reports; it receives no 9Router endpoint or API-key secret.
-2. **Review matrix:** one candidate per job, maximum three parallel jobs, per-PR concurrency group shared with the existing reviewer. This job checks out only trusted default-branch code and invokes `run-review.mjs` with exact candidate values and the expected repository ID. Only this job receives the 9Router and marker secrets.
+2. **Review matrix:** one candidate per job, maximum three parallel jobs, per-PR concurrency group shared with the existing reviewer. Before invoking `run-review.mjs`, each job uploads a distinct immutable write-ahead reservation artifact and verifies the returned artifact identity/digest. Only then may it invoke the reviewer. After the attempt, it uploads a separate immutable outcome artifact. This job checks out only trusted default-branch code and passes exact candidate values and expected repository ID. Only this job receives the 9Router and marker secrets.
 3. **Finalize:** run only after discovery and candidate review jobs reach safe terminal outcomes. Download the same-run proposed checkpoint artifact, validate its schema and run metadata, and publish a checkpoint artifact for the next run. If any candidate outcome is uncertain, do not advance past that candidate.
 
 Use the existing pinned official checkout/setup-node/download-artifact/upload-artifact action SHAs already present in the repository where their behavior is suitable. Any new action must be pinned to an immutable SHA and independently reviewed.
@@ -386,6 +386,9 @@ Test:
 - Any failed or UNKNOWN candidate => checkpoint does not advance beyond the earliest uncompleted candidate.
 - Missing, expired, wrong-workflow, wrong-branch, wrong-repository, wrong-SHA, or digest-mismatched checkpoint => safe bootstrap or UNKNOWN, never trusted reuse.
 - Missing secrets => no 9Router invocation.
+- Failed or unverifiable write-ahead reservation artifact upload => no 9Router invocation.
+- Crash after reservation upload but before a terminal outcome artifact => the attempt ordinal is not replayed; disposition becomes UNKNOWN/quarantined.
+- A workflow rerun discovers existing reservation artifacts and cannot dispatch the same attempt ID again.
 - A PR head or base change before review => existing reviewer refuses the snapshot.
 - A concurrent signal-driven review and reconciler review for the same PR share one concurrency group.
 - No workflow permission or trigger is broadened beyond the approved design.
@@ -432,6 +435,7 @@ Cover the approved design's T01–T26 matrix, including:
 - More than 200 PR records and cursor resume.
 - New PR creation and PR closure during pagination.
 - Checkpoint artifact tampering, wrong workflow provenance, incompatible workflow SHA, expiration, and loss.
+- Reservation/outcome artifact tampering, digest mismatch, missing outcome, duplicate attempt ID, and crash between reservation and dispatch.
 - Concurrent scheduled/manual runs.
 - Event-driven reviewer and reconciler contention for one PR.
 - GitHub primary/secondary rate limit and 5xx.
@@ -557,16 +561,17 @@ The approved global ceiling remains **3 dispatched inference attempts per reconc
 
 ### 5. Write-ahead attempt reservation and crash recovery
 
-Before dispatching an inference request, the runner MUST durably reserve the attempt in the run's authenticated checkpoint state:
+Before dispatching an inference request, the review job MUST create a durable write-ahead reservation as a separate immutable GitHub Actions artifact:
 
-- Generate a unique `attemptId` and record the tuple, ordinal (1–3), run ID, run attempt, dispatch intent timestamp, and state `DISPATCH_RESERVED`.
-- Persist and validate that reservation before sending the external request.
-- Transition to `DISPATCHED` only at the dispatch boundary; persist a terminal result when known.
-- If a process or workflow terminates with a reservation whose dispatch outcome cannot be proven, treat it as `UNKNOWN` and do not automatically dispatch the same ordinal again.
-- A workflow rerun must not replay an existing `DISPATCH_RESERVED` or `DISPATCHED` attempt. It must reconcile the attempt record and enter a safe terminal disposition or quarantine it.
-- Checkpoint cursor advancement and retry-ledger updates must be committed as one logical checkpoint artifact. Never advance the cursor while losing the retry record for a candidate that was consumed.
+- Generate a unique `attemptId` and record the tuple, ordinal (1–3), run ID, run attempt, workflow ID/SHA, dispatch-intent timestamp, and state `DISPATCH_RESERVED`.
+- Validate the reservation schema and provenance locally, then upload it under a deterministic, attempt-specific artifact name with a finite retention period. The upload action must complete successfully and expose a verifiable artifact identity/digest before any 9Router request is allowed.
+- If reservation upload fails, is skipped, or returns an unverifiable result, do not dispatch inference.
+- Only after the reservation artifact is durably accepted may the runner cross the external dispatch boundary. The result is recorded in a second immutable outcome artifact; it must never overwrite the reservation artifact.
+- If a process or workflow terminates after reservation upload and the dispatch outcome cannot be proven, treat the attempt as `UNKNOWN` and do not automatically dispatch the same ordinal again.
+- A workflow rerun must discover and reconcile prior reservation/outcome artifacts for the exact tuple and attempt ID. It must not replay an existing `DISPATCH_RESERVED` or `DISPATCHED` attempt.
+- The final checkpoint is produced only after reservation and outcome artifacts have been validated and reconciled. Cursor advancement and retry-ledger updates are committed together in that final checkpoint artifact.
 
-The artifact is not a transactional database. If the artifact cannot be durably written or its provenance/digest cannot be verified, do not dispatch inference and do not advance the cursor.
+GitHub Actions artifacts are immutable evidence objects, not a transactional database. The implementation must validate source run, run attempt, repository ID, workflow ID/path/SHA, artifact name, digest, and payload schema. If the reservation artifact cannot be durably written or later verified, do not dispatch inference and do not advance the cursor.
 
 ### 6. Publication ambiguity and duplicate prevention
 
@@ -599,7 +604,7 @@ All transitions must be explicit, deterministic, and covered by tests. Illegal o
 
 ### 8. Checkpoint persistence, fairness, and generation boundaries
 
-The checkpoint MUST persist the retry ledger alongside the cursor and generation boundary. The schema must include `generationId`, `policyVersion`, and a bounded `retryLedger`; the schema example and validator must use the same field names.
+The checkpoint MUST persist the retry ledger alongside the cursor and generation boundary. The schema must include `generationId`, `policyVersion`, and a bounded `retryLedger`; the schema example and validator must use the same field names. Enforce a maximum of 4,096 retry records and 2 MiB serialized checkpoint size. Exceeding either limit blocks inference and cursor advancement with `UNKNOWN`; records must never be silently evicted.
 
 - Retry records are sorted and serialized deterministically.
 - Enforce explicit maximum record count and serialized-byte limits. If either limit is exceeded, stop safely with `UNKNOWN`; never silently drop old retry records.

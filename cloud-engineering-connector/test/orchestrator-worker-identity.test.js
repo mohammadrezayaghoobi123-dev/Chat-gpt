@@ -110,3 +110,32 @@ test("scheduled signer authorizes only the dedicated DLQ archiver principal and 
     error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
   );
 });
+
+
+test("executor signer fixes its principal and role and permits only the initial claim operation", async () => {
+  const { createExecutorWorkerAssertion } = await import("../orchestrator-worker-identity.js");
+  assert.equal(typeof createExecutorWorkerAssertion, "function");
+
+  const token = await createExecutorWorkerAssertion(keySet, "worker-v1", {
+    operation: "claimTask",
+    nowMs,
+    subject: "attacker-selected-principal",
+    role: "system",
+  });
+  const verified = await verifyWorkerAssertion(keySet, token, {
+    subject: "orchestrator-executor",
+    role: "agent",
+    operation: "claimTask",
+    nowMs,
+  });
+  assert.equal(verified.subject, "orchestrator-executor");
+  assert.equal(verified.role, "agent");
+  assert.equal(verified.operation, "claimTask");
+
+  for (const operation of ["createTask", "transitionTask", "renewLease", "releaseLease", "claimOutbox"]) {
+    await assert.rejects(
+      createExecutorWorkerAssertion(keySet, "worker-v1", { operation, nowMs }),
+      error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
+    );
+  }
+});

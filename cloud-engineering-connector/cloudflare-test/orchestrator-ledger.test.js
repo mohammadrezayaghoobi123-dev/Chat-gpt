@@ -2235,3 +2235,257 @@ it("rejects an expired lease even when its generation is still current", async (
     await expect(ledger.getTask({ taskId: "task-0001" }))
       .resolves.toMatchObject({ state: "RUNNING", version: 2 });
   });
+
+
+it("fences a late publisher acknowledgement after lease reclamation and deduplicates concurrent consumer deliveries", async () => {
+  const integrationNow = Date.now();
+  let clockNow = integrationNow;
+  const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+  let releaseFirstSend;
+  let resolveFirstSendEntered;
+  const firstSendRelease = new Promise(resolve => { releaseFirstSend = resolve; });
+  const firstSendEntered = new Promise(resolve => { resolveFirstSendEntered = resolve; });
+  const queued = [];
+  try {
+    const ledger = ledgerFor("ledger-outbox-late-ack-race-atomicity");
+    const taskId = "task-outbox-late-ack-race";
+    await createTask(ledger, {
+      task: task(taskId),
+      idempotencyKey: "task-create-outbox-late-ack-race",
+      inputHash: "1".repeat(64),
+      now: integrationNow,
+    });
+    const payload = { taskId, version: 1, transition: "created", source: "late-ack-race" };
+    await ledger.enqueueOutbox({
+      eventId: "evt-outbox-late-ack-race",
+      idempotencyKey: "outbox-late-ack-race",
+      taskId,
+      eventType: "task.created",
+      payload,
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: integrationNow,
+      }),
+      now: integrationNow,
+    });
+
+    const publisherEnv = {
+      ORCHESTRATOR_LEDGER: {
+        idFromName: name => name,
+        get: name => name === "orchestrator-ledger-global" ? ledger : null,
+      },
+      ORCHESTRATOR_OUTBOX_QUEUE: {
+        send: async (message, options) => {
+          queued.push({ message: structuredClone(message), options });
+          if (queued.length === 1) {
+            resolveFirstSendEntered();
+            await firstSendRelease;
+          }
+        },
+      },
+      LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: TEST_ASSERTION_KID,
+    };
+
+    const firstPublisherPromise = processOrchestratorOutbox(publisherEnv, { maxEvents: 1 });
+    await firstSendEntered;
+
+    // The first Queue send is accepted by the transport fixture, but its
+    // acknowledgement is delayed beyond the 120-second Ledger lease.
+    clockNow = integrationNow + 120_001;
+    const secondPublisher = await processOrchestratorOutbox(publisherEnv, { maxEvents: 1 });
+    expect(secondPublisher).toEqual({
+      processed: 1, published: 1, failed: 0, deadLettered: 0, completionPending: 0,
+    });
+    expect(queued).toHaveLength(2);
+    expect(queued.map(item => item.message.attempts)).toEqual([1, 2]);
+    expect(queued[0].message.eventId).toBe(queued[1].message.eventId);
+
+    releaseFirstSend();
+    const firstPublisher = await firstPublisherPromise;
+    expect(firstPublisher).toEqual({
+      processed: 1, published: 1, failed: 0, deadLettered: 0, completionPending: 1,
+    });
+
+    const stateAfterPublisherRace = await runInDurableObject(ledger, (_instance, state) => ({
+      event: state.storage.sql.exec(
+        "SELECT status, attempts, lease_generation, lease_worker_id, lease_until, retry_state FROM orchestrator_outbox_events WHERE event_id = ?",
+        "evt-outbox-late-ack-race",
+      ).one(),
+    }));
+    expect(stateAfterPublisherRace.event).toMatchObject({
+      status: "COMPLETED",
+      attempts: 2,
+      lease_generation: 2,
+      lease_worker_id: null,
+      lease_until: 0,
+      retry_state: "READY",
+    });
+
+    const consumerEnv = {
+      ORCHESTRATOR_LEDGER: {
+        idFromName: name => name,
+        get: name => name === "orchestrator-ledger-global" ? ledger : null,
+      },
+      LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: TEST_ASSERTION_KID,
+    };
+    const deliveries = queued.map(item => ({
+      body: structuredClone(item.message),
+      acknowledged: false,
+      retried: false,
+      ack() { this.acknowledged = true; },
+      retry() { this.retried = true; },
+    }));
+    const consumerResults = await Promise.all(
+      deliveries.map(delivery => consumeOrchestratorOutbox({ messages: [delivery] }, consumerEnv)),
+    );
+    expect(consumerResults.every(result =>
+      result.received === 1 && result.acknowledged === 1 && result.retried === 0,
+    )).toBe(true);
+    expect(consumerResults.reduce((sum, result) => sum + result.duplicates, 0)).toBe(1);
+    expect(deliveries.every(delivery => delivery.acknowledged && !delivery.retried)).toBe(true);
+
+    await runInDurableObject(ledger, (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        "evt-outbox-late-ack-race",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT status, attempts, lease_generation FROM orchestrator_outbox_events WHERE event_id = ?",
+        "evt-outbox-late-ack-race",
+      ).one()).toMatchObject({
+        status: "COMPLETED",
+        attempts: 2,
+        lease_generation: 2,
+      });
+    });
+  } finally {
+    releaseFirstSend();
+    dateNow.mockRestore();
+  }
+}, 15000);
+
+it("recovers a Queue-accepted send with a lost acknowledgement through bounded retry and concurrent receipt deduplication", async () => {
+  const integrationNow = Date.now();
+  let clockNow = integrationNow;
+  const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+  const queued = [];
+  let sendCalls = 0;
+  try {
+    const ledger = ledgerFor("ledger-outbox-send-ack-loss-atomicity");
+    const taskId = "task-outbox-send-ack-loss";
+    await createTask(ledger, {
+      task: task(taskId),
+      idempotencyKey: "task-create-outbox-send-ack-loss",
+      inputHash: "2".repeat(64),
+      now: integrationNow,
+    });
+    const payload = { taskId, version: 1, transition: "created", source: "send-ack-loss" };
+    await ledger.enqueueOutbox({
+      eventId: "evt-outbox-send-ack-loss",
+      idempotencyKey: "outbox-send-ack-loss",
+      taskId,
+      eventType: "task.created",
+      payload,
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: integrationNow,
+      }),
+      now: integrationNow,
+    });
+
+    const publisherEnv = {
+      ORCHESTRATOR_LEDGER: {
+        idFromName: name => name,
+        get: name => name === "orchestrator-ledger-global" ? ledger : null,
+      },
+      ORCHESTRATOR_OUTBOX_QUEUE: {
+        send: async (message, options) => {
+          sendCalls += 1;
+          queued.push({ message: structuredClone(message), options });
+          if (sendCalls === 1) {
+            // The transport accepted the message but its success acknowledgement
+            // was lost before the publisher received it.
+            throw new Error("injected queue acknowledgement loss after acceptance");
+          }
+        },
+      },
+      LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: TEST_ASSERTION_KID,
+    };
+
+    const firstPublisher = await processOrchestratorOutbox(publisherEnv, { maxEvents: 1 });
+    expect(firstPublisher).toEqual({
+      processed: 1, published: 0, failed: 1, deadLettered: 0, completionPending: 0,
+    });
+    expect(queued).toHaveLength(1);
+    expect(queued[0].message.attempts).toBe(1);
+    const afterLostAck = await runInDurableObject(ledger, (_instance, state) => state.storage.sql.exec(
+      "SELECT status, attempts, lease_generation, lease_worker_id, lease_until, retry_state, next_attempt_at, last_error_code FROM orchestrator_outbox_events WHERE event_id = ?",
+      "evt-outbox-send-ack-loss",
+    ).one());
+    expect(afterLostAck).toMatchObject({
+      status: "PENDING",
+      attempts: 1,
+      lease_generation: 1,
+      lease_worker_id: null,
+      lease_until: 0,
+      retry_state: "RETRY_WAIT",
+      next_attempt_at: integrationNow + 1_000,
+      last_error_code: "OUTBOX_QUEUE_PUBLISH_FAILED",
+    });
+
+    clockNow = integrationNow + 1_001;
+    const secondPublisher = await processOrchestratorOutbox(publisherEnv, { maxEvents: 1 });
+    expect(secondPublisher).toEqual({
+      processed: 1, published: 1, failed: 0, deadLettered: 0, completionPending: 0,
+    });
+    expect(queued).toHaveLength(2);
+    expect(queued.map(item => item.message.attempts)).toEqual([1, 2]);
+    expect(queued[0].message.eventId).toBe(queued[1].message.eventId);
+    expect(queued.every(item => item.options.contentType === "json")).toBe(true);
+
+    const consumerEnv = {
+      ORCHESTRATOR_LEDGER: {
+        idFromName: name => name,
+        get: name => name === "orchestrator-ledger-global" ? ledger : null,
+      },
+      LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: TEST_ASSERTION_KID,
+    };
+    const deliveries = queued.map(item => ({
+      body: structuredClone(item.message),
+      acknowledged: false,
+      retried: false,
+      ack() { this.acknowledged = true; },
+      retry() { this.retried = true; },
+    }));
+    const consumerResults = await Promise.all(
+      deliveries.map(delivery => consumeOrchestratorOutbox({ messages: [delivery] }, consumerEnv)),
+    );
+    expect(consumerResults.every(result =>
+      result.received === 1 && result.acknowledged === 1 && result.retried === 0,
+    )).toBe(true);
+    expect(consumerResults.reduce((sum, result) => sum + result.duplicates, 0)).toBe(1);
+    expect(deliveries.every(delivery => delivery.acknowledged && !delivery.retried)).toBe(true);
+
+    await runInDurableObject(ledger, (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        "evt-outbox-send-ack-loss",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT status, attempts, lease_generation, retry_state FROM orchestrator_outbox_events WHERE event_id = ?",
+        "evt-outbox-send-ack-loss",
+      ).one()).toMatchObject({
+        status: "COMPLETED",
+        attempts: 2,
+        lease_generation: 2,
+        retry_state: "READY",
+      });
+    });
+  } finally {
+    dateNow.mockRestore();
+  }
+}, 15000);

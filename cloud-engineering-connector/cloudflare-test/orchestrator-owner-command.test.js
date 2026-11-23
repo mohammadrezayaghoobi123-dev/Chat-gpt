@@ -1901,7 +1901,7 @@ describe("Owner command atomic Ledger contract", () => {
     await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
 
     const eventId = "receipt-jti-cancel-gap-event-01";
-    const idempotencyKey = "receipt-jti-cancel-gap-key-1";
+    const idempotencyKey = "receipt-jti-gap";
     const payload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
     await ledger.enqueueOutbox({
       eventId,

@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
 import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
@@ -1111,8 +1111,37 @@ describe("Owner command atomic Ledger contract", () => {
       now: now + 2,
     });
 
-    const [transition, quarantine] = await Promise.all([
-      ledger.transitionTask({
+    // Hold the Owner's audit hash after its optimistic task snapshot but before
+    // its transaction. This forces the otherwise narrow stale-snapshot window:
+    // Agent commits v2 while Owner still holds its v1 snapshot.
+    let releaseOwnerAuditDigest;
+    let signalOwnerAuditDigest;
+    let heldOwnerAuditDigest = false;
+    const ownerAuditDigestReached = new Promise(resolve => {
+      signalOwnerAuditDigest = resolve;
+    });
+    const ownerAuditDigestGate = new Promise(resolve => {
+      releaseOwnerAuditDigest = resolve;
+    });
+    const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+    const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(async (algorithm, data) => {
+      const serialized = new TextDecoder().decode(data);
+      if (!heldOwnerAuditDigest &&
+          serialized.includes('"eventType":"OWNER_TASK_QUARANTINED"') &&
+          serialized.includes("owner-transition-linearization-quarantine-01")) {
+        heldOwnerAuditDigest = true;
+        signalOwnerAuditDigest();
+        await ownerAuditDigestGate;
+      }
+      return originalDigest(algorithm, data);
+    });
+
+    let transition;
+    let quarantine;
+    try {
+      const quarantinePromise = ledger.executeOwnerCommand(quarantineCommand);
+      await ownerAuditDigestReached;
+      transition = await ledger.transitionTask({
         taskId,
         expectedVersion: 1,
         expectedState: "SCHEDULED",
@@ -1128,9 +1157,13 @@ describe("Owner command atomic Ledger contract", () => {
         workerId,
         workerAssertion: transitionAssertion,
         leaseGeneration: claim.leaseGeneration,
-      }),
-      ledger.executeOwnerCommand(quarantineCommand),
-    ]);
+      });
+      releaseOwnerAuditDigest();
+      quarantine = await quarantinePromise;
+    } finally {
+      releaseOwnerAuditDigest?.();
+      digestSpy.mockRestore();
+    }
 
     // Exactly two serializable histories are valid:
     // 1) Agent commits RUNNING first; Owner retries against v2 and quarantines v3.

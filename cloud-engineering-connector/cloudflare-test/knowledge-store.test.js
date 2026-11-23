@@ -1,6 +1,8 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import worker from "../worker.js";
+import { createGitHubWriteMock } from "../test/helpers/write-control-mocks.js";
 
 function storeFor(name) {
   return env.KNOWLEDGE_STORE.get(env.KNOWLEDGE_STORE.idFromName(name));
@@ -240,4 +242,122 @@ it("deferOutbox releases a pending-review lease without consuming retry attempts
   const second = await store.claimOutbox({ tenantId: "tenant-a", now: 62_000, leaseMs: 1000 });
   expect(second.leaseGeneration).toBe(first.leaseGeneration + 1);
   expect(second.attempts).toBe(1);
+});
+
+
+it("preflights Vault proposal hashes before GitHub writes and leaves real SQLite unchanged", async () => {
+  const path = "knowledge/tenants/owner/architecture.md";
+  const contentText = "# Cloudflare Durable Vault proposal\n";
+  const proposalId = "proposal-cloudflare-preflight-0001";
+  const targetBytes = new TextEncoder().encode("owner\\n" + proposalId);
+  const injectedFailure = new Error("SENSITIVE_VAULT_EVENT_ID_HASH_FAILURE");
+  const blobBytes = new TextEncoder().encode(contentText);
+  const blobHeader = new TextEncoder().encode("blob " + blobBytes.byteLength + "\0");
+  const blobObject = new Uint8Array(blobHeader.byteLength + blobBytes.byteLength);
+  blobObject.set(blobHeader);
+  blobObject.set(blobBytes, blobHeader.byteLength);
+  const blobDigest = await crypto.subtle.digest("SHA-1", blobObject);
+  const blobSha = Array.from(new Uint8Array(blobDigest), byte => byte.toString(16).padStart(2, "0")).join("");
+  const fixture = createGitHubWriteMock({ filePath: path, blobSha, baseBranch: "main" });
+  const subtle = crypto.subtle;
+  const originalDigest = subtle.digest.bind(subtle);
+  const hadOwnDigest = Object.prototype.hasOwnProperty.call(subtle, "digest");
+  const originalDescriptor = Object.getOwnPropertyDescriptor(subtle, "digest");
+  const originalFetch = globalThis.fetch;
+  let targetedDigestCalls = 0;
+  const token = "cloudflare-test-owner-token-with-32-plus-characters";
+
+  Object.defineProperty(subtle, "digest", {
+    configurable: true,
+    writable: true,
+    value: (algorithm, data) => {
+      const bytes = new Uint8Array(data);
+      if (bytes.length === targetBytes.length && bytes.every((value, index) => value === targetBytes[index])) {
+        targetedDigestCalls += 1;
+        return Promise.reject(injectedFailure);
+      }
+      return originalDigest(algorithm, data);
+    },
+  });
+  globalThis.fetch = fixture.fetch;
+
+  let response;
+  try {
+    const request = new Request("https://connector.test/mcp", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer " + token,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "cf-connecting-ip": "192.0.2.41",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 901,
+        method: "tools/call",
+        params: {
+          name: "knowledge_document_propose",
+          arguments: {
+            path,
+            content: contentText,
+            title: "Cloudflare atomicity probe",
+            summary: "Verify real Durable Object state is unchanged when proposal hashing fails.",
+            expectedBlobSha: "ABSENT",
+            proposalId,
+          },
+        },
+      }),
+    });
+    response = await worker.fetch(request, {
+      ...env,
+      MCP_AUTH_TOKEN: token,
+      MCP_RATE_LIMITER: { limit: async () => ({ success: true }) },
+      GITHUB_TOKEN: "test-write-token",
+      GITHUB_READONLY_TOKEN: "test-read-token",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (hadOwnDigest) Object.defineProperty(subtle, "digest", originalDescriptor);
+    else delete subtle.digest;
+  }
+
+  const body = await response.json();
+  const toolError = JSON.parse(body.result.content[0].text);
+  const writeCalls = fixture.calls.filter(call => call.method !== "GET");
+  const eventId = "evt_" + (await sha256("owner\\n" + proposalId)).slice(0, 32);
+  const store = storeFor("tenant:owner");
+  await store.ping();
+  const persisted = await runInDurableObject(store, async (_instance, state) => ({
+    proposalRows: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM knowledge_vault_proposals WHERE tenant_id = ? AND proposal_id = ?",
+      "owner",
+      proposalId,
+    ).one().count,
+    outboxRows: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM knowledge_outbox WHERE tenant_id = ? AND event_id = ?",
+      "owner",
+      eventId,
+    ).one().count,
+  }));
+
+  expect({
+    status: response.status,
+    isError: body.result.isError,
+    toolError,
+    providerMessageLeaked: body.result.content[0].text.includes(injectedFailure.message),
+    targetedDigestCalls,
+    githubWriteCalls: writeCalls.length,
+    githubPrCreated: fixture.calls.some(call => call.method === "POST" && call.url.endsWith("/pulls")),
+    ...persisted,
+  }).toEqual({
+    status: 200,
+    isError: true,
+    toolError: { error: "KNOWLEDGE_VAULT_HASH_UNAVAILABLE" },
+    providerMessageLeaked: false,
+    targetedDigestCalls: 1,
+    githubWriteCalls: 0,
+    githubPrCreated: false,
+    proposalRows: 0,
+    outboxRows: 0,
+  });
 });

@@ -85,6 +85,7 @@ The verifier enforces a 60-second maximum lifetime and five-second clock-skew al
 - An Ed25519 Executor assertion must not authenticate Scheduler task creation or other HMAC-only Ledger operations.
 - Other existing agent identities retain the current HMAC compatibility path in this slice.
 - Scheduler/Outbox HMAC signer and verifier behavior is not migrated or broadened here.
+- The legacy HMAC createExecutorWorkerAssertion export now fails closed; only the Ed25519 signer module can mint a valid Executor assertion.
 - Claim assignment, cursor ownership, JTI consumption, and lease fencing remain Ledger-owned.
 
 ## Key rotation

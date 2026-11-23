@@ -1393,9 +1393,7 @@ export class OrchestratorLedger extends DurableObject {
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
-        return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
-      }
+      // Deliberate mutant: bypass the one-time consumer JTI guard.
       if (payloadRejectionReason) {
         return { recorded: false, reason: payloadRejectionReason };
       }

@@ -148,7 +148,9 @@ git commit -m "refactor: share signed review marker verification"
   "workflowId": 0,
   "workflowPath": ".github/workflows/9router-pr-reconciler.yml",
   "workflowSha": "40-character-commit-sha",
-  "scanGeneration": "stable-generation-identifier",
+  "generationId": 0,
+  "policyVersion": 1,
+  "retryLedger": [],
   "highWaterPullRequestNumber": 0,
   "afterCursor": null,
   "afterPullRequestNumber": 0,
@@ -170,13 +172,15 @@ Checkpoint fields and validation rules:
 | `afterCursor` | Null only before the first page; otherwise a non-empty opaque GraphQL edge cursor |
 | `afterPullRequestNumber` | Non-negative safe integer for the last fully processed edge |
 | `createdAt` | Canonical UTC ISO-8601 timestamp |
+| `policyVersion` | Integer; exactly `1` for the retry-ledger contract |
+| `retryLedger` | Deterministically ordered, bounded records keyed by repository ID, PR number, head SHA, and base SHA; includes attempt reservations and explicit state |
 
-The checkpoint also carries source-run provenance in its enclosing artifact receipt: source run ID, run attempt, repository ID, workflow ID/path, event, conclusion, branch, workflow SHA, artifact name, and GitHub artifact digest. Production values are derived from verified GitHub context and API metadata.
+The checkpoint persists the retry ledger and also carries source-run provenance in its enclosing artifact receipt: source run ID, run attempt, repository ID, workflow ID/path, event, conclusion, branch, workflow SHA, artifact name, and GitHub artifact digest. Production values are derived from verified GitHub context and API metadata.
 
 - [ ] **Step 1: Add failing checkpoint contract tests**
 
 Test:
-- Correct schema, repository ID, workflow ID/path, and exact workflow SHA are accepted.
+- Correct schema, repository ID, workflow ID/path, exact workflow SHA, policy version, and retry-ledger records are accepted.
 - Unknown schema versions, wrong repository/workflow identity, wrong workflow SHA, malformed timestamps, invalid PR numbers, oversized cursor values, unexpected fields, and missing required fields are rejected.
 - A missing, expired, malformed, or incompatible checkpoint causes a safe bootstrap decision.
 - A completed scan generation resets the cursor and establishes a new high-water PR number.
@@ -244,7 +248,7 @@ git commit -m "feat: add bounded cursor-based PR discovery"
 
 **Interfaces:**
 - `classifyStaleReviewEvidence({ currentHeadSha, currentBaseSha, authenticatedMarkers }) -> { status, reason, candidate }`
-- `discoverReconcilerCandidates({ repository, repositoryId, githubToken, reviewMarkerKeys, checkpoint, maxRecords: 200, maxReviewAttempts: 3, fetchImpl, now }) -> { candidates, nextCheckpoint, scanStatus, counters }`
+- `discoverReconcilerCandidates({ repository, repositoryId, githubToken, reviewMarkerKeys, checkpoint, maxRecords: 200, maxReviewAttempts: 3, retryPolicyVersion: 1, fetchImpl, now }) -> { candidates, nextCheckpoint, scanStatus, counters }`
 - `validateCandidateSnapshot({ candidate, livePullRequest, repositoryId }) -> { valid, reason }`
 - `runReconcilerReview({ candidate, reviewerEnvironment, runReviewImpl }) -> structured disposition`
 
@@ -272,7 +276,7 @@ Use only `readAuthenticatedReviewMarkers` from Task 1. Do not parse HMAC markers
 
 Use mocked GitHub GraphQL and REST responses plus a stubbed `runReview` boundary to prove:
 - At most 200 PR records are consumed.
-- At most three candidate review attempts are returned per run.
+- At most three dispatched inference attempts are returned per run; at most one may be a deferred retry and at least two slots remain reserved for new candidates.
 - Candidate order is deterministic by the cursor scan order.
 - Discovery stops before consuming the next candidate after the three-attempt budget is full and preserves the cursor before that unprocessed candidate.
 - A PR with no historical signed report never calls `runReview`.
@@ -496,18 +500,138 @@ Tasks are sequential because the reconciler must reuse the marker contract and r
 
 Each task is independently reviewable and must be green before the next task begins. No task merges into `main`. A single Draft PR may be prepared from the implementation branch only after all five task commits are verified. The Draft PR is not authorization to merge or activate the schedule.
 
-## Unresolved Operational Decision Before Implementation
+## Operational Retry, Recovery, and Fairness Policy
 
-The approved design fixes the per-run inference ceiling at three but does not specify how many times a persistently failing candidate may consume future runs. A naive “do not advance checkpoint on failure” rule can starve all later PRs; silently advancing can lose a candidate.
+This policy is the required implementation contract for retry accounting, checkpoint progression, and uncertain external side effects. It replaces the former consecutive-run counter proposal. The per-run ceiling of three inference attempts remains unchanged.
 
-**Recommended policy (requires explicit approval):**
-- Persist failed candidate identity as `(PR number, head SHA, base SHA)` with a retry count in the checkpoint.
-- Reserve at most one of the three per-run inference slots for a deferred retry; keep at least two slots available for new candidates.
-- After three consecutive scheduled/manual run attempts for the same exact tuple, defer it until the next completed scan generation and record `DEFERRED_UNKNOWN`.
-- Reset the retry counter when the tuple changes or a valid current-pair marker appears.
-- Do not retry within the same run after an inference or publication uncertainty.
+### 1. Immutable work identity and policy version
 
-This policy preserves the global three-attempt ceiling and avoids one failing PR permanently blocking discovery. It is a recommendation, not an approved requirement. Implementation must not begin until this decision is confirmed or replaced.
+A retry record is keyed by the exact tuple:
+
+`(repositoryId, pullRequestNumber, headSha, baseSha)`
+
+- `repositoryId` is the numeric GitHub repository ID, not an owner/name string.
+- `pullRequestNumber` is a positive integer scoped to that repository ID.
+- `headSha` and `baseSha` are full, lower-case 40-character commit SHAs.
+- The record also stores `policyVersion: 1`; a policy-version mismatch is not silently migrated and yields `UNKNOWN` pending a controlled checkpoint migration.
+- A changed head SHA or base SHA creates a new work identity. It does not inherit the prior tuple's inference count.
+- A valid authenticated marker for the exact current tuple resolves the work item and suppresses further inference.
+
+Repository identity, PR number, head SHA, and base SHA must be revalidated from authoritative GitHub metadata immediately before an inference dispatch and immediately before publication.
+
+### 2. Separate attempt classes and accounting
+
+The implementation MUST maintain separate counters and dispositions for:
+
+1. **Discovery / metadata reads** — do not consume inference budget.
+2. **Pre-dispatch transport attempts** — do not consume inference budget if the system can prove the model request was never dispatched.
+3. **Dispatched inference attempts** — consume one inference attempt as soon as a request may have reached the 9Router service. A timeout, connection loss, malformed response, process cancellation, or lost response after dispatch is counted conservatively because billing and execution may have occurred.
+4. **Publication attempts** — are tracked independently from inference attempts. They are never blindly repeated after an ambiguous outcome.
+
+A transport retry is permitted only for a provably pre-dispatch transient failure (network connection failure before request transmission, HTTP 429, or HTTP 5xx). It is limited to one retry per operation, must honor a valid `Retry-After` value, and must remain within the run deadline. Authentication/authorization failures, malformed requests, schema violations, 4xx responses other than 429, and exhausted deadlines are not retried automatically.
+
+### 3. Per-tuple inference budget and cooldown
+
+- Maximum dispatched inference attempts for one exact tuple: **3 total**, across all scheduled and manually dispatched runs.
+- Attempt 1 is the initial eligible review.
+- Attempt 2 is eligible no earlier than **6 hours** after attempt 1 was dispatched.
+- Attempt 3 is eligible no earlier than **24 hours** after attempt 2 was dispatched.
+- A retry is eligible only if the prior outcome is explicitly classified as retryable, the tuple is still current, the PR remains open/non-draft/same-repository, no valid current-pair marker exists, and the cooldown has elapsed.
+- Deterministic invalidity (wrong repository, fork, draft/closed PR, invalid marker, incomplete evidence, invalid candidate schema, or failed identity revalidation) is not an inference retry. It is excluded or recorded as `BLOCKED_UNKNOWN` until a new authoritative state permits reclassification.
+- After the third dispatched attempt has a retryable or uncertain failure, the tuple enters terminal `QUARANTINED_UNKNOWN`. It is not automatically re-queued by a new scan generation. Recovery requires a changed head/base tuple, authenticated evidence that resolves the work, or a separately authorized and auditable operator reset. No operator-reset mechanism is added by this plan.
+
+The cooldown is a minimum delay, not a guarantee that a retry will run at the exact boundary. Global run budgets, rate limits, and candidate fairness still apply.
+
+### 4. Per-run budget and fairness
+
+The approved global ceiling remains **3 dispatched inference attempts per reconciler run**.
+
+- At most **1 slot** may be allocated to an eligible deferred retry.
+- At least **2 slots** remain reserved for first-time candidates discovered in the current scan.
+- If no eligible deferred retry exists, the reserved retry slot remains unused; it is not converted into a second deferred retry slot.
+- If fewer than two new candidates exist, unused new-candidate capacity may remain idle; it is not used to exceed the one-retry ceiling.
+- Deferred retries are selected deterministically by earliest `nextEligibleAt`, then repository ID, PR number, head SHA, and base SHA.
+- New candidates retain deterministic discovery order.
+- A candidate that cannot be processed within the remaining run budget is not consumed from the discovery cursor. The checkpoint remains immediately before that candidate so a later run can reconsider it.
+- A single repeatedly failing PR therefore cannot consume more than one inference slot in any run or starve all newly discovered candidates.
+
+### 5. Write-ahead attempt reservation and crash recovery
+
+Before dispatching an inference request, the runner MUST durably reserve the attempt in the run's authenticated checkpoint state:
+
+- Generate a unique `attemptId` and record the tuple, ordinal (1–3), run ID, run attempt, dispatch intent timestamp, and state `DISPATCH_RESERVED`.
+- Persist and validate that reservation before sending the external request.
+- Transition to `DISPATCHED` only at the dispatch boundary; persist a terminal result when known.
+- If a process or workflow terminates with a reservation whose dispatch outcome cannot be proven, treat it as `UNKNOWN` and do not automatically dispatch the same ordinal again.
+- A workflow rerun must not replay an existing `DISPATCH_RESERVED` or `DISPATCHED` attempt. It must reconcile the attempt record and enter a safe terminal disposition or quarantine it.
+- Checkpoint cursor advancement and retry-ledger updates must be committed as one logical checkpoint artifact. Never advance the cursor while losing the retry record for a candidate that was consumed.
+
+The artifact is not a transactional database. If the artifact cannot be durably written or its provenance/digest cannot be verified, do not dispatch inference and do not advance the cursor.
+
+### 6. Publication ambiguity and duplicate prevention
+
+- A publication request with a definitive successful response is recorded as `PUBLISHED`; the authenticated current-pair marker must subsequently be verified before the work item is considered `RESOLVED`.
+- A definitive pre-send failure may be retried only under the single transport retry rule above.
+- A timeout, connection loss, cancellation, or malformed response after a comment POST may have been sent is `PUBLICATION_UNKNOWN`.
+- For `PUBLICATION_UNKNOWN`, do not issue another comment POST and do not start another inference for the tuple. Later runs may perform bounded, read-only marker-history reconciliation.
+- If a complete, authenticated history read finds the exact current-pair marker, mark `RESOLVED`.
+- If history is incomplete, over budget, malformed, or contradictory, preserve `PUBLICATION_UNKNOWN`; do not infer absence.
+- If complete history does not establish whether the earlier POST took effect, retain `QUARANTINED_UNKNOWN`. This plan makes no exactly-once publication claim and does not invent a provider idempotency guarantee.
+
+### 7. State machine and allowed transitions
+
+The retry ledger uses these explicit states:
+
+| State | Meaning | Automatic action |
+|---|---|---|
+| `ELIGIBLE_NEW` | Current tuple has no prior dispatched attempt and passes all evidence gates | May reserve one new-candidate slot |
+| `RETRY_WAIT` | A retryable dispatched attempt is known and cooldown has not elapsed | Read-only checks; no inference |
+| `ELIGIBLE_RETRY` | Retryable prior attempt, cooldown elapsed, tuple still valid, budget remains | May reserve the single deferred-retry slot |
+| `DISPATCH_RESERVED` | Write-ahead attempt reservation exists; dispatch outcome not yet established | Never replay; reconcile or quarantine |
+| `DISPATCHED` | Request may have reached 9Router; terminal outcome not yet established | Never replay same attempt ordinal |
+| `PUBLICATION_UNKNOWN` | Comment POST may have succeeded but outcome is ambiguous | Read-only marker reconciliation only |
+| `RESOLVED` | Exact current-pair authenticated marker is verified | No further inference |
+| `BLOCKED_UNKNOWN` | Required evidence/state is incomplete, contradictory, or invalid | No inference; re-evaluate only after authoritative state changes |
+| `QUARANTINED_UNKNOWN` | Attempt budget exhausted or external side effect cannot be safely reconciled | No automatic inference or publication |
+| `NOT_ELIGIBLE` | PR is closed, draft, fork-originated, or otherwise outside the approved scope | No inference |
+
+All transitions must be explicit, deterministic, and covered by tests. Illegal or unrecognized transitions fail closed. `UNKNOWN` is never coerced into success or failure.
+
+### 8. Checkpoint persistence, fairness, and generation boundaries
+
+The checkpoint MUST persist the retry ledger alongside the cursor and generation boundary. The schema must include `generationId`, `policyVersion`, and a bounded `retryLedger`; the schema example and validator must use the same field names.
+
+- Retry records are sorted and serialized deterministically.
+- Enforce explicit maximum record count and serialized-byte limits. If either limit is exceeded, stop safely with `UNKNOWN`; never silently drop old retry records.
+- A scan generation completes only after every record through its captured high-water boundary has a durable disposition.
+- A failed or uncertain candidate may be passed by the discovery cursor only after its retry record and disposition are durably included in the same verified checkpoint artifact.
+- If the run stops before checkpoint finalization, the previous checkpoint remains authoritative; the next run replays from the last fully committed cursor and deduplicates by immutable tuple and attempt ID.
+- A new generation does not reset a tuple's attempt count or quarantine state.
+- Checkpoint loss or invalid provenance triggers a safe bootstrap, but does not authorize resetting a retry budget from untrusted or incomplete state. If prior retry history cannot be recovered, mark affected work `UNKNOWN` and require controlled recovery rather than assuming zero attempts.
+
+### 9. Required adversarial tests and acceptance criteria
+
+The implementation is not acceptable until tests prove all of the following:
+
+- The same tuple never exceeds three dispatched inference attempts across multiple workflow runs.
+- Attempt 2 and 3 cannot dispatch before their respective 6-hour and 24-hour cooldowns.
+- One deferred retry maximum is enforced per run, while at least two new-candidate slots remain reserved.
+- A retryable failure does not block cursor progress after its ledger entry is durably committed.
+- A candidate beyond the per-run budget is not consumed from the cursor.
+- A changed head or base SHA creates a new tuple; an unchanged tuple does not reset its count on a new scan generation or workflow rerun.
+- A workflow crash after reservation cannot cause the same attempt ordinal to be dispatched again.
+- A request that may have reached 9Router consumes the attempt budget conservatively.
+- An ambiguous comment POST never triggers a second POST or another inference for the same tuple.
+- Complete authenticated current-pair marker evidence resolves the tuple; incomplete or contradictory history does not.
+- Missing, tampered, oversized, incompatible, or provenance-invalid checkpoint state prevents inference and cursor advancement.
+- Rate limits, 5xx, timeouts, cancellations, malformed model output, and process restarts produce the exact state transitions specified above.
+- No test treats `UNKNOWN` as success or failure.
+
+Required deterministic test fixtures must cover state-transition legality, cooldown boundaries, cross-run accounting, fairness, crash recovery, checkpoint atomicity, and publication ambiguity. The test suite must report each disposition as `PASS`, `FAIL`, `UNKNOWN`, or `NOT TESTED`.
+
+### Approval boundary
+
+This rewritten policy is a proposed operational contract for the implementation plan. It does not authorize code implementation, workflow activation, secret changes, repository settings changes, PR merge, or Production operations. Implementation remains blocked until this policy and the revised plan are explicitly approved.
 
 ## Explicitly Out of Scope
 

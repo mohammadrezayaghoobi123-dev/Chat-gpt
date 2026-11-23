@@ -41,8 +41,6 @@ function assertApi(api) {
 test("Executor Ed25519 assertion round-trips with a public-only verifier key set", async () => {
   const api = await loadApi();
   assertApi(api);
-  assertApi(api);
-  assertApi(api);
   const keys = await fixture();
   const token = await api.createExecutorWorkerAssertion(keys.privateKey, kid, { nowMs });
   const verified = await api.verifyExecutorWorkerAssertion(keys.publicKeySet, token, { nowMs });
@@ -56,7 +54,6 @@ test("Executor Ed25519 assertion round-trips with a public-only verifier key set
 
 test("Executor signer cannot select another principal, role, or operation", async () => {
   const api = await loadApi();
-  assertApi(api);
   assertApi(api);
   const keys = await fixture();
   for (const input of [
@@ -75,7 +72,6 @@ test("Executor signer cannot select another principal, role, or operation", asyn
 test("Executor verifier rejects a legacy HMAC key set and never treats it as an Ed25519 public key", async () => {
   const api = await loadApi();
   assertApi(api);
-  assertApi(api);
   const keys = await fixture();
   const token = await api.createExecutorWorkerAssertion(keys.privateKey, kid, { nowMs });
   const legacyHmacKeySet = JSON.stringify({ "worker-v1": "a".repeat(64) });
@@ -88,7 +84,6 @@ test("Executor verifier rejects a legacy HMAC key set and never treats it as an 
 test("Executor verifier rejects unknown key IDs, wrong key material, and malformed key metadata", async () => {
   const api = await loadApi();
   assertApi(api);
-  assertApi(api);
   const keys = await fixture();
   const token = await api.createExecutorWorkerAssertion(keys.privateKey, kid, { nowMs });
   await assert.rejects(
@@ -100,11 +95,23 @@ test("Executor verifier rejects unknown key IDs, wrong key material, and malform
     api.verifyExecutorWorkerAssertion(malformed, token, { nowMs }),
     error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
   );
+  const otherKeyPair = await fixture();
+  const mismatchedPublicKeySet = JSON.stringify({
+    [kid]: {
+      publicKey: otherKeyPair.publicKey,
+      subject: "orchestrator-executor",
+      role: "agent",
+      operations: ["claimTask"],
+    },
+  });
+  await assert.rejects(
+    api.verifyExecutorWorkerAssertion(mismatchedPublicKeySet, token, { nowMs }),
+    error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
+  );
 });
 
 test("Executor verifier rejects altered payloads and signatures", async () => {
   const api = await loadApi();
-  assertApi(api);
   assertApi(api);
   const keys = await fixture();
   const token = await api.createExecutorWorkerAssertion(keys.privateKey, kid, { nowMs });
@@ -125,7 +132,6 @@ test("Executor verifier rejects altered payloads and signatures", async () => {
 test("Executor verifier enforces expiry, clock skew, principal, role, and operation policy", async () => {
   const api = await loadApi();
   assertApi(api);
-  assertApi(api);
   const keys = await fixture();
   const token = await api.createExecutorWorkerAssertion(keys.privateKey, kid, { nowMs });
   await assert.rejects(
@@ -143,7 +149,6 @@ test("Executor verifier enforces expiry, clock skew, principal, role, and operat
 
 test("Executor signer rejects malformed PKCS8 keys and invalid timestamps", async () => {
   const api = await loadApi();
-  assertApi(api);
   assertApi(api);
   await assert.rejects(
     api.createExecutorWorkerAssertion("not-pkcs8", kid, { nowMs }),

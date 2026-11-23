@@ -3,7 +3,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
-import { consumeOrchestratorOutbox } from "../worker.js";
+import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
 const now = 1_800_000_000_000;
 const ownerId = "335530603";
@@ -383,6 +383,265 @@ describe("Owner command atomic Ledger contract", () => {
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ? AND event_type = ?",
         taskId, operation === "cancel" ? "OWNER_TASK_CANCELLED" : "OWNER_TASK_QUARANTINED",
+      ).one().count).toBe(1);
+    });
+  });
+
+
+  it("blocks a version-1 Queue delivery arriving after quarantine and release while accepting the release version", async () => {
+    const taskId = "task-owner-late-delivery-0001";
+    const ledger = ledgerFor("owner-late-delivery-after-release");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const staleEventId = "owner-late-delivery-stale-event-01";
+    const staleDedupeId = "owner-late-delivery-stale-dedupe-01";
+    const stalePayload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
+    const enqueued = await ledger.enqueueOutbox({
+      eventId: staleEventId,
+      idempotencyKey: staleDedupeId,
+      taskId,
+      eventType: "task.transitioned",
+      payload: stalePayload,
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox"),
+      now,
+    });
+    expect(enqueued).toMatchObject({ enqueued: true });
+
+    const queuedBodies = [];
+    const binding = {
+      idFromName: () => "orchestrator-ledger-global",
+      get: () => ledger,
+    };
+    const runtimeEnv = {
+      ORCHESTRATOR_LEDGER: binding,
+      ORCHESTRATOR_OUTBOX_QUEUE: {
+        send: async message => queuedBodies.push(structuredClone(message)),
+      },
+      LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: "test-v1",
+    };
+
+    const publishedBeforeQuarantine = await processOrchestratorOutbox(runtimeEnv, { maxEvents: 1 });
+    expect(publishedBeforeQuarantine).toMatchObject({
+      processed: 1, published: 1, failed: 0, completionPending: 0,
+    });
+    expect(queuedBodies).toHaveLength(1);
+    expect(queuedBodies[0]).toMatchObject({
+      eventId: staleEventId,
+      payload: stalePayload,
+      attempts: 1,
+    });
+
+    const quarantined = await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        operation: "quarantine",
+        taskId,
+        eventId: "owner-late-delivery-quarantine-01",
+      },
+      deliveryId: "delivery-late-delivery-quarantine-01",
+      commentId: "123456797",
+    }));
+    expect(quarantined).toMatchObject({
+      applied: true,
+      task: { taskId, state: "QUARANTINED", version: 2 },
+    });
+
+    const released = await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        operation: "release",
+        taskId,
+        eventId: "owner-late-delivery-release-01",
+      },
+      deliveryId: "delivery-late-delivery-release-01",
+      commentId: "123456798",
+    }));
+    expect(released).toMatchObject({
+      applied: true,
+      task: { taskId, state: "VALIDATING", version: 3 },
+    });
+
+    const publishedAfterRelease = await processOrchestratorOutbox(runtimeEnv, { maxEvents: 1 });
+    expect(publishedAfterRelease).toMatchObject({
+      processed: 1, published: 1, failed: 0, completionPending: 0,
+    });
+    expect(queuedBodies).toHaveLength(2);
+    expect(queuedBodies[1]).toMatchObject({
+      eventId: "owner-release-owner-late-delivery-release-01",
+      eventType: "task.transitioned",
+      payload: { taskId, version: 3, from: "QUARANTINED", to: "VALIDATING" },
+    });
+
+    const messages = queuedBodies.map(body => ({
+      body,
+      ackCalls: 0,
+      retryCalls: 0,
+      ack() { this.ackCalls += 1; },
+      retry() { this.retryCalls += 1; },
+    }));
+    const consumed = await consumeOrchestratorOutbox({ messages }, runtimeEnv);
+    expect(consumed).toMatchObject({
+      received: 2, acknowledged: 2, retried: 0, duplicates: 0,
+    });
+    expect(messages).toEqual([
+      expect.objectContaining({ ackCalls: 1, retryCalls: 0 }),
+      expect.objectContaining({ ackCalls: 1, retryCalls: 0 }),
+    ]);
+    expect(await ledger.getTask({ taskId })).toMatchObject({
+      taskId, state: "VALIDATING", version: 3,
+    });
+
+    const staleReceipt = await ledger.recordOutboxReceipt({
+      eventId: staleEventId,
+      eventType: "task.transitioned",
+      idempotencyKey: staleDedupeId,
+      taskId,
+      payload: stalePayload,
+      createdAt: now,
+      schemaVersion: 1,
+      envelopeSha256: "a".repeat(64),
+      consumerId: "orchestrator-outbox-consumer",
+      workerAssertion: await workerAssertion(
+        "orchestrator-outbox-consumer", "consumer", "recordOutboxReceipt", now + 1,
+      ),
+      now: now + 1,
+    });
+    expect(staleReceipt).toMatchObject({
+      recorded: false, blocked: true, reason: "TASK_VERSION_FENCED",
+    });
+
+    const reboundReceipt = await ledger.recordOutboxReceipt({
+      eventId: staleEventId,
+      eventType: "task.transitioned",
+      idempotencyKey: "attacker-rebound-idempotency-01",
+      taskId,
+      payload: { taskId, version: 3, from: "QUARANTINED", to: "VALIDATING" },
+      createdAt: now,
+      schemaVersion: 1,
+      envelopeSha256: "b".repeat(64),
+      consumerId: "orchestrator-outbox-consumer",
+      workerAssertion: await workerAssertion(
+        "orchestrator-outbox-consumer", "consumer", "recordOutboxReceipt", now + 2,
+      ),
+      now: now + 2,
+    });
+    expect(reboundReceipt).toMatchObject({
+      recorded: false, reason: "OUTBOX_SOURCE_NOT_FOUND",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        staleEventId,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        "owner-release-owner-late-delivery-release-01",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT status FROM orchestrator_outbox_events WHERE event_id = ?",
+        staleEventId,
+      ).one().status).toBe("COMPLETED");
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ?",
+        taskId,
+      ).one().count).toBe(2);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ? AND event_type IN ('OWNER_TASK_QUARANTINED','OWNER_TASK_RELEASED')",
+        taskId,
+      ).one().count).toBe(2);
+    });
+  });
+
+  it("rejects rebinding an existing Outbox eventId or idempotency key to changed content after release", async () => {
+    const taskId = "task-owner-event-rebind-0001";
+    const ledger = ledgerFor("owner-event-rebind-after-release");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const eventId = "owner-event-rebind-original-01";
+    const idempotencyKey = "owner-event-rebind-original-dedupe-01";
+    const originalPayload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
+    const original = await ledger.enqueueOutbox({
+      eventId,
+      idempotencyKey,
+      taskId,
+      eventType: "task.transitioned",
+      payload: originalPayload,
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox"),
+      now,
+    });
+    expect(original).toMatchObject({ enqueued: true });
+
+    expect(await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        operation: "quarantine",
+        taskId,
+        eventId: "owner-event-rebind-quarantine-01",
+      },
+      deliveryId: "delivery-event-rebind-quarantine-01",
+      commentId: "123456799",
+    }))).toMatchObject({
+      applied: true, task: { taskId, state: "QUARANTINED", version: 2 },
+    });
+    expect(await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        operation: "release",
+        taskId,
+        eventId: "owner-event-rebind-release-01",
+      },
+      deliveryId: "delivery-event-rebind-release-01",
+      commentId: "123456800",
+    }))).toMatchObject({
+      applied: true, task: { taskId, state: "VALIDATING", version: 3 },
+    });
+
+    const changedPayload = { taskId, version: 3, from: "QUARANTINED", to: "VALIDATING" };
+    const reusedEventId = await ledger.enqueueOutbox({
+      eventId,
+      idempotencyKey: "owner-event-rebind-new-key-01",
+      taskId,
+      eventType: "task.transitioned",
+      payload: changedPayload,
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox", now + 1),
+      now: now + 1,
+    });
+    expect(reusedEventId).toMatchObject({
+      enqueued: false, conflict: true, reason: "EVENT_ID_CONFLICT",
+    });
+
+    const reusedIdempotencyKey = await ledger.enqueueOutbox({
+      eventId: "owner-event-rebind-new-event-01",
+      idempotencyKey,
+      taskId,
+      eventType: "task.transitioned",
+      payload: changedPayload,
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox", now + 2),
+      now: now + 2,
+    });
+    expect(reusedIdempotencyKey).toMatchObject({
+      enqueued: false, conflict: true, reason: "IDEMPOTENCY_CONFLICT",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      const originalRow = state.storage.sql.exec(
+        "SELECT event_id, idempotency_key, payload_json FROM orchestrator_outbox_events WHERE event_id = ?",
+        eventId,
+      ).one();
+      expect(originalRow).toMatchObject({
+        event_id: eventId,
+        idempotency_key: idempotencyKey,
+      });
+      expect(JSON.parse(originalRow.payload_json)).toEqual(originalPayload);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE event_id = ?",
+        "owner-event-rebind-new-event-01",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE event_id = ?",
+        eventId,
       ).one().count).toBe(1);
     });
   });

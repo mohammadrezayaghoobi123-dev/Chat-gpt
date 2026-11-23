@@ -74,3 +74,40 @@ Each mutation is a separate temporary branch from the exact test candidate. A mu
 - The three targeted mutations described above are killed on isolated commits.
 - The candidate remains Draft/open/unmerged and targets PR #307's feature branch, not `main`.
 - Main remains unchanged.
+
+
+## Observed Verification Record
+
+### Candidate CI
+
+Exact code-tested candidate: `a177c4f40f3ca90684e0bfc66a2291418e12a0b5` (PR #311).
+
+- Cloud Engineering Connector CI run `45186365668`: success.
+- Node test suite: 416 passed, 0 failed.
+- Durable Object/Vitest suite: 13 files, 211 passed, 0 failed. The four new Publisher/Owner interleavings all passed.
+- `npm audit --audit-level=moderate`: 0 vulnerabilities.
+- JavaScript syntax checks and default/staging Wrangler dry-runs: passed.
+- Post-deploy Staging smoke: skipped; there was no deployment or live operation.
+
+The first CI attempts exposed test-harness defects, not product regressions: the test needed to set its test-only active signing key explicitly, the Worker adapter needed to route to the same global Durable Object identity used by the Worker, and consumed-assertion counts needed per-case baselines because the test reused the global Ledger. Each was corrected on the isolated branch; the exact candidate above passed the full configured suite.
+
+### Mutation Experiments
+
+Each mutant was created from the exact candidate above, changed one invariant, ran CI, and was closed unmerged after its intended assertion failed.
+
+| Invariant removed | Temporary PR / mutant commit | CI run | Falsifying observation |
+|---|---|---:|---|
+| Owner Cancel/Quarantine Outbox invalidation | #313 / `9d683d07b59ebe35bad0222710a55c325ee60fb5` | `45186554481` | New in-flight Publisher tests observed `RETRY_WAIT` / `OUTBOX_QUEUE_PUBLISH_FAILED` and a late success callback reported `completed: true`; Owner-terminal Outbox state was not preserved. |
+| `failOutbox` lease owner/generation/expiry fence | #314 / `65097023faf0fbc422142957df2e8e0f65595696` | `45186576125` | The stale failure callback consumed its operation-scoped JTI; per-case assertion-consumption delta failed for Cancel and Quarantine. |
+| `completeOutbox` lease owner/generation/expiry fence | #315 / `aa0d2c315cdde60df2c1f80c5448aa5808c036f8` | `45186595358` | The stale success callback returned `completed: true` rather than `completionPending: 1`; the new and existing stale-ACK tests failed. |
+
+All three mutations were killed by their intended behavioral or persisted-state assertions. The failed jobs are expected mutation evidence on deliberately weakened branches, not candidate failures.
+
+### Security Scan and Boundaries
+
+- Gitleaks run `45186365624`: PR diff scan covered 7 commits and found no leaks.
+- Full reachable history: 4,277 commits scanned; 11 historical `generic-api-key` findings remain unclassified. The scan alone does not establish whether these are live credentials or false positives. No values or fingerprints are included.
+- Main comparison against `919b19ca3d3887352cdef06b03c668ead04fbce7`: identical, 0 commits ahead/behind.
+- PR #311 remains Draft/open/unmerged. Parent PRs #307 and #300 remain Draft/open/unmerged. Mutation PRs #313–#315 are closed and unmerged.
+- No production code was modified, no Validator/Scheduler authority was added, and no `VALIDATING` transition was introduced.
+- No Cloudflare configuration/secret mutation, live Worker/Queue action, deployment, Staging smoke, merge, or Production activity occurred.

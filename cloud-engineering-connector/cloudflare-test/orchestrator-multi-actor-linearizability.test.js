@@ -417,6 +417,7 @@ describe("Multi-actor Owner, Agent, Publisher, and Consumer linearizability", ()
     });
 
     let releaseResult;
+    let releaseJti;
     let lateReleaseResult;
     let lateReleaseJti;
     let lateReceipt;
@@ -444,6 +445,7 @@ describe("Multi-actor Owner, Agent, Publisher, and Consumer linearizability", ()
         },
       );
       releaseResult = race.interleaved.result;
+      releaseJti = race.interleaved.jti;
       expect(race.ownerResult).toMatchObject({
         applied: true,
         operation: "quarantine",
@@ -527,7 +529,7 @@ describe("Multi-actor Owner, Agent, Publisher, and Consumer linearizability", ()
       ).one().count).toBe(1);
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
-        raceJtiPlaceholder,
+        releaseJti,
       ).one().count).toBe(1);
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",

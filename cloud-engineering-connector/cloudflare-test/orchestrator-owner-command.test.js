@@ -2341,7 +2341,12 @@ describe("Owner command atomic Ledger contract", () => {
       created: false,
       reason: "AUTHENTICATED_WORKER_REQUIRED",
     });
-    expect(ledger.getTask({ taskId: "task-jti-retention-exact-boundary" })).toBeNull();
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+        "task-jti-retention-exact-boundary",
+      ).one().count).toBe(0);
+    });
 
     await runInDurableObject(ledger, async (_instance, state) => {
       const rows = state.storage.sql.exec(

@@ -254,10 +254,11 @@ describe("Executor Ed25519 trust boundary", () => {
       now: now + 1,
     })).resolves.toMatchObject({ renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
 
+    const renewAssertion = await createExecutorAssertion(now + 1, "renewLease");
     await expect(ledger.renewLease({
       taskId: "task-executor-renew",
       workerId: EXECUTOR_ID,
-      workerAssertion: await createExecutorAssertion(now + 1, "renewLease"),
+      workerAssertion: renewAssertion,
       leaseGeneration: claimed.leaseGeneration,
       leaseMs: 45_000,
       now: now + 1,
@@ -266,6 +267,14 @@ describe("Executor Ed25519 trust boundary", () => {
       leaseGeneration: claimed.leaseGeneration,
       leaseUntil: now + 45_001,
     });
+    await expect(ledger.renewLease({
+      taskId: "task-executor-renew",
+      workerId: EXECUTOR_ID,
+      workerAssertion: renewAssertion,
+      leaseGeneration: claimed.leaseGeneration,
+      leaseMs: 45_000,
+      now: now + 2,
+    })).resolves.toMatchObject({ renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec(
         "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
@@ -314,7 +323,7 @@ describe("Executor Ed25519 trust boundary", () => {
       workerAssertion: releaseAssertion,
       leaseGeneration: claimed.leaseGeneration,
       now: now + 3,
-    })).resolves.toMatchObject({ released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+    })).resolves.toMatchObject({ released: false, reason: "LEASE_FENCE_MISMATCH" });
 
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec(

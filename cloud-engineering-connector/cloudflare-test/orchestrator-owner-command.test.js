@@ -2407,37 +2407,47 @@ describe("Owner command atomic Ledger contract", () => {
     const operation = "createTask";
     const token = await workerAssertion(subject, role, operation, now, sharedJti);
 
-    const afterExpiry = await ledger.createTask({
-      task: {
-        ...task("task-clock-rollback-expired"),
-        createdAt: now + 120_000,
-        updatedAt: now + 120_000,
-      },
-      idempotencyKey: "clock-rollback-expired-attempt",
-      inputHash: "a".repeat(64),
-      now: now + 120_000,
-      workerId: subject,
-      workerAssertion: token,
-    });
+    // Hold the actual wall clock beyond assertion expiry while the caller
+    // supplies logical timestamps. A Ledger-local clock check would reject
+    // the second request; the current caller-time check accepts it.
+    const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(now + 120_000);
+    let afterExpiry;
+    let afterRollback;
+    try {
+      afterExpiry = await ledger.createTask({
+        task: {
+          ...task("task-clock-rollback-expired"),
+          createdAt: now + 120_000,
+          updatedAt: now + 120_000,
+        },
+        idempotencyKey: "clock-rollback-expired-attempt",
+        inputHash: "a".repeat(64),
+        now: now + 120_000,
+        workerId: subject,
+        workerAssertion: token,
+      });
+
+      // The first attempt did not consume the JTI because expiry verification
+      // rejected it before the SQL transaction. Rolling the caller's timestamp
+      // back by 66 seconds makes the same assertion valid again.
+      afterRollback = await ledger.createTask({
+        task: {
+          ...task("task-clock-rollback-resurrected"),
+          createdAt: now + 54_000,
+          updatedAt: now + 54_000,
+        },
+        idempotencyKey: "clock-rollback-resurrected-attempt",
+        inputHash: "c".repeat(64),
+        now: now + 54_000,
+        workerId: subject,
+        workerAssertion: token,
+      });
+    } finally {
+      wallClockSpy.mockRestore();
+    }
     expect(afterExpiry).toMatchObject({
       created: false,
       reason: "AUTHENTICATED_WORKER_REQUIRED",
-    });
-
-    // The first attempt did not consume the JTI because expiry verification
-    // rejected it before the SQL transaction. Rolling the caller's timestamp
-    // back by 66 seconds makes the same assertion valid again.
-    const afterRollback = await ledger.createTask({
-      task: {
-        ...task("task-clock-rollback-resurrected"),
-        createdAt: now + 54_000,
-        updatedAt: now + 54_000,
-      },
-      idempotencyKey: "clock-rollback-resurrected-attempt",
-      inputHash: "c".repeat(64),
-      now: now + 54_000,
-      workerId: subject,
-      workerAssertion: token,
     });
     expect(afterRollback).toMatchObject({
       created: true,

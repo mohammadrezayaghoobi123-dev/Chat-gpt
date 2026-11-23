@@ -1123,47 +1123,50 @@ describe("Owner command atomic Ledger contract", () => {
     const ownerAuditDigestGate = new Promise(resolve => {
       releaseOwnerAuditDigest = resolve;
     });
-    const originalDigest = crypto.subtle.digest;
-    const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(async function (algorithm, data) {
-      const serialized = new TextDecoder().decode(data);
-      if (!heldOwnerAuditDigest &&
-          serialized.includes('"eventType":"OWNER_TASK_QUARANTINED"') &&
-          serialized.includes("owner-transition-linearization-quarantine-01")) {
-        heldOwnerAuditDigest = true;
-        signalOwnerAuditDigest();
-        await ownerAuditDigestGate;
-      }
-      return Reflect.apply(originalDigest, this, [algorithm, data]);
-    });
-
     let transition;
     let quarantine;
-    try {
-      const quarantinePromise = ledger.executeOwnerCommand(quarantineCommand);
-      await ownerAuditDigestReached;
-      transition = await ledger.transitionTask({
-        taskId,
-        expectedVersion: 1,
-        expectedState: "SCHEDULED",
-        nextState: "RUNNING",
-        actor: {
-          id: workerId,
-          role: "agent",
-          authenticated: true,
-          identityVerified: true,
-        },
-        evidence: { executionStartedAt: now + 2 },
-        now: now + 2,
-        workerId,
-        workerAssertion: transitionAssertion,
-        leaseGeneration: claim.leaseGeneration,
+    await runInDurableObject(ledger, async instance => {
+      // Install the gate inside the Durable Object context. WebCrypto objects
+      // are context-bound by the Workers runtime and must not cross DO contexts.
+      const originalDigest = crypto.subtle.digest;
+      const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(async function (algorithm, data) {
+        const serialized = new TextDecoder().decode(data);
+        if (!heldOwnerAuditDigest &&
+            serialized.includes('"eventType":"OWNER_TASK_QUARANTINED"') &&
+            serialized.includes("owner-transition-linearization-quarantine-01")) {
+          heldOwnerAuditDigest = true;
+          signalOwnerAuditDigest();
+          await ownerAuditDigestGate;
+        }
+        return Reflect.apply(originalDigest, this, [algorithm, data]);
       });
-      releaseOwnerAuditDigest();
-      quarantine = await quarantinePromise;
-    } finally {
-      releaseOwnerAuditDigest?.();
-      digestSpy.mockRestore();
-    }
+      try {
+        const quarantinePromise = instance.executeOwnerCommand(quarantineCommand);
+        await ownerAuditDigestReached;
+        transition = await instance.transitionTask({
+          taskId,
+          expectedVersion: 1,
+          expectedState: "SCHEDULED",
+          nextState: "RUNNING",
+          actor: {
+            id: workerId,
+            role: "agent",
+            authenticated: true,
+            identityVerified: true,
+          },
+          evidence: { executionStartedAt: now + 2 },
+          now: now + 2,
+          workerId,
+          workerAssertion: transitionAssertion,
+          leaseGeneration: claim.leaseGeneration,
+        });
+        releaseOwnerAuditDigest();
+        quarantine = await quarantinePromise;
+      } finally {
+        releaseOwnerAuditDigest?.();
+        digestSpy.mockRestore();
+      }
+    });
 
     // Exactly two serializable histories are valid:
     // 1) Agent commits RUNNING first; Owner retries against v2 and quarantines v3.

@@ -2027,4 +2027,113 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+
+  it("allows exactly one concurrent receipt RPC to consume a shared consumer JTI", async () => {
+    const taskId = "task-same-jti-race-0001";
+    const ledger = ledgerFor("same-jti-concurrent-replay");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const eventId = "same-jti-concurrent-event-01";
+    const idempotencyKey = "same-jti-concurrent-key";
+    const payload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
+    await ledger.enqueueOutbox({
+      eventId,
+      idempotencyKey,
+      taskId,
+      eventType: "task.transitioned",
+      payload,
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox"),
+      now,
+    });
+
+    const workerAssertionToken = await workerAssertion(
+      "orchestrator-outbox-consumer",
+      "consumer",
+      "recordOutboxReceipt",
+      now + 1,
+    );
+    const jti = assertionJti(workerAssertionToken);
+    const receiptInput = {
+      eventId,
+      eventType: "task.transitioned",
+      idempotencyKey,
+      taskId,
+      payload,
+      createdAt: now,
+      schemaVersion: 1,
+      envelopeSha256: "f".repeat(64),
+      consumerId: "orchestrator-outbox-consumer",
+      workerAssertion: workerAssertionToken,
+      now: now + 1,
+    };
+
+    // Both callers must finish the real MAC check before either can enter SQL.
+    const signingInput = workerAssertionToken.split(".").slice(0, 3).join(".");
+    const originalVerify = crypto.subtle.verify.bind(crypto.subtle);
+    let verifiedCount = 0;
+    let releaseVerifiedAssertions;
+    let signalBothVerified;
+    const verifiedAssertionsGate = new Promise(resolve => {
+      releaseVerifiedAssertions = resolve;
+    });
+    const bothVerified = new Promise(resolve => {
+      signalBothVerified = resolve;
+    });
+    const verifySpy = vi.spyOn(crypto.subtle, "verify").mockImplementation(
+      async (algorithm, key, signature, data) => {
+        const valid = await originalVerify(algorithm, key, signature, data);
+        if (new TextDecoder().decode(data) === signingInput) {
+          verifiedCount += 1;
+          if (verifiedCount === 2) signalBothVerified();
+          await verifiedAssertionsGate;
+        }
+        return valid;
+      },
+    );
+
+    let results;
+    try {
+      results = await runInDurableObject(ledger, async instance => {
+        const first = instance.recordOutboxReceipt(receiptInput);
+        const second = instance.recordOutboxReceipt(receiptInput);
+        await bothVerified;
+        releaseVerifiedAssertions();
+        return await Promise.all([first, second]);
+      });
+    } finally {
+      releaseVerifiedAssertions();
+      verifySpy.mockRestore();
+    }
+
+    expect(verifiedCount).toBe(2);
+    expect(results.filter(result => result.recorded === true)).toHaveLength(1);
+    expect(results.filter(result => result.recorded === false)).toMatchObject([
+      { reason: "AUTHENTICATED_WORKER_REQUIRED" },
+    ]);
+    expect(results.some(result => result.replay === true)).toBe(false);
+    expect(await ledger.getTask({ taskId })).toMatchObject({
+      taskId,
+      state: "SCHEDULED",
+      version: 1,
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ? AND subject = 'orchestrator-outbox-consumer' AND role = 'consumer' AND operation = 'recordOutboxReceipt'",
+        jti,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT event_id, event_type, schema_version, envelope_sha256, consumer_id FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).toArray()).toEqual([{
+        event_id: eventId,
+        event_type: "task.transitioned",
+        schema_version: 1,
+        envelope_sha256: "f".repeat(64),
+        consumer_id: "orchestrator-outbox-consumer",
+      }]);
+    });
+  });
+
 });

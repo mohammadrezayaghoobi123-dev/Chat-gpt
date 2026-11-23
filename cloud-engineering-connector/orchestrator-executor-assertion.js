@@ -2,7 +2,7 @@ import { canonicalJson } from "./orchestrator-protocol.js";
 
 const EXECUTOR_PRINCIPAL = "orchestrator-executor";
 const EXECUTOR_ROLE = "agent";
-const EXECUTOR_OPERATION = "claimTask";
+const EXECUTOR_OPERATIONS = Object.freeze(["claimTask", "renewLease", "releaseLease"]);
 const ISSUER = "orchestrator-executor";
 const AUDIENCE = "orchestrator-ledger";
 const MAX_LIFETIME_SECONDS = 60;
@@ -38,6 +38,18 @@ function decodeBase64Url(value, maxBytes) {
   return bytes;
 }
 
+function assertSignerOptions(expected) {
+  if (!expected || typeof expected !== "object" || Array.isArray(expected) ||
+      ![1, 2].includes(Object.keys(expected).length) ||
+      !Number.isSafeInteger(expected.nowMs) || expected.nowMs < 1 ||
+      Object.keys(expected).some(key => !["nowMs", "operation"].includes(key))) {
+    throw reject();
+  }
+  const operation = expected.operation ?? "claimTask";
+  if (!EXECUTOR_OPERATIONS.includes(operation)) throw reject();
+  return operation;
+}
+
 function assertNowOnly(expected) {
   if (!expected || typeof expected !== "object" || Array.isArray(expected) ||
       Object.keys(expected).length !== 1 || !Number.isSafeInteger(expected.nowMs) ||
@@ -68,8 +80,9 @@ function validateKeyPolicy(entry) {
     throw reject();
   }
   if (entry.subject !== EXECUTOR_PRINCIPAL || entry.role !== EXECUTOR_ROLE ||
-      !Array.isArray(entry.operations) || entry.operations.length !== 1 ||
-      entry.operations[0] !== EXECUTOR_OPERATION ||
+      !Array.isArray(entry.operations) || entry.operations.length !== EXECUTOR_OPERATIONS.length ||
+      new Set(entry.operations).size !== EXECUTOR_OPERATIONS.length ||
+      EXECUTOR_OPERATIONS.some(operation => !entry.operations.includes(operation)) ||
       typeof entry.publicKey !== "string") {
     throw reject();
   }
@@ -83,7 +96,7 @@ function validateClaims(claims, nowMs) {
       fields.some((field, index) => field !== CLAIM_KEYS[index])) throw reject();
   if (claims.v !== 2 || claims.iss !== ISSUER || claims.aud !== AUDIENCE ||
       claims.sub !== EXECUTOR_PRINCIPAL || claims.role !== EXECUTOR_ROLE ||
-      claims.op !== EXECUTOR_OPERATION || !ID.test(claims.sub) ||
+      !EXECUTOR_OPERATIONS.includes(claims.op) || !ID.test(claims.sub) ||
       typeof claims.jti !== "string" || !/^jti-[A-Za-z0-9_-]{22}$/.test(claims.jti) ||
       !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp)) {
     throw reject();
@@ -98,7 +111,7 @@ function validateClaims(claims, nowMs) {
 
 export async function createExecutorWorkerAssertion(privateKeyPkcs8, activeKid, expected) {
   try {
-    assertNowOnly(expected);
+    const operation = assertSignerOptions(expected);
     if (typeof activeKid !== "string" || !KID.test(activeKid)) throw reject();
     const privateKeyBytes = decodeBase64Url(privateKeyPkcs8, 256);
     const privateKey = await crypto.subtle.importKey(
@@ -115,7 +128,7 @@ export async function createExecutorWorkerAssertion(privateKeyPkcs8, activeKid, 
       aud: AUDIENCE,
       sub: EXECUTOR_PRINCIPAL,
       role: EXECUTOR_ROLE,
-      op: EXECUTOR_OPERATION,
+      op: operation,
       iat: issuedAt,
       exp: issuedAt + MAX_LIFETIME_SECONDS,
       jti: "jti-" + encodeBase64Url(crypto.getRandomValues(new Uint8Array(16))),

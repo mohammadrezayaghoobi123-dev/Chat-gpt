@@ -263,8 +263,16 @@ test("Executor verifier rejects a correctly signed operation outside the key-spe
     jti: "jti-" + encodeBase64Url(crypto.getRandomValues(new Uint8Array(16))),
   };
   const token = await signClaims(keys.pair.privateKey, kid, claims);
+  const claimOnlyPolicy = JSON.stringify({
+    [kid]: {
+      publicKey: keys.publicKey,
+      subject: "orchestrator-executor",
+      role: "agent",
+      operations: ["claimTask"],
+    },
+  });
   await assert.rejects(
-    api.verifyExecutorWorkerAssertion(keys.publicKeySet, token, { nowMs }),
+    api.verifyExecutorWorkerAssertion(claimOnlyPolicy, token, { nowMs }),
     error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
   );
 });

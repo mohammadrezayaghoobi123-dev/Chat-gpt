@@ -1168,37 +1168,22 @@ describe("Owner command atomic Ledger contract", () => {
       }
     });
 
-    // Exactly two serializable histories are valid:
-    // 1) Agent commits RUNNING first; Owner retries against v2 and quarantines v3.
-    // 2) Owner quarantines v2 first; Agent loses its task CAS before JTI consumption.
-    // In both histories the final task is quarantined and its Lease is revoked.
-    if (transition.updated) {
-      expect(transition).toMatchObject({
-        updated: true,
-        task: { taskId, state: "RUNNING", version: 2 },
-      });
-      expect(quarantine).toMatchObject({
-        applied: true,
-        operation: "quarantine",
-        task: { taskId, state: "QUARANTINED", version: 3 },
-      });
-    } else {
-      expect(transition).toMatchObject({
-        updated: false,
-        reason: "VERSION_OR_STATE_CONFLICT",
-        task: { taskId, state: "QUARANTINED", version: 2 },
-      });
-      expect(quarantine).toMatchObject({
-        applied: true,
-        operation: "quarantine",
-        task: { taskId, state: "QUARANTINED", version: 2 },
-      });
-    }
+    // The gate forces the stale-snapshot history: Agent commits RUNNING v2
+    // after Owner's v1 snapshot, then Owner must retry and quarantine v3.
+    expect(transition).toMatchObject({
+      updated: true,
+      task: { taskId, state: "RUNNING", version: 2 },
+    });
+    expect(quarantine).toMatchObject({
+      applied: true,
+      operation: "quarantine",
+      task: { taskId, state: "QUARANTINED", version: 3 },
+    });
 
     await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
       taskId,
       state: "QUARANTINED",
-      version: transition.updated ? 3 : 2,
+      version: 3,
     });
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec(
@@ -1212,7 +1197,7 @@ describe("Owner command atomic Ledger contract", () => {
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
         transitionJti,
-      ).one().count).toBe(transition.updated ? 1 : 0);
+      ).one().count).toBe(1);
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ? AND operation = 'quarantine'",
         taskId,

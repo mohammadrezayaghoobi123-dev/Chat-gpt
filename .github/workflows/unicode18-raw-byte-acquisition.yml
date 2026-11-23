@@ -591,6 +591,17 @@ jobs:
                   },
               }
 
+          def enforce_lexical_field_shapes(path, metrics):
+              unexpected = metrics.get("unexpected_field_count_records")
+              if type(unexpected) is not int or unexpected < 0:
+                  raise ValueError("invalid lexical field-shape metric: " + str(path))
+              if unexpected:
+                  raise ValueError(
+                      "lexical record field-shape anomaly: " + str(path)
+                      + " records=" + str(unexpected)
+                  )
+              return None
+
           def canonical_manifest_bytes(document):
               return json.dumps(
                   document, ensure_ascii=True, sort_keys=True, separators=(",", ":")
@@ -1103,10 +1114,8 @@ jobs:
                       "SUPPORTED" if unexpected_shapes == 0
                       else "BLOCKED_UNEXPECTED_FIELD_SHAPES"
                   )
-                  if unexpected_shapes:
-                      raise ValueError(
-                          "lexical record field-shape anomalies: " + str(unexpected_shapes)
-                      )
+                  for item in lexical_metrics:
+                      enforce_lexical_field_shapes(item["relative_path"], item["metrics"])
                   report["status"] = "SUPPORTED"
                   report["acquired_at_utc"] = datetime.now(timezone.utc).isoformat()
               except Exception as exc:

@@ -1,5 +1,7 @@
 name: Unicode 18.0.0 Raw-Byte Acquisition Audit
 
+# Branch-only push is intentional: workflow_dispatch and schedule require default-branch presence.
+# main remains unchanged; updating this workflow on the integration branch triggers the audit.
 on:
   push:
     branches:
@@ -29,6 +31,7 @@ jobs:
           python3 - <<'PY'
           import hashlib
           import json
+          import os
           import re
           import stat
           import sys
@@ -37,6 +40,7 @@ jobs:
           import urllib.error
           import urllib.parse
           import urllib.request
+          import ssl
           import zipfile
           from datetime import datetime, timezone
           from io import BytesIO
@@ -65,6 +69,105 @@ jobs:
               "application/octet-stream",
               "application/x-zip-compressed",
           }
+
+          TLS_CONTEXT = ssl.create_default_context()
+          TLS_CONTEXT.minimum_version = ssl.TLSVersion.TLSv1_2
+          if TLS_CONTEXT.verify_mode != ssl.CERT_REQUIRED or not TLS_CONTEXT.check_hostname:
+              raise RuntimeError("TLS certificate and hostname verification are not enabled")
+          HTTPS_OPENER = urllib.request.build_opener(
+              urllib.request.HTTPSHandler(context=TLS_CONTEXT)
+          )
+
+          def validate_content_length(declared, received):
+              if declared is None:
+                  return None
+              try:
+                  expected = int(declared)
+              except (TypeError, ValueError) as exc:
+                  raise ValueError("invalid Content-Length header") from exc
+              if expected < 0 or expected != received:
+                  raise ValueError("Content-Length does not match received bytes")
+              return True
+
+          def execution_environment():
+              return {
+                  "github_run_id": os.environ.get("GITHUB_RUN_ID", "UNKNOWN"),
+                  "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", "UNKNOWN"),
+                  "github_sha": os.environ.get("GITHUB_SHA", "UNKNOWN"),
+                  "github_ref": os.environ.get("GITHUB_REF", "UNKNOWN"),
+                  "github_workflow": os.environ.get("GITHUB_WORKFLOW", "UNKNOWN"),
+                  "runner_os": os.environ.get("RUNNER_OS", "UNKNOWN"),
+                  "runner_arch": os.environ.get("RUNNER_ARCH", "UNKNOWN"),
+                  "image_os": os.environ.get("ImageOS", "NOT_EXPOSED"),
+                  "image_version": os.environ.get("ImageVersion", "NOT_EXPOSED"),
+                  "cloud_provider": "NOT_EXPOSED_BY_RUNNER",
+              }
+
+          def emit_report(report):
+              encoded = json.dumps(report, ensure_ascii=True, sort_keys=True, indent=2)
+              print("UNICODE18_ACQUISITION_REPORT_BEGIN")
+              print(encoded)
+              print("UNICODE18_ACQUISITION_REPORT_END")
+              summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+              if not summary_path:
+                  return
+              environment = report.get("execution_environment", {})
+              lines = [
+                  "## Unicode 18.0.0 raw-byte acquisition report",
+                  "",
+                  "- Status: **" + str(report.get("status", "UNKNOWN")) + "**",
+                  "- Acquired at (UTC): " + str(report.get("acquired_at_utc", "NOT_COMPLETED")),
+                  "- Run ID / attempt: " + str(environment.get("github_run_id", "UNKNOWN")) + " / " + str(environment.get("github_run_attempt", "UNKNOWN")),
+                  "- Commit: " + str(environment.get("github_sha", "UNKNOWN")),
+                  "- Ref: " + str(environment.get("github_ref", "UNKNOWN")),
+                  "- Runner: " + str(environment.get("runner_os", "UNKNOWN")) + " / " + str(environment.get("runner_arch", "UNKNOWN")),
+                  "- Runner image: " + str(environment.get("image_os", "NOT_EXPOSED")) + " / " + str(environment.get("image_version", "NOT_EXPOSED")),
+                  "- Cloud provider: NOT_EXPOSED_BY_RUNNER",
+                  "",
+                  "| File | Exact bytes | SHA-256 | HTTP | Media type | Content-Length | TLS |",
+                  "|---|---:|---|---:|---|---:|---|",
+              ]
+              for item in report.get("files", []):
+                  content_length = item.get("content_length_header")
+                  if content_length is None:
+                      content_length = "NOT_SUPPLIED"
+                  tls = (item.get("tls_validation") or {}).get("result", "UNKNOWN")
+                  lines.append(
+                      "| " + str(item.get("relative_path", "UNKNOWN"))
+                      + " | " + str(item.get("byte_length", "UNKNOWN"))
+                      + " | " + str(item.get("sha256", "UNKNOWN"))
+                      + " | " + str(item.get("http_status", "UNKNOWN"))
+                      + " | " + str(item.get("content_type", "UNKNOWN"))
+                      + " | " + str(content_length)
+                      + " | " + str(tls) + " |"
+                  )
+              archive = report.get("archive") or {}
+              if archive:
+                  lines.extend([
+                      "",
+                      "Archive: HTTP " + str(archive.get("http_status", "UNKNOWN"))
+                      + "; exact bytes " + str(archive.get("byte_length", "UNKNOWN"))
+                      + "; SHA-256 " + str(archive.get("sha256", "UNKNOWN")),
+                  ])
+              failure = report.get("failure")
+              if failure:
+                  lines.extend([
+                      "",
+                      "### Failure",
+                      "- Stage: " + str(report.get("failed_stage", "UNKNOWN")),
+                      "- Type: " + str(failure.get("type", "UNKNOWN")),
+                      "- Detail: " + str(failure.get("message", "UNKNOWN")),
+                  ])
+              lines.extend([
+                  "",
+                  "- Direct-file versus official UCD.zip comparison: " + str(report.get("cross_representation_status", "NOT_COMPLETED")),
+                  "- Independent publisher corroboration: NOT_ESTABLISHED",
+                  "- Raw source contents logged: NO",
+                  "- Artifacts uploaded: NO",
+                  "- Manifest/source lock modified: NO",
+              ])
+              with open(summary_path, "a", encoding="utf-8", newline="\n") as summary:
+                  summary.write("\n".join(lines) + "\n")
 
           def safe_member_name(raw):
               if not isinstance(raw, str) or not raw or "\\" in raw:
@@ -153,9 +256,43 @@ jobs:
                   self.assertEqual(canonical_manifest_bytes(sample),
                                    canonical_manifest_bytes(sample))
 
+              def test_content_length_may_be_absent(self):
+                  self.assertIsNone(validate_content_length(None, 12))
+
+              def test_content_length_matches_exact_bytes(self):
+                  self.assertTrue(validate_content_length("12", 12))
+
+              def test_rejects_content_length_mismatch(self):
+                  with self.assertRaisesRegex(ValueError, "Content-Length"):
+                      validate_content_length("11", 12)
+
+              def test_rejects_invalid_content_length(self):
+                  with self.assertRaisesRegex(ValueError, "invalid Content-Length"):
+                      validate_content_length("unknown", 12)
+
+              def test_tls_context_requires_certificate_and_hostname_verification(self):
+                  self.assertEqual(TLS_CONTEXT.verify_mode, ssl.CERT_REQUIRED)
+                  self.assertTrue(TLS_CONTEXT.check_hostname)
+
+              def test_tls_context_requires_tls_12_or_newer(self):
+                  self.assertEqual(TLS_CONTEXT.minimum_version, ssl.TLSVersion.TLSv1_2)
+
           suite = unittest.defaultTestLoader.loadTestsFromTestCase(AcquisitionSafetyTests)
           test_result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
           if not test_result.wasSuccessful():
+              emit_report({
+                  "status": "BLOCKED",
+                  "unicode_version": VERSION,
+                  "acquired_at_utc": datetime.now(timezone.utc).isoformat(),
+                  "execution_environment": execution_environment(),
+                  "files": [],
+                  "failure": {
+                      "type": "SafetyTestFailure",
+                      "message": "pre-acquisition safety tests failed",
+                  },
+                  "raw_source_contents_logged": False,
+                  "artifacts_uploaded": False,
+              })
               raise SystemExit("pre-acquisition safety tests failed")
 
           def fetch_exact(url, maximum, expected_kind):
@@ -173,8 +310,9 @@ jobs:
               )
               last_error = None
               for attempt in range(3):
+                  request_started_at_utc = datetime.now(timezone.utc).isoformat()
                   try:
-                      with urllib.request.urlopen(request, timeout=25) as response:
+                      with HTTPS_OPENER.open(request, timeout=25) as response:
                           final = urllib.parse.urlsplit(response.geturl())
                           if (final.scheme != "https" or final.hostname != "www.unicode.org"
                                   or final.path != parsed.path or final.query or final.fragment):
@@ -187,7 +325,10 @@ jobs:
                           encoding = response.headers.get("Content-Encoding", "identity").lower()
                           if encoding not in ("", "identity"):
                               raise ValueError("unexpected content encoding: " + encoding)
-                          declared = response.headers.get("Content-Length")
+                          content_lengths = response.headers.get_all("Content-Length", [])
+                          if len(content_lengths) > 1:
+                              raise ValueError("multiple Content-Length headers rejected")
+                          declared = content_lengths[0].strip() if content_lengths else None
                           if declared is not None and int(declared) > maximum:
                               raise ValueError("declared response size exceeds limit")
                           chunks = []
@@ -201,8 +342,7 @@ jobs:
                               if total > maximum:
                                   raise ValueError("response size exceeds limit")
                           body = b"".join(chunks)
-                          if declared is not None and len(body) != int(declared):
-                              raise ValueError("Content-Length does not match received bytes")
+                          content_length_matches = validate_content_length(declared, len(body))
                           if not body:
                               raise ValueError("empty response body")
                           if expected_kind == "zip" and not body.startswith(b"PK"):
@@ -212,9 +352,27 @@ jobs:
                           return body, {
                               "requested_url": url,
                               "final_url": response.geturl(),
+                              "request_started_at_utc": request_started_at_utc,
+                              "response_completed_at_utc": datetime.now(timezone.utc).isoformat(),
                               "http_status": response.status,
                               "content_type": content_type,
                               "content_encoding": encoding or "identity",
+                              "content_length_header": declared,
+                              "content_length_matches_received": content_length_matches,
+                              "response_headers": {
+                                  "date": response.headers.get("Date"),
+                                  "etag": response.headers.get("ETag"),
+                                  "last_modified": response.headers.get("Last-Modified"),
+                                  "cache_control": response.headers.get("Cache-Control"),
+                              },
+                              "tls_validation": {
+                                  "result": "PASS",
+                                  "method": "ssl.create_default_context",
+                                  "verify_mode": "CERT_REQUIRED",
+                                  "hostname_check": True,
+                                  "minimum_tls_version": "TLSv1.2",
+                              },
+                              "raw_byte_preserving": True,
                               "byte_length": len(body),
                           }
                   except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
@@ -246,78 +404,108 @@ jobs:
               return "Unicode 18.0.0 marker present in first 32768 bytes"
 
           def main():
-              archive_bytes, archive_meta = fetch_exact(ARCHIVE_URL, MAX_ARCHIVE, "zip")
-              archive_meta["sha256"] = hashlib.sha256(archive_bytes).hexdigest()
-              direct = {}
-              direct_meta = {}
-              total = 0
-              for path in REQUIRED:
-                  body, meta = fetch_exact(ROOT + path, MAX_FILE, "text")
-                  total += len(body)
-                  if total > MAX_TOTAL:
-                      raise ValueError("aggregate direct-source size limit exceeded")
-                  header_result = validate_text_source(path, body)
-                  direct[path] = body
-                  meta["sha256"] = hashlib.sha256(body).hexdigest()
-                  meta["header_validation"] = header_result
-                  direct_meta[path] = meta
-
-              with zipfile.ZipFile(BytesIO(archive_bytes), "r") as archive:
-                  index = validate_zip_index(archive.infolist())
-                  results = []
-                  for path in REQUIRED:
-                      info, _ = index[path]
-                      if info.file_size > MAX_FILE:
-                          raise ValueError("required ZIP member exceeds size limit: " + path)
-                      packaged = archive.read(info)
-                      if len(packaged) != info.file_size:
-                          raise ValueError("ZIP member size mismatch: " + path)
-                      if packaged != direct[path]:
-                          raise ValueError("direct-download and UCD.zip bytes differ: " + path)
-                      results.append({
-                          "relative_path": path,
-                          **direct_meta[path],
-                          "zip_member_byte_length": len(packaged),
-                          "zip_member_sha256": hashlib.sha256(packaged).hexdigest(),
-                          "direct_vs_zip_equal": True,
-                      })
-
-              stable = {
-                  "unicode_version": VERSION,
-                  "source_root": ROOT,
-                  "archive": {
-                      "url": ARCHIVE_URL,
-                      "byte_length": archive_meta["byte_length"],
-                      "sha256": archive_meta["sha256"],
-                  },
-                  "files": [
-                      {
-                          "relative_path": item["relative_path"],
-                          "byte_length": item["byte_length"],
-                          "sha256": item["sha256"],
-                          "zip_member_sha256": item["zip_member_sha256"],
-                          "direct_vs_zip_equal": item["direct_vs_zip_equal"],
-                          "header_validation": item["header_validation"],
-                      }
-                      for item in results
-                  ],
-              }
-              stable_digest = hashlib.sha256(canonical_manifest_bytes(stable)).hexdigest()
               report = {
-                  "status": "PASS",
+                  "status": "BLOCKED",
                   "unicode_version": VERSION,
-                  "acquired_at_utc": datetime.now(timezone.utc).isoformat(),
-                  "archive": archive_meta,
-                  "files": results,
-                  "stable_manifest_sha256": stable_digest,
+                  "acquired_at_utc": None,
+                  "execution_environment": execution_environment(),
+                  "archive": None,
+                  "files": [],
+                  "cross_representation_status": "NOT_COMPLETED",
+                  "stable_manifest_sha256": None,
                   "raw_source_contents_logged": False,
                   "artifacts_uploaded": False,
                   "independent_publisher_corroboration": "NOT_ESTABLISHED",
                   "source_provenance_scope": "official Unicode direct files compared byte-for-byte with official Unicode UCD.zip; same publisher",
+                  "independent_reproduction_scope": "separate curl/unzip job environment; same GitHub Actions control plane; cloud-provider independence NOT_ESTABLISHED",
+                  "manifest_or_source_lock_modified": False,
               }
-              print("UNICODE18_ACQUISITION_REPORT_BEGIN")
-              print(json.dumps(report, ensure_ascii=True, sort_keys=True, indent=2))
-              print("UNICODE18_ACQUISITION_REPORT_END")
+              stage = "archive_acquisition"
+              try:
+                  archive_bytes, archive_meta = fetch_exact(ARCHIVE_URL, MAX_ARCHIVE, "zip")
+                  archive_meta["sha256"] = hashlib.sha256(archive_bytes).hexdigest()
+                  report["archive"] = archive_meta
+
+                  direct = {}
+                  direct_meta = {}
+                  total = 0
+                  for path in REQUIRED:
+                      stage = "direct_file_acquisition:" + path
+                      body, meta = fetch_exact(ROOT + path, MAX_FILE, "text")
+                      total += len(body)
+                      if total > MAX_TOTAL:
+                          raise ValueError("aggregate direct-source size limit exceeded")
+                      header_result = validate_text_source(path, body)
+                      direct[path] = body
+                      meta["sha256"] = hashlib.sha256(body).hexdigest()
+                      meta["header_validation"] = header_result
+                      direct_meta[path] = meta
+                      report["files"].append({
+                          "relative_path": path,
+                          **meta,
+                      })
+
+                  stage = "zip_index_validation_and_byte_comparison"
+                  with zipfile.ZipFile(BytesIO(archive_bytes), "r") as archive:
+                      index = validate_zip_index(archive.infolist())
+                      results = []
+                      for path in REQUIRED:
+                          info, _ = index[path]
+                          if info.file_size > MAX_FILE:
+                              raise ValueError("required ZIP member exceeds size limit: " + path)
+                          packaged = archive.read(info)
+                          if len(packaged) != info.file_size:
+                              raise ValueError("ZIP member size mismatch: " + path)
+                          if packaged != direct[path]:
+                              raise ValueError("direct-download and UCD.zip bytes differ: " + path)
+                          results.append({
+                              "relative_path": path,
+                              **direct_meta[path],
+                              "zip_member_byte_length": len(packaged),
+                              "zip_member_sha256": hashlib.sha256(packaged).hexdigest(),
+                              "direct_vs_zip_equal": True,
+                          })
+                  report["files"] = results
+                  report["cross_representation_status"] = "SUPPORTED_FOR_ALL_NINE_FILES"
+
+                  stable = {
+                      "unicode_version": VERSION,
+                      "source_root": ROOT,
+                      "archive": {
+                          "url": ARCHIVE_URL,
+                          "byte_length": archive_meta["byte_length"],
+                          "sha256": archive_meta["sha256"],
+                      },
+                      "files": [
+                          {
+                              "relative_path": item["relative_path"],
+                              "byte_length": item["byte_length"],
+                              "sha256": item["sha256"],
+                              "zip_member_sha256": item["zip_member_sha256"],
+                              "direct_vs_zip_equal": item["direct_vs_zip_equal"],
+                              "header_validation": item["header_validation"],
+                          }
+                          for item in results
+                      ],
+                  }
+                  report["stable_manifest_sha256"] = hashlib.sha256(
+                      canonical_manifest_bytes(stable)
+                  ).hexdigest()
+                  report["status"] = "SUPPORTED"
+                  report["acquired_at_utc"] = datetime.now(timezone.utc).isoformat()
+              except Exception as exc:
+                  report["status"] = "BLOCKED"
+                  report["failed_stage"] = stage
+                  report["failure"] = {
+                      "type": type(exc).__name__,
+                      "message": str(exc)[:1000],
+                  }
+                  report["acquired_at_utc"] = datetime.now(timezone.utc).isoformat()
+                  emit_report(report)
+                  raise
+
+              emit_report(report)
+
 
           main()
           PY
@@ -334,20 +522,40 @@ jobs:
           set -euo pipefail
           base="https://www.unicode.org/Public/18.0.0/ucd"
           tmp="$(mktemp -d)"
-          trap 'rm -rf "$tmp"' EXIT
+          summary="$GITHUB_STEP_SUMMARY"
+          trap 'rc=$?; if [ "$rc" -eq 0 ]; then result=SUPPORTED; else result=BLOCKED; fi; printf "\n- Final independent-shell status: **%s** (exit %s)\n" "$result" "$rc" >> "$summary"; exit "$rc"' EXIT
           mkdir -p "$tmp/direct" "$tmp/member"
           archive="$tmp/UCD.zip"
+          {
+            printf "## Unicode 18.0.0 independent curl/unzip reproduction\n\n"
+            printf -- "- Status: **RUNNING**\n"
+            printf -- "- Run ID: %s / attempt %s\n" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf -- "- Commit: %s\n" "$GITHUB_SHA"
+            printf -- "- Ref: %s\n" "$GITHUB_REF"
+            printf -- "- Runner: %s / %s\n" "$RUNNER_OS" "$RUNNER_ARCH"
+            printf -- "- Runner image: %s / %s\n" "$(printenv ImageOS 2>/dev/null || echo NOT_EXPOSED)" "$(printenv ImageVersion 2>/dev/null || echo NOT_EXPOSED)"
+            printf -- "- Cloud provider: NOT_EXPOSED_BY_RUNNER\n"
+            printf -- "- Independent scope: distinct curl/unzip implementation and separate job environment; same GitHub Actions control plane\n\n"
+            printf "| Requested URL | HTTP | Exact bytes | Content-Length | Media type | TLS verify result | Request interval (UTC) |\n"
+            printf "|---|---:|---:|---:|---|---:|---|\n"
+          } >> "$summary"
+
           fetch_one() {
             local url="$1" destination="$2" limit="$3" expected="$4"
-            local metadata status content_type size effective actual
+            local metadata status content_type size effective verify_result actual headers declared declared_count started finished
+            headers="$destination.headers"
+            started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             metadata="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
               --max-redirs 0 --max-filesize "$limit" \
+              --dump-header "$headers" \
               --output "$destination" \
-              --write-out '%{http_code}\t%{content_type}\t%{size_download}\t%{url_effective}' \
+              --write-out '%{http_code}\t%{content_type}\t%{size_download}\t%{url_effective}\t%{ssl_verify_result}' \
               "$url")"
-            IFS=$'\t' read -r status content_type size effective <<< "$metadata"
+            finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            IFS=$'\t' read -r status content_type size effective verify_result <<< "$metadata"
             test "$status" = "200"
             test "$effective" = "$url"
+            test "$verify_result" = "0"
             case "$expected:$content_type" in
               zip:application/zip*|zip:application/octet-stream*|text:text/plain*|text:application/octet-stream*) ;;
               *) echo "unexpected content type for $url: $content_type" >&2; exit 1 ;;
@@ -355,28 +563,29 @@ jobs:
             actual="$(wc -c < "$destination" | tr -d ' ')"
             test "$actual" = "$size"
             test "$actual" -gt 0
-            printf '%s\t%s\t%s\n' "$actual" "$content_type" "$effective"
+            declared_count="$(awk 'tolower($1) == "content-length:" { count++ } END { print count+0 }' "$headers")"
+            test "$declared_count" -le 1
+            declared="$(awk 'tolower($1) == "content-length:" { gsub("\r", "", $2); value=$2 } END { print value }' "$headers")"
+            if [ -z "$declared" ]; then
+              declared="NOT_SUPPLIED"
+            else
+              test "$declared" = "$actual"
+            fi
+            printf 'TRANSFER\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$url" "$status" "$actual" "$declared" "$content_type" "$verify_result" "$started/$finished"
+            printf "| %s | %s | %s | %s | %s | %s | %s / %s |\n" "$url" "$status" "$actual" "$declared" "$content_type" "$verify_result" "$started" "$finished" >> "$summary"
           }
+
           echo "INDEPENDENT_REPRODUCTION_BEGIN"
           fetch_one "$base/UCD.zip" "$archive" 41943040 zip
           unzip -tqq "$archive"
           archive_size="$(wc -c < "$archive" | tr -d ' ')"
           archive_sha="$(sha256sum "$archive" | cut -d ' ' -f 1)"
           printf 'ARCHIVE\t%s\t%s\n' "$archive_size" "$archive_sha"
-          files=(
-            "ReadMe.txt"
-            "PropList.txt"
-            "DerivedCoreProperties.txt"
-            "DerivedAge.txt"
-            "extracted/DerivedGeneralCategory.txt"
-            "UnicodeData.txt"
-            "CaseFolding.txt"
-            "DerivedNormalizationProps.txt"
-            "NormalizationTest.txt"
-          )
+          printf -- "\n- UCD.zip exact byte length: %s\n- UCD.zip SHA-256: %s\n" "$archive_size" "$archive_sha" >> "$summary"
+
           listing="$tmp/listing.txt"
           unzip -Z1 "$archive" > "$listing"
-          for path in "${files[@]}"; do
+          for path in ReadMe.txt PropList.txt DerivedCoreProperties.txt DerivedAge.txt extracted/DerivedGeneralCategory.txt UnicodeData.txt CaseFolding.txt DerivedNormalizationProps.txt NormalizationTest.txt; do
             count="$(grep -Fxc -- "$path" "$listing" || true)"
             test "$count" = "1"
             mkdir -p "$tmp/direct/$(dirname "$path")" "$tmp/member/$(dirname "$path")"
@@ -385,9 +594,12 @@ jobs:
             cmp --silent "$tmp/direct/$path" "$tmp/member/$path"
             direct_size="$(wc -c < "$tmp/direct/$path" | tr -d ' ')"
             direct_sha="$(sha256sum "$tmp/direct/$path" | cut -d ' ' -f 1)"
+            member_size="$(wc -c < "$tmp/member/$path" | tr -d ' ')"
             member_sha="$(sha256sum "$tmp/member/$path" | cut -d ' ' -f 1)"
+            test "$direct_size" = "$member_size"
             test "$direct_sha" = "$member_sha"
-            printf 'FILE\t%s\t%s\t%s\t%s\n' "$path" "$direct_size" "$direct_sha" "BYTE_EQUAL"
+            printf 'FILE\t%s\t%s\t%s\t%s\tBYTE_EQUAL\n' "$path" "$direct_size" "$direct_sha" "$member_sha"
+            printf -- "- %s: direct bytes equal ZIP member; SHA-256 reproduced: SUPPORTED\n" "$path" >> "$summary"
           done
           echo "FILES_VERIFIED=9"
           echo "INDEPENDENT_REPRODUCTION_END"

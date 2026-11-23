@@ -10,9 +10,21 @@ const TEST_REVIEW_MARKER_KEY = "test-only-review-marker-key-32-bytes-minimum";
 
 async function runReview(options) {
   const { strictImmutableSnapshot = false, ...reviewOptions } = options;
-  const fetchImpl = strictImmutableSnapshot
+  const sourceFetch = strictImmutableSnapshot
     ? reviewOptions.fetchImpl
     : createLegacyFixtureFetch(reviewOptions);
+  const fetchImpl = async (url, init = {}) => {
+    const response = await sourceFetch(url, init);
+    if (!String(url).includes("/compare/") || !response?.ok) return response;
+    const comparison = await response.json();
+    if (!comparison.merge_base_commit) {
+      comparison.merge_base_commit = { sha: reviewOptions.expectedBaseSha };
+    }
+    return new Response(JSON.stringify(comparison), {
+      status: response.status,
+      headers: { "content-type": "application/json" },
+    });
+  };
   return runImmutableReview({ ...reviewOptions, fetchImpl });
 }
 

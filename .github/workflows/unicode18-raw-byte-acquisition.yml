@@ -6,6 +6,7 @@ on:
     branches:
       - "integration/master-brain-unification-2026-11-15"
       - "work/r1u12b-raw-structure-metrics-2026-11-23"
+      - "work/r1u12c-lexical-structure-2026-11-23"
     paths:
       - ".github/workflows/unicode18-raw-byte-acquisition.yml"
 
@@ -467,7 +468,93 @@ jobs:
               def test_tls_context_requires_tls_12_or_newer(self):
                   self.assertEqual(TLS_CONTEXT.minimum_version, ssl.TLSVersion.TLSv1_2)
 
-          suite = unittest.defaultTestLoader.loadTestsFromTestCase(AcquisitionSafetyTests)
+          class LexicalStructureTests(unittest.TestCase):
+              def test_property_format_counts_records_comments_and_field_shapes(self):
+                  raw = (
+                      b"0041 ; Alpha # inline comment\n"
+                      b"# file comment\n"
+                      b" \t\n"
+                      b"0042..0043 ; Beta ; Delta\n"
+                  )
+                  metrics = measure_lexical_records("PropList.txt", raw)
+                  self.assertEqual(metrics["data_records"], 2)
+                  self.assertEqual(metrics["comment_only_lines"], 1)
+                  self.assertEqual(metrics["blank_lines"], 1)
+                  self.assertEqual(metrics["inline_comment_records"], 1)
+                  self.assertEqual(metrics["field_count_histogram"], {"2": 1, "3": 1})
+                  self.assertEqual(metrics["unexpected_field_count_records"], 0)
+
+              def test_case_folding_expects_three_fields_and_reports_shape_anomaly(self):
+                  raw = b"0041; C; 0061; # LATIN CAPITAL LETTER A\n0042; C; # missing mapping\n"
+                  metrics = measure_lexical_records("CaseFolding.txt", raw)
+                  self.assertEqual(metrics["field_count_histogram"], {"2": 1, "3": 1})
+                  self.assertEqual(metrics["unexpected_field_count_records"], 1)
+                  self.assertEqual(metrics["data_records"], 2)
+
+              def test_unicode_data_counts_fifteen_fields_without_comment_semantics(self):
+                  fields = [b"0041", b"#NOT_A_COMMENT"] + [b""] * 13
+                  raw = b";".join(fields) + b"\n"
+                  metrics = measure_lexical_records("UnicodeData.txt", raw)
+                  self.assertEqual(metrics["data_records"], 1)
+                  self.assertEqual(metrics["comment_only_lines"], 0)
+                  self.assertEqual(metrics["inline_comment_records"], 0)
+                  self.assertEqual(metrics["field_count_histogram"], {"15": 1})
+                  self.assertEqual(metrics["unexpected_field_count_records"], 0)
+
+              def test_normalization_test_separates_part_directive_and_five_fields(self):
+                  raw = (
+                      b"@Part1 # character by character test\n"
+                      b"0041;0041;0041;0041;0041; # sample record\n"
+                  )
+                  metrics = measure_lexical_records("NormalizationTest.txt", raw)
+                  self.assertEqual(metrics["directive_lines"], 1)
+                  self.assertEqual(metrics["data_records"], 1)
+                  self.assertEqual(metrics["field_count_histogram"], {"5": 1})
+                  self.assertEqual(metrics["inline_comment_records"], 1)
+                  self.assertEqual(metrics["unexpected_field_count_records"], 0)
+
+              def test_at_prefix_is_not_a_directive_in_property_files(self):
+                  metrics = measure_lexical_records("PropList.txt", b"@Part ; Sample_Property\n")
+                  self.assertEqual(metrics["directive_lines"], 0)
+                  self.assertEqual(metrics["data_records"], 1)
+
+              def test_unknown_or_document_paths_are_not_silently_parsed(self):
+                  for path in ("ReadMe.txt", "unexpected.txt"):
+                      with self.subTest(path=path), self.assertRaisesRegex(ValueError, "unsupported lexical format"):
+                          measure_lexical_records(path, b"plain text\n")
+
+              def test_rejects_physical_record_line_over_resource_limit(self):
+                  with self.assertRaisesRegex(ValueError, "line byte limit"):
+                      measure_lexical_records("PropList.txt", b"A" * 4097)
+
+              def test_rejects_field_count_over_resource_limit(self):
+                  raw = b";".join([b"x"] * 33) + b"\n"
+                  with self.assertRaisesRegex(ValueError, "field count limit"):
+                      measure_lexical_records("UnicodeData.txt", raw)
+
+              def test_max_field_offsets_are_zero_based_byte_offsets(self):
+                  raw = "é;abc;z\n".encode("utf-8")
+                  metrics = measure_lexical_records("PropList.txt", raw)
+                  self.assertEqual(
+                      metrics["max_field"],
+                      {"byte_length": 3, "line_number": 1, "byte_offset": 3, "field_index": 1},
+                  )
+
+              def test_empty_fields_are_counted_without_value_normalization(self):
+                  metrics = measure_lexical_records("PropList.txt", b"0041; ;\n")
+                  self.assertEqual(metrics["field_count_histogram"], {"3": 1})
+                  self.assertEqual(metrics["empty_field_count"], 2)
+
+              def test_scanner_does_not_mutate_source_bytes(self):
+                  raw = b"0041 ; Alpha # note\n"
+                  before = hashlib.sha256(raw).hexdigest()
+                  measure_lexical_records("PropList.txt", raw)
+                  self.assertEqual(hashlib.sha256(raw).hexdigest(), before)
+
+          suite = unittest.TestSuite((
+              unittest.defaultTestLoader.loadTestsFromTestCase(AcquisitionSafetyTests),
+              unittest.defaultTestLoader.loadTestsFromTestCase(LexicalStructureTests),
+          ))
           test_result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
           if not test_result.wasSuccessful():
               emit_report({

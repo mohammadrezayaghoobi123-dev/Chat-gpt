@@ -1123,7 +1123,7 @@ describe("Owner command atomic Ledger contract", () => {
     const ownerAuditDigestGate = new Promise(resolve => {
       releaseOwnerAuditDigest = resolve;
     });
-    const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+    const originalDigest = crypto.subtle.digest;
     const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(async (algorithm, data) => {
       const serialized = new TextDecoder().decode(data);
       if (!heldOwnerAuditDigest &&
@@ -1133,7 +1133,7 @@ describe("Owner command atomic Ledger contract", () => {
         signalOwnerAuditDigest();
         await ownerAuditDigestGate;
       }
-      return originalDigest(algorithm, data);
+      return Reflect.apply(originalDigest, crypto.subtle, [algorithm, data]);
     });
 
     let transition;

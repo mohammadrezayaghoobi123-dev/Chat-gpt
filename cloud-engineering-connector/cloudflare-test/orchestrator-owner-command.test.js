@@ -863,6 +863,22 @@ describe("Owner command atomic Ledger contract", () => {
       task: { taskId, state: "VALIDATING", version: 3 },
     });
 
+    const postReleaseClaimAssertion = await workerAssertion(
+      workerId, "agent", "claimTask", now + 4,
+    );
+    const postReleaseClaimJti = assertionJti(postReleaseClaimAssertion);
+    const postReleaseClaim = await ledger.claimTask({
+      taskId,
+      workerId,
+      workerAssertion: postReleaseClaimAssertion,
+      leaseMs: 30_000,
+      now: now + 4,
+    });
+    expect(postReleaseClaim).toMatchObject({
+      claimed: false,
+      reason: "NO_TASK_AVAILABLE",
+    });
+
     await expect(createScheduledWorkerAssertion(
       env.LEDGER_WORKER_ASSERTION_KEYS,
       "test-v1",
@@ -935,6 +951,10 @@ describe("Owner command atomic Ledger contract", () => {
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
         schedulerJti,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        postReleaseClaimJti,
       ).one().count).toBe(0);
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ? AND event_type IN ('OWNER_TASK_QUARANTINED','OWNER_TASK_RELEASED')",

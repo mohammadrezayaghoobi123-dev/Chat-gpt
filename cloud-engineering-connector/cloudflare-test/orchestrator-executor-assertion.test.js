@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { canonicalJson } from "../orchestrator-protocol.js";
 import { createExecutorWorkerAssertion } from "../orchestrator-executor-assertion.js";
 
@@ -60,6 +60,39 @@ async function createExecutorAssertion(nowMs = now, operation = "claimTask") {
   pkcs8.set(prefix);
   pkcs8.set(seed, prefix.length);
   return createExecutorWorkerAssertion(base64Url(pkcs8), EXECUTOR_KID, { nowMs, operation });
+}
+
+async function withClockAdvanceDuringExecutorVerification(initialNow, advancedNow, action) {
+  const originalVerify = crypto.subtle.verify.bind(crypto.subtle);
+  let currentNow = initialNow;
+  const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => currentNow);
+  const verifySpy = vi.spyOn(crypto.subtle, "verify").mockImplementation(async (...args) => {
+    currentNow = advancedNow;
+    return originalVerify(...args);
+  });
+  try {
+    return await action();
+  } finally {
+    verifySpy.mockRestore();
+    dateNowSpy.mockRestore();
+  }
+}
+
+
+async function withClockAdvanceDuringExecutorDigest(initialNow, advancedNow, action) {
+  const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+  let currentNow = initialNow;
+  const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => currentNow);
+  const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(async (...args) => {
+    currentNow = advancedNow;
+    return originalDigest(...args);
+  });
+  try {
+    return await action();
+  } finally {
+    digestSpy.mockRestore();
+    dateNowSpy.mockRestore();
+  }
 }
 
 async function createScheduledTask(ledger, taskId, executorId) {
@@ -531,5 +564,460 @@ describe("Executor Ed25519 trust boundary", () => {
       released: false,
       reason: "LEASE_FENCE_MISMATCH",
     });
+  });
+
+  it("rejects Executor renewal when the lease expires during WebCrypto verification without consuming its JTI", async () => {
+    const ledger = ledgerFor("executor-ed25519-toctou-renew");
+    await expect(createScheduledTask(ledger, "task-executor-toctou-renew", EXECUTOR_ID))
+      .resolves.toMatchObject({ created: true });
+    const claimed = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now, "claimTask"),
+      leaseMs: 30_000,
+      now,
+      taskId: "task-executor-toctou-renew",
+    });
+    expect(claimed).toMatchObject({ claimed: true, leaseGeneration: 1 });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE orchestrator_execution_leases SET lease_until = ? WHERE task_id = ?",
+        now + 1, "task-executor-toctou-renew",
+      );
+    });
+
+    const assertion = await createExecutorAssertion(now, "renewLease");
+    const result = await withClockAdvanceDuringExecutorVerification(now, now + 2, () =>
+      ledger.renewLease({
+        taskId: "task-executor-toctou-renew",
+        workerId: EXECUTOR_ID,
+        workerAssertion: assertion,
+        leaseGeneration: claimed.leaseGeneration,
+        leaseMs: 30_000,
+        now,
+      }),
+    );
+    expect(result).toMatchObject({ renewed: false, reason: "LEASE_FENCE_MISMATCH" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-executor-toctou-renew",
+      ).toArray()).toEqual([{
+        worker_id: EXECUTOR_ID,
+        lease_generation: 1,
+        lease_until: now + 1,
+      }]);
+      expect(state.storage.sql.exec(
+        "SELECT operation FROM orchestrator_consumed_assertions WHERE subject = ? ORDER BY operation",
+        EXECUTOR_ID,
+      ).toArray()).toEqual([{ operation: "claimTask" }]);
+    });
+  });
+
+  it("rejects Executor release when the lease expires during WebCrypto verification without consuming its JTI", async () => {
+    const ledger = ledgerFor("executor-ed25519-toctou-release");
+    await expect(createScheduledTask(ledger, "task-executor-toctou-release", EXECUTOR_ID))
+      .resolves.toMatchObject({ created: true });
+    const claimed = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now, "claimTask"),
+      leaseMs: 30_000,
+      now,
+      taskId: "task-executor-toctou-release",
+    });
+    expect(claimed).toMatchObject({ claimed: true, leaseGeneration: 1 });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE orchestrator_execution_leases SET lease_until = ? WHERE task_id = ?",
+        now + 1, "task-executor-toctou-release",
+      );
+    });
+
+    const assertion = await createExecutorAssertion(now, "releaseLease");
+    const result = await withClockAdvanceDuringExecutorVerification(now, now + 2, () =>
+      ledger.releaseLease({
+        taskId: "task-executor-toctou-release",
+        workerId: EXECUTOR_ID,
+        workerAssertion: assertion,
+        leaseGeneration: claimed.leaseGeneration,
+        now,
+      }),
+    );
+    expect(result).toMatchObject({ released: false, reason: "LEASE_FENCE_MISMATCH" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-executor-toctou-release",
+      ).toArray()).toEqual([{
+        worker_id: EXECUTOR_ID,
+        lease_generation: 1,
+        lease_until: now + 1,
+      }]);
+      expect(state.storage.sql.exec(
+        "SELECT operation FROM orchestrator_consumed_assertions WHERE subject = ? ORDER BY operation",
+        EXECUTOR_ID,
+      ).toArray()).toEqual([{ operation: "claimTask" }]);
+    });
+  });
+
+  it("rejects an Executor assertion that expires while WebCrypto verification is pending", async () => {
+    const ledger = ledgerFor("executor-ed25519-toctou-assertion-expiry");
+    await expect(createScheduledTask(ledger, "task-executor-toctou-expiry", EXECUTOR_ID))
+      .resolves.toMatchObject({ created: true });
+    const claimed = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now, "claimTask"),
+      leaseMs: 30_000,
+      now,
+      taskId: "task-executor-toctou-expiry",
+    });
+    expect(claimed).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    const issuedAt = Math.floor(now / 1000) - 56;
+    const assertion = await createExecutorAssertion(issuedAt * 1000, "renewLease");
+    const result = await withClockAdvanceDuringExecutorVerification(now, now + 10_000, () =>
+      ledger.renewLease({
+        taskId: "task-executor-toctou-expiry",
+        workerId: EXECUTOR_ID,
+        workerAssertion: assertion,
+        leaseGeneration: claimed.leaseGeneration,
+        leaseMs: 30_000,
+        now,
+      }),
+    );
+    expect(result).toMatchObject({ renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-executor-toctou-expiry",
+      ).toArray()).toEqual([{
+        worker_id: EXECUTOR_ID,
+        lease_generation: 1,
+        lease_until: claimed.leaseUntil,
+      }]);
+      expect(state.storage.sql.exec(
+        "SELECT operation FROM orchestrator_consumed_assertions WHERE subject = ? ORDER BY operation",
+        EXECUTOR_ID,
+      ).toArray()).toEqual([{ operation: "claimTask" }]);
+    });
+  });
+
+
+  it("revalidates Executor assertion time after asynchronous claim cursor hashing", async () => {
+    const ledger = ledgerFor("executor-ed25519-toctou-claim-cursor-hash");
+    await expect(createScheduledTask(ledger, "task-executor-toctou-claim-hash", EXECUTOR_ID))
+      .resolves.toMatchObject({ created: true });
+    const issuedAt = Math.floor(now / 1000) - 56;
+    const assertion = await createExecutorAssertion(issuedAt * 1000, "claimTask");
+    const result = await withClockAdvanceDuringExecutorDigest(now, now + 10_000, () =>
+      ledger.claimTask({
+        workerId: EXECUTOR_ID,
+        workerAssertion: assertion,
+        leaseMs: 30_000,
+        now,
+      }),
+    );
+    expect(result).toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-executor-toctou-claim-hash",
+      ).toArray()).toEqual([]);
+      expect(state.storage.sql.exec(
+        "SELECT operation FROM orchestrator_consumed_assertions WHERE subject = ? ORDER BY operation",
+        EXECUTOR_ID,
+      ).toArray()).toEqual([]);
+    });
+  });
+
+
+  it("atomically rejects concurrent Executor claims that reuse one JTI", async () => {
+    const ledger = ledgerFor("executor-ed25519-concurrent-jti-replay");
+    const taskIds = [
+      "task-executor-concurrent-jti-one",
+      "task-executor-concurrent-jti-two",
+    ];
+    for (const taskId of taskIds) {
+      await expect(createScheduledTask(ledger, taskId, EXECUTOR_ID))
+        .resolves.toMatchObject({ created: true });
+    }
+
+    const assertion = await createExecutorAssertion(now, "claimTask");
+    const subtle = crypto.subtle;
+    const originalVerify = subtle.verify.bind(subtle);
+    const hadOwnVerify = Object.prototype.hasOwnProperty.call(subtle, "verify");
+    const originalDescriptor = Object.getOwnPropertyDescriptor(subtle, "verify");
+    let verificationCalls = 0;
+    let releaseVerificationBarrier;
+    const verificationBarrier = new Promise(resolve => {
+      releaseVerificationBarrier = resolve;
+    });
+
+    Object.defineProperty(subtle, "verify", {
+      configurable: true,
+      writable: true,
+      value: async (...args) => {
+        verificationCalls += 1;
+        if (verificationCalls === 2) releaseVerificationBarrier();
+        await verificationBarrier;
+        return originalVerify(...args);
+      },
+    });
+
+    try {
+      const results = await Promise.all(taskIds.map(taskId => ledger.claimTask({
+        workerId: EXECUTOR_ID,
+        workerAssertion: assertion,
+        leaseMs: 30_000,
+        now,
+        taskId,
+      })));
+
+      expect(verificationCalls).toBe(2);
+      expect(results.filter(result => result.claimed)).toHaveLength(1);
+      expect(results.filter(result =>
+        result.claimed === false && result.reason === "AUTHENTICATED_WORKER_REQUIRED"
+      )).toHaveLength(1);
+
+      await runInDurableObject(ledger, async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND operation = ?",
+          EXECUTOR_ID, "claimTask",
+        ).one().count).toBe(1);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id IN (?, ?) AND worker_id = ?",
+          taskIds[0], taskIds[1], EXECUTOR_ID,
+        ).one().count).toBe(1);
+      });
+    } finally {
+      if (hadOwnVerify) {
+        Object.defineProperty(subtle, "verify", originalDescriptor);
+      } else {
+        delete subtle.verify;
+      }
+    }
+  });
+
+  it("preserves the Executor continuation cursor when either cursor SHA-256 operation rejects", async () => {
+    const ledger = ledgerFor("executor-ed25519-cursor-digest-failure");
+    const taskIds = Array.from({ length: 129 }, (_value, index) =>
+      "task-executor-digest-failure-" + String(index).padStart(3, "0"),
+    );
+    for (const taskId of taskIds) {
+      await expect(createScheduledTask(ledger, taskId, EXECUTOR_ID))
+        .resolves.toMatchObject({ created: true });
+    }
+
+    const leaseTime = Date.now();
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.transactionSync(() => {
+        for (const taskId of taskIds.slice(0, 128)) {
+          state.storage.sql.exec(
+            "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
+            taskId, "agent:other-worker", leaseTime + 300_000, leaseTime,
+          );
+        }
+      });
+    });
+
+    const firstIssuedAt = Date.now();
+    const first = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(firstIssuedAt, "claimTask"),
+      leaseMs: 30_000,
+      now: firstIssuedAt,
+    });
+    expect(first).toMatchObject({
+      claimed: false,
+      reason: "CLAIM_SCAN_BUDGET_EXHAUSTED",
+      nextCursor: expect.stringMatching(/^[a-f0-9]{32}$/),
+      candidatesExamined: 128,
+      candidateRowsRead: 129,
+    });
+
+    const subtle = crypto.subtle;
+    const originalDigest = subtle.digest.bind(subtle);
+    const hadOwnDigest = Object.prototype.hasOwnProperty.call(subtle, "digest");
+    const originalDescriptor = Object.getOwnPropertyDescriptor(subtle, "digest");
+
+    for (const failingDigestCall of [1, 2]) {
+      const assertionTime = Date.now();
+      const assertion = await createExecutorAssertion(assertionTime, "claimTask");
+      const injectedFailure = new Error(
+        "Injected WebCrypto SHA-256 digest rejection at call " + failingDigestCall,
+      );
+      let digestCalls = 0;
+      let nativeDigestCalls = 0;
+
+      Object.defineProperty(subtle, "digest", {
+        configurable: true,
+        writable: true,
+        value: (...args) => {
+          digestCalls += 1;
+          if (digestCalls === failingDigestCall) {
+            return Promise.reject(injectedFailure);
+          }
+          nativeDigestCalls += 1;
+          return originalDigest(...args);
+        },
+      });
+
+      try {
+        const failureOutcome = await runInDurableObject(ledger, async instance => {
+          try {
+            await instance.claimTask({
+              workerId: EXECUTOR_ID,
+              workerAssertion: assertion,
+              leaseMs: 30_000,
+              now: assertionTime,
+              cursor: first.nextCursor,
+            });
+            return { rejected: false, message: null };
+          } catch (error) {
+            return {
+              rejected: true,
+              message: typeof error?.message === "string" ? error.message : String(error),
+            };
+          }
+        });
+        expect(failureOutcome).toEqual({
+          rejected: true,
+          message: injectedFailure.message,
+        });
+      } finally {
+        if (hadOwnDigest) {
+          Object.defineProperty(subtle, "digest", originalDescriptor);
+        } else {
+          delete subtle.digest;
+        }
+      }
+
+      const persisted = await runInDurableObject(ledger, async (_instance, state) => ({
+        consumedAssertions: state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND operation = ?",
+          EXECUTOR_ID, "claimTask",
+        ).one().count,
+        cursorRows: state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_claim_cursors WHERE executor_id = ?",
+          EXECUTOR_ID,
+        ).one().count,
+        resumeLeases: state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ? AND worker_id = ?",
+          taskIds[128], EXECUTOR_ID,
+        ).one().count,
+      }));
+
+      expect({
+        failingDigestCall,
+        digestCalls,
+        nativeDigestCalls,
+        ...persisted,
+      }).toEqual({
+        failingDigestCall,
+        digestCalls: failingDigestCall,
+        nativeDigestCalls: failingDigestCall - 1,
+        consumedAssertions: 0,
+        cursorRows: 1,
+        resumeLeases: 0,
+      });
+    }
+
+    const retryTime = Date.now();
+    const retry = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(retryTime, "claimTask"),
+      leaseMs: 30_000,
+      now: retryTime,
+      cursor: first.nextCursor,
+    });
+    expect(retry).toMatchObject({
+      claimed: true,
+      workerId: EXECUTOR_ID,
+      leaseGeneration: 1,
+    });
+    expect(retry.task.taskId).toBe(taskIds[128]);
+
+    const afterRetry = await runInDurableObject(ledger, async (_instance, state) => ({
+      consumedAssertions: state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND operation = ?",
+        EXECUTOR_ID, "claimTask",
+      ).one().count,
+      cursorRows: state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_claim_cursors WHERE executor_id = ?",
+        EXECUTOR_ID,
+      ).one().count,
+      resumeLeases: state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ? AND worker_id = ?",
+        taskIds[128], EXECUTOR_ID,
+      ).one().count,
+    }));
+    expect(afterRetry).toEqual({
+      consumedAssertions: 1,
+      cursorRows: 0,
+      resumeLeases: 1,
+    });
+  });
+
+  it("rejects an Executor claim when its assertion expires during asynchronous signature verification", async () => {
+    const ledger = ledgerFor("executor-ed25519-assertion-expiry-during-verification");
+    const taskId = "task-executor-expiry-during-verification";
+    await expect(createScheduledTask(ledger, taskId, EXECUTOR_ID))
+      .resolves.toMatchObject({ created: true });
+
+    const issuedAt = Math.floor(Date.now() / 1_000) * 1_000;
+    const assertion = await createExecutorAssertion(issuedAt, "claimTask");
+    let ledgerClock = issuedAt + 59_000;
+    const subtle = crypto.subtle;
+    const originalVerify = subtle.verify.bind(subtle);
+    const hadOwnVerify = Object.prototype.hasOwnProperty.call(subtle, "verify");
+    const originalDescriptor = Object.getOwnPropertyDescriptor(subtle, "verify");
+    const realNow = Date.now;
+    let verificationCalls = 0;
+
+    Object.defineProperty(subtle, "verify", {
+      configurable: true,
+      writable: true,
+      value: (...args) => {
+        verificationCalls += 1;
+        const pendingVerification = originalVerify(...args);
+        ledgerClock = issuedAt + 66_000;
+        return pendingVerification;
+      },
+    });
+    Date.now = () => ledgerClock;
+
+    try {
+      const result = await ledger.claimTask({
+        workerId: EXECUTOR_ID,
+        workerAssertion: assertion,
+        leaseMs: 30_000,
+        now: issuedAt,
+        taskId,
+      });
+      Date.now = realNow;
+
+      expect(result).toMatchObject({
+        claimed: false,
+        reason: "AUTHENTICATED_WORKER_REQUIRED",
+      });
+      expect(verificationCalls).toBe(1);
+
+      await runInDurableObject(ledger, async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ? AND operation = ?",
+          EXECUTOR_ID, "claimTask",
+        ).one().count).toBe(0);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ?",
+          taskId,
+        ).one().count).toBe(0);
+      });
+    } finally {
+      Date.now = realNow;
+      if (hadOwnVerify) {
+        Object.defineProperty(subtle, "verify", originalDescriptor);
+      } else {
+        delete subtle.verify;
+      }
+    }
   });
 });

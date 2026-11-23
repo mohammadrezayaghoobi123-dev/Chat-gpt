@@ -80,9 +80,11 @@ The verifier enforces a 60-second maximum lifetime and five-second clock-skew al
 
 ## Trusted time source
 
-For the fixed Executor principal, the Ledger's own runtime clock is authoritative. The caller-supplied `now` value is not used to validate Executor assertion expiry, lease expiry, lease renewal, or lease release. The Ledger obtains `Date.now()` inside the Durable Object, verifies the assertion against that time, and uses the same trusted timestamp for the state transition and JTI consumption.
+For the fixed Executor principal, the Ledger's own `Date.now()` is authoritative. The caller-supplied `now` value is never used for Executor assertion expiry, lease expiry, renewal, or release decisions.
 
-This prevents an Executor caller from backdating `now` to make an expired lease appear active. The existing caller-supplied timestamp behavior for Scheduler, Outbox, and non-Executor agent paths is unchanged in this slice. The assertion verifier retains its five-second clock-skew allowance for signer-versus-Ledger clock differences.
+The Ledger performs Ed25519 signature verification asynchronously as a preflight step. After every asynchronous operation in the selected Ledger method has completed (including claim-cursor hashing), the `transactionSync` callback samples `Date.now()` and synchronously revalidates the verified assertion's `iat` and `exp` claims using the protocol's five-second clock-skew allowance. In the same synchronous transaction callback, it checks lease expiry and generation, consumes the JTI, and performs the state mutation. There is no `await` inside this transaction callback and no asynchronous boundary between the final clock sample and the state checks.
+
+This ordering prevents a lease or assertion that expires during WebCrypto verification or claim-cursor hashing from being accepted using a stale timestamp. The implementation deliberately does not place WebCrypto inside `transactionSync`, because SQLite Durable Object synchronous transactions cannot await asynchronous work. Scheduler, Outbox, and non-Executor HMAC timestamp behavior remains unchanged.
 
 ## Ledger compatibility boundary
 

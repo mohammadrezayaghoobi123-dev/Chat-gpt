@@ -562,7 +562,7 @@ export class KnowledgeStore extends DurableObject {
         existing.proposed_content_sha256 === proposedContentSha256 &&
         existing.pr_number === pullRequestNumber && existing.pr_url === pullRequestUrl &&
         existing.branch === branch && existing.commit_sha === commitSha;
-      if (!same) throw fail("KNOWLEDGE_PROPOSAL_IDEMPOTENCY_CONFLICT", "Proposal ID is already bound to a different Vault change.");
+      if (!same) return proposalRecord(existing);
       return proposalRecord(existing);
     }
     this.ctx.storage.sql.exec(

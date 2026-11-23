@@ -863,6 +863,17 @@ describe("Owner command atomic Ledger contract", () => {
       task: { taskId, state: "VALIDATING", version: 3 },
     });
 
+    await expect(createScheduledWorkerAssertion(
+      env.LEDGER_WORKER_ASSERTION_KEYS,
+      "test-v1",
+      {
+        subject: "orchestrator-scheduler",
+        role: "agent",
+        operation: "transitionTask",
+        nowMs: now + 4,
+      },
+    )).rejects.toMatchObject({ code: "AUTHENTICATED_WORKER_REQUIRED" });
+
     const schedulerAssertion = await createScheduledWorkerAssertion(
       env.LEDGER_WORKER_ASSERTION_KEYS,
       "test-v1",

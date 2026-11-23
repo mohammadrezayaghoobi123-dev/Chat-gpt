@@ -17,6 +17,32 @@ const CLAIM_CURSOR_TOKEN = /^[a-f0-9]{32}$/;
 const CLAIM_CURSOR_TTL_MS = 15 * 60_000;
 const MAX_EXPIRED_CLAIM_CURSORS_PER_CALL = 64;
 const EXECUTOR_PRINCIPAL = "orchestrator-executor";
+const EXECUTOR_OPERATIONS = Object.freeze(["claimTask", "renewLease", "releaseLease"]);
+
+async function verifyLedgerAgentAssertion(env, workerId, workerAssertion, operation, now) {
+  if (workerId === EXECUTOR_PRINCIPAL) {
+    if (!EXECUTOR_OPERATIONS.includes(operation)) {
+      throw Object.assign(new Error("Executor operation is not authorized."), {
+        code: "AUTHENTICATED_WORKER_REQUIRED",
+      });
+    }
+    const verified = await verifyExecutorWorkerAssertion(
+      env?.ORCHESTRATOR_EXECUTOR_VERIFICATION_KEYS,
+      workerAssertion,
+      { nowMs: now },
+    );
+    if (verified.operation !== operation) {
+      throw Object.assign(new Error("Executor assertion operation mismatch."), {
+        code: "AUTHENTICATED_WORKER_REQUIRED",
+      });
+    }
+    return verified;
+  }
+  return verifyWorkerAssertion(env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+    subject: workerId, role: "agent", operation, nowMs: now,
+  });
+}
+
 export const CLAIM_CANDIDATE_QUERY = `
   SELECT candidate.candidate_seq, candidate.task_id, candidate.executor_id,
          candidate.created_at, task.created_at AS task_created_at, task.state, task.task_json
@@ -616,9 +642,9 @@ export class OrchestratorLedger extends DurableObject {
     timestamp(now);
     let verifiedAssertion;
     try {
-      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: workerId, role: "agent", operation: "transitionTask", nowMs: now,
-      });
+      verifiedAssertion = await verifyLedgerAgentAssertion(
+        this.env, workerId, workerAssertion, "transitionTask", now,
+      );
     } catch {
       return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
@@ -700,9 +726,9 @@ export class OrchestratorLedger extends DurableObject {
     identifier(workerId, "workerId");
     let verifiedAssertion;
     try {
-      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: workerId, role: "agent", operation: "recordMessage", nowMs: now,
-      });
+      verifiedAssertion = await verifyLedgerAgentAssertion(
+        this.env, workerId, workerAssertion, "recordMessage", now,
+      );
     } catch {
       return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
     }
@@ -772,13 +798,9 @@ export class OrchestratorLedger extends DurableObject {
     timestamp(now);
     let verifiedAssertion;
     try {
-      verifiedAssertion = workerId === EXECUTOR_PRINCIPAL
-        ? await verifyExecutorWorkerAssertion(this.env?.ORCHESTRATOR_EXECUTOR_VERIFICATION_KEYS, workerAssertion, {
-          nowMs: now,
-        })
-        : await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-          subject: workerId, role: "agent", operation: "claimTask", nowMs: now,
-        });
+      verifiedAssertion = await verifyLedgerAgentAssertion(
+        this.env, workerId, workerAssertion, "claimTask", now,
+      );
     } catch {
       return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
@@ -1020,9 +1042,9 @@ export class OrchestratorLedger extends DurableObject {
     timestamp(now);
     let verifiedAssertion;
     try {
-      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: workerId, role: "agent", operation: "advanceAgentRound", nowMs: now,
-      });
+      verifiedAssertion = await verifyLedgerAgentAssertion(
+        this.env, workerId, workerAssertion, "advanceAgentRound", now,
+      );
     } catch {
       return { advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
@@ -1086,9 +1108,9 @@ export class OrchestratorLedger extends DurableObject {
     timestamp(now);
     let verifiedAssertion;
     try {
-      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: workerId, role: "agent", operation: "renewLease", nowMs: now,
-      });
+      verifiedAssertion = await verifyLedgerAgentAssertion(
+        this.env, workerId, workerAssertion, "renewLease", now,
+      );
     } catch {
       return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
@@ -1116,9 +1138,9 @@ export class OrchestratorLedger extends DurableObject {
     timestamp(now);
     let verifiedAssertion;
     try {
-      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: workerId, role: "agent", operation: "releaseLease", nowMs: now,
-      });
+      verifiedAssertion = await verifyLedgerAgentAssertion(
+        this.env, workerId, workerAssertion, "releaseLease", now,
+      );
     } catch {
       return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
@@ -1150,9 +1172,9 @@ export class OrchestratorLedger extends DurableObject {
     identifier(input.workerId, "workerId");
     let verifiedAssertion;
     try {
-      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, input.workerAssertion, {
-        subject: input.workerId, role: "agent", operation: "enqueueOutbox", nowMs: now,
-      });
+      verifiedAssertion = await verifyLedgerAgentAssertion(
+        this.env, input.workerId, input.workerAssertion, "enqueueOutbox", now,
+      );
     } catch {
       return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
@@ -1763,9 +1785,9 @@ export class OrchestratorLedger extends DurableObject {
     timestamp(now);
     let verifiedAssertion;
     try {
-      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: workerId, role: "agent", operation: "appendAuditEvent", nowMs: now,
-      });
+      verifiedAssertion = await verifyLedgerAgentAssertion(
+        this.env, workerId, workerAssertion, "appendAuditEvent", now,
+      );
     } catch {
       return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
     }

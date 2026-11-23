@@ -1117,7 +1117,12 @@ describe("Owner command atomic Ledger contract", () => {
         expectedVersion: 1,
         expectedState: "SCHEDULED",
         nextState: "RUNNING",
-        actor: { id: workerId, role: "agent" },
+        actor: {
+          id: workerId,
+          role: "agent",
+          authenticated: true,
+          identityVerified: true,
+        },
         evidence: { executionStartedAt: now + 2 },
         now: now + 2,
         workerId,

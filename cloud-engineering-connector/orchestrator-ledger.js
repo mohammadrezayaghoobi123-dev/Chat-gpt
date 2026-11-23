@@ -3,6 +3,7 @@ import { transitionTask as transitionTaskCore, TASK_STATES } from "./orchestrato
 import { assertAgentRoundLimit } from "./orchestrator-protocol.js";
 import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orchestrator-protocol.js";
 import { verifyWorkerAssertion } from "./orchestrator-worker-identity.js";
+import { verifyExecutorWorkerAssertion } from "./orchestrator-executor-assertion.js";
 import { verifyOwnerAssertion } from "./orchestrator-owner-assertion.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -15,6 +16,7 @@ const MAX_CLAIM_CANDIDATES_PER_CALL = 128;
 const CLAIM_CURSOR_TOKEN = /^[a-f0-9]{32}$/;
 const CLAIM_CURSOR_TTL_MS = 15 * 60_000;
 const MAX_EXPIRED_CLAIM_CURSORS_PER_CALL = 64;
+const EXECUTOR_PRINCIPAL = "orchestrator-executor";
 export const CLAIM_CANDIDATE_QUERY = `
   SELECT candidate.candidate_seq, candidate.task_id, candidate.executor_id,
          candidate.created_at, task.created_at AS task_created_at, task.state, task.task_json
@@ -770,9 +772,13 @@ export class OrchestratorLedger extends DurableObject {
     timestamp(now);
     let verifiedAssertion;
     try {
-      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: workerId, role: "agent", operation: "claimTask", nowMs: now,
-      });
+      verifiedAssertion = workerId === EXECUTOR_PRINCIPAL
+        ? await verifyExecutorWorkerAssertion(this.env?.ORCHESTRATOR_EXECUTOR_VERIFICATION_KEYS, workerAssertion, {
+          nowMs: now,
+        })
+        : await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
+          subject: workerId, role: "agent", operation: "claimTask", nowMs: now,
+        });
     } catch {
       return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }

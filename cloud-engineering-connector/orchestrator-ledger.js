@@ -1745,13 +1745,7 @@ export class OrchestratorLedger extends DurableObject {
                 throw new Error("Owner release outbox enqueue failed.");
               }
             }
-            if (command.operation === "cancel" || command.operation === "quarantine") {
-              const reasonCode = command.operation === "cancel" ? "OWNER_CANCELLED" : "OWNER_QUARANTINED";
-              sql.exec(
-                "UPDATE orchestrator_outbox_events SET retry_state = 'DEAD_LETTER', last_error_code = ?, dead_lettered_at = ?, lease_worker_id = NULL, lease_generation = lease_generation + 1, lease_until = 0, updated_at = ? WHERE task_id = ? AND status IN ('PENDING','IN_PROGRESS') AND retry_state != 'DEAD_LETTER'",
-                reasonCode, now, now, command.taskId,
-              );
-            }
+            // MUTANT: deliberately omit Owner's Outbox lease revocation.
           }
           sql.exec(
             "INSERT INTO orchestrator_audit_events (event_id, task_id, actor_id, actor_role, event_type, details_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, 'owner', ?, ?, ?, ?, ?)",

@@ -7,7 +7,7 @@ import { createExecutorWorkerAssertion } from "../orchestrator-executor-assertio
 const EXECUTOR_ID = "orchestrator-executor";
 const EXECUTOR_KID = "executor-ed25519-v1";
 const SCHEDULER_MARKER = "test-v1";
-const SCHEDULER_KEY = new TextEncoder().encode("0123456789abcdef0123456789abcdef");
+const SCHEDULER_BYTES = new TextEncoder().encode("0123456789abcdef0123456789abcdef");
 const now = 1_800_000_000_000;
 
 function ledgerFor(name) {
@@ -36,7 +36,7 @@ async function createHmacAssertion({ subject, role, operation, nowMs }) {
   const payload = base64Url(new TextEncoder().encode(canonicalJson(claims)));
   const signingInput = "v1." + SCHEDULER_MARKER + "." + payload;
   const key = await crypto.subtle.importKey(
-    "raw", SCHEDULER_KEY, { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+    "raw", SCHEDULER_BYTES, { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
   );
   const signature = new Uint8Array(await crypto.subtle.sign(
     "HMAC", key, new TextEncoder().encode(signingInput),

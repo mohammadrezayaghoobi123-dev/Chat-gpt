@@ -634,6 +634,40 @@ The implementation is not acceptable until tests prove all of the following:
 
 Required deterministic test fixtures must cover state-transition legality, cooldown boundaries, cross-run accounting, fairness, crash recovery, checkpoint atomicity, and publication ambiguity. The test suite must report each disposition as `PASS`, `FAIL`, `UNKNOWN`, or `NOT TESTED`.
 
+## Adversarial Design-Consistency Finding: Cross-Run Ledger Durability
+
+**Disposition: BLOCKED — the current retry contract cannot be implemented faithfully under the previously approved design's storage and permission constraints.**
+
+The approved design in `docs/specs/2026-11-23-9router-finding-67-reconciler-design.md` defines the checkpoint as a bounded-retention GitHub Actions artifact, requires bootstrap when that artifact is missing or expired, and explicitly excludes `contents: write` and other persistent repository mutation permissions. The existing reviewer documentation also describes bounded duplicate suppression as best-effort rather than durable retry accounting.
+
+The rewritten retry policy, by contrast, requires all of the following:
+- A cross-run, per-tuple inference-attempt ledger that survives scan generations and workflow reruns.
+- Permanent preservation of `QUARANTINED_UNKNOWN` and unresolved dispatch reservations.
+- No reset to zero when checkpoint provenance or history is lost.
+- A write-ahead reservation durably persisted before 9Router dispatch.
+
+A finite-retention artifact cannot prove that an old attempt never occurred after the artifact expires or is deleted. Bootstrapping a new checkpoint cannot reconstruct missing attempt history. Treating the new ledger as empty would violate the cross-run three-attempt ceiling; refusing all future inference would preserve safety but can permanently halt service without a defined recovery path. This is a structural contradiction, not a test-only defect.
+
+### Required architecture decision before implementation
+
+Choose and explicitly approve one of these mutually exclusive directions:
+
+1. **Durable GitHub-native attempt ledger (recommended for strong cross-run guarantees).** Amend the approved design to permit a dedicated append-only ledger using GitHub Check Runs (or another explicitly selected GitHub-native durable record), with narrowly scoped read/write permissions, immutable tuple/attempt identifiers, write-ahead reservation, duplicate detection, bounded pagination, provenance validation, and crash-recovery rules. This introduces a new permission and externally visible audit records; it requires a separate threat-model review and must not be silently added.
+2. **Artifact-only bounded guarantee.** Retain the approved artifact-only/least-privilege design, but explicitly weaken the retry guarantee to the verified checkpoint-retention horizon. After checkpoint loss/expiry, inference must remain globally disabled until an independently authorized state-recovery procedure re-establishes continuity. This does not provide a durable cross-run attempt ceiling and must not be described as one.
+3. **No cross-run retry.** Permit only one inference dispatch per candidate tuple and never automatically retry a tuple after a dispatch may have occurred. This still requires a durable write-ahead identity record to prevent redispatch after artifact loss; without a persistent ledger or externally visible reservation, it cannot guarantee at-most-once dispatch across checkpoint loss.
+
+### Required proof obligations for any selected direction
+
+- Demonstrate that a dispatched or possibly dispatched tuple cannot be assigned a fresh attempt budget after workflow rerun, artifact expiry, artifact deletion, branch/workflow revision, or scan-generation rollover.
+- Demonstrate that reservation creation is idempotently discoverable after a lost API response; ambiguous reservation creation must not trigger a second inference.
+- Demonstrate that concurrent workflow runs cannot reserve the same tuple/ordinal.
+- Demonstrate that the persistent ledger cannot be rewritten or erased by PR-controlled code or untrusted artifacts.
+- Define retention, pagination, deletion, API outage, permission revocation, and operator recovery semantics.
+- Prove that ledger failure blocks inference before dispatch and does not advance the scan cursor past an unrecorded candidate.
+- Keep `UNKNOWN` distinct from `FAIL` and `PASS`.
+
+Until this decision is made, the cross-run retry policy is a **proposal only**. Task 1 implementation must not begin, because marker refactoring and runner changes would be built on an unresolved persistence contract.
+
 ### Approval boundary
 
 This rewritten policy is a proposed operational contract for the implementation plan. It does not authorize code implementation, workflow activation, secret changes, repository settings changes, PR merge, or Production operations. Implementation remains blocked until this policy and the revised plan are explicitly approved.

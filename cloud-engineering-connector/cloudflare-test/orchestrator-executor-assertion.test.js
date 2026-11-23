@@ -692,7 +692,7 @@ describe("Executor Ed25519 trust boundary", () => {
       ).toArray()).toEqual([{
         worker_id: EXECUTOR_ID,
         lease_generation: 1,
-        lease_until: now + 30_000,
+        lease_until: claimed.leaseUntil,
       }]);
       expect(state.storage.sql.exec(
         "SELECT operation FROM orchestrator_consumed_assertions WHERE subject = ? ORDER BY operation",

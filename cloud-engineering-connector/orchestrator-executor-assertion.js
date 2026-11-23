@@ -55,6 +55,7 @@ function parsePublicKeySet(keySet) {
   if (kids.length < 1 || kids.length > MAX_KEYS || kids.some(kid => !KID.test(kid))) {
     throw reject();
   }
+  for (const kid of kids) validateKeyPolicy(keys[kid]);
   return keys;
 }
 

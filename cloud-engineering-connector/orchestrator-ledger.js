@@ -12,6 +12,9 @@ const MAX_LEASE_MS = 86_400_000;
 const MAX_OUTBOX_ATTEMPTS = 8;
 const CLAIMABLE_TASK_STATES = Object.freeze(["SCHEDULED", "RUNNING", "VERIFYING"]);
 const MAX_CLAIM_CANDIDATES_PER_CALL = 128;
+const CLAIM_CURSOR_TOKEN = /^[a-f0-9]{32}$/;
+const CLAIM_CURSOR_TTL_MS = 15 * 60_000;
+const MAX_EXPIRED_CLAIM_CURSORS_PER_CALL = 64;
 export const CLAIM_CANDIDATE_QUERY = `
   SELECT candidate.candidate_seq, candidate.task_id, candidate.executor_id,
          candidate.created_at, task.created_at AS task_created_at, task.state, task.task_json
@@ -277,6 +280,17 @@ export class OrchestratorLedger extends DurableObject {
         sql.exec("DROP TABLE orchestrator_claim_candidates_legacy");
       }
       sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_claim_candidates_by_executor_created ON orchestrator_claim_candidates(executor_id, created_at, task_id)");
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_claim_cursors (
+          cursor_hash TEXT PRIMARY KEY CHECK(length(cursor_hash) = 64),
+          executor_id TEXT NOT NULL CHECK(length(executor_id) BETWEEN 1 AND 160),
+          snapshot_sequence INTEGER NOT NULL CHECK(snapshot_sequence >= 0),
+          created_at INTEGER NOT NULL,
+          task_id TEXT NOT NULL,
+          expires_at INTEGER NOT NULL
+        )
+      `);
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_claim_cursors_by_expiry ON orchestrator_claim_cursors(expires_at, cursor_hash)");
       const executorExpression = "COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId'))";
       const validExecutorPredicate = `typeof(${executorExpression}) = 'text'
         AND length(${executorExpression}) BETWEEN 1 AND 160
@@ -767,14 +781,16 @@ export class OrchestratorLedger extends DurableObject {
       return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
     }
     if (cursor !== undefined && (
-      !cursor || typeof cursor !== "object" || Array.isArray(cursor) ||
-      cursor.version !== 1 || cursor.executorId !== workerId ||
-      !Number.isSafeInteger(cursor.snapshotSequence) || cursor.snapshotSequence < 0 ||
-      !Number.isSafeInteger(cursor.createdAt) || cursor.createdAt < 1 ||
-      typeof cursor.taskId !== "string" || !IDENTIFIER.test(cursor.taskId)
+      typeof cursor !== "string" || !CLAIM_CURSOR_TOKEN.test(cursor)
     )) {
       return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
     }
+
+    const cursorHash = cursor === undefined ? null : await sha256Canonical({ token: cursor });
+    const nextCursorToken = taskId === undefined ? crypto.randomUUID().replaceAll("-", "") : null;
+    const nextCursorHash = nextCursorToken === null
+      ? null
+      : await sha256Canonical({ token: nextCursorToken });
 
     // Caller-shaped evidence is not an authorization. No trusted reconciliation
     // issuer or claimTask runtime caller exists in this repository, so expired
@@ -782,6 +798,17 @@ export class OrchestratorLedger extends DurableObject {
     void reconciliationEvidence;
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      sql.exec(`
+        DELETE FROM orchestrator_claim_cursors
+        WHERE cursor_hash IN (
+          SELECT cursor_hash
+          FROM orchestrator_claim_cursors
+          WHERE expires_at <= ?
+          ORDER BY expires_at, cursor_hash
+          LIMIT ?
+        )
+      `, now, MAX_EXPIRED_CLAIM_CURSORS_PER_CALL);
+
       if (taskId !== undefined) {
         const row = sql.exec(
           "SELECT * FROM orchestrator_tasks WHERE task_id = ? AND state IN ('SCHEDULED','RUNNING','VERIFYING')",
@@ -832,17 +859,27 @@ export class OrchestratorLedger extends DurableObject {
         return { claimed: true, task: taskProjection, workerId, leaseGeneration: generation, leaseUntil: now + leaseMs, reconciliationRequired };
       }
 
+      let cursorState = null;
+      if (cursorHash !== null) {
+        cursorState = sql.exec(
+          "SELECT snapshot_sequence, created_at, task_id FROM orchestrator_claim_cursors WHERE cursor_hash = ? AND executor_id = ? AND expires_at > ?",
+          cursorHash, workerId, now,
+        ).toArray()[0] ?? null;
+        if (!cursorState) return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
+        sql.exec("DELETE FROM orchestrator_claim_cursors WHERE cursor_hash = ?", cursorHash);
+      }
+
       const sequenceRow = sql.exec(
         "SELECT seq FROM sqlite_sequence WHERE name = ?",
         "orchestrator_claim_candidates",
       ).toArray()[0];
       const currentSequence = Number(sequenceRow?.seq ?? 0);
-      const snapshotSequence = cursor?.snapshotSequence ?? currentSequence;
+      const snapshotSequence = cursorState?.snapshot_sequence ?? currentSequence;
       if (snapshotSequence > currentSequence) {
         return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
       }
-      const lastCreatedAt = cursor?.createdAt ?? 0;
-      const lastTaskId = cursor?.taskId ?? "";
+      const lastCreatedAt = cursorState?.created_at ?? 0;
+      const lastTaskId = cursorState?.task_id ?? "";
       const candidateRows = sql.exec(
         CLAIM_CANDIDATE_QUERY,
         workerId, lastCreatedAt, lastTaskId,
@@ -912,16 +949,15 @@ export class OrchestratorLedger extends DurableObject {
 
       if (budgetExhausted) {
         const last = batch[batch.length - 1];
+        sql.exec(
+          "INSERT INTO orchestrator_claim_cursors (cursor_hash, executor_id, snapshot_sequence, created_at, task_id, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+          nextCursorHash, workerId, snapshotSequence, last.created_at, last.task_id,
+          now + CLAIM_CURSOR_TTL_MS,
+        );
         return {
           claimed: false,
           reason: "CLAIM_SCAN_BUDGET_EXHAUSTED",
-          nextCursor: {
-            version: 1,
-            executorId: workerId,
-            snapshotSequence,
-            createdAt: last.created_at,
-            taskId: last.task_id,
-          },
+          nextCursor: nextCursorToken,
           budgetExhausted: true,
           scanExhausted: false,
           candidatesExamined,

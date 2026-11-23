@@ -982,6 +982,69 @@ it("consumes a signed lease-renewal assertion once and rejects replay", async ()
   });
 });
 
+it("rejects Agent lease renewal after a forward caller-clock jump", async () => {
+  const ledger = ledgerFor("ledger-agent-lease-forward-clock-jump");
+  await createTask(ledger, {
+    task: task(), idempotencyKey: "task-create-agent-lease-forward-clock",
+    inputHash: "b".repeat(64), now,
+  });
+  const claimed = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(claimed).toMatchObject({ claimed: true, leaseGeneration: 1, leaseUntil: now + 30_000 });
+
+  const forwardJumpedCallerTime = now + 60_000;
+  const stableLedgerWallClock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    const assertion = await createWorkerAssertion({
+      subject: "agent:worker-1",
+      role: "agent",
+      operation: "renewLease",
+      nowMs: forwardJumpedCallerTime,
+      jti: "jti-agent-lease-forward-clock-0001",
+    });
+    expect(Date.now()).toBe(now);
+
+    const renewal = await ledger.renewLease({
+      taskId: "task-0001",
+      workerId: "agent:worker-1",
+      workerAssertion: assertion,
+      leaseGeneration: claimed.leaseGeneration,
+      leaseMs: 60_000,
+      now: forwardJumpedCallerTime,
+    });
+
+    expect(renewal).toMatchObject({
+      renewed: false,
+      reason: "LEASE_FENCE_MISMATCH",
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until, updated_at FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-0001",
+      ).one()).toEqual({
+        worker_id: "agent:worker-1",
+        lease_generation: 1,
+        lease_until: now + 30_000,
+        updated_at: now,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        "jti-agent-lease-forward-clock-0001",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+        "task-0001",
+      ).one().count).toBe(1);
+    });
+  } finally {
+    stableLedgerWallClock.mockRestore();
+  }
+});
+
 it("characterizes whether a backdated Agent timestamp can renew a lease after wall-clock expiry", async () => {
   const ledger = ledgerFor("ledger-agent-lease-renewal-clock-rollback");
   await createTask(ledger, {

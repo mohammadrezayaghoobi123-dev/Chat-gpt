@@ -44,6 +44,7 @@ jobs:
           import urllib.request
           import ssl
           import zipfile
+          from fractions import Fraction
           from datetime import datetime, timezone
           from io import BytesIO
 
@@ -258,6 +259,26 @@ jobs:
                           + " | " + str(max_field.get("byte_length", "N/A"))
                           + " |"
                       )
+              semantic_item = next(
+                  (item for item in report.get("files", [])
+                   if item.get("relative_path") == "UnicodeData.txt"),
+                  None,
+              )
+              if semantic_item:
+                  semantic = semantic_item.get("unicode_data_semantics", {})
+                  lines.extend([
+                      "",
+                      "## R1-U12-D1 UnicodeData semantic validation",
+                      "- Status: **" + str(report.get("unicode_data_semantic_status", "UNKNOWN")) + "**",
+                      "- Metrics SHA-256: " + str(report.get("unicode_data_semantic_sha256", "NOT_COMPUTED")),
+                      "- Records: " + str(semantic.get("records", "UNKNOWN")),
+                      "- First/Last range pairs: " + str(semantic.get("range_pairs", "UNKNOWN")),
+                      "- Decimal digit sets (0..9): " + str(semantic.get("decimal_digit_sets", "UNKNOWN")),
+                      "- Maximum decomposition length: " + str(semantic.get("max_decomposition_length", "UNKNOWN")),
+                      "- Maximum canonical combining class: " + str(semantic.get("max_canonical_combining_class", "UNKNOWN")),
+                      "- Numeric types: " + json.dumps(semantic.get("numeric_type_counts", {}), sort_keys=True),
+                      "- Validation scope: single-file semantics; no cross-file or normalization conformance claim",
+                  ])
               with open(summary_path, "a", encoding="utf-8", newline="\n") as summary:
                   summary.write("\n".join(lines) + "\n")
 
@@ -602,6 +623,372 @@ jobs:
                       + " records=" + str(unexpected)
                   )
               return None
+
+          UNICODE_GENERAL_CATEGORIES = {
+              "Lu", "Ll", "Lt", "Lm", "Lo",
+              "Mn", "Mc", "Me",
+              "Nd", "Nl", "No",
+              "Pc", "Pd", "Ps", "Pe", "Pi", "Pf", "Po",
+              "Sm", "Sc", "Sk", "So",
+              "Zs", "Zl", "Zp",
+              "Cc", "Cf", "Cs", "Co",
+          }
+
+          UNICODE_BIDI_CLASSES = {
+              "L", "R", "AL", "EN", "ES", "ET", "AN", "CS", "NSM", "BN",
+              "B", "S", "WS", "ON",
+              "LRE", "LRO", "RLE", "RLO", "PDF", "LRI", "RLI", "FSI", "PDI",
+          }
+
+          UNICODE_DECOMPOSITION_TAGS = {
+              b"font", b"noBreak", b"initial", b"medial", b"final",
+              b"isolated", b"circle", b"super", b"sub", b"vertical",
+              b"wide", b"narrow", b"small", b"square", b"fraction", b"compat",
+          }
+
+          def unicode_data_error(line_number, field_name, reason):
+              raise ValueError(
+                  "UnicodeData.txt line " + str(line_number)
+                  + " field " + field_name + ": " + reason
+              )
+
+          def parse_unicode_code_point(value, line_number, field_name):
+              if not re.fullmatch(rb"[0-9A-F]{4,6}", value):
+                  unicode_data_error(line_number, field_name, "invalid code point syntax")
+              codepoint = int(value, 16)
+              if codepoint > 0x10FFFF:
+                  unicode_data_error(line_number, field_name, "code point exceeds U+10FFFF")
+              return codepoint
+
+          def parse_unicode_numeric(value, line_number):
+              if not re.fullmatch(rb"-?[0-9]+(?:/[0-9]+)?", value):
+                  unicode_data_error(line_number, "Numeric_Value", "invalid numeric value syntax")
+              try:
+                  parsed = Fraction(value.decode("ascii"))
+              except (ValueError, ZeroDivisionError) as exc:
+                  raise ValueError(
+                      "UnicodeData.txt line " + str(line_number)
+                      + " field Numeric_Value: invalid rational value"
+                  ) from exc
+              if parsed.denominator <= 0:
+                  unicode_data_error(line_number, "Numeric_Value", "rational denominator must be positive")
+              return parsed
+
+          def validate_unicode_data_semantics(raw):
+              if not isinstance(raw, bytes):
+                  raise TypeError("UnicodeData semantic validation requires immutable raw bytes")
+              try:
+                  raw.decode("utf-8", errors="strict")
+              except UnicodeDecodeError as exc:
+                  raise ValueError(
+                      "UnicodeData.txt is not valid UTF-8 at byte offset " + str(exc.start)
+                  ) from exc
+
+              previous_codepoint = -1
+              record_count = 0
+              range_pairs = 0
+              pending_range = None
+              general_category_counts = {}
+              numeric_type_counts = {
+                  "None": 0,
+                  "Decimal": 0,
+                  "Digit": 0,
+                  "Numeric": 0,
+              }
+              decimal_digit_sets = 0
+              decimal_codepoint = None
+              decimal_value = None
+              decimal_line = None
+              max_decomposition_length = 0
+              max_combining_class = 0
+
+              for line_number, line_offset, line in iter_metric_lines(raw):
+                  if len(line) > LEXICAL_MAX_LINE_BYTES:
+                      unicode_data_error(line_number, "record", "line byte limit exceeded")
+                  if not line:
+                      unicode_data_error(line_number, "record", "blank record is not permitted")
+
+                  fields = line.split(b";")
+                  if len(fields) != 15:
+                      unicode_data_error(line_number, "record", "expected exactly 15 fields")
+                  for index, value in enumerate(fields):
+                      if value.startswith((b" ", b"\t")) or value.endswith((b" ", b"\t")):
+                          unicode_data_error(
+                              line_number, "field " + str(index),
+                              "leading or trailing spaces are not permitted",
+                          )
+
+                  codepoint = parse_unicode_code_point(fields[0], line_number, "Code_Point")
+                  if codepoint <= previous_codepoint:
+                      unicode_data_error(
+                          line_number, "Code_Point",
+                          "code points must be strictly increasing and unique",
+                      )
+                  previous_codepoint = codepoint
+
+                  if not fields[1]:
+                      unicode_data_error(line_number, "Name", "name field must not be empty")
+
+                  category = fields[2].decode("ascii", errors="strict")
+                  if category not in UNICODE_GENERAL_CATEGORIES:
+                      unicode_data_error(
+                          line_number, "General_Category",
+                          "unknown, grouped, or unassigned category value",
+                      )
+                  general_category_counts[category] = (
+                      general_category_counts.get(category, 0) + 1
+                  )
+
+                  if not re.fullmatch(rb"[0-9]+", fields[3]):
+                      unicode_data_error(
+                          line_number, "Canonical_Combining_Class",
+                          "value must be an unsigned decimal integer",
+                      )
+                  combining_class = int(fields[3])
+                  if combining_class > 254 or combining_class == 133:
+                      unicode_data_error(
+                          line_number, "Canonical_Combining_Class",
+                          "value is outside 0..254 or is reserved value 133",
+                      )
+                  max_combining_class = max(max_combining_class, combining_class)
+
+                  bidi_class = fields[4].decode("ascii", errors="strict")
+                  if bidi_class not in UNICODE_BIDI_CLASSES:
+                      unicode_data_error(line_number, "Bidi_Class", "unknown bidi class")
+
+                  decomposition = fields[5]
+                  if decomposition:
+                      parts = decomposition.split(b" ")
+                      if any(not part for part in parts):
+                          unicode_data_error(
+                              line_number, "Decomposition_Mapping",
+                              "empty code point element in mapping",
+                          )
+                      tag = None
+                      if parts[0].startswith(b"<"):
+                          tag_token = parts.pop(0)
+                          if not tag_token.endswith(b">"):
+                              unicode_data_error(
+                                  line_number, "Decomposition_Mapping",
+                                  "malformed compatibility tag",
+                              )
+                          tag = tag_token[1:-1]
+                          if tag not in UNICODE_DECOMPOSITION_TAGS:
+                              unicode_data_error(
+                                  line_number, "Decomposition_Mapping",
+                                  "unknown compatibility tag",
+                              )
+                      if not parts:
+                          unicode_data_error(
+                              line_number, "Decomposition_Mapping",
+                              "mapping must contain at least one code point",
+                          )
+                      mapping_length = len(parts)
+                      for target in parts:
+                          parse_unicode_code_point(
+                              target, line_number, "Decomposition_Mapping"
+                          )
+                      if tag is None and mapping_length > 2:
+                          unicode_data_error(
+                              line_number, "Decomposition_Mapping",
+                              "canonical decomposition length exceeds two code points",
+                          )
+                      if tag is not None and mapping_length > 18:
+                          unicode_data_error(
+                              line_number, "Decomposition_Mapping",
+                              "compatibility decomposition length exceeds eighteen code points",
+                          )
+                      max_decomposition_length = max(
+                          max_decomposition_length, mapping_length
+                      )
+
+                  decimal_value = None
+                  digit_value = None
+                  if fields[6]:
+                      if not re.fullmatch(rb"[0-9]+", fields[6]):
+                          unicode_data_error(
+                              line_number, "Decimal_Digit_Value",
+                              "value must be an integer from 0 through 9",
+                          )
+                      decimal_value = int(fields[6])
+                      if decimal_value > 9:
+                          unicode_data_error(
+                              line_number, "Decimal_Digit_Value",
+                              "value must be an integer from 0 through 9",
+                          )
+
+                  if fields[7]:
+                      if not re.fullmatch(rb"[0-9]+", fields[7]):
+                          unicode_data_error(
+                              line_number, "Digit_Value",
+                              "value must be an integer from 0 through 9",
+                          )
+                      digit_value = int(fields[7])
+                      if digit_value > 9:
+                          unicode_data_error(
+                              line_number, "Digit_Value",
+                              "value must be an integer from 0 through 9",
+                          )
+
+                  numeric_value = None
+                  if fields[8]:
+                      numeric_value = parse_unicode_numeric(fields[8], line_number)
+
+                  if decimal_value is not None and digit_value is not None and numeric_value is not None:
+                      numeric_type = "Decimal"
+                      if decimal_value != digit_value or numeric_value != decimal_value:
+                          unicode_data_error(
+                              line_number, "Numeric_Value",
+                              "decimal, digit, and numeric fields must denote the same value",
+                          )
+                  elif decimal_value is None and digit_value is not None and numeric_value is not None:
+                      numeric_type = "Digit"
+                      if numeric_value != digit_value:
+                          unicode_data_error(
+                              line_number, "Numeric_Value",
+                              "digit and numeric fields must denote the same value",
+                          )
+                  elif decimal_value is None and digit_value is None and numeric_value is not None:
+                      numeric_type = "Numeric"
+                  elif decimal_value is None and digit_value is None and numeric_value is None:
+                      numeric_type = "None"
+                  else:
+                      unicode_data_error(
+                          line_number, "Numeric_Type",
+                          "numeric fields 6, 7, and 8 form an incomplete combination",
+                      )
+
+                  if (category == "Nd") != (numeric_type == "Decimal"):
+                      unicode_data_error(
+                          line_number, "General_Category/Numeric_Type",
+                          "General_Category Nd and Numeric_Type Decimal must be co-extensive",
+                      )
+                  numeric_type_counts[numeric_type] += 1
+
+                  if fields[9] not in (b"Y", b"N"):
+                      unicode_data_error(line_number, "Bidi_Mirrored", "value must be Y or N")
+
+                  for index, mapping in enumerate(fields[12:15], 12):
+                      if mapping:
+                          if b" " in mapping or b"\t" in mapping:
+                              unicode_data_error(
+                                  line_number, "case mapping field " + str(index),
+                                  "simple case mapping must contain one code point",
+                              )
+                          parse_unicode_code_point(
+                              mapping, line_number, "case mapping field " + str(index)
+                          )
+
+                  range_match = re.fullmatch(rb"<(.+), (First|Last)>", fields[1])
+                  range_kind = range_match.group(2) if range_match else None
+                  range_identifier = range_match.group(1) if range_match else None
+
+                  if pending_range is not None:
+                      if range_kind != b"Last":
+                          unicode_data_error(
+                              line_number, "Name",
+                              "First range record must be followed immediately by its Last record",
+                          )
+                      if range_identifier != pending_range["identifier"]:
+                          unicode_data_error(
+                              line_number, "Name",
+                              "First and Last range identifiers do not match",
+                          )
+                      if codepoint <= pending_range["codepoint"]:
+                          unicode_data_error(
+                              line_number, "Code_Point",
+                              "range Last endpoint must be greater than First endpoint",
+                          )
+                      if fields[2:] != pending_range["properties"]:
+                          unicode_data_error(
+                              line_number, "range properties",
+                              "First and Last endpoint properties differ",
+                          )
+                      range_pairs += 1
+                      pending_range = None
+                  elif range_kind == b"Last":
+                      unicode_data_error(
+                          line_number, "Name", "Last range record has no preceding First record"
+                      )
+                  elif range_kind == b"First":
+                      pending_range = {
+                          "identifier": range_identifier,
+                          "codepoint": codepoint,
+                          "properties": fields[2:],
+                      }
+
+                  if category == "Nd":
+                      current_decimal_value = decimal_value
+                      if decimal_codepoint is None:
+                          if current_decimal_value != 0:
+                              unicode_data_error(
+                                  line_number, "Decimal_Digit_Value",
+                                  "decimal digit sequence must begin at zero",
+                              )
+                      elif codepoint == decimal_codepoint + 1:
+                          expected_value = (decimal_value + 1) % 10
+                          if current_decimal_value != expected_value:
+                              unicode_data_error(
+                                  line_number, "Decimal_Digit_Value",
+                                  "decimal digit sequence must be contiguous and ascend from zero through nine",
+                              )
+                          if current_decimal_value == 0:
+                              decimal_digit_sets += 1
+                      else:
+                          if decimal_value != 9:
+                              unicode_data_error(
+                                  decimal_line, "Decimal_Digit_Value",
+                                  "decimal digit sequence must end at nine before a gap",
+                              )
+                          decimal_digit_sets += 1
+                          if current_decimal_value != 0:
+                              unicode_data_error(
+                                  line_number, "Decimal_Digit_Value",
+                                  "decimal digit sequence must restart at zero",
+                              )
+                      decimal_codepoint = codepoint
+                      decimal_value = current_decimal_value
+                      decimal_line = line_number
+                  elif decimal_codepoint is not None:
+                      if decimal_value != 9:
+                          unicode_data_error(
+                              decimal_line, "Decimal_Digit_Value",
+                              "decimal digit sequence must end at nine",
+                          )
+                      decimal_digit_sets += 1
+                      decimal_codepoint = None
+                      decimal_value = None
+                      decimal_line = None
+
+                  record_count += 1
+
+              if pending_range is not None:
+                  raise ValueError(
+                      "UnicodeData.txt ends with an unmatched First range record"
+                  )
+              if decimal_codepoint is not None:
+                  if decimal_value != 9:
+                      unicode_data_error(
+                          decimal_line, "Decimal_Digit_Value",
+                          "decimal digit sequence must end at nine at end of file",
+                      )
+                  decimal_digit_sets += 1
+              if record_count == 0:
+                  raise ValueError("UnicodeData.txt has no records")
+
+              return {
+                  "records": record_count,
+                  "range_pairs": range_pairs,
+                  "decimal_digit_sets": decimal_digit_sets,
+                  "general_category_counts": {
+                      key: general_category_counts[key]
+                      for key in sorted(general_category_counts)
+                  },
+                  "numeric_type_counts": numeric_type_counts,
+                  "max_decomposition_length": max_decomposition_length,
+                  "max_canonical_combining_class": max_combining_class,
+                  "validation_scope": "single-file field semantics and local ordering/range invariants",
+              }
 
           def canonical_manifest_bytes(document):
               return json.dumps(
@@ -1186,20 +1573,11 @@ jobs:
           def validate_text_source(path, data):
               data.decode("utf-8", errors="strict")
               if path == "UnicodeData.txt":
-                  previous = -1
-                  rows = 0
-                  for line_number, line in enumerate(data.splitlines(), 1):
-                      fields = line.split(b";")
-                      if len(fields) != 15 or not re.fullmatch(rb"[0-9A-Fa-f]{4,6}", fields[0]):
-                          raise ValueError("UnicodeData.txt malformed row at line " + str(line_number))
-                      codepoint = int(fields[0], 16)
-                      if codepoint <= previous:
-                          raise ValueError("UnicodeData.txt code points are not strictly increasing")
-                      previous = codepoint
-                      rows += 1
-                  if rows == 0:
-                      raise ValueError("UnicodeData.txt has no records")
-                  return "15-field UTF-8 records; strictly increasing code points; rows=" + str(rows)
+                  semantic_metrics = validate_unicode_data_semantics(data)
+                  return (
+                      "15-field UTF-8 semantic records; strictly increasing code points; rows="
+                      + str(semantic_metrics["records"])
+                  )
               if VERSION.encode("ascii") not in data[:32768]:
                   raise ValueError("version marker 18.0.0 not found in header window: " + path)
               return "Unicode 18.0.0 marker present in first 32768 bytes"
@@ -1245,6 +1623,8 @@ jobs:
                       meta["sha256"] = hashlib.sha256(body).hexdigest()
                       meta["header_validation"] = header_result
                       direct_meta[path] = meta
+                      if path == "UnicodeData.txt":
+                          meta["unicode_data_semantics"] = validate_unicode_data_semantics(body)
                       report["files"].append({
                           "relative_path": path,
                           **meta,
@@ -1323,6 +1703,22 @@ jobs:
                   report["byte_metrics_sha256"] = hashlib.sha256(
                       canonical_manifest_bytes(byte_metrics_payload)
                   ).hexdigest()
+                  unicode_data_item = next(
+                      item for item in results if item["relative_path"] == "UnicodeData.txt"
+                  )
+                  unicode_semantic_payload = {
+                      "gate_id": "R1-U12-D1",
+                      "tool_version": "1.0.0",
+                      "unicode_version": VERSION,
+                      "source_manifest_stable_sha256": report["stable_manifest_sha256"],
+                      "source_sha256": unicode_data_item["sha256"],
+                      "metrics": unicode_data_item["unicode_data_semantics"],
+                  }
+                  report["unicode_data_semantic_sha256"] = hashlib.sha256(
+                      canonical_manifest_bytes(unicode_semantic_payload)
+                  ).hexdigest()
+                  report["unicode_data_semantic_status"] = "SUPPORTED"
+
 
                   lexical_metrics = []
                   for item in results:

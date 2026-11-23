@@ -135,18 +135,25 @@ async function enqueueTaskEvent(ledger, { taskId, eventId, idempotencyKey, paylo
   });
 }
 
-function publisherRuntime(queue) {
+function ledgerRuntimeBinding(ledger) {
   return {
-    ORCHESTRATOR_LEDGER: env.ORCHESTRATOR_LEDGER,
+    idFromName: name => name,
+    get: name => name === "orchestrator-ledger-global" ? ledger : null,
+  };
+}
+
+function publisherRuntime(ledger, queue) {
+  return {
+    ORCHESTRATOR_LEDGER: ledgerRuntimeBinding(ledger),
     ORCHESTRATOR_OUTBOX_QUEUE: queue,
     LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
     LEDGER_WORKER_ASSERTION_ACTIVE_KID: "test-v1",
   };
 }
 
-function consumerRuntime() {
+function consumerRuntime(ledger) {
   return {
-    ORCHESTRATOR_LEDGER: env.ORCHESTRATOR_LEDGER,
+    ORCHESTRATOR_LEDGER: ledgerRuntimeBinding(ledger),
     LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
     LEDGER_WORKER_ASSERTION_ACTIVE_KID: "test-v1",
   };
@@ -214,7 +221,7 @@ describe("Owner transition versus in-flight Outbox Publisher callback", () => {
           },
         };
         const publisherPromise = processOrchestratorOutbox(
-          publisherRuntime(queue),
+          publisherRuntime(ledger, queue),
           { maxEvents: 1 },
         );
 
@@ -285,7 +292,7 @@ describe("Owner transition versus in-flight Outbox Publisher callback", () => {
         };
         const consumerResult = await consumeOrchestratorOutbox(
           { messages: [delivery] },
-          consumerRuntime(),
+          consumerRuntime(ledger),
         );
         expect(consumerResult).toEqual({
           received: 1,

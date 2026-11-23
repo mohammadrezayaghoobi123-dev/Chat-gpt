@@ -513,7 +513,7 @@ describe("Owner command atomic Ledger contract", () => {
     const reboundReceipt = await ledger.recordOutboxReceipt({
       eventId: staleEventId,
       eventType: "task.transitioned",
-      idempotencyKey: "attacker-rebound-idempotency-01",
+      idempotencyKey: "attacker-rebound-dedupe-01",
       taskId,
       payload: { taskId, version: 3, from: "QUARANTINED", to: "VALIDATING" },
       createdAt: now,

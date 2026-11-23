@@ -160,10 +160,10 @@ commits = [
 paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-owner-command\.test\.js$''']
 regexTarget = "line"
 regexes = [
-  '''\s*const staleIdempotencyKey = "owner-late-delivery-stale-dedupe-01";$''',
-  '''\s*idempotencyKey: "attacker-rebound-dedupe-01",$''',
-  '''\s*const staleIdempotencyKey = "owner-late-delivery-stale-key-01";$''',
-  '''\s*idempotencyKey: "attacker-rebound-idempotency-01",$'''
+  '''^\s*const staleIdempotencyKey = "owner-late-delivery-stale-dedupe-01";$''',
+  '''^\s*idempotencyKey: "attacker-rebound-dedupe-01",$''',
+  '''^\s*const staleIdempotencyKey = "owner-late-delivery-stale-key-01";$''',
+  '''^\s*idempotencyKey: "attacker-rebound-idempotency-01",$'''
 ]
 
 [[allowlists]]
@@ -173,7 +173,7 @@ condition = "AND"
 commits = ["ab525a63948822e195cc74f63c3a6b4340f705db"]
 paths = ['''^tools/9router-review/review\.test\.mjs$''']
 regexTarget = "line"
-regexes = ['''\s*const previousKey = "previous-test-marker-key-with-at-least-32-bytes";$''']
+regexes = ['''^\s*const previousKey = "previous-test-marker-key-with-at-least-32-bytes";$''']
 
 [[allowlists]]
 description = "Public ICU publisher inventory metadata (a public Git blob SHA and public signer key fingerprint), not private signing material; exact documentation commit, path, rule, and lines only."
@@ -183,8 +183,8 @@ commits = ["3082b80fbaf71685827ba63de882c3d93083b96f"]
 paths = ['''^docs/MASTER_BRAIN_GATE2P_R1U17_ICU79_SIGNING_IDENTITY_CANDIDATE_RECONCILIATION_2026-11-16\.md$''']
 regexTarget = "line"
 regexes = [
-  '''\s*- KEYS blob SHA: 9523c0beaf609fc2c276dd8b4478c9471a9bbdec$''',
-  '''\s*trusted-key id="E52F07877A5805F9AF4AB0ACD46C5610D06E7001" group="com.ibm.icu"$'''
+  '''^\s*- KEYS blob SHA: 9523c0beaf609fc2c276dd8b4478c9471a9bbdec$''',
+  '''^\s*trusted-key id="E52F07877A5805F9AF4AB0ACD46C5610D06E7001" group="com.ibm.icu"$'''
 ]
 
 [[allowlists]]
@@ -194,7 +194,7 @@ condition = "AND"
 commits = ["fe0302ea9927936f70c8a4acc577cae0b140e2d7"]
 paths = ['''^cloud-agent/test/memory-sync\.test\.js$''']
 regexTarget = "line"
-regexes = ['''\s*"api_key = 'abcd1234efgh5678'"$''']
+regexes = ['''^\s*"api_key = 'abcd1234efgh5678'"$''']
 
 [[allowlists]]
 description = "Synthetic legacy idempotency identifier in the historical tenant-scope migration fixture; exact commit, path, rule, and line only."
@@ -203,4 +203,4 @@ condition = "AND"
 commits = ["168a5097fa6c50f4351c5d753ee0358403175a7d"]
 paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger-tenant-scope-migration\.test\.js$''']
 regexTarget = "line"
-regexes = ['''\s*idempotency_key: "legacy-idempotency-1",$''']
+regexes = ['''^\s*idempotency_key: "legacy-idempotency-1",$''']

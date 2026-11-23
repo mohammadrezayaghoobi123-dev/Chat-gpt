@@ -1601,6 +1601,213 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+  it("deterministically commits the consumer receipt before Owner cancellation", async () => {
+    const taskId = "task-receipt-cancel-receipt-first-0001";
+    const ledger = ledgerFor("receipt-cancel-receipt-first");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const eventId = "receipt-cancel-receipt-first-event-01";
+    const idempotencyKey = "receipt-cancel-receipt-first-key-1";
+    const payload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
+    await ledger.enqueueOutbox({
+      eventId,
+      idempotencyKey,
+      taskId,
+      eventType: "task.transitioned",
+      payload,
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox"),
+      now,
+    });
+
+    const body = {
+      attempts: 1,
+      createdAt: now,
+      eventId,
+      eventType: "task.transitioned",
+      idempotencyKey,
+      payload,
+      schemaVersion: 1,
+      taskId,
+    };
+    const consumerEnv = {
+      ORCHESTRATOR_LEDGER: {
+        idFromName: () => "receipt-cancel-receipt-first",
+        get: () => ledger,
+      },
+      LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: "test-v1",
+    };
+    const message = {
+      body: structuredClone(body),
+      ackCalls: 0,
+      retryCalls: 0,
+      ack() { this.ackCalls += 1; },
+      retry() { this.retryCalls += 1; },
+    };
+
+    let releaseOwnerCommand;
+    let signalOwnerCommandReady;
+    const ownerCommandGate = new Promise(resolve => { releaseOwnerCommand = resolve; });
+    const ownerCommandReady = new Promise(resolve => { signalOwnerCommandReady = resolve; });
+    const ownerCommandInput = await ownerInput({
+      command: {
+        operation: "cancel",
+        taskId,
+        reason: "Exercise deterministic receipt-before-cancel ordering",
+        eventId: "receipt-cancel-receipt-first-owner-command-01",
+      },
+      deliveryId: "delivery-receipt-cancel-receipt-first-01",
+      commentId: "123456812",
+    });
+    const cancellationPromise = (async () => {
+      signalOwnerCommandReady();
+      await ownerCommandGate;
+      return ledger.executeOwnerCommand(ownerCommandInput);
+    })();
+    await ownerCommandReady;
+    const delivery = await consumeOrchestratorOutbox({ messages: [message] }, consumerEnv);
+    releaseOwnerCommand();
+    const cancellation = await cancellationPromise;
+
+    expect(cancellation).toMatchObject({
+      applied: true,
+      operation: "cancel",
+      task: { taskId, state: "CANCELLED", version: 2 },
+    });
+    expect(delivery).toMatchObject({
+      received: 1, acknowledged: 1, retried: 0,
+    });
+    expect(message).toMatchObject({ ackCalls: 1, retryCalls: 0 });
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+      taskId, state: "CANCELLED", version: 2,
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      const receipts = state.storage.sql.exec(
+        "SELECT event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).toArray();
+      expect(receipts).toHaveLength(1);
+      expect(receipts[0]).toMatchObject({
+        event_id: eventId,
+        event_type: "task.transitioned",
+        schema_version: 1,
+        consumer_id: "orchestrator-outbox-consumer",
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ? AND operation = 'cancel'",
+        taskId,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ? AND event_type = 'OWNER_TASK_CANCELLED'",
+        taskId,
+      ).one().count).toBe(1);
+    });
+  });
+
+  it("deterministically commits Owner cancellation before the stale consumer receipt", async () => {
+    const taskId = "task-receipt-cancel-cancel-first-0001";
+    const ledger = ledgerFor("receipt-cancel-cancel-first");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const eventId = "receipt-cancel-cancel-first-event-01";
+    const idempotencyKey = "receipt-cancel-cancel-first-key-1";
+    const payload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
+    await ledger.enqueueOutbox({
+      eventId,
+      idempotencyKey,
+      taskId,
+      eventType: "task.transitioned",
+      payload,
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox"),
+      now,
+    });
+
+    const body = {
+      attempts: 1,
+      createdAt: now,
+      eventId,
+      eventType: "task.transitioned",
+      idempotencyKey,
+      payload,
+      schemaVersion: 1,
+      taskId,
+    };
+    const consumerEnv = {
+      ORCHESTRATOR_LEDGER: {
+        idFromName: () => "receipt-cancel-cancel-first",
+        get: () => ledger,
+      },
+      LEDGER_WORKER_ASSERTION_KEYS: env.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: "test-v1",
+    };
+    const message = {
+      body: structuredClone(body),
+      ackCalls: 0,
+      retryCalls: 0,
+      ack() { this.ackCalls += 1; },
+      retry() { this.retryCalls += 1; },
+    };
+
+    let releaseReceiptRpc;
+    let signalReceiptRpcStarted;
+    const receiptRpcGate = new Promise(resolve => { releaseReceiptRpc = resolve; });
+    const receiptRpcStarted = new Promise(resolve => { signalReceiptRpcStarted = resolve; });
+    consumerEnv.ORCHESTRATOR_LEDGER.get = () => ({
+      recordOutboxReceipt: async input => {
+        signalReceiptRpcStarted();
+        await receiptRpcGate;
+        return ledger.recordOutboxReceipt(input);
+      },
+    });
+    const deliveryPromise = consumeOrchestratorOutbox({ messages: [message] }, consumerEnv);
+    await receiptRpcStarted;
+    const cancellation = await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        operation: "cancel",
+        taskId,
+        reason: "Exercise deterministic cancel-before-receipt ordering",
+        eventId: "receipt-cancel-cancel-first-owner-command-01",
+      },
+      deliveryId: "delivery-receipt-cancel-cancel-first-01",
+      commentId: "123456813",
+    }));
+    releaseReceiptRpc();
+    const delivery = await deliveryPromise;
+
+    expect(cancellation).toMatchObject({
+      applied: true,
+      operation: "cancel",
+      task: { taskId, state: "CANCELLED", version: 2 },
+    });
+    expect(delivery).toMatchObject({
+      received: 1, acknowledged: 1, retried: 0,
+    });
+    expect(message).toMatchObject({ ackCalls: 1, retryCalls: 0 });
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+      taskId, state: "CANCELLED", version: 2,
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      const receipts = state.storage.sql.exec(
+        "SELECT event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).toArray();
+      expect(receipts).toHaveLength(0);
+      // A cancelled task's stale event must not create a receipt.
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ? AND operation = 'cancel'",
+        taskId,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ? AND event_type = 'OWNER_TASK_CANCELLED'",
+        taskId,
+      ).one().count).toBe(1);
+    });
+  });
+
   it("rejects a same-event receipt with a conflicting envelope digest without replacing the original receipt", async () => {
     const taskId = "task-receipt-digest-conflict-0001";
     const ledger = ledgerFor("receipt-digest-conflict");

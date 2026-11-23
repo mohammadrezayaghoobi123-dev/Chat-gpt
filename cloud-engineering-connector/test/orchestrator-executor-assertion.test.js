@@ -155,3 +155,29 @@ test("Executor signer rejects malformed PKCS8 keys and invalid timestamps", asyn
     error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
   );
 });
+
+test("Executor verifier rejects private-key fields anywhere in its public key set", async () => {
+  const api = await loadApi();
+  assertApi(api);
+  const keys = await fixture();
+  const token = await api.createExecutorWorkerAssertion(keys.privateKey, kid, { nowMs });
+  const mixedKeySet = JSON.stringify({
+    [kid]: {
+      publicKey: keys.publicKey,
+      subject: "orchestrator-executor",
+      role: "agent",
+      operations: ["claimTask"],
+    },
+    "executor-next": {
+      publicKey: keys.publicKey,
+      privateKey: "must-never-be-present",
+      subject: "orchestrator-executor",
+      role: "agent",
+      operations: ["claimTask"],
+    },
+  });
+  await assert.rejects(
+    api.verifyExecutorWorkerAssertion(mixedKeySet, token, { nowMs }),
+    error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
+  );
+});

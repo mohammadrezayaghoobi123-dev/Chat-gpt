@@ -122,3 +122,38 @@ Expected results:
 - The candidate remains a Draft PR, open and unmerged.
 - Main HEAD remains unchanged.
 - No deployment, Cloudflare configuration/secret mutation, live smoke, or Production operation occurs.
+
+
+## Observed Verification Record
+
+Candidate: `ed7bb81bcc822959aef508d35ba8ec1daab7f400` (PR #307, Draft, open, unmerged).
+
+### Candidate CI
+
+- Cloud Engineering Connector CI run `45182926716`: success.
+- Node test suite: 416 passed, 0 failed.
+- Cloudflare Durable Object/Vitest suite: 12 files, 207 passed, 0 failed.
+- `npm audit --audit-level=moderate`: 0 vulnerabilities.
+- JavaScript syntax checks and default/staging Wrangler dry-runs: passed.
+- Post-deploy Staging smoke: skipped; this was not a deployment or live test.
+- The initial candidate run exposed an invalid Agent actor fixture in the newly added Cancel race. The fixture was corrected to include the required authenticated identity flags; the exact final candidate above passed.
+
+### Mutation Experiments
+
+Each mutant was created from the exact candidate SHA above, changed one production invariant, ran CI, and its temporary PR was closed without merge.
+
+| Invariant removed | Mutant commit / PR | CI run | Falsifying observation |
+|---|---|---:|---|
+| Owner task state/version snapshot CAS | `e3c40023f10a70452b0ceea833fb3bea7fc958ff` / #308 (closed) | `45183115644` | The new Cancel race observed Owner commit `CANCELLED v2` instead of the required retry result `CANCELLED v3`; the existing Quarantine race also detected the same stale-snapshot behavior. |
+| Owner Outbox publisher lease invalidation | `d516cf03ac4bb030b847e60b7fc09ccc8226be44` / #309 (closed) | `45183136219` | Late Publisher `completeOutbox` returned `completed: true` instead of `LEASE_FENCE_MISMATCH`; persisted lease-generation assertions also failed. |
+| Consumer task-version/state fence | `38575e44b5524883b3e60fd858309c032a7d87c8` / #310 (closed) | `45183154896` | Post-Owner stale Consumer receipts returned `recorded: true` instead of `TASK_VERSION_FENCED` in both Cancel and Quarantine interleavings. |
+
+All three mutations were killed by the intended assertions. These are mutation-test failures on deliberately weakened code, not failures of the candidate.
+
+### Secret Scan and Repository Boundary
+
+- Gitleaks PR-diff scan in run `45182926610`: 6 commits scanned; no new leaks found.
+- Full reachable history: 4,264 commits scanned; 11 pre-existing `generic-api-key` findings remain unclassified. The scan does not establish whether they are live credentials or false positives. No values or fingerprints were copied into this report.
+- Main comparison: `main` is identical to `919b19ca3d3887352cdef06b03c668ead04fbce7` (0 commits ahead/behind).
+- PR #307 remains Draft/open/unmerged. Parent PR #300 remains Draft/open/unmerged. Mutation PRs #308–#310 are closed/unmerged.
+- No deployment, Cloudflare configuration/secret change, live Worker/Queue operation, or Production action occurred.

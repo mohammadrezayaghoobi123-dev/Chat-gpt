@@ -12,6 +12,7 @@ on:
   push:
     branches:
       - "feature/cloud-engineering-connector"
+      - "feature/orchestrator-*"
       - "release/production"
       - "assistant/**"
       - "security/**"

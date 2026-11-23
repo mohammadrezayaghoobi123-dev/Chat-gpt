@@ -1488,8 +1488,9 @@ describe("Owner command atomic Ledger contract", () => {
       ).toArray();
       expect(receipts).toEqual([firstReceipt]);
       expect(state.storage.sql.exec(
-        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = 'orchestrator-outbox-consumer' AND role = 'consumer' AND operation = 'recordOutboxReceipt'",
-      ).one().count).toBe(2);
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ? AND subject = 'orchestrator-outbox-consumer' AND role = 'consumer' AND operation = 'recordOutboxReceipt'",
+        conflictingJti,
+      ).one().count).toBe(1);
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ? AND operation = 'cancel'",
         taskId,
@@ -1654,6 +1655,8 @@ describe("Owner command atomic Ledger contract", () => {
         eventId,
       ).one(),
     );
+    const conflictingAssertion = await workerAssertion("orchestrator-outbox-consumer", "consumer", "recordOutboxReceipt");
+    const conflictingJti = assertionJti(conflictingAssertion);
     const conflict = await ledger.recordOutboxReceipt({
       eventId,
       eventType: "task.transitioned",
@@ -1664,7 +1667,7 @@ describe("Owner command atomic Ledger contract", () => {
       schemaVersion: 1,
       envelopeSha256: "f".repeat(64),
       consumerId: "orchestrator-outbox-consumer",
-      workerAssertion: await workerAssertion("orchestrator-outbox-consumer", "consumer", "recordOutboxReceipt"),
+      workerAssertion: conflictingAssertion,
       now,
     });
     expect(conflict).toMatchObject({

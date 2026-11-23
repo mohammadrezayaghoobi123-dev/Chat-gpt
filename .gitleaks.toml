@@ -144,3 +144,63 @@ commits = ["916436f86dc076916bc5588a61b92e710a6680f9"]
 paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger\.test\.js$''']
 regexTarget = "line"
 regexes = ['''idempotencyKey\s*:\s*["']idem-transition-sensitive-0001["']''']
+
+
+[[allowlists]]
+description = "Synthetic stale and rebound idempotency identifiers in historical Owner command tests; exact commits, test path, rule, and complete fixture lines only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = [
+  "167b676479f855a92d63b2aca575b8798128c143",
+  "a5f3a65dbe8e41d09c5d23131beca4eb73342fb2",
+  "93214555f5aa752a670c1c7c9a6d5f7b58f41cdf",
+  "5a750037bc1bec098184b7890f66b407582b94d8",
+  "b12a3e068c8cba44039cf478f174814fc1d8f6b5"
+]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-owner-command\.test\.js$''']
+regexTarget = "line"
+regexes = [
+  '''^    const staleIdempotencyKey = "owner-late-delivery-stale-dedupe-01";$''',
+  '''^      idempotencyKey: "attacker-rebound-dedupe-01",$''',
+  '''^    const staleIdempotencyKey = "owner-late-delivery-stale-key-01";$''',
+  '''^      idempotencyKey: "attacker-rebound-idempotency-01",$'''
+]
+
+[[allowlists]]
+description = "Synthetic previous marker signing key used only by the historical marker-rotation unit test; exact commit, test path, rule, and line only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["ab525a63948822e195cc74f63c3a6b4340f705db"]
+paths = ['''^tools/9router-review/review\.test\.mjs$''']
+regexTarget = "line"
+regexes = ['''^  const previousKey = "previous-test-marker-key-with-at-least-32-bytes";$''']
+
+[[allowlists]]
+description = "Public ICU publisher inventory metadata (a public Git blob SHA and public signer key fingerprint), not private signing material; exact documentation commit, path, rule, and lines only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["3082b80fbaf71685827ba63de882c3d93083b96f"]
+paths = ['''^docs/MASTER_BRAIN_GATE2P_R1U17_ICU79_SIGNING_IDENTITY_CANDIDATE_RECONCILIATION_2026-11-16\.md$''']
+regexTarget = "line"
+regexes = [
+  '''^- KEYS blob SHA: 9523c0beaf609fc2c276dd8b4478c9471a9bbdec$''',
+  '''^trusted-key id="E52F07877A5805F9AF4AB0ACD46C5610D06E7001" group="com.ibm.icu"$'''
+]
+
+[[allowlists]]
+description = "Deliberate credential-shaped negative-test fixture in memory-sync tests; exact historical commit, path, rule, and line only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["fe0302ea9927936f70c8a4acc577cae0b140e2d7"]
+paths = ['''^cloud-agent/test/memory-sync\.test\.js$''']
+regexTarget = "line"
+regexes = ['''^    "api_key = 'abcd1234efgh5678'"$''']
+
+[[allowlists]]
+description = "Synthetic legacy idempotency identifier in the historical tenant-scope migration fixture; exact commit, path, rule, and line only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["168a5097fa6c50f4351c5d753ee0358403175a7d"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-ledger-tenant-scope-migration\.test\.js$''']
+regexTarget = "line"
+regexes = ['''^        idempotency_key: "legacy-idempotency-1",$''']

@@ -979,7 +979,7 @@ describe("Knowledge Vault hostile failure matrix", () => {
 
       secondPromise = observeRequest(worker.fetch(proposalRequest({
         proposalId, path, content, id: 9802,
-      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding })));
+      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding, WRITE_CONTROL: writeControlBinding })));
 
       await recordGate.allArrived;
       const replayCalls = github.calls.slice(githubCallsBeforeReplay).map(call => ({
@@ -1147,7 +1147,7 @@ describe("Knowledge Vault hostile failure matrix", () => {
       const githubCallsBeforeConflict = github.calls.length;
       const conflict = await observeRequest(worker.fetch(proposalRequest({
         proposalId, path, content: changedContent, id: 9812,
-      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding })));
+      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding, WRITE_CONTROL: writeControlBinding })));
       const stateBeforeRelease = await readProposalState(
         proposalId,
         "vault-" + proposalId,

@@ -2472,4 +2472,96 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+
+  it("enforces the symmetric five-second issuer-to-Ledger clock-skew boundary", async () => {
+    const ledger = ledgerFor("worker-assertion-clock-skew-boundaries");
+
+    const futureBoundary = await ledger.createTask({
+      task: { ...task("task-clock-skew-future-boundary") },
+      idempotencyKey: "clock-skew-future-boundary",
+      inputHash: "d".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: await workerAssertion(
+        "orchestrator-scheduler", "system", "createTask", now + 5_000,
+        "worker-jti-clock-skew-future-boundary-01",
+      ),
+    });
+    expect(futureBoundary).toMatchObject({
+      created: true,
+      task: { taskId: "task-clock-skew-future-boundary" },
+    });
+
+    const futureOutside = await ledger.createTask({
+      task: { ...task("task-clock-skew-future-outside") },
+      idempotencyKey: "clock-skew-future-outside",
+      inputHash: "e".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: await workerAssertion(
+        "orchestrator-scheduler", "system", "createTask", now + 6_000,
+        "worker-jti-clock-skew-future-outside-01",
+      ),
+    });
+    expect(futureOutside).toMatchObject({
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    const expiryBoundary = await ledger.createTask({
+      task: { ...task("task-clock-skew-expiry-boundary") },
+      idempotencyKey: "clock-skew-expiry-boundary",
+      inputHash: "f".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: await workerAssertion(
+        "orchestrator-scheduler", "system", "createTask", now - 65_000,
+        "worker-jti-clock-skew-expiry-boundary-01",
+      ),
+    });
+    expect(expiryBoundary).toMatchObject({
+      created: true,
+      task: { taskId: "task-clock-skew-expiry-boundary" },
+    });
+
+    const expiryOutside = await ledger.createTask({
+      task: { ...task("task-clock-skew-expiry-outside") },
+      idempotencyKey: "clock-skew-expiry-outside",
+      inputHash: "1".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: await workerAssertion(
+        "orchestrator-scheduler", "system", "createTask", now - 66_000,
+        "worker-jti-clock-skew-expiry-outside-01",
+      ),
+    });
+    expect(expiryOutside).toMatchObject({
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT task_id FROM orchestrator_tasks WHERE task_id LIKE 'task-clock-skew-%' ORDER BY task_id",
+      ).toArray().map(row => row.task_id)).toEqual([
+        "task-clock-skew-expiry-boundary",
+        "task-clock-skew-future-boundary",
+      ]);
+      expect(state.storage.sql.exec(
+        "SELECT jti, issued_at, expires_at FROM orchestrator_consumed_assertions ORDER BY jti",
+      ).toArray()).toEqual([
+        {
+          jti: "worker-jti-clock-skew-expiry-boundary-01",
+          issued_at: Math.floor((now - 65_000) / 1000),
+          expires_at: Math.floor((now - 65_000) / 1000) + 60,
+        },
+        {
+          jti: "worker-jti-clock-skew-future-boundary-01",
+          issued_at: Math.floor((now + 5_000) / 1000),
+          expires_at: Math.floor((now + 5_000) / 1000) + 60,
+        },
+      ]);
+    });
+  });
+
 });

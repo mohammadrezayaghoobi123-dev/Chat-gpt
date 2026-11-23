@@ -940,12 +940,17 @@ async function handleOwnerGitHubComment(authenticated, payload, ledger, env) {
   reason: parsed.reason,
   taskId: parsed.taskId,
  };
- const commandHash = await sha256Canonical({
-  eventId: command.eventId,
-  operation: command.operation,
-  reason: command.reason,
-  taskId: command.taskId,
- });
+ let commandHash;
+ try {
+  commandHash = await sha256Canonical({
+   eventId: command.eventId,
+   operation: command.operation,
+   reason: command.reason,
+   taskId: command.taskId,
+  });
+ } catch {
+  return json({ error: "owner_command_unavailable" }, 503);
+ }
  const assertionContext = {
   actorId: ownerId,
   repositoryId: Number(repositoryIdText),

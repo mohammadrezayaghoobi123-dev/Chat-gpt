@@ -6,7 +6,7 @@ import { createExecutorWorkerAssertion } from "../orchestrator-executor-assertio
 
 const EXECUTOR_ID = "orchestrator-executor";
 const EXECUTOR_KID = "executor-ed25519-v1";
-const EXECUTOR_TEST_SEED_LABEL = "executor-ledger-test-fixture-v1";
+const EXECUTOR_TEST_SEED_LABEL = "exec-fixture-v1";
 const SCHEDULER_KID = "test-v1";
 const SCHEDULER_KEY = new TextEncoder().encode("0123456789abcdef0123456789abcdef");
 const now = 1_800_000_000_000;

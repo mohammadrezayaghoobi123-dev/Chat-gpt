@@ -6,7 +6,7 @@ import { createExecutorWorkerAssertion } from "../orchestrator-executor-assertio
 
 const EXECUTOR_ID = "orchestrator-executor";
 const EXECUTOR_KID = "executor-ed25519-v1";
-const now = 1_800_000_000_000;
+const now = Date.now();
 
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));

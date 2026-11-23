@@ -26,17 +26,20 @@ async function verifyLedgerWorkerAssertion(env, workerId, workerAssertion, role,
         code: "AUTHENTICATED_WORKER_REQUIRED",
       });
     }
+    // The Ledger's clock is authoritative for Executor assertion expiry and lease fencing.
+    // Never let the Executor backdate the timestamp used by stateful Ledger operations.
+    const trustedNow = Date.now();
     const verified = await verifyExecutorWorkerAssertion(
       env?.ORCHESTRATOR_EXECUTOR_VERIFICATION_KEYS,
       workerAssertion,
-      { nowMs: now },
+      { nowMs: trustedNow },
     );
     if (verified.operation !== operation) {
       throw Object.assign(new Error("Executor assertion operation mismatch."), {
         code: "AUTHENTICATED_WORKER_REQUIRED",
       });
     }
-    return verified;
+    return Object.freeze({ ...verified, trustedNow });
   }
   return verifyWorkerAssertion(env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
     subject: workerId, role, operation, nowMs: now,
@@ -804,6 +807,7 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
+    now = verifiedAssertion.trustedNow ?? now;
     if (taskId !== undefined) identifier(taskId, "taskId");
     if (taskId !== undefined && cursor !== undefined) {
       return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
@@ -1114,6 +1118,7 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
+    now = verifiedAssertion.trustedNow ?? now;
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
@@ -1144,6 +1149,7 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
+    now = verifiedAssertion.trustedNow ?? now;
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];

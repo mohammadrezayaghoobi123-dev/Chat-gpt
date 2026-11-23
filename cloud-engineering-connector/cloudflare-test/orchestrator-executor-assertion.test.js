@@ -387,4 +387,62 @@ describe("Executor Ed25519 trust boundary", () => {
       now: now + 2,
     })).resolves.toMatchObject({ advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
   });
+
+  it("preserves lease-generation fencing and expiry for Executor renewal and release", async () => {
+    const ledger = ledgerFor("executor-ed25519-lease-fencing");
+    await expect(createScheduledTask(ledger, "task-executor-lease-fencing", EXECUTOR_ID))
+      .resolves.toMatchObject({ created: true });
+    const claimed = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now, "claimTask"),
+      leaseMs: 30_000,
+      now,
+      taskId: "task-executor-lease-fencing",
+    });
+    expect(claimed).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE orchestrator_execution_leases SET lease_generation = 2 WHERE task_id = ?",
+        "task-executor-lease-fencing",
+      );
+    });
+    await expect(ledger.renewLease({
+      taskId: "task-executor-lease-fencing",
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now + 1, "renewLease"),
+      leaseGeneration: claimed.leaseGeneration,
+      leaseMs: 30_000,
+      now: now + 1,
+    })).resolves.toMatchObject({ renewed: false, reason: "LEASE_FENCE_MISMATCH" });
+    await expect(ledger.releaseLease({
+      taskId: "task-executor-lease-fencing",
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now + 2, "releaseLease"),
+      leaseGeneration: claimed.leaseGeneration,
+      now: now + 2,
+    })).resolves.toMatchObject({ released: false, reason: "LEASE_FENCE_MISMATCH" });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE orchestrator_execution_leases SET lease_generation = 1, lease_until = ? WHERE task_id = ?",
+        now + 3, "task-executor-lease-fencing",
+      );
+    });
+    await expect(ledger.renewLease({
+      taskId: "task-executor-lease-fencing",
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now + 4, "renewLease"),
+      leaseGeneration: claimed.leaseGeneration,
+      leaseMs: 30_000,
+      now: now + 4,
+    })).resolves.toMatchObject({ renewed: false, reason: "LEASE_FENCE_MISMATCH" });
+    await expect(ledger.releaseLease({
+      taskId: "task-executor-lease-fencing",
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now + 5, "releaseLease"),
+      leaseGeneration: claimed.leaseGeneration,
+      now: now + 5,
+    })).resolves.toMatchObject({ released: false, reason: "LEASE_FENCE_MISMATCH" });
+  });
 });

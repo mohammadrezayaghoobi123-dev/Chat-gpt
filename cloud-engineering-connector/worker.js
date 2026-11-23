@@ -1436,8 +1436,8 @@ export async function consumeOrchestratorOutbox(batch, env) {
     message.ack();
     totals.acknowledged += 1;
    } else if (receipt?.recorded === true) {
-    message.ack();
-    totals.acknowledged += 1;
+    message.retry({ delaySeconds: 30 }); // MUTATION: retry committed receipt
+    totals.retried += 1;
    } else if (receipt?.replay === true) {
     message.ack();
     totals.acknowledged += 1;

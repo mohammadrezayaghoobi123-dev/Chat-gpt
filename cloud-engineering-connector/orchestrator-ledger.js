@@ -590,7 +590,7 @@ export class OrchestratorLedger extends DurableObject {
     let verifiedAssertion;
     try {
       verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: "orchestrator-scheduler", role: "system", operation: "createTask", nowMs: now,
+        subject: "orchestrator-scheduler", role: "system", operation: "createTask", nowMs: Math.max(now, Date.now()),
       });
     } catch {
       return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };

@@ -1134,7 +1134,7 @@ export class OrchestratorLedger extends DurableObject {
       verifiedAssertion = await verifyLedgerWorkerAssertion(
         this.env, workerId, workerAssertion, "agent", "renewLease", now,
       );
-      if (workerId === EXECUTOR_PRINCIPAL) now = executorTrustedNow(verifiedAssertion); else now = Date.now();
+      if (workerId === EXECUTOR_PRINCIPAL) now = executorTrustedNow(verifiedAssertion); else now = Math.max(now, Date.now());
     } catch {
       return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }

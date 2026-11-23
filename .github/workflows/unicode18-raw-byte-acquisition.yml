@@ -967,7 +967,7 @@ jobs:
                       "UnicodeData.txt ends with an unmatched First range record"
                   )
               if decimal_codepoint is not None:
-                  if decimal_value != 9:
+                  if decimal_run_value != 9:
                       unicode_data_error(
                           decimal_line, "Decimal_Digit_Value",
                           "decimal digit sequence must end at nine at end of file",
@@ -1575,7 +1575,7 @@ jobs:
               if path == "UnicodeData.txt":
                   semantic_metrics = validate_unicode_data_semantics(data)
                   return (
-                      "15-field UTF-8 semantic records; strictly increasing code points; rows="
+                      "15-field UTF-8 records; strictly increasing code points; rows="
                       + str(semantic_metrics["records"])
                   )
               if VERSION.encode("ascii") not in data[:32768]:

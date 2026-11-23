@@ -21,6 +21,7 @@ function createKnowledgeStoreBinding(){
   indexDocumentSnapshot:async input=>{calls.push({method:"indexDocumentSnapshot",input});return input},
   setDocumentSyncState:async input=>{calls.push({method:"setDocumentSyncState",input});return input},
   recordVaultProposal:async input=>{calls.push({method:"recordVaultProposal",input});return{...input,status:"proposed"}},
+  enqueueOutbox:async input=>{calls.push({method:"enqueueOutbox",input});return{...input,status:"pending"}},
   getVaultProposal:async input=>{calls.push({method:"getVaultProposal",input});return{...input,status:"proposed",pullRequestNumber:987}}
  };
  return{calls,binding:{
@@ -1187,6 +1188,65 @@ test("authenticated Vault proposal status is scoped to the owner principal",asyn
  assert.equal(result.proposalId,"proposal-00000001");
  const call=knowledgeStore.calls.find(item=>item.method==="getVaultProposal");
  assert.equal(call.input.tenantId,"owner");
+});
+
+test("knowledge_document_propose hashes all deterministic identifiers before any GitHub write",async()=>{
+ const originalFetch=globalThis.fetch;
+ const subtle=crypto.subtle;
+ const originalDigest=subtle.digest.bind(subtle);
+ const hadOwnDigest=Object.prototype.hasOwnProperty.call(subtle,"digest");
+ const originalDescriptor=Object.getOwnPropertyDescriptor(subtle,"digest");
+ const path="knowledge/tenants/owner/architecture.md";
+ const contentText="# Proposed architecture\n";
+ const proposalId="proposal-hash-preflight-0001";
+ const targetBytes=new TextEncoder().encode("owner\\n"+proposalId);
+ const injectedFailure=new Error("SENSITIVE_VAULT_EVENT_ID_HASH_FAILURE");
+ let targetedDigestCalls=0;
+ const fixture=createGitHubWriteMock({
+  filePath:path,blobSha:"e".repeat(40),baseBranch:"main"
+ });
+ const writeControl=createWriteControlBinding();
+ knowledgeStore.calls.length=0;
+ Object.defineProperty(subtle,"digest",{
+  configurable:true,writable:true,
+  value:(algorithm,data)=>{
+   const bytes=new Uint8Array(data);
+   if(bytes.length===targetBytes.length&&bytes.every((value,index)=>value===targetBytes[index])){
+    targetedDigestCalls++;
+    return Promise.reject(injectedFailure);
+   }
+   return originalDigest(algorithm,data);
+  }
+ });
+ globalThis.fetch=fixture.fetch;
+ try{
+  const response=await worker.fetch(rpc("tools/call",{
+   name:"knowledge_document_propose",
+   arguments:{
+    path,content:contentText,title:"Atomic Vault proposal",
+    summary:"Verify deterministic hash preflight before external writes.",
+    expectedBlobSha:"ABSENT",proposalId
+   }
+  },31),{
+   ...env,WRITE_CONTROL:writeControl,GITHUB_TOKEN:"test-write-token",
+   GITHUB_READONLY_TOKEN:"test-read-token"
+  });
+  const body=await response.json();
+  const writeCalls=fixture.calls.filter(call=>call.method!=="GET");
+  const proposalRecords=knowledgeStore.calls.filter(call=>call.method==="recordVaultProposal");
+  const outboxWrites=knowledgeStore.calls.filter(call=>call.method==="enqueueOutbox");
+  assert.equal(body.result.isError,true);
+  assert.match(body.result.content[0].text,/KNOWLEDGE_VAULT_HASH_UNAVAILABLE/);
+  assert.equal(body.result.content[0].text.includes(injectedFailure.message),false);
+  assert.equal(targetedDigestCalls,1);
+  assert.equal(writeCalls.length,0);
+  assert.equal(proposalRecords.length,0);
+  assert.equal(outboxWrites.length,0);
+ }finally{
+  globalThis.fetch=originalFetch;
+  if(hadOwnDigest)Object.defineProperty(subtle,"digest",originalDescriptor);
+  else delete subtle.digest;
+ }
 });
 
 function mergedVaultPullRequest(fixture,overrides={}){

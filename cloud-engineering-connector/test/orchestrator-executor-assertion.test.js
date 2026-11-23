@@ -28,7 +28,8 @@ async function loadApi() {
   try {
     return await import("../orchestrator-executor-assertion.js");
   } catch (error) {
-    if (error?.code === "ERR_MODULE_NOT_FOUND") return {};
+    if (error?.code === "ERR_MODULE_NOT_FOUND" &&
+        error.message.includes("orchestrator-executor-assertion.js")) return {};
     throw error;
   }
 }

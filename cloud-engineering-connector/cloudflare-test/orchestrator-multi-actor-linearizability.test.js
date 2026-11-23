@@ -280,7 +280,12 @@ describe("Multi-actor Owner, Agent, Publisher, and Consumer linearizability", ()
             expectedVersion: 1,
             expectedState: "SCHEDULED",
             nextState: "RUNNING",
-            actor: { id: "agent:worker-1", role: "agent" },
+            actor: {
+              id: "agent:worker-1",
+              role: "agent",
+              authenticated: true,
+              identityVerified: true,
+            },
             evidence: { executionStartedAt: now + 3 },
             now: now + 3,
             workerId: "agent:worker-1",

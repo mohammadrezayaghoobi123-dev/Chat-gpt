@@ -1393,9 +1393,7 @@ export class OrchestratorLedger extends DurableObject {
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
-        return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
-      }
+      // Deliberate mutant: defer JTI consumption until after payload and task fences.
       if (payloadRejectionReason) {
         return { recorded: false, reason: payloadRejectionReason };
       }
@@ -1432,6 +1430,9 @@ export class OrchestratorLedger extends DurableObject {
             currentTask.state === "CANCELLED" || currentTask.state === "QUARANTINED") {
           return { recorded: false, blocked: true, reason: "TASK_VERSION_FENCED" };
         }
+      }
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       sql.exec(
         "INSERT INTO orchestrator_outbox_receipts (event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at) VALUES (?, ?, ?, ?, ?, ?)",

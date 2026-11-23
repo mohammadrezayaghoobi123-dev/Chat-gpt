@@ -1399,3 +1399,4 @@ describe("Owner command atomic Ledger contract", () => {
   });
 
 });
+// API_KEY = "0123456789abcdef0123456789abcdef"

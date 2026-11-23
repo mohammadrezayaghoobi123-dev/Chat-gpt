@@ -865,7 +865,7 @@ describe("Owner command atomic Ledger contract", () => {
 
     const schedulerAssertion = await createScheduledWorkerAssertion(
       env.LEDGER_WORKER_ASSERTION_KEYS,
-      env.LEDGER_WORKER_ASSERTION_ACTIVE_KID,
+      "test-v1",
       {
         subject: "orchestrator-scheduler",
         role: "system",

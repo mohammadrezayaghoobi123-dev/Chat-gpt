@@ -2398,4 +2398,78 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+
+  it("demonstrates that a caller clock rollback can resurrect an expired unconsumed worker assertion", async () => {
+    const ledger = ledgerFor("worker-assertion-clock-rollback");
+    const sharedJti = "worker-jti-clock-rollback-00000001";
+    const subject = "orchestrator-scheduler";
+    const role = "system";
+    const operation = "createTask";
+    const token = await workerAssertion(subject, role, operation, now, sharedJti);
+
+    // Hold the actual wall clock beyond assertion expiry while the caller
+    // supplies logical timestamps. A Ledger-local clock check would reject
+    // the second request; the current caller-time check accepts it.
+    const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(now + 120_000);
+    let afterExpiry;
+    let afterRollback;
+    try {
+      afterExpiry = await ledger.createTask({
+        task: {
+          ...task("task-clock-rollback-expired"),
+          createdAt: now + 120_000,
+          updatedAt: now + 120_000,
+        },
+        idempotencyKey: "clock-rollback-expired-attempt",
+        inputHash: "a".repeat(64),
+        now: now + 120_000,
+        workerId: subject,
+        workerAssertion: token,
+      });
+
+      // The first attempt did not consume the JTI because expiry verification
+      // rejected it before the SQL transaction. Rolling the caller's timestamp
+      // back by 66 seconds makes the same assertion valid again.
+      afterRollback = await ledger.createTask({
+        task: {
+          ...task("task-clock-rollback-resurrected"),
+          createdAt: now + 54_000,
+          updatedAt: now + 54_000,
+        },
+        idempotencyKey: "clock-rollback-resurrected-attempt",
+        inputHash: "c".repeat(64),
+        now: now + 54_000,
+        workerId: subject,
+        workerAssertion: token,
+      });
+    } finally {
+      wallClockSpy.mockRestore();
+    }
+    expect(afterExpiry).toMatchObject({
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+    expect(afterRollback).toMatchObject({
+      created: true,
+      task: { taskId: "task-clock-rollback-resurrected" },
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id IN (?, ?)",
+        "task-clock-rollback-expired",
+        "task-clock-rollback-resurrected",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT jti, issued_at, expires_at, consumed_at FROM orchestrator_consumed_assertions WHERE jti = ?",
+        sharedJti,
+      ).toArray()).toEqual([{
+        jti: sharedJti,
+        issued_at: Math.floor(now / 1000),
+        expires_at: Math.floor(now / 1000) + 60,
+        consumed_at: Math.floor((now + 54_000) / 1000),
+      }]);
+    });
+  });
+
 });

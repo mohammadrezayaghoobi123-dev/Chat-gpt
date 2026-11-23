@@ -889,4 +889,343 @@ describe("Knowledge Vault hostile failure matrix", () => {
     }
   });
 
+
+
+  function createPartyGate(parties) {
+    let arrivals = 0;
+    let release;
+    let resolveFirst;
+    let resolveAll;
+    const opened = new Promise(resolve => { release = resolve; });
+    const firstArrived = new Promise(resolve => { resolveFirst = resolve; });
+    const allArrived = new Promise(resolve => { resolveAll = resolve; });
+    return {
+      firstArrived,
+      allArrived,
+      release,
+      async arrive() {
+        arrivals += 1;
+        if (arrivals === 1) resolveFirst();
+        if (arrivals === parties) resolveAll();
+        await opened;
+      },
+    };
+  }
+
+  const observeRequest = promise => promise.then(
+    async response => ({ response, body: await response.json() }),
+    error => ({ error }),
+  );
+
+  it("serializes concurrent identical proposals into one durable Proposal and one Outbox event", async () => {
+    const proposalId = "vault-proposal-concurrent-identical-20261123";
+    const path = "knowledge/tenants/owner/proposal-concurrent-identical.md";
+    const content = "# Concurrent identical proposal\nBoth callers carry the exact same payload.\n";
+    const prNumber = 991001;
+    const originalFetch = globalThis.fetch;
+    const github = createGitHubWriteMock({
+      filePath: path,
+      blobSha: await gitBlobSha(content),
+      baseBranch: "main",
+      prNumber,
+    });
+    const recordGate = createPartyGate(2);
+    const outboxGate = createPartyGate(2);
+    const calls = { recordVaultProposal: 0, enqueueOutbox: 0 };
+    const knowledgeBinding = {
+      idFromName(name) {
+        return env.KNOWLEDGE_STORE.idFromName(name);
+      },
+      get(id) {
+        const actual = env.KNOWLEDGE_STORE.get(id);
+        return {
+          async recordVaultProposal(input) {
+            calls.recordVaultProposal += 1;
+            await recordGate.arrive();
+            return actual.recordVaultProposal(input);
+          },
+          async enqueueOutbox(input) {
+            calls.enqueueOutbox += 1;
+            await outboxGate.arrive();
+            return actual.enqueueOutbox(input);
+          },
+        };
+      },
+    };
+    const keyHash = await sha256Hex(
+      "create_change_pr\nmohammadrezayaghoobi123-dev/chat-gpt\n" + proposalId,
+    );
+
+    globalThis.fetch = github.fetch;
+    let firstPromise;
+    let secondPromise;
+    try {
+      firstPromise = observeRequest(worker.fetch(proposalRequest({
+        proposalId, path, content, id: 9801,
+      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding })));
+
+      await recordGate.firstArrived;
+      const githubCallsBeforeReplay = github.calls.length;
+
+      secondPromise = observeRequest(worker.fetch(proposalRequest({
+        proposalId, path, content, id: 9802,
+      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding })));
+
+      await recordGate.allArrived;
+      const replayCalls = github.calls.slice(githubCallsBeforeReplay).map(call => ({
+        method: call.method,
+        path: new URL(call.url).pathname,
+      }));
+      recordGate.release();
+
+      await outboxGate.allArrived;
+      outboxGate.release();
+
+      const [first, second] = await Promise.all([firstPromise, secondPromise]);
+      const state = await readProposalState(
+        proposalId,
+        "vault-" + proposalId,
+        keyHash,
+      );
+      const firstResult = first.error
+        ? null
+        : JSON.parse(first.body.result.content[0].text);
+      const secondResult = second.error
+        ? null
+        : JSON.parse(second.body.result.content[0].text);
+
+      expect({
+        firstThrown: Boolean(first.error),
+        secondThrown: Boolean(second.error),
+        firstHttpStatus: first.response?.status,
+        secondHttpStatus: second.response?.status,
+        firstIsToolError: first.body?.result?.isError === true,
+        secondIsToolError: second.body?.result?.isError === true,
+        firstProposalStatus: firstResult?.proposal_status,
+        secondProposalStatus: secondResult?.proposal_status,
+        firstOutboxStatus: firstResult?.outbox_status,
+        secondOutboxStatus: secondResult?.outbox_status,
+        firstPullRequestNumber: firstResult?.pull_request?.number,
+        secondPullRequestNumber: secondResult?.pull_request?.number,
+        firstReplayed: firstResult?.replayed ?? false,
+        secondReplayed: secondResult?.replayed ?? false,
+        proposals: state.knowledge.proposals,
+        outbox: state.knowledge.outbox,
+        operations: state.writes.operations,
+        admissions: state.writes.admissions,
+        recordVaultProposalCalls: calls.recordVaultProposal,
+        enqueueOutboxCalls: calls.enqueueOutbox,
+        replayCalls,
+        githubWrites: github.calls
+          .filter(call => call.method === "POST")
+          .map(call => new URL(call.url).pathname),
+        deleteAttempted: github.deleteAttempted,
+      }).toEqual({
+        firstThrown: false,
+        secondThrown: false,
+        firstHttpStatus: 200,
+        secondHttpStatus: 200,
+        firstIsToolError: false,
+        secondIsToolError: false,
+        firstProposalStatus: "proposed",
+        secondProposalStatus: "proposed",
+        firstOutboxStatus: "pending",
+        secondOutboxStatus: "pending",
+        firstPullRequestNumber: prNumber,
+        secondPullRequestNumber: prNumber,
+        firstReplayed: false,
+        secondReplayed: true,
+        proposals: [{
+          proposal_id: proposalId,
+          status: "proposed",
+          pr_number: prNumber,
+          pr_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/991001",
+        }],
+        outbox: [{
+          event_id: expect.stringMatching(/^evt_[a-f0-9]{32}$/),
+          idempotency_key: "vault-" + proposalId,
+          status: "pending",
+          attempts: 0,
+        }],
+        operations: [{
+          status: "SUCCEEDED",
+          phase: "PR_CREATED",
+          branch_name: "assistant/mcp-" + keyHash,
+          commit_sha: "d".repeat(40),
+          pr_number: prNumber,
+        }],
+        admissions: [{ key_hash: keyHash }],
+        recordVaultProposalCalls: 2,
+        enqueueOutboxCalls: 2,
+        replayCalls: [{
+          method: "GET",
+          path: "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/pulls/991001",
+        }],
+        githubWrites: [
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/trees",
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/commits",
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/refs",
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/pulls",
+        ],
+        deleteAttempted: false,
+      });
+    } finally {
+      recordGate.release();
+      outboxGate.release();
+      await Promise.allSettled([firstPromise, secondPromise].filter(Boolean));
+      globalThis.fetch = originalFetch;
+    }
+  }, 15000);
+
+  it("rejects a concurrent payload mutation before GitHub or Knowledge Store side effects", async () => {
+    const proposalId = "vault-proposal-concurrent-drift-20261123";
+    const path = "knowledge/tenants/owner/proposal-concurrent-drift.md";
+    const content = "# Concurrent proposal identity\nThe original operation remains authoritative.\n";
+    const changedContent = content + "Conflicting concurrent payload.\n";
+    const prNumber = 992001;
+    const originalFetch = globalThis.fetch;
+    const github = createGitHubWriteMock({
+      filePath: path,
+      blobSha: await gitBlobSha(content),
+      baseBranch: "main",
+      prNumber,
+    });
+    const recordGate = createPartyGate(1);
+    const calls = { recordVaultProposal: 0, enqueueOutbox: 0 };
+    const knowledgeBinding = {
+      idFromName(name) {
+        return env.KNOWLEDGE_STORE.idFromName(name);
+      },
+      get(id) {
+        const actual = env.KNOWLEDGE_STORE.get(id);
+        return {
+          async recordVaultProposal(input) {
+            calls.recordVaultProposal += 1;
+            await recordGate.arrive();
+            return actual.recordVaultProposal(input);
+          },
+          async enqueueOutbox(input) {
+            calls.enqueueOutbox += 1;
+            return actual.enqueueOutbox(input);
+          },
+        };
+      },
+    };
+    const keyHash = await sha256Hex(
+      "create_change_pr\nmohammadrezayaghoobi123-dev/chat-gpt\n" + proposalId,
+    );
+
+    globalThis.fetch = github.fetch;
+    let firstPromise;
+    try {
+      firstPromise = observeRequest(worker.fetch(proposalRequest({
+        proposalId, path, content, id: 9811,
+      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding })));
+
+      await recordGate.firstArrived;
+      const githubCallsBeforeConflict = github.calls.length;
+      const conflict = await observeRequest(worker.fetch(proposalRequest({
+        proposalId, path, content: changedContent, id: 9812,
+      }), authenticatedEnv({ KNOWLEDGE_STORE: knowledgeBinding })));
+      const stateBeforeRelease = await readProposalState(
+        proposalId,
+        "vault-" + proposalId,
+        keyHash,
+      );
+      const conflictError = conflict.error
+        ? null
+        : JSON.parse(conflict.body.result.content[0].text);
+
+      recordGate.release();
+      const first = await firstPromise;
+      const firstResult = first.error
+        ? null
+        : JSON.parse(first.body.result.content[0].text);
+      const finalState = await readProposalState(
+        proposalId,
+        "vault-" + proposalId,
+        keyHash,
+      );
+
+      expect({
+        conflictThrown: Boolean(conflict.error),
+        conflictHttpStatus: conflict.response?.status,
+        conflictIsToolError: conflict.body?.result?.isError === true,
+        conflictError,
+        conflictMadeNoGitHubCall: github.calls.length === githubCallsBeforeConflict,
+        preReleaseProposals: stateBeforeRelease.knowledge.proposals,
+        preReleaseOutbox: stateBeforeRelease.knowledge.outbox,
+        preReleaseWrite: stateBeforeRelease.writes.operations,
+        firstThrown: Boolean(first.error),
+        firstHttpStatus: first.response?.status,
+        firstIsToolError: first.body?.result?.isError === true,
+        firstProposalStatus: firstResult?.proposal_status,
+        firstOutboxStatus: firstResult?.outbox_status,
+        finalProposals: finalState.knowledge.proposals,
+        finalOutbox: finalState.knowledge.outbox,
+        finalWrite: finalState.writes.operations,
+        finalAdmissions: finalState.writes.admissions,
+        recordVaultProposalCalls: calls.recordVaultProposal,
+        enqueueOutboxCalls: calls.enqueueOutbox,
+        githubWrites: github.calls
+          .filter(call => call.method === "POST")
+          .map(call => new URL(call.url).pathname),
+        deleteAttempted: github.deleteAttempted,
+      }).toEqual({
+        conflictThrown: false,
+        conflictHttpStatus: 200,
+        conflictIsToolError: true,
+        conflictError: { error: "IDEMPOTENCY_CONFLICT" },
+        conflictMadeNoGitHubCall: true,
+        preReleaseProposals: [],
+        preReleaseOutbox: [],
+        preReleaseWrite: [{
+          status: "SUCCEEDED",
+          phase: "PR_CREATED",
+          branch_name: "assistant/mcp-" + keyHash,
+          commit_sha: "d".repeat(40),
+          pr_number: prNumber,
+        }],
+        firstThrown: false,
+        firstHttpStatus: 200,
+        firstIsToolError: false,
+        firstProposalStatus: "proposed",
+        firstOutboxStatus: "pending",
+        finalProposals: [{
+          proposal_id: proposalId,
+          status: "proposed",
+          pr_number: prNumber,
+          pr_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/992001",
+        }],
+        finalOutbox: [{
+          event_id: expect.stringMatching(/^evt_[a-f0-9]{32}$/),
+          idempotency_key: "vault-" + proposalId,
+          status: "pending",
+          attempts: 0,
+        }],
+        finalWrite: [{
+          status: "SUCCEEDED",
+          phase: "PR_CREATED",
+          branch_name: "assistant/mcp-" + keyHash,
+          commit_sha: "d".repeat(40),
+          pr_number: prNumber,
+        }],
+        finalAdmissions: [{ key_hash: keyHash }],
+        recordVaultProposalCalls: 1,
+        enqueueOutboxCalls: 1,
+        githubWrites: [
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/trees",
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/commits",
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/git/refs",
+          "/repos/mohammadrezayaghoobi123-dev/Chat-gpt/pulls",
+        ],
+        deleteAttempted: false,
+      });
+    } finally {
+      recordGate.release();
+      await Promise.allSettled([firstPromise].filter(Boolean));
+      globalThis.fetch = originalFetch;
+    }
+  }, 15000);
+
 });

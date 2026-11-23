@@ -37,6 +37,15 @@ test("scheduled signer cannot mint agent identities or caller-selected principal
   );
   await assert.rejects(
     createScheduledWorkerAssertion(keySet, "worker-v1", {
+      subject: "orchestrator-executor",
+      role: "agent",
+      operation: "claimTask",
+      nowMs,
+    }),
+    error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
+  );
+  await assert.rejects(
+    createScheduledWorkerAssertion(keySet, "worker-v1", {
       subject: "orchestrator-outbox-publisher",
       role: "system",
       operation: "createTask",

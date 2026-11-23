@@ -1971,21 +1971,22 @@ describe("Owner command atomic Ledger contract", () => {
       },
     );
 
-    let pendingReceipt;
-    let cancellation;
-    let receipt;
-    let replay;
+    let race;
     try {
-      pendingReceipt = ledger.recordOutboxReceipt(receiptInput);
-      await verifiedAssertionReached;
-      cancellation = await ledger.executeOwnerCommand(ownerCommandInput);
-      releaseVerifiedAssertion();
-      receipt = await pendingReceipt;
-      replay = await ledger.recordOutboxReceipt(receiptInput);
+      race = await runInDurableObject(ledger, async instance => {
+        const pendingReceipt = instance.recordOutboxReceipt(receiptInput);
+        await verifiedAssertionReached;
+        const cancellation = await instance.executeOwnerCommand(ownerCommandInput);
+        releaseVerifiedAssertion();
+        const receipt = await pendingReceipt;
+        const replay = await instance.recordOutboxReceipt(receiptInput);
+        return { cancellation, receipt, replay };
+      });
     } finally {
       releaseVerifiedAssertion();
       verifySpy.mockRestore();
     }
+    const { cancellation, receipt, replay } = race;
 
     expect(cancellation).toMatchObject({
       applied: true,

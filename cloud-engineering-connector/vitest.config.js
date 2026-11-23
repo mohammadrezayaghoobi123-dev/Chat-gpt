@@ -1,8 +1,10 @@
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
-import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
+import { createPrivateKey, createPublicKey } from "node:crypto";
 
-const executorFixtureSeed = createHash("sha256").update("exec-fixture-v1").digest();
+const executorFixtureSeed = Buffer.from(
+  Array.from({ length: 32 }, (_value, index) => index + 1),
+);
 const executorFixturePkcs8 = Buffer.concat([
   Buffer.from([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20]),
   executorFixtureSeed,

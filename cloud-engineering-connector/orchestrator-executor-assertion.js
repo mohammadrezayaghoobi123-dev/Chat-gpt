@@ -109,6 +109,28 @@ function validateClaims(claims, nowMs) {
   }
 }
 
+
+export function assertExecutorWorkerAssertionTime(assertion, nowMs) {
+  try {
+    if (!assertion || typeof assertion !== "object" || Array.isArray(assertion) ||
+        !Number.isSafeInteger(nowMs) || nowMs < 1 ||
+        !Number.isSafeInteger(assertion.issuedAt) ||
+        !Number.isSafeInteger(assertion.expiresAt)) {
+      throw reject();
+    }
+    const nowSeconds = Math.floor(nowMs / 1000);
+    if (assertion.expiresAt <= assertion.issuedAt ||
+        assertion.expiresAt - assertion.issuedAt > MAX_LIFETIME_SECONDS ||
+        assertion.issuedAt > nowSeconds + CLOCK_SKEW_SECONDS ||
+        assertion.expiresAt < nowSeconds - CLOCK_SKEW_SECONDS) {
+      throw reject();
+    }
+    return true;
+  } catch {
+    throw reject();
+  }
+}
+
 export async function createExecutorWorkerAssertion(privateKeyPkcs8, activeKid, expected) {
   try {
     const operation = assertSignerOptions(expected);

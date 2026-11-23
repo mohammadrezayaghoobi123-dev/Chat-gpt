@@ -1,11 +1,11 @@
 name: Unicode 18.0.0 Raw-Byte Acquisition Audit
 
-# Branch-only push is intentional: workflow_dispatch and schedule require default-branch presence.
-# main remains unchanged; updating this workflow on the integration branch triggers the audit.
+# Push-only execution is branch-scoped; main remains untouched.
 on:
   push:
     branches:
       - "integration/master-brain-unification-2026-11-15"
+      - "work/r1u12b-raw-structure-metrics-2026-11-23"
     paths:
       - ".github/workflows/unicode18-raw-byte-acquisition.yml"
 
@@ -165,7 +165,26 @@ jobs:
                   "- Raw source contents logged: NO",
                   "- Artifacts uploaded: NO",
                   "- Manifest/source lock modified: NO",
+                  "- R1-U12-B byte metrics SHA-256: " + str(report.get("byte_metrics_sha256", "NOT_COMPUTED")),
+                  "",
+                  "| File | BOM | CRLF | LF | CR | Mixed | EOF | Lines | Maximum line bytes |",
+                  "|---|---:|---:|---:|---:|---|---|---:|---:|",
               ])
+              for item in report.get("files", []):
+                  metric = item.get("raw_structure", {})
+                  maximum = metric.get("max_line") or {}
+                  lines.append(
+                      "| " + str(item.get("relative_path", "UNKNOWN"))
+                      + " | " + ("YES" if metric.get("leading_utf8_bom") else "NO")
+                      + " | " + str((metric.get("eol") or {}).get("crlf", "UNKNOWN"))
+                      + " | " + str((metric.get("eol") or {}).get("lf", "UNKNOWN"))
+                      + " | " + str((metric.get("eol") or {}).get("cr", "UNKNOWN"))
+                      + " | " + ("YES" if metric.get("eol_mixed") else "NO")
+                      + " | " + str(metric.get("eof_terminator", "UNKNOWN"))
+                      + " | " + str(metric.get("physical_line_count", "UNKNOWN"))
+                      + " | " + str(maximum.get("byte_length", "N/A"))
+                      + " |"
+                  )
               with open(summary_path, "a", encoding="utf-8", newline="\n") as summary:
                   summary.write("\n".join(lines) + "\n")
 
@@ -220,6 +239,92 @@ jobs:
                       raise ValueError("required ZIP member missing: " + required)
               return by_name
 
+          def iter_metric_lines(data):
+              start = 0
+              line_number = 1
+              index = 0
+              while index < len(data):
+                  if data[index] == 13:
+                      yield line_number, start, data[start:index]
+                      index += 2 if index + 1 < len(data) and data[index + 1] == 10 else 1
+                      start = index
+                      line_number += 1
+                  elif data[index] == 10:
+                      yield line_number, start, data[start:index]
+                      index += 1
+                      start = index
+                      line_number += 1
+                  else:
+                      index += 1
+              if start < len(data):
+                  yield line_number, start, data[start:]
+
+          def measure_raw_bytes(data):
+              crlf = lf = cr = 0
+              max_line = None
+              physical_lines = 0
+              for number, offset, line in iter_metric_lines(data):
+                  physical_lines += 1
+                  candidate = {"byte_length": len(line), "line_number": number, "byte_offset": offset}
+                  if max_line is None or candidate["byte_length"] > max_line["byte_length"]:
+                      max_line = candidate
+              index = 0
+              while index < len(data):
+                  if data[index] == 13:
+                      if index + 1 < len(data) and data[index + 1] == 10:
+                          crlf += 1
+                          index += 2
+                      else:
+                          cr += 1
+                          index += 1
+                  elif data[index] == 10:
+                      lf += 1
+                      index += 1
+                  else:
+                      index += 1
+              leading = data.startswith(b"\xef\xbb\xbf")
+              bom_positions = []
+              cursor = 0
+              while True:
+                  pos = data.find(b"\xef\xbb\xbf", cursor)
+                  if pos < 0:
+                      break
+                  bom_positions.append(pos)
+                  cursor = pos + 3
+              embedded = [pos for pos in bom_positions if pos != 0]
+              nul = data.find(b"\x00")
+              if not data:
+                  eof = "EMPTY"
+              elif data.endswith(b"\r\n"):
+                  eof = "CRLF"
+              elif data.endswith(b"\n"):
+                  eof = "LF"
+              elif data.endswith(b"\r"):
+                  eof = "CR"
+              else:
+                  eof = "NONE"
+              try:
+                  data.decode("utf-8", errors="strict")
+                  utf8 = {"valid": True, "first_error_offset": None, "error": None}
+              except UnicodeDecodeError as exc:
+                  utf8 = {"valid": False, "first_error_offset": exc.start, "error": exc.reason}
+              return {
+                  "byte_length": len(data),
+                  "leading_utf8_bom": leading,
+                  "leading_bom_offset": 0 if leading else None,
+                  "embedded_utf8_bom_count": len(embedded),
+                  "embedded_utf8_bom_offsets": embedded[:16],
+                  "embedded_utf8_bom_offsets_truncated": len(embedded) > 16,
+                  "nul_byte_count": data.count(b"\x00"),
+                  "first_nul_byte_offset": nul if nul >= 0 else None,
+                  "eol": {"crlf": crlf, "lf": lf, "cr": cr},
+                  "eol_mixed": sum(bool(v) for v in (crlf, lf, cr)) > 1,
+                  "physical_line_count": physical_lines,
+                  "eof_terminator": eof,
+                  "max_line": max_line,
+                  "utf8": utf8,
+              }
+
           def canonical_manifest_bytes(document):
               return json.dumps(
                   document, ensure_ascii=True, sort_keys=True, separators=(",", ":")
@@ -250,6 +355,40 @@ jobs:
                   second = zipfile.ZipInfo("proplist.txt")
                   with self.assertRaisesRegex(ValueError, "case-fold"):
                       validate_zip_index([first, second])
+
+              def test_metrics_count_crlf_lf_and_lone_cr(self):
+                  m = measure_raw_bytes(b"A\r\nB\nC\rD")
+                  self.assertEqual(m["eol"], {"crlf": 1, "lf": 1, "cr": 1})
+                  self.assertTrue(m["eol_mixed"])
+                  self.assertEqual(m["physical_line_count"], 4)
+
+              def test_metrics_do_not_create_phantom_eof_line(self):
+                  self.assertEqual(measure_raw_bytes(b"A\r\nB\n")["physical_line_count"], 2)
+
+              def test_metrics_empty_input_has_zero_lines(self):
+                  m = measure_raw_bytes(b"")
+                  self.assertEqual(m["physical_line_count"], 0)
+                  self.assertIsNone(m["max_line"])
+                  self.assertEqual(m["eof_terminator"], "EMPTY")
+
+              def test_metrics_distinguish_leading_and_embedded_bom(self):
+                  m = measure_raw_bytes(b"\xef\xbb\xbfA\nB\xef\xbb\xbf")
+                  self.assertTrue(m["leading_utf8_bom"])
+                  self.assertEqual(m["embedded_utf8_bom_offsets"], [6])
+
+              def test_metrics_use_byte_length_and_original_offset(self):
+                  m = measure_raw_bytes("é\nABCD\n".encode("utf-8"))
+                  self.assertEqual(m["max_line"], {"byte_length": 4, "line_number": 2, "byte_offset": 3})
+
+              def test_metrics_record_invalid_utf8_without_replacement(self):
+                  m = measure_raw_bytes(b"valid\xff\n")
+                  self.assertFalse(m["utf8"]["valid"])
+                  self.assertEqual(m["utf8"]["first_error_offset"], 5)
+
+              def test_metrics_count_nul_bytes(self):
+                  m = measure_raw_bytes(b"A\x00B\n")
+                  self.assertEqual(m["nul_byte_count"], 1)
+                  self.assertEqual(m["first_nul_byte_offset"], 1)
 
               def test_manifest_encoding_is_stable(self):
                   sample = {"unicode_version": VERSION, "files": [{"path": "A", "sha256": "00"}]}
@@ -465,6 +604,13 @@ jobs:
                               "zip_member_sha256": hashlib.sha256(packaged).hexdigest(),
                               "direct_vs_zip_equal": True,
                           })
+                  for item in results:
+                      raw = direct[item["relative_path"]]
+                      item["raw_structure"] = measure_raw_bytes(raw)
+                      item["raw_sha256_before_metrics"] = hashlib.sha256(raw).hexdigest()
+                      item["raw_sha256_after_metrics"] = hashlib.sha256(raw).hexdigest()
+                      if item["raw_sha256_before_metrics"] != item["raw_sha256_after_metrics"]:
+                          raise ValueError("raw bytes changed during metrics collection")
                   report["files"] = results
                   report["cross_representation_status"] = "SUPPORTED_FOR_ALL_NINE_FILES"
 
@@ -490,6 +636,24 @@ jobs:
                   }
                   report["stable_manifest_sha256"] = hashlib.sha256(
                       canonical_manifest_bytes(stable)
+                  ).hexdigest()
+                  byte_metrics_payload = {
+                      "gate_id": "R1-U12-B",
+                      "tool_version": "1.0.0",
+                      "unicode_version": VERSION,
+                      "source_manifest_stable_sha256": report["stable_manifest_sha256"],
+                      "files": [
+                          {
+                              "relative_path": item["relative_path"],
+                              "sha256_before_metrics": item["raw_sha256_before_metrics"],
+                              "sha256_after_metrics": item["raw_sha256_after_metrics"],
+                              "structural": item["raw_structure"],
+                          }
+                          for item in results
+                      ],
+                  }
+                  report["byte_metrics_sha256"] = hashlib.sha256(
+                      canonical_manifest_bytes(byte_metrics_payload)
                   ).hexdigest()
                   report["status"] = "SUPPORTED"
                   report["acquired_at_utc"] = datetime.now(timezone.utc).isoformat()

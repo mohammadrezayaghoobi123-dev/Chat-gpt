@@ -333,13 +333,7 @@ describe("OrchestratorLedger bounded candidate cursor", () => {
     expect(first).toMatchObject({
       claimed: false,
       reason: "CLAIM_SCAN_BUDGET_EXHAUSTED",
-      nextCursor: {
-        version: 1,
-        executorId: "agent:worker-1",
-        snapshotSequence: 129,
-        createdAt: now,
-        taskId: "task-127",
-      },
+      nextCursor: expect.stringMatching(/^[a-f0-9]{32}$/),
       candidatesExamined: 128,
       candidateRowsRead: 129,
     });
@@ -362,6 +356,23 @@ describe("OrchestratorLedger bounded candidate cursor", () => {
       leaseGeneration: 1,
       candidatesExamined: 1,
       candidateRowsRead: 1,
+    });
+
+    const replay = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now + 2,
+      }),
+      leaseMs: 30_000,
+      now: now + 2,
+      cursor: first.nextCursor,
+    });
+    expect(replay).toEqual({ claimed: false, reason: "INVALID_CLAIM_CURSOR" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases WHERE task_id = ? AND worker_id = ?",
+        "task-128", "agent:worker-1",
+      ).one().count).toBe(1);
     });
   });
 });
@@ -407,6 +418,126 @@ describe("OrchestratorLedger reconciliation fail-closed policy", () => {
   });
 });
 
+
+describe("OrchestratorLedger cursor integrity", () => {
+  it("rejects caller-forged cursor positions instead of allowing task starvation", async () => {
+    const ledger = ledgerFor("claim-candidate-forged-cursor");
+    await createTask(ledger, "candidate-forged-cursor-a", "agent:worker-1");
+    await createTask(ledger, "candidate-forged-cursor-b", "agent:worker-1", "SCHEDULED", now + 1);
+    const result = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 30_000,
+      now,
+      cursor: {
+        version: 1,
+        executorId: "agent:worker-1",
+        snapshotSequence: 2,
+        createdAt: now + 1_000_000,
+        taskId: "zzzz",
+      },
+    });
+    expect(result).toEqual({ claimed: false, reason: "INVALID_CLAIM_CURSOR" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_execution_leases",
+      ).one().count).toBe(0);
+    });
+  });
+
+  it("does not consume a valid continuation token when another executor presents it", async () => {
+    const ledger = ledgerFor("claim-candidate-cursor-executor-binding");
+    const taskIds = Array.from({ length: 129 }, (_value, index) =>
+      "bound-" + String(index).padStart(3, "0"),
+    );
+    for (const taskId of taskIds) {
+      await createTask(ledger, taskId, "agent:worker-1");
+    }
+    await createTask(ledger, "bound-other-executor", "agent:worker-2", "SCHEDULED", now + 1);
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.transactionSync(() => {
+        for (const taskId of taskIds.slice(0, 128)) {
+          state.storage.sql.exec(
+            "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, 1, ?, ?)",
+            taskId, "agent:other-worker", now + 60_000, now,
+          );
+        }
+      });
+    });
+    const first = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 30_000,
+      now,
+    });
+    expect(first.reason).toBe("CLAIM_SCAN_BUDGET_EXHAUSTED");
+    expect(first.nextCursor).toMatch(/^[a-f0-9]{32}$/);
+
+    const wrongExecutor = await ledger.claimTask({
+      workerId: "agent:worker-2",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-2", role: "agent", operation: "claimTask", nowMs: now + 1,
+      }),
+      leaseMs: 30_000,
+      now: now + 1,
+      cursor: first.nextCursor,
+    });
+    expect(wrongExecutor).toEqual({ claimed: false, reason: "INVALID_CLAIM_CURSOR" });
+
+    const resumed = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now + 2,
+      }),
+      leaseMs: 30_000,
+      now: now + 2,
+      cursor: first.nextCursor,
+    });
+    expect(resumed).toMatchObject({ claimed: true, task: { taskId: "bound-128" } });
+  });
+});
+
+describe("OrchestratorLedger multiple expired lease reconciliation", () => {
+  it("leaves every expired lease and generation unchanged until trusted reconciliation exists", async () => {
+    const ledger = ledgerFor("claim-multiple-expired-leases-fail-closed");
+    await createTask(ledger, "expired-a", "agent:worker-1");
+    await createTask(ledger, "expired-b", "agent:worker-1", "SCHEDULED", now + 1);
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.transactionSync(() => {
+        state.storage.sql.exec(
+          "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, ?, ?, ?)",
+          "expired-a", "agent:old-worker-a", 4, now - 1, now - 100,
+        );
+        state.storage.sql.exec(
+          "INSERT INTO orchestrator_execution_leases (task_id, worker_id, lease_generation, lease_until, updated_at) VALUES (?, ?, ?, ?, ?)",
+          "expired-b", "agent:old-worker-b", 9, now - 1, now - 100,
+        );
+      });
+    });
+    const result = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
+      }),
+      leaseMs: 30_000,
+      now,
+    });
+    expect(result).toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      const leases = state.storage.sql.exec(
+        "SELECT task_id, worker_id, lease_generation, lease_until FROM orchestrator_execution_leases ORDER BY task_id",
+      ).toArray();
+      expect(leases).toEqual([
+        { task_id: "expired-a", worker_id: "agent:old-worker-a", lease_generation: 4, lease_until: now - 1 },
+        { task_id: "expired-b", worker_id: "agent:old-worker-b", lease_generation: 9, lease_until: now - 1 },
+      ]);
+    });
+  });
+});
 
 describe("OrchestratorLedger migration, concurrency, and scale", () => {
   it("migrates the previous candidate-table schema without losing eligible rows", async () => {
@@ -584,7 +715,7 @@ describe("OrchestratorLedger claim concurrency and cursor validation", () => {
     });
   });
 
-  it("rejects a cursor scoped to a different executor before any lease side effect", async () => {
+  it("rejects an unknown cursor token before any lease side effect", async () => {
     const ledger = ledgerFor("claim-candidate-invalid-cursor");
     await createTask(ledger, "candidate-invalid-cursor", "agent:worker-1");
     const result = await ledger.claimTask({
@@ -594,13 +725,7 @@ describe("OrchestratorLedger claim concurrency and cursor validation", () => {
       }),
       leaseMs: 30_000,
       now,
-      cursor: {
-        version: 1,
-        executorId: "agent:worker-2",
-        snapshotSequence: 1,
-        createdAt: now,
-        taskId: "candidate-invalid-cursor",
-      },
+      cursor: "a".repeat(32),
     });
     expect(result).toEqual({ claimed: false, reason: "INVALID_CLAIM_CURSOR" });
     await runInDurableObject(ledger, async (_instance, state) => {

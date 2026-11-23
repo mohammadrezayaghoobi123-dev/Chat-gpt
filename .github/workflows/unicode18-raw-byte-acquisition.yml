@@ -217,6 +217,46 @@ jobs:
                       + " | " + str(maximum.get("byte_length", "N/A"))
                       + " |"
                   )
+              lexical_digest = report.get("lexical_record_metrics_sha256")
+              if lexical_digest:
+                  lines.extend([
+                      "",
+                      "## R1-U12-C lexical record metrics",
+                      "- Status: **" + str(report.get("lexical_record_metrics_status", "UNKNOWN")) + "**",
+                      "- Metrics SHA-256: " + str(lexical_digest),
+                      "- Scanned data files: " + str(report.get("lexical_record_metrics_file_count", "UNKNOWN")),
+                      "- Data records: " + str(report.get("lexical_record_metrics_record_count", "UNKNOWN")),
+                      "",
+                      "| File | Format | Records | Blank | Comment-only | Inline comments | Directives | Fields (count:records) | Shape anomalies | Empty fields | Max record bytes | Max field bytes |",
+                      "|---|---|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|",
+                  ])
+                  for item in report.get("files", []):
+                      metric = item.get("lexical_records") or {}
+                      if not metric.get("scanned", True) and metric.get("format") == "DOCUMENT_EXCLUDED":
+                          continue
+                      if not metric:
+                          continue
+                      histogram = ",".join(
+                          str(key) + ":" + str(value)
+                          for key, value in metric.get("field_count_histogram", {}).items()
+                      ) or "NONE"
+                      max_record = metric.get("max_record") or {}
+                      max_field = metric.get("max_field") or {}
+                      lines.append(
+                          "| " + str(item.get("relative_path", "UNKNOWN"))
+                          + " | " + str(metric.get("format", "UNKNOWN"))
+                          + " | " + str(metric.get("data_records", "UNKNOWN"))
+                          + " | " + str(metric.get("blank_lines", "UNKNOWN"))
+                          + " | " + str(metric.get("comment_only_lines", "UNKNOWN"))
+                          + " | " + str(metric.get("inline_comment_records", "UNKNOWN"))
+                          + " | " + str(metric.get("directive_lines", "UNKNOWN"))
+                          + " | " + histogram
+                          + " | " + str(metric.get("unexpected_field_count_records", "UNKNOWN"))
+                          + " | " + str(metric.get("empty_field_count", "UNKNOWN"))
+                          + " | " + str(max_record.get("byte_length", "N/A"))
+                          + " | " + str(max_field.get("byte_length", "N/A"))
+                          + " |"
+                      )
               with open(summary_path, "a", encoding="utf-8", newline="\n") as summary:
                   summary.write("\n".join(lines) + "\n")
 
@@ -357,6 +397,200 @@ jobs:
                   "utf8": utf8,
               }
 
+          LEXICAL_MAX_LINE_BYTES = 4096
+          LEXICAL_MAX_FIELDS = 32
+
+          LEXICAL_FORMAT_SPECS = {
+              "PropList.txt": {
+                  "format": "UCD_PROPERTY",
+                  "comment_marker": b"#",
+                  "accepted_field_counts": (2, 3),
+                  "trailing_separator": False,
+                  "directives": False,
+              },
+              "DerivedCoreProperties.txt": {
+                  "format": "UCD_PROPERTY",
+                  "comment_marker": b"#",
+                  "accepted_field_counts": (2, 3),
+                  "trailing_separator": False,
+                  "directives": False,
+              },
+              "DerivedAge.txt": {
+                  "format": "UCD_PROPERTY",
+                  "comment_marker": b"#",
+                  "accepted_field_counts": (2, 3),
+                  "trailing_separator": False,
+                  "directives": False,
+              },
+              "extracted/DerivedGeneralCategory.txt": {
+                  "format": "UCD_PROPERTY",
+                  "comment_marker": b"#",
+                  "accepted_field_counts": (2, 3),
+                  "trailing_separator": False,
+                  "directives": False,
+              },
+              "DerivedNormalizationProps.txt": {
+                  "format": "UCD_PROPERTY",
+                  "comment_marker": b"#",
+                  "accepted_field_counts": (2, 3),
+                  "trailing_separator": False,
+                  "directives": False,
+              },
+              "CaseFolding.txt": {
+                  "format": "CASE_FOLDING",
+                  "comment_marker": b"#",
+                  "accepted_field_counts": (3,),
+                  "trailing_separator": True,
+                  "directives": False,
+              },
+              "UnicodeData.txt": {
+                  "format": "UNICODE_DATA",
+                  "comment_marker": None,
+                  "accepted_field_counts": (15,),
+                  "trailing_separator": False,
+                  "directives": False,
+              },
+              "NormalizationTest.txt": {
+                  "format": "NORMALIZATION_TEST",
+                  "comment_marker": b"#",
+                  "accepted_field_counts": (5,),
+                  "trailing_separator": True,
+                  "directives": True,
+              },
+          }
+
+          def measure_lexical_records(path, raw):
+              if not isinstance(raw, bytes):
+                  raise TypeError("lexical scanner requires immutable raw bytes")
+              spec = LEXICAL_FORMAT_SPECS.get(path)
+              if spec is None:
+                  raise ValueError("unsupported lexical format: " + str(path))
+
+              physical_lines = 0
+              blank_lines = 0
+              comment_only_lines = 0
+              inline_comment_records = 0
+              directive_lines = 0
+              data_records = 0
+              trailing_delimiter_records = 0
+              unexpected_field_count_records = 0
+              empty_field_count = 0
+              data_tab_byte_count = 0
+              field_count_histogram = {}
+              max_record = None
+              max_field = None
+
+              for line_number, line_offset, line in iter_metric_lines(raw):
+                  physical_lines += 1
+                  if len(line) > LEXICAL_MAX_LINE_BYTES:
+                      raise ValueError(
+                          "lexical line byte limit exceeded at " + path
+                          + ":" + str(line_number)
+                      )
+                  if not line.strip(b" \t"):
+                      blank_lines += 1
+                      continue
+
+                  comment_position = -1
+                  marker = spec["comment_marker"]
+                  if marker is not None:
+                      comment_position = line.find(marker)
+                  has_comment = comment_position >= 0
+                  payload = line[:comment_position] if has_comment else line
+                  if not payload.strip(b" \t"):
+                      if has_comment:
+                          comment_only_lines += 1
+                      else:
+                          blank_lines += 1
+                      continue
+
+                  if spec["directives"] and payload.lstrip(b" \t").startswith(b"@"):
+                      directive_lines += 1
+                      continue
+
+                  if has_comment:
+                      inline_comment_records += 1
+                  data_records += 1
+                  data_tab_byte_count += payload.count(b"\t")
+
+                  trailing_separator = (
+                      spec["trailing_separator"]
+                      and payload.rstrip(b" \t").endswith(b";")
+                  )
+                  delimiter_count = payload.count(b";")
+                  field_count = delimiter_count if trailing_separator else delimiter_count + 1
+                  if field_count > LEXICAL_MAX_FIELDS:
+                      raise ValueError(
+                          "lexical field count limit exceeded at " + path
+                          + ":" + str(line_number)
+                      )
+
+                  fields = payload.split(b";")
+                  if trailing_separator:
+                      fields.pop()
+                      trailing_delimiter_records += 1
+
+                  field_count = len(fields)
+                  histogram_key = str(field_count)
+                  field_count_histogram[histogram_key] = (
+                      field_count_histogram.get(histogram_key, 0) + 1
+                  )
+                  if field_count not in spec["accepted_field_counts"]:
+                      unexpected_field_count_records += 1
+
+                  record_candidate = {
+                      "byte_length": len(payload),
+                      "line_number": line_number,
+                      "byte_offset": line_offset,
+                  }
+                  if (
+                      max_record is None
+                      or record_candidate["byte_length"] > max_record["byte_length"]
+                  ):
+                      max_record = record_candidate
+
+                  field_offset = line_offset
+                  for field_index, field in enumerate(fields):
+                      if not field.strip(b" \t"):
+                          empty_field_count += 1
+                      candidate = {
+                          "byte_length": len(field),
+                          "line_number": line_number,
+                          "byte_offset": field_offset,
+                          "field_index": field_index,
+                      }
+                      if (
+                          max_field is None
+                          or candidate["byte_length"] > max_field["byte_length"]
+                      ):
+                          max_field = candidate
+                      field_offset += len(field) + 1
+
+              return {
+                  "format": spec["format"],
+                  "physical_lines": physical_lines,
+                  "blank_lines": blank_lines,
+                  "comment_only_lines": comment_only_lines,
+                  "inline_comment_records": inline_comment_records,
+                  "directive_lines": directive_lines,
+                  "data_records": data_records,
+                  "trailing_delimiter_records": trailing_delimiter_records,
+                  "field_count_histogram": {
+                      key: field_count_histogram[key]
+                      for key in sorted(field_count_histogram, key=int)
+                  },
+                  "accepted_field_counts": list(spec["accepted_field_counts"]),
+                  "unexpected_field_count_records": unexpected_field_count_records,
+                  "empty_field_count": empty_field_count,
+                  "data_tab_byte_count": data_tab_byte_count,
+                  "max_record": max_record,
+                  "max_field": max_field,
+                  "resource_limits": {
+                      "max_line_bytes": LEXICAL_MAX_LINE_BYTES,
+                      "max_fields_per_record": LEXICAL_MAX_FIELDS,
+                  },
+              }
+
           def canonical_manifest_bytes(document):
               return json.dumps(
                   document, ensure_ascii=True, sort_keys=True, separators=(",", ":")
@@ -478,6 +712,7 @@ jobs:
                   )
                   metrics = measure_lexical_records("PropList.txt", raw)
                   self.assertEqual(metrics["data_records"], 2)
+                  self.assertEqual(metrics["trailing_delimiter_records"], 1)
                   self.assertEqual(metrics["comment_only_lines"], 1)
                   self.assertEqual(metrics["blank_lines"], 1)
                   self.assertEqual(metrics["inline_comment_records"], 1)
@@ -485,7 +720,7 @@ jobs:
                   self.assertEqual(metrics["unexpected_field_count_records"], 0)
 
               def test_case_folding_expects_three_fields_and_reports_shape_anomaly(self):
-                  raw = b"0041; C; 0061; # LATIN CAPITAL LETTER A\n0042; C; # missing mapping\n"
+                  raw = b"0041; C; 0061; # LATIN CAPITAL LETTER A\n0042; C # missing mapping\n"
                   metrics = measure_lexical_records("CaseFolding.txt", raw)
                   self.assertEqual(metrics["field_count_histogram"], {"2": 1, "3": 1})
                   self.assertEqual(metrics["unexpected_field_count_records"], 1)
@@ -511,6 +746,7 @@ jobs:
                   self.assertEqual(metrics["data_records"], 1)
                   self.assertEqual(metrics["field_count_histogram"], {"5": 1})
                   self.assertEqual(metrics["inline_comment_records"], 1)
+                  self.assertEqual(metrics["trailing_delimiter_records"], 1)
                   self.assertEqual(metrics["unexpected_field_count_records"], 0)
 
               def test_at_prefix_is_not_a_directive_in_property_files(self):
@@ -550,6 +786,10 @@ jobs:
                   before = hashlib.sha256(raw).hexdigest()
                   measure_lexical_records("PropList.txt", raw)
                   self.assertEqual(hashlib.sha256(raw).hexdigest(), before)
+
+              def test_scanner_rejects_mutable_input_buffers(self):
+                  with self.assertRaisesRegex(TypeError, "immutable raw bytes"):
+                      measure_lexical_records("PropList.txt", bytearray(b"0041; Alpha\n"))
 
           suite = unittest.TestSuite((
               unittest.defaultTestLoader.loadTestsFromTestCase(AcquisitionSafetyTests),
@@ -799,6 +1039,53 @@ jobs:
                   report["byte_metrics_sha256"] = hashlib.sha256(
                       canonical_manifest_bytes(byte_metrics_payload)
                   ).hexdigest()
+
+                  lexical_metrics = []
+                  for item in results:
+                      path = item["relative_path"]
+                      if path == "ReadMe.txt":
+                          item["lexical_records"] = {
+                              "format": "DOCUMENT_EXCLUDED",
+                              "scanned": False,
+                          }
+                          continue
+                      lexical = measure_lexical_records(path, direct[path])
+                      if lexical["physical_lines"] != item["raw_structure"]["physical_line_count"]:
+                          raise ValueError("lexical and raw physical-line counts differ: " + path)
+                      item["lexical_records"] = lexical
+                      lexical_metrics.append({
+                          "relative_path": path,
+                          "source_sha256": item["sha256"],
+                          "metrics": lexical,
+                      })
+
+                  lexical_payload = {
+                      "gate_id": "R1-U12-C",
+                      "tool_version": "1.0.0",
+                      "unicode_version": VERSION,
+                      "source_manifest_stable_sha256": report["stable_manifest_sha256"],
+                      "files": lexical_metrics,
+                  }
+                  report["lexical_record_metrics_sha256"] = hashlib.sha256(
+                      canonical_manifest_bytes(lexical_payload)
+                  ).hexdigest()
+                  report["lexical_record_metrics_file_count"] = len(lexical_metrics)
+                  report["lexical_record_metrics_record_count"] = sum(
+                      item["metrics"]["data_records"] for item in lexical_metrics
+                  )
+                  unexpected_shapes = sum(
+                      item["metrics"]["unexpected_field_count_records"]
+                      for item in lexical_metrics
+                  )
+                  report["lexical_record_metrics_unexpected_shapes"] = unexpected_shapes
+                  report["lexical_record_metrics_status"] = (
+                      "SUPPORTED" if unexpected_shapes == 0
+                      else "BLOCKED_UNEXPECTED_FIELD_SHAPES"
+                  )
+                  if unexpected_shapes:
+                      raise ValueError(
+                          "lexical record field-shape anomalies: " + str(unexpected_shapes)
+                      )
                   report["status"] = "SUPPORTED"
                   report["acquired_at_utc"] = datetime.now(timezone.utc).isoformat()
               except Exception as exc:

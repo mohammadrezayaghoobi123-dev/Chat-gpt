@@ -8,10 +8,19 @@ const authToken = "test-owner-mcp-auth-token-0000000000000001";
 const proposalId = "vault-proposal-preflight-crypto-failure-0001";
 const path = "knowledge/tenants/owner/failure-atomicity.md";
 const content = "# Vault proposal failure atomicity\nA controlled test fixture.\n";
-const blobSha = "e".repeat(40);
 
 async function sha256Hex(value) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function gitBlobSha(value) {
+  const bytes = new TextEncoder().encode(value);
+  const header = new TextEncoder().encode("blob " + bytes.byteLength + "\0");
+  const object = new Uint8Array(header.byteLength + bytes.byteLength);
+  object.set(header);
+  object.set(bytes, header.byteLength);
+  const digest = await crypto.subtle.digest("SHA-1", object);
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -50,6 +59,7 @@ describe("Knowledge Vault proposal failure atomicity", () => {
     const hadOwnDigest = Object.prototype.hasOwnProperty.call(subtle, "digest");
     const originalDescriptor = Object.getOwnPropertyDescriptor(subtle, "digest");
     const originalFetch = globalThis.fetch;
+    const blobSha = await gitBlobSha(content);
     const github = createGitHubWriteMock({ filePath: path, blobSha, baseBranch: "main" });
     const marker = "SENSITIVE_VAULT_EVENT_ID_DIGEST_FAILURE";
     let injected = false;

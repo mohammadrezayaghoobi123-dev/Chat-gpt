@@ -1239,13 +1239,27 @@ test("knowledge_document_propose hashes all deterministic identifiers before any
   const writeCalls=fixture.calls.filter(call=>call.method!=="GET");
   const proposalRecords=knowledgeStore.calls.filter(call=>call.method==="recordVaultProposal");
   const outboxWrites=knowledgeStore.calls.filter(call=>call.method==="enqueueOutbox");
-  assert.equal(body.result.isError,true);
-  assert.match(body.result.content[0].text,/KNOWLEDGE_VAULT_HASH_UNAVAILABLE/);
-  assert.equal(body.result.content[0].text.includes(injectedFailure.message),false);
-  assert.equal(targetedDigestCalls,1);
-  assert.equal(writeCalls.length,0);
-  assert.equal(proposalRecords.length,0);
-  assert.equal(outboxWrites.length,0);
+  const toolError=JSON.parse(body.result.content[0].text);
+  const observed={
+   isError:body.result.isError,
+   toolError,
+   providerMessageLeaked:body.result.content[0].text.includes(injectedFailure.message),
+   targetedDigestCalls,
+   githubWriteCalls:writeCalls.length,
+   githubPrCreated:fixture.calls.some(call=>call.method==="POST"&&call.url.endsWith("/pulls")),
+   proposalRecordCalls:proposalRecords.length,
+   outboxWriteCalls:outboxWrites.length
+  };
+  assert.deepEqual(observed,{
+   isError:true,
+   toolError:{error:"KNOWLEDGE_VAULT_HASH_UNAVAILABLE"},
+   providerMessageLeaked:false,
+   targetedDigestCalls:1,
+   githubWriteCalls:0,
+   githubPrCreated:false,
+   proposalRecordCalls:0,
+   outboxWriteCalls:0
+  });
  }finally{
   globalThis.fetch=originalFetch;
   if(hadOwnDigest)Object.defineProperty(subtle,"digest",originalDescriptor);

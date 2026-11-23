@@ -290,6 +290,10 @@ describe("Multi-actor Owner, Agent, Publisher, and Consumer linearizability", ()
           return transition;
         },
       );
+      expect(transition).toMatchObject({
+        updated: true,
+        task: { taskId, state: "RUNNING", version: 2 },
+      });
       expect(race.ownerResult).toMatchObject({
         applied: true,
         operation: "cancel",

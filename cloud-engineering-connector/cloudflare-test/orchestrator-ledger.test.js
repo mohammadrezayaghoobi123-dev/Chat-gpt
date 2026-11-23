@@ -1045,6 +1045,114 @@ it("rejects Agent lease renewal after a forward caller-clock jump", async () => 
   }
 });
 
+it("preserves the active lease generation when a forward clock jump requires claim reconciliation", async () => {
+  const ledger = ledgerFor("ledger-agent-clock-jump-claim-reconciliation");
+  await createTask(ledger, {
+    task: task(), idempotencyKey: "task-create-agent-clock-jump-reconciliation",
+    inputHash: "c".repeat(64), now,
+  });
+  const claimed = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(claimed).toMatchObject({
+    claimed: true,
+    leaseGeneration: 1,
+    leaseUntil: now + 30_000,
+  });
+
+  const forwardJumpedCallerTime = now + 60_000;
+  const stableLedgerWallClock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    const claimJti = "jti-agent-clock-jump-reclaim-0001";
+    const blockedClaim = await ledger.claimTask({
+      taskId: "task-0001",
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1",
+        role: "agent",
+        operation: "claimTask",
+        nowMs: forwardJumpedCallerTime,
+        jti: claimJti,
+      }),
+      leaseMs: 30_000,
+      now: forwardJumpedCallerTime,
+    });
+
+    expect(blockedClaim).toEqual({
+      claimed: false,
+      reason: "RECONCILIATION_REQUIRED",
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until, updated_at FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-0001",
+      ).one()).toEqual({
+        worker_id: "agent:worker-1",
+        lease_generation: 1,
+        lease_until: now + 30_000,
+        updated_at: now,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        claimJti,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT state, version FROM orchestrator_tasks WHERE task_id = ?",
+        "task-0001",
+      ).one()).toEqual({ state: "SCHEDULED", version: 1 });
+    });
+  } finally {
+    stableLedgerWallClock.mockRestore();
+  }
+
+  const renewalJti = "jti-agent-clock-jump-generation-renew-0001";
+  const renewed = await ledger.renewLease({
+    taskId: "task-0001",
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1",
+      role: "agent",
+      operation: "renewLease",
+      nowMs: now + 1,
+      jti: renewalJti,
+    }),
+    leaseGeneration: claimed.leaseGeneration,
+    leaseMs: 60_000,
+    now: now + 1,
+  });
+  expect(renewed).toEqual({
+    renewed: true,
+    leaseUntil: now + 1 + 60_000,
+    leaseGeneration: 1,
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT worker_id, lease_generation, lease_until, updated_at FROM orchestrator_execution_leases WHERE task_id = ?",
+      "task-0001",
+    ).one()).toEqual({
+      worker_id: "agent:worker-1",
+      lease_generation: 1,
+      lease_until: now + 1 + 60_000,
+      updated_at: now + 1,
+    });
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      "jti-agent-clock-jump-reclaim-0001",
+    ).one().count).toBe(0);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      renewalJti,
+    ).one().count).toBe(1);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+      "task-0001",
+    ).one().count).toBe(1);
+  });
+});
+
 it("characterizes whether a backdated Agent timestamp can renew a lease after wall-clock expiry", async () => {
   const ledger = ledgerFor("ledger-agent-lease-renewal-clock-rollback");
   await createTask(ledger, {

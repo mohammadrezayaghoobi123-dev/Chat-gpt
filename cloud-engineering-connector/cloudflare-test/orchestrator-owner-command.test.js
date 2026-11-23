@@ -1894,4 +1894,137 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+
+  it("consumes a verified consumer JTI when cancellation commits before the receipt transaction", async () => {
+    const taskId = "task-receipt-jti-cancel-gap-0001";
+    const ledger = ledgerFor("receipt-jti-cancel-gap");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const eventId = "receipt-jti-cancel-gap-event-01";
+    const idempotencyKey = "receipt-jti-cancel-gap-key-1";
+    const payload = { taskId, version: 1, from: "READY", to: "SCHEDULED" };
+    await ledger.enqueueOutbox({
+      eventId,
+      idempotencyKey,
+      taskId,
+      eventType: "task.transitioned",
+      payload,
+      workerId: "agent:worker-1",
+      workerAssertion: await workerAssertion("agent:worker-1", "agent", "enqueueOutbox"),
+      now,
+    });
+
+    const workerAssertionToken = await workerAssertion(
+      "orchestrator-outbox-consumer",
+      "consumer",
+      "recordOutboxReceipt",
+      now + 1,
+    );
+    const jti = assertionJti(workerAssertionToken);
+    const receiptInput = {
+      eventId,
+      eventType: "task.transitioned",
+      idempotencyKey,
+      taskId,
+      payload,
+      createdAt: now,
+      schemaVersion: 1,
+      envelopeSha256: "e".repeat(64),
+      consumerId: "orchestrator-outbox-consumer",
+      workerAssertion: workerAssertionToken,
+      now: now + 1,
+    };
+    const ownerCommandInput = await ownerInput({
+      command: {
+        operation: "cancel",
+        taskId,
+        reason: "Commit cancellation after consumer MAC verification but before receipt transaction",
+        eventId: "receipt-jti-cancel-gap-owner-command-01",
+      },
+      deliveryId: "delivery-receipt-jti-cancel-gap-01",
+      commentId: "123456814",
+      now: now + 2,
+    });
+
+    // Hold the exact consumer assertion after its MAC has been verified but
+    // before verifyWorkerAssertion returns and recordOutboxReceipt opens SQL.
+    const signingInput = workerAssertionToken.split(".").slice(0, 3).join(".");
+    const originalVerify = crypto.subtle.verify.bind(crypto.subtle);
+    let releaseVerifiedAssertion;
+    let signalVerifiedAssertion;
+    let paused = false;
+    const verifiedAssertionGate = new Promise(resolve => {
+      releaseVerifiedAssertion = resolve;
+    });
+    const verifiedAssertionReached = new Promise(resolve => {
+      signalVerifiedAssertion = resolve;
+    });
+    const verifySpy = vi.spyOn(crypto.subtle, "verify").mockImplementation(
+      async (algorithm, key, signature, data) => {
+        const valid = await originalVerify(algorithm, key, signature, data);
+        if (!paused && new TextDecoder().decode(data) === signingInput) {
+          paused = true;
+          signalVerifiedAssertion();
+          await verifiedAssertionGate;
+        }
+        return valid;
+      },
+    );
+
+    let pendingReceipt;
+    let cancellation;
+    let receipt;
+    let replay;
+    try {
+      pendingReceipt = ledger.recordOutboxReceipt(receiptInput);
+      await verifiedAssertionReached;
+      cancellation = await ledger.executeOwnerCommand(ownerCommandInput);
+      releaseVerifiedAssertion();
+      receipt = await pendingReceipt;
+      replay = await ledger.recordOutboxReceipt(receiptInput);
+    } finally {
+      releaseVerifiedAssertion();
+      verifySpy.mockRestore();
+    }
+
+    expect(cancellation).toMatchObject({
+      applied: true,
+      operation: "cancel",
+      task: { taskId, state: "CANCELLED", version: 2 },
+    });
+    expect(receipt).toMatchObject({
+      recorded: false,
+      blocked: true,
+      reason: "TASK_VERSION_FENCED",
+    });
+    expect(replay).toMatchObject({
+      recorded: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+      taskId,
+      state: "CANCELLED",
+      version: 2,
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ? AND subject = 'orchestrator-outbox-consumer' AND role = 'consumer' AND operation = 'recordOutboxReceipt'",
+        jti,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ? AND operation = 'cancel'",
+        taskId,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ? AND event_type = 'OWNER_TASK_CANCELLED'",
+        taskId,
+      ).one().count).toBe(1);
+    });
+  });
+
 });

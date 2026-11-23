@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { canonicalJson } from "../orchestrator-protocol.js";
 
 const encoder = new TextEncoder();
 const nowMs = 1_800_000_000_000;
@@ -7,6 +8,17 @@ const kid = "executor-ed25519-v1";
 
 function encodeBase64Url(bytes) {
   return Buffer.from(bytes).toString("base64url");
+}
+
+async function signClaims(privateKey, keyId, claims) {
+  const payload = encodeBase64Url(new TextEncoder().encode(canonicalJson(claims)));
+  const signingInput = "v2." + keyId + "." + payload;
+  const signature = new Uint8Array(await crypto.subtle.sign(
+    { name: "Ed25519" },
+    privateKey,
+    new TextEncoder().encode(signingInput),
+  ));
+  return signingInput + "." + encodeBase64Url(signature);
 }
 
 async function fixture() {
@@ -139,6 +151,26 @@ test("Executor verifier enforces expiry, clock skew, principal, role, and operat
     api.verifyExecutorWorkerAssertion(keys.publicKeySet, token, { nowMs: nowMs + 120_000 }),
     error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
   );
+  await assert.rejects(
+    api.verifyExecutorWorkerAssertion(keys.publicKeySet, token, { nowMs: nowMs - 120_000 }),
+    error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
+  );
+  const parts = token.split(".");
+  const originalClaims = JSON.parse(Buffer.from(parts[2], "base64url").toString("utf8"));
+  for (const override of [
+    { role: "system" },
+    { op: "createTask" },
+    { sub: "orchestrator-scheduler" },
+    { iss: "chat-gpt111-worker" },
+    { aud: "untrusted-audience" },
+  ]) {
+    const forgedClaims = { ...originalClaims, ...override };
+    const correctlySignedUnauthorizedToken = await signClaims(keys.pair.privateKey, kid, forgedClaims);
+    await assert.rejects(
+      api.verifyExecutorWorkerAssertion(keys.publicKeySet, correctlySignedUnauthorizedToken, { nowMs }),
+      error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
+    );
+  }
   const unauthorizedPolicy = JSON.stringify({
     [kid]: { publicKey: keys.publicKey, subject: "orchestrator-scheduler", role: "system", operations: ["createTask"] },
   });

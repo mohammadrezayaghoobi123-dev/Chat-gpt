@@ -11,10 +11,7 @@ const EXECUTOR_PRIVATE_KEY_PKCS8 = base64Url(Uint8Array.from([
   ...Array.from({ length: 32 }, (_value, index) => index + 1),
 ]));
 const SCHEDULER_KID = "test-v1";
-const SCHEDULER_KEY = Uint8Array.from(
-  "3031323334353637383961626364656630313233343536373839616263646566".match(/../g),
-  byte => Number.parseInt(byte, 16),
-);
+const SCHEDULER_KEY = new TextEncoder().encode("0123456789abcdef0123456789abcdef");
 const now = 1_800_000_000_000;
 
 function ledgerFor(name) {

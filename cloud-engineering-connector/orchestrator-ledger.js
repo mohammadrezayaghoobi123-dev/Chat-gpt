@@ -3,7 +3,7 @@ import { transitionTask as transitionTaskCore, TASK_STATES } from "./orchestrato
 import { assertAgentRoundLimit } from "./orchestrator-protocol.js";
 import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orchestrator-protocol.js";
 import { verifyWorkerAssertion } from "./orchestrator-worker-identity.js";
-import { verifyExecutorWorkerAssertion } from "./orchestrator-executor-assertion.js";
+import { assertExecutorWorkerAssertionTime, verifyExecutorWorkerAssertion } from "./orchestrator-executor-assertion.js";
 import { verifyOwnerAssertion } from "./orchestrator-owner-assertion.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -28,18 +28,18 @@ async function verifyLedgerWorkerAssertion(env, workerId, workerAssertion, role,
     }
     // The Ledger's clock is authoritative for Executor assertion expiry and lease fencing.
     // Never let the Executor backdate the timestamp used by stateful Ledger operations.
-    const trustedNow = Date.now();
+    const verificationNow = Date.now();
     const verified = await verifyExecutorWorkerAssertion(
       env?.ORCHESTRATOR_EXECUTOR_VERIFICATION_KEYS,
       workerAssertion,
-      { nowMs: trustedNow },
+      { nowMs: verificationNow },
     );
     if (verified.operation !== operation) {
       throw Object.assign(new Error("Executor assertion operation mismatch."), {
         code: "AUTHENTICATED_WORKER_REQUIRED",
       });
     }
-    return Object.freeze({ ...verified, trustedNow });
+    return verified;
   }
   return verifyWorkerAssertion(env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
     subject: workerId, role, operation, nowMs: now,
@@ -807,7 +807,6 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
-    now = verifiedAssertion.trustedNow ?? now;
     if (taskId !== undefined) identifier(taskId, "taskId");
     if (taskId !== undefined && cursor !== undefined) {
       return { claimed: false, reason: "INVALID_CLAIM_CURSOR" };
@@ -823,6 +822,15 @@ export class OrchestratorLedger extends DurableObject {
     const nextCursorHash = nextCursorToken === null
       ? null
       : await sha256Canonical({ token: nextCursorToken });
+
+    if (workerId === EXECUTOR_PRINCIPAL) {
+      now = Date.now();
+      try {
+        assertExecutorWorkerAssertionTime(verifiedAssertion, now);
+      } catch {
+        return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+    }
 
     // Caller-shaped evidence is not an authorization. No trusted reconciliation
     // issuer or claimTask runtime caller exists in this repository, so expired
@@ -1118,7 +1126,14 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
-    now = verifiedAssertion.trustedNow ?? now;
+    if (workerId === EXECUTOR_PRINCIPAL) {
+      now = Date.now();
+      try {
+        assertExecutorWorkerAssertionTime(verifiedAssertion, now);
+      } catch {
+        return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+    }
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];
@@ -1149,7 +1164,14 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
-    now = verifiedAssertion.trustedNow ?? now;
+    if (workerId === EXECUTOR_PRINCIPAL) {
+      now = Date.now();
+      try {
+        assertExecutorWorkerAssertionTime(verifiedAssertion, now);
+      } catch {
+        return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+    }
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
       const lease = sql.exec("SELECT * FROM orchestrator_execution_leases WHERE task_id = ?", taskId).toArray()[0];

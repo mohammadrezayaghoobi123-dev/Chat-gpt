@@ -532,4 +532,51 @@ describe("Executor Ed25519 trust boundary", () => {
       reason: "LEASE_FENCE_MISMATCH",
     });
   });
+
+  it("uses a post-verification Ledger timestamp when renewing an Executor lease", async () => {
+    const ledger = ledgerFor("executor-ed25519-lease-clock-toctou");
+    await expect(createScheduledTask(ledger, "task-executor-clock-toctou", EXECUTOR_ID))
+      .resolves.toMatchObject({ created: true });
+    const issuedAt = Date.now();
+    const claimed = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(issuedAt, "claimTask"),
+      leaseMs: 30_000,
+      now: issuedAt,
+      taskId: "task-executor-clock-toctou",
+    });
+    expect(claimed).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    const realNow = Date.now;
+    const verificationTime = realNow();
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE orchestrator_execution_leases SET lease_until = ? WHERE task_id = ?",
+        verificationTime + 500, "task-executor-clock-toctou",
+      );
+    });
+
+    let clockReads = 0;
+    Date.now = () => {
+      clockReads += 1;
+      return clockReads === 1 ? verificationTime : verificationTime + 1_000;
+    };
+    try {
+      const renewed = await ledger.renewLease({
+        taskId: "task-executor-clock-toctou",
+        workerId: EXECUTOR_ID,
+        workerAssertion: await createExecutorAssertion(verificationTime, "renewLease"),
+        leaseGeneration: claimed.leaseGeneration,
+        leaseMs: 30_000,
+        now: verificationTime,
+      });
+      expect(renewed).toMatchObject({
+        renewed: false,
+        reason: "LEASE_FENCE_MISMATCH",
+      });
+      expect(clockReads).toBeGreaterThanOrEqual(2);
+    } finally {
+      Date.now = realNow;
+    }
+  });
 });

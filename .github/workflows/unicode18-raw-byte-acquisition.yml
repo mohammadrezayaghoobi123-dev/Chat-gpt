@@ -7,6 +7,7 @@ on:
       - "integration/master-brain-unification-2026-11-15"
       - "work/r1u12b-raw-structure-metrics-2026-11-23"
       - "work/r1u12c-lexical-structure-2026-11-23"
+      - "work/r1u12d1-unicodedata-semantic-2026-11-23"
     paths:
       - ".github/workflows/unicode18-raw-byte-acquisition.yml"
 
@@ -823,9 +824,260 @@ jobs:
                   with self.assertRaisesRegex(TypeError, "immutable raw bytes"):
                       measure_lexical_records("PropList.txt", bytearray(b"0041; Alpha\n"))
 
+          class UnicodeDataSemanticTests(unittest.TestCase):
+              def record(
+                  self, codepoint=0x0041, name=b"TEST CHARACTER", category=b"Lu",
+                  ccc=b"0", bidi=b"L", decomposition=b"", decimal=b"",
+                  digit=b"", numeric=b"", mirrored=b"N", unicode1=b"",
+                  iso_comment=b"", uppercase=b"", lowercase=b"", titlecase=b"",
+              ):
+                  if isinstance(codepoint, int):
+                      codepoint = ("%04X" % codepoint).encode("ascii")
+                  fields = [
+                      codepoint, name, category, ccc, bidi, decomposition,
+                      decimal, digit, numeric, mirrored, unicode1, iso_comment,
+                      uppercase, lowercase, titlecase,
+                  ]
+                  return b";".join(fields) + b"\n"
+
+              def decimal_set(self, start=0x0030):
+                  return b"".join(
+                      self.record(
+                          codepoint=start + value,
+                          name=("DIGIT " + str(value)).encode("ascii"),
+                          category=b"Nd",
+                          bidi=b"EN",
+                          decimal=str(value).encode("ascii"),
+                          digit=str(value).encode("ascii"),
+                          numeric=str(value).encode("ascii"),
+                      )
+                      for value in range(10)
+                  )
+
+              def test_accepts_minimal_semantically_valid_record(self):
+                  result = validate_unicode_data_semantics(self.record())
+                  self.assertEqual(result["records"], 1)
+                  self.assertEqual(result["range_pairs"], 0)
+
+              def test_rejects_empty_input_and_blank_records(self):
+                  for raw in (b"", b"\n", self.record() + b"\n"):
+                      with self.subTest(raw=raw[:8]), self.assertRaises(ValueError):
+                          validate_unicode_data_semantics(raw)
+
+              def test_rejects_wrong_field_count(self):
+                  malformed = b";".join(self.record().rstrip(b"\n").split(b";")[:-1]) + b"\n"
+                  with self.assertRaisesRegex(ValueError, "15 fields"):
+                      validate_unicode_data_semantics(malformed)
+
+              def test_requires_four_to_six_uppercase_hex_digits(self):
+                  for cp in (b"041", b"0000000", b"00a0"):
+                      raw = self.record().replace(b"0041;", cp + b";", 1)
+                      with self.subTest(codepoint=cp), self.assertRaises(ValueError):
+                          validate_unicode_data_semantics(raw)
+
+              def test_rejects_codepoint_above_unicode_maximum(self):
+                  raw = self.record(codepoint=b"110000")
+                  with self.assertRaisesRegex(ValueError, "code point"):
+                      validate_unicode_data_semantics(raw)
+
+              def test_rejects_duplicate_or_descending_codepoints(self):
+                  row_a = self.record(codepoint=0x0042)
+                  row_b = self.record(codepoint=0x0041)
+                  for raw in (row_a + row_a, row_a + row_b):
+                      with self.subTest(raw=raw[:10]), self.assertRaisesRegex(ValueError, "strictly increasing"):
+                          validate_unicode_data_semantics(raw)
+
+              def test_rejects_unknown_group_and_unassigned_general_categories(self):
+                  for category in (b"Qq", b"Cn", b"L", b"LC"):
+                      with self.subTest(category=category), self.assertRaisesRegex(ValueError, "General_Category"):
+                          validate_unicode_data_semantics(self.record(category=category))
+
+              def test_accepts_ccc_254_but_rejects_255_and_reserved_133(self):
+                  self.assertEqual(
+                      validate_unicode_data_semantics(self.record(ccc=b"254"))["records"], 1
+                  )
+                  for value in (b"255", b"133", b"-1", b"1.0"):
+                      with self.subTest(ccc=value), self.assertRaisesRegex(ValueError, "Canonical_Combining_Class"):
+                          validate_unicode_data_semantics(self.record(ccc=value))
+
+              def test_rejects_unknown_bidi_class(self):
+                  with self.assertRaisesRegex(ValueError, "Bidi_Class"):
+                      validate_unicode_data_semantics(self.record(bidi=b"XYZ"))
+
+              def test_accepts_valid_compatibility_decomposition_tag(self):
+                  result = validate_unicode_data_semantics(
+                      self.record(decomposition=b"<font> 0041 0301")
+                  )
+                  self.assertEqual(result["max_decomposition_length"], 2)
+
+              def test_accepts_untagged_canonical_pair_mapping(self):
+                  result = validate_unicode_data_semantics(
+                      self.record(decomposition=b"0041 0301")
+                  )
+                  self.assertEqual(result["max_decomposition_length"], 2)
+
+              def test_rejects_unknown_or_malformed_decomposition_tags(self):
+                  for value in (b"<unknown> 0041", b"<font>", b"<font>0041", b"<font> 041"):
+                      with self.subTest(value=value), self.assertRaisesRegex(ValueError, "Decomposition_Mapping"):
+                          validate_unicode_data_semantics(self.record(decomposition=value))
+
+              def test_rejects_canonical_mapping_longer_than_two_codepoints(self):
+                  mapping = b" ".join([b"0041"] * 3)
+                  with self.assertRaisesRegex(ValueError, "canonical decomposition length"):
+                      validate_unicode_data_semantics(self.record(decomposition=mapping))
+
+              def test_rejects_compatibility_mapping_longer_than_eighteen_codepoints(self):
+                  mapping = b"<compat> " + b" ".join([b"0041"] * 19)
+                  with self.assertRaisesRegex(ValueError, "compatibility decomposition length"):
+                      validate_unicode_data_semantics(self.record(decomposition=mapping))
+
+              def test_decimal_numeric_type_requires_all_three_matching_digit_fields(self):
+                  result = validate_unicode_data_semantics(self.decimal_set())
+                  self.assertEqual(result["records"], 10)
+                  self.assertEqual(result["decimal_digit_sets"], 1)
+                  for raw in (
+                      self.record(category=b"Nd"),
+                      self.record(category=b"Nd", decimal=b"1", digit=b"2", numeric=b"1"),
+                      self.record(category=b"Lu", decimal=b"1", digit=b"1", numeric=b"1"),
+                  ):
+                      with self.subTest(raw=raw[:24]), self.assertRaises(ValueError):
+                          validate_unicode_data_semantics(raw)
+
+              def test_digit_numeric_type_requires_fields_seven_and_eight_only(self):
+                  valid = self.record(
+                      category=b"No", digit=b"2", numeric=b"2"
+                  )
+                  result = validate_unicode_data_semantics(valid)
+                  self.assertEqual(result["numeric_type_counts"]["Digit"], 1)
+                  for raw in (
+                      self.record(category=b"No", digit=b"2"),
+                      self.record(category=b"No", decimal=b"2", numeric=b"2"),
+                  ):
+                      with self.subTest(raw=raw[:24]), self.assertRaises(ValueError):
+                          validate_unicode_data_semantics(raw)
+
+              def test_numeric_type_accepts_signed_rational_and_rejects_zero_denominator(self):
+                  valid = self.record(category=b"No", numeric=b"-1/2")
+                  self.assertEqual(
+                      validate_unicode_data_semantics(valid)["numeric_type_counts"]["Numeric"], 1
+                  )
+                  invalid = self.record(category=b"No", numeric=b"1/0")
+                  with self.assertRaisesRegex(ValueError, "Numeric_Value"):
+                      validate_unicode_data_semantics(invalid)
+
+              def test_rejects_invalid_numeric_lexemes_and_digit_values(self):
+                  for raw in (
+                      self.record(category=b"No", numeric=b"1.25"),
+                      self.record(category=b"No", numeric=b"1/-2"),
+                      self.record(category=b"No", digit=b"10", numeric=b"10"),
+                      self.record(category=b"No", decimal=b"10", digit=b"10", numeric=b"10"),
+                  ):
+                      with self.subTest(raw=raw[:30]), self.assertRaises(ValueError):
+                          validate_unicode_data_semantics(raw)
+
+              def test_bidi_mirrored_is_binary(self):
+                  self.assertEqual(
+                      validate_unicode_data_semantics(self.record(mirrored=b"Y"))["records"], 1
+                  )
+                  with self.assertRaisesRegex(ValueError, "Bidi_Mirrored"):
+                      validate_unicode_data_semantics(self.record(mirrored=b"YES"))
+
+              def test_simple_case_mappings_are_single_codepoints(self):
+                  result = validate_unicode_data_semantics(
+                      self.record(uppercase=b"0041", lowercase=b"0061", titlecase=b"0041")
+                  )
+                  self.assertEqual(result["records"], 1)
+                  for value in (b"0041 0061", b"110000"):
+                      with self.subTest(value=value), self.assertRaisesRegex(ValueError, "case mapping"):
+                          validate_unicode_data_semantics(self.record(lowercase=value))
+
+              def test_accepts_valid_first_last_range_pair(self):
+                  first = self.record(
+                      codepoint=0xD800,
+                      name=b"<Non Private Use High Surrogate, First>",
+                      category=b"Cs",
+                  )
+                  last = self.record(
+                      codepoint=0xDB7F,
+                      name=b"<Non Private Use High Surrogate, Last>",
+                      category=b"Cs",
+                  )
+                  result = validate_unicode_data_semantics(first + last)
+                  self.assertEqual(result["range_pairs"], 1)
+
+              def test_rejects_orphan_first_and_orphan_last_range_records(self):
+                  first = self.record(name=b"<CJK Ideograph, First>")
+                  last = self.record(name=b"<CJK Ideograph, Last>")
+                  for raw in (first, last):
+                      with self.subTest(raw=raw[:32]), self.assertRaisesRegex(ValueError, "range"):
+                          validate_unicode_data_semantics(raw)
+
+              def test_rejects_mismatched_or_nonadjacent_range_pair(self):
+                  first = self.record(
+                      codepoint=0x4E00,
+                      name=b"<CJK Ideograph, First>",
+                      category=b"Lo",
+                  )
+                  wrong_last = self.record(
+                      codepoint=0x9FFF,
+                      name=b"<CJK Compatibility Ideograph, Last>",
+                      category=b"Lo",
+                  )
+                  intervening = self.record(codepoint=0x4E01, name=b"ORDINARY")
+                  with self.assertRaisesRegex(ValueError, "range"):
+                      validate_unicode_data_semantics(first + wrong_last)
+                  with self.assertRaisesRegex(ValueError, "range"):
+                      validate_unicode_data_semantics(first + intervening + self.record(
+                          codepoint=0x4E02,
+                          name=b"<CJK Ideograph, Last>",
+                          category=b"Lo",
+                      ))
+
+              def test_rejects_range_endpoint_property_mismatch(self):
+                  first = self.record(
+                      codepoint=0xD800,
+                      name=b"<Surrogate, First>",
+                      category=b"Cs",
+                  )
+                  last = self.record(
+                      codepoint=0xDFFF,
+                      name=b"<Surrogate, Last>",
+                      category=b"Co",
+                  )
+                  with self.assertRaisesRegex(ValueError, "range properties"):
+                      validate_unicode_data_semantics(first + last)
+
+              def test_rejects_leading_or_trailing_spaces_in_fields(self):
+                  for raw in (
+                      self.record(name=b" TEST"),
+                      self.record(name=b"TEST "),
+                      self.record(ccc=b" 0"),
+                  ):
+                      with self.subTest(raw=raw[:30]), self.assertRaisesRegex(ValueError, "leading or trailing"):
+                          validate_unicode_data_semantics(raw)
+
+              def test_rejects_incomplete_or_nonascending_decimal_digit_sequences(self):
+                  incomplete = self.decimal_set().splitlines()[:-1]
+                  out_of_order = b"".join(
+                      self.record(
+                          codepoint=0x0030 + value,
+                          name=("DIGIT " + str(value)).encode("ascii"),
+                          category=b"Nd",
+                          bidi=b"EN",
+                          decimal=str((value + 1) % 10).encode("ascii"),
+                          digit=str((value + 1) % 10).encode("ascii"),
+                          numeric=str((value + 1) % 10).encode("ascii"),
+                      )
+                      for value in range(10)
+                  )
+                  for raw in (b"\n".join(incomplete) + b"\n", out_of_order):
+                      with self.subTest(length=len(raw)), self.assertRaisesRegex(ValueError, "decimal digit sequence"):
+                          validate_unicode_data_semantics(raw)
+
           suite = unittest.TestSuite((
               unittest.defaultTestLoader.loadTestsFromTestCase(AcquisitionSafetyTests),
               unittest.defaultTestLoader.loadTestsFromTestCase(LexicalStructureTests),
+              unittest.defaultTestLoader.loadTestsFromTestCase(UnicodeDataSemanticTests),
           ))
           test_result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
           if not test_result.wasSuccessful():

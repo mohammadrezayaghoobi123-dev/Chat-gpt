@@ -1,6 +1,6 @@
 # Finding 67: Scheduled PR Review Reconciler Design
 
-**Status:** Approved design; documentation-only phase  
+**Status:** Design decision updated; implementation blocked  
 **Date:** 2026-11-23  
 **Repository:** `mohammadrezayaghoobi123-dev/Chat-gpt`  
 **Design branch:** `docs/9router-finding-67-reconciler-design`  
@@ -320,3 +320,55 @@ Finding 67 is currently classified as a design/availability gap: the existing si
 The prior Finding 67 record in `tools/9router-review/README.md` remains the evidence record for the original observation and cited GitHub event semantics. This design does not claim that a live scheduled workflow, live 9Router inference, or hosted publication has been tested.
 
 **Approved scope:** write and review this design document on an isolated documentation branch only. Implementation, workflow activation, PR merge, and Production changes remain separate decisions.
+
+
+## 15. Durable attempt-ledger decision — GitHub-native feasibility gate
+
+### Decision
+
+**GitHub-native PR comments are rejected as the authoritative cross-run attempt ledger.** They may remain human-visible audit evidence, but they cannot prove the required durable reservation invariant under the currently approved permission boundary.
+
+This is a design decision, not an implementation failure. No live duplicate inference or comment deletion is alleged.
+
+### Evidence and falsification
+
+1. The existing reviewer publishes report markers through PR issue comments. GitHub exposes separate create, update, and delete operations for issue comments. A signed comment body can therefore be edited or removed by an actor with sufficient repository permissions; HMAC authenticity detects modification of a surviving marker but cannot prove that a missing marker was never created. The create-comment endpoint also does not provide a caller-supplied idempotency key or an atomic unique constraint on the reservation tuple.
+2. The current design explicitly prohibits `contents: write` and repository administration permissions. A dedicated Git ref with compare-and-swap/force-with-lease semantics is a plausible GitHub-native ledger candidate, but it requires permission and workflow changes outside the approved boundary. It is not authorized by this decision.
+3. Workflow artifacts/checkpoints are useful for discovery progress, but the current design does not establish them as a durable, atomic, cross-run uniqueness primitive. Artifact presence, retention, and deletion do not provide the required compare-and-set contract.
+
+### Consequence
+
+- Do not represent a PR comment reservation as durable at-most-once state.
+- Do not claim cross-run duplicate-inference prevention from HMAC authenticity alone.
+- Keep the existing report marker as report evidence only.
+- Keep scheduled inference blocked until an external ledger (or a separately approved GitHub ref design with revised permissions and threat model) passes the ledger acceptance contract.
+- If no durable ledger can be reached or verified, the reconciler must not invoke 9Router. It may run in dry-run/discovery-only mode and report `LEDGER_UNAVAILABLE`.
+
+### Required external-ledger contract
+
+The next design candidate must provide:
+
+- atomic insert-if-absent or compare-and-set keyed by the canonical tuple `(repository_id, pull_request_number, head_sha, base_sha)`;
+- durable reservation persistence across workflow runs and process restarts;
+- a unique reservation ID and authenticated binding to workflow ID, run ID, run attempt, schema version, and creation time;
+- append-only or tamper-evident transition history, with explicit retention and recovery semantics;
+- an idempotent reservation API whose ambiguous response can be reconciled by reading the exact key;
+- least-privilege credentials isolated from PR-controlled inputs;
+- bounded latency, request quotas, data size, and operational cost;
+- a tested outage mode that fails closed before inference.
+
+The ledger reservation must be committed before the 9Router request. A timeout after reservation remains `ATTEMPT_UNKNOWN` and is never automatically re-armed. This is an at-most-once automatic dispatch policy, not an exactly-once execution guarantee.
+
+### Acceptance tests
+
+- Two concurrent reservations for the same tuple: exactly one succeeds; the other reads the existing reservation.
+- Same PR with a different head or base SHA: distinct tuple, no collision.
+- Client loses reservation response after server commit: read-after-uncertain-write resolves the exact reservation; no second reservation is created.
+- Ledger unavailable, stale, or authentication-invalid: zero 9Router requests and zero report writes.
+- Reservation committed, then process crashes before inference: subsequent run treats the tuple as reserved/unknown; no automatic retry.
+- Inference accepted but response lost: subsequent run observes the reservation and does not dispatch again.
+- Reservation state tampering or rollback: detected or classified unknown; never treated as an unreserved tuple.
+
+### Approval boundary
+
+This decision does not select or provision a vendor, create an account, add secrets, alter workflow permissions, or authorize implementation. A separate design review must compare available external ledger options against the contract above before any integration work.

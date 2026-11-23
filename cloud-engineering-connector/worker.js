@@ -305,8 +305,15 @@ async function createChangePr(args,env) {
  const canonicalOwner=args.owner.toLowerCase();
  const canonicalRepo=args.repo.toLowerCase();
  const canonicalRequestData={...requestData,owner:canonicalOwner,repo:canonicalRepo};
- const keyHash=await sha256Hex("create_change_pr\n"+canonicalOwner+"/"+canonicalRepo+"\n"+idempotency_key);
- const requestHash=await sha256Hex(stableStringify(canonicalRequestData));
+ let keyHash;
+ let requestHash;
+ try {
+  keyHash=await sha256Hex("create_change_pr\n"+canonicalOwner+"/"+canonicalRepo+"\n"+idempotency_key);
+  requestHash=await sha256Hex(stableStringify(canonicalRequestData));
+ } catch {
+  // Never reflect cryptographic provider errors across the authenticated MCP boundary.
+  throw new ToolError("WRITE_CRYPTO_UNAVAILABLE");
+ }
  const now=Date.now();
  let admission;
  try {

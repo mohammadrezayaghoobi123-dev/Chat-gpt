@@ -18,6 +18,21 @@ The private signing key must be provisioned only as a secret bound to the dedica
 
 The Ledger Worker receives only public verification material through ORCHESTRATOR_EXECUTOR_VERIFICATION_KEYS. Public-key material is not a secret, but the mapping is security policy and must be reviewed like code.
 
+## Trust-boundary diagram
+
+~~~mermaid
+flowchart LR
+  Scheduler["Scheduler / Outbox runtime"] --> HMAC["Existing HMAC signing key"]
+  HMAC --> HMACVerify["Ledger HMAC verifier"]
+  Executor["Dedicated Executor Worker (future runtime)"] --> Private["Ed25519 private key"]
+  Private --> Sign["Fixed claimTask signer"]
+  Sign --> Token["Ed25519 v2 assertion"]
+  Public["Ledger public-key set"] --> Verify["Ledger Ed25519 verifier"]
+  Token --> Verify
+  Verify --> Claim["Ledger claimTask"]
+  HMACVerify --> Legacy["Existing Scheduler / Outbox / non-Executor paths"]
+~~~
+
 ## Public-key set schema
 
 The environment value is a JSON object keyed by a bounded key identifier. Each entry has exactly four fields:

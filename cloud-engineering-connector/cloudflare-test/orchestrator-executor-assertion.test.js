@@ -497,4 +497,37 @@ describe("Executor Ed25519 trust boundary", () => {
       reason: "LEASE_FENCE_MISMATCH",
     });
   });
+
+  it("does not let a backdated caller timestamp release an expired Executor lease", async () => {
+    const ledger = ledgerFor("executor-ed25519-reject-backdated-release-time");
+    await expect(createScheduledTask(ledger, "task-executor-backdated-release-time", EXECUTOR_ID))
+      .resolves.toMatchObject({ created: true });
+    const claimed = await ledger.claimTask({
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(now, "claimTask"),
+      leaseMs: 30_000,
+      now,
+      taskId: "task-executor-backdated-release-time",
+    });
+    expect(claimed).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE orchestrator_execution_leases SET lease_until = ? WHERE task_id = ?",
+        now - 1, "task-executor-backdated-release-time",
+      );
+    });
+
+    const backdatedNow = now - 1_000;
+    await expect(ledger.releaseLease({
+      taskId: "task-executor-backdated-release-time",
+      workerId: EXECUTOR_ID,
+      workerAssertion: await createExecutorAssertion(backdatedNow, "releaseLease"),
+      leaseGeneration: claimed.leaseGeneration,
+      now: backdatedNow,
+    })).resolves.toMatchObject({
+      released: false,
+      reason: "LEASE_FENCE_MISMATCH",
+    });
+  });
 });

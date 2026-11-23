@@ -80,9 +80,9 @@ The verifier enforces a 60-second maximum lifetime and five-second clock-skew al
 
 ## Trusted time source
 
-For the fixed Executor principal, the Ledger's own runtime clock is authoritative. The caller-supplied `now` value is not used to validate Executor assertion expiry, lease expiry, lease renewal, or lease release. The Ledger obtains `Date.now()` inside the Durable Object, verifies the assertion against that time, and uses the same trusted timestamp for the state transition and JTI consumption.
+For the fixed Executor principal, the Ledger's own runtime clock is authoritative. The caller-supplied `now` value is not used to validate Executor assertion expiry, lease expiry, lease renewal, or lease release. The Ledger first validates the assertion against its own clock, completes asynchronous signature verification, then samples its clock again after verification and any asynchronous claim-cursor hashing. This second timestamp is used immediately before the synchronous Durable Object transaction for lease checks, state changes, and JTI consumption. No asynchronous boundary is permitted between this final clock sample and transaction entry.
 
-This prevents an Executor caller from backdating `now` to make an expired lease appear active. The existing caller-supplied timestamp behavior for Scheduler, Outbox, and non-Executor agent paths is unchanged in this slice. The assertion verifier retains its five-second clock-skew allowance for signer-versus-Ledger clock differences.
+The final transition-time sample also rechecks assertion expiry against the verifier's five-second clock-skew allowance. This prevents an Executor caller from backdating `now` and prevents verification or pre-transaction work from carrying a stale timestamp into a lease state transition. The existing caller-supplied timestamp behavior for Scheduler, Outbox, and non-Executor agent paths is unchanged in this slice.
 
 ## Ledger compatibility boundary
 

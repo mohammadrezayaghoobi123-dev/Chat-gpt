@@ -1546,3 +1546,123 @@ test("Queue consumer retries unknown event types without invoking durable receip
  assert.equal(retried,1);
  assert.equal(acked,0);
 });
+
+
+test("sanitizes WebCrypto digest failures before exposing create_change_pr results", async () => {
+ const subtle = crypto.subtle;
+ const originalDigest = subtle.digest.bind(subtle);
+ const hadOwnDigest = Object.prototype.hasOwnProperty.call(subtle, "digest");
+ const originalDescriptor = Object.getOwnPropertyDescriptor(subtle, "digest");
+ const originalFetch = globalThis.fetch;
+ let githubCalls = 0;
+ const durableCalls = [];
+ const unexpectedRpc = async method => {
+  durableCalls.push(method);
+  throw new Error("Unexpected WriteControl RPC before cryptographic preflight completed.");
+ };
+ const writeControl = {
+  markStaleOperationsUnknown: () => unexpectedRpc("markStaleOperationsUnknown"),
+  admitWrite: () => unexpectedRpc("admitWrite"),
+  transitionOperation: () => unexpectedRpc("transitionOperation"),
+  markOperationStatus: () => unexpectedRpc("markOperationStatus"),
+  getStorageStats: () => unexpectedRpc("getStorageStats"),
+  reconcilePrCreated: () => unexpectedRpc("reconcilePrCreated"),
+  getOperation: () => unexpectedRpc("getOperation"),
+ };
+ const writeControlBinding = { idFromName: name => name, get: () => writeControl };
+ const outcomes = [];
+
+ globalThis.fetch = async () => {
+  githubCalls += 1;
+  throw new Error("Unexpected GitHub request before cryptographic preflight completed.");
+ };
+
+ try {
+  for (const failingDigestCall of [1, 2]) {
+   durableCalls.length = 0;
+   githubCalls = 0;
+   const marker = "SENSITIVE_INTERNAL_DIGEST_FAILURE_" + failingDigestCall;
+   const injectedFailure = new Error(marker);
+   let digestCalls = 0;
+   let nativeDigestCalls = 0;
+   Object.defineProperty(subtle, "digest", {
+    configurable: true,
+    writable: true,
+    value: (...args) => {
+     digestCalls += 1;
+     if (digestCalls === failingDigestCall) return Promise.reject(injectedFailure);
+     nativeDigestCalls += 1;
+     return originalDigest(...args);
+    },
+   });
+
+   const response = await worker.fetch(rpc("tools/call", {
+    name: "create_change_pr",
+    arguments: {
+     owner: "mohammadrezayaghoobi123-dev",
+     repo: "Chat-gpt",
+     base_branch: "feature/cloud-engineering-connector",
+     title: "Digest failure boundary probe",
+     summary: "Verify safe error propagation before durable admission.",
+     idempotency_key: "worker-digest-error-test-key-" + failingDigestCall,
+     files: [{ path: "docs/worker-digest-failure.md", content: "Controlled test input.\n" }],
+    },
+   }, 300 + failingDigestCall), {
+    ...env,
+    GITHUB_TOKEN: "write-only-test-token",
+    WRITE_CONTROL: writeControlBinding,
+   });
+   const body = await response.json();
+   const wire = JSON.stringify(body);
+   outcomes.push({
+    failingDigestCall,
+    status: response.status,
+    jsonrpc: body.jsonrpc,
+    id: body.id,
+    isError: body.result?.isError,
+    toolError: JSON.parse(body.result.content[0].text),
+    rawMessageLeaked: wire.includes(marker),
+    stackLeaked: wire.includes("stack"),
+    digestCalls,
+    nativeDigestCalls,
+    durableCalls: [...durableCalls],
+    githubCalls,
+   });
+  }
+ } finally {
+  globalThis.fetch = originalFetch;
+  if (hadOwnDigest) Object.defineProperty(subtle, "digest", originalDescriptor);
+  else delete subtle.digest;
+ }
+
+ assert.deepEqual(outcomes, [
+  {
+   failingDigestCall: 1,
+   status: 200,
+   jsonrpc: "2.0",
+   id: 301,
+   isError: true,
+   toolError: { error: "WRITE_CRYPTO_UNAVAILABLE" },
+   rawMessageLeaked: false,
+   stackLeaked: false,
+   digestCalls: 1,
+   nativeDigestCalls: 0,
+   durableCalls: [],
+   githubCalls: 0,
+  },
+  {
+   failingDigestCall: 2,
+   status: 200,
+   jsonrpc: "2.0",
+   id: 302,
+   isError: true,
+   toolError: { error: "WRITE_CRYPTO_UNAVAILABLE" },
+   rawMessageLeaked: false,
+   stackLeaked: false,
+   digestCalls: 2,
+   nativeDigestCalls: 1,
+   durableCalls: [],
+   githubCalls: 0,
+  },
+ ]);
+});

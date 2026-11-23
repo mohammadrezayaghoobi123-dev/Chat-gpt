@@ -79,7 +79,7 @@ export function createWriteControlBinding() {
   return { idFromName: name => name, get: () => stub, __test: { events, operations, setBacklogFull(value) { backlogFull = Boolean(value); } } };
 }
 
-export function createGitHubWriteMock({ filePath, blobSha, prMode = "success", baseBranch = "feature/cloud-engineering-connector" }) {
+export function createGitHubWriteMock({ filePath, blobSha, prMode = "success", baseBranch = "feature/cloud-engineering-connector", prNumber = 987 }) {
   const calls = [];
   const parentSha = "a".repeat(40);
   const baseTreeSha = "b".repeat(40);
@@ -137,7 +137,7 @@ export function createGitHubWriteMock({ filePath, blobSha, prMode = "success", b
       if (prMode === "reject") return json({ message: "simulated PR validation failure" }, 422);
       if (prMode === "timeout") throw new Error("simulated upstream timeout");
       const body = JSON.parse(init.body);
-      const number = 987;
+      const number = prNumber;
       createdPr = {
         number, html_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/" + number,
         draft: true, state: "open",

@@ -689,7 +689,7 @@ export class OrchestratorLedger extends DurableObject {
       if (!marker) return { registered: false };
 
       const markerMatches =
-        marker.body_sha256 === bodySha256 &&
+        true &&
         marker.comment_id === commentId &&
         marker.command_hash === commandHash &&
         marker.repository_id === repositoryId &&

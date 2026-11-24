@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker from "../worker.js";
 const tenantDirectory={idFromName:name=>name,get:name=>({
- async getActiveMembership(input){return{tenantId:input.tenantId,principalId:input.principalId,membershipId:"test-membership",role:"service-operator",status:"active"}},
- async authorizeProjectAction(input){return{...input,effect:"allow",decisionId:"test-decision",policyVersion:"test-policy-v1"}}
+ async getActiveMembership(input){return{tenantId:input.tenantId,principalId:input.principalId,membershipId:"test-membership",role:"service-operator",status:"active",version:1}},
+ async authorizeProjectAction(input){return{...input,effect:"allow",membershipId:"test-membership",membershipVersion:input.expectedMembershipVersion,policyScopeEpoch:1,policyRuleVersion:1,decisionId:"test-decision",policyVersion:"test-policy-v1"}}
 })};
 const env={MCP_AUTH_TOKEN:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",MCP_RATE_LIMITER:{limit:async()=>({success:true})},TENANT_DIRECTORY:tenantDirectory};
 const req=(path,options={})=>{const headers=new Headers(options.headers);if(path==="/mcp"&&!headers.has("cf-connecting-ip"))headers.set("cf-connecting-ip","203.0.113.10");return new Request("https://example.test"+path,{...options,headers})};
@@ -944,8 +944,8 @@ test("create_change_pr denies missing tenant membership before any GitHub API ca
 test("create_change_pr denies project policy before any GitHub API call",async()=>{
  const originalFetch=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw new Error("unexpected GitHub call")};
  const deniedDirectory={idFromName:name=>name,get:name=>({
-  async getActiveMembership(input){return{tenantId:input.tenantId,principalId:input.principalId,membershipId:"test-membership",role:"service-operator",status:"active"}},
-  async authorizeProjectAction(input){return{...input,effect:"deny",decisionId:"deny-decision",policyVersion:"deny-v1"}}
+  async getActiveMembership(input){return{tenantId:input.tenantId,principalId:input.principalId,membershipId:"test-membership",role:"service-operator",status:"active",version:1}},
+  async authorizeProjectAction(input){return{...input,effect:"deny",membershipId:"test-membership",membershipVersion:input.expectedMembershipVersion,policyScopeEpoch:1,policyRuleVersion:1,decisionId:"deny-decision",policyVersion:"deny-v1"}}
  })};
  try{
   const response=await worker.fetch(rpc("tools/call",{name:"create_change_pr",arguments:{owner:"mohammadrezayaghoobi123-dev",repo:"Chat-gpt",base_branch:"feature/cloud-engineering-connector",title:"Denied",summary:"No policy",files:[{path:"README.md",content:"proposal"}]}}),{...env,GITHUB_TOKEN:"test-token",TENANT_DIRECTORY:deniedDirectory});

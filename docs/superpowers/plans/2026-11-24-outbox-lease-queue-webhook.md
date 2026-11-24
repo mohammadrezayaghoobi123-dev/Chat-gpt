@@ -89,6 +89,7 @@
   - `alarm_write_failure_rolls_back_outbox_sql_mutation`: inside an explicit async storage transaction, perform an Outbox SQL write and force `setAlarm()` to reject with an invalid scheduled time; assert the SQL write rolled back and no alarm persisted.
   - `transitionTask_outbox_and_owner_release_schedule_alarm`: exercise the existing internal producers and assert the Ledger Alarm is scheduled.
   - `scheduler_selects_earliest_due_or_expiring_event`: combine READY, RETRY_WAIT, and IN_PROGRESS rows; assert the minimum next-attempt/lease-expiry time; assert no eligible rows delete the Alarm.
+  - `owner_cancel_or_quarantine_recalculates_alarm`: terminalizing Outbox work removes it from the scheduler and recalculates the next Alarm.
 
 - [ ] **Step 2 — Verify RED**
   Run:
@@ -209,6 +210,7 @@
 - [ ] **Step 1 — Write failing tests**
   - `encryptOutboxCapability_hides_plaintext_and_authenticates_routing_metadata`: valid decrypt; changing DO ID, event ID, generation, key ID, IV, or ciphertext fails authentication.
   - `decryptOutboxCapability_rejects_unknown_key_and_malformed_nonce`.
+  - `decryptOutboxCapability_accepts_previous_key_for_in_flight_message`: ciphertext created with the previous key remains decryptable while the active key rotates.
   - `buildOutboxWebhookRequest_signs_exact_raw_body_and_stable_event_id`: independently compute HMAC and assert `Idempotency-Key`, timestamp, signature.
   - `buildOutboxWebhookRequest_rejects_non_https_credentials_and_fragments`.
   - `classifyOutboxWebhookResponse_separates_retryable_and_permanent_statuses`.
@@ -233,6 +235,7 @@
 
 **Files**
 - Modify: `cloud-engineering-connector/orchestrator-ledger.js`
+- Modify: `cloud-engineering-connector/wrangler.toml` (producer bindings only)
 - Create: `cloud-engineering-connector/cloudflare-test/orchestrator-ledger-outbox-alarm-publisher.test.js`
 
 **Interfaces**
@@ -253,11 +256,11 @@
   Expected: no `alarm()` publisher currently exists.
 
 - [ ] **Step 3 — Implement**
-  Validate required bindings/config before claiming. Use fixed publisher identity `orchestrator-outbox-publisher` and `LEDGER_WORKER_ASSERTION_KEYS` plus active KID. Claim at most 8 rows. Encrypt each token before calling `this.env.OUTBOX_QUEUE.send(envelope)`. Queue send stays outside the storage transaction. On send failure call token-fenced publisher failure. Recalculate or preserve the earliest pending/lease-expiry Alarm before returning.
+  Add only the production and staging `[[queues.producers]]` declarations that bind `OUTBOX_QUEUE` to the already-existing main Outbox Queues. Validate required bindings/config before claiming. Use fixed publisher identity `orchestrator-outbox-publisher` and `LEDGER_WORKER_ASSERTION_KEYS` plus active KID. Claim at most 8 rows. Encrypt each token before calling `this.env.OUTBOX_QUEUE.send(envelope)`. Queue send stays outside the storage transaction. On send failure call token-fenced publisher failure. Recalculate or preserve the earliest pending/lease-expiry Alarm before returning.
 
 - [ ] **Step 4 — Verify GREEN and commit**
   Re-run focused alarm-publisher test, then:
-  `git add cloud-engineering-connector/orchestrator-ledger.js cloud-engineering-connector/cloudflare-test/orchestrator-ledger-outbox-alarm-publisher.test.js`
+  `git add cloud-engineering-connector/orchestrator-ledger.js cloud-engineering-connector/wrangler.toml cloud-engineering-connector/cloudflare-test/orchestrator-ledger-outbox-alarm-publisher.test.js`
   `git commit -m "feat: publish Outbox events from Durable Object alarms"`
 
 ---
@@ -283,7 +286,7 @@
   - `queue_handler_permanent_http_failure_persists_dead_letter_before_ack`.
   - `queue_handler_retries_if_ledger_decision_is_unavailable`.
   - `queue_handler_invalid_envelope_never_calls_fetch`.
-  Use documented Cloudflare Vitest helpers `createMessageBatch`, `createExecutionContext`, and `getQueueResult`. Keep Ledger and Queue behavior real; stub only the external network fetch boundary.
+  Use documented Cloudflare Vitest helpers `createMessageBatch`, `createExecutionContext`, and `getQueueResult`. Supply explicit test-only `OUTBOX_QUEUE_NAME` and `OUTBOX_DLQ_NAME` values until Task 9 adds source vars. Keep Ledger and Queue behavior real; stub only the external network fetch boundary.
 
 - [ ] **Step 2 — Verify RED**
   Run:
@@ -357,7 +360,7 @@
   Expected: configured environment routing is absent.
 
 - [ ] **Step 3 — Implement Wrangler bindings**
-  Preserve existing DO bindings/migrations. Add `OUTBOX_QUEUE` producer binding to each environment's main Queue. Add main consumer (`max_batch_size = 1`, `max_concurrency = 4`, `max_retries = 3`, existing DLQ target). Add DLQ consumer (`max_batch_size = 1`, `max_retries = 3`, existing quarantine target). Leave quarantine without a consumer. Add non-secret `OUTBOX_QUEUE_NAME` and `OUTBOX_DLQ_NAME` vars for both environments. Extend `check` script syntax validation for new modules. Do not add secret values/placeholders or create live Queue resources.
+  Preserve existing DO bindings/migrations and the producer bindings added in Task 6. Add main consumer (`max_batch_size = 1`, `max_concurrency = 4`, `max_retries = 3`, existing DLQ target). Add DLQ consumer (`max_batch_size = 1`, `max_retries = 3`, existing quarantine target). Leave quarantine without a consumer. Add non-secret `OUTBOX_QUEUE_NAME` and `OUTBOX_DLQ_NAME` vars for both environments. Extend `check` script syntax validation for new modules. Do not add secret values/placeholders or create live Queue resources.
 
 - [ ] **Step 4 — Verify GREEN**
   Run focused consumer tests, then `npm run check`.
@@ -418,6 +421,15 @@
 - Existing internal Outbox producers are `transitionTask(outboxEvent)` and owner `release`; the inspected Worker `fetch` path does not invoke the Ledger. Verify the upstream invocation/actor path without inventing a public ingress.
 - The parent PR #462's full-history secret-scan blocker remains independent of this branch.
 - No exactly-once external side effects, production resilience, or real provider delivery may be claimed from local Workers Vitest evidence.
+
+## Rollback Strategy
+
+1. Stop new Outbox publication through an approved code/configuration gate, then pause Queue consumers through the approved deployment control; record queue names, message IDs, and in-flight event IDs.
+2. Do not roll the Ledger class back to pre-v11 code while v11 rows or encrypted v1 Queue messages remain active. Prefer a forward-compatible consumer pause/disable release; a prior Worker may be restored only with a compatibility shim that preserves the v11 schema, Alarm scheduling, and encrypted-envelope handling until the backlog is drained or quarantined.
+3. Retain additive schema columns and old decrypt keys until all messages using them are drained. Never delete Queue objects or purge messages as a rollback shortcut.
+4. Allow in-flight leases to expire and reconcile through exact generation/token fences. Never mass-clear lease fields.
+5. A rollback cannot reverse a remote webhook side effect; receiver-side idempotency remains required across retries and releases.
+6. Actual consumer pausing, production configuration changes, deployment, and rollback are outside this plan and require separate explicit authorization.
 
 **Completion contract:** the implementation PR remains Draft/Open/Unmerged. Missing key material, absent destination, unverified receiver idempotency, failed runtime characterization, untested deployed bindings, quarantine retention gap, or full-history secret findings remain BLOCKED/UNKNOWN, never silently converted to success.
 

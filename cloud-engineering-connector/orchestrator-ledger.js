@@ -19,7 +19,7 @@ const MAX_EXPIRED_CLAIM_CURSORS_PER_CALL = 64;
 const EXECUTOR_PRINCIPAL = "orchestrator-executor";
 const EXECUTOR_OPERATIONS = Object.freeze(["claimTask", "renewLease", "releaseLease"]);
 const EXECUTOR_CLOCK_SKEW_SECONDS = 5;
-const OWNER_WEBHOOK_REDELIVERY_MAX = 3;
+const OWNER_WEBHOOK_REDELIVERY_MAX = 4;
 const OWNER_WEBHOOK_REDELIVERY_TTL_MS = 72 * 60 * 60 * 1000;
 const OWNER_WEBHOOK_REDELIVERY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -499,7 +499,7 @@ export class OrchestratorLedger extends DurableObject {
         operation TEXT NOT NULL CHECK(operation IN ('cancel','quarantine','release')),
         issue_number INTEGER NOT NULL CHECK(issue_number > 0),
         comment_created_at INTEGER NOT NULL CHECK(comment_created_at > 0),
-        retry_count INTEGER NOT NULL CHECK(retry_count BETWEEN 0 AND 3),
+        retry_count INTEGER NOT NULL CHECK(retry_count BETWEEN 0 AND 4),
         state TEXT NOT NULL CHECK(state IN ('RETRYABLE','COMPLETED','EXHAUSTED','EXPIRED')),
         first_failed_at INTEGER NOT NULL CHECK(first_failed_at > 0),
         expires_at INTEGER NOT NULL CHECK(expires_at > first_failed_at),

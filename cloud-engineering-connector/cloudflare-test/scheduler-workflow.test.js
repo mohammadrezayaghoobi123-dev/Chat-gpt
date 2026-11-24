@@ -292,11 +292,13 @@ describe("durable Scheduler Workflow admission", () => {
         };
       },
     };
-    const faultEnv = Object.create(envForEvent);
-    Object.assign(faultEnv, {
+    const faultEnv = {
+      SCHEDULED_ADMISSION_POLICIES: JSON.stringify({ [CRON]: policy }),
+      LEDGER_WORKER_ASSERTION_KEYS: envForEvent.LEDGER_WORKER_ASSERTION_KEYS,
+      LEDGER_WORKER_ASSERTION_ACTIVE_KID: envForEvent.LEDGER_WORKER_ASSERTION_ACTIVE_KID,
       TENANT_DIRECTORY: directoryNamespace,
       ORCHESTRATOR_LEDGER: ledgerNamespace,
-    });
+    };
 
     await expect(admitPreparedScheduledTask(snapshot, item, faultEnv))
       .rejects.toMatchObject({ code: "LEDGER_RPC_UNAVAILABLE" });

@@ -14,7 +14,7 @@
 
 The current repository source does not demonstrate a production Scheduler runtime that invokes `OrchestratorLedger.createTask`.
 
-The recursive Git tree at the pinned baseline contained 86 tracked entries. All 19 non-test JavaScript/TypeScript source files were fetched at the pinned commit and scanned for the relevant runtime symbols and call patterns, including:
+The recursive Git tree at the pinned baseline contained 86 tracked files (blob entries). All 19 non-test JavaScript/TypeScript source files were fetched at the pinned commit and scanned for the relevant runtime symbols and call patterns, including:
 
 - `createTask`
 - `createScheduledWorkerAssertion`

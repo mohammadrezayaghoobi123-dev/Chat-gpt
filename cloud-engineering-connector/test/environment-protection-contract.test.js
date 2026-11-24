@@ -75,3 +75,18 @@ for (const workflow of workflows) {
     );
   });
 }
+
+
+for (const workflow of workflows) {
+  test(workflow.name + " release approval receives the exact GitHub workflow run ID", () => {
+    const source = readFileSync(workflow.path, "utf8");
+    const approvalStart = source.indexOf("      - name: ", source.indexOf("      - name: Verify GitHub Environment protection contract") + 1);
+    const approvalEnd = source.indexOf("      - name: ", approvalStart + 1);
+    const approvalStep = source.slice(approvalStart, approvalEnd < 0 ? undefined : approvalEnd);
+    assert.match(
+      approvalStep,
+      /GITHUB_RUN_ID:\s*\$\{\{\s*github\.run_id\s*\}\}/,
+      "approval verifier must receive the immutable workflow run ID used to inspect deployment review history",
+    );
+  });
+}

@@ -63,6 +63,7 @@ jobs:
         env:
           RELEASE_GITHUB_TOKEN: ${{ github.token }}
           RELEASE_ALLOWED_REVIEWER_IDS: ${{ steps.environment-protection.outputs.reviewer_user_ids }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
 
       - name: Validate MCP smoke credential
         env:

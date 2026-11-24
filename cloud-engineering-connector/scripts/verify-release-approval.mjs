@@ -30,6 +30,7 @@ try {
     candidateSha: process.env.GITHUB_SHA,
     releaseEnvironment: process.env.RELEASE_ENV,
     token: process.env.RELEASE_GITHUB_TOKEN,
+    workflowRunId: Number(process.env.GITHUB_RUN_ID),
     allowedReviewerIds: parseAllowedReviewerIds(process.env.RELEASE_ALLOWED_REVIEWER_IDS),
   });
   console.log(

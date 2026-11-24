@@ -1,12 +1,13 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
 import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
 const now = Date.now();
+afterEach(() => vi.restoreAllMocks());
 const ownerId = "335530603";
 const repositoryId = 1398846697;
 const ownerKeySet = JSON.stringify({
@@ -2474,6 +2475,8 @@ describe("Owner command atomic Ledger contract", () => {
 
   it("rejects issuer clocks more than five seconds ahead of the Ledger", async () => {
     const ledger = ledgerFor("worker-assertion-future-clock-skew-boundary");
+    const ledgerNow = Math.floor(now / 1000) * 1000;
+    vi.spyOn(Date, "now").mockReturnValue(ledgerNow);
 
     const atBoundary = await ledger.createTask({
       task: { ...task("task-clock-skew-future-boundary") },
@@ -2482,7 +2485,7 @@ describe("Owner command atomic Ledger contract", () => {
       now,
       workerId: "orchestrator-scheduler",
       workerAssertion: await workerAssertion(
-        "orchestrator-scheduler", "system", "createTask", now + 5_000,
+        "orchestrator-scheduler", "system", "createTask", ledgerNow + 5_000,
         "worker-jti-clock-skew-future-boundary-01",
       ),
     });
@@ -2493,7 +2496,7 @@ describe("Owner command atomic Ledger contract", () => {
       now,
       workerId: "orchestrator-scheduler",
       workerAssertion: await workerAssertion(
-        "orchestrator-scheduler", "system", "createTask", now + 6_000,
+        "orchestrator-scheduler", "system", "createTask", ledgerNow + 6_000,
         "worker-jti-clock-skew-future-outside-01",
       ),
     });
@@ -2520,6 +2523,8 @@ describe("Owner command atomic Ledger contract", () => {
 
   it("rejects issuer clocks more than five seconds behind the Ledger expiry boundary", async () => {
     const ledger = ledgerFor("worker-assertion-expiry-clock-skew-boundary");
+    const ledgerNow = Math.floor(now / 1000) * 1000;
+    vi.spyOn(Date, "now").mockReturnValue(ledgerNow);
 
     const atBoundary = await ledger.createTask({
       task: { ...task("task-clock-skew-expiry-boundary") },
@@ -2528,7 +2533,7 @@ describe("Owner command atomic Ledger contract", () => {
       now,
       workerId: "orchestrator-scheduler",
       workerAssertion: await workerAssertion(
-        "orchestrator-scheduler", "system", "createTask", now - 65_000,
+        "orchestrator-scheduler", "system", "createTask", ledgerNow - 65_000,
         "worker-jti-clock-skew-expiry-boundary-01",
       ),
     });
@@ -2539,7 +2544,7 @@ describe("Owner command atomic Ledger contract", () => {
       now,
       workerId: "orchestrator-scheduler",
       workerAssertion: await workerAssertion(
-        "orchestrator-scheduler", "system", "createTask", now - 66_000,
+        "orchestrator-scheduler", "system", "createTask", ledgerNow - 66_000,
         "worker-jti-clock-skew-expiry-outside-01",
       ),
     });
@@ -2566,18 +2571,20 @@ describe("Owner command atomic Ledger contract", () => {
 
   it("pins future-issued assertion skew to whole-second NumericDate quantization", async () => {
     const ledger = ledgerFor("worker-assertion-clock-skew-future-quantization");
+    const ledgerNow = Math.floor(now / 1000) * 1000;
+    vi.spyOn(Date, "now").mockReturnValue(ledgerNow);
     const withinQuantizedBoundary = await ledger.createTask({
       task: {
         ...task("task-clock-skew-quantized-future-accepted"),
-        createdAt: now,
-        updatedAt: now,
+        createdAt: ledgerNow,
+        updatedAt: ledgerNow,
       },
       idempotencyKey: "clock-skew-quantized-future-accepted",
       inputHash: "2".repeat(64),
-      now,
+      now: ledgerNow,
       workerId: "orchestrator-scheduler",
       workerAssertion: await workerAssertion(
-        "orchestrator-scheduler", "system", "createTask", now + 5_999,
+        "orchestrator-scheduler", "system", "createTask", ledgerNow + 5_999,
         "worker-jti-clock-skew-quantized-future-accepted-01",
       ),
     });
@@ -2589,15 +2596,15 @@ describe("Owner command atomic Ledger contract", () => {
     const outsideQuantizedBoundary = await ledger.createTask({
       task: {
         ...task("task-clock-skew-quantized-future-rejected"),
-        createdAt: now,
-        updatedAt: now,
+        createdAt: ledgerNow,
+        updatedAt: ledgerNow,
       },
       idempotencyKey: "clock-skew-quantized-future-rejected",
       inputHash: "3".repeat(64),
-      now,
+      now: ledgerNow,
       workerId: "orchestrator-scheduler",
       workerAssertion: await workerAssertion(
-        "orchestrator-scheduler", "system", "createTask", now + 6_000,
+        "orchestrator-scheduler", "system", "createTask", ledgerNow + 6_000,
         "worker-jti-clock-skew-quantized-future-rejected-01",
       ),
     });
@@ -2622,8 +2629,11 @@ describe("Owner command atomic Ledger contract", () => {
 
   it("pins expired-assertion grace to whole-second NumericDate quantization", async () => {
     const ledger = ledgerFor("worker-assertion-clock-skew-expiry-quantization");
-    const withinQuantizedBoundaryNow = now + 999;
-    const outsideQuantizedBoundaryNow = now + 1_000;
+    const ledgerBase = Math.floor(now / 1000) * 1000;
+    let ledgerNow = ledgerBase + 999;
+    vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
+    const withinQuantizedBoundaryNow = ledgerBase + 999;
+    const outsideQuantizedBoundaryNow = ledgerBase + 1_000;
 
     const withinQuantizedBoundary = await ledger.createTask({
       task: {
@@ -2636,7 +2646,7 @@ describe("Owner command atomic Ledger contract", () => {
       now: withinQuantizedBoundaryNow,
       workerId: "orchestrator-scheduler",
       workerAssertion: await workerAssertion(
-        "orchestrator-scheduler", "system", "createTask", now - 65_000,
+        "orchestrator-scheduler", "system", "createTask", ledgerBase - 65_000,
         "worker-jti-clock-skew-quantized-expiry-accepted-01",
       ),
     });
@@ -2645,6 +2655,7 @@ describe("Owner command atomic Ledger contract", () => {
       task: { taskId: "task-clock-skew-quantized-expiry-accepted" },
     });
 
+    ledgerNow = outsideQuantizedBoundaryNow;
     const outsideQuantizedBoundary = await ledger.createTask({
       task: {
         ...task("task-clock-skew-quantized-expiry-rejected"),
@@ -2656,7 +2667,7 @@ describe("Owner command atomic Ledger contract", () => {
       now: outsideQuantizedBoundaryNow,
       workerId: "orchestrator-scheduler",
       workerAssertion: await workerAssertion(
-        "orchestrator-scheduler", "system", "createTask", now - 65_000,
+        "orchestrator-scheduler", "system", "createTask", ledgerBase - 65_000,
         "worker-jti-clock-skew-quantized-expiry-rejected-01",
       ),
     });

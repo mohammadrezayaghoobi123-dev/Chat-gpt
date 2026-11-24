@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -678,3 +678,110 @@ for (const workflow of workflows) {
       "preflight must not fall back to an arbitrary version when the 100% target is ambiguous");
   });
 }
+
+
+function createGuardedDeployCommandFixtures(directory) {
+  const nodeCommand = join(directory, "node");
+  const npxCommand = join(directory, "npx");
+  const commandSource = phase => `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+const event = {
+  phase: ${JSON.stringify(phase)},
+  args: process.argv.slice(2),
+  cloudflareTokenPresent: Boolean(process.env.CLOUDFLARE_API_TOKEN),
+  cloudflareAccountPresent: Boolean(process.env.CLOUDFLARE_ACCOUNT_ID),
+  githubTokenPresent: Boolean(process.env.RELEASE_GITHUB_TOKEN),
+  reviewerPolicyPresent: Boolean(process.env.RELEASE_REVIEWER_IDS),
+};
+appendFileSync(process.env.RELEASE_EVENT_LOG, JSON.stringify(event) + "\\n");
+if (${JSON.stringify(phase)} === "approval") {
+  process.exit(Number(process.env.FAKE_APPROVAL_EXIT || 0));
+}
+`;
+  writeFileSync(nodeCommand, commandSource("approval"));
+  writeFileSync(npxCommand, commandSource("deployment"));
+  chmodSync(nodeCommand, 0o755);
+  chmodSync(npxCommand, 0o755);
+}
+
+function guardedDeployEnvironment(directory, overrides = {}) {
+  return {
+    ...process.env,
+    PATH: directory + ":" + process.env.PATH,
+    RELEASE_EVENT_LOG: join(directory, "events.jsonl"),
+    RELEASE_ENV: "staging",
+    RELEASE_GITHUB_TOKEN: "github-token-sentinel",
+    RELEASE_REVIEWER_IDS: "101,202",
+    CLOUDFLARE_API_TOKEN: "cloudflare-token-sentinel",
+    CLOUDFLARE_ACCOUNT_ID: "cloudflare-account-sentinel",
+    GITHUB_REPOSITORY: "example/repository",
+    GITHUB_SHA: "0123456789abcdef0123456789abcdef01234567",
+    ...overrides,
+  };
+}
+
+test("final release runner validates authorization and deploys in one step with child-process credential isolation", () => {
+  const directory = mkdtempSync(join(tmpdir(), "guarded-release-deploy-"));
+  try {
+    createGuardedDeployCommandFixtures(directory);
+    const script = new URL("../scripts/verify-and-deploy-release.sh", import.meta.url).pathname;
+    const result = spawnSync("bash", [script], {
+      env: guardedDeployEnvironment(directory),
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+
+    const events = readFileSync(join(directory, "events.jsonl"), "utf8")
+      .trim().split("\\n").map(line => JSON.parse(line));
+    assert.deepEqual(events.map(event => event.phase), ["approval", "deployment"]);
+    assert.deepEqual(events[0].args, ["scripts/verify-release-approval.mjs"]);
+    assert.equal(events[0].githubTokenPresent, true);
+    assert.equal(events[0].reviewerPolicyPresent, true);
+    assert.equal(events[0].cloudflareTokenPresent, false);
+    assert.equal(events[0].cloudflareAccountPresent, false);
+    assert.deepEqual(events[1].args, ["wrangler", "deploy", "--env", "staging"]);
+    assert.equal(events[1].cloudflareTokenPresent, true);
+    assert.equal(events[1].cloudflareAccountPresent, true);
+    assert.equal(events[1].githubTokenPresent, false);
+    assert.equal(events[1].reviewerPolicyPresent, false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("final release runner never invokes deployment when the last authorization check fails", () => {
+  const directory = mkdtempSync(join(tmpdir(), "guarded-release-deny-"));
+  try {
+    createGuardedDeployCommandFixtures(directory);
+    const script = new URL("../scripts/verify-and-deploy-release.sh", import.meta.url).pathname;
+    const result = spawnSync("bash", [script], {
+      env: guardedDeployEnvironment(directory, { FAKE_APPROVAL_EXIT: "29" }),
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 29, result.stderr || result.stdout);
+    const events = readFileSync(join(directory, "events.jsonl"), "utf8")
+      .trim().split("\\n").map(line => JSON.parse(line));
+    assert.deepEqual(events.map(event => event.phase), ["approval"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("production release runner invokes Wrangler without staging-specific arguments", () => {
+  const directory = mkdtempSync(join(tmpdir(), "guarded-release-production-"));
+  try {
+    createGuardedDeployCommandFixtures(directory);
+    const script = new URL("../scripts/verify-and-deploy-release.sh", import.meta.url).pathname;
+    const result = spawnSync("bash", [script], {
+      env: guardedDeployEnvironment(directory, { RELEASE_ENV: "production" }),
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const events = readFileSync(join(directory, "events.jsonl"), "utf8")
+      .trim().split("\\n").map(line => JSON.parse(line));
+    assert.deepEqual(events.map(event => event.phase), ["approval", "deployment"]);
+    assert.deepEqual(events[1].args, ["wrangler", "deploy"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

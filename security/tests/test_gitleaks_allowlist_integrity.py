@@ -133,6 +133,39 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
         self.assertNotIn(finding_match, result.stdout)
 
 
+
+    def test_redacted_report_never_claims_regex_mismatch(self):
+        description, (commit, path) = next(iter(EXPECTED_FIXTURES.items()))
+        report = [{
+            "Commit": commit,
+            "File": path,
+            "RuleID": "generic-api-key",
+            "Secret": "REDACTED",
+            "Match": "key = REDACTED",
+            "Line": "",
+        }]
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = pathlib.Path(directory) / "redacted-report.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "security" / "validate_gitleaks_allowlists.py"),
+                    "--config",
+                    str(ROOT / ".gitleaks.toml"),
+                    "--report",
+                    str(report_path),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("regex=redacted allowed=unverifiable", result.stdout)
+        self.assertNotIn("REDACTED", result.stdout)
+
+
     def test_validator_rejects_non_literal_line_pattern(self):
         changed = copy.deepcopy(self.config)
         target = next(

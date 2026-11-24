@@ -1061,3 +1061,29 @@ test("T47: comment intent rejects a model-stage outcome", async () => {
   assert.equal(inventory.events.length, 1);
   assert.equal(inventory.events[0].kind, "INTENT");
 });
+
+
+test("T48: outcome cannot be appended before the authoritative attempt boundary is acknowledged", async () => {
+  const system = makeSystem();
+  const intent = await system.ledger.appendIntent({
+    key: KEY,
+    stage: "MODEL",
+    attemptId: "boundary-required-model",
+    requestDigest: "model-request",
+  });
+  assert.equal(intent.status, "ACK");
+
+  const before = await system.ledger.readComplete({ key: KEY });
+  const outcome = await system.ledger.appendOutcome({
+    attemptId: "boundary-required-model",
+    outcomeType: "MODEL_RESULT_STORED",
+    evidenceDigest: "model-result",
+    evidenceReference: "encrypted-result://boundary-required",
+    attemptBoundaryReceipt: null,
+  });
+
+  assert.equal(outcome.status, "ATTEMPT_BOUNDARY_NOT_ACKNOWLEDGED");
+  const after = await system.ledger.readComplete({ key: KEY });
+  assert.equal(after.events.length, before.events.length);
+  assert.equal(after.watermark, before.watermark);
+});

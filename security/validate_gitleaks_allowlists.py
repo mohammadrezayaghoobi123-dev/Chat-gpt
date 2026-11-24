@@ -185,7 +185,8 @@ def diagnose_report(report: list[dict], config: dict) -> list[str]:
             diagnostics.append(
                 f"DIAGNOSTIC: {label}: rule={rule_match} commit={commit_match} "
                 f"path={path_match} regex={regex_match} allowed={allowed} "
-                f"target_length={len(target)}"
+                f"secret_length={len(finding.get('Secret') or '')} " 
+                f"match_length={len(finding.get('Match') or '')} line_length={len(finding.get('Line') or '')}"
             )
     return diagnostics
 

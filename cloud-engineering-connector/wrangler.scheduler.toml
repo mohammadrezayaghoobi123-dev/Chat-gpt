@@ -17,7 +17,6 @@ name = "ORCHESTRATOR_LEDGER"
 class_name = "OrchestratorLedger"
 script_name = "chat-gpt111"
 
-[[workflows]]
-binding = "SCHEDULED_TASK_ADMISSION"
+[exports.ScheduledTaskAdmissionWorkflow]
+type = "workflow"
 name = "scheduler-task-admission"
-class_name = "ScheduledTaskAdmissionWorkflow"

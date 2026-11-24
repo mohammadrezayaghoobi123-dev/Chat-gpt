@@ -20,7 +20,6 @@ class_name = "OrchestratorLedger"
 tag = "scheduler-test-v1"
 new_sqlite_classes = ["TenantDirectory", "OrchestratorLedger"]
 
-[[workflows]]
-binding = "SCHEDULED_TASK_ADMISSION"
+[exports.ScheduledTaskAdmissionWorkflow]
+type = "workflow"
 name = "scheduler-task-admission-test"
-class_name = "ScheduledTaskAdmissionWorkflow"

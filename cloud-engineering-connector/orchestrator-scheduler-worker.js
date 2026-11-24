@@ -104,11 +104,11 @@ export class ScheduledTaskAdmissionWorkflow extends WorkflowEntrypoint {
 }
 
 export default Object.freeze({
-  async scheduled(controller, env) {
-    const workflowBinding = env?.SCHEDULED_TASK_ADMISSION;
+  async scheduled(controller, env, ctx) {
+    const workflowBinding = ctx?.exports?.ScheduledTaskAdmissionWorkflow;
     if (!workflowBinding || typeof workflowBinding.create !== "function" ||
         typeof workflowBinding.get !== "function") {
-      throw fail("SCHEDULED_WORKFLOW_BINDING_UNAVAILABLE", "The durable Scheduled Task Workflow binding is unavailable.");
+      throw fail("SCHEDULED_WORKFLOW_EXPORT_UNAVAILABLE", "The durable Scheduled Task Workflow export is unavailable.");
     }
 
     const snapshot = await prepareScheduledAdmission(controller, env);

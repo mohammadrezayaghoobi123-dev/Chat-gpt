@@ -103,6 +103,10 @@ function taskPolicy(tenantId, suffix) {
   };
 }
 
+function workflowContext() {
+  return { exports: { ScheduledTaskAdmissionWorkflow: env.SCHEDULED_TASK_ADMISSION } };
+}
+
 function schedulerEnv(policies) {
   const result = Object.create(env);
   Object.assign(result, {
@@ -142,7 +146,7 @@ describe("durable Scheduler Workflow admission", () => {
       );
     });
 
-    const accepted = await schedulerWorker.scheduled(event, envForEvent);
+    const accepted = await schedulerWorker.scheduled(event, envForEvent, workflowContext());
     expect(accepted).toMatchObject({
       accepted: true,
       created: true,
@@ -160,7 +164,7 @@ describe("durable Scheduler Workflow admission", () => {
       replayed: 0,
     });
 
-    const duplicate = await schedulerWorker.scheduled(event, envForEvent);
+    const duplicate = await schedulerWorker.scheduled(event, envForEvent, workflowContext());
     expect(duplicate).toMatchObject({
       accepted: true,
       created: false,
@@ -207,7 +211,7 @@ describe("durable Scheduler Workflow admission", () => {
       await modify.disableRetryDelays();
     });
 
-    await schedulerWorker.scheduled(event, envForEvent);
+    await schedulerWorker.scheduled(event, envForEvent, workflowContext());
     await instance.waitForStatus("errored");
     const error = await instance.getError();
     expect(error.name).toBe("NonRetryableError");

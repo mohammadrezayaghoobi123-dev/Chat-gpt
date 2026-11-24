@@ -1,7 +1,10 @@
 import copy
+import json
 import pathlib
 import re
+import subprocess
 import sys
+import tempfile
 import tomllib
 import unittest
 
@@ -86,6 +89,46 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                 self.assertIsNotNone(pattern.fullmatch(finding_match))
                 mutated = ("0" if key[0] != "0" else "1") + key[1:]
                 self.assertIsNone(pattern.fullmatch(f'key = "{mutated}"'))
+
+
+    def test_report_diagnostics_explain_allowlist_predicates_without_secrets(self):
+        description, (commit, path) = next(iter(EXPECTED_FIXTURES.items()))
+        line = _source_fixture_line(ROOT, commit, path)
+        fixture = re.fullmatch(r'const key = "([0-9a-f]{64})";', line)
+        self.assertIsNotNone(fixture)
+        finding_match = f'key = "{fixture.group(1)}"'
+        report = [{
+            "Commit": commit,
+            "File": path,
+            "RuleID": "generic-api-key",
+            "Secret": finding_match,
+            "Match": finding_match,
+            "Line": line,
+        }]
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = pathlib.Path(directory) / "gitleaks-report.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "security" / "validate_gitleaks_allowlists.py"),
+                    "--config",
+                    str(ROOT / ".gitleaks.toml"),
+                    "--report",
+                    str(report_path),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn(
+            "rule=True commit=True path=True regex=True allowed=True",
+            result.stdout,
+        )
+        self.assertNotIn(finding_match, result.stdout)
+
 
     def test_validator_rejects_non_literal_line_pattern(self):
         changed = copy.deepcopy(self.config)

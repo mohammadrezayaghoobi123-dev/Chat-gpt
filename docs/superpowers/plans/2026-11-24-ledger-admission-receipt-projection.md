@@ -1,6 +1,6 @@
 # Ledger Admission Receipt Projection Implementation Plan
 
-> **For agentic workers:** Use the host's available task-by-task implementation workflow. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Use the host's available task-by-task implementation workflow. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make a signed, tenant-bound Admission Receipt the only authorization evidence that can create a newly scheduled Task in OrchestratorLedger.
 
@@ -14,7 +14,7 @@
 - A Ledger verifier must resolve the public key from TenantDirectory by the Receipt tenant and key ID. It must never trust a public key supplied in the Receipt or RPC input.
 - Private signing material must not be introduced into Ledger, Task, Outbox, audit, logs, repository files, or Cloudflare secrets as part of this step.
 - Keep the existing HMAC Scheduler assertion only as an independent workload-authentication factor for the new projection operation. It is not authorization evidence.
-- Receipt signature verification and TenantDirectory RPC occur outside `transactionSync`; all consumption identities and Task/claim-candidate writes occur in one synchronous Ledger transaction.
+- Receipt signature verification and TenantDirectory RPC occur outside `transactionSync`; all consumption identities and Task/claim-candidate writes occur in one synchronous Ledger transaction. The verified envelope and the exact canonical Task bytes are snapshotted before the Ledger transaction.
 - Recompute the canonical Task digest from the normalized Task after `assertNoSecretFields` and the existing 32 KiB serialization bound.
 - Preserve the existing task primary key and tenant/project idempotency namespace. Add explicit durable constraints for admission ID and Receipt JTI.
 - An identical replay returns the original projection. Reuse with a different Task, digest, scope, admission ID, or JTI returns a conflict without a second Task.
@@ -65,7 +65,7 @@ The signed envelope is exactly:
 }
 ```
 
-The signature is Ed25519 over UTF-8 `canonicalJson({ header, claims })`. The contract accepts only the exact header and claim key sets shown above. The maximum Receipt lifetime is 60 seconds; `iat` and `exp` are Unix seconds. `scheduledTime` is milliseconds. The Task must be `SCHEDULED`, version 1, and carry matching `taskId`, `tenantId`, `projectId`, and `resourceDigest`. The Receipt's `taskDigest` is recomputed over the normalized bounded Task JSON. The idempotency key persisted by Ledger is the Receipt's SHA-256 idempotency-key digest in the existing tenant/project injective namespace.
+The signature is Ed25519 over UTF-8 `canonicalJson({ header, claims })`. The contract accepts only the exact header and claim key sets shown above. The maximum Receipt lifetime is 60 seconds; `iat` and `exp` are Unix seconds. `scheduledTime` is milliseconds. The Task must be `SCHEDULED`, version 1, and carry matching `taskId`, `tenantId`, `projectId`, and `resourceDigest`. The Receipt's `taskDigest` is recomputed over the exact canonical Task JSON bytes that are persisted, after secret-field rejection and the 32 KiB bound. The idempotency key persisted by Ledger is the Receipt's SHA-256 idempotency-key digest in the existing tenant/project injective namespace.
 
 ## Task 1: Tenant-Scoped Public-Key Registry
 
@@ -80,18 +80,18 @@ The signature is Ed25519 over UTF-8 `canonicalJson({ header, claims })`. The con
 - `getAdmissionVerificationKey({ tenantId, keyId, now })` returns only active or verification-only, currently valid public-key metadata; revoked, unknown, and expired keys return `null`.
 - Adapter adds `admissionVerificationKeyStore.getAdmissionVerificationKey(input)`, binding the tenant ID before the RPC.
 
-- [ ] **Step 1: Add failing key-registry tests**
+- [x] **Step 1: Add failing key-registry tests**
   - Provision a new active key with expected version 0; assert version 1 and read-back through the read-only adapter.
   - Change active to verification-only with expected version 1; assert it remains verifiable.
   - Revoke with expected version 2; assert lookup returns null.
   - Reject an unknown key ID, malformed/non-32-byte public key, unsupported algorithm, invalid validity interval, optimistic version conflict, public-key rebinding under an existing key ID, and revoked-key reactivation.
   - Drop the key registry table after schema v3 and assert schema initialization fails closed.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
   - Run: `cd cloud-engineering-connector && npx vitest run --config vitest.config.js cloudflare-test/tenant-directory.test.js`.
   - Expected: the new public-key registry tests fail because the RPC, table, and schema-v3 migration do not exist.
 
-- [ ] **Step 3: Implement schema v3 and key registry**
+- [x] **Step 3: Implement schema v3 and key registry**
   - Add `tenant_admission_verification_keys` with a composite tenant/key primary key, Ed25519-only algorithm constraint, status constraint, public key, validity bounds, optimistic row version, and timestamps.
   - Migrate schema v2 to v3 idempotently. Once v3 is recorded, missing registry table is `TENANT_DIRECTORY_SCHEMA_CORRUPT`; do not reconstruct it silently.
   - Add `upsertAdmissionVerificationKey` to the existing admin assertion operation allowlist. Bind the exact tenant, key ID, public key, algorithm, status, validity interval, and expected version in the signed admin target.
@@ -99,11 +99,11 @@ The signature is Ed25519 over UTF-8 `canonicalJson({ header, claims })`. The con
   - Append audit evidence without exposing private material; the table stores only public keys.
   - Add the read-only lookup and tenant-bound adapter method.
 
-- [ ] **Step 4: Verify focused and full TenantDirectory suites**
+- [x] **Step 4: Verify focused and full TenantDirectory suites**
   - Run the focused test above and then `cd cloud-engineering-connector && npm test`.
   - Expected: all existing and new tests pass; schema version is 3.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   - `feat: add tenant admission verification key registry`.
 
 ## Task 2: Strict Receipt Verification and Atomic Ledger Projection
@@ -120,7 +120,7 @@ The signature is Ed25519 over UTF-8 `canonicalJson({ header, claims })`. The con
 - `OrchestratorLedger.createTask(input)` returns `ADMISSION_RECEIPT_REQUIRED` before any write if the Receipt is absent; if present it delegates to the exact projection path.
 - `orchestrator_task_admissions` records tenant/project, admission ID, Receipt issuer/JTI, task ID/digest, resource digest, idempotency digest, and consumption time with database-enforced primary/unique constraints.
 
-- [ ] **Step 1: Add failing Ledger tests**
+- [x] **Step 1: Add failing Ledger tests**
   - Valid Ed25519 Receipt creates one Task, one admission-consumption record, and the expected claim candidate.
   - Identical Receipt/task retry returns the original Task and does not increase any row count.
   - Valid legacy HMAC assertion with no Receipt passed to `createTask()` returns `ADMISSION_RECEIPT_REQUIRED`; assert zero writes to tasks, admissions, consumed assertions, and claim candidates.
@@ -130,28 +130,28 @@ The signature is Ed25519 over UTF-8 `canonicalJson({ header, claims })`. The con
   - Reject secret-bearing, malformed, and over-32-KiB Task payloads before persistence.
   - Drop `orchestrator_task_admissions` after schema v10 and assert Ledger initialization fails closed.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
   - Run: `cd cloud-engineering-connector && npx vitest run --config vitest.config.js cloudflare-test/orchestrator-ledger-admission-receipt.test.js`.
   - Expected: the new suite fails because Receipt verification, the TenantDirectory key RPC, schema v10 identities, and Receipt-only Task creation do not exist.
 
-- [ ] **Step 3: Implement strict receipt verification**
+- [x] **Step 3: Implement strict receipt verification**
   - Canonicalize `{ header, claims }` using the existing shared `canonicalJson`.
   - Decode raw 32-byte Ed25519 public keys and 64-byte signatures using strict base64url decoding.
   - Resolve `kid` only through `env.TENANT_DIRECTORY.get(idFromName(receipt.claims.tenantId)).getAdmissionVerificationKey(...)`; never accept a public key from the sender.
   - Verify signature and all expected bindings before opening the Ledger SQL transaction.
 
-- [ ] **Step 4: Implement schema v10 and atomic projection**
+- [x] **Step 4: Implement schema v10 and atomic projection**
   - Add `orchestrator_task_admissions` with `PRIMARY KEY(tenant_id, admission_id)`, `UNIQUE(receipt_issuer, receipt_jti)`, and `UNIQUE(tenant_id, project_id, task_id)`; use a foreign key to the Task.
   - Record schema v10 only after the table and constraints are created. If schema v10 exists but the table is missing, fail with `LEDGER_SCHEMA_CORRUPT` instead of silently reconstructing replay state.
   - In one `transactionSync`: consume the verified HMAC workload assertion, check admission/JTI/idempotency/task identities, return an identical replay or conflict, insert the Task, insert the admission-consumption row, and synchronize the claim candidate.
   - If any insert or claim-candidate write fails, the local transaction rolls back all Task and admission writes.
   - Keep `createTask()` as a receipt-required shim only; never leave an HMAC-only creation branch.
 
-- [ ] **Step 5: Verify focused and full suites**
+- [x] **Step 5: Verify focused and full suites**
   - Run the new focused Vitest file, existing `orchestrator-ledger-idempotency-scope.test.js`, `orchestrator-ledger-tenant-scope-api.test.js`, then `cd cloud-engineering-connector && npm test`.
   - Expected: all focused and full tests pass; no unhandled Vitest errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   - `feat: require admission receipts for ledger task projection`.
 
 ## Task 3: Independent Adversarial Review and Release Boundary
@@ -160,15 +160,15 @@ The signature is Ed25519 over UTF-8 `canonicalJson({ header, claims })`. The con
 - Review: every changed source and test file.
 - Update: this plan with exact evidence and PR description with verification results.
 
-- [ ] **Step 1: Re-read the complete branch diff**
+- [x] **Step 1: Re-read the complete branch diff**
   - Confirm only TenantDirectory key registry, Ledger Receipt verifier/projector, related tests, plan/spec, and workload-assertion allowlist changed.
   - Confirm no Wrangler, binding, secret, Cron, or Worker scheduled-handler changes.
-- [ ] **Step 2: Inspect CI**
+- [x] **Step 2: Inspect CI**
   - Record Node, Durable Object, dependency audit, syntax/Wrangler dry-run, PR diff Gitleaks, and full-history Gitleaks separately.
-- [ ] **Step 3: Recheck parent/base integrity**
+- [x] **Step 3: Recheck parent/base integrity**
   - Confirm parent PR #434 head is unchanged and `main` remains unchanged.
   - Confirm this PR is stacked on the PR #434 feature branch and remains Draft/unmerged.
-- [ ] **Step 4: Record gates**
+- [x] **Step 4: Record gates**
   - Receipt issuance, signing-key custody approval, Scheduler provenance, Outbox wake/recovery, Execution Permit, live Ledger namespace/binding, and canonical Ledger object routing remain separate gates.
   - Do not merge or deploy.
 
@@ -191,3 +191,63 @@ The signature is Ed25519 over UTF-8 `canonicalJson({ header, claims })`. The con
 - Outbox wake-up atomicity, tenant discovery registry, retry/recovery, and Ledger acknowledgement remain unimplemented.
 - Canonical production Ledger DO routing/partition model remains unresolved; this API is partition-agnostic and does not claim a production object-ID mapping.
 - Execution Permit and start-reservation semantics remain unimplemented.
+
+
+## Execution Record
+
+- **PR:** [#437 — Require Admission Receipts for Ledger Task Projection](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/437)
+- **Branch:** `feature/ledger-admission-receipt-projection-2026-11-24`
+- **Verified head:** `2719c0086ad0b02f2c3cef2f6217f83208faa106`
+- **Base:** `feature/tenant-directory-versioned-authorization-2026-11-24` at `295720ff03b4c9b0818c382871f2fd82117853aa`
+- **Parent PR #434:** Open/Draft/Unmerged.
+- **main:** `919b19ca3d3887352cdef06b03c668ead04fbce7`, independently rechecked unchanged.
+- **PR #437:** Open/Draft/Unmerged; mergeable at last metadata read.
+
+### Final CI evidence
+
+- Cloud Engineering Connector CI run: `45383933395`, test job `138409832181`, conclusion `success`.
+- Node tests: 187 passed, 0 failed.
+- Durable Object Vitest: 18 test files passed; 75 tests passed, 0 failed, 0 unhandled errors.
+- `npm audit --audit-level=moderate`: 0 vulnerabilities.
+- JavaScript syntax checks passed.
+- Both Production-config and staging-config Wrangler dry-runs passed.
+- Staging post-deploy smoke was skipped; no deployment occurred.
+
+### Hostile scenarios exercised
+
+- Receipt-free HMAC-authenticated `createTask` returns `ADMISSION_RECEIPT_REQUIRED` before writing Task, consuming an assertion, or creating a claim candidate.
+- Valid Receipt projection through the compatibility `createTask(receipt)` delegates to the same new projection path.
+- Identical Receipt replay returns the previously persisted Task with no second Task/admission/claim-candidate row.
+- Bad signature, changed project claim, altered Task digest, wrong audience, unregistered key ID, expired Receipt, and caller-supplied public-key injection fail closed.
+- Active and verification-only public keys can verify; revocation blocks subsequent verification lookups.
+- Admission ID, receipt issuer/JTI, task identity, and idempotency digest collisions are independently checked. A shared raw caller idempotency key remains usable in different tenant namespaces.
+- A forced SQLite trigger failure during admission-row insertion proves rollback of the Task, admission row, claim candidate, and consumed workload assertion.
+- Secret-bearing and over-32-KiB Task payloads fail before persistence.
+- Task digest is computed from the exact canonical Task JSON bytes persisted in Ledger. A caller mutation after submission does not alter the stored snapshot.
+- Schema v10 fails closed if its admission identity table is missing after migration has been recorded.
+
+### Security scan signal
+
+- Gitleaks PR diff-range scan: passed; no findings in this PR change range.
+- Full-history/fetched-ref Gitleaks: failed with 13 existing `generic-api-key` findings across the fetched repository history/refs. One remains at `cloud-engineering-connector/worker.js:277` in unrelated commit `2729a325991c989cbab182967135aa76f864ac29`; the other findings are in older owner-command tests, tooling and a historical design document. They remain unadjudicated and are not allowlisted.
+- No historical finding has been suppressed or declared a false positive.
+
+### Runtime inventory and deployment boundary
+
+A fresh GET-only Cloudflare inventory on 2026-11-24 found:
+- Durable Object namespaces: `master-brain-cloud-agent_AgentBudget`, `master-brain-cloud-agent_AgentSession`, and `chat-gpt111-staging_WriteControl`.
+- No live `TenantDirectory` or `OrchestratorLedger` Durable Object namespace.
+- No corresponding TenantDirectory/OrchestratorLedger binding on `chat-gpt111` or `chat-gpt111-staging`.
+- No Cron schedules on either inspected Worker.
+- No secret values were read. No Cloudflare resource, Worker setting, binding, key, Cron, staging, or Production state was changed.
+
+### Explicit residual risks and gates
+
+1. **Cross-Durable-Object revocation race:** Ledger resolves the tenant public key and verifies the Receipt through TenantDirectory before opening its own local SQL transaction. A key can be revoked, or membership/policy state can change, after that verification and before Ledger commits. There is no cross-DO ACID transaction. This phase provides verification-time snapshot semantics, not instantaneous cross-DO revocation linearizability. The 60-second Receipt lifetime bounds ordinary exposure but does not prove zero race window.
+2. **Receipt signing and key custody:** only the public verification-key registry and verification path exist. There is no production signer, private-key provisioning, custody, rotation workflow, or actual Receipt-issuance path in this PR. Tests use ephemeral private keys.
+3. **Scheduler provenance:** the HMAC assertion authenticates a configured scheduler workload identity; it does not prove the request originated from a Cloudflare Scheduled Event. The live schedule inventory is empty and there is no deployed scheduled handler/allowlist.
+4. **Runtime parity:** because the connected Cloudflare account has no live TenantDirectory/OrchestratorLedger namespace or bindings, source CI does not prove staging or Production compatibility.
+5. **Outbox and execution:** Outbox activation/recovery, Alarm transaction-boundary proof, Scheduler discovery registry, Execution Permit, immutable start reservation, executor fencing, and remote side-effect semantics remain unimplemented.
+6. **Ledger partition identity:** this API remains partition-agnostic. The canonical production `idFromName` mapping and migration of any existing data remain unresolved.
+
+The end-to-end Hybrid Admission design therefore remains **DESIGN HOLD**. This PR closes the Receipt-free Task-creation bypass in source and establishes a testable Admission Receipt projection boundary; it does not authorize merging or deployment.

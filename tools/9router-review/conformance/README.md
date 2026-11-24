@@ -34,6 +34,18 @@ Run with Node.js 22 from tools/9router-review:
 | T17 | A41 | RECOVERY_LOCKED blocks external-effect permits |
 | T18 | I26 | Effect-ledger intent is idempotent and payload-bound |
 | T19 | A41 | Recovery unlock requires complete independent inventory |
-| T20–T31 | A04–A42 (partial) | Positive reconciliation, marker-key rotation, server-time fencing, terminal states, and ledger integrity |
+| T20 | A18, A19 | Positive marker evidence remains sufficient despite incomplete later pagination |
+| T21 | I20 | HMAC key rotation does not change persisted marker identity |
+| T22 | A15, A19 | Comment-stage UNKNOWN resolves only from positive evidence |
+| T23 | A25 | Lease expiry uses backend/server clock, not caller clock |
+| T24 | I15 | Stale record version cannot renew lease |
+| T25 | I26 | Effect-ledger receipt cannot cross immutable reservation keys |
+| T26 | A19 | Positive pre-model reconciliation prevents model dispatch |
+| T27 | I16 | CLOSED_NO_PUBLISH is terminal for publication |
+| T28 | I26 | Effect-ledger outcome is immutable per attempt ID |
+| T29 | I14 | Marker ID mismatch is a hard reservation conflict |
+| T30 | A18 | Zero evidence does not resolve comment-stage UNKNOWN |
+| T31 | A15, A16 | Comment deadline expiry becomes UNKNOWN and never authorizes retry |
+| 
 
-This is not the A01–A41 backend qualification suite. The coverage map deliberately marks partial coverage. A02's controlled read-before-insert schedule, A03's forced tuple/hash-collision case, independent-process concurrency, backend failover, storage restore, R2 conditional writes, quota exhaustion, and the remaining matrix cases are still NOT_EXECUTED.
+This is not the A01–A42 backend qualification suite. The coverage map deliberately marks partial coverage. A02's controlled read-before-insert schedule, A03's forced tuple/hash-collision case, independent-process concurrency, backend failover, storage restore, R2 conditional writes, quota exhaustion, and the remaining matrix cases are still NOT_EXECUTED.

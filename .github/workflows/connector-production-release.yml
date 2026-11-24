@@ -8,6 +8,7 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  actions: read
 
 concurrency:
   group: connector-production-release
@@ -49,6 +50,12 @@ jobs:
         with:
           node-version: "22"
           package-manager-cache: false
+      - name: Verify GitHub Environment protection contract
+        run: node scripts/verify-environment-protection.mjs
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_ENV: production
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Verify independently approved merged Production candidate
         run: node scripts/verify-release-approval.mjs

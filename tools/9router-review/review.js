@@ -347,6 +347,7 @@ async function requestJson(fetchImpl, url, { method = "GET", token, body, accept
         ...(body ? { "Content-Type": "application/json" } : {}),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
+      redirect: "error",
       signal,
     });
   } catch (error) {

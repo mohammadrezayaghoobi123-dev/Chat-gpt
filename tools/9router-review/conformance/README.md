@@ -68,3 +68,6 @@ This is not the A01–A42 backend qualification suite. T32–T42 extend the in-m
 
 
 T46–T47 add stage-to-outcome binding checks for the append-only effect ledger.
+
+
+Latest stage-bound outcome checkpoint: T46–T47 were observed RED on the initial test-only revision and GREEN after the reference-oracle correction. Hosted run 45511958154 reports T01–T47 47/47 PASS. The full reviewer regression remains intentionally non-green because the preserved duplicate-publication race still produces two POSTs. This does not qualify any persistent provider adapter.

@@ -83,6 +83,7 @@ jobs:
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_PRODUCTION_METADATA_TOKEN: ${{ secrets.CLOUDFLARE_PRODUCTION_METADATA_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           node --input-type=module <<'NODE'
@@ -91,6 +92,7 @@ jobs:
 
           const account = process.env.CLOUDFLARE_ACCOUNT_ID;
           const token = process.env.CLOUDFLARE_API_TOKEN;
+          const productionMetadataToken = process.env.CLOUDFLARE_PRODUCTION_METADATA_TOKEN;
           const root = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/chat-gpt111-staging`;
           const productionRoot = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/chat-gpt111`;
           async function api(path) {
@@ -103,8 +105,14 @@ jobs:
             return body.result;
           }
           async function productionApi(path) {
+            if (typeof productionMetadataToken !== "string" || productionMetadataToken.length === 0) {
+              throw new Error("Staging GitHub environment must configure CLOUDFLARE_PRODUCTION_METADATA_TOKEN for the Production Worker metadata read.");
+            }
+            if (productionMetadataToken === token) {
+              throw new Error("CLOUDFLARE_PRODUCTION_METADATA_TOKEN must be distinct from the Staging deployment credential.");
+            }
             const response = await fetch(productionRoot + path, {
-              headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+              headers: { authorization: `Bearer ${productionMetadataToken}`, accept: "application/json" },
               signal: AbortSignal.timeout(15000),
             });
             const body = await response.json();
@@ -208,12 +216,14 @@ jobs:
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_PRODUCTION_METADATA_TOKEN: ${{ secrets.CLOUDFLARE_PRODUCTION_METADATA_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           node --input-type=module <<'NODE'
           import assert from "node:assert/strict";
           const account = process.env.CLOUDFLARE_ACCOUNT_ID;
           const token = process.env.CLOUDFLARE_API_TOKEN;
+          const productionMetadataToken = process.env.CLOUDFLARE_PRODUCTION_METADATA_TOKEN;
           const root = "https://api.cloudflare.com/client/v4/accounts/" + account + "/workers/scripts/chat-gpt111-staging";
           const productionRoot = "https://api.cloudflare.com/client/v4/accounts/" + account + "/workers/scripts/chat-gpt111";
           async function api(path) {
@@ -226,8 +236,14 @@ jobs:
             return body.result;
           }
           async function productionApi(path) {
+            if (typeof productionMetadataToken !== "string" || productionMetadataToken.length === 0) {
+              throw new Error("Staging GitHub environment must configure CLOUDFLARE_PRODUCTION_METADATA_TOKEN for the Production Worker metadata read.");
+            }
+            if (productionMetadataToken === token) {
+              throw new Error("CLOUDFLARE_PRODUCTION_METADATA_TOKEN must be distinct from the Staging deployment credential.");
+            }
             const response = await fetch(productionRoot + path, {
-              headers: { authorization: "Bearer " + token, accept: "application/json" },
+              headers: { authorization: "Bearer " + productionMetadataToken, accept: "application/json" },
               signal: AbortSignal.timeout(15000),
             });
             const body = await response.json();

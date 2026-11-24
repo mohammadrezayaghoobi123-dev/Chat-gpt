@@ -244,11 +244,21 @@ export class TenantDirectory extends DurableObject {
     sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(1, ?)", Date.now());
     sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(2, ?)", Date.now());
     sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(3, ?)", Date.now());
+
+    const schemaVersion = Number(
+      sql.exec("SELECT MAX(version) AS version FROM tenant_directory_schema_migrations").one().version ?? 0,
+    );
+    if (schemaVersion < 4) {
+      sql.exec("ALTER TABLE tenant_admissions ADD COLUMN idempotency_key TEXT");
+      sql.exec("ALTER TABLE tenant_admissions ADD COLUMN task_json TEXT");
+      sql.exec("ALTER TABLE tenant_admission_outbox ADD COLUMN last_error_code TEXT");
+      sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(4, ?)", Date.now());
+    }
   }
 
   ping() {
     const row = this.ctx.storage.sql.exec("SELECT MAX(version) AS version FROM tenant_directory_schema_migrations").one();
-    return { ok: Number(row.version) === 3, schemaVersion: Number(row.version ?? 0) };
+    return { ok: Number(row.version) === 4, schemaVersion: Number(row.version ?? 0) };
   }
 
   async #provisionAdmissionSigningKey(tenantId) {
@@ -419,6 +429,9 @@ export class TenantDirectory extends DurableObject {
       throw fail("INVALID_TENANT_DIRECTORY_INPUT", "resourceDigest must be a SHA-256 digest.");
     }
     const idempotencyKey = requiredString(input?.idempotencyKey, "idempotencyKey", 160);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(idempotencyKey)) {
+      throw fail("INVALID_TENANT_DIRECTORY_INPUT", "idempotencyKey must be a bounded opaque identifier.");
+    }
     const invocationId = identifier(input?.invocationId, "invocationId");
     const cron = requiredString(input?.cron, "cron", 128);
     const scheduledTime = timestamp(input?.scheduledTime);
@@ -592,8 +605,8 @@ export class TenantDirectory extends DurableObject {
         "INSERT INTO tenant_admissions(" +
         "admission_id, receipt_jti, scheduler_assertion_jti, scheduler_invocation_id, tenant_id, project_id, " +
         "principal_id, action, task_id, task_digest, idempotency_key_digest, claims_json, signing_key_id, " +
-        "public_key, signature, audit_event_id, created_at, expires_at) " +
-        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "public_key, signature, audit_event_id, created_at, expires_at, idempotency_key, task_json) " +
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         admissionId,
         receiptJti,
         scheduler.jti,
@@ -602,7 +615,7 @@ export class TenantDirectory extends DurableObject {
         projectId,
         principalId,
         action,
-        task.taskId,
+        normalizedTask.taskId,
         taskDigest,
         idempotencyKeyDigest,
         claimsJson,
@@ -612,6 +625,8 @@ export class TenantDirectory extends DurableObject {
         auditEventId,
         now,
         expiresAt * 1000,
+        idempotencyKey,
+        taskJson,
       );
       sql.exec(
         "INSERT INTO tenant_admission_outbox(event_id, admission_id, tenant_id, project_id, status, attempts, next_attempt_at, created_at, updated_at) " +
@@ -624,6 +639,9 @@ export class TenantDirectory extends DurableObject {
         now,
         now,
       );
+
+      // Alarm creation shares the same local transaction as Admission and Outbox persistence.
+      this.ctx.storage.setAlarm(now + 1_000);
 
       return {
         tenantId,

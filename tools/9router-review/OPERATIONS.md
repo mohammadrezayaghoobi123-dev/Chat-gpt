@@ -964,6 +964,7 @@ Official evidence: [Connect to your database](https://supabase.com/docs/guides/d
 Current evidence:
 
 - `9R-ATOMIC-001` duplicate-publication race: **REPRODUCED / CONFIRMED FOR TESTED IN-PROCESS INTERLEAVING** by hosted run `45468257408`; expected physical POST count 1, observed 2.
+- The unresolved P1 redirect-replay review thread remains open. The shared GitHub request helper contains `redirect: "error"`, and the 307/308 comment-publication integration subtests passed in the verification run; however, the complete suite is not green and the P1 thread is intentionally not marked resolved.
 - Backend-neutral reference-oracle tranche T01–T19: **PASS 19/19** in hosted run [`45507214386`](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45507214386), exact test revision `190a709331118331ded43a953a28bc9ed39201f0`. The oracle is intentionally in-memory and non-production.
 - Full reviewer regression plus reference tranche at the same revision: **155 passed / 1 failed**. The sole failure is the preserved concurrency RED: 2 physical comment POSTs against the required maximum of 1. No assertion was weakened.
 - The executable tranche covers selected invariants only; the full A01–A41 matrix remains **PARTIALLY_COVERED / NOT_QUALIFIED**. Coverage mapping and explicit gaps are in `tools/9router-review/conformance/README.md`.

@@ -369,3 +369,25 @@ The evidence supports the bounded conclusion that no active Scheduler-to-`Orches
 - Cloudflare calls for this addendum were GET-only.
 - No Cloudflare Worker, Queue, Workflow, Durable Object, binding, trigger, secret, version, or deployment was changed.
 - No repository production source, `main`, merge state, or deployment was changed.
+
+## 13. Exact-head verification after the expanded inventory
+
+**Candidate HEAD:** `9ecd08834185da72e2f4d769e0a649fb9063dcd4`  
+**Workflow:** Full History Secret Scan  
+**Run:** `45360043438`  
+**Job:** `138327483396`
+
+The exact-head job completed with **failure**. Its steps distinguish the two scan scopes:
+
+| Scan | Scope/result | Conclusion |
+|---|---|---|
+| Gitleaks PR diff | 6 commits scanned; `no leaks found` | Passed |
+| Full fetched refs/reachable history | 4,577 commits scanned; 12 historical `generic-api-key` findings; process exit code 2 | Failed |
+
+The 12 findings were read from the redacted report metadata only. No detected value, fingerprint, token material, or credential was reproduced. Their validity, revocation status, and false-positive status have not been established. No allowlist, suppression, or detector change was made.
+
+The job completed its setup and full-history scan successfully as workflow steps; the overall job conclusion is nevertheless **failure** because the full-history scan exited with code 2. The PR diff scan being clean does not make the overall CI green.
+
+This PR changes documentation only. Runtime/unit test workflows were not run as evidence for production-code behavior and must not be represented as passing.
+
+**Verification disposition:** exact-head CI is **not green**. Keep the PR Draft and unmerged. Historical findings require a separate, evidence-backed triage; they must not be hidden to force a green status.

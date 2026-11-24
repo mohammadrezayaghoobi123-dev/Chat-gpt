@@ -270,15 +270,16 @@ describe("OrchestratorLedger Durable Object eviction and recovery invariants", (
       expect(instance.getTask({ taskId, tenantId: TENANT_ID, projectId: PROJECT_ID }))
         .toMatchObject({ taskId, state: "SCHEDULED", version: 1 });
       expect(candidateRows(instance, taskId)).toHaveLength(1);
-      expect(outboxRow(instance, eventId)).toMatchObject({
+      const persistedPendingEvent = outboxRow(instance, eventId);
+      expect(persistedPendingEvent).toMatchObject({
         status: "PENDING",
         attempts: 0,
         lease_worker_id: null,
         lease_generation: 0,
         tenant_id: TENANT_ID,
         project_id: PROJECT_ID,
-        payload_json: JSON.stringify(payload),
       });
+      expect(JSON.parse(persistedPendingEvent.payload_json)).toEqual(payload);
 
       expect(await claimTask(
         instance,

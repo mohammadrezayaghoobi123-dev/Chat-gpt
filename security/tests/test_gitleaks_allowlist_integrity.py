@@ -49,6 +49,16 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                     mutate(target)
                     self.assertTrue(validate_config(changed, ROOT), label)
 
+
+    def test_global_allowlist_policy_rejects_new_or_unscoped_exceptions(self):
+        changed = copy.deepcopy(self.config)
+        changed["allowlists"][0]["regexTarget"] = "secret"
+        self.assertTrue(validate_config(changed, ROOT))
+
+        changed = copy.deepcopy(self.config)
+        changed["allowlists"].append(copy.deepcopy(changed["allowlists"][0]))
+        self.assertTrue(validate_config(changed, ROOT))
+
     def test_validator_rejects_non_literal_line_pattern(self):
         changed = copy.deepcopy(self.config)
         target = next(

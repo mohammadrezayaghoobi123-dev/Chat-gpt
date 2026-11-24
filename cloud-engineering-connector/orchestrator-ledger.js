@@ -261,6 +261,159 @@ function enqueueOutboxInTransaction(sql, input) {
   return { enqueued: true, event: outboxFromRow(row) };
 }
 
+function decodeAdmissionBase64(value, expectedBytes) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+  ) throw fail("Admission Receipt contains invalid base64 data.", "TASK_ADMISSION_INVALID");
+  let bytes;
+  try {
+    const binary = atob(value);
+    bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+  } catch {
+    throw fail("Admission Receipt contains invalid base64 data.", "TASK_ADMISSION_INVALID");
+  }
+  if (bytes.byteLength !== expectedBytes) {
+    bytes.fill(0);
+    throw fail("Admission Receipt contains an invalid cryptographic field length.", "TASK_ADMISSION_INVALID");
+  }
+  return bytes;
+}
+
+async function verifyDirectoryAdmissionReceipt(env, receipt, task, idempotencyKey) {
+  try {
+    if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return null;
+    if (
+      receipt.tenantId !== task.tenantId ||
+      receipt.algorithm !== "Ed25519" ||
+      typeof receipt.keyId !== "string" ||
+      !IDENTIFIER.test(receipt.keyId) ||
+      !receipt.claims ||
+      typeof receipt.claims !== "object" ||
+      Array.isArray(receipt.claims) ||
+      typeof receipt.signature !== "string"
+    ) return null;
+
+    const claims = receipt.claims;
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    if (
+      claims.version !== 1 ||
+      claims.tokenType !== "admission-receipt" ||
+      claims.issuer !== "tenant-directory-admission" ||
+      claims.audience !== "orchestrator-ledger" ||
+      typeof claims.admissionId !== "string" ||
+      !IDENTIFIER.test(claims.admissionId) ||
+      typeof claims.jti !== "string" ||
+      !IDENTIFIER.test(claims.jti) ||
+      typeof claims.schedulerAssertionJti !== "string" ||
+      !IDENTIFIER.test(claims.schedulerAssertionJti) ||
+      typeof claims.schedulerInvocationId !== "string" ||
+      !IDENTIFIER.test(claims.schedulerInvocationId) ||
+      typeof claims.schedulerCron !== "string" ||
+      claims.schedulerCron.length < 1 ||
+      claims.schedulerCron.length > 128 ||
+      !Number.isSafeInteger(claims.scheduledTime) ||
+      claims.scheduledTime < 1 ||
+      !Number.isSafeInteger(claims.issuedAt) ||
+      claims.issuedAt < 1 ||
+      !Number.isSafeInteger(claims.expiresAt) ||
+      claims.expiresAt <= claims.issuedAt ||
+      claims.expiresAt - claims.issuedAt > 300 ||
+      claims.issuedAt > nowSeconds + 5 ||
+      claims.tenantId !== task.tenantId ||
+      claims.projectId !== task.projectId ||
+      claims.taskId !== task.taskId ||
+      claims.action === undefined ||
+      typeof claims.action !== "string" ||
+      claims.action.length < 1 ||
+      claims.action.length > 128 ||
+      typeof claims.principalId !== "string" ||
+      !IDENTIFIER.test(claims.principalId) ||
+      typeof claims.membershipId !== "string" ||
+      !IDENTIFIER.test(claims.membershipId) ||
+      !Number.isSafeInteger(claims.membershipVersion) ||
+      claims.membershipVersion < 1 ||
+      !Number.isSafeInteger(claims.policyScopeEpoch) ||
+      claims.policyScopeEpoch < 0 ||
+      !Number.isSafeInteger(claims.selectedRuleVersion) ||
+      claims.selectedRuleVersion < 1 ||
+      typeof claims.decisionId !== "string" ||
+      !IDENTIFIER.test(claims.decisionId) ||
+      typeof claims.policyVersion !== "string" ||
+      claims.policyVersion.length < 1 ||
+      typeof claims.resourceDigest !== "string" ||
+      !SHA256.test(claims.resourceDigest) ||
+      !(claims.selectedResourceDigest === "*" || SHA256.test(claims.selectedResourceDigest ?? "")) ||
+      typeof claims.taskDigest !== "string" ||
+      !SHA256.test(claims.taskDigest) ||
+      typeof claims.idempotencyKeyDigest !== "string" ||
+      !SHA256.test(claims.idempotencyKeyDigest) ||
+      claims.scheduledTime !== task.createdAt ||
+      claims.scheduledTime !== task.updatedAt
+    ) return null;
+
+    const namespace = env?.TENANT_DIRECTORY;
+    if (!namespace || typeof namespace.idFromName !== "function" || typeof namespace.get !== "function") return null;
+    const directory = namespace.get(namespace.idFromName(task.tenantId));
+    const verificationKey = await directory.getAdmissionVerificationKey({
+      tenantId: task.tenantId,
+      keyId: receipt.keyId,
+    });
+    if (
+      !verificationKey ||
+      verificationKey.tenantId !== task.tenantId ||
+      verificationKey.keyId !== receipt.keyId ||
+      verificationKey.algorithm !== "Ed25519" ||
+      typeof verificationKey.publicKey !== "string"
+    ) return null;
+
+    const publicKeyBytes = decodeAdmissionBase64(verificationKey.publicKey, 32);
+    const signatureBytes = decodeAdmissionBase64(receipt.signature, 64);
+    let publicKey;
+    let verified;
+    try {
+      publicKey = await crypto.subtle.importKey(
+        "raw",
+        publicKeyBytes,
+        { name: "Ed25519" },
+        false,
+        ["verify"],
+      );
+      verified = await crypto.subtle.verify(
+        { name: "Ed25519" },
+        publicKey,
+        signatureBytes,
+        new TextEncoder().encode(canonicalJson(claims)),
+      );
+    } finally {
+      publicKeyBytes.fill(0);
+      signatureBytes.fill(0);
+    }
+    if (!verified) return null;
+
+    const taskDigest = await sha256Canonical(task);
+    const idempotencyKeyDigest = await sha256Canonical({
+      tenantId: task.tenantId,
+      projectId: task.projectId,
+      idempotencyKey,
+    });
+    if (claims.taskDigest !== taskDigest || claims.idempotencyKeyDigest !== idempotencyKeyDigest) return null;
+
+    return {
+      claims,
+      claimsJson: canonicalJson(claims),
+      keyId: receipt.keyId,
+      publicKey: verificationKey.publicKey,
+      signature: receipt.signature,
+      taskDigest,
+      idempotencyKeyDigest,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export class OrchestratorLedger extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
@@ -620,6 +773,43 @@ export class OrchestratorLedger extends DurableObject {
         "INSERT INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (9, ?, ?)",
         Date.now(),
         "Namespace task and outbox idempotency keys by injective tenant/project tuple; preserve existing identifiers and rows",
+      );
+    });
+
+    // Schema v10: bind each newly projected Task to one immutable, Directory-signed Admission Receipt.
+    this.ctx.storage.transactionSync(() => {
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_task_admission_receipts (
+          admission_id TEXT PRIMARY KEY,
+          jti TEXT NOT NULL UNIQUE,
+          task_id TEXT NOT NULL UNIQUE REFERENCES orchestrator_tasks(task_id),
+          tenant_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          principal_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          task_digest TEXT NOT NULL CHECK(length(task_digest) = 64),
+          idempotency_key_digest TEXT NOT NULL CHECK(length(idempotency_key_digest) = 64),
+          claims_json TEXT NOT NULL CHECK(json_valid(claims_json)),
+          signing_key_id TEXT NOT NULL,
+          public_key TEXT NOT NULL,
+          signature TEXT NOT NULL,
+          consumed_at INTEGER NOT NULL,
+          UNIQUE(tenant_id, project_id, idempotency_key_digest)
+        )
+      `);
+      sql.exec(
+        "CREATE INDEX IF NOT EXISTS orchestrator_task_admission_by_scope ON orchestrator_task_admission_receipts(tenant_id, project_id, task_id)",
+      );
+      sql.exec(
+        "CREATE TRIGGER IF NOT EXISTS orchestrator_task_admission_no_update BEFORE UPDATE ON orchestrator_task_admission_receipts BEGIN SELECT RAISE(ABORT, 'TASK_ADMISSION_IMMUTABLE'); END",
+      );
+      sql.exec(
+        "CREATE TRIGGER IF NOT EXISTS orchestrator_task_admission_no_delete BEFORE DELETE ON orchestrator_task_admission_receipts BEGIN SELECT RAISE(ABORT, 'TASK_ADMISSION_IMMUTABLE'); END",
+      );
+      sql.exec(
+        "INSERT OR IGNORE INTO orchestrator_schema_migrations(version, applied_at, description) VALUES(10, ?, ?)",
+        Date.now(),
+        "Bind new task projections to immutable Directory-signed Admission Receipts with unique admission and replay identities",
       );
     });
 

@@ -1024,6 +1024,9 @@ async function handleOwnerGitHubComment(authenticated, payload, ledger, env) {
    deliveryId: authenticated.deliveryId,
   }, 422);
  }
+ if (retryAuthorization.retryAuthorized === true && retryAuthorization.registered !== true) {
+  return json({ error: "owner_command_unavailable" }, 503);
+ }
  if (retryAuthorization.denied === true) {
   return json({
    error: "owner_command_conflict",

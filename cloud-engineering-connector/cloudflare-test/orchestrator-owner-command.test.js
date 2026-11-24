@@ -1,12 +1,25 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
 import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
-const now = Math.floor(Date.now() / 1000) * 1000;
+let now = 0;
+let wallClockNow = 0;
+let wallClockSpy;
+
+beforeEach(() => {
+  now = Math.floor(Date.now() / 1000) * 1000;
+  wallClockNow = now;
+  wallClockSpy = vi.spyOn(Date, "now").mockImplementation(() => wallClockNow);
+});
+
+afterEach(() => {
+  wallClockSpy?.mockRestore();
+  wallClockSpy = undefined;
+});
 const ownerId = "335530603";
 const repositoryId = 1398846697;
 const ownerKeySet = JSON.stringify({
@@ -2407,8 +2420,7 @@ describe("Owner command atomic Ledger contract", () => {
     const operation = "createTask";
     const token = await workerAssertion(subject, role, operation, now, sharedJti);
 
-    let wallClockNow = now + 120_000;
-    const wallClockSpy = vi.spyOn(Date, "now").mockImplementation(() => wallClockNow);
+    wallClockNow = now + 120_000;
     let afterExpiry;
     let afterRollback;
     try {
@@ -2440,7 +2452,7 @@ describe("Owner command atomic Ledger contract", () => {
         workerAssertion: token,
       });
     } finally {
-      wallClockSpy.mockRestore();
+      wallClockNow = now;
     }
     expect(afterExpiry).toMatchObject({
       created: false,
@@ -2469,8 +2481,7 @@ describe("Owner command atomic Ledger contract", () => {
 
   it("does not let caller clock rollback renew an expired execution lease", async () => {
     const ledger = ledgerFor("worker-assertion-caller-clock-lease-rollback");
-    let wallClockNow = now;
-    const wallClockSpy = vi.spyOn(Date, "now").mockImplementation(() => wallClockNow);
+    wallClockNow = now;
     try {
       await createTask(ledger);
       const claim = await ledger.claimTask({
@@ -2497,7 +2508,7 @@ describe("Owner command atomic Ledger contract", () => {
         reason: "LEASE_FENCE_MISMATCH",
       });
     } finally {
-      wallClockSpy.mockRestore();
+      wallClockNow = now + 101;
     }
 
     await runInDurableObject(ledger, async (_instance, state) => {
@@ -2561,7 +2572,7 @@ describe("Owner command atomic Ledger contract", () => {
     const operation = "createTask";
     const sharedJti = "worker-jti-caller-time-prune-000001";
     const originalToken = await workerAssertion(subject, role, operation, now, sharedJti);
-    const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    wallClockNow = now;
     try {
       const first = await ledger.createTask({
         task: { ...task("task-caller-time-jti-original") },
@@ -2613,7 +2624,7 @@ describe("Owner command atomic Ledger contract", () => {
         reason: "AUTHENTICATED_WORKER_REQUIRED",
       });
     } finally {
-      wallClockSpy.mockRestore();
+      wallClockNow = now;
     }
 
     await runInDurableObject(ledger, async (_instance, state) => {

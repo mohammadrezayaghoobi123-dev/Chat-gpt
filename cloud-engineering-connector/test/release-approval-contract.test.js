@@ -33,36 +33,40 @@ const workflows = [
 ];
 
 for (const workflow of workflows) {
-  test(workflow.name + " release refuses to deploy an unapproved or currently unauthorized candidate", () => {
+  test(workflow.name + " release revalidates authorization in the same step that deploys", () => {
     const source = readFileSync(workflow.path, "utf8");
-    assert.match(source, /pull-requests:\s*read/, "release workflow must have read-only PR review access");
-    assert.equal((source.match(/node scripts\/verify-release-approval\.mjs/g) || []).length, 2,
-      "approval must be checked once before preparation and revalidated immediately before deployment");
-    assert.equal((source.match(/RELEASE_GITHUB_TOKEN:/g) || []).length, 2,
-      "GitHub token must be scoped only to the two approval checks");
-    assert.equal((source.match(/RELEASE_REVIEWER_IDS:/g) || []).length, 2,
-      "trusted reviewer policy must be scoped only to the two approval checks");
-    assert.equal((source.match(/RELEASE_REVIEWER_IDS:\s*\$\{\{\s*vars\.RELEASE_REVIEWER_IDS\s*\}\}/g) || []).length, 2,
-      "both approval checks must use the explicit GitHub Actions reviewer policy variable");
+    assert.match(source, /pull-requests:\\s*read/, "release workflow must have read-only PR review access");
+    assert.equal((source.match(/node scripts\\/verify-release-approval\\.mjs/g) || []).length, 1,
+      "only the early approval check may run as a separate step");
+    assert.equal((source.match(/bash scripts\\/verify-and-deploy-release\\.sh/g) || []).length, 1,
+      "the final authorization check and deployment must execute through one guarded runner");
 
-    const firstGuardPosition = source.indexOf("node scripts/verify-release-approval.mjs");
-    const secondGuardPosition = source.indexOf("node scripts/verify-release-approval.mjs", firstGuardPosition + 1);
-    const deployPosition = source.indexOf("npx wrangler deploy");
-    const secondGuardStepStart = source.lastIndexOf("      - name: ", secondGuardPosition);
-    const deployStepStart = source.lastIndexOf("      - name: ", deployPosition);
-    const secondGuardStepEnd = source.indexOf("\n      - name: ", secondGuardStepStart + 1) + 1;
-    const secondGuardStep = source.slice(secondGuardStepStart, secondGuardStepEnd);
-    assert.ok(firstGuardPosition < secondGuardPosition && secondGuardPosition < deployPosition,
-      "the second authorization check must execute after initial preparation and before deployment");
-    assert.match(secondGuardStep, /Revalidate trusted reviewer access immediately before/,
-      "the second check must be explicitly named as a just-in-time authorization revalidation");
-    assert.match(secondGuardStep, /RELEASE_GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/,
-      "the just-in-time gate must receive only the scoped GitHub token");
-    assert.match(secondGuardStep, /RELEASE_REVIEWER_IDS:\s*\$\{\{\s*vars\.RELEASE_REVIEWER_IDS\s*\}\}/,
-      "the just-in-time gate must receive the trusted reviewer policy");
-    assert.equal(secondGuardStepEnd, deployStepStart,
-      "the just-in-time authorization gate must be the immediately preceding workflow step");
-    assert.match(source, /RELEASE_ENV:\s*(staging|production)/, "release environment must be explicit");
+    const deployStepName = workflow.name === "Staging"
+      ? "      - name: Deploy candidate to Staging"
+      : "      - name: Deploy candidate to Production";
+    const deployStepStart = source.indexOf(deployStepName);
+    const deployStepEnd = source.indexOf("\\n      - name: ", deployStepStart + 1);
+    assert.ok(deployStepStart >= 0 && deployStepEnd > deployStepStart,
+      "the deployment step must be uniquely identifiable");
+    const deployStep = source.slice(deployStepStart, deployStepEnd);
+
+    assert.match(deployStep, /id: deploy/, "deployment step identity must remain stable for rollback and evidence");
+    assert.match(deployStep, /shell: bash/, "guarded runner must use an explicit Bash shell");
+    assert.match(deployStep, /bash scripts\\/verify-and-deploy-release\\.sh/,
+      "the same step must run the final approval check and Wrangler deployment");
+    assert.match(deployStep, /RELEASE_GITHUB_TOKEN:\\s*\\$\\{\\{\\s*github\\.token\\s*\\}\\}/,
+      "the final authorization check must receive its scoped GitHub token");
+    assert.match(deployStep, /RELEASE_REVIEWER_IDS:\\s*\\$\\{\\{\\s*vars\\.RELEASE_REVIEWER_IDS\\s*\\}\\}/,
+      "the final authorization check must receive the configured reviewer policy");
+    assert.match(deployStep, /CLOUDFLARE_API_TOKEN:\\s*\\$\\{\\{\\s*secrets\\.CLOUDFLARE_API_TOKEN\\s*\\}\\}/,
+      "the deploy process must receive the Cloudflare API token");
+    assert.match(deployStep, /CLOUDFLARE_ACCOUNT_ID:\\s*\\$\\{\\{\\s*vars\\.CLOUDFLARE_ACCOUNT_ID\\s*\\}\\}/,
+      "the deploy process must receive the exact Cloudflare account");
+    assert.doesNotMatch(deployStep, /npx wrangler deploy/,
+      "Wrangler invocation must be owned by the guarded runner, not duplicated in the workflow");
+    assert.doesNotMatch(source, /Revalidate trusted reviewer access immediately before/,
+      "a separately scheduled final authorization step must not remain");
+    assert.match(source, /RELEASE_ENV:\\s*(staging|production)/, "release environment must remain explicit");
   });
 }
 

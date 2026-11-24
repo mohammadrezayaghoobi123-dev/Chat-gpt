@@ -5,6 +5,13 @@ import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orche
 import { verifyWorkerAssertion } from "./orchestrator-worker-identity.js";
 import { verifyReconciliationEvidence } from "./orchestrator-reconciliation-evidence.js";
 import { verifyOwnerAssertion } from "./orchestrator-owner-assertion.js";
+import {
+  admissionTextDigest,
+  decodeTaskAdmissionGrantClaims,
+  normalizeTaskForAdmission,
+  taskAdmissionDigest,
+  verifyTaskAdmissionGrant,
+} from "./orchestrator-admission.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
@@ -623,6 +630,49 @@ export class OrchestratorLedger extends DurableObject {
       );
     });
 
+    // Schema v10: durable, append-only evidence that a TenantDirectory-signed
+    // Task admission grant was consumed by this Ledger. The unique JTI is the
+    // local replay fence; the whole receipt/task/outbox write is one transaction.
+    this.ctx.storage.transactionSync(() => {
+      const applied = sql.exec(
+        "SELECT version FROM orchestrator_schema_migrations WHERE version = 10",
+      ).toArray()[0];
+      if (applied) return;
+      sql.exec(
+        "CREATE TABLE IF NOT EXISTS orchestrator_task_admission_receipts (" +
+        "admission_id TEXT PRIMARY KEY, jti TEXT NOT NULL UNIQUE, task_id TEXT NOT NULL UNIQUE, " +
+        "tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, principal_id TEXT NOT NULL, " +
+        "task_digest TEXT NOT NULL CHECK(length(task_digest)=64), " +
+        "idempotency_key_digest TEXT NOT NULL CHECK(length(idempotency_key_digest)=64), " +
+        "input_hash TEXT NOT NULL CHECK(length(input_hash)=64), " +
+        "membership_id TEXT NOT NULL, membership_version INTEGER NOT NULL CHECK(membership_version > 0), " +
+        "policy_scope_epoch INTEGER NOT NULL CHECK(policy_scope_epoch >= 0), " +
+        "policy_rule_version INTEGER NOT NULL CHECK(policy_rule_version > 0), " +
+        "policy_rule_resource_digest TEXT NOT NULL, policy_decision_id TEXT NOT NULL, " +
+        "issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, key_id TEXT NOT NULL, " +
+        "grant_digest TEXT NOT NULL CHECK(length(grant_digest)=64), created_at INTEGER NOT NULL)"
+      );
+      sql.exec(
+        "CREATE INDEX IF NOT EXISTS orchestrator_task_admission_receipts_by_scope " +
+        "ON orchestrator_task_admission_receipts(tenant_id, project_id, created_at DESC)"
+      );
+      sql.exec(
+        "CREATE TRIGGER IF NOT EXISTS orchestrator_task_admission_receipts_no_update " +
+        "BEFORE UPDATE ON orchestrator_task_admission_receipts " +
+        "BEGIN SELECT RAISE(ABORT, 'ORCHESTRATOR_ADMISSION_RECEIPT_APPEND_ONLY'); END"
+      );
+      sql.exec(
+        "CREATE TRIGGER IF NOT EXISTS orchestrator_task_admission_receipts_no_delete " +
+        "BEFORE DELETE ON orchestrator_task_admission_receipts " +
+        "BEGIN SELECT RAISE(ABORT, 'ORCHESTRATOR_ADMISSION_RECEIPT_APPEND_ONLY'); END"
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (10, ?, ?)",
+        Date.now(),
+        "Persist immutable TenantDirectory admission receipts and enforce local JTI replay uniqueness",
+      );
+    });
+
   }
 
   ping() {
@@ -636,10 +686,11 @@ export class OrchestratorLedger extends DurableObject {
       "orchestrator_outbox_events",
       "orchestrator_audit_events",
       "orchestrator_owner_command_receipts",
+      "orchestrator_task_admission_receipts",
     ].every(name => tableNames.has(name));
     return {
       ok: Number(result.ok) === 1 && requiredTablesOk,
-      schemaVersion: 9,
+      schemaVersion: 10,
       storage: {
         requiredTables: requiredTablesOk,
       },
@@ -727,16 +778,20 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  async createTask({ task, idempotencyKey, inputHash, now, workerId, workerAssertion }) {
+  async createTask({ task, idempotencyKey, inputHash, now, workerId, workerAssertion, admissionGrant }) {
     if (!task || !hasTenantProjectScope(task.tenantId, task.projectId)) {
       return { created: false, reason: "TENANT_PROJECT_SCOPE_REQUIRED" };
     }
     identifier(idempotencyKey, "idempotencyKey");
     hash(inputHash, "inputHash");
     timestamp(now);
+    if (typeof admissionGrant !== "string" || admissionGrant.length < 1) {
+      return { created: false, reason: "TASK_ADMISSION_REQUIRED" };
+    }
     if (workerId !== "orchestrator-scheduler") {
       return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
+
     let verifiedAssertion;
     try {
       verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
@@ -745,33 +800,141 @@ export class OrchestratorLedger extends DurableObject {
     } catch {
       return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
+
     let normalizedTask;
     let taskJson;
     let taskRejectionReason = null;
     try {
-      if (!task || typeof task !== "object" || Array.isArray(task)) throw fail("task must be an object.");
-      identifier(task.taskId, "taskId");
-      if (!TASK_STATES.includes(task.state) || !Number.isSafeInteger(task.version) || task.version < 1 ||
-          !Number.isSafeInteger(task.createdAt) || !Number.isSafeInteger(task.updatedAt) ||
-          task.createdAt < 1 || task.updatedAt < task.createdAt) {
-        throw fail("task projection is invalid.");
-      }
-      normalizedTask = { ...task, agentRound: task.agentRound ?? 0 };
-      if (!Number.isSafeInteger(normalizedTask.agentRound) || normalizedTask.agentRound < 0 || normalizedTask.agentRound > 4) {
-        throw fail("agentRound must be an integer from zero through four.", "INVALID_AGENT_ROUND");
+      normalizedTask = normalizeTaskForAdmission(task);
+      if (!hasTenantProjectScope(normalizedTask.tenantId, normalizedTask.projectId)) {
+        throw fail("Task tenant/project scope is invalid.", "TENANT_PROJECT_SCOPE_REQUIRED");
       }
       taskJson = serializeBounded(normalizedTask, "task");
     } catch (error) {
       taskRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_TASK";
     }
+    if (taskRejectionReason) {
+      return { created: false, reason: taskRejectionReason };
+    }
+
+    let verifiedAdmission;
+    let admissionClaims;
+    let idempotencyKeyDigest;
+    let grantDigest;
+    try {
+      const taskDigest = await taskAdmissionDigest(normalizedTask);
+      idempotencyKeyDigest = await admissionTextDigest(idempotencyKey);
+      const decoded = decodeTaskAdmissionGrantClaims(admissionGrant);
+      const claims = decoded.claims;
+      verifiedAdmission = await verifyTaskAdmissionGrant(
+        this.env?.ORCHESTRATOR_LEDGER_ADMISSION_PUBLIC_KEYS,
+        admissionGrant,
+        {
+          principalId: claims.sub,
+          tenantId: normalizedTask.tenantId,
+          projectId: normalizedTask.projectId,
+          taskId: normalizedTask.taskId,
+          taskDigest,
+          idempotencyKeyDigest,
+          inputHash,
+          membershipId: claims.membershipId,
+          membershipVersion: claims.membershipVersion,
+          policyScopeEpoch: claims.policyScopeEpoch,
+          policyRuleVersion: claims.policyRuleVersion,
+          policyRuleResourceDigest: claims.policyRuleResourceDigest,
+          policyDecisionId: claims.policyDecisionId,
+          admissionId: claims.admissionId,
+          jti: claims.jti,
+          issuedAt: claims.iat,
+          expiresAt: claims.exp,
+          nowMs: Date.now(),
+        },
+      );
+      admissionClaims = {
+        admissionId: verifiedAdmission.admissionId,
+        jti: verifiedAdmission.jti,
+        principalId: verifiedAdmission.sub,
+        tenantId: verifiedAdmission.tenantId,
+        projectId: verifiedAdmission.projectId,
+        taskId: verifiedAdmission.taskId,
+        taskDigest: verifiedAdmission.taskDigest,
+        idempotencyKeyDigest: verifiedAdmission.idempotencyKeyDigest,
+        inputHash: verifiedAdmission.inputHash,
+        membershipId: verifiedAdmission.membershipId,
+        membershipVersion: verifiedAdmission.membershipVersion,
+        policyScopeEpoch: verifiedAdmission.policyScopeEpoch,
+        policyRuleVersion: verifiedAdmission.policyRuleVersion,
+        policyRuleResourceDigest: verifiedAdmission.policyRuleResourceDigest,
+        policyDecisionId: verifiedAdmission.policyDecisionId,
+        issuedAt: verifiedAdmission.iat,
+        expiresAt: verifiedAdmission.exp,
+        keyId: decoded.keyId,
+      };
+      grantDigest = await admissionTextDigest(admissionGrant);
+    } catch {
+      return { created: false, reason: "TASK_ADMISSION_INVALID" };
+    }
+
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
-      if (taskRejectionReason) {
-        return { created: false, reason: taskRejectionReason };
+
+      const priorReceipt = sql.exec(
+        "SELECT * FROM orchestrator_task_admission_receipts WHERE admission_id=? OR jti=? LIMIT 1",
+        admissionClaims.admissionId, admissionClaims.jti,
+      ).toArray()[0] ?? null;
+      if (priorReceipt) {
+        const matches =
+          priorReceipt.admission_id === admissionClaims.admissionId &&
+          priorReceipt.jti === admissionClaims.jti &&
+          priorReceipt.task_id === normalizedTask.taskId &&
+          priorReceipt.tenant_id === normalizedTask.tenantId &&
+          priorReceipt.project_id === normalizedTask.projectId &&
+          priorReceipt.principal_id === admissionClaims.principalId &&
+          priorReceipt.task_digest === admissionClaims.taskDigest &&
+          priorReceipt.idempotency_key_digest === admissionClaims.idempotencyKeyDigest &&
+          priorReceipt.input_hash === inputHash &&
+          priorReceipt.membership_id === admissionClaims.membershipId &&
+          priorReceipt.membership_version === admissionClaims.membershipVersion &&
+          priorReceipt.policy_scope_epoch === admissionClaims.policyScopeEpoch &&
+          priorReceipt.policy_rule_version === admissionClaims.policyRuleVersion &&
+          priorReceipt.policy_rule_resource_digest === admissionClaims.policyRuleResourceDigest &&
+          priorReceipt.policy_decision_id === admissionClaims.policyDecisionId &&
+          priorReceipt.grant_digest === grantDigest;
+        if (!matches) {
+          return { created: false, conflict: true, reason: "TASK_ADMISSION_REPLAY_CONFLICT" };
+        }
+        const taskRow = sql.exec(
+          "SELECT * FROM orchestrator_tasks WHERE task_id=? AND tenant_id=? AND project_id=?",
+          normalizedTask.taskId, normalizedTask.tenantId, normalizedTask.projectId,
+        ).toArray()[0];
+        if (!taskRow) throw fail("Admission receipt exists without its Task; integrity failure.", "ADMISSION_RECEIPT_ORPHANED");
+        return {
+          created: false,
+          replay: true,
+          task: taskFromRow(taskRow),
+          admissionReceipt: {
+            admissionId: priorReceipt.admission_id,
+            jti: priorReceipt.jti,
+            taskDigest: priorReceipt.task_digest,
+          },
+        };
       }
+
+      const conflictingJti = sql.exec(
+        "SELECT admission_id FROM orchestrator_task_admission_receipts WHERE jti=?",
+        admissionClaims.jti,
+      ).toArray()[0];
+      const conflictingAdmission = sql.exec(
+        "SELECT jti FROM orchestrator_task_admission_receipts WHERE admission_id=?",
+        admissionClaims.admissionId,
+      ).toArray()[0];
+      if (conflictingJti || conflictingAdmission) {
+        return { created: false, conflict: true, reason: "TASK_ADMISSION_REPLAY_CONFLICT" };
+      }
+
       const scopedIdempotencyKey = tenantProjectIdempotencyKey(
         normalizedTask.tenantId, normalizedTask.projectId, idempotencyKey,
       );
@@ -783,19 +946,81 @@ export class OrchestratorLedger extends DurableObject {
         if (existing.input_hash !== inputHash || existing.task_id !== normalizedTask.taskId) {
           return { created: false, conflict: true, reason: "IDEMPOTENCY_CONFLICT" };
         }
-        return { created: false, replay: true, task: taskFromRow(existing) };
+        return { created: false, conflict: true, reason: "ADMISSION_RECEIPT_MISSING" };
       }
-      const taskIdExisting = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", normalizedTask.taskId).toArray()[0];
+      const taskIdExisting = sql.exec(
+        "SELECT task_id FROM orchestrator_tasks WHERE task_id = ?",
+        normalizedTask.taskId,
+      ).toArray()[0];
       if (taskIdExisting) return { created: false, conflict: true, reason: "TASK_ID_CONFLICT" };
+
+      // Local admission linearization: worker assertion consumption, Task,
+      // immutable admission receipt, Outbox event, and claim index commit together.
       sql.exec(
         "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         normalizedTask.taskId, scopedIdempotencyKey, inputHash, normalizedTask.state, normalizedTask.version, taskJson,
         normalizedTask.createdAt, normalizedTask.updatedAt, normalizedTask.tenantId, normalizedTask.projectId,
       );
+
+      sql.exec(
+        "INSERT INTO orchestrator_task_admission_receipts (" +
+        "admission_id, jti, task_id, tenant_id, project_id, principal_id, task_digest, idempotency_key_digest, input_hash, " +
+        "membership_id, membership_version, policy_scope_epoch, policy_rule_version, policy_rule_resource_digest, " +
+        "policy_decision_id, issued_at, expires_at, key_id, grant_digest, created_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        admissionClaims.admissionId, admissionClaims.jti, admissionClaims.taskId,
+        admissionClaims.tenantId, admissionClaims.projectId, admissionClaims.principalId,
+        admissionClaims.taskDigest, admissionClaims.idempotencyKeyDigest, admissionClaims.inputHash,
+        admissionClaims.membershipId, admissionClaims.membershipVersion, admissionClaims.policyScopeEpoch,
+        admissionClaims.policyRuleVersion, admissionClaims.policyRuleResourceDigest,
+        admissionClaims.policyDecisionId, admissionClaims.issuedAt, admissionClaims.expiresAt,
+        admissionClaims.keyId, grantDigest, now,
+      );
+
+      const eventPayload = {
+        eventType: "task.admitted",
+        taskId: normalizedTask.taskId,
+        tenantId: normalizedTask.tenantId,
+        projectId: normalizedTask.projectId,
+        taskDigest: admissionClaims.taskDigest,
+        admissionId: admissionClaims.admissionId,
+        jti: admissionClaims.jti,
+        principalId: admissionClaims.principalId,
+        membershipId: admissionClaims.membershipId,
+        membershipVersion: admissionClaims.membershipVersion,
+        policyScopeEpoch: admissionClaims.policyScopeEpoch,
+        policyRuleVersion: admissionClaims.policyRuleVersion,
+        policyRuleResourceDigest: admissionClaims.policyRuleResourceDigest,
+        policyDecisionId: admissionClaims.policyDecisionId,
+      };
+      const outboxResult = enqueueOutboxInTransaction(sql, {
+        eventId: "task-admitted-" + admissionClaims.admissionId,
+        idempotencyKey: "task-admitted:" + admissionClaims.admissionId,
+        taskId: normalizedTask.taskId,
+        eventType: "task.admitted",
+        payloadJson: serializeBounded(eventPayload, "task admission outbox payload"),
+        tenantId: normalizedTask.tenantId,
+        projectId: normalizedTask.projectId,
+        now,
+      });
+      if (!outboxResult.enqueued || outboxResult.conflict) {
+        throw fail("Task admission Outbox persistence failed; transaction rolled back.", "TASK_ADMISSION_OUTBOX_FAILED");
+      }
+
       syncClaimCandidateInTransaction(sql, normalizedTask.taskId);
-      return { created: true, task: normalizedTask };
+      return {
+        created: true,
+        task: normalizedTask,
+        admissionReceipt: {
+          admissionId: admissionClaims.admissionId,
+          jti: admissionClaims.jti,
+          taskDigest: admissionClaims.taskDigest,
+        },
+        outbox: outboxResult,
+      };
     });
   }
+
 
   getTask({ taskId, tenantId, projectId } = {}) {
     try {

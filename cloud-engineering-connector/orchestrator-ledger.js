@@ -363,7 +363,8 @@ export class OrchestratorLedger extends DurableObject {
         schema_version INTEGER NOT NULL CHECK(schema_version = 1),
         envelope_sha256 TEXT NOT NULL CHECK(length(envelope_sha256) = 64),
         consumer_id TEXT NOT NULL,
-        received_at INTEGER NOT NULL
+        received_at INTEGER NOT NULL,
+        lease_generation INTEGER NOT NULL DEFAULT 0 CHECK(lease_generation >= 0)
       )
     `);
     sql.exec(`
@@ -623,6 +624,23 @@ export class OrchestratorLedger extends DurableObject {
       );
     });
 
+    // Schema v10: record the publisher Lease generation that authorizes each receipt.
+    // Existing receipts are assigned generation 0 and remain explicitly untrusted
+    // for new receipt-gated completion until independently reconciled.
+    this.ctx.storage.transactionSync(() => {
+      const receiptColumns = new Set(
+        sql.exec("PRAGMA table_info(orchestrator_outbox_receipts)").toArray().map(column => column.name),
+      );
+      if (!receiptColumns.has("lease_generation")) {
+        sql.exec("ALTER TABLE orchestrator_outbox_receipts ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0 CHECK(lease_generation >= 0)");
+      }
+      sql.exec(
+        "INSERT OR IGNORE INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (10, ?, ?)",
+        Date.now(),
+        "Persist the Lease generation that authorizes each Outbox receipt; legacy receipts remain generation 0",
+      );
+    });
+
   }
 
   ping() {
@@ -639,7 +657,7 @@ export class OrchestratorLedger extends DurableObject {
     ].every(name => tableNames.has(name));
     return {
       ok: Number(result.ok) === 1 && requiredTablesOk,
-      schemaVersion: 9,
+      schemaVersion: 10,
       storage: {
         requiredTables: requiredTablesOk,
       },
@@ -1532,22 +1550,55 @@ export class OrchestratorLedger extends DurableObject {
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
       const row = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", eventId).toArray()[0];
-      if (!row || row.status !== "IN_PROGRESS" || row.lease_worker_id !== workerId ||
+      if (!row) return { completed: false, reason: "LEASE_FENCE_MISMATCH" };
+
+      const receipt = sql.exec(
+        "SELECT lease_generation FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).toArray()[0] ?? null;
+
+      if (row.status === "COMPLETED") {
+        if (row.lease_generation !== leaseGeneration) {
+          return { completed: false, reason: "LEASE_FENCE_MISMATCH" };
+        }
+        if (!receipt || receipt.lease_generation !== leaseGeneration) {
+          return { completed: false, reason: "OUTBOX_RECEIPT_REQUIRED" };
+        }
+        if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+          return { completed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+        }
+        return { completed: true, replay: true, eventId, leaseGeneration };
+      }
+
+      if (row.status !== "IN_PROGRESS" || row.lease_worker_id !== workerId ||
           row.lease_generation !== leaseGeneration || row.lease_until <= now) {
         return { completed: false, reason: "LEASE_FENCE_MISMATCH" };
       }
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return { completed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        return { completed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      if (!receipt || receipt.lease_generation !== leaseGeneration) {
+        return { completed: false, reason: "OUTBOX_RECEIPT_REQUIRED" };
+      }
       sql.exec(
         "UPDATE orchestrator_outbox_events SET status = 'COMPLETED', lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND status = 'IN_PROGRESS' AND lease_worker_id = ? AND lease_generation = ?",
         now, eventId, workerId, leaseGeneration,
       );
+      const completed = sql.exec(
+        "SELECT status, lease_worker_id, lease_generation, lease_until FROM orchestrator_outbox_events WHERE event_id = ?",
+        eventId,
+      ).toArray()[0];
+      if (!completed || completed.status !== "COMPLETED" || completed.lease_worker_id !== null ||
+          completed.lease_generation !== leaseGeneration || completed.lease_until !== 0) {
+        throw fail("Outbox completion verification failed; transaction rolled back.", "OUTBOX_COMPLETION_FAILED");
+      }
       return { completed: true, eventId, leaseGeneration };
     });
   }
 
   async recordOutboxReceipt({
     eventId, eventType, idempotencyKey, taskId, payload, createdAt,
-    schemaVersion, envelopeSha256, consumerId, workerAssertion, now,
+    schemaVersion, envelopeSha256, consumerId, workerAssertion, leaseGeneration, now,
   } = {}) {
     identifier(eventId, "eventId");
     identifier(eventType, "eventType");
@@ -1556,6 +1607,9 @@ export class OrchestratorLedger extends DurableObject {
     timestamp(createdAt, "createdAt");
     hash(envelopeSha256, "envelopeSha256");
     timestamp(now);
+    if (!Number.isSafeInteger(leaseGeneration) || leaseGeneration < 1) {
+      throw fail("leaseGeneration must be positive.");
+    }
     if (schemaVersion !== 1 || consumerId !== "orchestrator-outbox-consumer") {
       return { recorded: false, reason: "INVALID_OUTBOX_RECEIPT" };
     }
@@ -1585,7 +1639,7 @@ export class OrchestratorLedger extends DurableObject {
         return { recorded: false, reason: payloadRejectionReason };
       }
       const source = sql.exec(
-        "SELECT event_type, idempotency_key, task_id, payload_json, created_at, tenant_id, project_id FROM orchestrator_outbox_events WHERE event_id = ?",
+        "SELECT event_type, idempotency_key, task_id, payload_json, created_at, tenant_id, project_id, status, lease_generation, lease_until FROM orchestrator_outbox_events WHERE event_id = ?",
         eventId,
       ).toArray()[0];
       if (!source || source.event_type !== eventType ||
@@ -1598,11 +1652,32 @@ export class OrchestratorLedger extends DurableObject {
         eventId,
       ).toArray()[0];
       if (existing) {
-        if (existing.event_type === eventType && existing.schema_version === schemaVersion &&
-            existing.envelope_sha256 === envelopeSha256) {
+        const sameReceipt = existing.event_type === eventType &&
+          existing.schema_version === schemaVersion &&
+          existing.envelope_sha256 === envelopeSha256;
+        if (!sameReceipt) {
+          return { recorded: false, conflict: true, reason: "OUTBOX_EVENT_ID_CONFLICT" };
+        }
+        if (existing.lease_generation === 0) {
+          return { recorded: false, blocked: true, reason: "LEGACY_OUTBOX_RECEIPT_UNVERIFIED" };
+        }
+        if (source.status === "COMPLETED" &&
+            source.lease_generation === existing.lease_generation &&
+            existing.lease_generation === leaseGeneration) {
           return { recorded: false, replay: true, eventId };
         }
-        return { recorded: false, conflict: true, reason: "OUTBOX_EVENT_ID_CONFLICT" };
+        return {
+          recorded: false,
+          blocked: true,
+          reason: existing.lease_generation !== leaseGeneration ||
+            source.lease_generation !== existing.lease_generation
+            ? "OUTBOX_RECEIPT_GENERATION_MISMATCH"
+            : "OUTBOX_RECEIPT_STATE_INCONSISTENT",
+        };
+      }
+      if (source.status !== "IN_PROGRESS" || source.lease_generation !== leaseGeneration ||
+          source.lease_until <= now) {
+        return { recorded: false, blocked: true, reason: "OUTBOX_LEASE_FENCE_MISMATCH" };
       }
       if (eventType === "task.created" || eventType === "task.transitioned") {
         const receiptPayload = parseJson(source.payload_json, "outbox receipt payload");
@@ -1619,10 +1694,22 @@ export class OrchestratorLedger extends DurableObject {
         }
       }
       sql.exec(
-        "INSERT INTO orchestrator_outbox_receipts (event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        eventId, eventType, schemaVersion, envelopeSha256, consumerId, now, source.tenant_id, source.project_id,
+        "INSERT INTO orchestrator_outbox_receipts (event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at, lease_generation, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        eventId, eventType, schemaVersion, envelopeSha256, consumerId, now, leaseGeneration, source.tenant_id, source.project_id,
       );
-      return { recorded: true, eventId };
+      sql.exec(
+        "UPDATE orchestrator_outbox_events SET status = 'COMPLETED', lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND status = 'IN_PROGRESS' AND lease_generation = ? AND lease_until > ?",
+        now, eventId, leaseGeneration, now,
+      );
+      const completed = sql.exec(
+        "SELECT status, lease_worker_id, lease_generation, lease_until FROM orchestrator_outbox_events WHERE event_id = ?",
+        eventId,
+      ).toArray()[0];
+      if (!completed || completed.status !== "COMPLETED" || completed.lease_worker_id !== null ||
+          completed.lease_generation !== leaseGeneration || completed.lease_until !== 0) {
+        throw fail("Outbox receipt settlement verification failed; transaction rolled back.", "OUTBOX_RECEIPT_SETTLEMENT_FAILED");
+      }
+      return { recorded: true, completed: true, eventId, leaseGeneration };
     });
   }
 

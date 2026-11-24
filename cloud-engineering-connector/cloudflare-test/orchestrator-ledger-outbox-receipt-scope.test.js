@@ -42,8 +42,9 @@ describe("OrchestratorLedger outbox receipt tenant/project binding", () => {
         JSON.stringify(task), task.createdAt, task.updatedAt, task.tenantId, task.projectId,
       );
       sql.exec(
-        "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_generation, lease_until, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, 'PENDING', 0, 0, 0, ?, ?, ?, ?)",
-        eventId, idempotencyKey, task.taskId, eventType, payloadJson, createdAt, createdAt,
+        "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_worker_id, lease_generation, lease_until, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, 'IN_PROGRESS', 0, ?, 1, ?, ?, ?, ?, ?)",
+        eventId, idempotencyKey, task.taskId, eventType, payloadJson,
+        "orchestrator-outbox-publisher", now + 5_000, createdAt, createdAt,
         "tenant-beta", "project-blue",
       );
 
@@ -58,6 +59,7 @@ describe("OrchestratorLedger outbox receipt tenant/project binding", () => {
         envelopeSha256: "b".repeat(64),
         consumerId: "orchestrator-outbox-consumer",
         workerAssertion: assertion,
+        leaseGeneration: 1,
         now,
       });
 

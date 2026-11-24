@@ -26,7 +26,7 @@ The recursive Git tree at the pinned baseline contained 86 tracked files (blob e
 
 The production-source matches are declarations, verification logic, a class export, and configuration. No production call site for `createTask` or `createScheduledWorkerAssertion` was found outside their defining modules. The test suite does call these APIs directly; test invocation is not evidence of a deployed runtime caller.
 
-This is a bounded repository finding, **not** proof that no external Worker, separately deployed service, or out-of-repository caller exists. The connected Cloudflare account was also inspected read-only: its three listed Workers had no Cron schedules or `scheduled` handlers, and the live `chat-gpt111` Worker did not expose the `ORCHESTRATOR_LEDGER` binding. Another Cloudflare account or an external platform remains unexamined.
+This is a bounded repository finding, **not** proof that no external Worker, separately deployed service, or out-of-repository caller exists. The connected Cloudflare account was also inspected read-only: its three listed Workers had no Cron schedules or `scheduled` handlers, and the live `chat-gpt111` Worker did not expose the `ORCHESTRATOR_LEDGER` binding. Subsequent release-history correlation established that the deployed production version predates the commit that introduced the Ledger class and binding into the repository; this is therefore an unreleased-source delta, not by itself evidence of a failed or incorrect deployment. Another Cloudflare account or an external platform remains unexamined.
 
 ## 2. Pinned evidence and call graph
 
@@ -147,7 +147,7 @@ The repository does not establish which contract the owner has approved. The imp
 | External/deployed Scheduler caller | Unknown |
 | Scheduler assertion bound to Tenant/Project/Task | No |
 | Scheduler admission authorized through Tenant Directory/policy at Ledger boundary | Not demonstrated |
-| Production exploitability | Unknown; no Scheduler or Ledger binding was observed in the connected Cloudflare account, but external accounts/callers remain unexamined |
+| Production exploitability | Unknown; no Scheduler/Ledger runtime path was observed in the connected account, but external accounts/callers remain unexamined |
 | Live `chat-gpt111` Cron schedules | Empty array from read-only Cloudflare API |
 | Live `chat-gpt111` handlers | `fetch` only |
 | Live `chat-gpt111` `ORCHESTRATOR_LEDGER` binding | Absent from returned Worker settings |
@@ -206,7 +206,7 @@ The following read-only API results were obtained:
 
 The live metadata does not show an active Cron Trigger or Scheduler handler among the three Workers visible in the connected Cloudflare account. More materially, the live production Worker `chat-gpt111` does not expose the `ORCHESTRATOR_LEDGER` binding or Durable Object export that current `main` declares in `wrangler.toml`.
 
-This is a **verified source-versus-live-configuration discrepancy** for the connected account at inspection time. It means the inspected `chat-gpt111` deployment is not demonstrated to contain the current-main Ledger binding. It does not establish which commit produced the deployment or whether a separately configured Worker in another Cloudflare account, an external service, or a different execution platform can access a Ledger namespace.
+This is a **verified source-versus-live release delta** for the connected account at inspection time: current `main` contains a Ledger capability that is absent from the production deployment inspected. Section 11 establishes that the live production deployment predates the commit that first added the Ledger class and binding to the repository. The absence is therefore consistent with a feature added to source after the last production deployment; it is not, by itself, evidence of a failed deployment, accidental configuration loss, or a production regression. The exact source commit that produced deployed Version 35 remains unestablished. A separately configured Worker in another Cloudflare account, external service, or different execution platform remains outside this evidence.
 
 ### 10.2 Updated threat disposition
 
@@ -217,6 +217,58 @@ This is a **verified source-versus-live-configuration discrepancy** for the conn
 - **Deployment provenance to current `main`:** not established; live deployment timestamp predates audited `main` head.
 - **External runtime or another Cloudflare account:** unknown.
 - **Production exploitability:** unknown; no active production Scheduler-to-Ledger path was demonstrated in the inspected repository/account.
-- **Primary operational finding:** deployment/configuration parity is not established. Do not deploy merely to make the live account match `main`; first determine the intended release state and obtain separate authorization.
+- **Primary operational finding:** the Ledger feature added to `main` on 2026-11-08 is not present in the latest production Version created on 2026-11-03. Treat it as an unreleased source change until an explicit release decision is made. Do not deploy solely to eliminate this difference.
 
 No secret values, tokens, key material, or secret fingerprints were retrieved. Only binding names and types were inspected. All Cloudflare calls in this section were GET operations; no Worker, binding, trigger, secret, Durable Object, queue, or deployment was modified.
+
+## 11. Release chronology and root-cause correlation
+
+A separate read-only chronology check was completed to distinguish an incorrect deployment from a source change that had not yet been released.
+
+### 11.1 Cloudflare production version history
+
+The Cloudflare Versions API was queried with `page=1` and `per_page=100` for `chat-gpt111`:
+
+- The API returned **35 versions** in total.
+- The latest version was Version **35**, ID `b4667a11-aa74-49ca-8d29-2f7b62608de0`, created at `2026-11-03T14:29:40.273955Z`, source `api`.
+- The Deployments API returned **25 deployments**.
+- The latest deployment was created at `2026-11-03T14:29:40.273955Z` and routed **100%** of traffic to Version 35.
+- Version 35 metadata showed `fetch` as its only default handler, an empty named-handler list, an empty Durable Object exports map, and no `ORCHESTRATOR_LEDGER` binding.
+- The Version 35 metadata and deployment metadata do not identify the exact Git commit whose source produced the uploaded bundle.
+
+### 11.2 Git introduction point for the Ledger
+
+GitHub path history for `cloud-engineering-connector/wrangler.toml` and `cloud-engineering-connector/orchestrator-ledger.js` was inspected. The first current-main commit introducing the Ledger capability was:
+
+- Commit: `5bf7f022e355f89a32e656ef056df94851c01592`
+- Timestamp: `2026-11-08T10:27:29Z`
+- Message: `feat(orchestration): port isolated Ledger with bounded readiness contract`
+
+The commit added `cloud-engineering-connector/orchestrator-ledger.js`, added its export in `index.js`, and modified `wrangler.toml` to add the `ORCHESTRATOR_LEDGER` Durable Object binding plus the v2 SQLite migration for production and staging.
+
+The Ledger-introduction commit occurred approximately **4 days and 20 hours after** the latest production Version 35 was created on 2026-11-03. The audited current `main` head is later still (`919b19ca3d3887352cdef06b03c668ead04fbce7`, 2026-11-09).
+
+### 11.3 Root-cause assessment
+
+The source/live difference is explained by chronology:
+
+1. Production Version 35 was created on 2026-11-03.
+2. The Ledger class and production/staging Durable Object binding were first added to the repository on 2026-11-08.
+3. The connected Cloudflare account has no later `chat-gpt111` version or deployment than Version 35.
+4. Therefore, the currently inspected production deployment predates the source change that introduced the Ledger.
+
+**Finding:** the Ledger capability is present in current source but is not part of the latest production deployment observed. This is a **not-yet-released feature delta**, not evidence that an already-deployed Ledger binding was lost or that Cloudflare failed to apply a configuration that existed at deployment time.
+
+The exact Git commit corresponding to Version 35 remains **unknown** because the deployment/version metadata returned no source commit identifier. This audit does not download or inspect Worker source bytes and does not make a source-equivalence claim beyond the verified version metadata, handler/export metadata, binding list, and Git introduction chronology.
+
+### 11.4 Release gate
+
+Do not create a corrective deployment solely to make Production match current `main`. Before any release:
+
+1. Confirm whether the Ledger capability is approved for Production or remains an unreleased foundation.
+2. Identify the intended release commit and compare its complete Worker code, binding set, Durable Object migrations, secrets-by-name, and rollback constraints.
+3. Validate the real Scheduler runtime and its signer/key boundary; current evidence still shows no Scheduler handler or Cron trigger in the inspected account.
+4. Run the approved staging integration and failure/recovery tests.
+5. Obtain explicit release authorization before changing Production.
+
+All Cloudflare calls for this chronology section were GET operations. No source bytes, secret values, or key material were retrieved. No deployment, version, binding, migration, trigger, or Worker setting was changed.

@@ -1,7 +1,7 @@
 import { appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import { verifyEnvironmentProtection } from "./verify-environment-protection.mjs";
+import { verifyEnvironmentProtection, EnvironmentProtectionError } from "./verify-environment-protection.mjs";
 
 const TARGET_ENVIRONMENTS = Object.freeze(["staging", "production"]);
 
@@ -59,7 +59,7 @@ async function auditOneEnvironment({ repository, token, fetchImpl, environment }
     const reason = safeReason(error);
     return Object.freeze({
       environment,
-      status: classifyFailure(reason),
+      status: classifyFailure(error),
       branchPattern: "",
       requiredReviewerCount: null,
       reason,

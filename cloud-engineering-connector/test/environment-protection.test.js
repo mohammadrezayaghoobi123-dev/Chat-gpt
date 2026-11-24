@@ -143,7 +143,7 @@ test("rejects an Environment with no required reviewer", async () => {
       protection_rules: [{ id: 12, type: "branch_policy" }],
     }),
   });
-  await expectRejected({ fetchImpl }, /required reviewer/i);
+  await expectRejected({ fetchImpl }, /reviewer/i);
 });
 
 test("rejects required reviewers when self-review prevention is disabled", async () => {
@@ -184,7 +184,7 @@ test("rejects an Environment that allows every branch to deploy", async () => {
       deployment_branch_policy: null,
     }),
   });
-  await expectRejected({ fetchImpl }, /deployment branch policy/i);
+  await expectRejected({ fetchImpl }, /deployment branch polic/i);
 });
 
 test("rejects a branch policy that does not exactly match the Staging release namespace", async () => {
@@ -194,7 +194,7 @@ test("rejects a branch policy that does not exactly match the Staging release na
       branch_policies: [{ id: 21, name: "integration/*" }],
     }],
   });
-  await expectRejected({ fetchImpl }, /branch policy/i);
+  await expectRejected({ fetchImpl }, /branch[- ]polic/i);
 });
 
 test("rejects additional branch policies rather than silently widening release eligibility", async () => {

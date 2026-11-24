@@ -1041,25 +1041,25 @@ test("an ambiguous POST timeout is reconciled before rerun publication", async (
 test("manual bootstrap workflow remains trusted, manual-only, and reviewer-disabled", () => {
   const workflow = readFileSync(new URL("../../.github/workflows/9router-pr-review.yml", import.meta.url), "utf8");
   const triggers = workflow.split(/^permissions:/m, 1)[0];
-  const resolverJob = workflow.split("  resolve:\\n")[1]?.split("  reviewer:\\n")[0];
+  const resolverJob = workflow.split("  resolve:\n")[1]?.split("  reviewer:\n")[0];
 
-  assert.match(triggers, /^on:\\s*\\n\\s+issue_comment:/m);
-  assert.match(triggers, /^\\s+workflow_dispatch:/m);
-  assert.doesNotMatch(triggers, /^\\s+(pull_request|pull_request_target|workflow_run|push|schedule):/m);
-  assert.match(workflow, /github\\.event\\.comment\\.body == '\\/review-canary'/);
-  assert.match(workflow, /github\\.actor_id == '335530603'/);
-  assert.match(workflow, /github\\.ref == 'refs\\/heads\\/main'/);
-  assert.match(workflow, /ref: \\$\\{\\{ github\\.workflow_sha \\}\\}/);
+  assert.match(triggers, /^on:\s*\n\s+issue_comment:/m);
+  assert.match(triggers, /^\s+workflow_dispatch:/m);
+  assert.doesNotMatch(triggers, /^\s+(pull_request|pull_request_target|workflow_run|push|schedule):/m);
+  assert.match(workflow, /github\.event\.comment\.body == '\/review-canary'/);
+  assert.match(workflow, /github\.actor_id == '335530603'/);
+  assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(workflow, /ref: \$\{\{ github\.workflow_sha \}\}/);
   assert.match(workflow, /persist-credentials: false/);
   assert.ok(resolverJob, "the read-only live PR resolver job must exist");
   assert.match(resolverJob, /contents: read/);
   assert.match(resolverJob, /pull-requests: read/);
   assert.match(resolverJob, /npm ci --ignore-scripts/);
   assert.match(resolverJob, /npm test/);
-  assert.match(workflow, /reviewer:\\n\\s+if: false\\n\\s+needs: resolve\\n\\s+runs-on: ubuntu-24\\.04\\n\\s+permissions: \\{\\}/m);
-  assert.doesNotMatch(workflow, /\\$\\{\\{\\s*secrets\\./);
+  assert.match(workflow, /reviewer:\n\s+if: false\n\s+needs: resolve\n\s+runs-on: ubuntu-24\.04\n\s+permissions: \{\}/m);
+  assert.doesNotMatch(workflow, /\$\{\{\s*secrets\./);
   assert.doesNotMatch(workflow, /NINE_ROUTER_API_URL|NINE_ROUTER_API_KEY|NINE_ROUTER_REVIEW_MARKER_KEY|PREVIOUS_REVIEW_MARKER_KEY/);
-  assert.doesNotMatch(workflow, /actions\\/(?:upload|download)-artifact|actions\\/cache/);
+  assert.doesNotMatch(workflow, /actions\/(?:upload|download)-artifact|actions\/cache/);
 });
 
 test("oversized model reports fail closed without comment publication", async () => {

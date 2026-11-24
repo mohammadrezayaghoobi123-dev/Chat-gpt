@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { transitionTask as transitionTaskCore, TASK_STATES } from "./orchestrator-core.js";
+import { transitionTask as transitionTaskCore, TASK_STATES, isTerminalTaskState } from "./orchestrator-core.js";
 import { assertAgentRoundLimit } from "./orchestrator-protocol.js";
 import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orchestrator-protocol.js";
 import { verifyWorkerAssertion } from "./orchestrator-worker-identity.js";
@@ -864,13 +864,17 @@ export class OrchestratorLedger extends DurableObject {
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
+      const current = taskFromRow(row);
+      const assignedAgentId = current.executorId ?? current.assignedAgentId;
+      if (assignedAgentId !== workerId) {
+        return { updated: false, reason: "ASSIGNEE_MISMATCH", task: current };
+      }
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       if (outboxRejectionReason) {
         return { updated: false, reason: outboxRejectionReason };
       }
-      const current = taskFromRow(row);
       let next;
       let nextTaskJson;
       try {
@@ -901,6 +905,21 @@ export class OrchestratorLedger extends DurableObject {
       if (normalizedOutboxInput !== null) {
         outboxResult = enqueueOutboxInTransaction(sql, normalizedOutboxInput);
         if (outboxResult.conflict) throw fail("Outbox idempotency conflict; task transition rolled back.", "OUTBOX_CONFLICT");
+      }
+      if (isTerminalTaskState(next.state)) {
+        sql.exec(
+          "UPDATE orchestrator_execution_leases SET worker_id = NULL, lease_until = 0, updated_at = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ? AND worker_id = ? AND lease_generation = ?",
+          now, taskId, tenantId, projectId, workerId, leaseGeneration,
+        );
+        const releasedLease = sql.exec(
+          "SELECT worker_id, lease_until, lease_generation FROM orchestrator_execution_leases WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+          taskId, tenantId, projectId,
+        ).toArray()[0];
+        if (!releasedLease || releasedLease.worker_id !== null || releasedLease.lease_until !== 0 ||
+            releasedLease.lease_generation !== leaseGeneration) {
+          throw fail("Terminal Task transition failed to invalidate its execution Lease; transaction rolled back.", "LEASE_TERMINALIZATION_FAILED");
+        }
+        syncClaimCandidateInTransaction(sql, taskId);
       }
       return { updated: true, task: next, outbox: outboxResult };
     });
@@ -1267,11 +1286,21 @@ export class OrchestratorLedger extends DurableObject {
     }
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
-      const task = sql.exec(
-        "SELECT task_id FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+      const taskRow = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
         taskId, tenantId, projectId,
       ).toArray()[0];
-      const lease = task ? sql.exec(
+      const task = taskRow ? taskFromRow(taskRow) : null;
+      if (task && !["SCHEDULED", "RUNNING", "VERIFYING"].includes(task.state)) {
+        return { renewed: false, reason: "TASK_NOT_LEASE_ELIGIBLE" };
+      }
+      if (task) {
+        const assignedAgentId = task.executorId ?? task.assignedAgentId;
+        if (assignedAgentId !== workerId) {
+          return { renewed: false, reason: "ASSIGNEE_MISMATCH" };
+        }
+      }
+      const lease = taskRow ? sql.exec(
         "SELECT * FROM orchestrator_execution_leases WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
         taskId, tenantId, projectId,
       ).toArray()[0] : null;
@@ -1307,14 +1336,20 @@ export class OrchestratorLedger extends DurableObject {
     }
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
-      const task = sql.exec(
-        "SELECT task_id FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+      const taskRow = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
         taskId, tenantId, projectId,
       ).toArray()[0];
-      const lease = task ? sql.exec(
+      if (!taskRow) return { released: false, reason: "LEASE_FENCE_MISMATCH" };
+      const current = taskFromRow(taskRow);
+      const assignedAgentId = current.executorId ?? current.assignedAgentId;
+      if (assignedAgentId !== workerId) {
+        return { released: false, reason: "ASSIGNEE_MISMATCH" };
+      }
+      const lease = sql.exec(
         "SELECT * FROM orchestrator_execution_leases WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
         taskId, tenantId, projectId,
-      ).toArray()[0] : null;
+      ).toArray()[0];
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { released: false, reason: "LEASE_FENCE_MISMATCH" };
       }

@@ -722,8 +722,8 @@ export class TenantDirectory extends DurableObject {
         });
         if (!(result?.created === true || result?.replay === true)) {
           throw fail(
-            typeof result?.reason === "string" ? result.reason : "LEDGER_ADMISSION_REJECTED",
             "The OrchestratorLedger rejected the Admission projection.",
+            typeof result?.reason === "string" ? result.reason : "LEDGER_ADMISSION_REJECTED",
           );
         }
 

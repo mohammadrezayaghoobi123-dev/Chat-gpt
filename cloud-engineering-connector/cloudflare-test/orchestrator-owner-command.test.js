@@ -1,12 +1,13 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
 import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
-const now = Date.now();
+let now;
+beforeEach(() => { now = Date.now(); });
 afterEach(() => vi.restoreAllMocks());
 const ownerId = "335530603";
 const repositoryId = 1398846697;

@@ -215,7 +215,7 @@ describe("TenantDirectory signed task admission reservation", () => {
   });
 
   it("denies task creation when membership exists but task.create has no allow policy", async () => {
-    const state = await fixture({ policy: false, tenantId: "tenant-task-admission-no-policy" });
+    const state = await fixture({ policy: false });
     const result = await admissionStore(state.adapters).prepareTaskAdmission(state.input)
       .then(() => null, error => error);
     expect(result?.code).toBe("TASK_ADMISSION_DENIED");
@@ -269,7 +269,7 @@ describe("TenantDirectory signed task admission reservation", () => {
       ).one().count).toBe(0);
       expect(instance.ctx.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM tenant_directory_audit_events WHERE tenant_id=? AND operation='prepareTaskAdmission'",
-        TENANT_ID,
+        state.tenantId,
       ).one().count).toBe(0);
     });
 

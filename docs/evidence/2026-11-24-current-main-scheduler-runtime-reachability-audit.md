@@ -26,7 +26,7 @@ The recursive Git tree at the pinned baseline contained 86 tracked files (blob e
 
 The production-source matches are declarations, verification logic, a class export, and configuration. No production call site for `createTask` or `createScheduledWorkerAssertion` was found outside their defining modules. The test suite does call these APIs directly; test invocation is not evidence of a deployed runtime caller.
 
-This is a bounded repository finding, **not** proof that no external Worker, separately deployed service, dashboard-configured integration, or out-of-repository caller exists. Those systems were not inspected.
+This is a bounded repository finding, **not** proof that no external Worker, separately deployed service, or out-of-repository caller exists. The connected Cloudflare account was also inspected read-only: its three listed Workers had no Cron schedules or `scheduled` handlers, and the live `chat-gpt111` Worker did not expose the `ORCHESTRATOR_LEDGER` binding. Another Cloudflare account or an external platform remains unexamined.
 
 ## 2. Pinned evidence and call graph
 
@@ -170,7 +170,7 @@ If tenant-scoped, approve the minimum signed context and canonical request bindi
 
 Once the runtime owner and intended authority are identified:
 
-1. Obtain the actual Scheduler source and deployed binding/trigger configuration.
+1. Identify any Scheduler outside the three Workers returned by the connected Cloudflare account, including any other Cloudflare account or external platform; obtain its source and deployed binding/trigger configuration.
 2. Trace one real scheduled invocation to the Durable Object RPC boundary.
 3. Record the trusted origin of Tenant/Project, the signer key boundary, the assertion claims, and the Task canonicalization/hash procedure.
 4. Reproduce the call in a controlled integration test.

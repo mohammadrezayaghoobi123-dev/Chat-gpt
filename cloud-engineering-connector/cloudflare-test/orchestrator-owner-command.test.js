@@ -117,6 +117,118 @@ describe("Owner command atomic Ledger contract", () => {
   });
 
 
+  it("prunes Owner assertion JTIs in bounded batches only after the expiry retention margin", async () => {
+    const ledger = ledgerFor("owner-command-jti-bounded-retention");
+    const taskIds = [
+      "task-owner-retention-0001",
+      "task-owner-retention-0002",
+      "task-owner-retention-0003",
+    ];
+    for (const taskId of taskIds) {
+      await createTask(ledger, task(taskId));
+    }
+
+    const nowSeconds = Math.floor(now / 1000);
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.transactionSync(() => {
+        for (let index = 0; index < 501; index += 1) {
+          const suffix = String(index).padStart(4, "0");
+          state.storage.sql.exec(
+            "INSERT INTO orchestrator_owner_consumed_assertions (jti, assertion_hash, repository_id, actor_id, task_id, operation, delivery_id, comment_id, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "owner-jti-expired-" + suffix,
+            "a".repeat(64),
+            repositoryId,
+            ownerId,
+            taskIds[0],
+            "cancel",
+            "delivery-owner-expired-" + suffix,
+            String(223450000 + index),
+            nowSeconds - 601,
+            nowSeconds - 700,
+          );
+        }
+        state.storage.sql.exec(
+          "INSERT INTO orchestrator_owner_consumed_assertions (jti, assertion_hash, repository_id, actor_id, task_id, operation, delivery_id, comment_id, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "owner-jti-retention-boundary",
+          "b".repeat(64),
+          repositoryId,
+          ownerId,
+          taskIds[0],
+          "cancel",
+          "delivery-owner-retention-boundary",
+          "223459999",
+          nowSeconds - 600,
+          nowSeconds - 700,
+        );
+      });
+    });
+
+    const executeAtBackdatedCallerTime = async (index, taskId) => {
+      const input = await ownerInput({
+        command: {
+          taskId,
+          eventId: "owner-event-retention-" + index,
+        },
+        deliveryId: "delivery-owner-retention-" + index + "-01",
+        commentId: String(223456800 + index),
+        now: now - 900_000,
+      });
+      const result = await ledger.executeOwnerCommand(input);
+      expect(result).toMatchObject({
+        applied: true,
+        operation: "cancel",
+        task: { taskId, state: "CANCELLED", version: 2 },
+      });
+      return assertionJti(input.assertion);
+    };
+
+    const firstJti = await executeAtBackdatedCallerTime(1, taskIds[0]);
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions WHERE jti LIKE 'owner-jti-expired-%'",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions WHERE jti = ?",
+        "owner-jti-retention-boundary",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions WHERE jti = ?",
+        firstJti,
+      ).one().count).toBe(1);
+    });
+
+    const secondJti = await executeAtBackdatedCallerTime(2, taskIds[1]);
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions WHERE jti LIKE 'owner-jti-expired-%'",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions WHERE jti = ?",
+        "owner-jti-retention-boundary",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions WHERE jti IN (?, ?)",
+        firstJti,
+        secondJti,
+      ).one().count).toBe(2);
+    });
+
+    ledgerClock.mockReturnValue(now + 1_000);
+    const thirdJti = await executeAtBackdatedCallerTime(3, taskIds[2]);
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions WHERE jti = ?",
+        "owner-jti-retention-boundary",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions WHERE jti IN (?, ?, ?)",
+        firstJti,
+        secondJti,
+        thirdJti,
+      ).one().count).toBe(3);
+    });
+  });
+
   it("rejects an expired Owner assertion when the caller backdates the Ledger timestamp", async () => {
     const ledger = ledgerFor("owner-command-clock-rollback");
     await createTask(ledger);

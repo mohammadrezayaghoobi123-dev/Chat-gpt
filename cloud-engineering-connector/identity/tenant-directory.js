@@ -221,7 +221,8 @@ export class TenantDirectory extends DurableObject {
     );
     sql.exec(
       "CREATE TABLE IF NOT EXISTS tenant_admissions (" +
-      "admission_id TEXT PRIMARY KEY, receipt_jti TEXT NOT NULL UNIQUE, scheduler_invocation_id TEXT NOT NULL, " +
+      "admission_id TEXT PRIMARY KEY, receipt_jti TEXT NOT NULL UNIQUE, scheduler_assertion_jti TEXT NOT NULL UNIQUE, " +
+      "scheduler_invocation_id TEXT NOT NULL, " +
       "tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, principal_id TEXT NOT NULL, action TEXT NOT NULL, " +
       "task_id TEXT NOT NULL, task_digest TEXT NOT NULL, idempotency_key_digest TEXT NOT NULL, " +
       "claims_json TEXT NOT NULL CHECK(json_valid(claims_json)), signing_key_id TEXT NOT NULL, " +
@@ -353,12 +354,8 @@ export class TenantDirectory extends DurableObject {
     };
   }
 
-  async signAdmissionMessage(input) {
-    const tenantId = identifier(input?.tenantId, "tenantId");
-    if (typeof input?.message !== "string" || input.message.length === 0) {
-      throw fail("INVALID_ADMISSION_SIGNING_MESSAGE", "A non-empty canonical signing message is required.");
-    }
-    const messageBytes = new TextEncoder().encode(input.message);
+  async #signAdmissionMessage(tenantId, message) {
+    const messageBytes = new TextEncoder().encode(message);
     if (messageBytes.byteLength > ADMISSION_SIGNING_MESSAGE_LIMIT) {
       messageBytes.fill(0);
       throw fail("INVALID_ADMISSION_SIGNING_MESSAGE", "The canonical signing message exceeds the size limit.");
@@ -382,7 +379,6 @@ export class TenantDirectory extends DurableObject {
         }),
       }));
     } catch {
-      messageBytes.fill(0);
       throw fail("ADMISSION_SIGNER_UNAVAILABLE", "The isolated admission signer could not be reached.");
     } finally {
       messageBytes.fill(0);
@@ -406,12 +402,237 @@ export class TenantDirectory extends DurableObject {
       throw fail("ADMISSION_SIGNER_RESPONSE_INVALID", "The isolated admission signer returned an invalid signature.");
     }
     return {
-      tenantId,
       keyId: envelope.keyId,
       algorithm: "Ed25519",
       publicKey: envelope.publicKey,
       signature: result.signature,
     };
+  }
+
+  async issueAdmissionReceipt(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const principalId = identifier(input?.principalId, "principalId");
+    const projectId = identifier(input?.projectId, "projectId");
+    const action = requiredString(input?.action, "action", 128);
+    const resourceDigest = input?.resourceDigest;
+    if (!SHA256.test(resourceDigest ?? "")) {
+      throw fail("INVALID_TENANT_DIRECTORY_INPUT", "resourceDigest must be a SHA-256 digest.");
+    }
+    const idempotencyKey = requiredString(input?.idempotencyKey, "idempotencyKey", 160);
+    const invocationId = identifier(input?.invocationId, "invocationId");
+    const cron = requiredString(input?.cron, "cron", 128);
+    const scheduledTime = timestamp(input?.scheduledTime);
+    const now = timestamp(input?.now);
+    const task = input?.task;
+    if (
+      !task ||
+      typeof task !== "object" ||
+      Array.isArray(task) ||
+      task.tenantId !== tenantId ||
+      task.projectId !== projectId ||
+      typeof task.taskId !== "string" ||
+      !IDENTIFIER.test(task.taskId) ||
+      task.state !== "SCHEDULED" ||
+      task.version !== 1 ||
+      !Number.isSafeInteger(task.createdAt) ||
+      task.createdAt < 1 ||
+      !Number.isSafeInteger(task.updatedAt) ||
+      task.updatedAt < task.createdAt ||
+      task.updatedAt > now
+    ) {
+      throw fail("INVALID_ADMISSION_TASK", "The canonical scheduled Task does not match the requested tenant/project scope.");
+    }
+    assertNoAdmissionSecrets(task);
+    const taskJson = canonicalJson(task);
+    if (new TextEncoder().encode(taskJson).byteLength > ADMISSION_TASK_LIMIT) {
+      throw fail("ADMISSION_TASK_TOO_LARGE", "The canonical scheduled Task exceeds the 32 KiB size limit.");
+    }
+
+    let scheduler;
+    try {
+      scheduler = await verifySchedulerInvocationAssertion(
+        this.env?.SCHEDULER_INVOCATION_KEYS,
+        input?.schedulerAssertion,
+        { invocationId, cron, scheduledTime, nowMs: now },
+      );
+    } catch {
+      throw fail("SCHEDULER_INVOCATION_REQUIRED", "A valid signed Scheduled Event invocation is required.");
+    }
+
+    const taskDigest = await sha256Text(taskJson);
+    const idempotencyKeyDigest = await sha256Text(canonicalJson({
+      tenantId,
+      projectId,
+      idempotencyKey,
+    }));
+    const scope = { tenantId, projectId, principalId, action, resourceDigest };
+    const snapshot = readAdmissionAuthorizationSnapshot(this.ctx.storage.sql, scope);
+    if (!snapshot.allowed || !snapshot.membership || !snapshot.rule) {
+      throw fail("PROJECT_ACTION_NOT_AUTHORIZED", "The principal is not currently authorized for this project action.");
+    }
+
+    const existingBeforeSigning = this.ctx.storage.sql.exec(
+      "SELECT * FROM tenant_admissions WHERE tenant_id=? AND project_id=? AND idempotency_key_digest=?",
+      tenantId, projectId, idempotencyKeyDigest,
+    ).toArray()[0];
+    if (existingBeforeSigning) {
+      if (existingBeforeSigning.task_digest !== taskDigest || existingBeforeSigning.task_id !== task.taskId) {
+        throw fail("ADMISSION_IDEMPOTENCY_CONFLICT", "The idempotency key is already bound to a different Task.");
+      }
+      if (existingBeforeSigning.expires_at <= now) {
+        throw fail("ADMISSION_RECEIPT_EXPIRED", "The original idempotent Admission Receipt has expired.");
+      }
+      return admissionReceiptFromRow(existingBeforeSigning, true);
+    }
+
+    const admissionId = "admission-" + crypto.randomUUID();
+    const receiptJti = "admission-jti-" + crypto.randomUUID();
+    const issuedAt = Math.floor(now / 1000);
+    const expiresAt = issuedAt + ADMISSION_RECEIPT_TTL_SECONDS;
+    const claims = {
+      version: 1,
+      tokenType: "admission-receipt",
+      issuer: "tenant-directory-admission",
+      audience: "orchestrator-ledger",
+      issuedAt,
+      expiresAt,
+      admissionId,
+      jti: receiptJti,
+      schedulerAssertionJti: scheduler.jti,
+      schedulerInvocationId: scheduler.invocationId,
+      schedulerCron: scheduler.cron,
+      scheduledTime: scheduler.scheduledTime,
+      tenantId,
+      principalId,
+      membershipId: snapshot.membership.membership_id,
+      projectId,
+      action,
+      membershipVersion: snapshot.membership.version,
+      policyScopeEpoch: snapshot.policyScopeEpoch,
+      selectedRuleVersion: snapshot.rule.version,
+      selectedResourceDigest: snapshot.rule.resource_digest,
+      decisionId: snapshot.rule.decision_id,
+      policyVersion: snapshot.rule.policy_version,
+      resourceDigest,
+      taskId: task.taskId,
+      taskDigest,
+      idempotencyKeyDigest,
+    };
+    const claimsJson = canonicalJson(claims);
+    if (new TextEncoder().encode(claimsJson).byteLength > ADMISSION_SIGNING_MESSAGE_LIMIT) {
+      throw fail("ADMISSION_RECEIPT_TOO_LARGE", "The canonical Admission Receipt exceeds the signing size limit.");
+    }
+    const signing = await this.#signAdmissionMessage(tenantId, claimsJson);
+
+    return this.ctx.storage.transactionSync(() => {
+      const sql = this.ctx.storage.sql;
+      const current = readAdmissionAuthorizationSnapshot(sql, scope);
+      if (
+        !current.allowed ||
+        !current.membership ||
+        current.membership.membership_id !== snapshot.membership.membership_id ||
+        current.membership.version !== snapshot.membership.version ||
+        current.policyScopeEpoch !== snapshot.policyScopeEpoch ||
+        !current.rule ||
+        current.rule.version !== snapshot.rule.version ||
+        current.rule.decision_id !== snapshot.rule.decision_id ||
+        current.rule.resource_digest !== snapshot.rule.resource_digest ||
+        current.rule.policy_version !== snapshot.rule.policy_version
+      ) {
+        throw fail("AUTHORIZATION_STATE_CHANGED", "Membership or policy changed while the Admission Receipt was being signed.");
+      }
+
+      const existing = sql.exec(
+        "SELECT * FROM tenant_admissions WHERE tenant_id=? AND project_id=? AND idempotency_key_digest=?",
+        tenantId, projectId, idempotencyKeyDigest,
+      ).toArray()[0];
+      if (existing) {
+        if (existing.task_digest !== taskDigest || existing.task_id !== task.taskId) {
+          throw fail("ADMISSION_IDEMPOTENCY_CONFLICT", "The idempotency key is already bound to a different Task.");
+        }
+        if (existing.expires_at <= now) {
+          throw fail("ADMISSION_RECEIPT_EXPIRED", "The original idempotent Admission Receipt has expired.");
+        }
+        return admissionReceiptFromRow(existing, true);
+      }
+
+      const consumedInvocation = sql.exec(
+        "SELECT admission_id FROM tenant_admissions WHERE scheduler_assertion_jti=?",
+        scheduler.jti,
+      ).toArray()[0];
+      if (consumedInvocation) {
+        throw fail("SCHEDULER_INVOCATION_REPLAYED", "The Scheduled Event invocation proof has already been consumed.");
+      }
+
+      const auditEventId = this.#appendAuditEvent(
+        sql,
+        { subject: scheduler.subject, targetDigest: taskDigest },
+        "issueAdmissionReceipt",
+        tenantId,
+        projectId,
+        {
+          admissionId,
+          principalId,
+          action,
+          taskId: task.taskId,
+          taskDigest,
+          idempotencyKeyDigest,
+          schedulerInvocationId: scheduler.invocationId,
+          schedulerAssertionJti: scheduler.jti,
+        },
+        snapshot.membership.version,
+        snapshot.membership.version,
+        now,
+      );
+
+      sql.exec(
+        "INSERT INTO tenant_admissions(" +
+        "admission_id, receipt_jti, scheduler_assertion_jti, scheduler_invocation_id, tenant_id, project_id, " +
+        "principal_id, action, task_id, task_digest, idempotency_key_digest, claims_json, signing_key_id, " +
+        "public_key, signature, audit_event_id, created_at, expires_at) " +
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        admissionId,
+        receiptJti,
+        scheduler.jti,
+        scheduler.invocationId,
+        tenantId,
+        projectId,
+        principalId,
+        action,
+        task.taskId,
+        taskDigest,
+        idempotencyKeyDigest,
+        claimsJson,
+        signing.keyId,
+        signing.publicKey,
+        signing.signature,
+        auditEventId,
+        now,
+        expiresAt * 1000,
+      );
+      sql.exec(
+        "INSERT INTO tenant_admission_outbox(event_id, admission_id, tenant_id, project_id, status, attempts, next_attempt_at, created_at, updated_at) " +
+        "VALUES(?, ?, ?, ?, 'PENDING', 0, ?, ?, ?)",
+        "admission-outbox-" + admissionId,
+        admissionId,
+        tenantId,
+        projectId,
+        now,
+        now,
+        now,
+      );
+
+      return {
+        tenantId,
+        claims,
+        keyId: signing.keyId,
+        algorithm: signing.algorithm,
+        publicKey: signing.publicKey,
+        signature: signing.signature,
+        auditEventId,
+        replay: false,
+      };
+    });
   }
 
   async #verifyAdmin(assertion, operation, tenantId, projectId, target, now) {

@@ -952,7 +952,7 @@ describe("Owner command atomic Ledger contract", () => {
       task_id: identity.taskId,
       operation: "cancel",
       retry_count: 3,
-      state: "RETRYABLE",
+      state: "EXHAUSTED",
       last_error_code: "AUDIT_CHAIN_CONTENTION",
     });
     expect(marker.expires_at - marker.first_failed_at).toBe(72 * 60 * 60 * 1000);
@@ -1001,7 +1001,7 @@ describe("Owner command atomic Ledger contract", () => {
       bodySha256: identity.bodySha256,
     });
     const applied = await ledger.executeOwnerCommand(retryInput);
-    expect(applied).toMatchObject({
+    expect(applied, JSON.stringify(applied)).toMatchObject({
       applied: true,
       task: { taskId: identity.taskId, state: "CANCELLED", version: 2 },
     });

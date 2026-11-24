@@ -40,21 +40,20 @@ describe("OrchestratorLedger readiness and integrity diagnostics", () => {
       execSpy.mockRestore();
     });
   });
-});
 
-
-it("owns orchestration persistence without creating Brain Store tables", async () => {
-  const ledger = ledgerFor("orchestration-ownership-boundary");
-  await runInDurableObject(ledger, async instance => {
-    const tables = new Set(instance.ctx.storage.sql
-      .exec("SELECT name FROM sqlite_master WHERE type = 'table'")
-      .toArray()
-      .map(row => row.name));
-    expect(tables.has("orchestrator_tasks")).toBe(true);
-    expect(tables.has("orchestrator_execution_leases")).toBe(true);
-    for (const name of ["knowledge_entities", "knowledge_relationships", "knowledge_tags"]) {
-      expect(tables.has(name)).toBe(false);
-    }
+  it("keeps OrchestratorLedger persistence isolated from Brain Store tables", async () => {
+    const ledger = ledgerFor("orchestration-ownership-boundary");
+    await runInDurableObject(ledger, async instance => {
+      const tables = new Set(instance.ctx.storage.sql
+        .exec("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .toArray()
+        .map(row => row.name));
+      expect(tables.has("orchestrator_tasks")).toBe(true);
+      expect(tables.has("orchestrator_execution_leases")).toBe(true);
+      for (const name of ["knowledge_entities", "knowledge_relationships", "knowledge_tags"]) {
+        expect(tables.has(name)).toBe(false);
+      }
+    });
   });
 
   it("fails closed when a schema-v10 Ledger loses its admission identity table", async () => {

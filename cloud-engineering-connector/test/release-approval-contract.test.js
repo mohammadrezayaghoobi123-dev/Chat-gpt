@@ -688,27 +688,25 @@ for (const workflow of workflows) {
 function createGuardedDeployCommandFixtures(directory) {
   const nodeCommand = join(directory, "node");
   const npxCommand = join(directory, "npx");
-  const commandSource = phase => `#!/usr/bin/env node
-import { appendFileSync } from "node:fs";
-const event = {
-  phase: ${JSON.stringify(phase)},
-  args: process.argv.slice(2),
-  cloudflareTokenPresent: Boolean(process.env.CLOUDFLARE_API_TOKEN),
-  cloudflareAccountPresent: Boolean(process.env.CLOUDFLARE_ACCOUNT_ID),
-  githubTokenPresent: Boolean(process.env.RELEASE_GITHUB_TOKEN),
-  reviewerPolicyPresent: Boolean(process.env.RELEASE_REVIEWER_IDS),
-};
-appendFileSync(process.env.RELEASE_EVENT_LOG, JSON.stringify(event) + "\\n");
-if (${JSON.stringify(phase)} === "approval") {
-  process.exit(Number(process.env.FAKE_APPROVAL_EXIT || 0));
-}
-`;
+  const commandSource = phase => [
+    "#!/bin/bash",
+    "set -euo pipefail",
+    "cf_token=false",
+    '[[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] && cf_token=true',
+    "cf_account=false",
+    '[[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && cf_account=true',
+    "github_token=false",
+    '[[ -n "${RELEASE_GITHUB_TOKEN:-}" ]] && github_token=true',
+    "reviewer_policy=false",
+    '[[ -n "${RELEASE_REVIEWER_IDS:-}" ]] && reviewer_policy=true',
+    'printf \'{"phase":"' + phase + '","args":"%s","cloudflareTokenPresent":%s,"cloudflareAccountPresent":%s,"githubTokenPresent":%s,"reviewerPolicyPresent":%s}\\n\' "$*" "$cf_token" "$cf_account" "$github_token" "$reviewer_policy" >> "$RELEASE_EVENT_LOG"',
+    'if [[ "' + phase + '" == "approval" ]]; then exit "${FAKE_APPROVAL_EXIT:-0}"; fi',
+  ].join("\n");
   writeFileSync(nodeCommand, commandSource("approval"));
   writeFileSync(npxCommand, commandSource("deployment"));
   chmodSync(nodeCommand, 0o755);
   chmodSync(npxCommand, 0o755);
 }
-
 function guardedDeployEnvironment(directory, overrides = {}) {
   return {
     ...process.env,
@@ -739,12 +737,12 @@ test("final release runner validates authorization and deploys in one step with 
     const events = readFileSync(join(directory, "events.jsonl"), "utf8")
       .trim().split("\n").map(line => JSON.parse(line));
     assert.deepEqual(events.map(event => event.phase), ["approval", "deployment"]);
-    assert.deepEqual(events[0].args, ["scripts/verify-release-approval.mjs"]);
+    assert.equal(events[0].args, "scripts/verify-release-approval.mjs");
     assert.equal(events[0].githubTokenPresent, true);
     assert.equal(events[0].reviewerPolicyPresent, true);
     assert.equal(events[0].cloudflareTokenPresent, false);
     assert.equal(events[0].cloudflareAccountPresent, false);
-    assert.deepEqual(events[1].args, ["wrangler", "deploy", "--env", "staging"]);
+    assert.equal(events[1].args, "wrangler deploy --env staging");
     assert.equal(events[1].cloudflareTokenPresent, true);
     assert.equal(events[1].cloudflareAccountPresent, true);
     assert.equal(events[1].githubTokenPresent, false);
@@ -785,7 +783,7 @@ test("production release runner invokes Wrangler without staging-specific argume
     const events = readFileSync(join(directory, "events.jsonl"), "utf8")
       .trim().split("\n").map(line => JSON.parse(line));
     assert.deepEqual(events.map(event => event.phase), ["approval", "deployment"]);
-    assert.deepEqual(events[1].args, ["wrangler", "deploy"]);
+    assert.equal(events[1].args, "wrangler deploy");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

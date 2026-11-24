@@ -246,7 +246,7 @@ export async function resolveTenantContext({ principal, tenantSelector, membersh
     tenantId: membership.tenantId,
     membershipId: membership.membershipId,
     role: membership.role,
-    membershipVersion: Number.isSafeInteger(membership.version) ? membership.version : null,
+    ...(Number.isSafeInteger(membership.version) ? { membershipVersion: membership.version } : {}),
   });
   VERIFIED_TENANT_CONTEXTS.add(context);
   return context;
@@ -330,9 +330,9 @@ export async function authorizeProjectAction({
     resourceDigest,
     decisionId: decision.decisionId,
     policyVersion: decision.policyVersion,
-    membershipVersion: decision.membershipVersion ?? null,
-    policyScopeEpoch: decision.policyScopeEpoch ?? null,
-    selectedRuleVersion: decision.selectedRuleVersion ?? null,
-    selectedResourceDigest: decision.selectedResourceDigest ?? null,
+    ...(Number.isSafeInteger(decision.membershipVersion) ? { membershipVersion: decision.membershipVersion } : {}),
+    ...(Number.isSafeInteger(decision.policyScopeEpoch) ? { policyScopeEpoch: decision.policyScopeEpoch } : {}),
+    ...(Number.isSafeInteger(decision.selectedRuleVersion) ? { selectedRuleVersion: decision.selectedRuleVersion } : {}),
+    ...(nonEmptyString(decision.selectedResourceDigest) ? { selectedResourceDigest: decision.selectedResourceDigest } : {}),
   });
 }

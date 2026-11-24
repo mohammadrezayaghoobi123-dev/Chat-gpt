@@ -2728,3 +2728,46 @@ it("recovers a Queue-accepted send with a lost acknowledgement through bounded r
     dateNow.mockRestore();
   }
 }, 15000);
+
+it("rejects an unsupported task state before durable persistence", async () => {
+  const ledger = ledgerFor("ledger-create-task-unsupported-state");
+  const jti = "jti-create-task-invalid-state-000001";
+  const workerAssertion = await createWorkerAssertion({
+    subject: "orchestrator-scheduler",
+    role: "system",
+    operation: "createTask",
+    nowMs: now,
+    jti,
+  });
+
+  const result = await ledger.createTask({
+    task: { ...task("task-create-invalid-state"), state: "NOT_A_TASK_STATE" },
+    idempotencyKey: "task-create-invalid-state",
+    inputHash: "d".repeat(64),
+    now,
+    workerId: "orchestrator-scheduler",
+    workerAssertion,
+  });
+
+  const persisted = await runInDurableObject(ledger, async (_instance, state) => ({
+    tasks: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+      "task-create-invalid-state",
+    ).one().count,
+    claimCandidates: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-create-invalid-state",
+    ).one().count,
+    consumedAssertions: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      jti,
+    ).one().count,
+  }));
+
+  expect(result).toEqual({ created: false, reason: "INVALID_INPUT" });
+  expect(persisted).toEqual({
+    tasks: 0,
+    claimCandidates: 0,
+    consumedAssertions: 1,
+  });
+});

@@ -174,7 +174,17 @@ def diagnose_report(report: list[dict], config: dict) -> list[str]:
                 "match": "Match",
             }.get(entry.get("regexTarget"), "Secret")
             target = finding.get(target_field) or ""
-            redacted = target == "REDACTED" or "REDACTED" in (finding.get("Match") or "")
+            source_line = _source_fixture_line(pathlib.Path.cwd(), expected_commit, expected_path) or ""
+            source_match = FIXTURE_LINE.fullmatch(source_line)
+            source_key = source_match.group(1) if source_match else ""
+            first_half = source_key[: len(source_key) // 2]
+            finding_secret = finding.get("Secret") or ""
+            finding_match = finding.get("Match") or ""
+            secret_matches_full = finding_secret == source_key
+            secret_matches_first_half = finding_secret == first_half
+            match_matches_full = finding_match == f'key = "{source_key}"'
+            match_matches_first_half = finding_match == f'key = "{first_half}"'
+            redacted = target == "REDACTED" or "REDACTED" in finding_match
             regex_match = None if redacted else any(
                 re.search(pattern, target) is not None
                 for pattern in entry.get("regexes", [])
@@ -190,8 +200,11 @@ def diagnose_report(report: list[dict], config: dict) -> list[str]:
             diagnostics.append(
                 f"DIAGNOSTIC: {label}: rule={rule_match} commit={commit_match} "
                 f"path={path_match} regex={regex_label} allowed={allowed_label} "
-                f"secret_length={len(finding.get('Secret') or '')} "
-                f"match_length={len(finding.get('Match') or '')} line_length={len(finding.get('Line') or '')}"
+                f"secret_length={len(finding_secret)} match_length={len(finding_match)} "
+                f"line_length={len(finding.get('Line') or '')} "
+                f"secret_full={secret_matches_full} secret_first_half={secret_matches_first_half} "
+                f"match_full={match_matches_full} match_first_half={match_matches_first_half}"
+            )
             )
     return diagnostics
 

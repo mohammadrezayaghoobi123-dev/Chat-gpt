@@ -262,3 +262,183 @@ Exact blob evidence retrieved from the PR head `52b00c544e8c2fd499c11738cae4d075
 - Exact-head CI evidence remains absent for this documentation commit: the commit-workflow query returned no PR-triggered runs and Combined Status returned no status checks. The previously recorded 136/136 local result applies to the identical executable tree rooted at `fcc83c5`; it has not been freshly re-executed in this turn.
 
 **Verification disposition:** static corroboration PASS; concurrency regression execution NOT_RUN; exact-current-head npm test NOT_RUN; reviewer activation BLOCKED.
+
+
+## Durable reservation protocol design — 9R-ATOMIC-001 — 2026-11-24
+
+**Design status:** provider-agnostic contract for review; not an implementation and not evidence of at-most-once behavior.  
+**Decision:** no storage vendor or service is selected in this record. Backend selection is deferred until transaction, consistency, availability, cost, and access-control properties are evidenced.
+
+### 1. Scope and immutable identity
+
+The reservation protects one logical reviewer publication for one immutable pull-request snapshot. It does not establish exactly-once model inference, exactly-once billing, or exactly-once external execution.
+
+Canonical reservation identity:
+
+`(repository_id, pull_request_number, head_sha, base_sha)`
+
+Requirements:
+
+- `repository_id` is the immutable numeric GitHub repository identity, not only an owner/name string.
+- `pull_request_number` is the positive repository-local PR number.
+- `head_sha` and `base_sha` are full immutable commit object IDs validated against the live PR snapshot.
+- Canonical key serialization must be versioned, unambiguous, and deterministic; the storage primary key may be `SHA-256(canonical_key_bytes)`, while all original tuple fields remain stored and checked for collision/mismatch.
+- A changed head or base produces a different reservation. A repository rename does not change repository identity.
+- Reservation rows are never deleted or silently reused. Retention/archival must preserve uniqueness and publication evidence for the full replay horizon.
+
+### 2. Required storage semantics
+
+The chosen authority MUST provide all of the following; a cache, process-local mutex, GitHub comment search, or best-effort key/value write is insufficient:
+
+1. A unique constraint on the canonical reservation key.
+2. Linearizable/serializable conditional state transitions, or an equivalent single-record compare-and-set primitive with documented consistency guarantees.
+3. Atomic allocation of a monotonically increasing fencing generation for each pre-publication lease acquisition/recovery.
+4. Authoritative server-side time for lease comparisons; worker clocks are not authoritative.
+5. Durable acknowledgement semantics: a successful write response means the committed record survives the failure model claimed by the backend.
+6. Read-after-write consistency for the reservation key.
+7. Authentication and authorization scoped to the minimum required record operations; no public unauthenticated write path.
+8. Auditable transition metadata without storing credentials, model prompts, or full review bodies unless separately justified.
+
+If the backend cannot prove these properties under concurrent writers and failover, it is rejected for this safety-critical role.
+
+### 3. Minimal record and interface contract
+
+Logical record fields:
+
+- `key_version`, `reservation_key`, `repository_id`, `pull_request_number`, `head_sha`, `base_sha`
+- `state`, `generation`, `owner_id`, `lease_expires_at`
+- `publication_attempt_id`, `publication_payload_sha256`, `publication_intent_at`
+- `remote_comment_id`, `published_at`
+- `last_error_class`, `unknown_reason`
+- `created_at`, `updated_at`, append-only transition/audit sequence
+
+The implementation boundary MUST expose equivalent operations (names are proposed):
+
+- `claim(key, owner, lease_duration) -> CLAIMED | BUSY | ALREADY_PUBLISHED | UNKNOWN`
+- `renew(key, owner, generation, lease_duration) -> RENEWED | LOST_OWNERSHIP`
+- `startWork(key, owner, generation) -> IN_PROGRESS | LOST_OWNERSHIP`
+- `beginPublication(key, owner, generation, attempt_id, payload_hash) -> PUBLISHING | LOST_OWNERSHIP | TERMINAL`
+- `completePublication(key, attempt_id, remote_comment_id) -> PUBLISHED | CONFLICT`
+- `markUnknown(key, attempt_id, reason) -> UNKNOWN | CONFLICT`
+- `reconcilePublication(key, evidence) -> PUBLISHED | DUPLICATE_ACCEPTED | UNKNOWN`
+
+Every mutating operation is conditional on the current state and expected owner/generation/attempt. A caller must not receive a publish capability from a stale read. State transitions and their audit events commit atomically.
+
+### 4. State machine and irreversible publication boundary
+
+Allowed states:
+
+- `UNCLAIMED`: no worker owns the reservation.
+- `CLAIMED`: one owner has a time-bounded lease; no inference or publication has started.
+- `IN_PROGRESS`: the current fenced owner may perform bounded preparation and model inference; no publication request is permitted yet.
+- `PUBLISHING`: a single-use publication intent has been durably committed. This state is an irreversible safety boundary.
+- `PUBLISHED`: one matching remote comment is authoritatively identified and its ID recorded.
+- `UNKNOWN`: publication may have occurred, but the system cannot establish the remote outcome.
+- `EXPIRED`: a pre-publication lease expired; a new generation may be claimed atomically.
+- `ABORTED`: a pre-publication run stopped safely and cannot publish under that generation.
+
+Allowed transitions:
+
+- `UNCLAIMED -> CLAIMED`: atomic insert/claim; unique key arbitrates concurrent workers.
+- `CLAIMED -> IN_PROGRESS`: owner and generation match, lease is valid.
+- `CLAIMED | IN_PROGRESS -> EXPIRED`: authoritative lease expiry is observed atomically before publication intent exists.
+- `EXPIRED -> CLAIMED`: atomic takeover with generation increment and a new owner/lease.
+- `CLAIMED | IN_PROGRESS -> ABORTED`: owner-conditional transition before publication intent.
+- `IN_PROGRESS -> PUBLISHING`: atomic compare-and-set; validate owner, generation, lease, immutable key, attempt ID, and payload hash; persist publication intent before any network request.
+- `PUBLISHING -> PUBLISHED`: only after a validated successful GitHub response or authoritative reconciliation identifies exactly one matching comment.
+- `PUBLISHING -> UNKNOWN`: timeout, process death, transport failure, malformed response, lost acknowledgement, or any outcome where remote acceptance cannot be excluded.
+- `UNKNOWN -> PUBLISHED`: reconciliation finds exactly one comment whose repository, issue, bot identity, signed marker, snapshot SHAs, and payload identity match.
+- `UNKNOWN -> DUPLICATE_ACCEPTED`: reconciliation finds more than one matching accepted comment; this is an invariant violation requiring incident handling.
+
+No transition from `PUBLISHING`, `UNKNOWN`, or `PUBLISHED` back to `CLAIMED` or `IN_PROGRESS` is allowed. In particular, lease expiry MUST NOT reassign a `PUBLISHING` reservation to another publisher. The first publication intent is single-use and never reset.
+
+### 5. Publication protocol
+
+1. Read the live PR and validate repository identity, open/draft/locked policy, and exact head/base SHAs.
+2. Atomically claim the canonical key. A loser returns `BUSY` and MUST NOT call the model or GitHub comment endpoint.
+3. Perform preparation and inference under the current owner/generation. Before publication, revalidate the live PR snapshot.
+4. Build the final comment deterministically; compute its payload hash and a unique attempt ID.
+5. Atomically transition `IN_PROGRESS -> PUBLISHING`. Only the successful caller may issue the one GitHub comment POST for that key.
+6. Immediately issue exactly one POST with redirect handling set to `error`. Do not automatically retry on timeout, 5xx, connection reset, malformed response, or client cancellation.
+7. On a validated 201 response, persist the remote comment ID and transition to `PUBLISHED`. If persistence acknowledgement is lost, the state remains `PUBLISHING` or becomes `UNKNOWN`; reconcile before any other action.
+8. On any ambiguous outcome, transition/retain `UNKNOWN`, then perform read-only reconciliation. A positive exact match can prove publication. A zero-result search, partial pagination, API error, stale replica, or incomplete visibility does NOT prove non-publication and MUST NOT authorize another POST.
+9. If no remote comment can be found but non-publication cannot be proven by an authoritative API guarantee, retain `UNKNOWN` indefinitely or until an explicitly reviewed manual disposition. Never silently reset the reservation.
+
+**Important limitation:** GitHub comment creation does not provide a caller-supplied transactional idempotency key coupled to the reservation store. Therefore the safe contract is *at-most-one publication attempt per immutable key*, with conservative UNKNOWN on ambiguous outcomes. It intentionally sacrifices automatic liveness after a crash at the publication boundary. It does not claim exactly-once delivery or exactly-once provider execution.
+
+### 6. Safety invariants
+
+- **S1 — Unique identity:** at most one durable reservation row exists for each canonical immutable key.
+- **S2 — Single active pre-publication owner:** at most one current owner/generation can transition a pre-publication state.
+- **S3 — Fencing:** stale generations cannot renew, start work, abort, or enter `PUBLISHING`.
+- **S4 — Single-use publication intent:** at most one successful transition to `PUBLISHING` exists for a key; it is never reclaimed or reset.
+- **S5 — No blind retry:** `PUBLISHING` and `UNKNOWN` never authorize another POST.
+- **S6 — Snapshot binding:** every reservation and published marker is bound to repository ID, PR number, head SHA, and base SHA.
+- **S7 — Evidence before success:** `PUBLISHED` requires one validated remote comment identity; a local POST attempt alone is not success.
+- **S8 — Audit completeness:** every successful transition records prior/new state, generation, actor/owner, attempt ID where applicable, server timestamp, and reason.
+- **S9 — Fail closed:** storage unavailability, stale reads, conditional-write conflict, clock uncertainty, or schema/version mismatch blocks model dispatch/publication rather than falling back to uncoordinated behavior.
+
+### 7. Liveness and cost trade-off
+
+Liveness is intentionally subordinate to publication safety. Expired `CLAIMED` or `IN_PROGRESS` work may be recovered because no publication intent exists. A crashed `PUBLISHING` worker cannot be safely replaced merely because its lease elapsed: the remote POST may already have been accepted. Such a record remains `UNKNOWN` until reconciled. This can strand a reservation and suppress a valid review; that is an explicit safety-over-availability choice, not a hidden failure.
+
+The backend decision must compare only candidates that can meet the required atomicity and durability semantics. Evaluate total cost at expected write/read volume, free-tier ceilings, egress, retention, backup/restore, regional consistency, credentials, operational burden, and failure behavior. Do not assume a free tier is durable or that a vendor's generic "atomic" claim covers the required conditional transition.
+
+### 8. Deterministic adversarial test matrix
+
+Tests MUST use two or more independent store clients and independent worker instances. A single process-local fake mutex does not test the required property.
+
+| Test | Fault/interleaving | Required result |
+|---|---|---|
+| T01 | 100 simultaneous claims for one key | Exactly one current claim succeeds; all others are BUSY or observe the same reservation |
+| T02 | Two workers both read UNCLAIMED before either claims | Unique constraint/CAS admits one; no double owner |
+| T03 | Old owner pauses; lease expires; new generation claims pre-publication row | Old generation cannot renew, start work, abort, or enter PUBLISHING |
+| T04 | Old owner resumes after takeover | Every stale mutation is rejected; no model or POST after rejected transition |
+| T05 | Worker crashes in CLAIMED | Lease expiry permits a new generation |
+| T06 | Worker crashes in IN_PROGRESS before publication intent | Lease expiry permits safe takeover; old generation is fenced |
+| T07 | Two workers race IN_PROGRESS -> PUBLISHING | Exactly one CAS succeeds; exactly one worker receives the single-use publish permit |
+| T08 | Worker crashes after PUBLISHING commit but before socket write | Reservation remains PUBLISHING/UNKNOWN; no second POST is authorized |
+| T09 | GitHub accepts POST but client times out before response | UNKNOWN; reconciliation may mark PUBLISHED; no second POST |
+| T10 | GitHub returns 201 but store completion write loses acknowledgement | Read-after-restart reconciliation finds the exact comment or retains UNKNOWN; no retry |
+| T11 | GitHub 307/308/5xx/reset/malformed response | No automatic replay; UNKNOWN where acceptance cannot be excluded |
+| T12 | Partial/paginated comment listing returns zero | UNKNOWN; zero from incomplete evidence is not proof of non-publication |
+| T13 | Reconciliation finds exactly one exact signed-marker/snapshot match | PUBLISHED with remote comment ID |
+| T14 | Reconciliation finds two matching comments | DUPLICATE_ACCEPTED and explicit incident; no further POST |
+| T15 | Head SHA changes while base remains fixed | New key; old reservation cannot authorize publication for new snapshot |
+| T16 | Base SHA changes while head remains fixed | New key; old reservation cannot authorize publication for new snapshot |
+| T17 | Repository rename with same repository ID | Same logical repository identity; no duplicate key caused by name change |
+| T18 | Backend failover, stale replica, lost commit acknowledgement, or transaction conflict | No fallback to local lock; fail closed and preserve UNKNOWN where commit outcome is ambiguous |
+| T19 | Reservation store unavailable before claim or before publication CAS | No model dispatch or POST |
+| T20 | Schema/key-version mismatch or hash collision simulation | Reject mismatched tuple; preserve original identity; no publication |
+
+The red-phase integration test against the current reviewer MUST deterministically demonstrate the existing race: synchronize both workers after the empty marker preflight, release both, and observe that both can reach the comment POST. Record this as a reproduction only after the test is actually executed. The current source-level race remains a static finding until then.
+
+### 9. Backend selection gate
+
+No backend is selected by this design. A candidate may proceed only after an evidence table records:
+
+- documented transaction/CAS primitive and its consistency model;
+- concurrent-client test results, including failover and acknowledgement-loss behavior;
+- server-side lease-time semantics;
+- authentication model and least-privilege enforcement;
+- backup, retention, restore, and auditability;
+- actual free-tier limits and cost at forecast volume;
+- data residency/region and operational dependency;
+- a tested recovery path for `PUBLISHING` and `UNKNOWN`.
+
+A backend that offers only workflow concurrency, object overwrite, eventually consistent KV, or process-local state is rejected for the reservation authority. A separate workflow concurrency group may be evaluated later as defense in depth, not as the correctness mechanism.
+
+### 10. Implementation gates
+
+Implementation is NOT authorized by this design record. The next implementation sequence is:
+
+1. Add the deterministic two-runner red test and prove it fails against the current code.
+2. Define the store adapter contract and backend conformance suite without selecting a vendor prematurely.
+3. Evaluate at least two viable backend candidates against the same conformance suite and cost/security evidence.
+4. Select a backend only when all mandatory storage semantics pass; otherwise retain the reviewer disabled.
+5. Implement the smallest transactional reservation adapter and integrate it before model dispatch.
+6. Add crash/timeout/failover fault injection for every transition and the GitHub publication boundary.
+7. Obtain independent security review and exact-head full test evidence.
+8. Keep reviewer activation, workflow registration on `main`, provider dispatch, and merge as separate approvals.
+
+**Disposition:** design contract drafted; no backend selected; no source/test/workflow changes; no runtime reproduction; no at-most-once claim. PR #463 remains Draft and reviewer activation remains BLOCKED.

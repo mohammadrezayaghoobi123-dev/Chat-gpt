@@ -964,9 +964,12 @@ Official evidence: [Connect to your database](https://supabase.com/docs/guides/d
 Current evidence:
 
 - `9R-ATOMIC-001` duplicate-publication race: **REPRODUCED / CONFIRMED FOR TESTED IN-PROCESS INTERLEAVING** by hosted run `45468257408`; expected physical POST count 1, observed 2.
-- Independent-process / independent-host durable-store conformance: **NOT_RUN**.
-- This document's A01–A41 matrix: **SPECIFIED, NOT_EXECUTED**.
-- Backend comparison: **NOT_STARTED**.
+- Backend-neutral reference-oracle tranche T01–T19: **PASS 19/19** in hosted run [`45507214386`](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45507214386), exact test revision `190a709331118331ded43a953a28bc9ed39201f0`. The oracle is intentionally in-memory and non-production.
+- Full reviewer regression plus reference tranche at the same revision: **155 passed / 1 failed**. The sole failure is the preserved concurrency RED: 2 physical comment POSTs against the required maximum of 1. No assertion was weakened.
+- The executable tranche covers selected invariants only; the full A01–A41 matrix remains **PARTIALLY_COVERED / NOT_QUALIFIED**. Coverage mapping and explicit gaps are in `tools/9router-review/conformance/README.md`.
+- Independent-process / independent-host durable-store conformance: **NOT_RUN**. Candidate-specific DO/R2/Supabase tests: **NOT_RUN**.
+- Backend screening: **DOCUMENTATION_SCREENED, NOT_SELECTED**. Cloudflare SQLite-backed Durable Objects plus R2 is the leading candidate architecture; Supabase PostgreSQL remains an alternative with material Free-plan durability/availability caveats. No provider resources were created or changed.
+- Independent effect-ledger implementation, restore drill, quota-exhaustion behavior, R2 bucket-lock enforcement, and writer/admin permission separation: **NOT_RUN**.
 - Production adapter implementation: **NOT_AUTHORIZED**.
 - Reviewer activation, workflow registration on `main`, provider dispatch, merge, secret changes, Cloudflare deployment, and local-host changes: **NOT_AUTHORIZED**.
 
@@ -974,9 +977,9 @@ Approval sequence:
 
 1. Review this integrated contract and adversarial findings.
 2. Resolve any design objections and freeze the contract version.
-3. Write backend-neutral A01–A41 conformance tests, validate the test harness against a non-production reference oracle, and prove the current reviewer path remains RED without weakening the existing regression.
-4. Compare at least two backend candidates against those same tests and documented guarantees.
+3. Complete the backend-neutral A01–A41 conformance suite; T01–T19 are the first reference-oracle tranche, not backend qualification.
+4. Run the same suite against candidate adapters with independent processes, fault injection, restart/failover, quota exhaustion, and restore rollback.
 5. Obtain independent security review of the selected adapter and failure model.
 6. Only then request separate authorization for implementation. Reviewer activation, default-branch workflow registration, provider dispatch, and merge remain distinct later approvals.
 
-**Final design verdict:** the contract is internally integrated and its identified design weaknesses have explicit mitigations or bounded residual limitations. It is NOT yet experimentally validated, backend-qualified, independently approved, or implementation-authorized. PR #463 must remain Draft; the reviewer remains disabled.
+**Current verdict:** contract and candidate screening are documented; T01–T19 pass against the in-memory oracle; the real reviewer duplicate-publication race remains reproducibly RED. The backend is not selected or qualified, and production implementation is not authorized. PR #463 must remain Draft; the reviewer remains disabled.

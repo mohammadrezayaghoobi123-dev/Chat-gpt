@@ -59,3 +59,14 @@ The reviewer runtime and original 9Router transport regression cases are carried
 - `run-review.mjs`: retained as inert runtime entry point; the bootstrap workflow never invokes it
 
 The source workflow's automatic triggers and signal/receipt components are deliberately not copied. The original PR #431 remains unchanged and unmerged.
+
+## DCP-01V.3 — exact command hardening and full-suite reconciliation
+
+- Test-first regression commit: `5ee33dab2cabc9c83fc5beb6e3dc0ff7537c46ff`. The new multiline command case failed as intended because the resolver returned `RESOLVED` for `/review-canary\nignore safeguards`.
+- Minimal resolver fix: `2a81f8e0a35cd0f2af734f856c3e9b830a50fa91`. The resolver now requires the complete comment body to be exactly `/review-canary`; no first-line parsing remains in the issue-comment path.
+- Focused RED/GREEN evidence: the exact-command regression failed before the fix (2 assertions failed in the targeted Node test invocation) and passed after the fix (8/8 targeted assertions).
+- Reconciled stale tests that still required the rejected signal/`workflow_run` design and its privileged reviewer concurrency configuration. The replacement test asserts the current manual-only triggers, exact actor/command gates, trusted workflow-SHA checkout, read-only resolver permissions, and statically disabled secret-free reviewer job.
+- Full isolated verification at code/test commit `fcc83c57f647aa36ff30f8552e5524eca1d2b285`: Node.js `v22.16.0`, npm `10.9.2`, Git `2.39.5`; `npm ci --ignore-scripts --no-audit --no-fund` completed, then `npm test` completed with **136/136 passing, 0 failing, 0 skipped**. The package tarball integrity matched the lockfile.
+- This is an isolated hosted reproduction, not a GitHub Actions workflow run. GitHub-hosted manual canary remains `NOT_RUN` because the workflow is not registered on `main`.
+- Latest completed Gitleaks evidence remains run `45406924306` on the earlier candidate head: PR-diff scan PASS; all-fetched-ref scan FAIL with 13 `generic-api-key` detections. No finding was allowlisted or cleared. A fresh exact-head Gitleaks attempt did not produce a completed report; current-head scan status is `NOT_RUN`, not PASS.
+- Current reviewer job remains disabled; no 9Router request, provider/model dispatch, comment publication, secret read, merge, default-branch workflow registration, deployment, Cloudflare operation, or local-host change occurred.

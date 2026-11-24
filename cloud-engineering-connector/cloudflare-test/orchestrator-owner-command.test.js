@@ -6,7 +6,7 @@ import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
-const now = 1_800_000_000_000;
+const now = Date.now();
 const ownerId = "335530603";
 const repositoryId = 1398846697;
 const ownerKeySet = JSON.stringify({
@@ -2399,7 +2399,7 @@ describe("Owner command atomic Ledger contract", () => {
   });
 
 
-  it("demonstrates that a caller clock rollback can resurrect an expired unconsumed worker assertion", async () => {
+  it("does not resurrect an expired unconsumed worker assertion after caller clock rollback", async () => {
     const ledger = ledgerFor("worker-assertion-clock-rollback");
     const sharedJti = "worker-jti-clock-rollback-00000001";
     const subject = "orchestrator-scheduler";
@@ -2407,9 +2407,8 @@ describe("Owner command atomic Ledger contract", () => {
     const operation = "createTask";
     const token = await workerAssertion(subject, role, operation, now, sharedJti);
 
-    // Hold the actual wall clock beyond assertion expiry while the caller
-    // supplies logical timestamps. A Ledger-local clock check would reject
-    // the second request; the current caller-time check accepts it.
+    // Hold the Ledger wall clock beyond assertion expiry while the caller
+    // supplies a later timestamp and then attempts to backdate it.
     const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(now + 120_000);
     let afterExpiry;
     let afterRollback;
@@ -2427,9 +2426,8 @@ describe("Owner command atomic Ledger contract", () => {
         workerAssertion: token,
       });
 
-      // The first attempt did not consume the JTI because expiry verification
-      // rejected it before the SQL transaction. Rolling the caller's timestamp
-      // back by 66 seconds makes the same assertion valid again.
+      // The first attempt is rejected by Ledger time. Backdating caller time
+      // must not make the same assertion valid again.
       afterRollback = await ledger.createTask({
         task: {
           ...task("task-clock-rollback-resurrected"),
@@ -2450,8 +2448,8 @@ describe("Owner command atomic Ledger contract", () => {
       reason: "AUTHENTICATED_WORKER_REQUIRED",
     });
     expect(afterRollback).toMatchObject({
-      created: true,
-      task: { taskId: "task-clock-rollback-resurrected" },
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
     });
 
     await runInDurableObject(ledger, async (_instance, state) => {
@@ -2459,16 +2457,11 @@ describe("Owner command atomic Ledger contract", () => {
         "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id IN (?, ?)",
         "task-clock-rollback-expired",
         "task-clock-rollback-resurrected",
-      ).one().count).toBe(1);
+      ).one().count).toBe(0);
       expect(state.storage.sql.exec(
-        "SELECT jti, issued_at, expires_at, consumed_at FROM orchestrator_consumed_assertions WHERE jti = ?",
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
         sharedJti,
-      ).toArray()).toEqual([{
-        jti: sharedJti,
-        issued_at: Math.floor(now / 1000),
-        expires_at: Math.floor(now / 1000) + 60,
-        consumed_at: Math.floor((now + 54_000) / 1000),
-      }]);
+      ).one().count).toBe(0);
     });
   });
 

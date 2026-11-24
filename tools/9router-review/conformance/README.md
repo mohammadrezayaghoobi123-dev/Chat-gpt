@@ -1,6 +1,6 @@
 # Reservation Contract Conformance Harness
 
-This directory contains a non-production reference oracle and the first executable conformance tranche.
+This directory contains a non-production reference oracle and the expanded executable conformance tranche.
 
 - The reference adapter is an executable specification only. It is in-memory and is not durable.
 - Passing these tests validates the contract harness against the reference model; it does not qualify Cloudflare Durable Objects, R2, Supabase, or any deployed backend.
@@ -34,5 +34,6 @@ Run with Node.js 22 from tools/9router-review:
 | T17 | A41 | RECOVERY_LOCKED blocks external-effect permits |
 | T18 | I26 | Effect-ledger intent is idempotent and payload-bound |
 | T19 | A41 | Recovery unlock requires complete independent inventory |
+| T20–T31 | A04–A42 (partial) | Positive reconciliation, marker-key rotation, server-time fencing, terminal states, and ledger integrity |
 
 This is not the A01–A41 backend qualification suite. The coverage map deliberately marks partial coverage. A02's controlled read-before-insert schedule, A03's forced tuple/hash-collision case, independent-process concurrency, backend failover, storage restore, R2 conditional writes, quota exhaustion, and the remaining matrix cases are still NOT_EXECUTED.

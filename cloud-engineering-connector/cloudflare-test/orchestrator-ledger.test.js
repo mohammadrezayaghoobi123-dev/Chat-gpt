@@ -175,6 +175,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       idempotencyKey: "claim-skip-expired-second", inputHash: "b".repeat(64), now: now + 1,
     });
 
+    wallClockNow = now + 101;
     const result = await ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101),
       leaseMs: 30_000, now: now + 101,
@@ -221,6 +222,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       now: now + 100,
     });
 
+    wallClockNow = now + 101;
     const result = await ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101),
       leaseMs: 30_000, now: now + 101,
@@ -404,6 +406,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await expect(ledger.claimOutbox({ workerId: "publisher-1", leaseMs: 100, now }))
       .resolves.toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
     const first = await ledger.claimOutbox({ workerId: "publisher-1", workerAssertion: await createWorkerAssertion({ subject: "publisher-1", role: "publisher", operation: "claimOutbox", nowMs: now }), leaseMs: 100, now });
+    wallClockNow = now + 101;
     const second = await ledger.claimOutbox({ workerId: "publisher-2", workerAssertion: await createWorkerAssertion({ subject: "publisher-2", role: "publisher", operation: "claimOutbox", nowMs: now + 101 }), leaseMs: 100, now: now + 101 });
     expect(second.leaseGeneration).toBe(first.leaseGeneration + 1);
     await expect(ledger.completeOutbox({ eventId: "event-0002", workerId: "publisher-1", workerAssertion: await createWorkerAssertion({ subject: "publisher-1", role: "publisher", operation: "completeOutbox", nowMs: now + 102 }), leaseGeneration: first.leaseGeneration, now: now + 102 }))
@@ -433,6 +436,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       }),
       leaseMs: 30_000, now,
     });
+    wallClockNow = now + 1;
     const failed = await ledger.failOutbox({
       eventId: "event-outbox-retry", workerId: "publisher-1",
       workerAssertion: await createWorkerAssertion({
@@ -445,6 +449,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       failed: true, retryScheduled: true, deadLettered: false,
       nextAttemptAt: now + 1_001,
     });
+    wallClockNow = now + 500;
     await expect(ledger.claimOutbox({
       workerId: "publisher-2",
       workerAssertion: await createWorkerAssertion({
@@ -453,6 +458,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       leaseMs: 30_000, now: now + 500,
     })).resolves.toMatchObject({ claimed: false, reason: "NO_OUTBOX_AVAILABLE" });
 
+    wallClockNow = now + 1_001;
     const retry = await ledger.claimOutbox({
       workerId: "publisher-2",
       workerAssertion: await createWorkerAssertion({
@@ -461,6 +467,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       leaseMs: 30_000, now: now + 1_001,
     });
     expect(retry).toMatchObject({ claimed: true, event: { attempts: 2 } });
+    wallClockNow = now + 1_002;
     const deadLetter = await ledger.failOutbox({
       eventId: "event-outbox-retry", workerId: "publisher-2",
       workerAssertion: await createWorkerAssertion({
@@ -534,6 +541,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
     await expect(ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101 }))
       .resolves.toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
+    wallClockNow = now + 101;
     const untrustedEvidence = await ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101,
       reconciliationEvidence: { checked: true, priorGeneration: first.leaseGeneration, evidenceRef: "github://caller-controlled/reference" },
@@ -1193,6 +1201,7 @@ it("moves an expired final-attempt outbox lease to a lease-free dead-letter stat
   let finalAttempt;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const attemptNow = now + (attempt - 1) * 101;
+    wallClockNow = attemptNow;
     finalAttempt = await ledger.claimOutbox({
       workerId: "publisher-" + attempt,
       workerAssertion: await createWorkerAssertion({
@@ -1204,6 +1213,7 @@ it("moves an expired final-attempt outbox lease to a lease-free dead-letter stat
   }
 
   const afterLeaseExpiry = now + 8 * 101;
+  wallClockNow = afterLeaseExpiry;
   const exhausted = await ledger.claimOutbox({
     workerId: "publisher-recovery",
     workerAssertion: await createWorkerAssertion({
@@ -2137,6 +2147,7 @@ it("rejects an expired lease even when its generation is still current", async (
       now,
     });
     expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+    wallClockNow = now + 101;
     await expect(ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
       actor: agent, evidence, now: now + 101, workerId: "agent:worker-1",

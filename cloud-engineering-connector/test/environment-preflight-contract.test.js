@@ -54,7 +54,7 @@ test("read-only preflight runs on the full posture census diagnostic branch", ()
   const source = readWorkflow();
   assert.match(
     source,
-    /-\\s+["']?security\\/environment-full-posture-census-\\*["']?/,
+    /-\s+["']?security\/environment-full-posture-census-\*["']?/,
     "the full posture census branch must run the same GET-only live audit",
   );
 });

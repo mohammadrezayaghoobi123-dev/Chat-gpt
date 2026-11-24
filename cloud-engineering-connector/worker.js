@@ -1028,6 +1028,14 @@ async function handleOwnerGitHubComment(authenticated, payload, ledger, env) {
  if (retryAuthorization.retryAuthorized === true && retryAuthorization.registered !== true) {
   return json({ error: "owner_command_unavailable" }, 503);
  }
+ if (retryAuthorization.denied === true &&
+     retryAuthorization.reason === "OWNER_ASSERTION_REJECTED") {
+  return json({
+   error: "owner_command_rejected",
+   reason: "OWNER_ASSERTION_REJECTED",
+   deliveryId: authenticated.deliveryId,
+  }, 403);
+ }
  if (retryAuthorization.denied === true) {
   return json({
    error: "owner_command_conflict",

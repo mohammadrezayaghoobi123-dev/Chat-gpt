@@ -187,7 +187,8 @@ function extractPostDeployScript(source) {
 const postDeployScript = extractPostDeployScript(workflow);
 
 function runPostDeploy({ productionLedgerId, stagingLedgerId }) {
-  const callsPath = join(tmpdir(), "staging-ledger-postdeploy-" + process.pid + "-" + Math.random().toString(16).slice(2));
+  const directory = mkdtempSync(join(tmpdir(), "staging-ledger-postdeploy-"));
+  const callsPath = join(directory, "cloudflare-calls.txt");
   const productionSettings = {
     bindings: [{
       name: "ORCHESTRATOR_LEDGER",
@@ -263,7 +264,7 @@ function runPostDeploy({ productionLedgerId, stagingLedgerId }) {
       calls: readFileSync(callsPath, "utf8").split("\n").filter(Boolean),
     };
   } finally {
-    rmSync(callsPath, { force: true });
+    rmSync(directory, { recursive: true, force: true });
   }
 }
 

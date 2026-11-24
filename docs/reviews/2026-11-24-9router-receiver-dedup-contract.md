@@ -19,7 +19,7 @@ The current evidence supports the following labels:
 | 9Router can route combo models and fall back between provider accounts | PROVISIONALLY SUPPORTED | Public architecture description; exact deployed behavior is version-dependent |
 | 9Router forwards `Idempotency-Key` for video-generation creation endpoints | SUPPORTED FOR THAT ROUTE ONLY | Official repository change for `/v1/videos/{generations,edits,extensions}` |
 | 9Router chat-completions route honors `Idempotency-Key` atomically | UNKNOWN | No chat-route contract, implementation proof, or deployment-specific test was established |
-| One client POST implies one provider attempt | REJECTED | Router architecture explicitly includes model/account fallback |
+| One client POST implies one provider attempt | REJECTED | Public chat-core source includes a 401/403 credential-refresh path that can call `executor.execute()` again; model-combo/account fallback is also documented. Exact deployed behavior remains UNKNOWN |
 | One provider attempt implies exactly one model execution | UNKNOWN | Provider-side acceptance, billing, retry, and deduplication semantics are outside the evidence collected |
 
 ## 2. Evidence boundary
@@ -50,6 +50,18 @@ OpenAI API compatibility describes request/response shape. It is not evidence of
 
 Until all receiver contract gates in this document pass for the exact deployed version, chat-route idempotency remains UNKNOWN.
 
+
+### 2.4 Public chat-core retry path — additional hostile evidence
+
+The public 9Router `master` source currently contains a concrete provider retry path in `open-sse/handlers/chatCore.js`: when a provider response has status 401 or 403, the handler attempts credential refresh (the inspected code calls `refreshWithRetry` with a maximum of three refresh attempts) and, if refreshed credentials are available, calls `executor.execute()` again using the request body. The public `open-sse/services/accountFallback.js` source separately evaluates fallback rules using status/text conditions and includes a default fallback decision for otherwise unmatched errors.
+
+This is direct source evidence that one client POST can lead to more than one provider-executor invocation in the public source tree. It does **not** establish that each retry results in a billable model execution, nor does it establish that the user's deployed router version contains the same code. The exact deployed version, commit, and build digest remain UNKNOWN. The acceptance contract therefore continues to require provider-attempt telemetry and exact-version tests.
+
+Additional public source references:
+
+- https://github.com/decolua/9router/blob/master/open-sse/handlers/chatCore.js
+- https://github.com/decolua/9router/blob/master/open-sse/services/accountFallback.js
+
 ## 3. Delivery layers and identities
 
 The system must distinguish the following independently observable events:
@@ -62,7 +74,7 @@ The system must distinguish the following independently observable events:
 6. **Client response receipt** — the reviewer receives and validates the router response.
 7. **Report publication** — the reviewer publishes a report after its existing snapshot and duplicate checks.
 
-These are different events. In particular:
+These are different events. In particular, the public `master` chat-core source inspected for this addendum contains a credential-refresh retry path after provider 401/403, as well as model/account fallback. Therefore a single inbound client POST cannot be treated as a one-provider-attempt proof. This source is not pinned to the user's deployment, so the deployed behavior remains UNKNOWN. In particular:
 
 - One client dispatch does not prove one router ingress if an intermediary can replay.
 - One router ingress does not prove one provider dispatch if internal fallback or retry occurs.

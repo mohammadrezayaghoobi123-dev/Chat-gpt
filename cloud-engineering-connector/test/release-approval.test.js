@@ -45,11 +45,20 @@ function approval(commitId = sha, login = reviewer, state = "APPROVED", submitte
   };
 }
 
-function fakeFetch(pulls, reviews, onRequest = () => {}) {
+function fakeFetch(pulls, reviews, onRequest = () => {}, permissionOverrides = {}) {
   return async (url, options) => {
     onRequest(String(url), options);
-    if (String(url).includes("/commits/")) return response(pulls);
-    if (String(url).includes("/reviews?")) return response(reviews);
+    const parsed = new URL(String(url));
+    if (parsed.pathname.includes("/collaborators/") && parsed.pathname.endsWith("/permission")) {
+      const login = decodeURIComponent(parsed.pathname.split("/").at(-2));
+      const override = permissionOverrides[login];
+      if (override) return response(override.body, override.status ?? 200);
+      const matchingReview = reviews.find(item => item.user?.login === login);
+      const id = matchingReview?.user?.id ?? reviewerUserId(login);
+      return response({ permission: "read", role_name: "read", user: { id, login } });
+    }
+    if (parsed.pathname.includes("/commits/")) return response(pulls);
+    if (parsed.pathname.endsWith("/reviews")) return response(reviews);
     return response({ message: "not found" }, 404);
   };
 }
@@ -130,8 +139,9 @@ test("Staging uses a scoped GitHub token and never places it in the URL", async 
       assert.equal(options.headers.authorization, "Bearer " + token);
     }),
   });
-  assert.equal(urls.length, 2);
+  assert.equal(urls.length, 3);
   assert.ok(urls.every(url => !url.includes(token)));
+  assert.ok(urls.some(url => url.includes("/collaborators/" + reviewer + "/permission")));
 });
 
 test("Production accepts only a merged PR to main with independent approval on its reviewed head", async () => {
@@ -214,6 +224,9 @@ test("release approval paginates associated PRs and all reviews before accepting
         return response([approval(sha, reviewer, "CHANGES_REQUESTED", "2026-11-02T13:00:00Z")]);
       }
       return response([]);
+    }
+    if (parsed.pathname.endsWith("/collaborators/" + reviewer + "/permission")) {
+      return response({ permission: "read", role_name: "read", user: { id: reviewerId, login: reviewer } });
     }
     return response({ message: "not found" }, 404);
   };
@@ -312,4 +325,67 @@ test("tracks a trusted reviewer latest state by immutable user ID across login c
   });
   assert.equal(result.reviewer, "renamed-reviewer-login");
   assert.equal(result.reviewerId, reviewerId);
+});
+
+
+test("rejects an allowlisted reviewer whose repository permission lookup returns 404", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch([stagingPull()], [approval()], undefined, {
+        [reviewer]: { status: 404, body: { message: "Not Found" } },
+      }),
+    }),
+    /no trusted independent approval/,
+  );
+});
+
+test("rejects an allowlisted reviewer with no current repository permission", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch([stagingPull()], [approval()], undefined, {
+        [reviewer]: { status: 200, body: { permission: "none", role_name: "none", user: { id: reviewerId, login: reviewer } } },
+      }),
+    }),
+    /no trusted independent approval/,
+  );
+});
+
+test("rejects a permission response that resolves to a different immutable GitHub user ID", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch([stagingPull()], [approval()], undefined, {
+        [reviewer]: { status: 200, body: { permission: "admin", role_name: "admin", user: { id: unlistedReviewerId, login: reviewer } } },
+      }),
+    }),
+    /identity mismatch/,
+  );
+});
+
+test("does not honor an outstanding change request from a reviewer whose repository access was revoked", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch([stagingPull()], [
+        approval(sha, reviewer, "CHANGES_REQUESTED", date),
+      ], undefined, {
+        [reviewer]: { status: 404, body: { message: "Not Found" } },
+      }),
+    }),
+    /no trusted independent approval/,
+  );
+});
+
+test("fails closed when the live repository permission lookup is forbidden", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch([stagingPull()], [approval()], undefined, {
+        [reviewer]: { status: 403, body: { message: "Resource not accessible by integration" } },
+      }),
+    }),
+    /HTTP 403/,
+  );
 });

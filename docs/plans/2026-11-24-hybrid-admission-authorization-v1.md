@@ -1,122 +1,134 @@
-# Hybrid Admission Authorization V1 Implementation Plan
+# Hybrid Admission Authorization V1 — Executed Atomic Foundation
 
-> **For agentic workers:** Execute task by task. Steps use checkbox syntax for tracking.
+**Status:** Foundation slice implemented and CI-verified on 2026-11-24. Full Admission protocol remains incomplete and is not deployed.
 
-**Goal:** Implement the first atomic authorization-freshness slice of the hybrid admission protocol without enabling task creation or deployment.
+**Branch:** design/hybrid-admission-authorization-2026-11-24  
+**Baseline:** main at 919b19ca3d3887352cdef06b03c668ead04fbce7  
+**Verified commit:** 1b7ce1e8aa5cb1e47f1def94920d11cdc0214645
 
-**Architecture:** TenantDirectory remains the per-tenant policy authority. A monotonic policy-scope epoch is updated in the same SQLite transaction as each relevant policy mutation, including the distinct scopes disabled by membership suspension or revocation. Authorization reads return a version-complete snapshot containing membership version, policy-scope epoch, selected rule version, decision identifier, and resource scope. This slice does not mint receipts or alter Ledger task-write behavior.
+## Objective
 
-**Tech Stack:** JavaScript ES modules, Cloudflare Durable Objects with SQLite storage, Vitest, Cloudflare Vitest plugin, Wrangler.
+Implement a single coherent foundation that supplies (1) authoritative authorization freshness per tenant, and (2) a private per-tenant signing-key capability without persisting extractable private-key bytes in TenantDirectory.
 
-## Global Constraints
+## Global invariants
 
-- Preserve the current main baseline and work only on the design branch.
-- Do not alter main, live Cloudflare resources, bindings, secrets, Cron schedules, or deployment state.
-- Use transactionSync for epoch and policy/membership writes; perform no asynchronous operation inside its callback.
-- Preserve default-deny behavior, exact-resource-before-wildcard precedence, numeric membership and rule versions, and append-only audit events.
-- A policy-scope key is the exact tuple of tenant_id, project_id, principal_id, and action.
-- Increment each distinct affected scope exactly once per mutation transaction. Do not increment unaffected scopes.
-- A missing epoch is represented as zero and never authorizes.
-- Keep technical artifacts English-only.
-- Do not claim the full Admission protocol is implemented by this slice.
+- All changes stay on this branch. Main and Production are out of scope.
+- No Cloudflare live binding, secret, trigger, namespace, script, or deployment mutation is authorized by this plan.
+- TenantDirectory remains the authority for membership and effective policy.
+- Policy and membership changes and their epoch/audit updates share one local synchronous SQLite transaction.
+- A scope epoch is keyed by the exact tuple `(tenant_id, project_id, principal_id, action)`.
+- Each distinct affected scope advances exactly once; unaffected scopes do not advance.
+- Unknown or invalid key lookups fail closed and never create/provision a key.
+- Signing-key material is available only to the isolated signer Worker. TenantDirectory stores an authenticated ciphertext envelope and public verification key, not a private CryptoKey or plaintext PKCS#8/JWK.
+- No cross-Durable-Object ACID claim is made.
+- Unexecuted behavior remains UNKNOWN, not pass or fail.
+- Technical artifacts are English-only.
 
 ---
 
-### Task 1: Add failing policy-freshness and revocation tests
+## Executed task 1 — Policy-scope epoch and authorization snapshot
 
-**Files:**
-- Create: cloud-engineering-connector/cloudflare-test/tenant-directory-policy-epoch.test.js
+**Files**
+- `identity/tenant-directory.js`
+- `identity/tenant-context.js`
+- `cloudflare-test/tenant-directory-policy-epoch.test.js`
 
-**Interfaces:**
-- Consumes: createTenantDirectoryAdapters, createTenantDirectoryAdminAssertion, upsertMembership, upsertProjectPolicy, revokeMembership, authorizeProjectAction.
-- Produces: executable assertions for the version-complete authorization snapshot and tenant_policy_scope_epochs.
+**Implementation**
+- Added `tenant_policy_scope_epochs` with a composite primary key over tenant, project, principal, and action.
+- Added synchronous transaction-local UPSERT helpers.
+- Advanced every distinct affected epoch in the same transaction as policy update, membership suspension, and membership revocation.
+- Included exact-resource and wildcard rule precedence effects.
+- Authorization results now expose authoritative membership version, scope epoch, selected numeric rule version, selected resource digest, and decision ID.
+- Tenant context propagates metadata only when supplied by the authority, preserving the legacy shape for older adapter implementations.
 
-- [x] **Step 1: Add the focused failing test**
+**Hostile assertions**
+- Exact-resource precedence increments the shared policy scope epoch once.
+- Membership suspension disables all active policy rows and increments each distinct affected scope once.
+- Membership revocation does the same, without changing unrelated principals' epochs.
+- A test-only SQLite abort trigger proves that membership state, rule state, epoch updates, and audit rows roll back together.
+- Authorization after suspension/revocation returns deny with the new authoritative version snapshot.
 
-Test these behaviors:
+## Executed task 2 — Runtime proof for private-key persistence
 
-1. Create active membership and an allow wildcard policy. Verify authorization returns membership version, selected rule version, policy-scope epoch, selected resource digest, and decision ID.
-2. Add exact-resource precedence and epoch increments.
-3. Suspend membership and verify all affected distinct policy scopes advance exactly once and deny remains enforced.
-2. Add an exact-resource rule for the same project/action. Verify exact-resource precedence and exactly one additional epoch increment.
-3. Seed active policy rows spanning multiple projects and actions, including wildcard and exact-resource rows. Revoke membership. Verify every distinct affected scope advances exactly once, all active rules are disabled in the same transaction, and an unrelated principal's epoch does not change.
-4. Query authorization after revocation. Verify deny, the new membership version, current policy-scope epoch, and no selected active rule.
-5. Force a transaction failure after epoch updates with a test-only abort trigger. Verify membership state, policy statuses, scope epochs, and audit row count all roll back together.
+**File**
+- `cloudflare-test/tenant-directory-admission-crypto-persistence.test.js`
 
-- [x] **Step 2: Verify the relevant failure**
+The Cloudflare Durable Object test runtime rejects storing a Web Crypto `CryptoKey` object in SQLite-backed DO storage with `DataCloneError`. The test also verifies Ed25519 private-key non-extractability in memory and successful signature verification before persistence is attempted.
 
-Run: npm run test:do -- cloudflare-test/tenant-directory-policy-epoch.test.js
+**Decision**
+Direct CryptoKey persistence is rejected as an implementation strategy. No fallback to plaintext PKCS#8 or private JWK storage in TenantDirectory is allowed.
 
-Expected: the test fails because version metadata/table/epoch behavior is missing. A module-resolution, test setup, or syntax error does not count as red and must be corrected first.
+## Executed task 3 — Isolated admission signer
 
-### Task 2: Implement the atomic policy-scope epoch
+**Files**
+- `admission-signer/worker.js`
+- `admission-signer/wrangler.toml`
+- `cloudflare-test/admission-signer.test.js`
+- `vitest.config.js`
 
-**Files:**
-- Modify: cloud-engineering-connector/identity/tenant-directory.js
-- Modify: cloud-engineering-connector/identity/tenant-context.js
-- Test: cloud-engineering-connector/cloudflare-test/tenant-directory-policy-epoch.test.js
+**Implementation**
+- Added a separate Worker source with `workers_dev = false` and no public routes.
+- The signer reads `ADMISSION_SIGNER_MASTER_KEYS`; this binding is not configured on the primary Worker.
+- It creates tenant-specific Ed25519 signing keys and wraps the private PKCS#8 bytes using HKDF-SHA-256-derived AES-256-GCM keys.
+- AEAD associated data binds envelope version, tenant ID, signing key ID, wrapping-key ID, public key, and KDF salt.
+- Signing imports the private key as non-extractable in memory and returns only the signature.
+- Requests are size-bounded; unknown routes/methods, missing/malformed key material, tenant substitution, ciphertext tampering, and retired wrapping keys fail closed.
+- The local Vitest Service Binding invokes the real signer Worker module with a fresh random test KEK generated at config-load time; no test key is committed.
 
-**Interfaces:**
-- Consumes: existing TenantDirectory membership, project-policy tables, and transaction boundary.
-- Produces: tenant_policy_scope_epochs with a composite primary key and monotonic integer epoch; complete authorization decision metadata.
+**Hostile assertions**
+- Returned key envelopes contain no private-key or master-key field.
+- A signature verifies against the returned public key.
+- Tenant substitution and ciphertext tampering fail.
+- Rotation overlap accepts an old wrapping key only while it remains in the ring; removal rejects the old envelope.
+- Missing/malformed signer configuration fails closed.
+- Unrecognized route, method, and oversized request are rejected.
 
-- [x] **Step 1: Create the storage table**
+## Executed task 4 — TenantDirectory signer integration
 
-Add an idempotent table with tenant_id, project_id, principal_id, action, epoch, and updated_at. Use a composite primary key over the four scope fields and constrain epoch to a non-negative integer.
+**Files**
+- `identity/tenant-directory.js`
+- `identity/tenant-directory-adapter.js`
+- `cloudflare-test/tenant-directory-admission-key.test.js`
 
-- [x] **Step 2: Add synchronous epoch helpers**
+**Implementation**
+- TenantDirectory persists a pending signing-key ID before calling the signer, so an ambiguous call can retry with the same identifier.
+- Concurrent calls within one object share the in-flight provisioning Promise.
+- The validated encrypted envelope is persisted under a tenant-specific key; plaintext private material is never returned to TenantDirectory.
+- `signAdmissionMessage` routes bounded bytes through the Service Binding and returns only tenant/key identifiers, public key, and signature.
+- `getAdmissionVerificationKey` is read-only: an unknown tenant/key is rejected without provisioning.
+- The tenant adapter enforces exact selected-tenant scope for both methods.
 
-Implement a transaction-local helper that increments one scope with an UPSERT. Implement a second helper that reads distinct active policy scopes for one tenant/principal and increments each exactly once. Both helpers use the active transaction's SQL handle and perform no asynchronous operations.
+**Hostile assertions**
+- Concurrent signing calls reuse one key ID and public key.
+- Both signatures verify.
+- Stored state contains the encrypted envelope and no private-key or master-key fields.
+- Verification-key lookup returns only the public key.
+- Unknown key IDs and cross-tenant lookups reject.
+- An unknown-tenant key lookup leaves no provisioned envelope behind.
 
-- [x] **Step 3: Wire all relevant mutations**
+## Verification evidence
 
-- upsertProjectPolicy increments the exact policy scope once in the same transaction as the policy write and audit event.
-- upsertMembership with a non-active status enumerates distinct active policy scopes before disabling rules, then increments each once in the same transaction as membership status/version, policy disable, and audit writes.
-- revokeMembership applies the same operation in the same transaction as membership revocation, policy disabling, and audit append. An already-revoked membership may be a no-op only when no active policy rows remain.
+- **Red evidence for Task 1:** GitHub Actions run `45370294820` failed on the new missing epoch/snapshot assertions as expected.
+- **Final integrated green run:** GitHub Actions run `45373603783`, commit `1b7ce1e8aa5cb1e47f1def94920d11cdc0214645`, completed successfully.
+- Node tests: **185 passed, 0 failed**.
+- Cloudflare Durable Object tests: **20 files, 63 passed, 0 failed**.
+- `npm audit --audit-level=moderate`: passed.
+- `node --check` validation, including TenantDirectory, adapter, signer Worker and test files: passed.
+- Wrangler dry-run validation: primary Worker production/staging configuration and signer Worker production/staging configuration all exited successfully. No deployment occurred.
+- Gitleaks PR diff-range scan: no leaks found.
+- Gitleaks full-history scan: failed on **12 historical `generic-api-key` findings** in pre-existing commits/files. They are not waived or assumed false positives.
 
-- [x] **Step 4: Return a consistent authorization snapshot**
+## Residual blockers — not implemented by this foundation
 
-Synchronously read membership status/version, the selected active rule, selected rule numeric version/resource digest, and policy-scope epoch without yielding between reads. Return these fields for allow and deny results. Missing epoch is zero. Missing/inactive membership or missing active rule remains deny.
+1. Admission Receipt issuance and canonical claim schema.
+2. Scheduler invocation provenance from a real platform `scheduled(controller, env, ctx)` handler and an explicit cron-to-service-principal allowlist.
+3. Ledger `projectAdmittedTask` receipt verification and unique admission/JTI consumption.
+4. Removal or fail-closed compatibility disposition of the legacy HMAC-only `createTask` write path.
+5. Outbox wake-up atomicity or an independently tested recovery registry.
+6. Execution Permit binding to executor, Task state/version, immutable start reservation, and lease generation.
+7. Canonical Ledger object identity and legacy-data migration proof.
+8. Effect-boundary fencing for any integration that needs stronger post-revocation guarantees.
+9. Rewrapping of already-persisted tenant envelopes during wrapping-key rotation. Old KEKs must not be removed until a verified rewrap inventory and migration exists.
+10. Live staging parity and end-to-end admission-to-lease test.
 
-- [x] **Step 5: Preserve the provider-neutral context**
-
-Carry the Directory numeric membership version into the verified tenant context and carry decision version metadata out of authorizeProjectAction. Never infer a missing version from a caller-supplied label.
-
-- [x] **Step 6: Verify the focused pass**
-
-Run: npm run test:do -- cloudflare-test/tenant-directory-policy-epoch.test.js
-
-Expected: the identical tests pass with exact epoch deltas and rollback assertions.
-
-- [x] **Step 7: Run all affected validation**
-
-Run: npm test
-
-Expected: existing Node tests and all Cloudflare Durable Object tests pass.
-
-Run: npm run check
-
-Expected: JavaScript syntax checks and both Wrangler dry-run configuration checks complete with exit code zero. These commands do not deploy.
-
-- [x] **Step 8: Review the diff**
-
-Verify only the plan, focused test, TenantDirectory, and tenant-context files changed. Verify there are no secret values, live resource changes, or unrelated formatting changes.
-
-## Execution Evidence
-
-- Red run: GitHub Actions run 45370294820, Cloudflare DO focused suite failed on missing version metadata and missing epoch table as expected.
-- Green run: GitHub Actions run 45371338047 completed successfully on commit de40d8897afb5daa506cec338ec64fd78d07a371.
-- Node tests: 185 passed, 0 failed.
-- Cloudflare Durable Object tests: 17 files, 55 passed, 0 failed.
-- npm dependency audit: `npm audit --audit-level=moderate` passed.
-- Syntax and config validation: `node --check` set passed; Production and Staging Wrangler `--dry-run` both exited successfully. No deploy was performed.
-- Security scan: PR diff-range clean; full-history scan still reports 12 existing historical `generic-api-key` findings. No finding was suppressed by this implementation.
-- Scope: TenantDirectory policy epochs and authorization metadata only. Receipt signing, Ledger receipt enforcement, Scheduler provenance, Outbox recovery, start reservation, and effect-boundary fencing remain subsequent implementation slices.
-
-## Explicit scope boundary
-
-This is the first independently testable implementation slice. It establishes the authoritative version snapshot required by signed Admission Receipts. It does not yet implement receipt signing, Ledger receipt consumption, Scheduler event provenance, Outbox delivery, start reservations, or effect-boundary fencing. Those components must consume this exact contract; they must not invent parallel version counters or bypass the Directory.
-
-## Acceptance rule
-
-The policy-freshness slice is complete on commit de40d8897afb5daa506cec338ec64fd78d07a371, subject to the recorded historical Gitleaks finding backlog. It does not complete or authorize deployment of the full Admission protocol.
+**Current delivery status:** The policy-freshness and isolated-signer foundation is implemented in source and CI-verified. The overall Admission protocol remains **NOT IMPLEMENTED / NOT DEPLOYED**. No source Worker binding in this branch proves that the corresponding live Cloudflare binding exists.

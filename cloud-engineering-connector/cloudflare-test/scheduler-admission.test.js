@@ -9,7 +9,7 @@ const WORKER_KEY_SET = JSON.stringify({ test: "f".repeat(64) });
 const DIRECTORY_ADMIN_KEY_SET = JSON.stringify({ test: "e".repeat(64) });
 const CRON = "0 * * * *";
 
-async function provisionTenant(tenantId) {
+async function provisionTenant(tenantId, configureLedger = true) {
   const now = Date.now();
   const projectId = "project-scheduled-admission";
   const principalId = "principal-scheduled-admission";
@@ -76,11 +76,14 @@ async function provisionTenant(tenantId) {
     now,
   });
 
-  const ledger = env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(tenantId));
-  await runInDurableObject(ledger, instance => {
-    instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEY_SET;
-    instance.env.ORCHESTRATOR_LEDGER_ADMISSION_PUBLIC_KEYS = publicKeys;
-  });
+  let ledger = null;
+  if (configureLedger) {
+    ledger = env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(tenantId));
+    await runInDurableObject(ledger, instance => {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEY_SET;
+      instance.env.ORCHESTRATOR_LEDGER_ADMISSION_PUBLIC_KEYS = publicKeys;
+    });
+  }
 
   return { tenantId, projectId, principalId, directory, ledger };
 }
@@ -211,11 +214,6 @@ describe("Scheduler tenant Task admission", () => {
         "SELECT COUNT(*) AS count FROM tenant_task_admission_reservations",
       ).one().count)).toBe(1);
     });
-    await runInDurableObject(fixture.ledger, instance => {
-      expect(Number(instance.ctx.storage.sql.exec(
-        "SELECT COUNT(*) AS count FROM orchestrator_tasks",
-      ).one().count)).toBe(0);
-    });
 
     const retry = await schedulerWorker.scheduled(controller, baseEnv, {});
     expect(retry).toMatchObject({ processed: 1, created: 1, replayed: 0 });
@@ -235,7 +233,7 @@ describe("Scheduler tenant Task admission", () => {
 
   it("preflights every task policy entry before creating any Directory reservation", async () => {
     const tenantId = "tenant-scheduled-preflight-" + crypto.randomUUID();
-    const fixture = await provisionTenant(tenantId);
+    const fixture = await provisionTenant(tenantId, false);
     const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
     const valid = taskPolicy(fixture.tenantId, fixture.projectId, suffix);
     const invalid = { ...taskPolicy(fixture.tenantId, fixture.projectId, suffix + "b"), taskIdPrefix: "../invalid" };

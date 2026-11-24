@@ -1341,11 +1341,6 @@ export class OrchestratorLedger extends DurableObject {
         taskId, tenantId, projectId,
       ).toArray()[0];
       if (!taskRow) return { released: false, reason: "LEASE_FENCE_MISMATCH" };
-      const current = taskFromRow(taskRow);
-      const assignedAgentId = current.executorId ?? current.assignedAgentId;
-      if (assignedAgentId !== workerId) {
-        return { released: false, reason: "ASSIGNEE_MISMATCH" };
-      }
       const lease = sql.exec(
         "SELECT * FROM orchestrator_execution_leases WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
         taskId, tenantId, projectId,

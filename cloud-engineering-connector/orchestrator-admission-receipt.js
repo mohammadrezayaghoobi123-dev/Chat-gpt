@@ -8,7 +8,7 @@ const CLOCK_SKEW_SECONDS = 5;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const KEY_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
-const CRON = /^[A-Za-z0-9*/ ,\\-]{5,64}$/;
+const CRON = /^[A-Za-z0-9*/ ,\-]{5,64}$/;
 
 const HEADER_KEYS = ["alg", "kid", "typ", "v"];
 const CLAIM_KEYS = [

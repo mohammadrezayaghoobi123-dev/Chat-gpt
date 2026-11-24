@@ -1,13 +1,14 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 import { consumeOrchestratorDeadLetters, consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
 }
-const now = Date.now();
+let now;
+beforeEach(() => { now = Date.now(); });
 afterEach(() => vi.restoreAllMocks());
 const task = (taskId = "task-0001") => ({
   taskId, state: "SCHEDULED", version: 1, agentRound: 0, createdAt: now, updatedAt: now,

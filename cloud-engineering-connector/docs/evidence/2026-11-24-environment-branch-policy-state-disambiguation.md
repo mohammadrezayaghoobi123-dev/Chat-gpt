@@ -37,8 +37,8 @@ The audit maps these codes to `MISSING`, `BLOCKED`, or `UNKNOWN`; unrecognized f
 
 ## Final GREEN verification
 
-- Final implementation SHA: `d071014d80de93d7c0c21098028e9978328abf5e`.
-- Cloud Engineering Connector CI [45377444528](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45377444528):
+- Final implementation and evidence SHA before this record refresh: `7d0c037919b999a1a8a9fa3d52468745b44270f9`.
+- Cloud Engineering Connector CI [45377732939](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45377732939):
   - Node tests: 475 passed, 0 failed.
   - Vitest: 227 passed across 11 files.
   - `npm audit --audit-level=moderate`: zero vulnerabilities.
@@ -53,7 +53,7 @@ The audit maps these codes to `MISSING`, `BLOCKED`, or `UNKNOWN`; unrecognized f
 
 ## Live read-only results
 
-GitHub Actions run [45377433255](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45377433255) ran the same read-only audit against the live repository metadata:
+GitHub Actions run [45377727301](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45377727301) ran the same read-only audit against the live repository metadata:
 
 | Environment | Result | Finding |
 |---|---|---|
@@ -66,8 +66,14 @@ The audit made no deployment attempt and performed no writes.
 
 ## Secret scanning
 
-- Gitleaks run [45377444564](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45377444564): PR diff scan passed with no leaks.
+- Gitleaks run [45377732918](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45377732918): PR diff scan passed with no leaks.
 - Full fetched-ref/reachable-history scan failed. The history result remains unresolved; no finding payload or fingerprint is reproduced.
+
+## Additional workflow verification
+
+- The dedicated preflight workflow is triggered on the original preflight branch family and the exact branch-policy diagnosis branch family.
+- The trigger contract itself was exercised test-first: [RED run 45377335389](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45377335389) ran 475 Node tests, 474 passed and 1 expected failure before the branch pattern was added.
+- Final CI run 45377732939 includes the trigger-contract test and passes all 475 Node tests.
 
 ## Safety and repository state
 

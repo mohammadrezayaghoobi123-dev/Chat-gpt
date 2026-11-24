@@ -592,8 +592,11 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("requires reconciliation evidence before reclaiming an expired lease and preserves task state", async () => {
     const ledger = ledgerFor("ledger-expired-lease-reconciliation");
+    let ledgerNow = now;
+    vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0012", inputHash: "b".repeat(64), now });
     const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
+    ledgerNow = now + 101;
     await expect(ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101 }))
       .resolves.toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
     const untrustedEvidence = await ledger.claimTask({
@@ -1041,6 +1044,7 @@ it("consumes a signed lease-renewal assertion once and rejects replay", async ()
     subject: "agent:worker-1", role: "agent", operation: "renewLease", nowMs: now + 1,
     jti: "jti-renew-once-000000000001",
   });
+  vi.spyOn(Date, "now").mockReturnValue(now + 1);
   const renewed = await ledger.renewLease({
     taskId: "task-0001", workerId: "agent:worker-1", workerAssertion: assertion,
     leaseGeneration: claimed.leaseGeneration, leaseMs: 60_000, now: now + 1,

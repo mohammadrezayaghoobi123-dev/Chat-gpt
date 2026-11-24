@@ -403,7 +403,7 @@ test("a trusted read-only reviewer cannot authorize a release", async () => {
         [readOnlyReviewer]: {
           body: {
             permission: "read",
-            role_name: "read",
+            role_name: "triage",
             user: { id: readOnlyReviewerId, login: readOnlyReviewer },
           },
         },
@@ -425,7 +425,7 @@ test("a trusted read-only reviewer cannot veto a write-authorized approval", asy
       [readOnlyReviewer]: {
         body: {
           permission: "read",
-          role_name: "read",
+          role_name: "triage",
           user: { id: readOnlyReviewerId, login: readOnlyReviewer },
         },
       },
@@ -449,6 +449,23 @@ test("a trusted administrator reviewer remains eligible to authorize a release",
         body: {
           permission: "admin",
           role_name: "admin",
+          user: { id: reviewerId, login: reviewer },
+        },
+      },
+    }),
+  });
+  assert.equal(result.reviewerId, reviewerId);
+});
+
+
+test("a trusted repository maintainer remains eligible through the legacy write permission mapping", async () => {
+  const result = await verifyReleaseApproval({
+    ...input({}),
+    fetchImpl: fakeFetch([stagingPull()], [approval()], undefined, {
+      [reviewer]: {
+        body: {
+          permission: "write",
+          role_name: "maintain",
           user: { id: reviewerId, login: reviewer },
         },
       },

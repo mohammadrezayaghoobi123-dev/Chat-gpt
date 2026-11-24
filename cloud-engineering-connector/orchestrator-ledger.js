@@ -1156,7 +1156,7 @@ export class OrchestratorLedger extends DurableObject {
           row.task_id, workerId, now + leaseMs, now, tenantId, projectId,
         );
       }
-      syncClaimCandidateInTransaction(sql, row.task_id);
+      // mutation: Candidate synchronization bypassed after claim.
       return {
         claimed: true,
         task: taskProjection,

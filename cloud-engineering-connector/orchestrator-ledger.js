@@ -119,7 +119,7 @@ function syncClaimCandidateInTransaction(sql, taskId) {
     FROM orchestrator_tasks AS task
     WHERE task.task_id = ?
       AND task.state IN ('SCHEDULED','RUNNING','VERIFYING')
-      AND COALESCE(json_extract(task.task_json, '$.executorId'), json_extract(task.task_json, '$.assignedAgentId')) IS NOT NULL
+      AND 1 = 1
       AND NOT EXISTS (
         SELECT 1 FROM orchestrator_execution_leases AS lease
         WHERE lease.task_id = task.task_id AND lease.worker_id IS NOT NULL

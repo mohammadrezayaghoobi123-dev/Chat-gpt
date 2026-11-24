@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { verifyReleaseApproval } from "../release-approval.js";
+import { parseAllowedReviewerIds, verifyReleaseApproval } from "../release-approval.js";
 
 const sha = "a".repeat(40);
 const headSha = "b".repeat(40);
@@ -235,4 +235,24 @@ test("fails closed when the Environment reviewer identity set is empty", async (
     }),
     /allowed Environment reviewer IDs/,
   );
+});
+
+
+test("parses a bounded, canonical list of Environment reviewer User IDs", () => {
+  assert.deepEqual(parseAllowedReviewerIds("335530603,123456"), [335530603, 123456]);
+});
+
+test("rejects missing, malformed, duplicate, unsafe, and overlong Environment reviewer identity lists", () => {
+  for (const value of [
+    "",
+    "0",
+    "01",
+    "335530603,",
+    "335530603,abc",
+    "335530603,335530603",
+    "9007199254740992",
+    "1,2,3,4,5,6,7",
+  ]) {
+    assert.throws(() => parseAllowedReviewerIds(value), /Environment-protected reviewer identity/);
+  }
 });

@@ -1275,12 +1275,6 @@ export class OrchestratorLedger extends DurableObject {
       if (task && !["SCHEDULED", "RUNNING", "VERIFYING"].includes(task.state)) {
         return { renewed: false, reason: "TASK_NOT_LEASE_ELIGIBLE" };
       }
-      if (task) {
-        const assignedAgentId = task.executorId ?? task.assignedAgentId;
-        if (assignedAgentId !== workerId) {
-          return { renewed: false, reason: "ASSIGNEE_MISMATCH" };
-        }
-      }
       const lease = taskRow ? sql.exec(
         "SELECT * FROM orchestrator_execution_leases WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
         taskId, tenantId, projectId,

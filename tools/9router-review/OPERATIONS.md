@@ -539,3 +539,55 @@ Static control-flow analysis predicts that the current implementation has no sha
 5. Do not select a storage vendor, change source implementation, register the workflow on `main`, activate reviewer/provider dispatch, merge, read/change secrets, deploy Cloudflare, or alter the local host in this checkpoint.
 
 **Checkpoint verdict:** static race finding remains **PROVISIONALLY_SUPPORTED**; concurrency runtime reproduction **NOT_RUN**; exact-head PR-diff Gitleaks evidence **UNKNOWN** due event-range mismatch; full-history scan **FAIL** with 13 provisionally classified detections; reviewer activation **BLOCKED**.
+
+
+## Deterministic concurrency race — hosted RED reproduction — 2026-11-24
+
+### Execution identity
+
+- Isolated verification branch: `verify/9router-concurrency-red-2026-11-24`.
+- Verification commit: `1f04aacde97fbd342e491b7db4f6c75f2d8f63b9`.
+- Verification branch was created from PR #463 documentation checkpoint `00ff2ddeb297583a8994ad89881d79959f3c11c6`.
+- Target test file blob: `4153df7ab5a4a259c612d82a1c2a2d4833fe031e`.
+- Temporary workflow: `.github/workflows/9router-concurrency-red.yml`; it exists only on the isolated verification branch and was not added to PR #463.
+- Workflow commit: `1f04aacde97fbd342e491b7db4f6c75f2d8f63b9`.
+- Runner: GitHub-hosted `ubuntu-24.04`.
+- Runtime: Node.js `v22.23.5`; npm `10.9.9`.
+- Dependency installation: `npm ci --ignore-scripts --no-audit --no-fund`; completed successfully, one locked package installed.
+- Test command: `node --test --test-name-pattern="deterministic concurrent duplicate-publication red test" review.test.mjs`.
+- Workflow run: `45468257408`; job: `138708889846`.
+- Run URL: https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45468257408
+
+### Observed result
+
+- Both independent `runReview()` invocations reached and completed the synchronized empty comment-history preflight; otherwise the barrier would not have released and the test would not have reached its assertion.
+- The test failed at the intended physical side-effect assertion:
+  - Assertion: `one immutable PR snapshot must produce at most one comment POST`.
+  - Expected: `1`.
+  - Actual: `2`.
+  - Error: `AssertionError [ERR_ASSERTION]`.
+  - Test location: `review.test.mjs:3587:10`.
+  - Test duration: approximately 18.5 ms.
+  - Test summary: 1 test, 0 pass, 1 fail; process exit code 1.
+- Setup, checkout, Node setup, and locked dependency installation all succeeded. The failure was not a dependency, syntax, or runner-setup failure.
+- This is a deterministic reproduction of duplicate physical comment publication under the tested interleaving. It is not merely a predicted race.
+
+### Updated finding status
+
+- `9R-ATOMIC-001`: **REPRODUCED / CONFIRMED FOR TESTED INTERLEAVING**.
+- Evidence scope: two independent in-process `runReview()` invocations sharing a deterministic fake GitHub transport and identical immutable PR snapshot.
+- The result proves the current implementation does not enforce at-most-one comment POST for this interleaving.
+- It does not prove behavior across multiple operating-system processes, independent hosts, or a durable reservation service; those remain untested.
+- Model-call count was not asserted in this failing execution because the physical-POST assertion is intentionally first. Do not infer or report a measured model-call count from this run.
+- No production implementation was changed. No live GitHub comment or model-provider request was sent by the test; all test HTTP calls were intercepted.
+- The temporary workflow grants only `contents: read`, uses pinned checkout/setup-node actions, installs with lifecycle scripts disabled, and runs only the targeted test. It does not access repository secrets, dispatch the reviewer, or deploy anything.
+
+### Required next phase
+
+1. Preserve this RED run and do not alter the failing assertion to make the test green.
+2. Define a storage-independent reservation adapter contract and its state-transition API before choosing a vendor.
+3. Add independent-client conformance tests for unique claim, CAS, fencing, lease expiry, one-shot publication intent, lost acknowledgement, and fail-closed behavior.
+4. Compare at least two backend candidates against those tests and documented consistency semantics.
+5. Implement only after the adapter contract and backend evidence are independently reviewed; then require a fresh GREEN run of this exact regression plus the full suite.
+
+**Disposition:** race reproduction **CONFIRMED for the tested interleaving**; durable fix **NOT_STARTED**; backend **NOT_SELECTED**; reviewer activation **BLOCKED**; PR #463 remains Draft / Open / Unmerged.

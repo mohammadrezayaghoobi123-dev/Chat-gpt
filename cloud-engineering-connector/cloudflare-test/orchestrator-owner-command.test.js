@@ -80,6 +80,38 @@ async function ownerInput(overrides = {}) {
   };
 }
 
+async function ownerAssertionWithJti(context, at, jti) {
+  const issuedAt = Math.floor(at / 1000);
+  const claims = {
+    v: 1,
+    iss: "chat-gpt111-owner-webhook",
+    aud: "orchestrator-ledger",
+    role: "owner",
+    actorId: context.actorId,
+    repositoryId: context.repositoryId,
+    taskId: context.taskId,
+    operation: context.operation,
+    deliveryId: context.deliveryId,
+    commentId: context.commentId,
+    commandHash: context.commandHash,
+    iat: issuedAt,
+    exp: issuedAt + 30,
+    jti,
+  };
+  const payload = btoa(String.fromCharCode(...new TextEncoder().encode(canonicalJson(claims))))
+    .split("=").join("").split("+").join("-").split("/").join("_");
+  const signingInput = "v1.owner-v1." + payload;
+  const key = await crypto.subtle.importKey(
+    "raw", workerKey, { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  const signature = new Uint8Array(await crypto.subtle.sign(
+    "HMAC", key, new TextEncoder().encode(signingInput),
+  ));
+  const encoded = btoa(String.fromCharCode(...signature))
+    .split("=").join("").split("+").join("-").split("/").join("_");
+  return signingInput + "." + encoded;
+}
+
 describe("Owner command atomic Ledger contract", () => {
   it("atomically consumes Owner JTI, claims delivery/comment, cancels task, fences Agent and outbox leases, and appends audit", async () => {
     const ledger = ledgerFor("owner-atomic-cancel");
@@ -456,6 +488,179 @@ describe("Owner command atomic Ledger contract", () => {
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_audit_events").one().count).toBe(1);
       expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts").one().count).toBe(1);
+    });
+  });
+
+  it("linearizes concurrent identical Owner commands with one assertion into one transition and one replay", async () => {
+    const ledger = ledgerFor("owner-identical-command-jti-race");
+    await createTask(ledger);
+    const input = await ownerInput({
+      command: { eventId: "owner-identical-command-race-01" },
+      deliveryId: "delivery-owner-identical-race-01",
+      commentId: "223456821",
+    });
+
+    const signingInput = input.assertion.split(".").slice(0, 3).join(".");
+    const originalVerify = crypto.subtle.verify.bind(crypto.subtle);
+    let verifiedCount = 0;
+    let releaseVerifiedAssertions;
+    let signalBothVerified;
+    const verifiedAssertionsGate = new Promise(resolve => {
+      releaseVerifiedAssertions = resolve;
+    });
+    const bothVerified = new Promise(resolve => {
+      signalBothVerified = resolve;
+    });
+    const verifySpy = vi.spyOn(crypto.subtle, "verify").mockImplementation(
+      async (algorithm, key, signature, data) => {
+        const valid = await originalVerify(algorithm, key, signature, data);
+        if (new TextDecoder().decode(data) === signingInput) {
+          verifiedCount += 1;
+          if (verifiedCount === 2) signalBothVerified();
+          await verifiedAssertionsGate;
+        }
+        return valid;
+      },
+    );
+
+    let results;
+    try {
+      results = await runInDurableObject(ledger, async instance => {
+        const first = instance.executeOwnerCommand(input);
+        const second = instance.executeOwnerCommand(input);
+        await bothVerified;
+        releaseVerifiedAssertions();
+        return await Promise.all([first, second]);
+      });
+    } finally {
+      releaseVerifiedAssertions();
+      verifySpy.mockRestore();
+    }
+
+    expect(verifiedCount).toBe(2);
+    expect(results.filter(result => result.applied === true)).toHaveLength(2);
+    expect(results.filter(result => result.replay === true)).toHaveLength(1);
+    expect(results.filter(result => result.replay !== true)).toHaveLength(1);
+    expect(results[0].task).toEqual(results[1].task);
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT state, version FROM orchestrator_tasks WHERE task_id = ?",
+        "task-owner-0001",
+      ).one()).toMatchObject({ state: "CANCELLED", version: 2 });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE event_type = 'OWNER_TASK_CANCELLED'",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT lease_generation, worker_id, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-owner-0001",
+      ).one()).toMatchObject({ lease_generation: 1, worker_id: null, lease_until: 0 });
+    });
+  });
+
+  it("allows exactly one concurrent Owner command when distinct valid assertions reuse the same JTI", async () => {
+    const ledger = ledgerFor("owner-shared-jti-distinct-command-race");
+    const firstTaskId = "task-owner-shared-jti-first";
+    const secondTaskId = "task-owner-shared-jti-second";
+    await createTask(ledger, task(firstTaskId));
+    await createTask(ledger, task(secondTaskId));
+
+    const sharedJti = "owner-jti-shared-concurrent-replay-001";
+    const firstInput = await ownerInput({
+      command: { taskId: firstTaskId, eventId: "owner-shared-jti-first-event" },
+      deliveryId: "delivery-owner-shared-jti-first-01",
+      commentId: "223456822",
+      bodySha256: "d".repeat(64),
+    });
+    const secondInput = await ownerInput({
+      command: { taskId: secondTaskId, eventId: "owner-shared-jti-second-event" },
+      deliveryId: "delivery-owner-shared-jti-second-01",
+      commentId: "223456823",
+      bodySha256: "e".repeat(64),
+    });
+    firstInput.assertion = await ownerAssertionWithJti(firstInput.assertionContext, now, sharedJti);
+    secondInput.assertion = await ownerAssertionWithJti(secondInput.assertionContext, now, sharedJti);
+
+    const originalVerify = crypto.subtle.verify.bind(crypto.subtle);
+    let verifiedCount = 0;
+    let releaseVerifiedAssertions;
+    let signalBothVerified;
+    const verifiedAssertionsGate = new Promise(resolve => {
+      releaseVerifiedAssertions = resolve;
+    });
+    const bothVerified = new Promise(resolve => {
+      signalBothVerified = resolve;
+    });
+    const verifySpy = vi.spyOn(crypto.subtle, "verify").mockImplementation(
+      async (algorithm, key, signature, data) => {
+        const valid = await originalVerify(algorithm, key, signature, data);
+        if (new TextDecoder().decode(data).startsWith("v1.owner-v1.")) {
+          verifiedCount += 1;
+          if (verifiedCount === 2) signalBothVerified();
+          await verifiedAssertionsGate;
+        }
+        return valid;
+      },
+    );
+
+    let results;
+    try {
+      results = await runInDurableObject(ledger, async instance => {
+        const first = instance.executeOwnerCommand(firstInput);
+        const second = instance.executeOwnerCommand(secondInput);
+        await bothVerified;
+        releaseVerifiedAssertions();
+        return await Promise.all([first, second]);
+      });
+    } finally {
+      releaseVerifiedAssertions();
+      verifySpy.mockRestore();
+    }
+
+    expect(verifiedCount).toBe(2);
+    expect(results.filter(result => result.applied === true)).toHaveLength(1);
+    expect(results.filter(result => result.reason === "OWNER_ASSERTION_REPLAY")).toMatchObject([
+      { applied: false, conflict: true, reason: "OWNER_ASSERTION_REPLAY" },
+    ]);
+    const winner = results.find(result => result.applied === true);
+    const winnerTaskId = winner.task.taskId;
+    const loserTaskId = winnerTaskId === firstTaskId ? secondTaskId : firstTaskId;
+    await expect(ledger.getTask({ taskId: winnerTaskId })).resolves.toMatchObject({
+      taskId: winnerTaskId,
+      state: "CANCELLED",
+      version: 2,
+    });
+    await expect(ledger.getTask({ taskId: loserTaskId })).resolves.toMatchObject({
+      taskId: loserTaskId,
+      state: "SCHEDULED",
+      version: 1,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions WHERE jti = ?",
+        sharedJti,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE event_type LIKE 'OWNER_TASK_%'",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE assertion_jti = ?",
+        sharedJti,
+      ).one().count).toBe(1);
     });
   });
 

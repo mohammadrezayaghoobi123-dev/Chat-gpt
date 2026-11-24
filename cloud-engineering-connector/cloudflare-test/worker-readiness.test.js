@@ -70,4 +70,112 @@ describe("Worker readiness with the real OrchestratorLedger Durable Object", () 
       orchestrator_outbox_dlq_archiver: "ok",
     });
   });
+
+  it("fails closed when the persisted Ledger schema is older than the Worker contract", async () => {
+    const { stub, binding } = createIsolatedLedgerBinding();
+    expect(await stub.ping()).toEqual({
+      ok: true,
+      schemaVersion: ORCHESTRATOR_LEDGER_SCHEMA_VERSION,
+    });
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE _sql_schema_migrations SET id = ? WHERE id = ?",
+        ORCHESTRATOR_LEDGER_SCHEMA_VERSION - 1,
+        ORCHESTRATOR_LEDGER_SCHEMA_VERSION,
+      );
+    });
+
+    expect(await stub.ping()).toEqual({
+      ok: false,
+      schemaVersion: ORCHESTRATOR_LEDGER_SCHEMA_VERSION - 1,
+    });
+
+    const response = await worker.fetch(
+      new Request("https://example.test/readyz", {
+        method: "GET",
+        headers: { "cf-connecting-ip": "203.0.113.24" },
+      }),
+      createReadinessEnvironment(binding),
+    );
+    const body = await response.json();
+
+    expect(response.status, JSON.stringify(body)).toBe(503);
+    expect(body).toMatchObject({
+      status: "not_ready",
+      durable_objects: "ok",
+      knowledge_store: "ok",
+      orchestrator_ledger: "unavailable",
+    });
+  });
+
+  it("fails closed when the persisted Ledger schema is newer than the Worker contract", async () => {
+    const { stub, binding } = createIsolatedLedgerBinding();
+    expect(await stub.ping()).toEqual({
+      ok: true,
+      schemaVersion: ORCHESTRATOR_LEDGER_SCHEMA_VERSION,
+    });
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE _sql_schema_migrations SET id = ? WHERE id = ?",
+        ORCHESTRATOR_LEDGER_SCHEMA_VERSION + 1,
+        ORCHESTRATOR_LEDGER_SCHEMA_VERSION,
+      );
+    });
+
+    expect(await stub.ping()).toEqual({
+      ok: false,
+      schemaVersion: ORCHESTRATOR_LEDGER_SCHEMA_VERSION + 1,
+    });
+
+    const response = await worker.fetch(
+      new Request("https://example.test/readyz", {
+        method: "GET",
+        headers: { "cf-connecting-ip": "203.0.113.24" },
+      }),
+      createReadinessEnvironment(binding),
+    );
+    const body = await response.json();
+
+    expect(response.status, JSON.stringify(body)).toBe(503);
+    expect(body).toMatchObject({
+      status: "not_ready",
+      durable_objects: "ok",
+      knowledge_store: "ok",
+      orchestrator_ledger: "unavailable",
+    });
+  });
+
+  it("fails closed when the persisted Ledger migration marker table is missing", async () => {
+    const { stub, binding } = createIsolatedLedgerBinding();
+    expect(await stub.ping()).toEqual({
+      ok: true,
+      schemaVersion: ORCHESTRATOR_LEDGER_SCHEMA_VERSION,
+    });
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("DROP TABLE _sql_schema_migrations");
+    });
+
+    await expect(stub.ping()).rejects.toThrow();
+
+    const response = await worker.fetch(
+      new Request("https://example.test/readyz", {
+        method: "GET",
+        headers: { "cf-connecting-ip": "203.0.113.24" },
+      }),
+      createReadinessEnvironment(binding),
+    );
+    const body = await response.json();
+
+    expect(response.status, JSON.stringify(body)).toBe(503);
+    expect(body).toMatchObject({
+      status: "not_ready",
+      durable_objects: "ok",
+      knowledge_store: "ok",
+      orchestrator_ledger: "unavailable",
+    });
+  });
+
 });

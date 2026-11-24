@@ -54,9 +54,9 @@ test("does not sample the Ledger clock when the Owner MAC is invalid", async () 
   );
   signatureBytes[0] ^= 1;
   parts[3] = btoa(String.fromCharCode(...signatureBytes))
-    .replace(/=/g, "")
-    .replace(/\\+/g, "-")
-    .replace(/\\//g, "_");
+    .split("=").join("")
+    .split("+").join("-")
+    .split("/").join("_");
   let samples = 0;
   await assert.rejects(verifyOwnerAssertion(keySet, parts.join("."), {
     ...context,

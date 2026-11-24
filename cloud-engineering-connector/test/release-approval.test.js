@@ -214,3 +214,20 @@ test("release approval paginates associated PRs and all reviews before accepting
   assert.ok(requestedUrls.some(url => url.includes("/commits/" + sha + "/pulls") && url.includes("page=2")));
   assert.ok(requestedUrls.some(url => url.includes("/pulls/129/reviews") && url.includes("page=2")));
 });
+
+test("characterizes acceptance of a non-code-owner reviewer without an authorization lookup", async () => {
+  const unlistedReviewer = "reviewer-not-listed-in-codeowners";
+  const requestedUrls = [];
+  const result = await verifyReleaseApproval({
+    ...input({}),
+    fetchImpl: fakeFetch([stagingPull()], [approval(sha, unlistedReviewer)], url => {
+      requestedUrls.push(url);
+    }),
+  });
+
+  assert.equal(result.reviewer, unlistedReviewer);
+  assert.equal(requestedUrls.length, 2);
+  assert.ok(requestedUrls.some(url => url.includes("/commits/" + sha + "/pulls")));
+  assert.ok(requestedUrls.some(url => url.includes("/pulls/129/reviews")));
+  assert.ok(requestedUrls.every(url => !/collaborators|permissions|teams|codeowners/i.test(url)));
+});

@@ -792,3 +792,100 @@ test("T35: recovery unlock rejects a trusted anchor that does not match the inve
     attemptTimeoutMs: 100,
   })).status, "RECOVERY_LOCKED");
 });
+
+
+test("T36: recovery anchor covers the complete cross-key ledger inventory", async () => {
+  const system = makeSystem();
+  const otherKey = { ...KEY, pull_request_number: KEY.pull_request_number + 1 };
+  await system.ledger.appendIntent({ key: KEY, stage: "MODEL", attemptId: "global-a", requestDigest: "a" });
+  await system.ledger.appendIntent({ key: otherKey, stage: "MODEL", attemptId: "global-b", requestDigest: "b" });
+  await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const inventory = await system.ledger.readComplete({ key: KEY, complete: true });
+  assert.equal(inventory.events.length, 2);
+  assert.equal(inventory.watermark, 2);
+  assert.equal(inventory.anchor.watermark, 2);
+  assert.equal((await system.adapter.unlockRecovery({
+    ledgerInventory: inventory,
+    trustedAnchor: inventory.anchor,
+  })).status, "ACTIVE");
+});
+
+test("T37: recovery unlock rejects a tampered ledger event even with the original trusted anchor", async () => {
+  const system = makeSystem();
+  await system.ledger.appendIntent({ key: KEY, stage: "MODEL", attemptId: "tamper-a", requestDigest: "original" });
+  await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const inventory = await system.ledger.readComplete({ key: KEY, complete: true });
+  inventory.events[0].request_digest = "tampered";
+  const result = await system.adapter.unlockRecovery({
+    ledgerInventory: inventory,
+    trustedAnchor: inventory.anchor,
+  });
+  assert.equal(result.status, "RECOVERY_INVENTORY_INVALID");
+  assert.equal((await system.adapter.setRecoveryMode("RECOVERY_LOCKED")).status, "RECOVERY_LOCKED");
+});
+
+test("T38: recovery unlock rejects a non-contiguous global ledger sequence", async () => {
+  const system = makeSystem();
+  await system.ledger.appendIntent({ key: KEY, stage: "MODEL", attemptId: "sequence-a", requestDigest: "a" });
+  await system.ledger.appendIntent({ key: KEY, stage: "MODEL", attemptId: "sequence-b", requestDigest: "b" });
+  await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const inventory = await system.ledger.readComplete({ key: KEY, complete: true });
+  inventory.events[1].sequence = 3;
+  const result = await system.adapter.unlockRecovery({
+    ledgerInventory: inventory,
+    trustedAnchor: inventory.anchor,
+  });
+  assert.equal(result.status, "RECOVERY_INVENTORY_INVALID");
+});
+
+test("T39: recovery unlock rejects duplicate immutable ledger event identifiers", async () => {
+  const system = makeSystem();
+  await system.ledger.appendIntent({ key: KEY, stage: "MODEL", attemptId: "event-a", requestDigest: "a" });
+  await system.ledger.appendIntent({ key: KEY, stage: "MODEL", attemptId: "event-b", requestDigest: "b" });
+  await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const inventory = await system.ledger.readComplete({ key: KEY, complete: true });
+  inventory.events[1].event_id = inventory.events[0].event_id;
+  const result = await system.adapter.unlockRecovery({
+    ledgerInventory: inventory,
+    trustedAnchor: inventory.anchor,
+  });
+  assert.equal(result.status, "RECOVERY_INVENTORY_INVALID");
+});
+
+test("T40: recovery unlock verifies every event digest before accepting the anchor", async () => {
+  const system = makeSystem();
+  await system.ledger.appendIntent({ key: KEY, stage: "MODEL", attemptId: "digest-a", requestDigest: "a" });
+  await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const inventory = await system.ledger.readComplete({ key: KEY, complete: true });
+  inventory.events[0].digest = "forged-digest";
+  const result = await system.adapter.unlockRecovery({
+    ledgerInventory: inventory,
+    trustedAnchor: inventory.anchor,
+  });
+  assert.equal(result.status, "RECOVERY_INVENTORY_INVALID");
+});
+
+test("T41: recovery anchor from a different watermark cannot authorize unlock", async () => {
+  const system = makeSystem();
+  await system.ledger.appendIntent({ key: KEY, stage: "MODEL", attemptId: "anchor-a", requestDigest: "a" });
+  await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const inventory = await system.ledger.readComplete({ key: KEY, complete: true });
+  const result = await system.adapter.unlockRecovery({
+    ledgerInventory: inventory,
+    trustedAnchor: { ...inventory.anchor, watermark: 0 },
+  });
+  assert.equal(result.status, "RECOVERY_ANCHOR_MISMATCH");
+});
+
+test("T42: failed recovery validation never clears the global recovery lock", async () => {
+  const system = makeSystem();
+  await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const inventory = await system.ledger.readComplete({ key: KEY, complete: false });
+  const denied = await system.adapter.unlockRecovery({
+    ledgerInventory: inventory,
+    trustedAnchor: inventory.anchor,
+  });
+  assert.equal(denied.status, "RECOVERY_INVENTORY_INCOMPLETE");
+  const owner = await claim(system);
+  assert.equal(owner.status, "RECOVERY_LOCKED");
+});

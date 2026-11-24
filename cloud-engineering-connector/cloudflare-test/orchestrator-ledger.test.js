@@ -2214,6 +2214,7 @@ it("rejects an expired lease even when its generation is still current", async (
       now,
     });
     expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+    ledgerClock.mockReturnValue(now + 101);
     await expect(ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
       actor: agent, evidence, now: now + 101, workerId: "agent:worker-1",

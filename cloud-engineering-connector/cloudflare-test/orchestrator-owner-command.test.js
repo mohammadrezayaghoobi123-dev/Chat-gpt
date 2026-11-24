@@ -2399,3 +2399,66 @@ describe("Owner command atomic Ledger contract", () => {
   });
 
 });
+
+
+  it("rejects a consumed scheduler assertion after forward-clock pruning followed by clock rollback", async () => {
+    const ledger = ledgerFor("consumer-jti-clock-rollback-replay");
+    const originalJti = "jti-clock-rollback-original-0001";
+    const originalAssertion = await workerAssertion(
+      "orchestrator-scheduler", "system", "createTask", now, originalJti,
+    );
+    const original = await ledger.createTask({
+      task: task("task-clock-rollback-original-0001"),
+      idempotencyKey: "clock-rollback-original-key-0001",
+      inputHash: "d".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: originalAssertion,
+    });
+    expect(original).toMatchObject({ created: true });
+
+    const forwardNow = now + 661_000;
+    const forwardAssertion = await workerAssertion(
+      "orchestrator-scheduler", "system", "createTask", forwardNow,
+    );
+    const forward = await ledger.createTask({
+      task: {
+        ...task("task-clock-rollback-forward-0001"),
+        createdAt: forwardNow,
+        updatedAt: forwardNow,
+      },
+      idempotencyKey: "clock-rollback-forward-key-0001",
+      inputHash: "e".repeat(64),
+      now: forwardNow,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: forwardAssertion,
+    });
+    expect(forward).toMatchObject({ created: true });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        originalJti,
+      ).one().count).toBe(0);
+    });
+
+    const rollbackNow = now + 1_000;
+    const replay = await ledger.createTask({
+      task: {
+        ...task("task-clock-rollback-replay-0001"),
+        createdAt: rollbackNow,
+        updatedAt: rollbackNow,
+      },
+      idempotencyKey: "clock-rollback-replay-key-0001",
+      inputHash: "f".repeat(64),
+      now: rollbackNow,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: originalAssertion,
+    });
+
+    expect(replay).toMatchObject({
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+    expect(await ledger.getTask({ taskId: "task-clock-rollback-replay-0001" })).toBeNull();
+  });

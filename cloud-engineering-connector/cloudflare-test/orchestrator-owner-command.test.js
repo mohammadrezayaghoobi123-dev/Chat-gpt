@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { assertTaskCompletion } from "../orchestrator-core.js";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
@@ -2708,4 +2709,223 @@ describe("Owner command atomic Ledger contract", () => {
       ]);
     });
   });
+
+  it("characterizes the independent-review completion authority mismatch between Core and Ledger", async () => {
+    const taskId = "task-completion-reviewer-reachability-0001";
+    const executorId = "agent:worker-1";
+    const reviewerId = "reviewer:independent-1";
+    const commitSha = "a".repeat(40);
+    const ledger = ledgerFor("completion-reviewer-reachability");
+
+    await createTask(ledger, {
+      ...task(taskId),
+      state: "SCHEDULED",
+      commitSha,
+    });
+
+    const claim = await ledger.claimTask({
+      taskId,
+      workerId: executorId,
+      workerAssertion: await workerAssertion(executorId, "agent", "claimTask", now),
+      leaseMs: 120_000,
+      now,
+    });
+    expect(claim).toMatchObject({
+      claimed: true,
+      workerId: executorId,
+      leaseGeneration: 1,
+    });
+
+    async function advance(expectedState, nextState, offsetSeconds) {
+      const current = await ledger.getTask({ taskId });
+      const transitionNow = now + offsetSeconds * 1_000;
+      const result = await ledger.transitionTask({
+        taskId,
+        expectedVersion: current.version,
+        expectedState,
+        nextState,
+        actor: {
+          id: executorId,
+          role: "agent",
+          authenticated: true,
+          identityVerified: true,
+        },
+        evidence: { stage: nextState },
+        now: transitionNow,
+        workerId: executorId,
+        workerAssertion: await workerAssertion(
+          executorId,
+          "agent",
+          "transitionTask",
+          transitionNow,
+        ),
+        leaseGeneration: claim.leaseGeneration,
+      });
+      expect(result).toMatchObject({
+        updated: true,
+        task: { taskId, state: nextState },
+      });
+    }
+
+    await advance("SCHEDULED", "RUNNING", 1);
+    await advance("RUNNING", "VERIFYING", 2);
+    await advance("VERIFYING", "REVIEW_PENDING", 3);
+
+    const reviewPending = await ledger.getTask({ taskId });
+    expect(reviewPending).toMatchObject({
+      taskId,
+      state: "REVIEW_PENDING",
+      version: 4,
+      executorId,
+      commitSha,
+    });
+
+    const completionEvidence = {
+      acceptance: {
+        passed: true,
+        criteria: [
+          { criterionId: "acceptance-1", passed: true },
+        ],
+      },
+      approval: {
+        reviewerId,
+        executorId,
+        independent: true,
+        commitSha,
+      },
+    };
+    const authenticatedReviewer = {
+      id: reviewerId,
+      role: "reviewer",
+      authenticated: true,
+      identityVerified: true,
+    };
+
+    // The Core-level completion contract accepts the exact same task,
+    // independently authenticated reviewer, and commit-bound approval.
+    const coreCompletion = assertTaskCompletion({
+      task: reviewPending,
+      evidence: completionEvidence,
+      authenticatedReviewer,
+    });
+    expect(coreCompletion).toMatchObject({
+      taskId,
+      state: "COMPLETED",
+      version: reviewPending.version + 1,
+      lastTransition: {
+        from: "REVIEW_PENDING",
+        to: "COMPLETED",
+        actorId: reviewerId,
+      },
+    });
+
+    // Path 1: a Reviewer identity/role assertion is rejected because the
+    // Ledger transition RPC hard-codes the required assertion role to "agent".
+    const reviewerRoleJti = "jti-reviewer-role-reachability-0001";
+    const reviewerRoleAttempt = await ledger.transitionTask({
+      taskId,
+      expectedVersion: reviewPending.version,
+      expectedState: "REVIEW_PENDING",
+      nextState: "COMPLETED",
+      actor: authenticatedReviewer,
+      evidence: completionEvidence,
+      now: now + 4_000,
+      workerId: reviewerId,
+      workerAssertion: await workerAssertion(
+        reviewerId,
+        "reviewer",
+        "transitionTask",
+        now + 4_000,
+        reviewerRoleJti,
+      ),
+      leaseGeneration: claim.leaseGeneration,
+    });
+    expect(reviewerRoleAttempt).toEqual({
+      updated: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    // Path 2: an Agent's real assertion and Lease cannot be relabelled as
+    // a Reviewer Actor; the Ledger rejects the actor/lease identity mismatch.
+    const reviewerLeaseJti = "jti-reviewer-with-agent-lease-0001";
+    const reviewerWithAgentLeaseAttempt = await ledger.transitionTask({
+      taskId,
+      expectedVersion: reviewPending.version,
+      expectedState: "REVIEW_PENDING",
+      nextState: "COMPLETED",
+      actor: authenticatedReviewer,
+      evidence: completionEvidence,
+      now: now + 5_000,
+      workerId: executorId,
+      workerAssertion: await workerAssertion(
+        executorId,
+        "agent",
+        "transitionTask",
+        now + 5_000,
+        reviewerLeaseJti,
+      ),
+      leaseGeneration: claim.leaseGeneration,
+    });
+    expect(reviewerWithAgentLeaseAttempt).toEqual({
+      updated: false,
+      reason: "LEASE_FENCE_MISMATCH",
+    });
+
+    // Path 3: preserving the authenticated Agent Actor and its valid Lease
+    // reaches Core, but Core rejects that Actor as the independent Reviewer.
+    const agentCompletionJti = "jti-agent-as-reviewer-completion-0001";
+    const agentCompletionAttempt = await ledger.transitionTask({
+      taskId,
+      expectedVersion: reviewPending.version,
+      expectedState: "REVIEW_PENDING",
+      nextState: "COMPLETED",
+      actor: {
+        id: executorId,
+        role: "agent",
+        authenticated: true,
+        identityVerified: true,
+      },
+      evidence: completionEvidence,
+      now: now + 6_000,
+      workerId: executorId,
+      workerAssertion: await workerAssertion(
+        executorId,
+        "agent",
+        "transitionTask",
+        now + 6_000,
+        agentCompletionJti,
+      ),
+      leaseGeneration: claim.leaseGeneration,
+    });
+    expect(agentCompletionAttempt).toEqual({
+      updated: false,
+      reason: "INDEPENDENT_APPROVAL_REQUIRED",
+    });
+
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+      taskId,
+      state: "REVIEW_PENDING",
+      version: reviewPending.version,
+      commitSha,
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation FROM orchestrator_execution_leases WHERE task_id = ?",
+        taskId,
+      ).one()).toEqual({
+        worker_id: executorId,
+        lease_generation: claim.leaseGeneration,
+      });
+
+      const consumedJtis = state.storage.sql.exec(
+        "SELECT jti FROM orchestrator_consumed_assertions WHERE jti IN (?, ?, ?)",
+        reviewerRoleJti,
+        reviewerLeaseJti,
+        agentCompletionJti,
+      ).toArray().map(row => row.jti).sort();
+      expect(consumedJtis).toEqual([agentCompletionJti]);
+    });
+  });
+
 });

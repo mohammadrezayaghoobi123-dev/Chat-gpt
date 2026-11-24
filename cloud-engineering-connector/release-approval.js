@@ -1,7 +1,7 @@
 const API_ROOT = "https://api.github.com";
 const STAGING_BASE = "integration/unify-main-and-integrated-2026-11-02";
 
-function validateInput({ repository, candidateSha, releaseEnvironment, token, allowedReviewerIds, fetchImpl }) {
+function validateInput({ repository, candidateSha, releaseEnvironment, token, workflowRunId, allowedReviewerIds, fetchImpl }) {
   if (typeof repository !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new TypeError("GITHUB_REPOSITORY must be an owner/repository pair.");
   }
@@ -13,6 +13,9 @@ function validateInput({ repository, candidateSha, releaseEnvironment, token, al
   }
   if (typeof token !== "string" || token.length < 1) {
     throw new TypeError("RELEASE_GITHUB_TOKEN is required.");
+  }
+  if (!Number.isSafeInteger(workflowRunId) || workflowRunId <= 0) {
+    throw new TypeError("GITHUB_RUN_ID must be a positive safe integer.");
   }
   if (
     !Array.isArray(allowedReviewerIds) ||
@@ -84,15 +87,58 @@ function latestReviewsByUser(reviews) {
   return [...latest.values()].map(item => item.review);
 }
 
+async function getEnvironmentDeploymentApproval({
+  fetchImpl,
+  repositoryPath,
+  workflowRunId,
+  releaseEnvironment,
+  token,
+}) {
+  const approvals = await getJson(
+    fetchImpl,
+    API_ROOT + "/repos/" + repositoryPath + "/actions/runs/" + workflowRunId + "/approvals",
+    token,
+  );
+  if (!Array.isArray(approvals)) {
+    throw new Error("GitHub returned an invalid workflow deployment approval history.");
+  }
+
+  const matching = approvals.filter(record =>
+    Array.isArray(record?.environments) &&
+    record.environments.some(environment => environment?.name === releaseEnvironment),
+  );
+  if (
+    matching.length !== 1 ||
+    !Array.isArray(matching[0]?.environments) ||
+    matching[0].environments.length !== 1 ||
+    matching[0].environments[0]?.name !== releaseEnvironment
+  ) {
+    throw new Error("Release blocked: deployment approval history is missing or ambiguous for the exact Environment.");
+  }
+
+  const record = matching[0];
+  if (record.state !== "approved") {
+    throw new Error("Release blocked: no approved deployment review exists for the exact Environment.");
+  }
+
+  const reviewerUserId = record.user?.id;
+  if (!Number.isSafeInteger(reviewerUserId) || reviewerUserId <= 0) {
+    throw new Error("Release blocked: deployment approval identity is malformed.");
+  }
+
+  return Object.freeze({ reviewerUserId });
+}
+
 export async function verifyReleaseApproval({
   repository,
   candidateSha,
   releaseEnvironment,
   token,
+  workflowRunId,
   allowedReviewerIds,
   fetchImpl = globalThis.fetch,
 }) {
-  validateInput({ repository, candidateSha, releaseEnvironment, token, allowedReviewerIds, fetchImpl });
+  validateInput({ repository, candidateSha, releaseEnvironment, token, workflowRunId, allowedReviewerIds, fetchImpl });
   const repoPath = repository.split("/").map(encodeURIComponent).join("/");
   const associated = await getJsonCollection(
     fetchImpl,
@@ -130,10 +176,18 @@ export async function verifyReleaseApproval({
   if (!Array.isArray(reviews)) throw new Error("GitHub returned an invalid PR review list.");
   const latest = latestReviewsByUser(reviews);
   const author = pull.user?.login;
-  if (typeof author !== "string" || !author) throw new Error("GitHub PR author identity is unavailable.");
+  const authorUserId = pull.user?.id;
+  if (
+    typeof author !== "string" ||
+    !author ||
+    !Number.isSafeInteger(authorUserId) ||
+    authorUserId <= 0
+  ) {
+    throw new Error("GitHub PR author identity is unavailable.");
+  }
 
   const changeRequest = latest.find(review =>
-    review.user?.login !== author &&
+    review.user?.id !== authorUserId &&
     review.state === "CHANGES_REQUESTED" &&
     review.commit_id === reviewCommitSha
   );
@@ -141,7 +195,7 @@ export async function verifyReleaseApproval({
 
   const allowedReviewerIdSet = new Set(allowedReviewerIds);
   const approval = latest.find(review =>
-    review.user?.login !== author &&
+    review.user?.id !== authorUserId &&
     allowedReviewerIdSet.has(review.user?.id) &&
     review.state === "APPROVED" &&
     review.commit_id === reviewCommitSha
@@ -150,12 +204,25 @@ export async function verifyReleaseApproval({
     throw new Error("Release blocked: no independent approval from a configured Environment reviewer exists for the exact PR head commit.");
   }
 
+  const deploymentApproval = await getEnvironmentDeploymentApproval({
+    fetchImpl,
+    repositoryPath: repoPath,
+    workflowRunId,
+    releaseEnvironment,
+    token,
+  });
+  if (deploymentApproval.reviewerUserId !== approval.user.id) {
+    throw new Error("Release blocked: the Environment deployment approver must be the same independent User who approved the exact PR head.");
+  }
+
   return Object.freeze({
     pullNumber: pull.number,
     pullUrl: pull.html_url,
     author,
     reviewer: approval.user.login,
     reviewerUserId: approval.user.id,
+    deploymentApproverUserId: deploymentApproval.reviewerUserId,
+    workflowRunId,
     reviewCommitSha,
     releaseEnvironment,
   });

@@ -7,7 +7,7 @@ import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
 let now;
-beforeEach(() => { now = Date.now(); });
+beforeEach(() => { now = Date.now(); vi.spyOn(Date, "now").mockReturnValue(now); });
 afterEach(() => vi.restoreAllMocks());
 const ownerId = "335530603";
 const repositoryId = 1398846697;

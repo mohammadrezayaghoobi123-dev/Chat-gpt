@@ -478,3 +478,252 @@ test("T19: restore recovery requires a complete independent ledger inventory bef
   const allowed = await system.adapter.unlockRecovery({ ledgerInventory: complete });
   assert.equal(allowed.status, "ACTIVE");
 });
+
+
+test("T20: one verified positive comment is sufficient even when later pages are unavailable", async () => {
+  const system = makeSystem();
+  const model = await completeModel(system);
+  const result = await system.adapter.reconcileComment({
+    key: KEY,
+    expectedRecordVersion: model.completed.record.record_version,
+    verifiedPositiveEvidence: [{ remoteCommentId: 901, exactMatch: true }],
+    listingComplete: false,
+  });
+  assert.equal(result.status, "PUBLISHED");
+  assert.equal(result.record.comment_remote_id, 901);
+});
+
+test("T21: HMAC key rotation does not change an existing deterministic marker identity", async () => {
+  const system = makeSystem();
+  const first = await claim(system, "owner-1", { markerKeyId: "hmac-key-v1" });
+  const second = await claim(system, "owner-2", { markerKeyId: "hmac-key-v2" });
+  assert.equal(first.status, "CLAIMED");
+  assert.equal(second.status, "BUSY");
+  assert.equal(second.record.comment_marker_id, "marker-v1");
+  assert.equal(second.record.comment_marker_key_id, "hmac-key-v1");
+});
+
+test("T22: comment-stage UNKNOWN can be resolved only by positive authenticated evidence", async () => {
+  const system = makeSystem();
+  const started = await commentAttempt(system);
+  const unknown = await system.adapter.markUnknown({
+    key: KEY,
+    generation: started.resumed.record.generation,
+    attemptId: started.attemptId,
+    expectedRecordVersion: started.permit.record_version,
+    stage: "COMMENT",
+    reasonCode: "GITHUB_RESPONSE_TIMEOUT",
+  });
+  assert.equal(unknown.status, "UNKNOWN");
+  const positive = await system.adapter.reconcileComment({
+    key: KEY,
+    expectedRecordVersion: unknown.record.record_version,
+    verifiedPositiveEvidence: [{ remoteCommentId: 902, exactMatch: true }],
+    listingComplete: false,
+  });
+  assert.equal(positive.status, "PUBLISHED");
+  assert.equal(positive.record.comment_remote_id, 902);
+});
+
+test("T23: lease expiry uses the adapter's server clock, not a caller-supplied clock", async () => {
+  const system = makeSystem();
+  const owner = await claim(system);
+  system.advance(101);
+  const renewed = await system.adapter.renew({
+    ...claimArgs(),
+    generation: owner.record.generation,
+    expectedRecordVersion: owner.record.record_version,
+    leaseDurationMs: 100,
+    clientNow: 0,
+  });
+  assert.equal(renewed.status, "EXPIRED");
+});
+
+test("T24: stale record version cannot renew a current lease", async () => {
+  const system = makeSystem();
+  const owner = await claim(system);
+  const first = await system.adapter.renew({
+    ...claimArgs(),
+    generation: owner.record.generation,
+    expectedRecordVersion: owner.record.record_version,
+    leaseDurationMs: 100,
+  });
+  assert.equal(first.status, "RENEWED");
+  const stale = await system.adapter.renew({
+    ...claimArgs(),
+    generation: owner.record.generation,
+    expectedRecordVersion: owner.record.record_version,
+    leaseDurationMs: 100,
+  });
+  assert.equal(stale.status, "LOST_OWNERSHIP");
+});
+
+test("T25: a ledger receipt for another immutable reservation key is rejected", async () => {
+  const system = makeSystem();
+  const owner = await claim(system);
+  const otherKey = { ...KEY, pull_request_number: KEY.pull_request_number + 1 };
+  const receipt = await system.ledger.appendIntent({
+    key: otherKey,
+    stage: "MODEL",
+    attemptId: "foreign-model-attempt",
+    requestDigest: "foreign-request",
+  });
+  const permit = await system.adapter.beginModelAttempt({
+    ...claimArgs(),
+    generation: owner.record.generation,
+    expectedRecordVersion: owner.record.record_version,
+    attemptId: "foreign-model-attempt",
+    requestDigest: "foreign-request",
+    effectLedgerReceipt: receipt,
+    attemptTimeoutMs: 100,
+  });
+  assert.equal(permit.status, "LEDGER_NOT_ACKNOWLEDGED");
+  assert.equal((await system.adapter.readAuthoritative({ key: KEY })).record.state, "CLAIMED");
+});
+
+test("T26: a positive pre-model marker match prevents model dispatch", async () => {
+  const system = makeSystem();
+  const owner = await claim(system);
+  const reconciled = await system.adapter.reconcileComment({
+    key: KEY,
+    expectedRecordVersion: owner.record.record_version,
+    verifiedPositiveEvidence: [{ remoteCommentId: 903, exactMatch: true }],
+    listingComplete: false,
+  });
+  assert.equal(reconciled.status, "PUBLISHED");
+  const intent = await system.ledger.appendIntent({
+    key: KEY,
+    stage: "MODEL",
+    attemptId: "must-not-run",
+    requestDigest: "request",
+  });
+  const permit = await system.adapter.beginModelAttempt({
+    ...claimArgs(),
+    generation: owner.record.generation,
+    expectedRecordVersion: reconciled.record.record_version,
+    attemptId: "must-not-run",
+    requestDigest: "request",
+    effectLedgerReceipt: intent,
+    attemptTimeoutMs: 100,
+  });
+  assert.equal(permit.status, "ALREADY_CONSUMED");
+});
+
+test("T27: CLOSED_NO_PUBLISH is terminal and cannot consume a comment permit", async () => {
+  const system = makeSystem();
+  const model = await completeModel(system);
+  const resumed = await system.adapter.resumeCompletedModel({
+    key: KEY,
+    ownerId: "owner-2",
+    ownerNonce: "nonce:owner-2",
+    expectedRecordVersion: model.completed.record.record_version,
+    leaseDurationMs: 100,
+  });
+  const closed = await system.adapter.closeWithoutPublish({
+    key: KEY,
+    ownerId: "owner-2",
+    ownerNonce: "nonce:owner-2",
+    generation: resumed.record.generation,
+    expectedRecordVersion: resumed.record.record_version,
+    reasonCode: "STALE_SNAPSHOT",
+  });
+  const intent = await system.ledger.appendIntent({
+    key: KEY,
+    stage: "COMMENT",
+    attemptId: "closed-comment",
+    requestDigest: "payload",
+  });
+  const permit = await system.adapter.beginCommentAttempt({
+    key: KEY,
+    ownerId: "owner-2",
+    ownerNonce: "nonce:owner-2",
+    generation: resumed.record.generation,
+    expectedRecordVersion: closed.record.record_version,
+    attemptId: "closed-comment",
+    markerId: "marker-v1",
+    payloadDigest: "payload",
+    snapshotValidationId: "snapshot-validation",
+    snapshotValidationDigest: "snapshot-digest",
+    effectLedgerReceipt: intent,
+    attemptTimeoutMs: 100,
+  });
+  assert.equal(closed.status, "CLOSED_NO_PUBLISH");
+  assert.equal(permit.status, "TERMINAL");
+});
+
+test("T28: effect-ledger outcome ID is immutable for an attempt", async () => {
+  const system = makeSystem();
+  await system.ledger.appendIntent({
+    key: KEY, stage: "MODEL", attemptId: "outcome-once", requestDigest: "request",
+  });
+  const first = await system.ledger.appendOutcome({
+    attemptId: "outcome-once",
+    outcomeType: "MODEL_RESULT_STORED",
+    evidenceDigest: "digest-1",
+    evidenceReference: "result://one",
+  });
+  const conflict = await system.ledger.appendOutcome({
+    attemptId: "outcome-once",
+    outcomeType: "MODEL_RESULT_STORED",
+    evidenceDigest: "digest-2",
+    evidenceReference: "result://two",
+  });
+  assert.equal(first.status, "ACK");
+  assert.equal(conflict.status, "INTEGRITY_CONFLICT");
+});
+
+test("T29: a changed marker ID for the same reservation key is a hard conflict", async () => {
+  const system = makeSystem();
+  assert.equal((await claim(system)).status, "CLAIMED");
+  const changed = await claim(system, "owner-2", { markerId: "different-marker" });
+  assert.equal(changed.status, "KEY_CONFLICT");
+});
+
+test("T30: comment-stage UNKNOWN remains UNKNOWN when no positive evidence is available", async () => {
+  const system = makeSystem();
+  const started = await commentAttempt(system);
+  const unknown = await system.adapter.markUnknown({
+    key: KEY,
+    generation: started.resumed.record.generation,
+    attemptId: started.attemptId,
+    expectedRecordVersion: started.permit.record_version,
+    stage: "COMMENT",
+    reasonCode: "GITHUB_TIMEOUT",
+  });
+  const result = await system.adapter.reconcileComment({
+    key: KEY,
+    expectedRecordVersion: unknown.record.record_version,
+    verifiedPositiveEvidence: [],
+    listingComplete: true,
+  });
+  assert.equal(result.status, "NO_CHANGE");
+  assert.equal(result.record.state, "UNKNOWN");
+  assert.equal(result.record.unknown_stage, "COMMENT");
+});
+
+test("T31: comment attempt deadline expiry becomes UNKNOWN and never authorizes a retry", async () => {
+  const system = makeSystem();
+  const started = await commentAttempt(system);
+  system.advance(101);
+  const expired = await system.adapter.expireAmbiguousAttempt({
+    key: KEY,
+    stage: "COMMENT",
+    attemptId: started.attemptId,
+  });
+  assert.equal(expired.status, "UNKNOWN");
+  const retry = await system.adapter.beginCommentAttempt({
+    key: KEY,
+    ownerId: "owner-2",
+    ownerNonce: "nonce:owner-2",
+    generation: started.resumed.record.generation,
+    expectedRecordVersion: expired.record.record_version,
+    attemptId: "comment-attempt-retry",
+    markerId: "marker-v1",
+    payloadDigest: "different-payload",
+    snapshotValidationId: "snapshot-validation-2",
+    snapshotValidationDigest: "snapshot-digest-2",
+    effectLedgerReceipt: started.intent,
+    attemptTimeoutMs: 100,
+  });
+  assert.equal(retry.status, "ALREADY_CONSUMED");
+});

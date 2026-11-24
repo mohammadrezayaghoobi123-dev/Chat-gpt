@@ -1652,11 +1652,28 @@ export class OrchestratorLedger extends DurableObject {
         eventId,
       ).toArray()[0];
       if (existing) {
-        if (existing.event_type === eventType && existing.schema_version === schemaVersion &&
-            existing.envelope_sha256 === envelopeSha256) {
+        const sameReceipt = existing.event_type === eventType &&
+          existing.schema_version === schemaVersion &&
+          existing.envelope_sha256 === envelopeSha256;
+        if (!sameReceipt) {
+          return { recorded: false, conflict: true, reason: "OUTBOX_EVENT_ID_CONFLICT" };
+        }
+        if (existing.lease_generation === 0) {
+          return { recorded: false, blocked: true, reason: "LEGACY_OUTBOX_RECEIPT_UNVERIFIED" };
+        }
+        if (source.status === "COMPLETED" &&
+            source.lease_generation === existing.lease_generation &&
+            existing.lease_generation === leaseGeneration) {
           return { recorded: false, replay: true, eventId };
         }
-        return { recorded: false, conflict: true, reason: "OUTBOX_EVENT_ID_CONFLICT" };
+        return {
+          recorded: false,
+          blocked: true,
+          reason: existing.lease_generation !== leaseGeneration ||
+            source.lease_generation !== existing.lease_generation
+            ? "OUTBOX_RECEIPT_GENERATION_MISMATCH"
+            : "OUTBOX_RECEIPT_STATE_INCONSISTENT",
+        };
       }
       if (source.status !== "IN_PROGRESS" || source.lease_generation !== leaseGeneration ||
           source.lease_until <= now) {

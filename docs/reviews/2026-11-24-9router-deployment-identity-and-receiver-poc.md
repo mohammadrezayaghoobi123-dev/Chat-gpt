@@ -62,7 +62,7 @@ Limitations: SQLite prototype only; no replication across hosts, WORM/append-onl
 ## 5. Gitleaks and branch reconciliation
 
 - PR #431 candidate ancestry uses --full-history HEAD; exact hosted run 45380564141 passed the PR diff and candidate-ancestry scans.
-- PR #324 still inherits the base workflow using --all; latest run 45385006010 passed the PR diff scan (9 commits; no leaks) but failed all-fetched-ref history with 10 generic-api-key detections across 4,859 commits.
+- PR #324 inherits the base workflow using --all; historical run 45385006010 passed the PR diff scan (9 commits; no leaks) but failed all-fetched-ref history with 10 generic-api-key detections across 4,859 commits. The latest run is tracked in the PR validation record.
 - Closed, unmerged negative-control PR #322 remains preserved. No allowlist, suppression, history rewrite, branch deletion, or finding adjudication was performed.
 
 Sources:

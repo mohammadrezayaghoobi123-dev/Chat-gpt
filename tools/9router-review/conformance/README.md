@@ -71,3 +71,7 @@ T46–T47 add stage-to-outcome binding checks for the append-only effect ledger.
 
 
 Latest stage-bound outcome checkpoint: T46–T47 were observed RED on the initial test-only revision and GREEN after the reference-oracle correction. Hosted run 45511958154 reports T01–T47 47/47 PASS. The full reviewer regression remains intentionally non-green because the preserved duplicate-publication race still produces two POSTs. This does not qualify any persistent provider adapter.
+
+| T48 | I34 (proposed) | Outcome append must reject a missing authoritative attempt-boundary receipt without advancing the ledger sequence |
+
+T48 is test-authored but execution-unverified at this checkpoint. The current reference implementation does not inspect an attempt-boundary receipt in `appendOutcome`, so RED is predicted from source inspection only. Do not report T48 as an observed RED until the exact hosted test run confirms it. No GREEN correction has been applied.

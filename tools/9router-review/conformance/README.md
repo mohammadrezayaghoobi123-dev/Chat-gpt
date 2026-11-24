@@ -60,6 +60,8 @@ Run with Node.js 22 from tools/9router-review:
 | T43 | A41 | Ordinary mode setter cannot bypass anchor-verified recovery unlock |
 | T44 | A41 | Recovery lock blocks model-completion writes |
 | T45 | A41 | Recovery lock blocks all non-recovery reservation mutations |
+| T46 | A11, A12 | MODEL intent rejects COMMENT_ACCEPTED as a stage-incompatible outcome |
+| T47 | A11, A12 | COMMENT intent rejects MODEL_RESULT_STORED as a stage-incompatible outcome |
 | 
 
 This is not the A01–A42 backend qualification suite. T32–T42 extend the in-memory reference oracle's reconciliation and recovery-validation coverage; they do not qualify a real provider adapter. The coverage map deliberately marks partial coverage. A02's controlled read-before-insert schedule, A03's forced tuple/hash-collision case, independent-process concurrency, backend failover, storage restore, R2 conditional writes, quota exhaustion, and the remaining matrix cases are still NOT_EXECUTED.

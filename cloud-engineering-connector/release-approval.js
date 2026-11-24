@@ -1,8 +1,32 @@
 const API_ROOT = "https://api.github.com";
 const STAGING_BASE = "integration/unify-main-and-integrated-2026-11-02";
 
-function validateInput({ repository, candidateSha, releaseEnvironment, token, fetchImpl }) {
-  if (typeof repository !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
+export function parseTrustedReviewerIds(value) {
+  if (value === undefined || value === null || (typeof value === "string" && value.trim() === "")) {
+    return [];
+  }
+  if (typeof value !== "string") {
+    throw new TypeError("RELEASE_REVIEWER_IDS must be a comma-separated list of positive GitHub numeric user IDs.");
+  }
+  const ids = value.split(",").map(part => {
+    const normalized = part.trim();
+    if (!/^[1-9][0-9]{0,15}$/.test(normalized)) {
+      throw new TypeError("RELEASE_REVIEWER_IDS must contain only positive decimal GitHub user IDs.");
+    }
+    const id = Number(normalized);
+    if (!Number.isSafeInteger(id) || id < 1) {
+      throw new TypeError("RELEASE_REVIEWER_IDS contains a GitHub user ID outside the safe integer range.");
+    }
+    return id;
+  });
+  if (new Set(ids).size !== ids.length) {
+    throw new TypeError("RELEASE_REVIEWER_IDS must not contain duplicate GitHub user IDs.");
+  }
+  return ids;
+}
+
+function validateInput({ repository, candidateSha, releaseEnvironment, token, fetchImpl, trustedReviewerIds }) {
+  if (typeof repository !== "string" || !/^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new TypeError("GITHUB_REPOSITORY must be an owner/repository pair.");
   }
   if (typeof candidateSha !== "string" || !/^[a-f0-9]{40}$/.test(candidateSha)) {
@@ -13,6 +37,11 @@ function validateInput({ repository, candidateSha, releaseEnvironment, token, fe
   }
   if (typeof token !== "string" || token.length < 1) {
     throw new TypeError("RELEASE_GITHUB_TOKEN is required.");
+  }
+  if (!Array.isArray(trustedReviewerIds) || trustedReviewerIds.length === 0 ||
+      trustedReviewerIds.some(id => !Number.isSafeInteger(id) || id < 1) ||
+      new Set(trustedReviewerIds).size !== trustedReviewerIds.length) {
+    throw new TypeError("RELEASE_REVIEWER_IDS must contain at least one unique positive GitHub numeric user ID.");
   }
   if (typeof fetchImpl !== "function") throw new TypeError("fetchImpl must be a function.");
 }
@@ -61,16 +90,19 @@ async function getJsonCollection(fetchImpl, url, token) {
   throw new Error("GitHub release-approval pagination exceeded 100 pages; refusing to approve an incomplete review history.");
 }
 
-function latestReviewsByUser(reviews) {
+function latestReviewsByUserId(reviews) {
   const latest = new Map();
   for (const review of reviews) {
+    const userId = review?.user?.id;
     const login = review?.user?.login;
     const submittedAt = review?.submitted_at;
-    if (typeof login !== "string" || !login || typeof submittedAt !== "string") continue;
+    if (!Number.isSafeInteger(userId) || userId < 1 ||
+        typeof login !== "string" || !login ||
+        typeof submittedAt !== "string") continue;
     const timestamp = Date.parse(submittedAt);
     if (!Number.isFinite(timestamp)) continue;
-    const previous = latest.get(login);
-    if (!previous || timestamp >= previous.timestamp) latest.set(login, { review, timestamp });
+    const previous = latest.get(userId);
+    if (!previous || timestamp >= previous.timestamp) latest.set(userId, { review, timestamp });
   }
   return [...latest.values()].map(item => item.review);
 }
@@ -80,9 +112,10 @@ export async function verifyReleaseApproval({
   candidateSha,
   releaseEnvironment,
   token,
+  trustedReviewerIds,
   fetchImpl = globalThis.fetch,
 }) {
-  validateInput({ repository, candidateSha, releaseEnvironment, token, fetchImpl });
+  validateInput({ repository, candidateSha, releaseEnvironment, token, fetchImpl, trustedReviewerIds });
   const repoPath = repository.split("/").map(encodeURIComponent).join("/");
   const associated = await getJsonCollection(
     fetchImpl,
@@ -118,24 +151,34 @@ export async function verifyReleaseApproval({
     token,
   );
   if (!Array.isArray(reviews)) throw new Error("GitHub returned an invalid PR review list.");
-  const latest = latestReviewsByUser(reviews);
+  const latest = latestReviewsByUserId(reviews);
   const author = pull.user?.login;
-  if (typeof author !== "string" || !author) throw new Error("GitHub PR author identity is unavailable.");
+  const authorId = pull.user?.id;
+  if (typeof author !== "string" || !author ||
+      !Number.isSafeInteger(authorId) || authorId < 1) {
+    throw new Error("GitHub PR author identity is unavailable.");
+  }
+  const trustedIds = new Set(trustedReviewerIds);
+  const isTrustedIndependentReviewer = review =>
+    Number.isSafeInteger(review?.user?.id) &&
+    review.user.id > 0 &&
+    review.user.id !== authorId &&
+    trustedIds.has(review.user.id);
 
   const changeRequest = latest.find(review =>
-    review.user?.login !== author &&
+    isTrustedIndependentReviewer(review) &&
     review.state === "CHANGES_REQUESTED" &&
     review.commit_id === reviewCommitSha
   );
   if (changeRequest) throw new Error("Release blocked: an independent reviewer has an outstanding change request for this candidate.");
 
   const approval = latest.find(review =>
-    review.user?.login !== author &&
+    isTrustedIndependentReviewer(review) &&
     review.state === "APPROVED" &&
     review.commit_id === reviewCommitSha
   );
   if (!approval) {
-    throw new Error("Release blocked: no independent approval exists for the exact PR head commit.");
+    throw new Error("Release blocked: no trusted independent approval exists for the exact PR head commit.");
   }
 
   return Object.freeze({
@@ -143,6 +186,7 @@ export async function verifyReleaseApproval({
     pullUrl: pull.html_url,
     author,
     reviewer: approval.user.login,
+    reviewerId: approval.user.id,
     reviewCommitSha,
     releaseEnvironment,
   });

@@ -638,7 +638,7 @@ The logical record contains:
 - Contract identity: `reviewer_policy_digest`, `runtime_digest`, `schema_version`.
 - Ownership: `state`, `generation`, `owner_id`, `owner_nonce`, `lease_expires_at`.
 - Model boundary: `model_attempt_id`, `model_request_digest`, `model_result_digest`, `model_attempt_deadline_at`, and a protected durable result reference or encrypted result envelope when continuation requires the result.
-- Comment boundary: `comment_attempt_id`, `comment_payload_digest`, `comment_marker_id`, `comment_marker_key_id`, `comment_marker_signature`, `comment_remote_id`, `comment_accepted_at`, `comment_attempt_deadline_at`.
+- Comment boundary: `comment_attempt_id`, `comment_payload_digest`, `comment_marker_id`, `comment_marker_key_id`, `comment_marker_signature`, `comment_remote_id`, `comment_accepted_at`, `comment_attempt_deadline_at`, `snapshot_validation_id`, `snapshot_validation_digest`.
 - Diagnosis: `unknown_stage`, `unknown_reason_code`, `last_error_class`.
 - Audit: monotonic `record_version`, `created_at`, `updated_at`, and append-only transition events with actor, prior/new state, generation, operation ID, server timestamp, and reason.
 
@@ -695,11 +695,13 @@ The storage-independent adapter MUST expose equivalent typed operations. Names b
 
 - `claim(key, owner_id, owner_nonce, lease_duration, policy_digest, runtime_digest, marker_id, marker_key_id) -> CLAIMED | BUSY | EXISTING(record) | KEY_CONFLICT`; for an existing row, return its persisted marker ID/key ID and never replace them as a side effect of key rotation.
 - `renew(key, owner_id, owner_nonce, generation, expected_record_version, lease_duration) -> RENEWED(new_record_version) | LOST_OWNERSHIP | EXPIRED`
+- `abortBeforeModel(key, owner_id, owner_nonce, generation, expected_record_version, reason_code) -> ABORTED | CONFLICT`
 - `resumeCompletedModel(key, owner_id, owner_nonce, expected_record_version, lease_duration) -> RESUMED(new_generation) | BUSY | TERMINAL`
+- `closeWithoutPublish(key, owner_id, owner_nonce, generation, expected_record_version, reason_code) -> CLOSED_NO_PUBLISH | CONFLICT`
 - `beginModelAttempt(key, owner_id, owner_nonce, generation, expected_record_version, attempt_id, request_digest, attempt_timeout) -> MODEL_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`; the backend computes and persists the deadline from server time in the same transaction.
 - `completeModelAttempt(key, generation, attempt_id, expected_record_version, result_reference, result_digest) -> MODEL_COMPLETED | CONFLICT | UNKNOWN`
-- `beginCommentAttempt(key, generation, expected_record_version, attempt_id, marker_id, payload_digest, snapshot_validation_id, attempt_timeout) -> COMMENT_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`; the backend computes and persists the deadline from server time in the same transaction.
-- `completeCommentAttempt(key, generation, attempt_id, expected_record_version, remote_comment_id) -> PUBLISHED | CONFLICT | UNKNOWN`
+- `beginCommentAttempt(key, owner_id, owner_nonce, generation, expected_record_version, attempt_id, marker_id, payload_digest, snapshot_validation_id, snapshot_validation_digest, attempt_timeout) -> COMMENT_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`; the backend computes and persists the deadline from server time in the same transaction.
+- `completeCommentAttempt(key, generation, attempt_id, expected_record_version, remote_comment_id, validated_response_digest) -> PUBLISHED | CONFLICT | UNKNOWN`; the caller must validate the HTTP status, exact issue URL/body, expected bot identity/type, marker signature, and payload digest before supplying this digest.
 - `markUnknown(key, generation, attempt_id, expected_record_version, stage: MODEL | COMMENT, reason_code) -> UNKNOWN | CONFLICT`; the stage must match the consumed attempt ID and current state.
 - `expireAmbiguousAttempt(key, attempt_id, stage) -> UNKNOWN | NOT_DUE | CONFLICT`; the backend evaluates the persisted deadline against its own authoritative server time inside the atomic transition.
 - `readAuthoritative(key) -> RECORD | NOT_FOUND | UNAVAILABLE`
@@ -708,6 +710,8 @@ The storage-independent adapter MUST expose equivalent typed operations. Names b
 Every mutating operation is one atomic conditional transaction against the current record. It MUST check the expected state, generation, owner nonce where applicable, attempt ID, and record version. Completion calls are fenced by the generation and attempt ID captured before dispatch; recovery transitions are fenced by the attempt ID and stage. `readAuthoritative` MUST bypass stale replicas and provide a linearizable read for the key. Successful transitions and audit events commit atomically. A stale worker cannot mutate state by presenting an old generation or stale record version.
 
 The marker ID is SHA-256-derived from the reservation key, policy digest, and runtime digest; it is not a per-worker random value and does not depend on the active HMAC key. HMAC key rotation changes only the signing-key ID/signature for newly created reservations; existing reservations retain their persisted marker identity and verification key ID. The signed marker contains the canonical key, policy digest, runtime digest, marker ID, payload digest, and signing-key ID. The signature is HMAC-SHA-256 over a versioned length-delimited UTF-8 canonical envelope. The payload digest is computed over the exact comment body bytes after removing the marker envelope, with UTF-8 and LF line endings; no locale-dependent normalization is permitted. Reconciliation validates the expected bot author ID, HMAC, and digest of the comment body after removing the marker envelope. This lets pre-model reconciliation recognize a previously published result without rerunning inference.
+
+A `snapshot_validation_id` identifies an immutable audit record containing the live repository ID, PR number, head/base SHAs, fetch timestamp, and validation result. `snapshot_validation_digest` commits to that record. The adapter checks that the record is bound to the same reservation tuple; it does not independently authenticate GitHub, which remains the trusted caller's responsibility.
 
 A returned `MODEL_PERMIT` or `COMMENT_PERMIT` is an in-memory authorization to make exactly one transport invocation. It is not a reusable bearer token and MUST NOT be serialized, logged, queued, or retried. The production caller MUST consume it once and call the transport once. The durable state transition prevents another worker from obtaining a second permit. This contract does not claim to defend against malicious application code that deliberately sends the same request multiple times; transport-call-count conformance tests and code review cover that boundary.
 
@@ -768,6 +772,9 @@ The model provider may also lack a caller-supplied idempotency key or execution-
 - **I19 — Bounded reconciliation:** pagination must complete within an explicit page/response budget; exceeding it is UNKNOWN/incomplete, never negative proof.
 - **I20 — Rotation-stable marker identity:** marker ID is independent of HMAC key rotation; existing rows retain their persisted signing-key ID.
 - **I21 — Fenced reconciliation:** reconciliation mutations require expected record version and verified positive evidence tied to the exact reservation key.
+- **I22 — Explicit terminal operations:** every normative transition to ABORTED or CLOSED_NO_PUBLISH has a typed, fenced adapter operation.
+- **I23 — Continuation ownership:** comment-attempt authorization requires the current continuation owner ID, nonce, and generation.
+- **I24 — Publication response evidence:** PUBLISHED requires a validated response digest committed with the remote comment ID.
 
 ### 10. Adversarial conformance matrix
 
@@ -843,6 +850,9 @@ The design was challenged against the reproduced interleaving, independent-host 
 - **AR-21 — A successful HTTP status alone could be mistaken for publication proof.** Required exact response ID, issue URL, body, bot identity/type, and marker verification before PUBLISHED.
 - **AR-22 — Pagination completion and provider-side retry layers were not fully bounded.** Added explicit pagination budgets and a provider transport-call-count test.
 - **AR-23 — Marker identity was coupled to the HMAC key, so signing-key rotation could derive a second marker for the same reservation.** Decoupled marker ID from signing-key material: SHA-256 binds the canonical tuple/policy/runtime, while HMAC key ID and signature remain separate and persisted.
+- **AR-24 — The interface omitted explicit operations for two normative terminal transitions.** Added `abortBeforeModel` and `closeWithoutPublish` so ABORTED/CLOSED_NO_PUBLISH are not undocumented state mutations.
+- **AR-25 — A continuation lease holder was not explicitly required to prove owner nonce at the comment-attempt boundary.** Added owner ID and nonce to `beginCommentAttempt`.
+- **AR-26 — PUBLISHED could be committed without a durable digest of the validated GitHub response.** Added `validated_response_digest` to the completion operation and snapshot-validation evidence fields.
 
 **Residual design limitations (not defects that this contract can eliminate):**
 

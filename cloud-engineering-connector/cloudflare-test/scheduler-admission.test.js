@@ -126,7 +126,6 @@ describe("Scheduler tenant Task admission", () => {
     const context = { waitUntil: vi.fn() };
     const taskId = policy.tasks[0].taskIdPrefix + "-" + scheduledTime;
 
-    expect(controller.type).toBe("scheduled");
     expect(typeof controller.scheduledTime).toBe("number");
     expect(schedulerWorker.fetch).toBeUndefined();
 

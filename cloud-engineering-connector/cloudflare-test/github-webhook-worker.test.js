@@ -383,9 +383,62 @@ describe("GitHub webhook Worker route", () => {
       commentCreatedAt,
     });
     expect(authorizationInput.bodySha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(typeof authorizationInput.assertion).toBe("string");
+    expect(authorizationInput.assertion.length).toBeGreaterThan(0);
     expect(authorizationInput.commandHash).toMatch(/^[a-f0-9]{64}$/);
     expect(executionInput.assertionContext.deliveryId).toBe(deliveryId);
     expect(executionInput.bodySha256).toBe(authorizationInput.bodySha256);
+  });
+
+  it("preserves HTTP 403 when the Ledger rejects the signed Owner assertion", async () => {
+    let executionCalls = 0;
+    const taskId = "task-webhook-owner-assertion-rejected-0001";
+    const fakeLedger = {
+      authorizeOwnerWebhookRetry: async () => ({
+        registered: true,
+        denied: true,
+        reason: "OWNER_ASSERTION_REJECTED",
+      }),
+      executeOwnerCommand: async () => {
+        executionCalls += 1;
+        return { applied: true };
+      },
+    };
+    const repository = "mohammadrezayaghoobi123-dev/Chat-gpt";
+    const ownerId = 335530603;
+    const event = payload({
+      action: "created",
+      repository: { id: 1398846697, full_name: repository },
+      issue: {
+        ...payload().issue,
+        html_url: "https://github.com/" + repository + "/issues/7",
+      },
+      comment: {
+        id: 900024,
+        body: '/orchestrator cancel ' + taskId + ' --reason "Rejected assertion"',
+        created_at: new Date().toISOString(),
+        user: { id: ownerId, type: "User" },
+      },
+      sender: { id: ownerId, type: "User" },
+    });
+    const ownerEnv = {
+      ...testEnv(),
+      GITHUB_WEBHOOK_REPOSITORY: repository,
+      GITHUB_WEBHOOK_REPOSITORY_ID: "1398846697",
+      GITHUB_WEBHOOK_OWNER_ID: String(ownerId),
+      ORCHESTRATOR_LEDGER: { idFromName: name => name, get: () => fakeLedger },
+    };
+    const response = await worker.fetch(
+      await signedRequest(JSON.stringify(event), "gh-owner-assertion-rejected-0001", undefined, "issue_comment"),
+      ownerEnv,
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "owner_command_rejected",
+      reason: "OWNER_ASSERTION_REJECTED",
+    });
+    expect(executionCalls).toBe(0);
   });
 
   it("returns a stored terminal Owner receipt for stale redelivery without executing the command again", async () => {

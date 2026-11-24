@@ -475,7 +475,10 @@ test("T19: restore recovery requires a complete independent ledger inventory bef
   const denied = await system.adapter.unlockRecovery({ ledgerInventory: incomplete });
   assert.equal(denied.status, "RECOVERY_INVENTORY_INCOMPLETE");
   const complete = await system.ledger.readComplete({ key: KEY, complete: true });
-  const allowed = await system.adapter.unlockRecovery({ ledgerInventory: complete });
+  const allowed = await system.adapter.unlockRecovery({
+    ledgerInventory: complete,
+    trustedAnchor: complete.anchor,
+  });
   assert.equal(allowed.status, "ACTIVE");
 });
 

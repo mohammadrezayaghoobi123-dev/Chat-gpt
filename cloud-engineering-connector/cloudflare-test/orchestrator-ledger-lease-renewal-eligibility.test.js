@@ -228,4 +228,105 @@ describe("OrchestratorLedger Lease renewal eligibility and fencing", () => {
       expect(persistedLease(instance, taskId)).toEqual(before);
     });
   });
+
+  it("rejects release by a former assignee without mutating the active Lease", async () => {
+    const ledger = ledgerFor("lease-release-former-assignee");
+    await runInDurableObject(ledger, async instance => {
+      const taskId = "reassigned-release-task";
+      await createScheduledTask(instance, taskId);
+      const claimNow = NOW + 9;
+      expect(await claim(instance, taskId, claimNow))
+        .toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+      instance.ctx.storage.sql.exec(
+        "UPDATE orchestrator_tasks SET task_json = json_set(task_json, '$.executorId', 'worker-b') WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, TENANT_ID, PROJECT_ID,
+      );
+      const before = persistedLease(instance, taskId);
+      const releaseNow = claimNow + 1;
+      const workerAssertion = await assertionFor("releaseLease", taskId, releaseNow);
+      const result = await instance.releaseLease({
+        taskId,
+        tenantId: TENANT_ID,
+        projectId: PROJECT_ID,
+        workerId: WORKER_ID,
+        workerAssertion,
+        leaseGeneration: 1,
+        now: releaseNow,
+      });
+
+      expect(result).toMatchObject({ released: false, reason: "ASSIGNEE_MISMATCH" });
+      expect(persistedLease(instance, taskId)).toEqual(before);
+    });
+  });
+
+  it("atomically invalidates the execution Lease and Claim Candidate when a Task becomes terminal", async () => {
+    const ledger = ledgerFor("lease-terminalization-atomicity");
+    await runInDurableObject(ledger, async instance => {
+      const taskId = "terminalization-atomic-task";
+      await createScheduledTask(instance, taskId);
+      const claimNow = NOW + 11;
+      expect(await claim(instance, taskId, claimNow))
+        .toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+      const runningNow = claimNow + 1;
+      const runningAssertion = await assertionFor("transitionTask", taskId, runningNow);
+      const running = await instance.transitionTask({
+        taskId,
+        tenantId: TENANT_ID,
+        projectId: PROJECT_ID,
+        expectedVersion: 1,
+        expectedState: "SCHEDULED",
+        nextState: "RUNNING",
+        actor: {
+          id: WORKER_ID,
+          role: "agent",
+          authenticated: true,
+          identityVerified: true,
+        },
+        evidence: {},
+        workerId: WORKER_ID,
+        workerAssertion: runningAssertion,
+        leaseGeneration: 1,
+        now: runningNow,
+      });
+      expect(running).toMatchObject({ updated: true, task: { state: "RUNNING", version: 2 } });
+
+      const terminalNow = runningNow + 1;
+      const terminalAssertion = await assertionFor("transitionTask", taskId, terminalNow);
+      const terminal = await instance.transitionTask({
+        taskId,
+        tenantId: TENANT_ID,
+        projectId: PROJECT_ID,
+        expectedVersion: 2,
+        expectedState: "RUNNING",
+        nextState: "FAILED",
+        actor: {
+          id: WORKER_ID,
+          role: "agent",
+          authenticated: true,
+          identityVerified: true,
+        },
+        evidence: {},
+        workerId: WORKER_ID,
+        workerAssertion: terminalAssertion,
+        leaseGeneration: 1,
+        now: terminalNow,
+      });
+
+      expect(terminal).toMatchObject({ updated: true, task: { state: "FAILED", version: 3 } });
+      expect(persistedLease(instance, taskId)).toMatchObject({
+        task_id: taskId,
+        worker_id: null,
+        lease_generation: 1,
+        lease_until: 0,
+      });
+      const candidateCount = instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, TENANT_ID, PROJECT_ID,
+      ).toArray()[0].count;
+      expect(candidateCount).toBe(0);
+    });
+  });
+
 });

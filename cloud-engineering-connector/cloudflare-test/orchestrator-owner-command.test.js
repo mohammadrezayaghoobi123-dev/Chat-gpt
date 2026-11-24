@@ -2429,19 +2429,31 @@ describe("Owner command atomic Ledger contract", () => {
         workerAssertion: assertion,
       });
 
-      expect(result).toMatchObject({
-        created: false,
-        reason: "AUTHENTICATED_WORKER_REQUIRED",
-      });
+      let durableState;
       await runInDurableObject(ledger, async (_instance, state) => {
-        expect(state.storage.sql.exec(
-          "SELECT task_id FROM orchestrator_tasks WHERE task_id = ?",
-          taskId,
-        ).toArray()).toEqual([]);
-        expect(state.storage.sql.exec(
-          "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
-          jti,
-        ).toArray()).toEqual([]);
+        durableState = {
+          tasks: state.storage.sql.exec(
+            "SELECT task_id FROM orchestrator_tasks WHERE task_id = ?",
+            taskId,
+          ).toArray(),
+          consumedJtis: state.storage.sql.exec(
+            "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
+            jti,
+          ).toArray(),
+        };
+      });
+      expect({
+        outcome: { created: result.created, reason: result.reason ?? null },
+        durableState,
+      }).toEqual({
+        outcome: {
+          created: false,
+          reason: "AUTHENTICATED_WORKER_REQUIRED",
+        },
+        durableState: {
+          tasks: [],
+          consumedJtis: [],
+        },
       });
     } finally {
       verifySpy.mockRestore();

@@ -737,7 +737,7 @@ test("final release runner validates authorization and deploys in one step with 
     assert.equal(result.status, 0, result.stderr || result.stdout);
 
     const events = readFileSync(join(directory, "events.jsonl"), "utf8")
-      .trim().split("\\n").map(line => JSON.parse(line));
+      .trim().split("\n").map(line => JSON.parse(line));
     assert.deepEqual(events.map(event => event.phase), ["approval", "deployment"]);
     assert.deepEqual(events[0].args, ["scripts/verify-release-approval.mjs"]);
     assert.equal(events[0].githubTokenPresent, true);
@@ -765,7 +765,7 @@ test("final release runner never invokes deployment when the last authorization 
     });
     assert.equal(result.status, 29, result.stderr || result.stdout);
     const events = readFileSync(join(directory, "events.jsonl"), "utf8")
-      .trim().split("\\n").map(line => JSON.parse(line));
+      .trim().split("\n").map(line => JSON.parse(line));
     assert.deepEqual(events.map(event => event.phase), ["approval"]);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -783,7 +783,7 @@ test("production release runner invokes Wrangler without staging-specific argume
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const events = readFileSync(join(directory, "events.jsonl"), "utf8")
-      .trim().split("\\n").map(line => JSON.parse(line));
+      .trim().split("\n").map(line => JSON.parse(line));
     assert.deepEqual(events.map(event => event.phase), ["approval", "deployment"]);
     assert.deepEqual(events[1].args, ["wrangler", "deploy"]);
   } finally {

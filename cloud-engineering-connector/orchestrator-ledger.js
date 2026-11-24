@@ -615,10 +615,13 @@ export class OrchestratorLedger extends DurableObject {
       taskRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_TASK";
     }
     const sql = this.ctx.storage.sql;
+    const assertionConsumed = this.ctx.storage.transactionSync(
+      () => consumeWorkerAssertion(sql, verifiedAssertion, now),
+    );
+    if (!assertionConsumed) {
+      return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
     return this.ctx.storage.transactionSync(() => {
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
-        return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
-      }
       if (taskRejectionReason) {
         return { created: false, reason: taskRejectionReason };
       }

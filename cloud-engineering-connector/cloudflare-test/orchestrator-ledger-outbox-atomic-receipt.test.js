@@ -153,6 +153,7 @@ describe("OrchestratorLedger Outbox receipt-gated completion and ambiguous deliv
     const claimNow = createdAt + 10;
     const receiptNow = claimNow + 1;
     const external = providerSink({ idempotent: true });
+    const consumerAssertion = await assertionFor(CONSUMER_ID, "consumer", "recordOutboxReceipt", receiptNow);
     let event;
 
     await runInDurableObject(ledger, async instance => {
@@ -165,9 +166,20 @@ describe("OrchestratorLedger Outbox receipt-gated completion and ambiguous deliv
       instance.ctx.storage.sql.exec(
         "CREATE TRIGGER fail_outbox_receipt_insert BEFORE INSERT ON orchestrator_outbox_receipts BEGIN SELECT RAISE(ABORT, 'forced_receipt_insert_failure'); END",
       );
+      let insertError;
+      try {
+        await recordReceipt(instance, event, 1, receiptNow, consumerAssertion);
+      } catch (error) {
+        insertError = error;
+      }
+      expect(String(insertError)).toContain("forced_receipt_insert_failure");
+      expect(receiptCount(instance, eventId)).toBe(0);
+      expect(storedOutbox(instance, eventId)).toMatchObject({
+        status: "IN_PROGRESS",
+        lease_generation: 1,
+      });
     });
 
-    const consumerAssertion = await assertionFor(CONSUMER_ID, "consumer", "recordOutboxReceipt", receiptNow);
     await evictDurableObject(ledger);
 
     await runInDurableObject(ledger, async instance => {

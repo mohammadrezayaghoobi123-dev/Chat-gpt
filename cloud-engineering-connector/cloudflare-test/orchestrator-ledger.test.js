@@ -2795,30 +2795,41 @@ it("rejects validation evidence replayed from a different task, version, and com
     leaseGeneration: targetLease.leaseGeneration,
   });
 
+  // Capture durable effects before asserting the intended rejection so a red
+  // run reports both the authorization outcome and any persisted cross-Task data.
+  const targetAfter = await ledger.getTask({ taskId: targetTaskId });
+  const sourceAfter = await ledger.getTask({ taskId: sourceTaskId });
+  const persisted = await runInDurableObject(ledger, async (_instance, state) => ({
+    lease: state.storage.sql.exec(
+      "SELECT worker_id, lease_generation FROM orchestrator_execution_leases WHERE task_id = ?",
+      targetTaskId,
+    ).one(),
+    consumedJtiCount: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      "jti-cross-task-validation-evidence-0001",
+    ).one().count,
+  }));
+
   // Evidence provenance is expected to be bound to the target Task, version,
   // and commit. A source Task's valid-looking PASS evidence must not authorize
   // a transition on a different Task even when the same Agent holds both Leases.
-  expect(crossTaskResult.updated).toBe(false);
-  await expect(ledger.getTask({ taskId: targetTaskId })).resolves.toMatchObject({
+  expect.soft(crossTaskResult.updated).toBe(false);
+  expect.soft(targetAfter).toMatchObject({
     taskId: targetTaskId,
     state: "SCHEDULED",
     version: 1,
     commitSha: targetCommitSha,
   });
-  await expect(ledger.getTask({ taskId: sourceTaskId })).resolves.toMatchObject({
+  expect.soft(sourceAfter).toMatchObject({
     taskId: sourceTaskId,
     state: "SCHEDULED",
     version: 1,
     commitSha: sourceCommitSha,
   });
-  await runInDurableObject(ledger, async (_instance, state) => {
-    expect(state.storage.sql.exec(
-      "SELECT worker_id, lease_generation FROM orchestrator_execution_leases WHERE task_id = ?",
-      targetTaskId,
-    ).one()).toMatchObject({ worker_id: "agent:worker-1", lease_generation: 1 });
-    expect(state.storage.sql.exec(
-      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
-      "jti-cross-task-validation-evidence-0001",
-    ).one().count).toBe(1);
+  expect.soft(targetAfter.lastTransition?.evidence).not.toEqual(sourceEvidence);
+  expect.soft(persisted.lease).toMatchObject({
+    worker_id: "agent:worker-1",
+    lease_generation: 1,
   });
+  expect.soft(persisted.consumedJtiCount).toBe(1);
 });

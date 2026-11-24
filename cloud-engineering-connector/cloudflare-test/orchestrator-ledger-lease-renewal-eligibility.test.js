@@ -143,6 +143,47 @@ describe("OrchestratorLedger Lease renewal eligibility and fencing", () => {
     });
   });
 
+  it("rejects a Task transition by a former assignee even while its old Lease generation remains active", async () => {
+    const ledger = ledgerFor("lease-transition-former-assignee");
+    await runInDurableObject(ledger, async instance => {
+      const taskId = "reassigned-transition-task";
+      await createScheduledTask(instance, taskId);
+      const claimNow = NOW + 7;
+      expect(await claim(instance, taskId, claimNow))
+        .toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+      instance.ctx.storage.sql.exec(
+        "UPDATE orchestrator_tasks SET task_json = json_set(task_json, '$.executorId', 'worker-b') WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+        taskId, TENANT_ID, PROJECT_ID,
+      );
+      const transitionNow = claimNow + 1;
+      const workerAssertion = await assertionFor("transitionTask", taskId, transitionNow);
+      const result = await instance.transitionTask({
+        taskId,
+        tenantId: TENANT_ID,
+        projectId: PROJECT_ID,
+        expectedVersion: 1,
+        expectedState: "SCHEDULED",
+        nextState: "RUNNING",
+        actor: {
+          id: WORKER_ID,
+          role: "agent",
+          authenticated: true,
+          identityVerified: true,
+        },
+        evidence: {},
+        workerId: WORKER_ID,
+        workerAssertion,
+        leaseGeneration: 1,
+        now: transitionNow,
+      });
+
+      expect(result).toMatchObject({ updated: false, reason: "ASSIGNEE_MISMATCH" });
+      expect(instance.getTask({ taskId, tenantId: TENANT_ID, projectId: PROJECT_ID }))
+        .toMatchObject({ state: "SCHEDULED", version: 1, executorId: "worker-b" });
+    });
+  });
+
   it("rejects both renewal and release from a superseded Lease generation while the newer Lease is active", async () => {
     const ledger = ledgerFor("lease-active-generation-fence");
     await runInDurableObject(ledger, async instance => {

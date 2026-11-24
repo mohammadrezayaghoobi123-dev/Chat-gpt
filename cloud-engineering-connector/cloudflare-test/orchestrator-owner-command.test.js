@@ -194,11 +194,13 @@ describe("Owner command atomic Ledger contract", () => {
     });
 
     const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+    let auditHashObserved = false;
     const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(
       async (algorithm, data) => {
         const digest = await originalDigest(algorithm, data);
         const canonicalInput = new TextDecoder().decode(data);
-        if (canonicalInput.includes("owner-event-expiry-during-hash")) {
+        if (canonicalInput.includes('"previousHash"')) {
+          auditHashObserved = true;
           ledgerClock.mockReturnValue(now + 36_000);
         }
         return digest;
@@ -208,6 +210,7 @@ describe("Owner command atomic Ledger contract", () => {
     const result = await ledger.executeOwnerCommand(input);
 
     expect(digestSpy).toHaveBeenCalled();
+    expect(auditHashObserved).toBe(true);
     expect(result).toMatchObject({
       applied: false,
       reason: "OWNER_ASSERTION_REJECTED",

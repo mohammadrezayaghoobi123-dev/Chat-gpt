@@ -780,7 +780,7 @@ export class OrchestratorLedger extends DurableObject {
         scopedIdempotencyKey, normalizedTask.tenantId, normalizedTask.projectId,
       ).toArray()[0];
       if (existing) {
-        if (existing.input_hash !== inputHash || existing.task_id !== normalizedTask.taskId) {
+        if (existing.input_hash !== inputHash) {
           return { created: false, conflict: true, reason: "IDEMPOTENCY_CONFLICT" };
         }
         return { created: false, replay: true, task: taskFromRow(existing) };

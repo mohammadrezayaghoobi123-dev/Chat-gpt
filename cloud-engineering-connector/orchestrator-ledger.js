@@ -1675,8 +1675,7 @@ export class OrchestratorLedger extends DurableObject {
             : "OUTBOX_RECEIPT_STATE_INCONSISTENT",
         };
       }
-      if (source.status !== "IN_PROGRESS" || source.lease_generation !== leaseGeneration ||
-          source.lease_until <= now) {
+      if (source.status !== "IN_PROGRESS" || source.lease_until <= now) {
         return { recorded: false, blocked: true, reason: "OUTBOX_LEASE_FENCE_MISMATCH" };
       }
       if (eventType === "task.created" || eventType === "task.transitioned") {
@@ -1698,15 +1697,15 @@ export class OrchestratorLedger extends DurableObject {
         eventId, eventType, schemaVersion, envelopeSha256, consumerId, now, leaseGeneration, source.tenant_id, source.project_id,
       );
       sql.exec(
-        "UPDATE orchestrator_outbox_events SET status = 'COMPLETED', lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND status = 'IN_PROGRESS' AND lease_generation = ? AND lease_until > ?",
-        now, eventId, leaseGeneration, now,
+        "UPDATE orchestrator_outbox_events SET status = 'COMPLETED', lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND status = 'IN_PROGRESS' AND lease_until > ?",
+        now, eventId, now,
       );
       const completed = sql.exec(
         "SELECT status, lease_worker_id, lease_generation, lease_until FROM orchestrator_outbox_events WHERE event_id = ?",
         eventId,
       ).toArray()[0];
       if (!completed || completed.status !== "COMPLETED" || completed.lease_worker_id !== null ||
-          completed.lease_generation !== leaseGeneration || completed.lease_until !== 0) {
+          completed.lease_until !== 0) {
         throw fail("Outbox receipt settlement verification failed; transaction rolled back.", "OUTBOX_RECEIPT_SETTLEMENT_FAILED");
       }
       return { recorded: true, completed: true, eventId, leaseGeneration };

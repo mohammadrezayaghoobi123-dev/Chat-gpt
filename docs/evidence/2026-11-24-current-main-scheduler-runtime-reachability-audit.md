@@ -391,3 +391,88 @@ The job completed its setup and full-history scan successfully as workflow steps
 This PR changes documentation only. Runtime/unit test workflows were not run as evidence for production-code behavior and must not be represented as passing.
 
 **Verification disposition:** exact-head CI is **not green**. Keep the PR Draft and unmerged. Historical findings require a separate, evidence-backed triage; they must not be hidden to force a green status.
+
+## 14. Historical Cron owner identified; Task Scheduler equivalence falsified
+
+**Historical source branch:** `remediation/orchestrator-production-hardening`  
+**Branch HEAD at inspection:** `752b3f77c43783d4e455d5deb913ae40bb38f8cb`  
+**Worker source blob:** `dd9014fdc6d47014cd2aba2afad72b2dc694f8ee`  
+**Wrangler source blob:** `e7a39c372b77208ea6ad696b4c2e8fd91fa747aa`  
+**Current-main baseline:** `919b19ca3d3887352cdef06b03c668ead04fbce7`
+
+### 14.1 Provenance and branch isolation
+
+The historical runtime was recovered from the remediation branch, not current `main`:
+
+- PR #157 is closed and reported merged, but its base was `remediation/production-readiness-2026-11-06`, not `main`. Its head branch was `remediation/orchestrator-production-hardening`.
+- PR #175 was also merged into `remediation/orchestrator-production-hardening`; PR #160's Queue-boundary documentation was incorporated there and PR #160 was closed as superseded.
+- The current head of `remediation/orchestrator-production-hardening` at inspection was `752b3f77c43783d4e455d5deb913ae40bb38f8cb`.
+- GitHub comparison of that remediation branch HEAD against current `main` returned **1,624 commits ahead and 131 behind**, with merge base `32e71becea29d186f887d1a23c2c4226eebf8410`.
+
+These PR merge states are branch-local history. They do not mean the historical Scheduler/Queue implementation was merged into current `main` or deployed to Production.
+
+### 14.2 Historical Cron declaration and exact behavior
+
+The remediation branch's `wrangler.toml` declares `crons = ["*/5 * * * *"]` for both Production and Staging environments. Its exported Worker has a `scheduled: handleScheduled` handler.
+
+At `worker.js:1390-1428`, `handleScheduled` starts exactly two asynchronous paths:
+
+1. `processKnowledgeOutbox(env)`, with reconciliation telemetry and failure logging.
+2. `processOrchestratorOutbox(env)`, with publisher telemetry and failure logging.
+
+The Orchestrator outbox publisher at `worker.js:1073-1186` signs as:
+
+- Subject: `orchestrator-outbox-publisher`
+- Role: `publisher`
+- Operations: `claimOutbox`, `failOutbox`, and `completeOutbox`
+
+It calls the Ledger's Outbox RPCs to claim, publish, and record completion/retry state. The scheduled handler does not call `createTask`, and the publisher does not mint the `orchestrator-scheduler / system / createTask` identity.
+
+The Queue consumer path at `worker.js:1188-1260` validates an Outbox envelope and calls `recordOutboxReceipt` with a `orchestrator-outbox-consumer / consumer` assertion. The DLQ path records dead-letter information. Neither path dispatches Task execution or invokes Task lifecycle transitions.
+
+PR #160's documented correction explicitly states that the receipt consumer records durable receipt/deduplication only; it does **not** dispatch Task execution, invoke lifecycle transitions, or perform Task business side effects. It calls for a separate authenticated task-execution consumer before such work can be activated. PR #160 was closed as superseded; the correction was incorporated into stacked PR #175 on the same remediation branch.
+
+### 14.3 Full historical production-source scan
+
+All 19 non-test JavaScript/TypeScript files under `cloud-engineering-connector/` were fetched at the remediation branch HEAD and scanned. No fetch failures occurred.
+
+Results:
+
+- Three `createTask` text references were found, all confined to the Ledger method/authorization check and the fixed signer policy definition.
+- No `createTask` reference was found in `worker.js`.
+- No `orchestrator-scheduler` reference was found in `worker.js`.
+- Three `createScheduledWorkerAssertion` invocation sites were found in `worker.js`: the Outbox Publisher, receipt Consumer, and DLQ Archiver.
+- The only other match was the signer implementation/policy file itself.
+
+This scan is a bounded static call-site inventory. It is not a runtime trace and cannot prove the absence of external or dynamically loaded callers. The exact Worker entrypoint control flow was additionally followed: its scheduled handler invokes the two outbox/reconciliation paths described above, not Task admission.
+
+### 14.4 Reconciliation with live Cloudflare evidence
+
+The historical remediation branch declares Cron and Queue configuration in source. The connected Cloudflare account currently reports:
+
+- Empty live Cron schedules for `chat-gpt111`, `chat-gpt111-staging`, and `master-brain-cloud-agent`.
+- Six Queue resources and zero configured Queue consumers.
+- No Cloudflare Workflow.
+- No live `ORCHESTRATOR_LEDGER` binding in Production `chat-gpt111`.
+
+The historical branch is therefore evidence of an intended source-level Outbox/reconciliation runtime, not evidence of an active deployed Cron or Queue consumer today. The Worker/config source delta remains unreleased in the inspected environment.
+
+### 14.5 Final classification of the Scheduler terms
+
+| Concept | Evidence-based classification |
+|---|---|
+| Historical Cloudflare Cron handler | Identified in the isolated remediation branch; every five minutes in source |
+| Historical Cron purpose | Knowledge Outbox reconciliation plus Orchestrator Outbox publishing |
+| Historical Queue receipt consumer | Receipt/deduplication and dead-letter recording; not Task execution |
+| `orchestrator-scheduler / system / createTask` grant | Defined and accepted by Ledger tests; no production Worker call site found |
+| Current-main Task Scheduler runtime | Not demonstrated |
+| Active connected-account Cron/Queue runtime | Not observed in the current live inventory |
+| Separate third-party or out-of-repository Task Scheduler | **Unknown** |
+
+**Corrected conclusion:** the repository history does identify a Cloudflare Scheduled Worker design, but that design is an Outbox publisher/reconciliation runner, not the missing Task Scheduler that invokes `OrchestratorLedger.createTask`. The fixed `orchestrator-scheduler / system / createTask` grant remains an orphaned/dormant capability within the inspected production-source snapshots. Do not infer Task scheduling from the existence of a Cron handler, an Outbox Queue, a receipt consumer, or a Ledger signer grant.
+
+### 14.6 Next falsification boundary
+
+The infrastructure-source question inside the repository is now materially narrowed. Before implementing or deleting the dormant grant, the owner must decide whether a dedicated platform-global Task Scheduler is intended at all. If it is intended, its source, deployment target, signer-key custody, Tenant/Project authority, admission digest, and execution provenance must be specified and independently verified. If it is not intended, removal of the dormant grant is a separate security change requiring an explicit owner decision and regression coverage.
+
+External accounts, third-party schedulers, and out-of-repository callers remain outside the inspected evidence and stay **Unknown**. No implementation, removal, merge, or deployment is authorized by this audit.

@@ -29,7 +29,7 @@ Make the Durable Object Outbox completion boundary reflect a verified downstream
 
 ## Contract
 
-recordOutboxReceipt accepts a positive leaseGeneration. It first checks source-event identity and any existing receipt. An identical existing receipt returns replay: true; a different receipt for the same event ID returns OUTBOX_EVENT_ID_CONFLICT. A new receipt is accepted only while the source event is IN_PROGRESS, its generation equals the supplied generation, and its lease has not expired. Task-version and tenant/project checks remain mandatory. The receipt row insert and Outbox transition to COMPLETED occur inside the same transactionSync callback. A failed SQL statement rolls back both and the consumer assertion JTI.
+recordOutboxReceipt accepts a positive leaseGeneration. It first checks source-event identity and any existing receipt. An identical existing receipt returns replay: true; a different receipt for the same event ID returns OUTBOX_EVENT_ID_CONFLICT. A new receipt is accepted only while the source event is IN_PROGRESS, its generation equals the supplied generation, and its lease has not expired. Task-version and tenant/project checks remain mandatory. The receipt row insert stores the positive lease_generation, and the Outbox transition to COMPLETED occur inside the same transactionSync callback. Schema v10 adds the generation column additively; pre-existing receipts receive generation 0 and remain legacy/unverified. A failed SQL statement rolls back the receipt, Outbox transition, and consumer assertion JTI.
 
 completeOutbox remains as a compatibility/recovery operation, but it cannot complete an event without a matching receipt. Replaying completion for an already completed event with a receipt is idempotent.
 
@@ -39,6 +39,7 @@ The stable eventId remains the downstream idempotency key. The external destinat
 
 - No receipt: completion is rejected and the Outbox row remains IN_PROGRESS.
 - Wrong lease generation or expired lease: new receipt is rejected without writing a receipt.
+- The receipt row persists the exact generation that authorized the settlement; legacy generation-0 receipts cannot authorize a new completion.
 - Same event, same receipt: replay is reported without inserting a second row.
 - Same event, different event type/schema/hash: conflict is reported.
 - SQLite abort during receipt insert: no receipt, no completion, and the consumer JTI is not consumed.

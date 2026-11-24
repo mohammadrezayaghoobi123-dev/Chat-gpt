@@ -124,6 +124,26 @@ test("issues an Ed25519 admission grant and verifies the exact tenant, project, 
   });
 });
 
+
+test("digests a full-size admission grant without widening the general text digest limit", async () => {
+  const createTaskAdmissionGrant = requireFunction("createTaskAdmissionGrant");
+  const admissionGrantDigest = requireFunction("taskAdmissionGrantDigest");
+  const admissionTextDigest = requireFunction("admissionTextDigest");
+  const keys = await makeKeyPair();
+  const token = await createTaskAdmissionGrant(keys.privateKeys, "test", claims());
+
+  assert.ok(token.length > 512, "grant fixture must exceed the generic text digest limit");
+  assert.match(await admissionGrantDigest(token), /^[a-f0-9]{64}$/);
+  await assert.rejects(
+    admissionGrantDigest("x".repeat(4097)),
+    error => error.code === "TASK_ADMISSION_INVALID",
+  );
+  await assert.rejects(
+    admissionTextDigest("x".repeat(513)),
+    error => error.code === "TASK_ADMISSION_INVALID",
+  );
+});
+
 test("rejects an admission grant whose Ed25519 signature has been modified", async () => {
   const createTaskAdmissionGrant = requireFunction("createTaskAdmissionGrant");
   const verifyTaskAdmissionGrant = requireFunction("verifyTaskAdmissionGrant");

@@ -299,7 +299,7 @@ async function verifyDirectoryAdmissionReceipt(env, receipt, task, idempotencyKe
     const nowSeconds = Math.floor(Date.now() / 1000);
     if (
       claims.version !== 1 ||
-      claims.tokenType !== "admission-receipt" ||
+      claims.receiptType !== "admission-receipt" ||
       claims.issuer !== "tenant-directory-admission" ||
       claims.audience !== "orchestrator-ledger" ||
       typeof claims.admissionId !== "string" ||
@@ -965,6 +965,9 @@ export class OrchestratorLedger extends DurableObject {
       idempotencyKey,
     );
     if (!verifiedReceipt) return { created: false, reason: "TASK_ADMISSION_INVALID" };
+    if (inputHash !== verifiedReceipt.taskDigest) {
+      return { created: false, reason: "TASK_INPUT_HASH_MISMATCH" };
+    }
 
     let verifiedAssertion;
     try {

@@ -494,7 +494,7 @@ export class TenantDirectory extends DurableObject {
     const expiresAt = issuedAt + ADMISSION_RECEIPT_TTL_SECONDS;
     const claims = {
       version: 1,
-      tokenType: "admission-receipt",
+      receiptType: "admission-receipt",
       issuer: "tenant-directory-admission",
       audience: "orchestrator-ledger",
       issuedAt,

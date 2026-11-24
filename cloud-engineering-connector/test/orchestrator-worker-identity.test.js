@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { createScheduledWorkerAssertion, verifyWorkerAssertion } from "../orchestrator-worker-identity.js";
 
 const key = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
@@ -133,4 +134,23 @@ test("legacy HMAC signer refuses to mint Executor assertions", async () => {
     }),
     error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
   );
+});
+
+test("production Worker keeps the dormant Scheduler createTask grant free of runtime mint call sites", async () => {
+  const workerSource = await readFile(new URL("../worker.js", import.meta.url), "utf8");
+  const signerCalls = workerSource.match(/\\bcreateScheduledWorkerAssertion\\s*\\(/g) ?? [];
+
+  assert.equal(
+    signerCalls.length,
+    3,
+    "Only the publisher, receipt consumer, and DLQ archiver may mint internal Worker assertions in the current runtime.",
+  );
+  assert.doesNotMatch(
+    workerSource,
+    /orchestrator-scheduler/,
+    "The dormant Scheduler createTask grant must not acquire a Worker runtime caller without a separately reviewed Scheduler contract.",
+  );
+  assert.match(workerSource, /const workerId = "orchestrator-outbox-publisher"/);
+  assert.match(workerSource, /const consumerId = "orchestrator-outbox-consumer"/);
+  assert.match(workerSource, /const archiverId = "orchestrator-outbox-dlq-archiver"/);
 });

@@ -99,7 +99,7 @@ For each successful claimOutbox:
 3. Return the plaintext token only to the same Durable Object alarm handler's trusted runtime memory. Before Queue publication, encrypt it with AES-256-GCM under a dedicated queue-encryption key; never serialize the plaintext token into a Queue message.
 4. Keep the existing publisher lease owner and generation checks.
 
-The Queue envelope contains only an authenticated ciphertext capability. Use a 256-bit AES-GCM key from OUTBOX_QUEUE_ENCRYPTION_KEYS, a 96-bit random nonce, a 128-bit authentication tag, and associated data exactly `v1\\n{ledgerObjectId}\\n{eventId}\\n{leaseGeneration}\\n{keyId}`. The consumer must authenticate/decrypt the capability before using it. Key IDs support one active key plus an old decryption key during rotation; removing an old key requires draining all main/DLQ messages encrypted under it.
+The Queue envelope contains only an authenticated ciphertext capability. Use a 256-bit AES-GCM key from OUTBOX_QUEUE_ENCRYPTION_KEYS, a 96-bit random nonce, a 128-bit authentication tag, and associated data exactly `v1\n{ledgerObjectId}\n{eventId}\n{leaseGeneration}\n{keyId}`. The consumer must authenticate/decrypt the capability before using it. Key IDs support one active key plus an old decryption key during rotation; removing an old key requires draining all main/DLQ messages encrypted under it.
 
 Add renewOutboxLease with this contract:
 
@@ -146,7 +146,7 @@ Outbound body is canonical JSON containing the versioned event envelope and sour
 - X-Outbox-Timestamp: <Unix-seconds>
 - X-Outbox-Signature: v1=<hex-HMAC-SHA256>
 
-The HMAC input is exactly v1, a newline, timestamp, a newline, and rawBody. The destination must verify the HMAC and a bounded freshness window. For the same Idempotency-Key and same body, the destination must return 2xx for both first acceptance and duplicate acceptance. Reuse of the same key with a different body must return a permanent conflict (409).
+The HMAC input is exactly the bytes of `v1\n{timestamp}\n{rawBody}` (one LF byte between each field, UTF-8 encoded, without a trailing newline). The destination must verify the HMAC and a bounded freshness window. For the same Idempotency-Key and same body, the destination must return 2xx for both first acceptance and duplicate acceptance. Reuse of the same key with a different body must return a permanent conflict (409).
 
 Use a bounded request timeout (proposed 20 seconds), redirect: manual, no caller-controlled URL, and no token forwarding. Never log request bodies, capability tokens, HMAC keys, or response bodies.
 

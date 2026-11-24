@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { createAgentWorkerAssertion } from "../orchestrator-worker-identity.js";
+import { createAgentWorkerAssertion, createScheduledWorkerAssertion, verifyWorkerAssertion } from "../orchestrator-worker-identity.js";
 
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
@@ -133,8 +133,133 @@ describe("OrchestratorLedger globally unique identifiers across tenant scopes", 
         tenant_id: taskA.tenantId,
         project_id: taskA.projectId,
         task_id: taskA.taskId,
-        details_json: JSON.stringify({ owner: "tenant-alpha" }),
+        details_json: JSON.string
+
+  it("rejects a Task ID already owned by another tenant/project without altering the original Task or Claim Candidate", async () => {
+    const ledger = ledgerFor("global-task-id-collision-across-tenant-scopes");
+    await runInDurableObject(ledger, async instance => {
+      const now = 1_800_000_000_000;
+      const keySet = JSON.stringify({ test: "a".repeat(64) });
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = keySet;
+      const taskId = "global-task-id-owner";
+
+      const create = async ({ tenantId, projectId, idempotencyKey, inputHash }) => {
+        const workerAssertion = await createScheduledWorkerAssertion(keySet, "test", {
+          subject: "orchestrator-scheduler",
+          role: "system",
+          operation: "createTask",
+          nowMs: now,
+        });
+        const verified = await verifyWorkerAssertion(keySet, workerAssertion, {
+          subject: "orchestrator-scheduler",
+          role: "system",
+          operation: "createTask",
+          nowMs: now,
+        });
+        const outcome = await instance.createTask({
+          task: {
+            taskId,
+            tenantId,
+            projectId,
+            state: "SCHEDULED",
+            version: 1,
+            createdAt: now,
+            updatedAt: now,
+            executorId: "worker-a",
+            agentRound: 0,
+          },
+          idempotencyKey,
+          inputHash,
+          now,
+          workerId: "orchestrator-scheduler",
+          workerAssertion,
+        }).then(
+          result => ({ threw: false, result }),
+          error => ({ threw: true, errorName: error?.name ?? "UnknownError" }),
+        );
+        return { outcome, jti: verified.jti };
+      };
+
+      const original = await create({
+        tenantId: "tenant-alpha",
+        projectId: "project-red",
+        idempotencyKey: "create-alpha-original",
+        inputHash: "b".repeat(64),
       });
+      const collision = await create({
+        tenantId: "tenant-beta",
+        projectId: "project-blue",
+        idempotencyKey: "create-beta-substitute",
+        inputHash: "c".repeat(64),
+      });
+
+      const sql = instance.ctx.storage.sql;
+      const persistedTasks = sql.exec(
+        "SELECT task_id, tenant_id, project_id FROM orchestrator_tasks WHERE task_id = ?",
+        taskId,
+      ).toArray();
+      const claimCandidates = sql.exec(
+        "SELECT task_id, executor_id, tenant_id, project_id FROM orchestrator_claim_candidates WHERE task_id = ?",
+        taskId,
+      ).toArray();
+      const consumedAssertions = sql.exec(
+        "SELECT jti FROM orchestrator_consumed_assertions WHERE jti IN (?, ?) ORDER BY jti",
+        original.jti,
+        collision.jti,
+      ).toArray();
+
+      expect(original.outcome).toMatchObject({
+        threw: false,
+        result: {
+          created: true,
+          task: {
+            taskId,
+            tenantId: "tenant-alpha",
+            projectId: "project-red",
+            state: "SCHEDULED",
+            version: 1,
+          },
+        },
+      });
+      expect(collision.outcome).toEqual({
+        threw: false,
+        result: {
+          created: false,
+          conflict: true,
+          reason: "TASK_ID_CONFLICT",
+        },
+      });
+      expect(persistedTasks).toEqual([{
+        task_id: taskId,
+        tenant_id: "tenant-alpha",
+        project_id: "project-red",
+      }]);
+      expect(claimCandidates).toEqual([{
+        task_id: taskId,
+        executor_id: "worker-a",
+        tenant_id: "tenant-alpha",
+        project_id: "project-red",
+      }]);
+      expect(consumedAssertions).toEqual(
+        [original.jti, collision.jti].sort().map(jti => ({ jti })),
+      );
+      expect(instance.getTask({
+        taskId,
+        tenantId: "tenant-alpha",
+        projectId: "project-red",
+      })).toMatchObject({
+        taskId,
+        tenantId: "tenant-alpha",
+        projectId: "project-red",
+        state: "SCHEDULED",
+        version: 1,
+      });
+      expect(instance.getTask({
+        taskId,
+        tenantId: "tenant-beta",
+        projectId: "project-blue",
+      })).toBeNull();
     });
   });
+
 });

@@ -3,6 +3,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { OrchestratorLedger } from "../index.js";
 import worker from "../worker.js";
+import { ORCHESTRATOR_LEDGER_SCHEMA_VERSION } from "../orchestrator-ledger-contract.js";
 
 function createIsolatedLedgerBinding() {
   const namespace = env.ORCHESTRATOR_LEDGER;
@@ -43,7 +44,7 @@ describe("Worker readiness with the real OrchestratorLedger Durable Object", () 
     const { stub, binding } = createIsolatedLedgerBinding();
 
     const directProbe = await stub.ping();
-    expect(directProbe).toEqual({ ok: true, schemaVersion: 8 });
+    expect(directProbe).toEqual({ ok: true, schemaVersion: ORCHESTRATOR_LEDGER_SCHEMA_VERSION });
 
     await runInDurableObject(stub, instance => {
       expect(instance).toBeInstanceOf(OrchestratorLedger);

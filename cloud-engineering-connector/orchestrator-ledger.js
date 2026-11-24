@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { ORCHESTRATOR_LEDGER_SCHEMA_VERSION as LEDGER_SCHEMA_VERSION } from "./orchestrator-ledger-contract.js";
 import { transitionTask as transitionTaskCore, TASK_STATES } from "./orchestrator-core.js";
 import { assertAgentRoundLimit } from "./orchestrator-protocol.js";
 import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orchestrator-protocol.js";
@@ -7,7 +8,7 @@ import { verifyExecutorWorkerAssertionSignature } from "./orchestrator-executor-
 import { verifyOwnerAssertionSignature, isOwnerAssertionTimeValidAt } from "./orchestrator-owner-assertion.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
-const LEDGER_SCHEMA_VERSION = 8;
+
 const LEDGER_SCHEMA_MIGRATION_NAME = "v8-ledger-security-clock";
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const MAX_RECORD_BYTES = 32_768;

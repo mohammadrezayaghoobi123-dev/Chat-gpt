@@ -35,7 +35,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
             "commit": lambda entry: entry.update(commits=["0" * 40]),
             "path": lambda entry: entry.update(paths=[".*"]),
             "condition": lambda entry: entry.update(condition="OR"),
-            "regex target": lambda entry: entry.update(regexTarget="secret"),
+            "regex target": lambda entry: entry.update(regexTarget="invalid"),
             "missing regex": lambda entry: entry.pop("regexes", None),
             "broad regex": lambda entry: entry.update(regexes=[".*"]),
         }
@@ -53,7 +53,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
 
     def test_global_allowlist_policy_rejects_new_or_unscoped_exceptions(self):
         changed = copy.deepcopy(self.config)
-        changed["allowlists"][0]["regexTarget"] = "secret"
+        changed["allowlists"][0]["regexTarget"] = "invalid"
         self.assertTrue(validate_config(changed, ROOT))
 
         changed = copy.deepcopy(self.config)

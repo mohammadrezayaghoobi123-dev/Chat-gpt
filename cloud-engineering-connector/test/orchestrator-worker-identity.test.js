@@ -134,3 +134,58 @@ test("legacy HMAC signer refuses to mint Executor assertions", async () => {
     error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
   );
 });
+
+
+test("verifier accepts the exact expiry skew boundary and rejects one second beyond it", async () => {
+  const token = await createScheduledWorkerAssertion(keySet, "worker-v1", {
+    subject: "orchestrator-outbox-publisher",
+    role: "publisher",
+    operation: "claimOutbox",
+    nowMs,
+  });
+
+  const atBoundary = await verifyWorkerAssertion(keySet, token, {
+    subject: "orchestrator-outbox-publisher",
+    role: "publisher",
+    operation: "claimOutbox",
+    nowMs: nowMs + 65_000,
+  });
+  assert.equal(atBoundary.expiresAt, Math.floor(nowMs / 1000) + 60);
+
+  await assert.rejects(
+    verifyWorkerAssertion(keySet, token, {
+      subject: "orchestrator-outbox-publisher",
+      role: "publisher",
+      operation: "claimOutbox",
+      nowMs: nowMs + 66_000,
+    }),
+    error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
+  );
+});
+
+test("verifier accepts the exact future-issued skew boundary and rejects one second beyond it", async () => {
+  const token = await createScheduledWorkerAssertion(keySet, "worker-v1", {
+    subject: "orchestrator-outbox-publisher",
+    role: "publisher",
+    operation: "claimOutbox",
+    nowMs: nowMs + 5_000,
+  });
+
+  const atBoundary = await verifyWorkerAssertion(keySet, token, {
+    subject: "orchestrator-outbox-publisher",
+    role: "publisher",
+    operation: "claimOutbox",
+    nowMs,
+  });
+  assert.equal(atBoundary.issuedAt, Math.floor(nowMs / 1000) + 5);
+
+  await assert.rejects(
+    verifyWorkerAssertion(keySet, token, {
+      subject: "orchestrator-outbox-publisher",
+      role: "publisher",
+      operation: "claimOutbox",
+      nowMs: nowMs - 1_000,
+    }),
+    error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
+  );
+});

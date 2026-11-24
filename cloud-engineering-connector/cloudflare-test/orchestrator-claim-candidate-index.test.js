@@ -1,11 +1,22 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
 import { CLAIM_CANDIDATE_QUERY } from "../orchestrator-ledger.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 
-const now = 1_800_000_000_000;
+let now = 0;
+let wallClockSpy;
+
+beforeEach(() => {
+  now = Math.floor(Date.now() / 1000) * 1000;
+  wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+});
+
+afterEach(() => {
+  wallClockSpy?.mockRestore();
+  wallClockSpy = undefined;
+});
 const TEST_ASSERTION_KID = "test-v1";
 const TEST_ASSERTION_KEY = Uint8Array.from(
   "3031323334353637383961626364656630313233343536373839616263646566".match(/../g),

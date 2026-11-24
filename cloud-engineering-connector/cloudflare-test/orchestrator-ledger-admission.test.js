@@ -292,9 +292,7 @@ async function createAdmittedTask(instance, fixture, { grant = fixture.grant, ta
     });
   });
 
-});
 
-describe("OrchestratorLedger admission receipt probe", () => {
   it("distinguishes absent, exactly admitted, and conflicting admission state without returning bearer material", async () => {
     const fixture = await taskAdmissionFixture();
     const ledger = env.ORCHESTRATOR_LEDGER.get(

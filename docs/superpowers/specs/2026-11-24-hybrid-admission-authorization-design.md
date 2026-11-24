@@ -639,3 +639,21 @@ The following are recommendations for review, not decisions attributed to the ow
 | Key custody | External signer where assurance/service constraints permit; otherwise isolated signer Worker, with shared binding explicitly treated as lower assurance. | OPEN |
 
 No implementation, schema migration, Worker binding, Cron Trigger, secret, staging deployment, Production deployment, or merge is authorized by this addendum. The next engineering phase is implementation planning only after the owner decisions are accepted and the blocking evidence gates are closed.
+
+### 17.12 Runtime-proven signing-key custody decision
+
+The Cloudflare Vitest Durable Object runtime was used to test direct persistence of a Web Crypto Ed25519 `CryptoKey` in SQLite-backed Durable Object storage. The private key is non-extractable in memory, but `ctx.storage.put()` rejects the object with `DataCloneError: Could not serialize object of type "CryptoKey"`. Therefore, direct persistence of a `CryptoKey` object is not a viable key-custody design on the tested runtime.
+
+**Selected v1 implementation direction: isolated internal signer Worker with tenant-bound envelope encryption.**
+
+1. Deploy a separate signer Worker with `workers_dev = false`, no public routes, and no public fetch exposure. The application Worker reaches it only through a Cloudflare Service Binding.
+2. Bind `ADMISSION_SIGNER_MASTER_KEYS` only to the signer Worker. The primary application Worker and TenantDirectory Durable Objects must not receive the wrapping master key.
+3. The signer generates one Ed25519 key pair per tenant. It exports the private PKCS#8 bytes only inside the signer Worker, derives a tenant/key-specific AES-256-GCM wrapping key using HKDF-SHA-256, and encrypts the private bytes. Associated authenticated data binds the tenant ID, signing key ID, wrapping-key ID, version, and public-key fingerprint/material.
+4. The signer returns only the public key and an encrypted private-key envelope. TenantDirectory stores the envelope and public key in its own tenant-private storage. No plaintext PKCS#8, private JWK, or private CryptoKey is stored in TenantDirectory or returned to the application Worker.
+5. For signing, TenantDirectory sends the encrypted envelope and exact canonical message bytes through the Service Binding. The signer decrypts the envelope in memory, imports the private key as non-extractable, signs the message, wipes the transient PKCS#8 byte buffer, and returns only the signature.
+6. Verification uses the public key already bound to the tenant/key ID. Public-key substitution, tenant substitution, altered ciphertext, unknown/revoked wrapping-key IDs, missing secrets, or invalid signatures fail closed.
+7. Master-key rotation uses a key ring with one active wrapping-key ID and a bounded set of previous IDs for overlap. New envelopes use only the active ID. Old IDs cannot be removed until all remaining envelopes have been rewrapped and reconciled. The removal gate requires a complete inventory of active/pending Admission and Permit records.
+
+**Security classification:** this is a separated signer service and envelope-encryption design, not an HSM/KMS claim. The signer Worker's master-key binding is the trust root; compromise of that Worker or its master secret can affect multiple tenants. The Service Binding reduces the application Worker's direct key-extraction surface but does not remove the signer's own blast radius. A stronger external KMS/HSM remains a future assurance upgrade, not a requirement silently assumed by v1.
+
+**Runtime gates:** actual Service Binding availability, private-key envelope round-trip, tenant-bound HKDF/AES-GCM verification, key rotation overlap/removal, signer restart behavior, and signer-unavailable fail-closed behavior must pass tests before staging activation. The signer secret is not present in the connected account and must not be created or deployed by this change.

@@ -82,9 +82,10 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                 self.assertEqual(entries[description]["regexTarget"], "secret")
                 pattern = re.compile(entries[description]["regexes"][0])
                 key = fixture.group(1)
-                self.assertIsNotNone(pattern.fullmatch(key))
+                finding_match = f'key = "{key}"'
+                self.assertIsNotNone(pattern.fullmatch(finding_match))
                 mutated = ("0" if key[0] != "0" else "1") + key[1:]
-                self.assertIsNone(pattern.fullmatch(mutated))
+                self.assertIsNone(pattern.fullmatch(f'key = "{mutated}"'))
 
     def test_validator_rejects_non_literal_line_pattern(self):
         changed = copy.deepcopy(self.config)

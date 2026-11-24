@@ -60,7 +60,7 @@ It sets one alarm for that time, or deletes the alarm if no dispatchable/recover
 
 When enqueueOutbox, transitionTask(outboxEvent), or executeOwnerCommand(release) writes a new Outbox row, it schedules the alarm inside the same asynchronous storage transaction. Idempotent enqueue replay also recomputes the alarm so a previous missed wake-up can be repaired. claimOutbox, lease renewal, failure settlement, receipt settlement, completion, and owner-command cancellation/quarantine recompute the next alarm after their state transitions. The transaction never contains Queue sends, webhook calls, Web Crypto hashing, or other network I/O.
 
-The alarm handler claims one due row at a time, creates a signed fixed-principal publisher assertion, and sends a minimal versioned Queue envelope. The claim storage transaction schedules the lease-expiry watchdog before the external Queue send occurs. If Queue send fails, the publisher attempts a token-fenced failOutbox transition to durable retry state. If the process fails between claim and send, the existing lease-expiry alarm reclaims the row. If Queue send succeeds but the producer cannot observe/finish the call, a later lease reclaim can publish a duplicate; consumer fencing and destination idempotency handle this at-least-once case.
+The alarm handler claims one due row at a time, creates a signed fixed-principal publisher assertion, and sends a minimal versioned Queue envelope using `this.env.OUTBOX_QUEUE.send(envelope, { contentType: "json" })`. The claim storage transaction schedules the lease-expiry watchdog before the external Queue send occurs. If Queue send fails, the publisher attempts a token-fenced failOutbox transition to durable retry state. If the process fails between claim and send, the existing lease-expiry alarm reclaims the row. If Queue send succeeds but the producer cannot observe/finish the call, a later lease reclaim can publish a duplicate; consumer fencing and destination idempotency handle this at-least-once case.
 
 Cloudflare confirms a resolved Queue.send() means the message has been written to disk ([Queue JavaScript API](https://developers.cloudflare.com/queues/configuration/javascript-apis/)). This is not a distributed transaction with SQLite; the recovery mechanism is deliberate at-least-once replay.
 
@@ -125,7 +125,7 @@ Extend failOutbox to require the current token and exact active lease. It must d
 
 Only the two fixed actor/role pairs are permitted. The Worker-assertion signer allowlist is extended only for these exact fixed principals and operations; alarm-originated publisher claims and Queue-originated consumer operations are not exposed through the MCP/HTTP request path. Failure settlement clears the token. Retryable failures schedule the existing bounded exponential retry (1s base, 15m cap, 8 attempts); permanent failures set retry_state = 'DEAD_LETTER' on the durable Outbox row; the existing status column remains PENDING. The Queue message is acknowledged after the Ledger has durably accepted the retry/dead-letter decision, preventing Queue retries from reusing a now-invalid token.
 
-The Queue DLQ archiver decrypts the authenticated capability only in Worker memory, then checks its token digest and generation in the owning Ledger. It may terminalize the source row only when that exact capability is still current. A stale DLQ message can be archived but cannot change a newer lease. The persisted archive body retains the original encrypted envelope (not plaintext); its stored body hash is calculated over the exact original Queue body before any normalization.
+The Queue DLQ archiver decrypts the authenticated capability only in Worker memory, then checks its token digest and generation in the owning Ledger. It may terminalize the source row only when that exact capability is still current. A stale DLQ message can be archived but cannot change a newer lease. The persisted archive body retains the canonical JSON encrypted envelope (not plaintext). Because the Queue consumer receives `message.body` as a structured-clone value rather than raw transport bytes, the archive digest is explicitly `sha256Canonical({ queueName, messageId, messageAttempts, messageTimestamp, body: envelope })` over the validated received object before any redaction; no claim is made about inaccessible raw wire bytes.
 
 ### 3.4 HTTPS webhook contract
 
@@ -225,7 +225,7 @@ The currently inspected Quarantine Queues have a one-day retention period and no
 - no endpoint is read from message content.
 
 ### DLQ/quarantine tests
-- archive hash is computed over the exact original encrypted Queue envelope bytes;
+- archive hash is computed over the canonical JSON representation of the received encrypted envelope and its Queue metadata;
 - persisted body contains the encrypted capability envelope only and no plaintext lease token;
 - archive replay is idempotent and conflicting message IDs are rejected;
 - only an exact current token/generation can terminalize the source event;

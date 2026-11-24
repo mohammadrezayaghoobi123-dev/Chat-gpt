@@ -191,3 +191,13 @@ This snapshot records the latest completed code/security evidence before this fi
 - This final record is itself a documentation-only update to `OPERATIONS.md`. Gitleaks run `45461431988` covers the pre-update head `f4c43a7`, not the resulting documentation commit. Do not represent it as a scan of the commit that adds this snapshot.
 
 **Disposition:** keep PR #463 Draft. Preserve the unresolved review thread, full-history Gitleaks failure, independent-review requirement, and manual-canary gate. No merge, default-branch workflow registration, reviewer activation, model/provider dispatch, secret read, repository-policy change, Cloudflare deployment, or local-host change is authorized by this record.
+
+
+## Post-record exact-head Gitleaks result — 2026-11-24
+
+- Exact PR head scanned: `a2793da91ea1e858804fb1e99b532d4abba5c8fb`.
+- Hosted run: `45461675413`, completed with failure. PR-diff scan: **PASS**, 19 commits / approximately 256.44 KB, zero findings. All-fetched-refs scan: **FAIL**, 4,961 commits / approximately 15.25 MB, 13 `generic-api-key` findings (exit 2).
+- This confirms that the 13 historical findings persist at the exact scanned PR head. Their source/test/public-identifier classification remains `PROVISIONALLY_SUPPORTED`; no finding was suppressed or allowlisted. Credential reuse and revocation remain `UNKNOWN`.
+- This addendum itself is a documentation-only update to `OPERATIONS.md`; run `45461675413` covers its parent head `a2793da`, not the commit that adds this addendum. No executable source, test, workflow, package, or lockfile changes are included.
+
+**Gate:** full-history Gitleaks remains FAIL. Keep PR #463 Draft and preserve all existing activation, review, and merge blocks.

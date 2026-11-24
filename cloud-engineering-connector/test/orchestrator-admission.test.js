@@ -66,6 +66,28 @@ test("normalizes the Task projection consistently before computing its digest", 
   assert.throws(() => normalizeTaskForAdmission({ ...normalized, tenantId: "../foreign" }));
 });
 
+test("decodes admission claims as untrusted data without treating extraction as signature verification", async () => {
+  const createTaskAdmissionGrant = requireFunction("createTaskAdmissionGrant");
+  const decodeTaskAdmissionGrantClaims = requireFunction("decodeTaskAdmissionGrantClaims");
+  const verifyTaskAdmissionGrant = requireFunction("verifyTaskAdmissionGrant");
+  const keys = await makeKeyPair();
+  const expected = claims();
+  const token = await createTaskAdmissionGrant(keys.privateKeys, "test", expected);
+  const decoded = decodeTaskAdmissionGrantClaims(token);
+  assert.equal(decoded.keyId, "test");
+  assert.equal(decoded.claims.sub, expected.principalId);
+  assert.equal(decoded.claims.taskDigest, expected.taskDigest);
+
+  const parts = token.split(".");
+  parts[3] = (parts[3][0] === "A" ? "B" : "A") + parts[3].slice(1);
+  const tampered = parts.join(".");
+  assert.equal(decodeTaskAdmissionGrantClaims(tampered).claims.sub, expected.principalId);
+  await assert.rejects(
+    verifyTaskAdmissionGrant(keys.publicKeys, tampered, { ...expected, nowMs: 1_800_000_000_000 }),
+    error => error.code === "TASK_ADMISSION_INVALID",
+  );
+});
+
 test("issues an Ed25519 admission grant and verifies the exact tenant, project, Task, and policy claims", async () => {
   const createTaskAdmissionGrant = requireFunction("createTaskAdmissionGrant");
   const verifyTaskAdmissionGrant = requireFunction("verifyTaskAdmissionGrant");

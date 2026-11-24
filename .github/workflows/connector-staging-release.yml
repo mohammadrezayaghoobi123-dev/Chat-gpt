@@ -51,6 +51,7 @@ jobs:
           node-version: "22"
           package-manager-cache: false
       - name: Verify GitHub Environment protection contract
+        id: environment-protection
         run: node scripts/verify-environment-protection.mjs
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -61,6 +62,7 @@ jobs:
         run: node scripts/verify-release-approval.mjs
         env:
           RELEASE_GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_ALLOWED_REVIEWER_IDS: ${{ steps.environment-protection.outputs.reviewer_user_ids }}
 
       - name: Validate MCP smoke credential
         env:

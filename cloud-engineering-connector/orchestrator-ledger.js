@@ -345,6 +345,7 @@ async function verifyDirectoryAdmissionReceipt(env, receipt, task, idempotencyKe
       typeof claims.resourceDigest !== "string" ||
       !SHA256.test(claims.resourceDigest) ||
       !(claims.selectedResourceDigest === "*" || SHA256.test(claims.selectedResourceDigest ?? "")) ||
+      !(claims.selectedResourceDigest === "*" || claims.selectedResourceDigest === claims.resourceDigest) ||
       typeof claims.taskDigest !== "string" ||
       !SHA256.test(claims.taskDigest) ||
       typeof claims.idempotencyKeyDigest !== "string" ||

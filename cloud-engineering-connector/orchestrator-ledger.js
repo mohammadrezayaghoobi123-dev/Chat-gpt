@@ -46,7 +46,7 @@ function trustedLedgerNow(sql) {
   if (!Number.isSafeInteger(previousHighWaterMs) || previousHighWaterMs < 0) {
     throw fail("Ledger security clock state is invalid.", "LEDGER_CLOCK_STATE_INVALID");
   }
-  const trustedNowMs = Math.max(wallClockNowMs, previousHighWaterMs);
+  const trustedNowMs = wallClockNowMs;
   sql.exec(
     `INSERT INTO orchestrator_security_clock (clock_id, high_water_ms)
      VALUES (1, ?)

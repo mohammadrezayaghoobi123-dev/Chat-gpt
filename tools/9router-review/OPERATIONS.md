@@ -255,7 +255,7 @@ No source, test, workflow, dependency, secret, repository-policy, `main`, Cloudf
 
 Exact blob evidence retrieved from the PR head `52b00c544e8c2fd499c11738cae4d075331f8fbc`:
 
-- `review.js` blob: `<review.js blob SHA to be recorded from the exact-head fetch>`; duplicate preflight begins at line 870; the final publication gate is at lines 940–941; the GitHub comment POST is at lines 944–950.
+- `review.js` blob: `9d5d60abe7551a0cfb63235b760cd61df8cb142a`; duplicate preflight begins at line 870; the final publication gate is at lines 940–941; the GitHub comment POST is at lines 944–950.
 - `review.test.mjs` blob: `104996a167d4a9e6883714eb89112d8f061eded6`; the retrieved 147,938-byte test file contains sequential duplicate suppression and ambiguous-first-POST reconciliation tests, but no concurrency/barrier/parallel-invocation/reservation/lease/at-most-once test was found by targeted source scan.
 - Workflow blob: `737e37cdafe3d12322226f493e78bf4856555a2e`; no `concurrency`, `group`, or `cancel-in-progress` directive exists. Reviewer remains disabled.
 - This corroborates the static race finding and the missing regression coverage. It is not a runtime reproduction and does not replace the required red-phase concurrent test.

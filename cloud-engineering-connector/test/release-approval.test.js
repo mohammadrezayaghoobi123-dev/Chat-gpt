@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { verifyReleaseApproval } from "../release-approval.js";
+import { parseTrustedReviewerIds, verifyReleaseApproval } from "../release-approval.js";
 
 const sha = "a".repeat(40);
 const headSha = "b".repeat(40);
@@ -29,7 +29,14 @@ function stagingPull(overrides = {}) {
   };
 }
 
-function approval(commitId = sha, login = reviewer, state = "APPROVED", submittedAt = date, userId = login === author ? authorId : login === reviewer ? reviewerId : unlistedReviewerId) {
+function reviewerUserId(login) {
+  if (login === author) return authorId;
+  if (login === reviewer) return reviewerId;
+  const commenter = /^commenter-(\\d+)$/.exec(login);
+  return commenter ? 1000 + Number(commenter[1]) : unlistedReviewerId;
+}
+
+function approval(commitId = sha, login = reviewer, state = "APPROVED", submittedAt = date, userId = reviewerUserId(login)) {
   return {
     user: { id: userId, login },
     state,
@@ -89,14 +96,14 @@ test("Staging rejects author self-approval and stale approvals", async () => {
       ...input({}),
       fetchImpl: fakeFetch([stagingPull()], [approval(sha, author)]),
     }),
-    /no independent approval/,
+    /no trusted independent approval/,
   );
   await assert.rejects(
     verifyReleaseApproval({
       ...input({}),
       fetchImpl: fakeFetch([stagingPull()], [approval(headSha)]),
     }),
-    /no independent approval/,
+    /no trusted independent approval/,
   );
 });
 
@@ -264,4 +271,45 @@ test("accepts an allowlisted immutable reviewer ID and returns it for traceabili
   });
   assert.equal(result.reviewerId, reviewerId);
   assert.equal(result.reviewCommitSha, sha);
+});
+
+test("parses only unique positive decimal GitHub user IDs", () => {
+  assert.deepEqual(parseTrustedReviewerIds("101, 202"), [101, 202]);
+  assert.deepEqual(parseTrustedReviewerIds(undefined), []);
+  assert.throws(() => parseTrustedReviewerIds("101,not-a-number"), /positive decimal GitHub user IDs/);
+  assert.throws(() => parseTrustedReviewerIds("101,101"), /duplicate GitHub user IDs/);
+  assert.throws(() => parseTrustedReviewerIds("9007199254740992"), /safe integer range/);
+});
+
+test("never accepts the PR author even when their numeric ID is configured", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({ trustedReviewerIds: [authorId, reviewerId] }),
+      fetchImpl: fakeFetch([stagingPull()], [approval(sha, author)]),
+    }),
+    /no trusted independent approval/,
+  );
+});
+
+test("ignores an untrusted change request when a trusted reviewer approved the exact candidate", async () => {
+  const result = await verifyReleaseApproval({
+    ...input({}),
+    fetchImpl: fakeFetch([stagingPull()], [
+      approval(sha, "untrusted-reviewer", "CHANGES_REQUESTED", "2026-11-02T12:05:00Z", unlistedReviewerId),
+      approval(sha, reviewer, "APPROVED", "2026-11-02T12:10:00Z", reviewerId),
+    ]),
+  });
+  assert.equal(result.reviewerId, reviewerId);
+});
+
+test("tracks a trusted reviewer latest state by immutable user ID across login changes", async () => {
+  const result = await verifyReleaseApproval({
+    ...input({}),
+    fetchImpl: fakeFetch([stagingPull()], [
+      approval(sha, reviewer, "CHANGES_REQUESTED", "2026-11-02T11:00:00Z", reviewerId),
+      approval(sha, "renamed-reviewer-login", "APPROVED", "2026-11-02T12:00:00Z", reviewerId),
+    ]),
+  });
+  assert.equal(result.reviewer, "renamed-reviewer-login");
+  assert.equal(result.reviewerId, reviewerId);
 });

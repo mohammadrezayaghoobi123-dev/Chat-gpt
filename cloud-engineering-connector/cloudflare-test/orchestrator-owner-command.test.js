@@ -2398,4 +2398,67 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+
+  it("rejects a Scheduler assertion that expires during asynchronous HMAC verification", async () => {
+    const ledger = ledgerFor("hmac-assertion-post-verification-expiry");
+    const taskId = "task-hmac-post-verification-expiry-0001";
+    const jti = "worker-jti-hmac-post-verification-expiry-0001";
+    const assertion = await workerAssertion(
+      "orchestrator-scheduler", "system", "createTask", now - 60_000, jti,
+    );
+
+    let runtimeNow = now;
+    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => runtimeNow);
+    const originalVerify = crypto.subtle.verify.bind(crypto.subtle);
+    const verifySpy = vi.spyOn(crypto.subtle, "verify").mockImplementation(async (...args) => {
+      runtimeNow = now + 6_000;
+      return originalVerify(...args);
+    });
+
+    try {
+      const result = await ledger.createTask({
+        task: {
+          ...task(taskId),
+          createdAt: now,
+          updatedAt: now,
+        },
+        idempotencyKey: "hmac-post-verification-expiry-key-0001",
+        inputHash: "7".repeat(64),
+        now,
+        workerId: "orchestrator-scheduler",
+        workerAssertion: assertion,
+      });
+
+      let durableState;
+      await runInDurableObject(ledger, async (_instance, state) => {
+        durableState = {
+          tasks: state.storage.sql.exec(
+            "SELECT task_id FROM orchestrator_tasks WHERE task_id = ?",
+            taskId,
+          ).toArray(),
+          consumedJtis: state.storage.sql.exec(
+            "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
+            jti,
+          ).toArray(),
+        };
+      });
+      expect({
+        outcome: { created: result.created, reason: result.reason ?? null },
+        durableState,
+      }).toEqual({
+        outcome: {
+          created: false,
+          reason: "AUTHENTICATED_WORKER_REQUIRED",
+        },
+        durableState: {
+          tasks: [],
+          consumedJtis: [],
+        },
+      });
+    } finally {
+      verifySpy.mockRestore();
+      dateNowSpy.mockRestore();
+    }
+  });
+
 });

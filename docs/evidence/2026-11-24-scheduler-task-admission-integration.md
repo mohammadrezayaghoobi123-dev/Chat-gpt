@@ -81,6 +81,8 @@ If a Ledger RPC fails after Directory has committed a reservation, the retry use
 
 The Directory grant has a bounded validity window of 300 seconds. A retry that arrives after that window is not silently re-authorized; the Directory's existing retry-window rejection remains a recovery blocker. A separate expired-reservation recovery protocol is required before claiming durable recovery across arbitrarily delayed retries.
 
+The recovery test explicitly invokes the same `ScheduledController` again after an injected transport interruption. It proves deterministic same-event replay at the application boundary; it does **not** prove that Cloudflare Cron Triggers automatically redeliver the same `scheduledTime` after a thrown exception. The reviewed Scheduled Handler and Cron Trigger documentation describes the event API, `noRetry()`, and event history, but does not establish a retry-delivery guarantee sufficient for this protocol. No automatic platform retry is assumed. A durable run coordinator, Workflow, or equivalent persisted retry mechanism must be designed and verified before runtime activation.
+
 ## 5. Hostile verification
 
 The new Cloudflare Durable Object tests cover:
@@ -97,11 +99,12 @@ A Cloudflare Vitest `createScheduledController()` test exercises the handler con
 
 ## 6. Known blockers before activation
 
-1. Create and review a dedicated scheduler Worker configuration and bind its Cron expressions explicitly; do not alter the existing public Worker configuration.
-2. Provision the Directory grant signing/verifying key material and Scheduler/Ledger assertion keys under a documented custody/rotation model. Keep the Scheduler assertion signing key out of public fetch/MCP code.
-3. Confirm and enforce the tenant-scoped Ledger ID mapping across all future Task claim, dispatch, reconciliation, and Outbox consumers.
-4. Design a bounded recovery/re-authorization protocol for Directory reservations whose 300-second grant window has expired.
-5. Add runtime monitoring for partial admission, stale reservations, signer failures, and Ledger RPC failures; then perform a separately approved staging activation and platform Cron smoke test.
+1. Design and verify a durable retry/run-coordination mechanism that preserves the original Cron event identity; do not assume platform Cron redelivery after handler failure.
+2. Create and review a dedicated scheduler Worker configuration and bind its Cron expressions explicitly; do not alter the existing public Worker configuration.
+3. Provision the Directory grant signing/verifying key material and Scheduler/Ledger assertion keys under a documented custody/rotation model. Keep the Scheduler assertion signing key out of public fetch/MCP code.
+4. Confirm and enforce the tenant-scoped Ledger ID mapping across all future Task claim, dispatch, reconciliation, and Outbox consumers.
+5. Design a bounded recovery/re-authorization protocol for Directory reservations whose 300-second grant window has expired.
+6. Add runtime monitoring for partial admission, stale reservations, signer failures, and Ledger RPC failures; then perform a separately approved staging activation and platform Cron smoke test.
 
 ## 7. Evidence and provenance
 

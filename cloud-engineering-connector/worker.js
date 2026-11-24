@@ -275,6 +275,7 @@ async function runScheduledAdmission(controller, env) {
    updatedAt:controller.scheduledTime
   };
   const idempotencyKey=idempotencyPrefix+":"+controller.scheduledTime+":"+taskId;
+  if(idempotencyKey.length>160)throw new Error("Scheduled idempotency key exceeds the supported length.");
   const schedulerAssertion=await createSchedulerInvocationAssertion(
    env.SCHEDULER_INVOCATION_KEYS,
    env.SCHEDULER_INVOCATION_ACTIVE_KEY_ID,
@@ -303,10 +304,7 @@ export default{
   try{response=await handleRequest(request,env)}catch{response=json({error:"internal_error"},500)}
   return applySecurityHeaders(request,applyCors(request,env,response));
  },
- async scheduled(controller,env,ctx){
-  const result=await runScheduledAdmission(controller,env);
-  if(result.processed>0&&ctx&&typeof ctx.waitUntil==="function"){
-   ctx.waitUntil(Promise.resolve());
-  }
+ async scheduled(controller,env,_ctx){
+  await runScheduledAdmission(controller,env);
  }
 };

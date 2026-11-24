@@ -340,7 +340,7 @@ describe("persistent Tenant Directory", () => {
     });
 
     const stub = env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName(tenantId));
-    await expect(stub.ping()).resolves.toMatchObject({ ok: true, schemaVersion: 2 });
+    await expect(stub.ping()).resolves.toMatchObject({ ok: true, schemaVersion: 3 });
   });
 
   it("advances each distinct policy scope once when membership is revoked", async () => {
@@ -616,7 +616,7 @@ describe("persistent Tenant Directory", () => {
         tenantId, "project-migration", principalId, "project.read",
       ).one().epoch),
     }));
-    expect(state.ping).toEqual({ ok: true, schemaVersion: 2 });
+    expect(state.ping).toEqual({ ok: true, schemaVersion: 3 });
     expect(state.epoch).toBe(1);
 
     await runInDurableObject(stub, instance => {
@@ -649,7 +649,7 @@ describe("persistent Tenant Directory", () => {
     const tenantId = "tenant-epoch-schema-corruption";
     const stub = env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName(tenantId));
     await runInDurableObject(stub, instance => {
-      expect(instance.ping()).toEqual({ ok: true, schemaVersion: 2 });
+      expect(instance.ping()).toEqual({ ok: true, schemaVersion: 3 });
       instance.ctx.storage.sql.exec("DROP TABLE tenant_policy_scope_epochs");
     });
     await expect(runInDurableObject(stub, instance => instance.ensureSchema()))

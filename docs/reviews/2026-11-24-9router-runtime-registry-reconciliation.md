@@ -175,3 +175,16 @@ The next valid step is to obtain a sanitized, non-secret runtime identity record
 ## 9. Safety boundary
 
 This is a documentation-only audit record. It does not modify application code, CI workflows, secrets, repository settings, permissions, default branch, production services, Cloudflare, the local machine, or any running 9Router instance. The existing PR remains Draft and unmerged.
+
+
+## 10. Adversarial source-cache conflict
+
+A separate web-search index result for the Docker Hub repository overview / a `latest` layer page surfaced a different digest prefix, `sha256:12086f978...`. In the same audit, direct Docker Hub tag API extraction for both `0.5.123` and `latest` returned the full index digest `sha256:b5f68a9d0f89a805f574b32ed00103a7f205ae0ddaa4e508ad6440e58a9bd07b`.
+
+The search-index snippet did not provide a reliable registry snapshot timestamp and may be cached or temporally stale; however, that explanation is not independently proven. Therefore:
+- Exact version tag `0.5.123` → index digest `b5f68a9d...`: PASS based on direct tag API response.
+- `latest` equals `0.5.123` across every public observation: UNKNOWN due to conflicting search-index evidence.
+- `latest` is not accepted as a stable identity reference.
+- No claim is made that the registry was compromised, that the tag moved, or that the search result is false.
+
+This conflict is retained rather than suppressed. Runtime pinning must use the exact immutable digest, not `latest`.

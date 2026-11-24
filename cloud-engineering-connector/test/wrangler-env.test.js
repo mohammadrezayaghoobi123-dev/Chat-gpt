@@ -49,26 +49,34 @@ test("Production and Staging enable persisted custom logs without invocation log
   }
 });
 
+function bindingBlock(header, binding, className) {
+  return [header, 'name = "' + binding + '"', 'class_name = "' + className + '"'].join("\n");
+}
+
+function exportBlock(className) {
+  return ["[exports." + className + "]", 'type = "durable-object"', 'storage = "sqlite"'].join("\n");
+}
+
 test("Production and Staging use declarative exports for the existing SQLite WriteControl class", () => {
   const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
   const entrypoint = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-  assert.ok(production.includes("[[durable_objects.bindings]]\\nname = \\"WRITE_CONTROL\\"\\nclass_name = \\"WriteControl\\""));
-  assert.ok(staging.includes("[[env.staging.durable_objects.bindings]]\\nname = \\"WRITE_CONTROL\\"\\nclass_name = \\"WriteControl\\""));
-  assert.ok(config.includes("[exports.WriteControl]\\ntype = \\"durable-object\\"\\nstorage = \\"sqlite\\""));
+  assert.ok(production.includes(bindingBlock("[[durable_objects.bindings]]", "WRITE_CONTROL", "WriteControl")));
+  assert.ok(staging.includes(bindingBlock("[[env.staging.durable_objects.bindings]]", "WRITE_CONTROL", "WriteControl")));
+  assert.ok(config.includes(exportBlock("WriteControl")));
   assert.ok(entrypoint.includes('export { WriteControl } from "./write-control.js"'));
 });
 
 test("Production and Staging declare KnowledgeStore and OrchestratorLedger as SQLite exports", () => {
   const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
   const entrypoint = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-  for (const [binding, className, modulePath, moduleText] of [
-    ["KNOWLEDGE_STORE", "KnowledgeStore", "./knowledge-store.js", "[exports.KnowledgeStore]\\ntype = \\"durable-object\\"\\nstorage = \\"sqlite\\""],
-    ["ORCHESTRATOR_LEDGER", "OrchestratorLedger", "./orchestrator-ledger.js", "[exports.OrchestratorLedger]\\ntype = \\"durable-object\\"\\nstorage = \\"sqlite\\""],
+  for (const [binding, className, modulePath] of [
+    ["KNOWLEDGE_STORE", "KnowledgeStore", "./knowledge-store.js"],
+    ["ORCHESTRATOR_LEDGER", "OrchestratorLedger", "./orchestrator-ledger.js"],
   ]) {
-    assert.ok(production.includes("[[durable_objects.bindings]]\\nname = \\"" + binding + "\\"\\nclass_name = \\"" + className + "\\""));
-    assert.ok(staging.includes("[[env.staging.durable_objects.bindings]]\\nname = \\"" + binding + "\\"\\nclass_name = \\"" + className + "\\""));
-    assert.ok(config.includes(moduleText));
-    assert.ok(entrypoint.includes("export { " + className + " } from \\"" + modulePath + "\\""));
+    assert.ok(production.includes(bindingBlock("[[durable_objects.bindings]]", binding, className)));
+    assert.ok(staging.includes(bindingBlock("[[env.staging.durable_objects.bindings]]", binding, className)));
+    assert.ok(config.includes(exportBlock(className)));
+    assert.ok(entrypoint.includes("export { " + className + " } from \"" + modulePath + "\""));
   }
 });
 

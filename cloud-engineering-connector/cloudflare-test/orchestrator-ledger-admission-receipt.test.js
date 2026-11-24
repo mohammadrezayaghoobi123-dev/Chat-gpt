@@ -124,10 +124,16 @@ async function fixture(name, overrides = {}) {
     { name: "Ed25519" }, pair.privateKey, signingBytes,
   ));
   const receipt = { header, claims, signature: encodeBase64Url(signature) };
-  const mintWorkerAssertion = () => createScheduledWorkerAssertion(WORKER_KEYS, "test", {
+  const mintWorkerAssertion = (nowMs = NOW) => createScheduledWorkerAssertion(WORKER_KEYS, "test", {
     subject: "orchestrator-scheduler",
     role: "system",
     operation: "projectAdmittedTask",
+    nowMs,
+  });
+  const mintLegacyWorkerAssertion = () => createScheduledWorkerAssertion(WORKER_KEYS, "test", {
+    subject: "orchestrator-scheduler",
+    role: "system",
+    operation: "createTask",
     nowMs: NOW,
   });
   return {
@@ -138,7 +144,7 @@ async function fixture(name, overrides = {}) {
 
 describe("OrchestratorLedger Admission Receipt projection", () => {
   it("rejects an HMAC-authenticated legacy createTask call before all writes when no Receipt is supplied", async () => {
-    const { ledger, task, mintWorkerAssertion } = await fixture("legacy-bypass");
+    const { ledger, task, mintLegacyWorkerAssertion } = await fixture("legacy-bypass");
     await runInDurableObject(ledger, async instance => {
       instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEYS;
       const before = {
@@ -146,7 +152,7 @@ describe("OrchestratorLedger Admission Receipt projection", () => {
         assertions: Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count),
         candidates: Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_claim_candidates").one().count),
       };
-      const workerAssertion = await mintWorkerAssertion();
+      const workerAssertion = await mintLegacyWorkerAssertion();
       const result = await instance.createTask({
         task,
         idempotencyKey: "legacy-bypass-key",

@@ -437,7 +437,8 @@ export class TenantDirectory extends DurableObject {
       !Number.isSafeInteger(task.createdAt) ||
       task.createdAt < 1 ||
       !Number.isSafeInteger(task.updatedAt) ||
-      task.updatedAt < task.createdAt ||
+      task.updatedAt !== task.createdAt ||
+      task.createdAt !== scheduledTime ||
       task.updatedAt > now ||
       (task.agentRound !== undefined && (!Number.isSafeInteger(task.agentRound) || task.agentRound < 0 || task.agentRound > 4))
     ) {

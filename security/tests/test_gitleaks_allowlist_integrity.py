@@ -1,65 +1,62 @@
+import copy
 import pathlib
-import re
-import subprocess
+import sys
 import tomllib
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-CONFIG = ROOT / ".gitleaks.toml"
-EXPECTED = {
-    "Synthetic ephemeral HMAC test-key fixture from one historical identity test commit; restricted to that exact commit, file, and generic-api-key rule.": (
-        "d5ffafb6df54e26189d8494548f7693fdcfdf108",
-        "cloud-engineering-connector/test/orchestrator-worker-identity.test.js",
-    ),
-    "Synthetic ephemeral HMAC test-key fixture from one historical outbox publisher test commit; restricted to that exact commit, file, and generic-api-key rule.": (
-        "a5c36d1c2e7461e38578a688133c797f541b4b46",
-        "cloud-engineering-connector/test/orchestrator-outbox-publisher.test.js",
-    ),
-}
+sys.path.insert(0, str(ROOT / "security"))
+from validate_gitleaks_allowlists import EXPECTED_FIXTURES, validate_config
 
 
 class GitleaksAllowlistIntegrityTests(unittest.TestCase):
-    def test_synthetic_hmac_exceptions_are_exact_line_scoped(self):
-        with CONFIG.open("rb") as handle:
-            config = tomllib.load(handle)
-        entries = {
-            entry.get("description"): entry
-            for entry in config.get("allowlists", [])
-            if entry.get("description") in EXPECTED
-        }
-        self.assertEqual(set(entries), set(EXPECTED))
+    @classmethod
+    def setUpClass(cls):
+        with (ROOT / ".gitleaks.toml").open("rb") as handle:
+            cls.config = tomllib.load(handle)
 
-        for description, (commit, path) in EXPECTED.items():
+    def test_repository_allowlists_pass_integrity_validation(self):
+        self.assertEqual(validate_config(self.config, ROOT), [])
+
+    def test_each_pinned_exception_is_required(self):
+        for description in EXPECTED_FIXTURES:
             with self.subTest(description=description):
-                entry = entries[description]
-                self.assertEqual(entry.get("targetRules"), ["generic-api-key"])
-                self.assertEqual(entry.get("condition"), "AND")
-                self.assertEqual(entry.get("commits"), [commit])
-                self.assertEqual(entry.get("paths"), [f"^{re.escape(path)}$"])
-                self.assertEqual(entry.get("regexTarget"), "line")
-                regexes = entry.get("regexes", [])
-                self.assertEqual(len(regexes), 1)
-
-                source = subprocess.run(
-                    ["git", "show", f"{commit}:{path}"],
-                    cwd=ROOT,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                ).stdout
-                key_lines = [
-                    line for line in source.splitlines()
-                    if re.fullmatch(r'const key = "[0-9a-f]{64}";', line)
+                mutated = copy.deepcopy(self.config)
+                mutated["allowlists"] = [
+                    entry for entry in mutated["allowlists"]
+                    if entry.get("description") != description
                 ]
-                self.assertEqual(len(key_lines), 1)
-                line = key_lines[0]
-                key = re.search(r'"([0-9a-f]{64})"', line).group(1)
-                self.assertEqual(bytes.fromhex(key).decode("ascii"), "0123456789abcdef" * 2)
+                self.assertTrue(validate_config(mutated, ROOT))
 
-                compiled = [re.compile(pattern) for pattern in regexes]
-                self.assertEqual(sum(bool(pattern.fullmatch(line)) for pattern in compiled), 1)
-                changed = ("1" if key[0] != "1" else "2") + line[line.index(key) + 1:]
-                self.assertFalse(any(pattern.fullmatch(changed) for pattern in compiled))
+    def test_adversarial_scope_mutations_are_rejected(self):
+        mutations = {
+            "target rule": lambda entry: entry.update(targetRules=["*"]),
+            "commit": lambda entry: entry.update(commits=["0" * 40]),
+            "path": lambda entry: entry.update(paths=[".*"]),
+            "condition": lambda entry: entry.update(condition="OR"),
+            "regex target": lambda entry: entry.update(regexTarget="secret"),
+            "missing regex": lambda entry: entry.pop("regexes", None),
+            "broad regex": lambda entry: entry.update(regexes=[".*"]),
+        }
+        for label, mutate in mutations.items():
+            for description in EXPECTED_FIXTURES:
+                with self.subTest(mutation=label, description=description):
+                    changed = copy.deepcopy(self.config)
+                    target = next(
+                        entry for entry in changed["allowlists"]
+                        if entry.get("description") == description
+                    )
+                    mutate(target)
+                    self.assertTrue(validate_config(changed, ROOT), label)
+
+    def test_validator_rejects_non_literal_line_pattern(self):
+        changed = copy.deepcopy(self.config)
+        target = next(
+            entry for entry in changed["allowlists"]
+            if entry.get("description") in EXPECTED_FIXTURES
+        )
+        target["regexes"] = [r'const key = ".*";']
+        self.assertTrue(validate_config(changed, ROOT))
 
 
 if __name__ == "__main__":

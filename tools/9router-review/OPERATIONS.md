@@ -496,3 +496,46 @@ Static control-flow analysis predicts that the current implementation has no sha
 - The current branch has advanced beyond the scanned parent. This run MUST NOT be represented as an exact-current-head security scan. Await the run associated with the final current PR head.
 
 **Disposition:** PR-diff secret scan PASS on the recorded parent; full-history secret scan FAIL; concurrency test runtime NOT_RUN; no implementation or activation authorization.
+
+
+## Adversarial verification checkpoint — 2026-11-24
+
+### Immutable repository snapshot
+
+- Pull request: #463, Draft / Open / Unmerged.
+- Branch: `feat/9router-trusted-manual-bootstrap-2026-11-24`.
+- Base SHA: `919b19ca3d3887352cdef06b03c668ead04fbce7`.
+- Exact branch HEAD observed before this checkpoint: `055a3fd0719ca9a4c55dd2acbcceee755bd77a8e`.
+- Compare result: 32 commits ahead, 0 behind; the nine changed paths remain the original bootstrap files. No workflow, dependency, or source implementation changes were introduced by the prior concurrency-test/doc commits.
+- Test file blob at this checkpoint: `4153df7ab5a4a259c612d82a1c2a2d4833fe031e`.
+- Workflow blob: `737e37cdafe3d12322226f493e78bf4856555a2e`; reviewer job remains literal `if: false`, with empty permissions.
+
+### Hosted Gitleaks run — event-snapshot discrepancy
+
+- Associated GitHub Actions run: `45464042892`; job: `138694046256`.
+- Job conclusion: **FAIL**.
+- PR-diff scan step: **PASS**, 30 commits / approximately 285.51 KB, zero findings, exit 0.
+- Full fetched-ref scan step: **FAIL**, 4,974 commits / approximately 15.28 MB, 13 `generic-api-key` detections, exit 2.
+- The job checkout log identifies the synthetic PR merge ref as `d4d33c28ceb9ea794d7a8dd00dacf5ace7cd8153`, whose log message merges `055a3fd0719ca9a4c55dd2acbcceee755bd77a8e` into the recorded base.
+- However, the Gitleaks PR-diff command in that same job uses the range `2b0e8f74bbb5ce5ca8f22613f9137d0c3ccf6473^..e5745a254eab612f9efa8c75636e71f2fc34e5ea`, not the exact branch HEAD `055a3fd...`. The run is therefore **not accepted as exact-HEAD PR-diff evidence**. The workflow event/range snapshot and checkout merge snapshot are inconsistent and require investigation in the scanner workflow/event metadata.
+- The 13 historical detections are the same known categories: one application idempotency identifier in `cloud-engineering-connector/worker.js`; nine synthetic test fixtures in `cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js`; one local marker-key test fixture in `tools/9router-review/review.test.mjs`; and two public ICU repository/commit/fingerprint references in the Master Brain audit document. Context inspection of the application identifier shows it is composed for admission-receipt idempotency, not used as an authentication token. The test fixture values are test-only in their cited historical commits; the ICU values are public repository/signing-fingerprint metadata. These classifications remain **PROVISIONALLY_SUPPORTED**, not a credential clearance.
+- No secret values were read. External secret-store reuse and revocation remain **UNKNOWN**. No findings were suppressed or allowlisted.
+- The current-head combined status query returned no status entries. The workflow-run association alone does not prove a current-head test or trusted scanner pass.
+
+### Runtime test execution gate
+
+- The deterministic concurrency regression remains present at the current branch snapshot.
+- The hosted run above is a Gitleaks workflow; it did not execute `npm ci` or `npm test`.
+- No available GitHub connector action provides a safe arbitrary command execution or workflow-dispatch path for this branch. The only observed workflow run is the security scan; it cannot establish the concurrency test's RED result.
+- Test execution remains **NOT_RUN**. The expected duplicate POST remains a static prediction, not an observed reproduction. No GREEN implementation is authorized before a valid RED result.
+- The TDD supporting reference `writing-good-tests.md` could not be retrieved from the installed skill bundle; this is a process-reference limitation, not a test result.
+
+### Disposition and next falsification requirements
+
+1. Preserve the reviewer as disabled and PR #463 as Draft.
+2. Do not treat the associated Gitleaks run as exact-head PR-diff evidence; reconcile the event SHA/range against the checkout merge SHA.
+3. Obtain an isolated, reproducible Node.js 22 execution of the exact test file and record command, exit code, assertion output, and exact tested commit. If the assertion fails, verify the failure is specifically the physical duplicate POST count, not setup or syntax.
+4. Only after valid RED, define and test the durable reservation adapter contract with independent clients and crash/acknowledgement fault injection.
+5. Do not select a storage vendor, change source implementation, register the workflow on `main`, activate reviewer/provider dispatch, merge, read/change secrets, deploy Cloudflare, or alter the local host in this checkpoint.
+
+**Checkpoint verdict:** static race finding remains **PROVISIONALLY_SUPPORTED**; concurrency runtime reproduction **NOT_RUN**; exact-head PR-diff Gitleaks evidence **UNKNOWN** due event-range mismatch; full-history scan **FAIL** with 13 provisionally classified detections; reviewer activation **BLOCKED**.

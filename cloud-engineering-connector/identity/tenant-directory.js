@@ -438,12 +438,14 @@ export class TenantDirectory extends DurableObject {
       task.createdAt < 1 ||
       !Number.isSafeInteger(task.updatedAt) ||
       task.updatedAt < task.createdAt ||
-      task.updatedAt > now
+      task.updatedAt > now ||
+      (task.agentRound !== undefined && (!Number.isSafeInteger(task.agentRound) || task.agentRound < 0 || task.agentRound > 4))
     ) {
       throw fail("INVALID_ADMISSION_TASK", "The canonical scheduled Task does not match the requested tenant/project scope.");
     }
-    assertNoAdmissionSecrets(task);
-    const taskJson = canonicalJson(task);
+    const normalizedTask = { ...task, agentRound: task.agentRound ?? 0 };
+    assertNoAdmissionSecrets(normalizedTask);
+    const taskJson = canonicalJson(normalizedTask);
     if (new TextEncoder().encode(taskJson).byteLength > ADMISSION_TASK_LIMIT) {
       throw fail("ADMISSION_TASK_TOO_LARGE", "The canonical scheduled Task exceeds the 32 KiB size limit.");
     }

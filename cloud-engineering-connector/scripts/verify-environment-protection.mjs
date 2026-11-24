@@ -73,7 +73,10 @@ async function getJson(fetchImpl, url, token, label, resourceType) {
     } else if (status === 401 || status === 403 || status >= 500 || status === 0) {
       code = "API_UNAVAILABLE";
     }
-    block(label + " returned HTTP " + status + ".", code);
+    const context = resourceType === "branch-policy" && status === 404
+      ? " after Environment metadata confirmed custom_branch_policies=true"
+      : "";
+    block(label + " returned HTTP " + status + context + ".", code);
   }
 
   let body;

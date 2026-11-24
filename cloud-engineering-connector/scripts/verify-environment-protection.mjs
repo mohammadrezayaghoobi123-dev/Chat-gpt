@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
@@ -148,14 +149,14 @@ function assertEnvironmentProtection({ environment, branchPolicies, releaseEnvir
   for (const entry of reviewers) {
     if (
       !isRecord(entry) ||
-      (entry.type !== "User" && entry.type !== "Team") ||
+      entry.type !== "User" ||
       !isRecord(entry.reviewer) ||
       !Number.isSafeInteger(entry.reviewer.id) ||
       entry.reviewer.id <= 0
     ) {
-      block("every required reviewer must resolve to a valid GitHub User or Team identity.");
+      block("every required reviewer must resolve to a valid GitHub User reviewer identity.");
     }
-    const identity = entry.type + ":" + entry.reviewer.id;
+    const identity = entry.reviewer.id;
     if (reviewerIdentities.has(identity)) {
       block("the required-reviewer set contains duplicate identities.");
     }
@@ -184,6 +185,7 @@ function assertEnvironmentProtection({ environment, branchPolicies, releaseEnvir
     environment: releaseEnvironment,
     branchPattern: expected.branchPattern,
     requiredReviewerCount: reviewers.length,
+    authorizedReviewerUserIds: Object.freeze([...reviewerIdentities].sort((left, right) => left - right)),
   });
 }
 
@@ -225,6 +227,16 @@ async function main() {
     token: process.env.GITHUB_TOKEN,
   });
 
+  const outputFile = process.env.GITHUB_OUTPUT;
+  if (typeof outputFile !== "string" || outputFile.length === 0) {
+    block("GitHub Actions output file is unavailable; authorized reviewer identities cannot be passed to the PR approval gate.");
+  }
+  appendFileSync(
+    outputFile,
+    "reviewer_user_ids=" + result.authorizedReviewerUserIds.join(",") + "\n",
+    "utf8",
+  );
+
   console.log(
     "GitHub Environment protection verified: environment=" +
       result.environment +
@@ -232,7 +244,7 @@ async function main() {
       result.branchPattern +
       ", required_reviewers=" +
       result.requiredReviewerCount +
-      ", self_review=disabled, administrator_bypass=disabled.",
+      ", reviewer_identity_binding=enabled, self_review=disabled, administrator_bypass=disabled.",
   );
 }
 

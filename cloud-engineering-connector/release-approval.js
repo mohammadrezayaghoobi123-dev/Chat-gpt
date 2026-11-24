@@ -1,7 +1,7 @@
 const API_ROOT = "https://api.github.com";
 const STAGING_BASE = "integration/unify-main-and-integrated-2026-11-02";
 
-function validateInput({ repository, candidateSha, releaseEnvironment, token, fetchImpl }) {
+function validateInput({ repository, candidateSha, releaseEnvironment, token, allowedReviewerIds, fetchImpl }) {
   if (typeof repository !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new TypeError("GITHUB_REPOSITORY must be an owner/repository pair.");
   }
@@ -13,6 +13,15 @@ function validateInput({ repository, candidateSha, releaseEnvironment, token, fe
   }
   if (typeof token !== "string" || token.length < 1) {
     throw new TypeError("RELEASE_GITHUB_TOKEN is required.");
+  }
+  if (
+    !Array.isArray(allowedReviewerIds) ||
+    allowedReviewerIds.length < 1 ||
+    allowedReviewerIds.length > 6 ||
+    allowedReviewerIds.some(id => !Number.isSafeInteger(id) || id <= 0) ||
+    new Set(allowedReviewerIds).size !== allowedReviewerIds.length
+  ) {
+    throw new TypeError("allowed Environment reviewer IDs must contain one to six unique positive GitHub User IDs.");
   }
   if (typeof fetchImpl !== "function") throw new TypeError("fetchImpl must be a function.");
 }
@@ -64,13 +73,13 @@ async function getJsonCollection(fetchImpl, url, token) {
 function latestReviewsByUser(reviews) {
   const latest = new Map();
   for (const review of reviews) {
-    const login = review?.user?.login;
+    const userId = review?.user?.id;
     const submittedAt = review?.submitted_at;
-    if (typeof login !== "string" || !login || typeof submittedAt !== "string") continue;
+    if (!Number.isSafeInteger(userId) || userId <= 0 || typeof submittedAt !== "string") continue;
     const timestamp = Date.parse(submittedAt);
     if (!Number.isFinite(timestamp)) continue;
-    const previous = latest.get(login);
-    if (!previous || timestamp >= previous.timestamp) latest.set(login, { review, timestamp });
+    const previous = latest.get(userId);
+    if (!previous || timestamp >= previous.timestamp) latest.set(userId, { review, timestamp });
   }
   return [...latest.values()].map(item => item.review);
 }
@@ -80,9 +89,10 @@ export async function verifyReleaseApproval({
   candidateSha,
   releaseEnvironment,
   token,
+  allowedReviewerIds,
   fetchImpl = globalThis.fetch,
 }) {
-  validateInput({ repository, candidateSha, releaseEnvironment, token, fetchImpl });
+  validateInput({ repository, candidateSha, releaseEnvironment, token, allowedReviewerIds, fetchImpl });
   const repoPath = repository.split("/").map(encodeURIComponent).join("/");
   const associated = await getJsonCollection(
     fetchImpl,
@@ -129,13 +139,15 @@ export async function verifyReleaseApproval({
   );
   if (changeRequest) throw new Error("Release blocked: an independent reviewer has an outstanding change request for this candidate.");
 
+  const allowedReviewerIdSet = new Set(allowedReviewerIds);
   const approval = latest.find(review =>
     review.user?.login !== author &&
+    allowedReviewerIdSet.has(review.user?.id) &&
     review.state === "APPROVED" &&
     review.commit_id === reviewCommitSha
   );
   if (!approval) {
-    throw new Error("Release blocked: no independent approval exists for the exact PR head commit.");
+    throw new Error("Release blocked: no independent approval from a configured Environment reviewer exists for the exact PR head commit.");
   }
 
   return Object.freeze({
@@ -143,6 +155,7 @@ export async function verifyReleaseApproval({
     pullUrl: pull.html_url,
     author,
     reviewer: approval.user.login,
+    reviewerUserId: approval.user.id,
     reviewCommitSha,
     releaseEnvironment,
   });

@@ -55,3 +55,23 @@ for (const workflow of workflows) {
       "the Production metadata credential must never enter the Production release workflow");
   });
 }
+
+
+for (const workflow of workflows) {
+  test(workflow.name + " release approval consumes the exact Environment-protected User reviewer identities", () => {
+    const source = readFileSync(workflow.path, "utf8");
+    const environmentGuardStart = source.indexOf("      - name: Verify GitHub Environment protection contract");
+    const approvalStart = source.indexOf("      - name: ", environmentGuardStart + 1);
+    const environmentGuard = source.slice(environmentGuardStart, approvalStart);
+    const approvalEnd = source.indexOf("      - name: ", approvalStart + 1);
+    const approvalStep = source.slice(approvalStart, approvalEnd < 0 ? undefined : approvalEnd);
+
+    assert.ok(environmentGuardStart >= 0 && approvalStart > environmentGuardStart, "Environment protection step must precede the PR approval step");
+    assert.match(environmentGuard, /id:\s*environment-protection/, "Environment guard must publish a stable step output");
+    assert.match(
+      approvalStep,
+      /RELEASE_ALLOWED_REVIEWER_IDS:\s*\$\{\{\s*steps\.environment-protection\.outputs\.reviewer_user_ids\s*\}\}/,
+      "PR approval must receive only the reviewer identities returned by the Environment protection check",
+    );
+  });
+}

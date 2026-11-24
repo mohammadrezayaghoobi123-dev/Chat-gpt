@@ -1,0 +1,34 @@
+name: Gitleaks Allowlist Integrity
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".gitleaks.toml"
+      - "security/**"
+      - ".github/workflows/gitleaks-allowlist-integrity.yml"
+  push:
+    branches:
+      - security/gitleaks-allowlist-integrity-2026-11-25
+    paths:
+      - ".gitleaks.toml"
+      - "security/**"
+      - ".github/workflows/gitleaks-allowlist-integrity.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  allowlist-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run allowlist integrity tests
+        run: python -m unittest discover -s security/tests -v

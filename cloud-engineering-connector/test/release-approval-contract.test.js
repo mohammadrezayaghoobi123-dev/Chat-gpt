@@ -697,24 +697,24 @@ test("Staging release keeps Production metadata access behind the protected Stag
     "utf8",
   );
 
-  const triggerStart = stagingSource.indexOf("\\non:");
-  const permissionsStart = stagingSource.indexOf("\\npermissions:", triggerStart);
+  const triggerStart = stagingSource.indexOf("\non:");
+  const permissionsStart = stagingSource.indexOf("\npermissions:", triggerStart);
   assert.ok(triggerStart >= 0 && permissionsStart > triggerStart, "Staging workflow trigger block must be bounded");
   const triggerBlock = stagingSource.slice(triggerStart + 1, permissionsStart).trimEnd();
   assert.equal(
     triggerBlock,
-    'on:\\n  push:\\n    branches:\\n      - "integration/staging-release-*"',
+    'on:\n  push:\n    branches:\n      - "integration/staging-release-*"',
     "Staging release must be push-only on the immutable release-branch namespace",
   );
 
   assert.match(
     stagingSource,
-    /^    environment:\\n      name: staging$/m,
+    /^    environment:\n      name: staging$/m,
     "the credential-bearing release job must bind to the protected Staging GitHub Environment",
   );
   assert.match(
     productionSource,
-    /^    environment:\\n      name: production$/m,
+    /^    environment:\n      name: production$/m,
     "the Production release job must remain bound to the Production GitHub Environment",
   );
   assert.doesNotMatch(
@@ -737,7 +737,7 @@ test("Staging release keeps Production metadata access behind the protected Stag
     "immutable SHA validation, independent approval, and complete tests must precede credential preflight and deployment",
   );
 
-  const metadataCredentialReferences = stagingSource.match(/CLOUDFLARE_PRODUCTION_METADATA_TOKEN:\\s*\\$\\{\\{\\s*secrets\\.CLOUDFLARE_PRODUCTION_METADATA_TOKEN\\s*\\}\\}/g) || [];
+  const metadataCredentialReferences = stagingSource.match(/CLOUDFLARE_PRODUCTION_METADATA_TOKEN:\s*\$\{\{\s*secrets\.CLOUDFLARE_PRODUCTION_METADATA_TOKEN\s*\}\}/g) || [];
   assert.equal(
     metadataCredentialReferences.length,
     2,

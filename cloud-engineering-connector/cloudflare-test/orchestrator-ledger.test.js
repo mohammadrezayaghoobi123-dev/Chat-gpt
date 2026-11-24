@@ -1,13 +1,16 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 import { consumeOrchestratorDeadLetters, consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
 }
-const now = 1_800_000_000_000;
+let now;
+let ledgerClock;
+beforeEach(() => { now = Date.now(); ledgerClock = vi.spyOn(Date, "now").mockReturnValue(now); });
+afterEach(() => vi.restoreAllMocks());
 const task = (taskId = "task-0001") => ({
   taskId, state: "SCHEDULED", version: 1, agentRound: 0, createdAt: now, updatedAt: now,
   executorId: "agent:worker-1", commitSha: "a".repeat(40),
@@ -148,6 +151,8 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("fails closed when the earliest eligible task has an expired lease without reconciliation evidence", async () => {
     const ledger = ledgerFor("ledger-claim-skip-expired-lease");
+    let ledgerNow = now;
+    ledgerClock.mockImplementation(() => ledgerNow);
     await createTask(ledger, {
       task: task("task-expired-first"), idempotencyKey: "claim-skip-expired-first",
       inputHash: "a".repeat(64), now,
@@ -162,6 +167,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       idempotencyKey: "claim-skip-expired-second", inputHash: "b".repeat(64), now: now + 1,
     });
 
+    ledgerNow = now + 101;
     const result = await ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101),
       leaseMs: 30_000, now: now + 101,
@@ -383,6 +389,8 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("uses monotonically increasing outbox fencing generations and rejects stale completion", async () => {
     const ledger = ledgerFor("ledger-outbox-fencing");
+    let ledgerNow = now;
+    ledgerClock.mockImplementation(() => ledgerNow);
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0009", inputHash: "7".repeat(64), now });
     await ledger.enqueueOutbox({
       eventId: "event-0002", idempotencyKey: "outbox-key-0002", taskId: "task-0001",
@@ -391,16 +399,21 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await expect(ledger.claimOutbox({ workerId: "publisher-1", leaseMs: 100, now }))
       .resolves.toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
     const first = await ledger.claimOutbox({ workerId: "publisher-1", workerAssertion: await createWorkerAssertion({ subject: "publisher-1", role: "publisher", operation: "claimOutbox", nowMs: now }), leaseMs: 100, now });
+    ledgerNow = now + 101;
     const second = await ledger.claimOutbox({ workerId: "publisher-2", workerAssertion: await createWorkerAssertion({ subject: "publisher-2", role: "publisher", operation: "claimOutbox", nowMs: now + 101 }), leaseMs: 100, now: now + 101 });
     expect(second.leaseGeneration).toBe(first.leaseGeneration + 1);
+    ledgerNow = now + 102;
     await expect(ledger.completeOutbox({ eventId: "event-0002", workerId: "publisher-1", workerAssertion: await createWorkerAssertion({ subject: "publisher-1", role: "publisher", operation: "completeOutbox", nowMs: now + 102 }), leaseGeneration: first.leaseGeneration, now: now + 102 }))
       .resolves.toMatchObject({ completed: false, reason: "LEASE_FENCE_MISMATCH" });
+    ledgerNow = now + 103;
     await expect(ledger.completeOutbox({ eventId: "event-0002", workerId: "publisher-2", workerAssertion: await createWorkerAssertion({ subject: "publisher-2", role: "publisher", operation: "completeOutbox", nowMs: now + 103 }), leaseGeneration: second.leaseGeneration, now: now + 103 }))
       .resolves.toMatchObject({ completed: true });
   });
 
   it("schedules bounded outbox retries and dead-letters permanent failures", async () => {
     const ledger = ledgerFor("ledger-outbox-retry-dead-letter");
+    let ledgerNow = now;
+    ledgerClock.mockImplementation(() => ledgerNow);
     await createTask(ledger, {
       task: task(), idempotencyKey: "task-create-outbox-retry", inputHash: "9".repeat(64), now,
     });
@@ -420,6 +433,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       }),
       leaseMs: 30_000, now,
     });
+    ledgerNow = now + 1;
     const failed = await ledger.failOutbox({
       eventId: "event-outbox-retry", workerId: "publisher-1",
       workerAssertion: await createWorkerAssertion({
@@ -432,6 +446,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       failed: true, retryScheduled: true, deadLettered: false,
       nextAttemptAt: now + 1_001,
     });
+    ledgerNow = now + 500;
     await expect(ledger.claimOutbox({
       workerId: "publisher-2",
       workerAssertion: await createWorkerAssertion({
@@ -440,6 +455,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       leaseMs: 30_000, now: now + 500,
     })).resolves.toMatchObject({ claimed: false, reason: "NO_OUTBOX_AVAILABLE" });
 
+    ledgerNow = now + 1_001;
     const retry = await ledger.claimOutbox({
       workerId: "publisher-2",
       workerAssertion: await createWorkerAssertion({
@@ -448,6 +464,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       leaseMs: 30_000, now: now + 1_001,
     });
     expect(retry).toMatchObject({ claimed: true, event: { attempts: 2 } });
+    ledgerNow = now + 1_002;
     const deadLetter = await ledger.failOutbox({
       eventId: "event-outbox-retry", workerId: "publisher-2",
       workerAssertion: await createWorkerAssertion({
@@ -500,6 +517,65 @@ describe("OrchestratorLedger durable coordination contract", () => {
     });
   });
 
+  it("rejects an audit assertion that expires during asynchronous event hashing", async () => {
+    const ledger = ledgerFor("ledger-audit-assertion-expiry-during-hash");
+    let ledgerNow = now;
+    ledgerClock.mockImplementation(() => ledgerNow);
+    await createTask(ledger, {
+      task: task(),
+      idempotencyKey: "audit-expiry-during-hash-task",
+      inputHash: "a".repeat(64),
+      now,
+    });
+
+    const jti = "jti-audit-expiry-during-hash-0001";
+    const workerAssertion = await createWorkerAssertion({
+      subject: "agent:worker-1",
+      role: "agent",
+      operation: "appendAuditEvent",
+      nowMs: now,
+      jti,
+    });
+    const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+    const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(
+      async (algorithm, data) => {
+        const digest = await originalDigest(algorithm, data);
+        const canonicalInput = new TextDecoder().decode(data);
+        if (canonicalInput.includes("audit-expiry-during-hash-0001")) {
+          ledgerNow = now + 120_000;
+        }
+        return digest;
+      },
+    );
+
+    const result = await ledger.appendAuditEvent({
+      eventId: "audit-expiry-during-hash-0001",
+      taskId: "task-0001",
+      actor: agent,
+      workerId: "agent:worker-1",
+      workerAssertion,
+      eventType: "task.created",
+      details: { version: 1 },
+      now,
+    });
+
+    expect(digestSpy).toHaveBeenCalled();
+    expect(result).toMatchObject({
+      appended: false,
+      reason: "AUTHENTICATED_ACTOR_REQUIRED",
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE event_id = ?",
+        "audit-expiry-during-hash-0001",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        jti,
+      ).one().count).toBe(0);
+    });
+  });
+
   it("one hundred duplicate deliveries produce exactly one effective message record", async () => {
     const ledger = ledgerFor("ledger-message-100-duplicates");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0011", inputHash: "9".repeat(64), now });
@@ -517,8 +593,11 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("requires reconciliation evidence before reclaiming an expired lease and preserves task state", async () => {
     const ledger = ledgerFor("ledger-expired-lease-reconciliation");
+    let ledgerNow = now;
+    ledgerClock.mockImplementation(() => ledgerNow);
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0012", inputHash: "b".repeat(64), now });
     const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
+    ledgerNow = now + 101;
     await expect(ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101 }))
       .resolves.toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
     const untrustedEvidence = await ledger.claimTask({
@@ -966,6 +1045,7 @@ it("consumes a signed lease-renewal assertion once and rejects replay", async ()
     subject: "agent:worker-1", role: "agent", operation: "renewLease", nowMs: now + 1,
     jti: "jti-renew-once-000000000001",
   });
+  ledgerClock.mockReturnValue(now + 1);
   const renewed = await ledger.renewLease({
     taskId: "task-0001", workerId: "agent:worker-1", workerAssertion: assertion,
     leaseGeneration: claimed.leaseGeneration, leaseMs: 60_000, now: now + 1,
@@ -1147,6 +1227,8 @@ it("rejects unauthenticated and caller-forged task creation", async () => {
 
 it("prunes consumed assertion IDs only after expiry plus the retention margin", async () => {
   const ledger = ledgerFor("ledger-assertion-retention");
+  let ledgerNow = now;
+  ledgerClock.mockImplementation(() => ledgerNow);
   await createTask(ledger, { task: task(), idempotencyKey: "task-create-retention-1", inputHash: "2".repeat(64), now });
   const assertion = await createWorkerAssertion({
     subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
@@ -1154,6 +1236,7 @@ it("prunes consumed assertion IDs only after expiry plus the retention margin", 
   });
   await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: assertion, leaseMs: 30_000, now });
   const later = now + 12 * 60 * 1000;
+  ledgerNow = later;
   await createTask(ledger, { task: task("task-0002"), idempotencyKey: "task-create-retention-2", inputHash: "3".repeat(64), now: later });
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti='jti-claim-retention-000000000001'").one().count).toBe(0);
@@ -1164,6 +1247,8 @@ it("prunes consumed assertion IDs only after expiry plus the retention margin", 
 
 it("moves an expired final-attempt outbox lease to a lease-free dead-letter state", async () => {
   const ledger = ledgerFor("ledger-outbox-final-attempt-crash");
+  let ledgerNow = now;
+  ledgerClock.mockImplementation(() => ledgerNow);
   await createTask(ledger, {
     task: task(), idempotencyKey: "task-create-final-attempt-crash", inputHash: "f".repeat(64), now,
   });
@@ -1180,6 +1265,7 @@ it("moves an expired final-attempt outbox lease to a lease-free dead-letter stat
   let finalAttempt;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const attemptNow = now + (attempt - 1) * 101;
+    ledgerNow = attemptNow;
     finalAttempt = await ledger.claimOutbox({
       workerId: "publisher-" + attempt,
       workerAssertion: await createWorkerAssertion({
@@ -1191,6 +1277,7 @@ it("moves an expired final-attempt outbox lease to a lease-free dead-letter stat
   }
 
   const afterLeaseExpiry = now + 8 * 101;
+  ledgerNow = afterLeaseExpiry;
   const exhausted = await ledger.claimOutbox({
     workerId: "publisher-recovery",
     workerAssertion: await createWorkerAssertion({
@@ -1447,7 +1534,7 @@ it("integrates the real Durable Object Ledger with publisher and Queue consumer 
 it("acknowledges a republished event after an uncertain send even when the publisher attempt counter changes", async () => {
   const integrationNow = Date.now();
   let clockNow = integrationNow;
-  const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+  const dateNow = ledgerClock.mockImplementation(() => clockNow);
   try {
     const ledger = ledgerFor("orchestrator-ledger-republish-e2e");
     const taskId = "task-queue-republish-e2e";
@@ -2127,6 +2214,7 @@ it("rejects an expired lease even when its generation is still current", async (
       now,
     });
     expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+    ledgerClock.mockReturnValue(now + 101);
     await expect(ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
       actor: agent, evidence, now: now + 101, workerId: "agent:worker-1",
@@ -2240,7 +2328,7 @@ it("rejects an expired lease even when its generation is still current", async (
 it("fences a late publisher acknowledgement after lease reclamation and deduplicates concurrent consumer deliveries", async () => {
   const integrationNow = Date.now();
   let clockNow = integrationNow;
-  const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+  const dateNow = ledgerClock.mockImplementation(() => clockNow);
   let releaseFirstSend;
   let resolveFirstSendEntered;
   const firstSendRelease = new Promise(resolve => { releaseFirstSend = resolve; });
@@ -2369,7 +2457,7 @@ it("fences a late publisher acknowledgement after lease reclamation and deduplic
 it("recovers a Queue-accepted send with a lost acknowledgement through bounded retry and concurrent receipt deduplication", async () => {
   const integrationNow = Date.now();
   let clockNow = integrationNow;
-  const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+  const dateNow = ledgerClock.mockImplementation(() => clockNow);
   const queued = [];
   let sendCalls = 0;
   try {

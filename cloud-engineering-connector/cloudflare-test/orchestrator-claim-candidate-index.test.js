@@ -1,11 +1,14 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
 import { CLAIM_CANDIDATE_QUERY } from "../orchestrator-ledger.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 
-const now = 1_800_000_000_000;
+let now;
+let ledgerClock;
+beforeEach(() => { now = Date.now(); ledgerClock = vi.spyOn(Date, "now").mockReturnValue(now); });
+afterEach(() => vi.restoreAllMocks());
 const TEST_ASSERTION_KID = "test-v1";
 const TEST_ASSERTION_KEY = Uint8Array.from(
   "3031323334353637383961626364656630313233343536373839616263646566".match(/../g),
@@ -393,6 +396,7 @@ describe("OrchestratorLedger reconciliation fail-closed policy", () => {
       now,
     });
     expect(first).toMatchObject({ claimed: true, leaseGeneration: 1 });
+    ledgerClock.mockReturnValue(now + 101);
     const result = await ledger.claimTask({
       workerId: "agent:worker-1",
       workerAssertion: await createWorkerAssertion({
@@ -506,6 +510,9 @@ describe("OrchestratorLedger cursor integrity", () => {
 describe("OrchestratorLedger cursor expiry and storage bounds", () => {
   it("rejects and deletes a continuation token after its fixed lifetime", async () => {
     const ledger = ledgerFor("claim-candidate-expired-cursor-token");
+    const ledgerBase = Math.floor(now / 1000) * 1000;
+    let ledgerNow = ledgerBase;
+    ledgerClock.mockImplementation(() => ledgerNow);
     const taskIds = Array.from({ length: 129 }, (_value, index) =>
       "expiry-" + String(index).padStart(3, "0"),
     );
@@ -532,7 +539,8 @@ describe("OrchestratorLedger cursor expiry and storage bounds", () => {
     });
     expect(first.reason).toBe("CLAIM_SCAN_BUDGET_EXHAUSTED");
     const cursorHash = await sha256Canonical({ token: first.nextCursor });
-    const expiredAt = now + 15 * 60_000 + 1;
+    const expiredAt = ledgerBase + 15 * 60_000 + 1;
+    ledgerNow = expiredAt;
     const result = await ledger.claimTask({
       workerId: "agent:worker-1",
       workerAssertion: await createWorkerAssertion({

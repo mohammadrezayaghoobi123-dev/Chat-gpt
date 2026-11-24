@@ -45,10 +45,14 @@ function validClaims(claims, expected) {
       claims.sub !== expected.subject || claims.role !== expected.role ||
       claims.op !== expected.operation || !ID.test(claims.sub) ||
       !ID.test(claims.jti) || claims.jti.length < 22 ||
-      !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp)) throw reject();
-  const nowSeconds = Math.floor(expected.nowMs / 1000);
-  if (claims.exp <= claims.iat || claims.exp - claims.iat > MAX_LIFETIME_SECONDS ||
-      claims.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
+      !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp) ||
+      claims.exp <= claims.iat || claims.exp - claims.iat > MAX_LIFETIME_SECONDS) throw reject();
+}
+
+function validateClaimTime(claims, nowMs) {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 1) throw reject();
+  const nowSeconds = Math.floor(nowMs / 1000);
+  if (claims.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
       claims.exp < nowSeconds - CLOCK_SKEW_SECONDS) throw reject();
 }
 
@@ -63,7 +67,8 @@ export async function verifyWorkerAssertion(keySet, token, expected) {
     if (typeof token !== "string" || token.length > 4096 ||
         !expected || !ID.test(expected.subject) || !ID.test(expected.operation) ||
         !["agent", "publisher", "system", "consumer"].includes(expected.role) ||
-        !Number.isSafeInteger(expected.nowMs)) throw reject();
+        !(typeof expected.nowMs === "function" ||
+          (Number.isSafeInteger(expected.nowMs) && expected.nowMs >= 1))) throw reject();
     const parts = token.split(".");
     if (parts.length !== 4 || parts[0] !== "v1" || !KID.test(parts[1])) throw reject();
     const key = loadKey(keySet, parts[1]);
@@ -75,7 +80,18 @@ export async function verifyWorkerAssertion(keySet, token, expected) {
     validClaims(claims, expected);
     const supplied = decodeBase64Url(parts[3]);
     if (supplied.byteLength !== 32 || !(await verifyMac(key, parts.slice(0, 3).join("."), supplied))) throw reject();
-    return Object.freeze({ jti: claims.jti, subject: claims.sub, role: claims.role, operation: claims.op, kid: parts[1], issuedAt: claims.iat, expiresAt: claims.exp });
+    const verifiedAtMs = typeof expected.nowMs === "function" ? expected.nowMs() : expected.nowMs;
+    validateClaimTime(claims, verifiedAtMs);
+    return Object.freeze({
+      jti: claims.jti,
+      subject: claims.sub,
+      role: claims.role,
+      operation: claims.op,
+      kid: parts[1],
+      issuedAt: claims.iat,
+      expiresAt: claims.exp,
+      verifiedAtMs,
+    });
   } catch {
     throw reject();
   }

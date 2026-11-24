@@ -6,6 +6,9 @@ const sha = "a".repeat(40);
 const headSha = "b".repeat(40);
 const author = "candidate-author";
 const reviewer = "independent-reviewer";
+const authorId = 202;
+const reviewerId = 101;
+const unlistedReviewerId = 909;
 const repo = "mohammadrezayaghoobi123-dev/Chat-gpt";
 const date = "2026-11-02T12:00:00Z";
 
@@ -19,16 +22,16 @@ function stagingPull(overrides = {}) {
     state: "open",
     draft: false,
     html_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/129",
-    user: { login: author },
+    user: { id: authorId, login: author },
     head: { sha },
     base: { ref: "integration/unify-main-and-integrated-2026-11-02" },
     ...overrides,
   };
 }
 
-function approval(commitId = sha, login = reviewer, state = "APPROVED", submittedAt = date) {
+function approval(commitId = sha, login = reviewer, state = "APPROVED", submittedAt = date, userId = login === author ? authorId : login === reviewer ? reviewerId : unlistedReviewerId) {
   return {
-    user: { login },
+    user: { id: userId, login },
     state,
     commit_id: commitId,
     submitted_at: submittedAt,
@@ -49,6 +52,7 @@ const input = overrides => ({
   candidateSha: sha,
   releaseEnvironment: "staging",
   token: "test-token-not-a-real-secret",
+  trustedReviewerIds: [reviewerId],
   ...overrides,
 });
 
@@ -215,19 +219,49 @@ test("release approval paginates associated PRs and all reviews before accepting
   assert.ok(requestedUrls.some(url => url.includes("/pulls/129/reviews") && url.includes("page=2")));
 });
 
-test("characterizes acceptance of a non-code-owner reviewer without an authorization lookup", async () => {
-  const unlistedReviewer = "reviewer-not-listed-in-codeowners";
+test("rejects a non-author review when its immutable GitHub user ID is outside the trusted reviewer policy", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch([stagingPull()], [
+        approval(sha, "reviewer-not-listed-in-codeowners", "APPROVED", date, unlistedReviewerId),
+      ]),
+    }),
+    /no trusted independent approval/,
+  );
+});
+
+test("fails closed before GitHub access when the trusted reviewer policy is missing", async () => {
   const requestedUrls = [];
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({ trustedReviewerIds: [] }),
+      fetchImpl: fakeFetch([stagingPull()], [approval()], url => requestedUrls.push(url)),
+    }),
+    /RELEASE_REVIEWER_IDS/,
+  );
+  assert.equal(requestedUrls.length, 0);
+});
+
+test("does not trust an allowlisted login when the immutable GitHub user ID differs", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch([stagingPull()], [
+        approval(sha, reviewer, "APPROVED", date, unlistedReviewerId),
+      ]),
+    }),
+    /no trusted independent approval/,
+  );
+});
+
+test("accepts an allowlisted immutable reviewer ID and returns it for traceability", async () => {
   const result = await verifyReleaseApproval({
     ...input({}),
-    fetchImpl: fakeFetch([stagingPull()], [approval(sha, unlistedReviewer)], url => {
-      requestedUrls.push(url);
-    }),
+    fetchImpl: fakeFetch([stagingPull()], [
+      approval(sha, "renamed-reviewer-login", "APPROVED", date, reviewerId),
+    ]),
   });
-
-  assert.equal(result.reviewer, unlistedReviewer);
-  assert.equal(requestedUrls.length, 2);
-  assert.ok(requestedUrls.some(url => url.includes("/commits/" + sha + "/pulls")));
-  assert.ok(requestedUrls.some(url => url.includes("/pulls/129/reviews")));
-  assert.ok(requestedUrls.every(url => !/collaborators|permissions|teams|codeowners/i.test(url)));
+  assert.equal(result.reviewerId, reviewerId);
+  assert.equal(result.reviewCommitSha, sha);
 });

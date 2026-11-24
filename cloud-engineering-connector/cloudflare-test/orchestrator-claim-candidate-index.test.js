@@ -508,6 +508,9 @@ describe("OrchestratorLedger cursor integrity", () => {
 describe("OrchestratorLedger cursor expiry and storage bounds", () => {
   it("rejects and deletes a continuation token after its fixed lifetime", async () => {
     const ledger = ledgerFor("claim-candidate-expired-cursor-token");
+    const ledgerBase = Math.floor(now / 1000) * 1000;
+    let ledgerNow = ledgerBase;
+    vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
     const taskIds = Array.from({ length: 129 }, (_value, index) =>
       "expiry-" + String(index).padStart(3, "0"),
     );
@@ -534,9 +537,8 @@ describe("OrchestratorLedger cursor expiry and storage bounds", () => {
     });
     expect(first.reason).toBe("CLAIM_SCAN_BUDGET_EXHAUSTED");
     const cursorHash = await sha256Canonical({ token: first.nextCursor });
-    const ledgerBase = Math.floor(now / 1000) * 1000;
     const expiredAt = ledgerBase + 15 * 60_000 + 1;
-    vi.spyOn(Date, "now").mockReturnValue(expiredAt);
+    ledgerNow = expiredAt;
     const result = await ledger.claimTask({
       workerId: "agent:worker-1",
       workerAssertion: await createWorkerAssertion({

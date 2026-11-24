@@ -34,9 +34,9 @@ export function createTenantDirectoryAdapters(namespace, selectedTenantId) {
       },
     }),
     admissionStore: Object.freeze({
-      async signAdmissionMessage(input) {
+      async issueAdmissionReceipt(input) {
         assertTenant(input);
-        return stub.signAdmissionMessage(input);
+        return stub.issueAdmissionReceipt(input);
       },
       async getAdmissionVerificationKey(input) {
         assertTenant(input);

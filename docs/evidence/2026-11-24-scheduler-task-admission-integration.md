@@ -96,14 +96,19 @@ The public `wrangler.toml`, main Worker entrypoint, secrets, live bindings, rout
 5. Run a separately approved staging deployment and actual platform Cron smoke test; neither is performed here.
 6. Resolve the existing Full History Secret Scan findings. The current failure is not waived or represented as a clean scan.
 
-## 8. Verification record
+## 9. Final verification snapshot
 
-The final commit-specific CI run is authoritative. Wrangler checks are dry-runs only. The Full History Secret Scan and deployment smoke remain separate gates; a successful source/test CI run does not clear those blockers.
+Verified against commit `61a053964b5eee011b858ccb614770121bd9085b`:
 
-References:
+- Node built-in test runner: **197 passed, 0 failed**.
+- Cloudflare Durable Object/Vitest suite: **76 passed across 21 files**.
+- Dedicated Scheduler Workflow suite: **5 passed in 1 file**.
+- `npm audit`: passed.
+- JavaScript syntax checks: passed.
+- Wrangler dry-runs: public Worker default config, public Worker staging config, scheduler test config, and isolated scheduler production config all passed.
+- The production scheduler config is parsed as a separate Worker and contains no Cron schedules. No deployment was performed.
+- PR diff/history-of-refs Gitleaks scan: no leaks found in the scanned PR diff segment.
+- Full repository history scan: **13 `generic-api-key` detections across 4,868 commits**. The scan remains failed and is not suppressed. Findings are in historical commits; one is the legacy computed scheduler idempotency-key expression in `cloud-engineering-connector/worker.js`. Remaining findings require separate evidence-based triage before promotion.
+- Post-deploy staging smoke: skipped; no staging deployment or actual Cron execution occurred.
 
-- https://developers.cloudflare.com/workflows/build/workers-api/
-- https://developers.cloudflare.com/workflows/build/events-and-parameters/
-- https://developers.cloudflare.com/workflows/build/trigger-workflows/
-- https://developers.cloudflare.com/workers/wrangler/configuration/
-- https://developers.cloudflare.com/workers/testing/vitest-integration/test-apis/
+This record is test evidence, not production qualification. The source test validates `WorkflowEntrypoint.run()` with a deterministic `step.do` executor and local Durable Objects; it does not substitute for a real Workflow-service/Cron smoke test.

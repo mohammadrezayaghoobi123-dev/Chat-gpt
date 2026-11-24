@@ -14,7 +14,7 @@
 - [x] Add test coverage for retry, replay deduplication, partial-batch failure, lost Ledger response after commit, Grant expiry, snapshot tampering, and missing schedule metadata.
 - [x] Isolate scheduler Worker and Wrangler configuration from the public Worker; use remote `chat-gpt111` Durable Object namespace bindings.
 - [x] Add CI syntax and Wrangler dry-run for both scheduler test and production configurations.
-- [ ] Verify final CI on the exact final HEAD, including all tests, npm audit, syntax, and both Wrangler dry-runs.
-- [ ] Review Full History Secret Scan findings; do not waive historical detections.
-- [ ] Verify PR remains Draft/open and base/main unchanged.
-- [ ] Keep production schedule absent; require separate activation authorization and staging review.
+- [x] Verify CI for the source HEAD: 197 Node tests, 76 Durable Object tests, 5 Scheduler Workflow tests, npm audit, syntax checks, and all four Wrangler dry-runs passed. A docs-only evidence commit follows; its own CI is rechecked separately.
+- [x] Review Full History Secret Scan findings: PR diff scan is clean; 13 historical detections remain unresolved and are not waived.
+- [x] Verify PR remains Draft/open on the isolated branch with the original main base SHA.
+- [x] Keep production schedule absent; activation requires separate authorization and staging review.

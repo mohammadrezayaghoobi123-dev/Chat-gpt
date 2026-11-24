@@ -906,21 +906,6 @@ export class OrchestratorLedger extends DurableObject {
         outboxResult = enqueueOutboxInTransaction(sql, normalizedOutboxInput);
         if (outboxResult.conflict) throw fail("Outbox idempotency conflict; task transition rolled back.", "OUTBOX_CONFLICT");
       }
-      if (isTerminalTaskState(next.state)) {
-        sql.exec(
-          "UPDATE orchestrator_execution_leases SET worker_id = NULL, lease_until = 0, updated_at = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ? AND worker_id = ? AND lease_generation = ?",
-          now, taskId, tenantId, projectId, workerId, leaseGeneration,
-        );
-        const releasedLease = sql.exec(
-          "SELECT worker_id, lease_until, lease_generation FROM orchestrator_execution_leases WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
-          taskId, tenantId, projectId,
-        ).toArray()[0];
-        if (!releasedLease || releasedLease.worker_id !== null || releasedLease.lease_until !== 0 ||
-            releasedLease.lease_generation !== leaseGeneration) {
-          throw fail("Terminal Task transition failed to invalidate its execution Lease; transaction rolled back.", "LEASE_TERMINALIZATION_FAILED");
-        }
-        syncClaimCandidateInTransaction(sql, taskId);
-      }
       return { updated: true, task: next, outbox: outboxResult };
     });
   }

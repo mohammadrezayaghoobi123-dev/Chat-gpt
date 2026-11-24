@@ -2728,3 +2728,84 @@ it("recovers a Queue-accepted send with a lost acknowledgement through bounded r
     dateNow.mockRestore();
   }
 }, 15000);
+
+
+it("rejects validation evidence bound to a different commit for the current task version", async () => {
+  const ledger = ledgerFor("ledger-validation-evidence-commit-provenance");
+  const taskId = "task-commit-provenance-mismatch-0001";
+  const taskCommitSha = "d".repeat(40);
+  const evidenceCommitSha = "e".repeat(40);
+
+  await createTask(ledger, {
+    task: { ...task(taskId), commitSha: taskCommitSha },
+    idempotencyKey: "task-commit-provenance-mismatch-create",
+    inputHash: "5".repeat(64),
+    now,
+  });
+
+  const lease = await ledger.claimTask({
+    taskId,
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1"),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+  const mismatchedCommitEvidence = {
+    kind: "validation-evidence",
+    taskId,
+    taskVersion: 1,
+    commitSha: evidenceCommitSha,
+    validationOutcome: "PASS",
+    evidenceDigest: "f".repeat(64),
+    issuer: "validator:independent-01",
+  };
+
+  const transitionResult = await ledger.transitionTask({
+    taskId,
+    expectedVersion: 1,
+    expectedState: "SCHEDULED",
+    nextState: "RUNNING",
+    actor: agent,
+    evidence: mismatchedCommitEvidence,
+    now: now + 1,
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1",
+      role: "agent",
+      operation: "transitionTask",
+      nowMs: now + 1,
+      jti: "jti-commit-provenance-mismatch-0001",
+    }),
+    leaseGeneration: lease.leaseGeneration,
+  });
+
+  const taskAfter = await ledger.getTask({ taskId });
+  const persisted = await runInDurableObject(ledger, async (_instance, state) => ({
+    lease: state.storage.sql.exec(
+      "SELECT worker_id, lease_generation FROM orchestrator_execution_leases WHERE task_id = ?",
+      taskId,
+    ).one(),
+    replayJtiCount: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      "jti-commit-provenance-mismatch-0001",
+    ).one().count,
+  }));
+
+  // The evidence matches Task ID and version, but its commit target differs.
+  // This isolates commit provenance from Task, version, actor, and Lease binding.
+  expect.soft(transitionResult.updated).toBe(false);
+  expect.soft(taskAfter).toMatchObject({
+    taskId,
+    state: "SCHEDULED",
+    version: 1,
+    commitSha: taskCommitSha,
+  });
+  expect.soft(taskAfter.lastTransition?.evidence).not.toEqual(mismatchedCommitEvidence);
+  expect.soft(persisted.lease).toMatchObject({
+    worker_id: "agent:worker-1",
+    lease_generation: 1,
+  });
+  expect.soft(persisted.replayJtiCount).toBe(1);
+});

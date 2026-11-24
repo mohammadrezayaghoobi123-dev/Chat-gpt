@@ -1,4 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
+import { canonicalJson } from "../orchestrator-protocol.js";
+import { verifySchedulerInvocationAssertion } from "../orchestrator-scheduler-invocation.js";
 import { verifyTenantDirectoryAdminAssertion } from "./tenant-directory-assertion.js";
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -45,6 +47,9 @@ function membershipRecord(row) {
 }
 
 const ADMISSION_SIGNING_MESSAGE_LIMIT = 32_768;
+const ADMISSION_TASK_LIMIT = 32_768;
+const ADMISSION_RECEIPT_TTL_SECONDS = 300;
+const ADMISSION_SECRET_FIELD = /(?:secret|token|password|credential|api[_-]?key|private[_-]?key)/i;
 const STANDARD_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 function base64ByteLength(value) {
@@ -79,6 +84,60 @@ function validAdmissionSigningEnvelope(envelope, tenantId, expectedKeyId = null)
     base64ByteLength(envelope.wrappedPrivateKey) >= 64 &&
     base64ByteLength(envelope.wrappedPrivateKey) <= 4096
   );
+}
+
+function assertNoAdmissionSecrets(value, path = "task") {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      assertNoAdmissionSecrets(value[index], path + "[" + index + "]");
+    }
+    return;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (ADMISSION_SECRET_FIELD.test(key)) {
+      throw fail("SENSITIVE_FIELD_REJECTED", path + " contains a sensitive field.");
+    }
+    assertNoAdmissionSecrets(child, path + "." + key);
+  }
+}
+
+async function sha256Text(value) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function readAdmissionAuthorizationSnapshot(sql, scope) {
+  const membership = sql.exec(
+    "SELECT membership_id, status, version FROM tenant_memberships WHERE tenant_id=? AND principal_id=?",
+    scope.tenantId, scope.principalId,
+  ).toArray()[0];
+  const policyScopeEpoch = readPolicyScopeEpoch(sql, scope);
+  if (!membership || membership.status !== "active") {
+    return { allowed: false, membership, policyScopeEpoch, rule: null };
+  }
+  const rule = sql.exec(
+    "SELECT effect, policy_version, decision_id, version, resource_digest FROM tenant_project_policy_rules " +
+    "WHERE tenant_id=? AND project_id=? AND principal_id=? AND action=? AND status='active' " +
+    "AND resource_digest IN (?, '*') ORDER BY CASE WHEN resource_digest=? THEN 0 ELSE 1 END LIMIT 1",
+    scope.tenantId, scope.projectId, scope.principalId, scope.action,
+    scope.resourceDigest, scope.resourceDigest,
+  ).toArray()[0];
+  return { allowed: rule?.effect === "allow", membership, policyScopeEpoch, rule: rule ?? null };
+}
+
+function admissionReceiptFromRow(row, replay = false) {
+  if (!row) return null;
+  return {
+    tenantId: row.tenant_id,
+    claims: JSON.parse(row.claims_json),
+    keyId: row.signing_key_id,
+    algorithm: "Ed25519",
+    publicKey: row.public_key,
+    signature: row.signature,
+    auditEventId: row.audit_event_id,
+    replay,
+  };
 }
 
 function readPolicyScopeEpoch(sql, { tenantId, projectId, principalId, action }) {
@@ -160,13 +219,35 @@ export class TenantDirectory extends DurableObject {
       "epoch INTEGER NOT NULL CHECK(epoch >= 1), updated_at INTEGER NOT NULL, " +
       "PRIMARY KEY(tenant_id, project_id, principal_id, action))"
     );
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS tenant_admissions (" +
+      "admission_id TEXT PRIMARY KEY, receipt_jti TEXT NOT NULL UNIQUE, scheduler_invocation_id TEXT NOT NULL, " +
+      "tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, principal_id TEXT NOT NULL, action TEXT NOT NULL, " +
+      "task_id TEXT NOT NULL, task_digest TEXT NOT NULL, idempotency_key_digest TEXT NOT NULL, " +
+      "claims_json TEXT NOT NULL CHECK(json_valid(claims_json)), signing_key_id TEXT NOT NULL, " +
+      "public_key TEXT NOT NULL, signature TEXT NOT NULL, audit_event_id TEXT NOT NULL, " +
+      "created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, " +
+      "UNIQUE(tenant_id, project_id, idempotency_key_digest))"
+    );
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS tenant_admission_outbox (" +
+      "event_id TEXT PRIMARY KEY, admission_id TEXT NOT NULL UNIQUE, tenant_id TEXT NOT NULL, " +
+      "project_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('PENDING','DELIVERED','RETRY_WAIT','DEAD_LETTER')), " +
+      "attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), next_attempt_at INTEGER NOT NULL, " +
+      "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, " +
+      "FOREIGN KEY(admission_id) REFERENCES tenant_admissions(admission_id))"
+    );
+    sql.exec("CREATE INDEX IF NOT EXISTS tenant_admission_outbox_due ON tenant_admission_outbox(status, next_attempt_at, created_at)");
+    sql.exec("CREATE TRIGGER IF NOT EXISTS tenant_admissions_no_update BEFORE UPDATE ON tenant_admissions BEGIN SELECT RAISE(ABORT, 'TENANT_ADMISSION_IMMUTABLE'); END");
+    sql.exec("CREATE TRIGGER IF NOT EXISTS tenant_admissions_no_delete BEFORE DELETE ON tenant_admissions BEGIN SELECT RAISE(ABORT, 'TENANT_ADMISSION_IMMUTABLE'); END");
     sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(1, ?)", Date.now());
     sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(2, ?)", Date.now());
+    sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(3, ?)", Date.now());
   }
 
   ping() {
     const row = this.ctx.storage.sql.exec("SELECT MAX(version) AS version FROM tenant_directory_schema_migrations").one();
-    return { ok: Number(row.version) === 2, schemaVersion: Number(row.version ?? 0) };
+    return { ok: Number(row.version) === 3, schemaVersion: Number(row.version ?? 0) };
   }
 
   async #provisionAdmissionSigningKey(tenantId) {

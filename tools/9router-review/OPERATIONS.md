@@ -249,3 +249,16 @@ The reservation store and its trust boundary must be reviewed independently. Do 
 No source, test, workflow, dependency, secret, repository-policy, `main`, Cloudflare, production, or local-host changes were made for this finding. No canary or provider call was run.
 
 **Gate:** `9R-ATOMIC-001` blocks reviewer activation and any claim of cross-run at-most-once publication. Keep PR #463 Draft. The required next engineering action is a red-phase concurrency test and an explicit durable-reservation design review; implementation must follow only after the test demonstrates the defect.
+
+
+### Static corroboration on the current source/test blobs
+
+Exact blob evidence retrieved from the PR head `52b00c544e8c2fd499c11738cae4d075331f8fbc`:
+
+- `review.js` blob: `<review.js blob SHA to be recorded from the exact-head fetch>`; duplicate preflight begins at line 870; the final publication gate is at lines 940–941; the GitHub comment POST is at lines 944–950.
+- `review.test.mjs` blob: `104996a167d4a9e6883714eb89112d8f061eded6`; the retrieved 147,938-byte test file contains sequential duplicate suppression and ambiguous-first-POST reconciliation tests, but no concurrency/barrier/parallel-invocation/reservation/lease/at-most-once test was found by targeted source scan.
+- Workflow blob: `737e37cdafe3d12322226f493e78bf4856555a2e`; no `concurrency`, `group`, or `cancel-in-progress` directive exists. Reviewer remains disabled.
+- This corroborates the static race finding and the missing regression coverage. It is not a runtime reproduction and does not replace the required red-phase concurrent test.
+- Exact-head CI evidence remains absent for this documentation commit: the commit-workflow query returned no PR-triggered runs and Combined Status returned no status checks. The previously recorded 136/136 local result applies to the identical executable tree rooted at `fcc83c5`; it has not been freshly re-executed in this turn.
+
+**Verification disposition:** static corroboration PASS; concurrency regression execution NOT_RUN; exact-current-head npm test NOT_RUN; reviewer activation BLOCKED.

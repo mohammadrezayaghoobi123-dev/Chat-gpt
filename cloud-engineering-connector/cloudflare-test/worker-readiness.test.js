@@ -147,7 +147,7 @@ describe("Worker readiness with the real OrchestratorLedger Durable Object", () 
     });
   });
 
-  it("fails closed when the persisted Ledger migration marker table is missing", async () => {
+  it("fails closed when the persisted Ledger migration marker is missing", async () => {
     const { stub, binding } = createIsolatedLedgerBinding();
     expect(await stub.ping()).toEqual({
       ok: true,
@@ -155,10 +155,10 @@ describe("Worker readiness with the real OrchestratorLedger Durable Object", () 
     });
 
     await runInDurableObject(stub, (_instance, state) => {
-      state.storage.sql.exec("DROP TABLE _sql_schema_migrations");
+      state.storage.sql.exec("DELETE FROM _sql_schema_migrations");
     });
 
-    await expect(stub.ping()).rejects.toThrow();
+    expect(await stub.ping()).toEqual({ ok: false, schemaVersion: 0 });
 
     const response = await worker.fetch(
       new Request("https://example.test/readyz", {

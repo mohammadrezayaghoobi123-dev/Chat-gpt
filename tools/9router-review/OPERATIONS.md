@@ -443,3 +443,43 @@ Implementation is NOT authorized by this design record. The next implementation 
 8. Keep reviewer activation, workflow registration on `main`, provider dispatch, and merge as separate approvals.
 
 **Disposition:** design contract drafted; no backend selected; no source/test/workflow changes; no runtime reproduction; no at-most-once claim. PR #463 remains Draft and reviewer activation remains BLOCKED.
+
+
+## Red-phase concurrency test authored — 2026-11-24
+
+**Test:** `tools/9router-review/review.test.mjs` — `deterministic concurrent duplicate-publication red test`  
+**Test-only commit:** `460d073bce1281ce9e15441a7e446621bc3b23a3`  
+**Test execution:** `NOT_RUN` in this environment. No RED result is claimed.
+
+### Harness construction and falsification target
+
+- The test launches two independent `runReview()` invocations with the same immutable repository/PR/head/base tuple and independent per-run legacy snapshot wrappers.
+- Both invocations share one deterministic fake GitHub transport.
+- The comment-history endpoint increments a shared counter and blocks each invocation at a Promise barrier until both have arrived. Only then does it return an empty comment list to both callers.
+- This establishes the critical interleaving: both runs have independently observed the same empty marker history before either can continue.
+- The fake 9Router endpoint counts model requests and returns a deterministic valid report.
+- The fake GitHub comment endpoint counts physical POST requests and returns a structurally valid bot-authored 201 response.
+- The test asserts two completed empty-history reads, one model invocation, one successful publication result per invocation only if consistent with the reservation contract, and exactly one physical comment POST.
+
+### Expected current-code outcome (prediction, not execution evidence)
+
+Static control-flow analysis predicts that the current implementation has no shared reservation between the barrier and POST. Therefore both runs are expected to invoke the model and both are expected to POST. The intended red assertion is `commentPosts === 1`; current source is predicted to violate it. This remains a falsifiable prediction until Node.js executes the test and records the actual counts.
+
+### Adversarial review of the test itself
+
+- **Barrier liveness:** the test releases only when both history reads arrive; `Promise.all` starts both workers. A missing second arrival causes a test timeout/failure rather than a false pass.
+- **No timing sleeps:** synchronization uses a Promise barrier, not arbitrary delays.
+- **Same-key collision:** both calls use identical repository, PR number, head SHA, and base SHA.
+- **Independent invocations:** each call enters the public `runReview` wrapper separately; no shared in-process application mutex is supplied by the fixture.
+- **Observable side effects:** model calls and physical comment POSTs are counted independently.
+- **No live side effects:** all GitHub and 9Router requests are intercepted by the fake transport; no credentials or network calls are made.
+- **Scope:** this test targets the current duplicate-preflight/publication race. It does not yet test a real durable store, multiple operating-system processes, worker crashes, lease fencing, or GitHub acceptance followed by lost acknowledgement. Those remain separate conformance/fault-injection gates.
+
+### Current disposition
+
+- Test artifact authored: **PASS (repository write acknowledged and content re-fetched)**.
+- Test runtime: **NOT_RUN**.
+- Predicted red result: **PROVISIONALLY_SUPPORTED** by source control flow; not experimentally confirmed.
+- Durable reservation implementation: **NOT_STARTED**.
+- Reviewer activation: **BLOCKED**.
+- PR #463 remains Draft / Open / Unmerged. No workflow, dependency, source implementation, main-branch, secret, Cloudflare, or local-host changes were made.

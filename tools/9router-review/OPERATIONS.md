@@ -739,6 +739,26 @@ A returned `MODEL_PERMIT` or `COMMENT_PERMIT` is an in-memory authorization to m
 - Stale replicas, eventually consistent reads, last-write-wins updates, cache locks, workflow concurrency groups, and local mutexes are not reservation authorities.
 - A lost commit acknowledgement is an ambiguous commit. The caller must read the authoritative key and reconcile the exact attempt ID. It must not optimistically repeat the mutation or external request.
 
+### 7A. System-level restore gate
+
+Per-reservation state alone cannot detect that a database restore erased rows created after the restore point. Therefore the service has a separate system mode, held outside the reservation store's backup/restore domain:
+
+- `ACTIVE`: reservation operations may proceed subject to all per-key invariants.
+- `RECOVERY_LOCKED`: no model-provider or GitHub comment transport call is permitted for any key.
+
+A restore or rollback operation MUST follow this order:
+
+1. Disable all effectful dispatch at the trusted Worker/workflow boundary.
+2. Set the out-of-band monotonic recovery anchor to RECOVERY_LOCKED and increment its recovery epoch before restoring the reservation store.
+3. Restore the database and keep all callers fail-closed.
+4. Reconcile the restored database against a complete, independently durable, append-only inventory of all model/comment attempt intents and confirmed outcomes created after the restore point.
+5. Reconstruct missing reservation tombstones and consumed attempt states. Any attempt intent without conclusive evidence that the external request was not sent is UNKNOWN; it MUST NOT be retried.
+6. Verify the inventory's completeness, sequence continuity, integrity, and replay result. Only a separately approved recovery operation may set the out-of-band anchor back to ACTIVE.
+
+The append-only inventory must be outside the restored store's backup/rollback domain, have durable acknowledged writes, unique attempt IDs, and complete ordered lookup by reservation key. The design and provider for this inventory are NOT_SELECTED. A backup or PITR feature alone does not satisfy this requirement. If no independent complete inventory exists, or if any gap cannot be explained, the system remains RECOVERY_LOCKED; safety takes precedence over availability.
+
+This protocol is deliberately fail-stop. It does not claim that restoring a database snapshot can preserve monotonic state without independent evidence. Candidate qualification MUST include a restore drill that attempts to roll back across both external-effect boundaries.
+
 ### 8. Snapshot race and external-service limitations
 
 The PR head/base check and GitHub comment POST are not one cross-service transaction. A PR can change after the last live snapshot read but before the comment POST. The comment marker MUST therefore bind the exact repository/PR/head/base/policy/runtime tuple, and consumers must treat a comment for an older head as stale. The implementation should minimize this interval and recheck immediately before consuming the comment permit, but it cannot eliminate the cross-service time-of-check/time-of-use race without a GitHub-side conditional publication primitive.

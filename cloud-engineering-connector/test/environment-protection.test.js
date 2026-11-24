@@ -299,3 +299,126 @@ test("rejects disabled custom branch policies before requesting the branch-polic
     "the branch-policy endpoint must not be queried when Environment metadata disables custom policies",
   );
 });
+
+test("inspector accumulates independent Environment findings and still verifies branch policies", async () => {
+  const { inspectEnvironmentProtection } = await loadVerifier();
+  const { fetchImpl, calls } = makeFetch({
+    environmentData: environment("staging", {
+      can_admins_bypass: true,
+      protection_rules: [
+        {
+          id: 11,
+          type: "required_reviewers",
+          prevent_self_review: false,
+          reviewers: [
+            { type: "User", reviewer: { id: 335530603 } },
+            { type: "User", reviewer: { id: 246801357 } },
+          ],
+        },
+        { id: 12, type: "branch_policy" },
+      ],
+    }),
+    branchPages: [{
+      total_count: 1,
+      branch_policies: [{ id: 21, name: "integration/*" }],
+    }],
+  });
+
+  const report = await inspectEnvironmentProtection({
+    repository,
+    releaseEnvironment: "staging",
+    token,
+    fetchImpl,
+  });
+
+  assert.equal(report.status, "BLOCKED");
+  assert.equal(report.administratorBypassAllowed, true);
+  assert.equal(report.preventSelfReview, false);
+  assert.equal(report.requiredReviewerRuleCount, 1);
+  assert.equal(report.requiredReviewerCount, 2);
+  assert.equal(report.branchPolicyState, "MISMATCH");
+  assert.deepEqual(
+    report.findings.map(finding => finding.code).sort(),
+    ["ADMIN_BYPASS_ENABLED", "BRANCH_POLICY_MISMATCH", "SELF_REVIEW_ALLOWED"],
+  );
+  assert.equal(calls.filter(call => call.path.endsWith("/deployment-branch-policies")).length, 1);
+  assert.ok(Object.isFrozen(report));
+  assert.ok(Object.isFrozen(report.findings));
+});
+
+test("inspector preserves a branch-policy API uncertainty alongside an independent policy violation", async () => {
+  const { inspectEnvironmentProtection } = await loadVerifier();
+  const { fetchImpl, calls } = makeFetch({
+    environmentData: environment("staging", { can_admins_bypass: true }),
+    branchPages: [{ total_count: 0, branch_policies: [] }],
+  });
+  const branchFetch = async (url, init) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname.endsWith("/deployment-branch-policies")) {
+      calls.push({
+        url: parsed.toString(),
+        path: parsed.pathname,
+        method: init?.method ?? "GET",
+        authorization: init?.headers?.authorization,
+      });
+      return jsonResponse(404, {});
+    }
+    return fetchImpl(url, init);
+  };
+
+  const report = await inspectEnvironmentProtection({
+    repository,
+    releaseEnvironment: "staging",
+    token,
+    fetchImpl: branchFetch,
+  });
+
+  assert.equal(report.status, "BLOCKED");
+  assert.ok(report.findings.some(finding => finding.code === "ADMIN_BYPASS_ENABLED"));
+  assert.ok(report.findings.some(finding => finding.code === "BRANCH_POLICY_ENDPOINT_NOT_FOUND"));
+  assert.equal(report.branchPolicyState, "UNKNOWN");
+  assert.equal(calls.filter(call => call.path.endsWith("/deployment-branch-policies")).length, 1);
+});
+
+test("inspector does not query branch policies when custom policies are explicitly disabled", async () => {
+  const { inspectEnvironmentProtection } = await loadVerifier();
+  const { fetchImpl, calls } = makeFetch({
+    environmentData: environment("staging", {
+      deployment_branch_policy: {
+        protected_branches: true,
+        custom_branch_policies: false,
+      },
+    }),
+  });
+
+  const report = await inspectEnvironmentProtection({
+    repository,
+    releaseEnvironment: "staging",
+    token,
+    fetchImpl,
+  });
+
+  assert.equal(report.status, "BLOCKED");
+  assert.equal(report.branchPolicyState, "NOT_APPLICABLE");
+  assert.ok(report.findings.some(finding => finding.code === "CUSTOM_BRANCH_POLICIES_DISABLED"));
+  assert.equal(calls.filter(call => call.path.endsWith("/deployment-branch-policies")).length, 0);
+});
+
+test("release verifier remains fail-closed when the complete inspection has independent findings", async () => {
+  const { verifyEnvironmentProtection } = await loadVerifier();
+  const { fetchImpl, calls } = makeFetch({
+    environmentData: environment("staging", { can_admins_bypass: true }),
+  });
+
+  await assert.rejects(
+    verifyEnvironmentProtection({
+      repository,
+      releaseEnvironment: "staging",
+      token,
+      fetchImpl,
+    }),
+    error => error.code === "POLICY_MISMATCH",
+  );
+
+  assert.equal(calls.filter(call => call.path.endsWith("/deployment-branch-policies")).length, 1);
+});

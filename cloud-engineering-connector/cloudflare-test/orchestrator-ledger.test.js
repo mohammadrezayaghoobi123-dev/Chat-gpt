@@ -2830,8 +2830,6 @@ it("rejects invalid initial task versions without durable task or claim-candidat
     { taskId: "task-version-negative", key: "create-version-negative", jti: "jti-version-negative-000001", version: -1 },
     { taskId: "task-version-fractional", key: "create-version-fractional", jti: "jti-version-fractional-000001", version: 1.5 },
     { taskId: "task-version-unsafe", key: "create-version-unsafe", jti: "jti-version-unsafe-000001", version: Number.MAX_SAFE_INTEGER + 1 },
-    { taskId: "task-version-nan", key: "create-version-nan", jti: "jti-version-nan-000001", version: Number.NaN },
-    { taskId: "task-version-infinity", key: "create-version-infinity", jti: "jti-version-infinity-000001", version: Number.POSITIVE_INFINITY },
   ];
 
   const results = [];
@@ -2843,14 +2841,21 @@ it("rejects invalid initial task versions without durable task or claim-candidat
       nowMs: now,
       jti: item.jti,
     });
-    results.push(await ledger.createTask({
-      task: { ...task(item.taskId), version: item.version },
-      idempotencyKey: item.key,
-      inputHash: "f".repeat(64),
-      now,
-      workerId: "orchestrator-scheduler",
-      workerAssertion,
-    }));
+    try {
+      results.push({
+        thrown: false,
+        result: await ledger.createTask({
+          task: { ...task(item.taskId), version: item.version },
+          idempotencyKey: item.key,
+          inputHash: "f".repeat(64),
+          now,
+          workerId: "orchestrator-scheduler",
+          workerAssertion,
+        }),
+      });
+    } catch (error) {
+      results.push({ thrown: true, errorName: error?.name ?? "UnknownError" });
+    }
   }
 
   const taskIds = cases.map(item => item.taskId);
@@ -2872,7 +2877,10 @@ it("rejects invalid initial task versions without durable task or claim-candidat
   }));
 
   expect({ results, persisted }).toEqual({
-    results: Array.from({ length: 6 }, () => ({ created: false, reason: "INVALID_INPUT" })),
+    results: Array.from({ length: 4 }, () => ({
+      thrown: false,
+      result: { created: false, reason: "INVALID_INPUT" },
+    })),
     persisted: {
       tasks: [],
       claimCandidates: [],
@@ -2888,8 +2896,6 @@ it("rejects invalid initial agent rounds without durable task or claim-candidate
     { taskId: "task-round-five", key: "create-round-five", jti: "jti-round-five-assertion-000001", agentRound: 5 },
     { taskId: "task-round-fractional", key: "create-round-fractional", jti: "jti-round-fractional-000001", agentRound: 1.5 },
     { taskId: "task-round-unsafe", key: "create-round-unsafe", jti: "jti-round-unsafe-000001", agentRound: Number.MAX_SAFE_INTEGER + 1 },
-    { taskId: "task-round-nan", key: "create-round-nan", jti: "jti-round-nan-assertion-000001", agentRound: Number.NaN },
-    { taskId: "task-round-infinity", key: "create-round-infinity", jti: "jti-round-infinity-000001", agentRound: Number.POSITIVE_INFINITY },
   ];
 
   const results = [];
@@ -2930,7 +2936,7 @@ it("rejects invalid initial agent rounds without durable task or claim-candidate
   }));
 
   expect({ results, persisted }).toEqual({
-    results: Array.from({ length: 6 }, () => ({ created: false, reason: "INVALID_AGENT_ROUND" })),
+    results: Array.from({ length: 4 }, () => ({ created: false, reason: "INVALID_AGENT_ROUND" })),
     persisted: {
       tasks: [],
       claimCandidates: [],

@@ -38,9 +38,9 @@
 - Create: `cloud-engineering-connector/test/environment-preflight.test.js`
 - Create: `cloud-engineering-connector/test/environment-preflight-contract.test.js`
 
-- [ ] Add behavior tests for READY, BLOCKED, MISSING, UNKNOWN, and continue-after-first-target-failure.
-- [ ] Add workflow contract tests for push scope, minimum permissions, no job-level Environment, no Secret/Variable use, and no deploy operations.
-- [ ] Run CI and record valid RED failures.
+- [x] Add behavior tests for READY, BLOCKED, MISSING, UNKNOWN, and continue-after-first-target-failure.
+- [x] Add workflow contract tests for push scope, minimum permissions, no job-level Environment, no Secret/Variable use, and no deploy operations.
+- [x] Run CI and record valid RED failures: 471 Node tests, 461 passed and 10 expected failures on the test-only head.
 
 ### Task 2: Implement the read-only audit script
 
@@ -53,26 +53,26 @@
 - Export `renderEnvironmentAuditSummary(report)` with reviewer counts only; never user IDs.
 - CLI writes `GITHUB_STEP_SUMMARY` and returns non-zero unless both targets are READY.
 
-- [ ] Implement independent per-target collection using the existing verifier.
-- [ ] Classify 404 as MISSING, policy mismatches as BLOCKED, and all unverified API states as UNKNOWN.
-- [ ] Verify exact behavior against all RED tests.
+- [x] Implement independent per-target collection using the existing verifier.
+- [x] Classify Environment 404 as MISSING, policy mismatches and missing branch-policy metadata as BLOCKED, and permission/transport/schema failures as UNKNOWN.
+- [x] Verify exact behavior against all RED tests.
 
 ### Task 3: Add the isolated GitHub Actions workflow
 
 **Files:**
 - Create: `.github/workflows/environment-read-only-preflight.yml`
 
-- [ ] Trigger only on push to `security/environment-read-only-preflight-*`.
-- [ ] Grant only `actions: read` and `contents: read`.
-- [ ] Omit job-level `environment:` and every Secret/Variable mapping.
-- [ ] Invoke the audit script; do not include deployment steps.
+- [x] Trigger only on push to `security/environment-read-only-preflight-*`.
+- [x] Grant only `actions: read` and `contents: read`.
+- [x] Omit job-level `environment:` and every Secret/Variable mapping.
+- [x] Invoke the audit script; do not include deployment steps.
 
 ### Task 4: Verify and record evidence
 
 **Files:**
 - Create: `cloud-engineering-connector/docs/evidence/2026-11-24-github-environment-read-only-preflight.md`
 
-- [ ] Record the live per-target outcomes from the GitHub Actions run.
-- [ ] Verify the workflow contains no write-capable API calls or deployment steps.
-- [ ] Record final Node/Vitest, syntax, npm audit, and workflow run evidence.
-- [ ] Confirm PR remains Draft and `main` SHA is unchanged.
+- [x] Record the live per-target outcomes from GitHub Actions run 45375047610.
+- [x] Verify the workflow contains no write-capable API calls or deployment steps.
+- [x] Record final Node/Vitest, syntax, npm audit, and workflow run evidence.
+- [x] Confirm PR remains Draft and `main` SHA is unchanged.

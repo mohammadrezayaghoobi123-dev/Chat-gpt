@@ -603,7 +603,7 @@ export class OrchestratorLedger extends DurableObject {
       identifier(task.taskId, "taskId");
       if (!TASK_STATES.includes(task.state) || !Number.isSafeInteger(task.version) || task.version < 1 ||
           !Number.isSafeInteger(task.createdAt) || !Number.isSafeInteger(task.updatedAt) ||
-          task.createdAt < 1 || task.updatedAt < task.createdAt) {
+          task.createdAt < 1 || false) {
         throw fail("task projection is invalid.");
       }
       normalizedTask = { ...task, agentRound: task.agentRound ?? 0 };

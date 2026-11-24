@@ -56,4 +56,14 @@ it("owns orchestration persistence without creating Brain Store tables", async (
       expect(tables.has(name)).toBe(false);
     }
   });
+
+  it("fails closed when a schema-v10 Ledger loses its admission identity table", async () => {
+    const ledger = ledgerFor("ledger-admission-schema-corruption");
+    await runInDurableObject(ledger, instance => {
+      expect(instance.ping()).toMatchObject({ ok: true, schemaVersion: 10 });
+      instance.ctx.storage.sql.exec("DROP TABLE orchestrator_task_admissions");
+    });
+    await expect(runInDurableObject(ledger, instance => instance.ensureSchema()))
+      .rejects.toMatchObject({ code: "LEDGER_SCHEMA_CORRUPT" });
+  });
 });

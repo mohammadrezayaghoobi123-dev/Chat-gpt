@@ -33,19 +33,19 @@ The workflow exits non-zero if either target is not READY. A failed audit is an 
 
 ## GREEN verification
 
-- Final code head before evidence documentation: `edf648fc1459e88b43500fe038fff26aea42ad31`.
-- Cloud Engineering Connector CI [45375058540](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45375058540):
+- Final evidence head: `f9bb036bbbb1347b167db1cb1bc11c5e2b8c19dd`.
+- Cloud Engineering Connector CI [45375291858](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45375291858):
   - Node tests: 471 passed, 0 failed.
   - Vitest: 227 passed across 11 files.
   - `npm audit --audit-level=moderate`: zero vulnerabilities.
   - JavaScript syntax checks passed.
   - Wrangler default and Staging dry-runs passed.
   - Post-deploy Staging smoke was skipped by design.
-- Orchestrator GitHub Intake workflow [45375058495](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45375058495): success.
+- Orchestrator GitHub Intake workflow [45375297643](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45375297643): success.
 
 ## Live read-only Environment results
 
-GitHub Actions run [45375047610](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45375047610) executed the audit against the repository's actual GitHub API state:
+GitHub Actions run [45375291919](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45375291919) executed the audit against the repository's actual GitHub API state:
 
 | Environment | Observed result | Evidence |
 |---|---|---|
@@ -58,7 +58,7 @@ This audit is the first current-run read-only observation in this branch and sup
 
 ## Secret scanning
 
-- Latest Gitleaks scan [45375058402](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45375058402): PR diff scan passed with no leaks.
+- Latest Gitleaks scan [45375297832](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45375297832): PR diff scan passed with no leaks.
 - The full fetched-ref/reachable-history scan failed. No fingerprint, secret-shaped value, or finding payload is reproduced. A clean PR diff is not evidence that the repository's full history is clean.
 
 ## Residual limits
@@ -68,7 +68,7 @@ This audit is the first current-run read-only observation in this branch and sup
 - No Cloudflare Worker, Durable Object namespace, Queue, or deployment was touched.
 - The Staging branch-policy endpoint remains unavailable and Production remains absent; release workflows must continue to fail closed.
 - This workflow is an audit, not a release authorization and not a remediation action.
-- The audit was executed before this evidence document was added; a fresh CI run on the final documentation head is required and will be recorded in the PR checks.
+- The final documentation head was revalidated by CI run 45375291858 and the live read-only preflight run 45375291919. The latter reproduced the Staging BLOCKED and Production MISSING results.
 
 ## Decision
 

@@ -3437,3 +3437,126 @@ test("does not replay 9Router POST through HTTP 307 or 308 redirects", async t =
     });
   }
 });
+
+
+test("GitHub comment publication rejects 307 and 308 without replaying the POST", async t => {
+  const headSha = "a".repeat(40);
+  const baseSha = "b".repeat(40);
+
+  for (const status of [307, 308]) {
+    await t.test("HTTP " + status, async t => {
+      const received = [];
+      let acceptedComments = 0;
+      let modelCalls = 0;
+
+      const server = createServer((request, response) => {
+        const chunks = [];
+        request.on("data", chunk => chunks.push(chunk));
+        request.on("end", () => {
+          received.push({
+            method: request.method,
+            path: request.url,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+
+          if (request.url === "/issues/281/comments") {
+            response.writeHead(status, { Location: "/redirect-target" });
+            response.end();
+            return;
+          }
+
+          if (request.url === "/redirect-target") {
+            acceptedComments += 1;
+            const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+            response.writeHead(201, { "Content-Type": "application/json" });
+            response.end(JSON.stringify({
+              id: 1281,
+              body: payload.body,
+              issue_url: "https://api.github.com/repos/owner/repo/issues/281",
+              user: { login: "github-actions[bot]", id: 41898282, type: "Bot" },
+            }));
+            return;
+          }
+
+          response.writeHead(404);
+          response.end();
+        });
+      });
+
+      await new Promise((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      t.after(() => new Promise((resolve, reject) => {
+        server.close(error => error ? reject(error) : resolve());
+      }));
+
+      const address = server.address();
+      assert.ok(address && typeof address === "object" && Number.isInteger(address.port));
+
+      const fakeFetch = async (url, options = {}) => {
+        const target = String(url);
+
+        if (target.endsWith("/pulls/281")) {
+          return new Response(JSON.stringify({
+            state: "open",
+            draft: false,
+            head: { sha: headSha },
+            base: { sha: baseSha },
+          }), { status: 200 });
+        }
+
+        if (target.includes("/pulls/281/files?")) {
+          return new Response(JSON.stringify([{
+            filename: "src/a.js",
+            status: "modified",
+            additions: 1,
+            deletions: 1,
+            patch: "@@ -1 +1 @@\n-old\n+new",
+          }]), { status: 200 });
+        }
+
+        if (target.includes("/issues/281/comments?")) {
+          return new Response("[]", { status: 200 });
+        }
+
+        if (target.endsWith("/chat/completions")) {
+          modelCalls += 1;
+          return new Response(JSON.stringify({
+            choices: [{ message: { content: "A sufficiently long placeholder review report." } }],
+          }), { status: 200 });
+        }
+
+        if (target.endsWith("/issues/281/comments") && options.method === "POST") {
+          return fetch("http://127.0.0.1:" + address.port + "/issues/281/comments", {
+            ...options,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
+        throw new Error("Unexpected test request: " + target);
+      };
+
+      await assert.rejects(runReview({
+        repository: "owner/repo",
+        pullRequest: 281,
+        expectedHeadSha: headSha,
+        expectedBaseSha: baseSha,
+        githubToken: "github-test-token",
+        routerBaseUrl: "https://router.example/v1",
+        routerApiKey: "router-test-token",
+        reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+        model: "test-model",
+        fetchImpl: fakeFetch,
+      }), /GitHub comment publication request failed.*UNKNOWN/);
+
+      assert.deepEqual(
+        received.map(({ method, path }) => ({ method, path })),
+        [{ method: "POST", path: "/issues/281/comments" }],
+        "a 307/308 response must not cause the GitHub comment POST to be replayed",
+      );
+      assert.equal(acceptedComments, 0, "the redirected destination must not accept a comment");
+      assert.equal(modelCalls, 1, "the redirect test must reach the publication boundary without a live model call");
+    });
+  }
+});

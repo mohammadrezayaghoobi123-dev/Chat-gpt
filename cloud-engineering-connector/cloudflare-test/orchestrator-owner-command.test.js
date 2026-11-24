@@ -2481,6 +2481,42 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+  it("rejects an expired Owner assertion after wall clock rollback despite caller-supplied now", async () => {
+    const ledger = ledgerFor("owner-assertion-clock-rollback");
+    await createTask(ledger);
+    const input = await ownerInput();
+
+    wallClockNow = now + 40_000;
+    const afterExpiry = await ledger.executeOwnerCommand(input);
+    expect(afterExpiry).toMatchObject({
+      applied: false,
+      reason: "OWNER_ASSERTION_REJECTED",
+    });
+
+    wallClockNow = now;
+    const afterRollback = await ledger.executeOwnerCommand(input);
+    expect(afterRollback).toMatchObject({
+      applied: false,
+      reason: "OWNER_ASSERTION_REJECTED",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT state, version FROM orchestrator_tasks WHERE task_id = ?",
+        "task-owner-0001",
+      ).one()).toMatchObject({ state: "SCHEDULED", version: 1 });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT high_water_ms FROM orchestrator_security_clock WHERE clock_id = 1",
+      ).one().high_water_ms).toBe(now + 40_000);
+    });
+  });
+
   it("does not let caller clock rollback renew an expired execution lease", async () => {
     const ledger = ledgerFor("worker-assertion-caller-clock-lease-rollback");
     wallClockNow = now;

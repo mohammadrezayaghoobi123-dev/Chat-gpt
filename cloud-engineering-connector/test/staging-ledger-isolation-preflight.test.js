@@ -33,10 +33,17 @@ function extractPreflightScript(source) {
 
 const preflightScript = extractPreflightScript(workflow);
 
-function runPreflight({ productionLedgerId, stagingLedgerId, productionBindingType = "durable_object_namespace" }) {
+function runPreflight({
+  productionLedgerId,
+  stagingLedgerId,
+  productionBindingType = "durable_object_namespace",
+  productionMetadataToken = "mock-production-metadata-token",
+  denyProductionRead = false,
+}) {
   const directory = mkdtempSync(join(tmpdir(), "staging-ledger-preflight-"));
   const outputPath = join(directory, "github-output.txt");
   const callsPath = join(directory, "cloudflare-calls.txt");
+  const authCallsPath = join(directory, "cloudflare-auth-classes.txt");
 
   const productionSettings = {
     bindings: [{
@@ -74,9 +81,21 @@ function runPreflight({ productionLedgerId, stagingLedgerId, productionBindingTy
 
   const prelude = `
     const fs = await import("node:fs");
-    globalThis.fetch = async (input) => {
+    globalThis.fetch = async (input, init = {}) => {
       const url = new URL(String(input));
       fs.appendFileSync(process.env.MOCK_CALLS_PATH, url.pathname + url.search + "\\n");
+      const authorization = new Headers(init.headers || {}).get("authorization");
+      const stagingCredential = "Bearer " + process.env.CLOUDFLARE_API_TOKEN;
+      const productionCredential = "Bearer " + process.env.CLOUDFLARE_PRODUCTION_METADATA_TOKEN;
+      const tokenClass = authorization === stagingCredential
+        ? "staging-deploy"
+        : authorization === productionCredential
+          ? "production-metadata"
+          : "unknown";
+      fs.appendFileSync(process.env.MOCK_AUTH_CALLS_PATH, url.pathname + "|" + tokenClass + "\\n");
+      if (process.env.MOCK_DENY_PRODUCTION_READ === "true" && url.pathname.endsWith("/workers/scripts/chat-gpt111/settings")) {
+        return Response.json({ success: false, errors: [{ code: 10000, message: "permission denied" }] }, { status: 403 });
+      }
       let result;
       if (url.pathname.endsWith("/workers/scripts/chat-gpt111/settings")) {
         result = ${JSON.stringify(productionSettings)};
@@ -107,9 +126,12 @@ function runPreflight({ productionLedgerId, stagingLedgerId, productionBindingTy
       env: {
         ...process.env,
         CLOUDFLARE_ACCOUNT_ID: "mock-account",
-        CLOUDFLARE_API_TOKEN: "mock-token-never-used-outside-test",
+        CLOUDFLARE_API_TOKEN: "mock-staging-deploy-token",
+        CLOUDFLARE_PRODUCTION_METADATA_TOKEN: productionMetadataToken ?? "",
         GITHUB_OUTPUT: outputPath,
         MOCK_CALLS_PATH: callsPath,
+        MOCK_AUTH_CALLS_PATH: authCallsPath,
+        MOCK_DENY_PRODUCTION_READ: denyProductionRead ? "true" : "false",
       },
     });
 
@@ -118,6 +140,7 @@ function runPreflight({ productionLedgerId, stagingLedgerId, productionBindingTy
       stdout: result.stdout,
       stderr: result.stderr,
       calls: readFileSync(callsPath, "utf8").split("\n").filter(Boolean),
+      authCalls: readFileSync(authCallsPath, "utf8").split("\n").filter(Boolean),
     };
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -186,9 +209,15 @@ function extractPostDeployScript(source) {
 
 const postDeployScript = extractPostDeployScript(workflow);
 
-function runPostDeploy({ productionLedgerId, stagingLedgerId }) {
+function runPostDeploy({
+  productionLedgerId,
+  stagingLedgerId,
+  productionMetadataToken = "mock-production-metadata-token",
+  denyProductionRead = false,
+}) {
   const directory = mkdtempSync(join(tmpdir(), "staging-ledger-postdeploy-"));
   const callsPath = join(directory, "cloudflare-calls.txt");
+  const authCallsPath = join(directory, "cloudflare-auth-classes.txt");
   const productionSettings = {
     bindings: [{
       name: "ORCHESTRATOR_LEDGER",
@@ -226,9 +255,21 @@ function runPostDeploy({ productionLedgerId, stagingLedgerId }) {
 
   const prelude = `
     const fs = await import("node:fs");
-    globalThis.fetch = async (input) => {
+    globalThis.fetch = async (input, init = {}) => {
       const url = new URL(String(input));
       fs.appendFileSync(process.env.MOCK_CALLS_PATH, url.pathname + url.search + "\\n");
+      const authorization = new Headers(init.headers || {}).get("authorization");
+      const stagingCredential = "Bearer " + process.env.CLOUDFLARE_API_TOKEN;
+      const productionCredential = "Bearer " + process.env.CLOUDFLARE_PRODUCTION_METADATA_TOKEN;
+      const tokenClass = authorization === stagingCredential
+        ? "staging-deploy"
+        : authorization === productionCredential
+          ? "production-metadata"
+          : "unknown";
+      fs.appendFileSync(process.env.MOCK_AUTH_CALLS_PATH, url.pathname + "|" + tokenClass + "\\n");
+      if (process.env.MOCK_DENY_PRODUCTION_READ === "true" && url.pathname.endsWith("/workers/scripts/chat-gpt111/settings")) {
+        return Response.json({ success: false, errors: [{ code: 10000, message: "permission denied" }] }, { status: 403 });
+      }
       if (url.pathname.endsWith("/workers/scripts/chat-gpt111/settings")) {
         return Response.json({ success: true, result: ${JSON.stringify(productionSettings)} });
       }
@@ -252,8 +293,11 @@ function runPostDeploy({ productionLedgerId, stagingLedgerId }) {
       env: {
         ...process.env,
         CLOUDFLARE_ACCOUNT_ID: "mock-account",
-        CLOUDFLARE_API_TOKEN: "mock-token-never-used-outside-test",
+        CLOUDFLARE_API_TOKEN: "mock-staging-deploy-token",
+        CLOUDFLARE_PRODUCTION_METADATA_TOKEN: productionMetadataToken ?? "",
         MOCK_CALLS_PATH: callsPath,
+        MOCK_AUTH_CALLS_PATH: authCallsPath,
+        MOCK_DENY_PRODUCTION_READ: denyProductionRead ? "true" : "false",
       },
     });
 
@@ -262,6 +306,7 @@ function runPostDeploy({ productionLedgerId, stagingLedgerId }) {
       stdout: result.stdout,
       stderr: result.stderr,
       calls: readFileSync(callsPath, "utf8").split("\n").filter(Boolean),
+      authCalls: readFileSync(authCallsPath, "utf8").split("\n").filter(Boolean),
     };
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -289,4 +334,107 @@ test("Staging post-deploy verification accepts distinct Ledger namespaces and re
     result.calls.some((call) => call.endsWith("/workers/scripts/chat-gpt111/settings")),
     "Post-deploy verification must independently read the Production Worker's Ledger binding",
   );
+});
+
+
+test("Staging preflight uses the dedicated metadata-only credential for Production settings and the deploy credential only for Staging", () => {
+  const result = runPreflight({
+    productionLedgerId: "production-ledger-namespace",
+    stagingLedgerId: "staging-ledger-namespace",
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.ok(
+    result.authCalls.some((call) => call.endsWith("/workers/scripts/chat-gpt111/settings|production-metadata")),
+    "Production settings must use the dedicated metadata-only credential",
+  );
+  assert.ok(
+    result.authCalls.some((call) => call.endsWith("/workers/scripts/chat-gpt111-staging/settings|staging-deploy")),
+    "Staging settings must use the Staging deploy credential",
+  );
+  assert.ok(
+    result.authCalls.filter((call) => call.endsWith("|staging-deploy")).every((call) => !call.includes("/workers/scripts/chat-gpt111/settings")),
+    "The Staging deploy credential must never be sent to the Production Worker endpoint",
+  );
+  assert.doesNotMatch(result.stdout + result.stderr, /mock-staging-deploy-token|mock-production-metadata-token/);
+});
+
+test("Staging preflight fails closed when the dedicated Production metadata credential is absent", () => {
+  const result = runPreflight({
+    productionLedgerId: "production-ledger-namespace",
+    stagingLedgerId: "staging-ledger-namespace",
+    productionMetadataToken: "",
+  });
+
+  assert.notEqual(result.status, 0, "Missing Production metadata credential must block Staging release");
+  assert.doesNotMatch(result.stdout + result.stderr, /mock-staging-deploy-token|mock-production-metadata-token/);
+});
+
+test("Staging preflight fails closed when the Production metadata credential lacks permission", () => {
+  const result = runPreflight({
+    productionLedgerId: "production-ledger-namespace",
+    stagingLedgerId: "staging-ledger-namespace",
+    denyProductionRead: true,
+  });
+
+  assert.notEqual(result.status, 0, "A denied Production metadata read must block Staging release before deployment");
+  assert.match(result.stderr + result.stdout, /Production Cloudflare API preflight failed: HTTP 403/);
+  assert.doesNotMatch(result.stdout + result.stderr, /mock-staging-deploy-token|mock-production-metadata-token/);
+});
+
+test("Staging post-deploy verification uses the dedicated metadata-only credential for Production settings", () => {
+  const result = runPostDeploy({
+    productionLedgerId: "production-ledger-namespace",
+    stagingLedgerId: "staging-ledger-namespace",
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.ok(
+    result.authCalls.some((call) => call.endsWith("/workers/scripts/chat-gpt111/settings|production-metadata")),
+    "Post-deploy Production settings must use the dedicated metadata-only credential",
+  );
+  assert.ok(
+    result.authCalls.some((call) => call.endsWith("/workers/scripts/chat-gpt111-staging/settings|staging-deploy")),
+    "Post-deploy Staging settings must use the Staging deploy credential",
+  );
+  assert.ok(
+    result.authCalls.filter((call) => call.endsWith("|staging-deploy")).every((call) => !call.includes("/workers/scripts/chat-gpt111/settings")),
+    "Post-deploy verification must not send the Staging deploy credential to the Production Worker endpoint",
+  );
+  assert.doesNotMatch(result.stdout + result.stderr, /mock-staging-deploy-token|mock-production-metadata-token/);
+});
+
+test("Staging post-deploy verification fails closed when the Production metadata read is forbidden", () => {
+  const result = runPostDeploy({
+    productionLedgerId: "production-ledger-namespace",
+    stagingLedgerId: "staging-ledger-namespace",
+    denyProductionRead: true,
+  });
+
+  assert.notEqual(result.status, 0, "Forbidden Production metadata access must fail post-deploy verification");
+  assert.match(result.stderr + result.stdout, /Production Cloudflare verification failed: HTTP 403/);
+  assert.doesNotMatch(result.stdout + result.stderr, /mock-staging-deploy-token|mock-production-metadata-token/);
+});
+
+
+test("Staging preflight rejects reuse of the Staging deploy credential as the Production metadata credential", () => {
+  const result = runPreflight({
+    productionLedgerId: "production-ledger-namespace",
+    stagingLedgerId: "staging-ledger-namespace",
+    productionMetadataToken: "mock-staging-deploy-token",
+  });
+
+  assert.notEqual(result.status, 0, "Production metadata credential must be distinct from the Staging deploy credential");
+  assert.doesNotMatch(result.stdout + result.stderr, /mock-staging-deploy-token/);
+});
+
+test("Staging post-deploy verification rejects reuse of the Staging deploy credential as the Production metadata credential", () => {
+  const result = runPostDeploy({
+    productionLedgerId: "production-ledger-namespace",
+    stagingLedgerId: "staging-ledger-namespace",
+    productionMetadataToken: "mock-staging-deploy-token",
+  });
+
+  assert.notEqual(result.status, 0, "Post-deploy Production metadata credential must be distinct from the Staging deploy credential");
+  assert.doesNotMatch(result.stdout + result.stderr, /mock-staging-deploy-token/);
 });

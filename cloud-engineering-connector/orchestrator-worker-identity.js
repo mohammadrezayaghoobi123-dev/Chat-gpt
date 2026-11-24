@@ -37,7 +37,7 @@ function loadKey(keySet, kid) {
   return raw;
 }
 
-function validClaims(claims, expected) {
+function validClaims(claims, expected, checkTime) {
   if (!claims || typeof claims !== "object" || Array.isArray(claims)) throw reject();
   const keys = Object.keys(claims).sort();
   if (keys.length !== CLAIM_KEYS.length || keys.some((key, index) => key !== CLAIM_KEYS[index])) throw reject();
@@ -45,10 +45,11 @@ function validClaims(claims, expected) {
       claims.sub !== expected.subject || claims.role !== expected.role ||
       claims.op !== expected.operation || !ID.test(claims.sub) ||
       !ID.test(claims.jti) || claims.jti.length < 22 ||
-      !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp)) throw reject();
+      !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp) ||
+      claims.exp <= claims.iat || claims.exp - claims.iat > MAX_LIFETIME_SECONDS) throw reject();
+  if (!checkTime) return;
   const nowSeconds = Math.floor(expected.nowMs / 1000);
-  if (claims.exp <= claims.iat || claims.exp - claims.iat > MAX_LIFETIME_SECONDS ||
-      claims.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
+  if (claims.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
       claims.exp < nowSeconds - CLOCK_SKEW_SECONDS) throw reject();
 }
 
@@ -58,12 +59,12 @@ async function verifyMac(keyBytes, input, signature) {
 }
 
 
-export async function verifyWorkerAssertion(keySet, token, expected) {
+async function verifyWorkerAssertionInternal(keySet, token, expected, checkTime) {
   try {
     if (typeof token !== "string" || token.length > 4096 ||
         !expected || !ID.test(expected.subject) || !ID.test(expected.operation) ||
         !["agent", "publisher", "system", "consumer"].includes(expected.role) ||
-        !Number.isSafeInteger(expected.nowMs)) throw reject();
+        (checkTime && !Number.isSafeInteger(expected.nowMs))) throw reject();
     const parts = token.split(".");
     if (parts.length !== 4 || parts[0] !== "v1" || !KID.test(parts[1])) throw reject();
     const key = loadKey(keySet, parts[1]);
@@ -72,13 +73,41 @@ export async function verifyWorkerAssertion(keySet, token, expected) {
     const payloadText = new TextDecoder("utf-8", { fatal: true }).decode(payloadBytes);
     const claims = JSON.parse(payloadText);
     if (canonicalJson(claims) !== payloadText) throw reject();
-    validClaims(claims, expected);
+    validClaims(claims, expected, checkTime);
     const supplied = decodeBase64Url(parts[3]);
     if (supplied.byteLength !== 32 || !(await verifyMac(key, parts.slice(0, 3).join("."), supplied))) throw reject();
-    return Object.freeze({ jti: claims.jti, subject: claims.sub, role: claims.role, operation: claims.op, kid: parts[1], issuedAt: claims.iat, expiresAt: claims.exp });
+    return Object.freeze({
+      jti: claims.jti,
+      subject: claims.sub,
+      role: claims.role,
+      operation: claims.op,
+      kid: parts[1],
+      issuedAt: claims.iat,
+      expiresAt: claims.exp,
+    });
   } catch {
     throw reject();
   }
+}
+
+export async function verifyWorkerAssertion(keySet, token, expected) {
+  return verifyWorkerAssertionInternal(keySet, token, expected, true);
+}
+
+export async function verifyWorkerAssertionSignature(keySet, token, expected) {
+  return verifyWorkerAssertionInternal(keySet, token, expected, false);
+}
+
+export function isWorkerAssertionTimeValidAt(assertion, nowMs) {
+  if (!assertion || !Number.isSafeInteger(nowMs) || nowMs < 1 ||
+      !Number.isSafeInteger(assertion.issuedAt) || !Number.isSafeInteger(assertion.expiresAt) ||
+      assertion.expiresAt <= assertion.issuedAt ||
+      assertion.expiresAt - assertion.issuedAt > MAX_LIFETIME_SECONDS) {
+    return false;
+  }
+  const nowSeconds = Math.floor(nowMs / 1000);
+  return assertion.issuedAt <= nowSeconds + CLOCK_SKEW_SECONDS &&
+    assertion.expiresAt >= nowSeconds - CLOCK_SKEW_SECONDS;
 }
 
 const SCHEDULED_SIGNER_POLICY = Object.freeze({

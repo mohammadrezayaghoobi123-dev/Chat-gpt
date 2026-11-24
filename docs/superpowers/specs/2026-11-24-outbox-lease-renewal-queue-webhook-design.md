@@ -268,7 +268,7 @@ Exact-head CI must include Node tests, Cloudflare Workers Vitest, syntax checks,
 
 Live activation is prohibited until all of the following are deliberately resolved:
 1. Configure and verify ORCHESTRATOR_LEDGER, producer, and consumer bindings in the intended Worker environment.
-2. Provision LEDGER_WORKER_ASSERTION_KEYS, LEDGER_WORKER_ASSERTION_ACTIVE_KID, OUTBOX_QUEUE_ENCRYPTION_KEYS, OUTBOX_QUEUE_ENCRYPTION_ACTIVE_KID, OUTBOX_WEBHOOK_URL, and OUTBOX_WEBHOOK_HMAC_KEY through an approved secret/configuration path.
+2. Provision LEDGER_WORKER_ASSERTION_KEYS, LEDGER_WORKER_ASSERTION_ACTIVE_KID, OUTBOX_QUEUE_ENCRYPTION_KEYS, OUTBOX_QUEUE_ENCRYPTION_ACTIVE_KID, OUTBOX_WEBHOOK_URL, OUTBOX_WEBHOOK_ALLOWED_HOSTS, and OUTBOX_WEBHOOK_HMAC_KEY through an approved secret/configuration path.
 3. Select and independently verify the HTTPS receiver's HMAC and idempotency implementation.
 4. Approve quarantine retention/export policy; current quarantine Queue retention is one day.
 5. Verify the already-existing upstream invocation path for transitionTask(outboxEvent) and executeOwnerCommand(release); the inspected Worker.fetch handler does not itself invoke ORCHESTRATOR_LEDGER.

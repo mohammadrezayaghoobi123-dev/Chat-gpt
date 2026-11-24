@@ -63,3 +63,6 @@ Run with Node.js 22 from tools/9router-review:
 | 
 
 This is not the A01–A42 backend qualification suite. T32–T42 extend the in-memory reference oracle's reconciliation and recovery-validation coverage; they do not qualify a real provider adapter. The coverage map deliberately marks partial coverage. A02's controlled read-before-insert schedule, A03's forced tuple/hash-collision case, independent-process concurrency, backend failover, storage restore, R2 conditional writes, quota exhaustion, and the remaining matrix cases are still NOT_EXECUTED.
+
+
+T46–T47 add stage-to-outcome binding checks for the append-only effect ledger.

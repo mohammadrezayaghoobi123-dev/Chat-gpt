@@ -9,7 +9,7 @@
 
 Do not claim that the 9Router chat-completions endpoint provides receiver-side idempotency until the exact deployed 9Router version, source revision, and endpoint behavior have been verified.
 
-Do not add an \`Idempotency-Key\` header to the production review request merely because 9Router forwards that header on a different API family. No live 9Router request, provider call, ledger provisioning, secret change, or workflow permission change is authorized by this review.
+Do not add an `Idempotency-Key` header to the production review request merely because 9Router forwards that header on a different API family. No live 9Router request, provider call, ledger provisioning, secret change, or workflow permission change is authorized by this review.
 
 The current evidence supports the following labels:
 
@@ -17,8 +17,8 @@ The current evidence supports the following labels:
 |---|---|---|
 | 9Router exposes an OpenAI-compatible chat API | PROVISIONALLY SUPPORTED | Public project site and architecture documentation |
 | 9Router can route combo models and fall back between provider accounts | PROVISIONALLY SUPPORTED | Public architecture description; exact deployed behavior is version-dependent |
-| 9Router forwards \`Idempotency-Key\` for video-generation creation endpoints | SUPPORTED FOR THAT ROUTE ONLY | Official repository change for \`/v1/videos/{generations,edits,extensions}\` |
-| 9Router chat-completions route honors \`Idempotency-Key\` atomically | UNKNOWN | No chat-route contract, implementation proof, or deployment-specific test was established |
+| 9Router forwards `Idempotency-Key` for video-generation creation endpoints | SUPPORTED FOR THAT ROUTE ONLY | Official repository change for `/v1/videos/{generations,edits,extensions}` |
+| 9Router chat-completions route honors `Idempotency-Key` atomically | UNKNOWN | No chat-route contract, implementation proof, or deployment-specific test was established |
 | One client POST implies one provider attempt | REJECTED | Router architecture explicitly includes model/account fallback |
 | One provider attempt implies exactly one model execution | UNKNOWN | Provider-side acceptance, billing, retry, and deduplication semantics are outside the evidence collected |
 
@@ -26,9 +26,9 @@ The current evidence supports the following labels:
 
 ### 2.1 Public router evidence
 
-The public 9Router architecture document describes an OpenAI-compatible \`/v1/\` surface and a request path that can resolve combo models, select provider credentials, and use model/account fallback. The document identifies itself as last updated on 2026-02-06; it is architectural context, not proof of the user's deployed release.
+The public 9Router architecture document describes an OpenAI-compatible `/v1/` surface and a request path that can resolve combo models, select provider credentials, and use model/account fallback. The document identifies itself as last updated on 2026-02-06; it is architectural context, not proof of the user's deployed release.
 
-An official 9Router change, commit \`d6761c6fb003faf537c198ae206d4e9b9864dd65\`, describes forwarding \`Idempotency-Key\` and disabling automatic retries for billable creation POSTs under the video-generation API. That evidence is scoped to \`/v1/videos/{generations,edits,extensions}\`; it must not be generalized to \`/v1/chat/completions\`.
+An official 9Router change, commit `d6761c6fb003faf537c198ae206d4e9b9864dd65`, describes forwarding `Idempotency-Key` and disabling automatic retries for billable creation POSTs under the video-generation API. That evidence is scoped to `/v1/videos/{generations,edits,extensions}`; it must not be generalized to `/v1/chat/completions`.
 
 References:
 
@@ -38,7 +38,7 @@ References:
 
 ### 2.2 Current reviewer-client evidence
 
-The reviewed client calls the configured HTTPS base URL plus \`/chat/completions\` with one POST and \`redirect: "error"\`. The request body contains the model, messages, temperature, streaming flag, and token limit. The request does not currently send \`Idempotency-Key\`.
+The reviewed client calls the configured HTTPS base URL plus `/chat/completions` with one POST and `redirect: "error"`. The request body contains the model, messages, temperature, streaming flag, and token limit. The request does not currently send `Idempotency-Key`.
 
 The 307/308 regression tests prove that this Fetch call rejects those redirect responses and does not follow them to a second target in the controlled local test. They do not prove that an egress proxy, router, service mesh, or provider cannot replay or retry the request.
 
@@ -87,7 +87,7 @@ The receiver must define a documented key scope that includes, at minimum:
 
 The logical key for this review use case must be bound to the exact tuple:
 
-\`(repository_id, pull_request_number, head_sha, base_sha)\`
+`(repository_id, pull_request_number, head_sha, base_sha)`
 
 A key must not collide across tenants, routes, or different logical review tuples.
 
@@ -163,13 +163,13 @@ Retention must exceed every client retry or replay window the system claims to s
 
 The receiver must distinguish at least:
 
-- \`REJECTED_BEFORE_DISPATCH\` — proven no provider dispatch began;
-- \`IN_PROGRESS\` — reservation exists and work is active;
-- \`COMPLETED\` — terminal response is durably stored;
-- \`FAILED_SAFE_TO_RETRY\` — only when non-acceptance is positively established by contract;
-- \`UNKNOWN\` — provider acceptance or completion cannot be established.
+- `REJECTED_BEFORE_DISPATCH` — proven no provider dispatch began;
+- `IN_PROGRESS` — reservation exists and work is active;
+- `COMPLETED` — terminal response is durably stored;
+- `FAILED_SAFE_TO_RETRY` — only when non-acceptance is positively established by contract;
+- `UNKNOWN` — provider acceptance or completion cannot be established.
 
-A missing response, timeout, worker restart, or 5xx response must not be mapped to \`FAILED_SAFE_TO_RETRY\` without independent evidence.
+A missing response, timeout, worker restart, or 5xx response must not be mapped to `FAILED_SAFE_TO_RETRY` without independent evidence.
 
 ## 5. Client policy until receiver support is proven
 

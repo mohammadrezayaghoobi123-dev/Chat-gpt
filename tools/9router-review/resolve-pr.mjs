@@ -42,8 +42,7 @@ function resolveEventTarget({ eventName, payload, actorId, ref, repositoryId }) 
     if (payload?.action !== "created") return rejected("COMMENT_ACTION_NOT_CREATED");
     if (!payload?.issue?.pull_request) return rejected("COMMENT_TARGET_IS_NOT_PULL_REQUEST");
     const body = payload?.comment?.body;
-    const firstLine = typeof body === "string" ? body.split(/\r?\n/, 1)[0] : null;
-    if (firstLine !== "/review-canary") return rejected("COMMENT_COMMAND_NOT_EXACT");
+    if (body !== "/review-canary") return rejected("COMMENT_COMMAND_NOT_EXACT");
     if (String(payload?.comment?.user?.id ?? "") !== currentActorId ||
         String(payload?.sender?.id ?? "") !== currentActorId) {
       return rejected("COMMENT_ACTOR_MISMATCH");

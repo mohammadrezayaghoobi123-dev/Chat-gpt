@@ -2773,3 +2773,52 @@ it("rejects an unsupported task state before durable persistence", async () => {
     },
   });
 });
+
+it("rejects a task whose updatedAt precedes createdAt before durable persistence", async () => {
+  const ledger = ledgerFor("ledger-create-task-inverted-timestamps");
+  const jti = "jti-create-task-inverted-time-000001";
+  const workerAssertion = await createWorkerAssertion({
+    subject: "orchestrator-scheduler",
+    role: "system",
+    operation: "createTask",
+    nowMs: now,
+    jti,
+  });
+
+  const result = await ledger.createTask({
+    task: {
+      ...task("task-create-inverted-timestamps"),
+      createdAt: now,
+      updatedAt: now - 1,
+    },
+    idempotencyKey: "task-create-inverted-timestamps",
+    inputHash: "e".repeat(64),
+    now,
+    workerId: "orchestrator-scheduler",
+    workerAssertion,
+  });
+
+  const persisted = await runInDurableObject(ledger, async (_instance, state) => ({
+    tasks: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+      "task-create-inverted-timestamps",
+    ).one().count,
+    claimCandidates: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-create-inverted-timestamps",
+    ).one().count,
+    consumedAssertions: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      jti,
+    ).one().count,
+  }));
+
+  expect({ result, persisted }).toEqual({
+    result: { created: false, reason: "INVALID_INPUT" },
+    persisted: {
+      tasks: 0,
+      claimCandidates: 0,
+      consumedAssertions: 1,
+    },
+  });
+});

@@ -24,30 +24,30 @@
 
 ## Task 1 — TDD for the discriminator
 
-- [ ] Add verifier test: custom policies disabled blocks before any branch-policy request.
-- [ ] Add audit test: explicit custom policies disabled is BLOCKED with a useful reason.
-- [ ] Add audit test: branch-policy endpoint 404 after custom-policy=true is UNKNOWN.
-- [ ] Verify current implementation fails those tests for the intended reasons.
+- [x] Add verifier test: custom policies disabled blocks before any branch-policy request.
+- [x] Add audit test: explicit custom policies disabled is BLOCKED with a useful reason.
+- [x] Add audit test: branch-policy endpoint 404 after custom-policy=true is UNKNOWN.
+- [x] Verify current implementation fails those tests for the intended reasons: 474 Node tests, 471 passed and 3 expected failures.
 
 ## Task 2 — Shared verifier implementation
 
-- [ ] Add typed errors with stable codes.
-- [ ] Validate Environment metadata before branch-policy retrieval.
-- [ ] Classify Environment 404, branch-policy 404, and API uncertainty separately.
-- [ ] Preserve successful result fields and all existing fail-closed invariants.
-- [ ] Pass the RED tests.
+- [x] Add typed errors with stable codes.
+- [x] Validate Environment metadata before branch-policy retrieval.
+- [x] Classify Environment 404, branch-policy 404, and API uncertainty separately.
+- [x] Preserve successful result fields and all existing fail-closed invariants.
+- [x] Pass the RED tests.
 
 ## Task 3 — Audit integration and regression
 
-- [ ] Remove regex-based classification for known verifier failures.
-- [ ] Use typed error codes and an UNKNOWN fallback for unexpected errors.
-- [ ] Run the complete Node and Vitest suites.
-- [ ] Run npm audit, JavaScript checks, and Wrangler dry-runs.
+- [x] Remove regex-based classification for known verifier failures.
+- [x] Use typed error codes and an UNKNOWN fallback for unexpected errors.
+- [x] Run the complete Node and Vitest suites: final run 45377444528, 475 Node and 227 Vitest tests passed.
+- [x] Run npm audit (zero vulnerabilities), JavaScript checks, and both Wrangler dry-runs.
 
 ## Task 4 — Evidence and PR verification
 
-- [ ] Record valid RED and GREEN run IDs.
-- [ ] Re-run the read-only Staging/Production audit.
-- [ ] Record exact live statuses and retain all ambiguities.
-- [ ] Run Gitleaks and distinguish PR diff from full-history results.
-- [ ] Verify PR #433 remains Draft/open/unmerged and `main` is unchanged.
+- [x] Record valid RED and GREEN run IDs.
+- [x] Re-run the read-only Staging/Production audit.
+- [x] Record exact live statuses and retain the unresolved Custom Branch Policy state because Administrator Bypass blocks metadata validation first.
+- [x] Run Gitleaks and distinguish PR diff from full-history results.
+- [x] Verify PR #433 remains Draft/open/unmerged and `main` is unchanged.

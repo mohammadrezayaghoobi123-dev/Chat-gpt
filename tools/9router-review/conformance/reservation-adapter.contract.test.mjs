@@ -109,7 +109,7 @@ async function commentAttempt(system, ownerId = "owner-2") {
   return { model, resumed, attemptId, payloadDigest, intent, permit };
 }
 
-test("A01: concurrent claims create exactly one owner for one immutable key", async () => {
+test("T01: concurrent claims create exactly one owner for one immutable key", async () => {
   const system = makeSystem();
   const results = await Promise.all(Array.from({ length: 64 }, (_, index) => claim(system, "owner-" + index)));
   assert.equal(results.filter(result => result.status === "CLAIMED").length, 1);
@@ -117,7 +117,7 @@ test("A01: concurrent claims create exactly one owner for one immutable key", as
   assert.equal((await system.adapter.readAuthoritative({ key: KEY })).record.generation, 1);
 });
 
-test("A02: policy or runtime digest mismatch is a key conflict, not a second reservation", async () => {
+test("T02: policy or runtime digest mismatch is a key conflict, not a second reservation", async () => {
   const system = makeSystem();
   assert.equal((await claim(system)).status, "CLAIMED");
   const conflict = await claim(system, "owner-2", { policyDigest: "policy-v2" });
@@ -125,7 +125,7 @@ test("A02: policy or runtime digest mismatch is a key conflict, not a second res
   assert.equal((await system.adapter.readAuthoritative({ key: KEY })).record.generation, 1);
 });
 
-test("A03: expired CLAIMED lease increments generation and fences the old owner", async () => {
+test("T03: expired CLAIMED lease increments generation and fences the old owner", async () => {
   const system = makeSystem();
   const first = await claim(system, "owner-1");
   system.advance(101);
@@ -144,7 +144,7 @@ test("A03: expired CLAIMED lease increments generation and fences the old owner"
   assert.equal(stale.status, "LOST_OWNERSHIP");
 });
 
-test("A04: model attempt cannot be authorized without a durable effect-ledger intent", async () => {
+test("T04: model attempt cannot be authorized without a durable effect-ledger intent", async () => {
   const system = makeSystem();
   const owner = await claim(system);
   const result = await system.adapter.beginModelAttempt({
@@ -160,7 +160,7 @@ test("A04: model attempt cannot be authorized without a durable effect-ledger in
   assert.equal((await system.adapter.readAuthoritative({ key: KEY })).record.state, "CLAIMED");
 });
 
-test("A05: model attempt boundary is single-use and requires both durable acknowledgements", async () => {
+test("T05: model attempt boundary is single-use and requires both durable acknowledgements", async () => {
   const system = makeSystem();
   const started = await modelAttempt(system);
   assert.equal(started.permit.status, "MODEL_PERMIT");
@@ -176,7 +176,7 @@ test("A05: model attempt boundary is single-use and requires both durable acknow
   assert.equal(repeated.status, "ALREADY_CONSUMED");
 });
 
-test("A06: model completion is fenced by generation, attempt ID, record version, and ledger outcome", async () => {
+test("T06: model completion is fenced by generation, attempt ID, record version, and ledger outcome", async () => {
   const system = makeSystem();
   const started = await modelAttempt(system);
   const wrongAttempt = await system.adapter.completeModelAttempt({
@@ -209,7 +209,7 @@ test("A06: model completion is fenced by generation, attempt ID, record version,
   assert.equal(completed.status, "MODEL_COMPLETED");
 });
 
-test("A07: MODEL_ATTEMPTED cannot be reclaimed after lease expiry", async () => {
+test("T07: MODEL_ATTEMPTED cannot be reclaimed after lease expiry", async () => {
   const system = makeSystem();
   const started = await modelAttempt(system);
   system.advance(1_000);
@@ -219,7 +219,7 @@ test("A07: MODEL_ATTEMPTED cannot be reclaimed after lease expiry", async () => 
   assert.equal(started.permit.status, "MODEL_PERMIT");
 });
 
-test("A08: model-stage UNKNOWN is terminal and cannot be reconciled through comments", async () => {
+test("T08: model-stage UNKNOWN is terminal and cannot be reconciled through comments", async () => {
   const system = makeSystem();
   const started = await modelAttempt(system);
   const unknown = await system.adapter.markUnknown({
@@ -240,7 +240,7 @@ test("A08: model-stage UNKNOWN is terminal and cannot be reconciled through comm
   assert.equal((await system.adapter.readAuthoritative({ key: KEY })).record.unknown_stage, "MODEL");
 });
 
-test("A09: MODEL_COMPLETED continuation increments generation without repeating model inference", async () => {
+test("T09: MODEL_COMPLETED continuation increments generation without repeating model inference", async () => {
   const system = makeSystem();
   const completed = await completeModel(system);
   assert.equal(completed.completed.status, "MODEL_COMPLETED");
@@ -256,7 +256,7 @@ test("A09: MODEL_COMPLETED continuation increments generation without repeating 
   assert.equal(resumed.record.model_attempt_id, completed.attemptId);
 });
 
-test("A10: stale continuation owner cannot consume the comment attempt", async () => {
+test("T10: stale continuation owner cannot consume the comment attempt", async () => {
   const system = makeSystem();
   const model = await completeModel(system);
   const resumed = await system.adapter.resumeCompletedModel({
@@ -286,7 +286,7 @@ test("A10: stale continuation owner cannot consume the comment attempt", async (
   assert.equal(result.status, "LOST_OWNERSHIP");
 });
 
-test("A11: comment attempt requires a ledger intent and a snapshot validation binding", async () => {
+test("T11: comment attempt requires a ledger intent and a snapshot validation binding", async () => {
   const system = makeSystem();
   const model = await completeModel(system);
   const resumed = await system.adapter.resumeCompletedModel({
@@ -314,7 +314,7 @@ test("A11: comment attempt requires a ledger intent and a snapshot validation bi
   assert.equal((await system.adapter.readAuthoritative({ key: KEY })).record.state, "MODEL_COMPLETED");
 });
 
-test("A12: comment attempt boundary is single-use and cannot be reclaimed", async () => {
+test("T12: comment attempt boundary is single-use and cannot be reclaimed", async () => {
   const system = makeSystem();
   const started = await commentAttempt(system);
   assert.equal(started.permit.status, "COMMENT_PERMIT");
@@ -339,7 +339,7 @@ test("A12: comment attempt boundary is single-use and cannot be reclaimed", asyn
   assert.equal(repeat.status, "ALREADY_CONSUMED");
 });
 
-test("A13: PUBLISHED requires a validated positive outcome in the independent effect ledger", async () => {
+test("T13: PUBLISHED requires a validated positive outcome in the independent effect ledger", async () => {
   const system = makeSystem();
   const started = await commentAttempt(system);
   const noOutcome = await system.adapter.completeCommentAttempt({
@@ -371,7 +371,7 @@ test("A13: PUBLISHED requires a validated positive outcome in the independent ef
   assert.equal(published.record.comment_remote_id, 777);
 });
 
-test("A14: zero or incomplete comment evidence never proves non-publication", async () => {
+test("T14: zero or incomplete comment evidence never proves non-publication", async () => {
   const system = makeSystem();
   const model = await completeModel(system);
   const result = await system.adapter.reconcileComment({
@@ -384,7 +384,7 @@ test("A14: zero or incomplete comment evidence never proves non-publication", as
   assert.equal((await system.adapter.readAuthoritative({ key: KEY })).record.state, "MODEL_COMPLETED");
 });
 
-test("A15: duplicate positive evidence escalates to DUPLICATE_ACCEPTED", async () => {
+test("T15: duplicate positive evidence escalates to DUPLICATE_ACCEPTED", async () => {
   const system = makeSystem();
   const model = await completeModel(system);
   const result = await system.adapter.reconcileComment({
@@ -399,7 +399,7 @@ test("A15: duplicate positive evidence escalates to DUPLICATE_ACCEPTED", async (
   assert.equal(result.status, "DUPLICATE_ACCEPTED");
 });
 
-test("A16: abort and close operations map to distinct pre-model and post-model terminal states", async () => {
+test("T16: abort and close operations map to distinct pre-model and post-model terminal states", async () => {
   const preModel = makeSystem();
   const pre = await claim(preModel);
   const aborted = await preModel.adapter.abortBeforeModel({
@@ -432,7 +432,7 @@ test("A16: abort and close operations map to distinct pre-model and post-model t
   assert.equal(closed.status, "CLOSED_NO_PUBLISH");
 });
 
-test("A17: recovery lock blocks every new external-effect permit", async () => {
+test("T17: recovery lock blocks every new external-effect permit", async () => {
   const system = makeSystem();
   const owner = await claim(system);
   await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
@@ -451,7 +451,7 @@ test("A17: recovery lock blocks every new external-effect permit", async () => {
   assert.equal(result.status, "RECOVERY_LOCKED");
 });
 
-test("A18: effect ledger append is idempotent for identical attempt intent and rejects payload mutation", async () => {
+test("T18: effect ledger append is idempotent for identical attempt intent and rejects payload mutation", async () => {
   const system = makeSystem();
   const first = await system.ledger.appendIntent({
     key: KEY, stage: "MODEL", attemptId: "same-attempt", requestDigest: "digest-1",
@@ -468,7 +468,7 @@ test("A18: effect ledger append is idempotent for identical attempt intent and r
   assert.equal(conflict.status, "INTEGRITY_CONFLICT");
 });
 
-test("A19: restore recovery requires a complete independent ledger inventory before unlock", async () => {
+test("T19: restore recovery requires a complete independent ledger inventory before unlock", async () => {
   const system = makeSystem();
   await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
   const incomplete = await system.ledger.readComplete({ key: KEY, complete: false });

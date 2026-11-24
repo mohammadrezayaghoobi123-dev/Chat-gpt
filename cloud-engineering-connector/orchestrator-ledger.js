@@ -1868,6 +1868,12 @@ export class OrchestratorLedger extends DurableObject {
       const eventHash = await sha256Canonical({
         eventId, taskId, actorId, actorRole, eventType, details: JSON.parse(detailsJson), occurredAt: now, previousHash,
       });
+      // Hashing is asynchronous; revalidate assertion expiry immediately before the atomic append.
+      try {
+        assertionTrustedNow(verifiedAssertion);
+      } catch {
+        return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+      }
       const inserted = this.ctx.storage.transactionSync(() => {
         const latest = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
         if ((latest?.event_hash ?? null) !== previousHash) return "retry";

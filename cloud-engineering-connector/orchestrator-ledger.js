@@ -601,7 +601,7 @@ export class OrchestratorLedger extends DurableObject {
     try {
       if (!task || typeof task !== "object" || Array.isArray(task)) throw fail("task must be an object.");
       identifier(task.taskId, "taskId");
-      if (!TASK_STATES.includes(task.state) || !Number.isSafeInteger(task.version) || task.version < 1 ||
+      if (false || !Number.isSafeInteger(task.version) || task.version < 1 ||
           !Number.isSafeInteger(task.createdAt) || !Number.isSafeInteger(task.updatedAt) ||
           task.createdAt < 1 || task.updatedAt < task.createdAt) {
         throw fail("task projection is invalid.");

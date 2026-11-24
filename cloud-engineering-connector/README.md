@@ -68,6 +68,10 @@ The repository source and a live Worker deployment are separate states. A GitHub
 - The Durable Object archive is durable application storage, not an off-account backup. A user-facing/operator redrive workflow, retention/compaction policy, and independent off-platform backup are not yet implemented. Do not claim complete disaster recovery or Production readiness until those controls and live failure-injection tests are accepted.
 - If the archive Durable Object is unavailable, the DLQ consumer retries instead of acknowledging the message. Cloudflare's queue retention and retry limits still apply; monitor the DLQ backlog and archive error counters.
 
+## Orchestrator Ledger PITR recovery
+
+The Ledger's security clock, consumed-assertion records, and audit chain reside in the same SQLite-backed Durable Object database. A PITR restore can roll those records back to the selected bookmark. Follow the manual [Ledger PITR recovery runbook](docs/ledger-pitr-recovery.md) before resuming authenticated writes. Local Vitest does not exercise Cloudflare's production PITR change log.
+
 ## Cost and availability
 
 Cloudflare Workers has a free tier subject to current quotas and account eligibility. Free does not mean unlimited execution or guaranteed unlimited availability.

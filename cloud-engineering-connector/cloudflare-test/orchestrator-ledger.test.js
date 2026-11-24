@@ -82,11 +82,158 @@ describe("OrchestratorLedger durable coordination contract", () => {
         "orchestrator_consumed_assertions",
         "orchestrator_owner_consumed_assertions",
         "orchestrator_owner_command_receipts",
+        "orchestrator_security_clock",
+        "_sql_schema_migrations",
       ]));
+      const migration = state.storage.sql.exec(
+        "SELECT id, name FROM _sql_schema_migrations ORDER BY id DESC LIMIT 1",
+      ).one();
+      expect(migration).toMatchObject({ id: 8, name: "v8-ledger-security-clock" });
       const outboxColumns = state.storage.sql.exec("PRAGMA table_info(orchestrator_outbox_events)").toArray().map(row => row.name);
       expect(outboxColumns).toEqual(expect.arrayContaining([
         "retry_state", "next_attempt_at", "last_error_code", "dead_lettered_at",
       ]));
+    });
+  });
+
+  it("upgrades a populated v7 ledger atomically without losing audit or replay state", async () => {
+    const ledger = ledgerFor("ledger-schema-v7-upgrade");
+    await createTask(ledger, {
+      task: task(),
+      idempotencyKey: "task-create-schema-v7",
+      inputHash: "7".repeat(64),
+      now,
+    });
+
+    await runInDurableObject(ledger, (instance, state) => {
+      const sql = state.storage.sql;
+      const issuedAt = Math.floor(now / 1000);
+      sql.exec(
+        "INSERT INTO orchestrator_consumed_assertions (jti, subject, role, operation, key_id, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "jti-v7-migration-preserved", "agent:worker-1", "agent", "appendAuditEvent",
+        "test-v1", issuedAt, issuedAt + 60, issuedAt,
+      );
+      sql.exec(
+        "INSERT INTO orchestrator_audit_events (event_id, task_id, actor_id, actor_role, event_type, details_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "audit-v7-migration-preserved", "task-0001", "agent:worker-1", "agent",
+        "task.created", JSON.stringify({ source: "v7-migration-fixture" }),
+        null, "c".repeat(64), now,
+      );
+
+      sql.exec("DROP TABLE orchestrator_security_clock");
+      sql.exec("DROP TABLE IF EXISTS _sql_schema_migrations");
+      instance.ensureSchema();
+
+      expect(sql.exec("SELECT COUNT(*) AS count FROM orchestrator_security_clock").one().count).toBe(0);
+      expect(sql.exec("SELECT id, name, applied_at_ms FROM _sql_schema_migrations ORDER BY id").toArray()).toEqual([{
+        id: 8,
+        name: "v8-ledger-security-clock",
+        applied_at_ms: expect.any(Number),
+      }]);
+      expect(sql.exec(
+        "SELECT subject, operation, expires_at FROM orchestrator_consumed_assertions WHERE jti = ?",
+        "jti-v7-migration-preserved",
+      ).one()).toMatchObject({
+        subject: "agent:worker-1",
+        operation: "appendAuditEvent",
+        expires_at: issuedAt + 60,
+      });
+      expect(sql.exec(
+        "SELECT event_id, task_id, actor_id, event_hash FROM orchestrator_audit_events WHERE event_id = ?",
+        "audit-v7-migration-preserved",
+      ).one()).toMatchObject({
+        event_id: "audit-v7-migration-preserved",
+        task_id: "task-0001",
+        actor_id: "agent:worker-1",
+        event_hash: "c".repeat(64),
+      });
+      expect(instance.ping()).toEqual({ ok: true, schemaVersion: 8 });
+
+      instance.ensureSchema();
+      expect(sql.exec("SELECT COUNT(*) AS count FROM _sql_schema_migrations WHERE id = 8").one().count).toBe(1);
+      expect(sql.exec("SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE event_id = ?", "audit-v7-migration-preserved").one().count).toBe(1);
+    });
+  });
+
+  it("rolls back schema DDL when the version marker cannot commit", async () => {
+    const ledger = ledgerFor("ledger-schema-migration-atomic-rollback");
+    await runInDurableObject(ledger, (instance, state) => {
+      const sql = state.storage.sql;
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS _sql_schema_migrations (
+          id INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          applied_at_ms INTEGER NOT NULL CHECK(applied_at_ms > 0)
+        )
+      `);
+      sql.exec("DROP TABLE orchestrator_security_clock");
+      sql.exec("DELETE FROM _sql_schema_migrations WHERE id = 8");
+      sql.exec(`
+        CREATE TRIGGER reject_v8_schema_migration
+        BEFORE INSERT ON _sql_schema_migrations
+        WHEN NEW.id = 8
+        BEGIN
+          SELECT RAISE(ABORT, 'injected schema migration failure');
+        END
+      `);
+
+      expect(() => instance.ensureSchema()).toThrow();
+      expect(sql.exec("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'orchestrator_security_clock'").one().count).toBe(0);
+      expect(sql.exec("SELECT COUNT(*) AS count FROM _sql_schema_migrations WHERE id = 8").one().count).toBe(0);
+
+      sql.exec("DROP TRIGGER reject_v8_schema_migration");
+      instance.ensureSchema();
+      expect(sql.exec("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'orchestrator_security_clock'").one().count).toBe(1);
+      expect(sql.exec("SELECT id, name FROM _sql_schema_migrations WHERE id = 8").one()).toMatchObject({
+        id: 8, name: "v8-ledger-security-clock",
+      });
+    });
+  });
+
+  it("serializes a concurrent audit burst into one continuous hash chain", async () => {
+    const ledger = ledgerFor("ledger-audit-concurrent-burst");
+    await createTask(ledger, {
+      task: task(),
+      idempotencyKey: "task-create-audit-concurrent-burst",
+      inputHash: "6".repeat(64),
+      now,
+    });
+
+    const inputs = await Promise.all(Array.from({ length: 16 }, async (_, index) => {
+      const suffix = String(index + 1).padStart(4, "0");
+      return {
+        eventId: "audit-burst-" + suffix,
+        taskId: "task-0001",
+        actor: agent,
+        workerId: "agent:worker-1",
+        workerAssertion: await createWorkerAssertion({
+          subject: "agent:worker-1",
+          role: "agent",
+          operation: "appendAuditEvent",
+          nowMs: now,
+          jti: "jti-audit-burst-event-" + suffix,
+        }),
+        eventType: "task.progress",
+        details: { ordinal: index + 1 },
+        now,
+      };
+    }));
+
+    const results = await Promise.allSettled(inputs.map(input => ledger.appendAuditEvent(input)));
+    expect(results.filter(result => result.status === "rejected")).toHaveLength(0);
+    expect(results.filter(result => result.status === "fulfilled" && result.value.appended)).toHaveLength(16);
+
+    await runInDurableObject(ledger, (_instance, state) => {
+      const sql = state.storage.sql;
+      const rows = sql.exec("SELECT sequence, event_id, previous_hash, event_hash FROM orchestrator_audit_events WHERE event_id LIKE 'audit-burst-%' ORDER BY sequence").toArray();
+      expect(rows).toHaveLength(16);
+      expect(new Set(rows.map(row => row.event_id)).size).toBe(16);
+      expect(rows[0].previous_hash).toBeNull();
+      for (let index = 0; index < rows.length; index += 1) {
+        expect(rows[index].event_hash).toMatch(/^[a-f0-9]{64}$/);
+        if (index > 0) expect(rows[index].previous_hash).toBe(rows[index - 1].event_hash);
+      }
+      expect(sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE operation = 'appendAuditEvent' AND jti LIKE 'jti-audit-burst-event-%'").one().count).toBe(16);
     });
   });
 

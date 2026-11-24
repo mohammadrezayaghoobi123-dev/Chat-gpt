@@ -85,9 +85,11 @@ function runPreflight({
       const url = new URL(String(input));
       fs.appendFileSync(process.env.MOCK_CALLS_PATH, url.pathname + url.search + "\\n");
       const authorization = new Headers(init.headers || {}).get("authorization");
-      const tokenClass = authorization === `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`
+      const stagingCredential = "Bearer " + process.env.CLOUDFLARE_API_TOKEN;
+      const productionCredential = "Bearer " + process.env.CLOUDFLARE_PRODUCTION_METADATA_TOKEN;
+      const tokenClass = authorization === stagingCredential
         ? "staging-deploy"
-        : authorization === `Bearer ${process.env.CLOUDFLARE_PRODUCTION_METADATA_TOKEN}`
+        : authorization === productionCredential
           ? "production-metadata"
           : "unknown";
       fs.appendFileSync(process.env.MOCK_AUTH_CALLS_PATH, url.pathname + "|" + tokenClass + "\\n");
@@ -256,9 +258,11 @@ function runPostDeploy({
       const url = new URL(String(input));
       fs.appendFileSync(process.env.MOCK_CALLS_PATH, url.pathname + url.search + "\\n");
       const authorization = new Headers(init.headers || {}).get("authorization");
-      const tokenClass = authorization === `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`
+      const stagingCredential = "Bearer " + process.env.CLOUDFLARE_API_TOKEN;
+      const productionCredential = "Bearer " + process.env.CLOUDFLARE_PRODUCTION_METADATA_TOKEN;
+      const tokenClass = authorization === stagingCredential
         ? "staging-deploy"
-        : authorization === `Bearer ${process.env.CLOUDFLARE_PRODUCTION_METADATA_TOKEN}`
+        : authorization === productionCredential
           ? "production-metadata"
           : "unknown";
       fs.appendFileSync(process.env.MOCK_AUTH_CALLS_PATH, url.pathname + "|" + tokenClass + "\\n");

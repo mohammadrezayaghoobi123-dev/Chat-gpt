@@ -26,7 +26,7 @@ function safeReason(error) {
 }
 
 function classifyFailure(reason) {
-  if (/^GitHub Environment metadata returned HTTP 404\b/i.test(reason)) {
+  if (/GitHub Environment metadata returned HTTP 404\b/i.test(reason)) {
     return "MISSING";
   }
 

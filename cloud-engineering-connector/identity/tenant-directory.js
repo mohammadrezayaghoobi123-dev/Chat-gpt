@@ -474,6 +474,11 @@ export class TenantDirectory extends DurableObject {
       const concurrent = findExisting();
       if (concurrent) return existingResponse(concurrent);
 
+      const commitNow = timestamp(Date.now());
+      if (Math.floor(commitNow / 1000) >= expiresAt) {
+        throw fail("TASK_ADMISSION_EXPIRED", "Task admission grant expired before its reservation committed.");
+      }
+
       const taskOwner = sql.exec(
         "SELECT admission_id FROM tenant_task_admission_reservations WHERE tenant_id=? AND project_id=? AND task_id=?",
         tenantId, projectId, taskId
@@ -514,7 +519,7 @@ export class TenantDirectory extends DurableObject {
         "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         admissionId, jti, tenantId, projectId, principalId, taskId, taskDigest, idempotencyKeyDigest, inputHash,
         claims.membershipId, claims.membershipVersion, claims.policyScopeEpoch, claims.policyRuleVersion,
-        policyRuleResourceDigest, claims.policyDecisionId, issuedAt, expiresAt, grant, now,
+        policyRuleResourceDigest, claims.policyDecisionId, issuedAt, expiresAt, grant, commitNow,
       );
       const auditEventId = this.#appendAuditEvent(
         sql,
@@ -525,7 +530,7 @@ export class TenantDirectory extends DurableObject {
         target,
         null,
         claims.membershipVersion,
-        now,
+        commitNow,
       );
       return {
         reserved: true,

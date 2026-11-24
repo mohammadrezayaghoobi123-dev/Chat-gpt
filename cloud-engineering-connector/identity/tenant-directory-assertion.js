@@ -4,7 +4,7 @@ const MAX_LIFETIME_SECONDS = 60;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const KID = /^[A-Za-z0-9_-]{1,32}$/;
 const HEX_KEY = /^[a-fA-F0-9]{64,128}$/;
-const OPERATIONS = new Set(["upsertMembership", "revokeMembership", "upsertProjectPolicy"]);
+const OPERATIONS = new Set(["upsertMembership", "revokeMembership", "upsertProjectPolicy", "upsertAdmissionVerificationKey"]);
 const CLAIM_KEYS = ["aud", "exp", "iat", "iss", "jti", "op", "projectId", "role", "sub", "targetDigest", "tenantId", "v"];
 
 function reject() {

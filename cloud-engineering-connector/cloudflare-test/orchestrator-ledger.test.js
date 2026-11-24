@@ -1,13 +1,14 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 import { consumeOrchestratorDeadLetters, consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
 }
-const now = 1_800_000_000_000;
+const now = Date.now();
+afterEach(() => vi.restoreAllMocks());
 const task = (taskId = "task-0001") => ({
   taskId, state: "SCHEDULED", version: 1, agentRound: 0, createdAt: now, updatedAt: now,
   executorId: "agent:worker-1", commitSha: "a".repeat(40),
@@ -148,6 +149,8 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("fails closed when the earliest eligible task has an expired lease without reconciliation evidence", async () => {
     const ledger = ledgerFor("ledger-claim-skip-expired-lease");
+    let ledgerNow = now;
+    vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
     await createTask(ledger, {
       task: task("task-expired-first"), idempotencyKey: "claim-skip-expired-first",
       inputHash: "a".repeat(64), now,
@@ -162,6 +165,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       idempotencyKey: "claim-skip-expired-second", inputHash: "b".repeat(64), now: now + 1,
     });
 
+    ledgerNow = now + 101;
     const result = await ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101),
       leaseMs: 30_000, now: now + 101,
@@ -383,6 +387,8 @@ describe("OrchestratorLedger durable coordination contract", () => {
 
   it("uses monotonically increasing outbox fencing generations and rejects stale completion", async () => {
     const ledger = ledgerFor("ledger-outbox-fencing");
+    let ledgerNow = now;
+    vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0009", inputHash: "7".repeat(64), now });
     await ledger.enqueueOutbox({
       eventId: "event-0002", idempotencyKey: "outbox-key-0002", taskId: "task-0001",
@@ -391,16 +397,21 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await expect(ledger.claimOutbox({ workerId: "publisher-1", leaseMs: 100, now }))
       .resolves.toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
     const first = await ledger.claimOutbox({ workerId: "publisher-1", workerAssertion: await createWorkerAssertion({ subject: "publisher-1", role: "publisher", operation: "claimOutbox", nowMs: now }), leaseMs: 100, now });
+    ledgerNow = now + 101;
     const second = await ledger.claimOutbox({ workerId: "publisher-2", workerAssertion: await createWorkerAssertion({ subject: "publisher-2", role: "publisher", operation: "claimOutbox", nowMs: now + 101 }), leaseMs: 100, now: now + 101 });
     expect(second.leaseGeneration).toBe(first.leaseGeneration + 1);
+    ledgerNow = now + 102;
     await expect(ledger.completeOutbox({ eventId: "event-0002", workerId: "publisher-1", workerAssertion: await createWorkerAssertion({ subject: "publisher-1", role: "publisher", operation: "completeOutbox", nowMs: now + 102 }), leaseGeneration: first.leaseGeneration, now: now + 102 }))
       .resolves.toMatchObject({ completed: false, reason: "LEASE_FENCE_MISMATCH" });
+    ledgerNow = now + 103;
     await expect(ledger.completeOutbox({ eventId: "event-0002", workerId: "publisher-2", workerAssertion: await createWorkerAssertion({ subject: "publisher-2", role: "publisher", operation: "completeOutbox", nowMs: now + 103 }), leaseGeneration: second.leaseGeneration, now: now + 103 }))
       .resolves.toMatchObject({ completed: true });
   });
 
   it("schedules bounded outbox retries and dead-letters permanent failures", async () => {
     const ledger = ledgerFor("ledger-outbox-retry-dead-letter");
+    let ledgerNow = now;
+    vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
     await createTask(ledger, {
       task: task(), idempotencyKey: "task-create-outbox-retry", inputHash: "9".repeat(64), now,
     });
@@ -420,6 +431,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       }),
       leaseMs: 30_000, now,
     });
+    ledgerNow = now + 1;
     const failed = await ledger.failOutbox({
       eventId: "event-outbox-retry", workerId: "publisher-1",
       workerAssertion: await createWorkerAssertion({
@@ -432,6 +444,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       failed: true, retryScheduled: true, deadLettered: false,
       nextAttemptAt: now + 1_001,
     });
+    ledgerNow = now + 500;
     await expect(ledger.claimOutbox({
       workerId: "publisher-2",
       workerAssertion: await createWorkerAssertion({
@@ -440,6 +453,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       leaseMs: 30_000, now: now + 500,
     })).resolves.toMatchObject({ claimed: false, reason: "NO_OUTBOX_AVAILABLE" });
 
+    ledgerNow = now + 1_001;
     const retry = await ledger.claimOutbox({
       workerId: "publisher-2",
       workerAssertion: await createWorkerAssertion({
@@ -448,6 +462,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       leaseMs: 30_000, now: now + 1_001,
     });
     expect(retry).toMatchObject({ claimed: true, event: { attempts: 2 } });
+    ledgerNow = now + 1_002;
     const deadLetter = await ledger.failOutbox({
       eventId: "event-outbox-retry", workerId: "publisher-2",
       workerAssertion: await createWorkerAssertion({
@@ -1147,6 +1162,8 @@ it("rejects unauthenticated and caller-forged task creation", async () => {
 
 it("prunes consumed assertion IDs only after expiry plus the retention margin", async () => {
   const ledger = ledgerFor("ledger-assertion-retention");
+  let ledgerNow = now;
+  vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
   await createTask(ledger, { task: task(), idempotencyKey: "task-create-retention-1", inputHash: "2".repeat(64), now });
   const assertion = await createWorkerAssertion({
     subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
@@ -1154,6 +1171,7 @@ it("prunes consumed assertion IDs only after expiry plus the retention margin", 
   });
   await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: assertion, leaseMs: 30_000, now });
   const later = now + 12 * 60 * 1000;
+  ledgerNow = later;
   await createTask(ledger, { task: task("task-0002"), idempotencyKey: "task-create-retention-2", inputHash: "3".repeat(64), now: later });
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti='jti-claim-retention-000000000001'").one().count).toBe(0);
@@ -1164,6 +1182,8 @@ it("prunes consumed assertion IDs only after expiry plus the retention margin", 
 
 it("moves an expired final-attempt outbox lease to a lease-free dead-letter state", async () => {
   const ledger = ledgerFor("ledger-outbox-final-attempt-crash");
+  let ledgerNow = now;
+  vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
   await createTask(ledger, {
     task: task(), idempotencyKey: "task-create-final-attempt-crash", inputHash: "f".repeat(64), now,
   });
@@ -1180,6 +1200,7 @@ it("moves an expired final-attempt outbox lease to a lease-free dead-letter stat
   let finalAttempt;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const attemptNow = now + (attempt - 1) * 101;
+    ledgerNow = attemptNow;
     finalAttempt = await ledger.claimOutbox({
       workerId: "publisher-" + attempt,
       workerAssertion: await createWorkerAssertion({
@@ -1191,6 +1212,7 @@ it("moves an expired final-attempt outbox lease to a lease-free dead-letter stat
   }
 
   const afterLeaseExpiry = now + 8 * 101;
+  ledgerNow = afterLeaseExpiry;
   const exhausted = await ledger.claimOutbox({
     workerId: "publisher-recovery",
     workerAssertion: await createWorkerAssertion({

@@ -2728,3 +2728,97 @@ it("recovers a Queue-accepted send with a lost acknowledgement through bounded r
     dateNow.mockRestore();
   }
 }, 15000);
+
+
+it("rejects validation evidence replayed from a different task, version, and commit", async () => {
+  const ledger = ledgerFor("ledger-task-scoped-validation-evidence");
+  const sourceTaskId = "task-evidence-source-0001";
+  const targetTaskId = "task-evidence-target-0001";
+  const sourceCommitSha = "a".repeat(40);
+  const targetCommitSha = "b".repeat(40);
+
+  await createTask(ledger, {
+    task: { ...task(sourceTaskId), commitSha: sourceCommitSha },
+    idempotencyKey: "task-evidence-source-create",
+    inputHash: "1".repeat(64),
+    now,
+  });
+  await createTask(ledger, {
+    task: { ...task(targetTaskId), commitSha: targetCommitSha },
+    idempotencyKey: "task-evidence-target-create",
+    inputHash: "2".repeat(64),
+    now,
+  });
+
+  const sourceLease = await ledger.claimTask({
+    taskId: sourceTaskId,
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1"),
+    leaseMs: 30_000,
+    now,
+  });
+  const targetLease = await ledger.claimTask({
+    taskId: targetTaskId,
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1"),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(sourceLease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+  expect(targetLease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+  const sourceEvidence = {
+    kind: "validation-evidence",
+    taskId: sourceTaskId,
+    taskVersion: 1,
+    commitSha: sourceCommitSha,
+    validationOutcome: "PASS",
+    evidenceDigest: "c".repeat(64),
+    issuer: "validator:independent-01",
+  };
+  const crossTaskResult = await ledger.transitionTask({
+    taskId: targetTaskId,
+    expectedVersion: 1,
+    expectedState: "SCHEDULED",
+    nextState: "RUNNING",
+    actor: agent,
+    evidence: sourceEvidence,
+    now: now + 1,
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1",
+      role: "agent",
+      operation: "transitionTask",
+      nowMs: now + 1,
+      jti: "jti-cross-task-validation-evidence-0001",
+    }),
+    leaseGeneration: targetLease.leaseGeneration,
+  });
+
+  // Evidence provenance is expected to be bound to the target Task, version,
+  // and commit. A source Task's valid-looking PASS evidence must not authorize
+  // a transition on a different Task even when the same Agent holds both Leases.
+  expect(crossTaskResult.updated).toBe(false);
+  await expect(ledger.getTask({ taskId: targetTaskId })).resolves.toMatchObject({
+    taskId: targetTaskId,
+    state: "SCHEDULED",
+    version: 1,
+    commitSha: targetCommitSha,
+  });
+  await expect(ledger.getTask({ taskId: sourceTaskId })).resolves.toMatchObject({
+    taskId: sourceTaskId,
+    state: "SCHEDULED",
+    version: 1,
+    commitSha: sourceCommitSha,
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT worker_id, lease_generation FROM orchestrator_execution_leases WHERE task_id = ?",
+      targetTaskId,
+    ).one()).toMatchObject({ worker_id: "agent:worker-1", lease_generation: 1 });
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      "jti-cross-task-validation-evidence-0001",
+    ).one().count).toBe(1);
+  });
+});

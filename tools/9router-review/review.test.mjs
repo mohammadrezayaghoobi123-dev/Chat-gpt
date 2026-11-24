@@ -3502,3 +3502,89 @@ test("GitHub comment publication rejects 307 and 308 without replaying the POST"
     });
   }
 });
+
+
+test("deterministic concurrent duplicate-publication red test", async () => {
+  const headSha = "a".repeat(40);
+  const baseSha = "b".repeat(40);
+  let commentHistoryReads = 0;
+  let releasePreflightBarrier;
+  const bothPreflightsObservedEmptyHistory = new Promise(resolve => {
+    releasePreflightBarrier = resolve;
+  });
+  let modelCalls = 0;
+  let commentPosts = 0;
+
+  const json = value => new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+
+  const fakeFetch = async (url, options = {}) => {
+    const target = String(url);
+
+    if (target.endsWith("/pulls/295")) {
+      return json({
+        number: 295,
+        state: "open",
+        draft: false,
+        head: { sha: headSha },
+        base: { sha: baseSha },
+      });
+    }
+
+    if (target.includes("/pulls/295/files?")) {
+      return json([{
+        filename: "src/concurrent-review.js",
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        patch: "@@ -1 +1 @@\\n-old\\n+new",
+      }]);
+    }
+
+    if (target.includes("/issues/295/comments?")) {
+      commentHistoryReads += 1;
+      if (commentHistoryReads === 2) releasePreflightBarrier();
+      await bothPreflightsObservedEmptyHistory;
+      return json([]);
+    }
+
+    if (target.endsWith("/chat/completions")) {
+      modelCalls += 1;
+      return json({
+        choices: [{ message: { content: "A sufficiently long concurrent test review report." } }],
+      });
+    }
+
+    if (target.endsWith("/issues/295/comments") && options.method === "POST") {
+      commentPosts += 1;
+      return createdCommentResponse(target, options, 1295 + commentPosts);
+    }
+
+    throw new Error("Unexpected API request in concurrent publication test: " + target);
+  };
+
+  const sharedOptions = {
+    repository: "owner/repo",
+    pullRequest: 295,
+    expectedHeadSha: headSha,
+    expectedBaseSha: baseSha,
+    githubToken: "github-test-token",
+    routerBaseUrl: "https://router.example/v1",
+    routerApiKey: "router-test-token",
+    reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+    model: "test-model",
+    fetchImpl: fakeFetch,
+  };
+
+  const results = await Promise.all([
+    runReview(sharedOptions),
+    runReview(sharedOptions),
+  ]);
+
+  assert.equal(commentHistoryReads, 2, "both independent runs must complete the empty-history preflight");
+  assert.ok(results.every(result => result.publishedNewComment === true));
+  assert.equal(modelCalls, 1, "only the reservation winner may incur model inference");
+  assert.equal(commentPosts, 1, "one immutable PR snapshot must produce at most one comment POST");
+});

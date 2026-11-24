@@ -984,6 +984,7 @@ async function handleOwnerGitHubComment(authenticated, payload, ledger, env) {
  let retryAuthorization;
  try {
   retryAuthorization = await ledger.authorizeOwnerWebhookRetry({
+   assertion,
    deliveryId: authenticated.deliveryId,
    bodySha256: authenticated.bodySha256,
    commentId,

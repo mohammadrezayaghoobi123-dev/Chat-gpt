@@ -637,12 +637,14 @@ The logical record contains:
 - Identity: `key_version`, `reservation_key`, `repository_id`, `pull_request_number`, `head_sha`, `base_sha`.
 - Contract identity: `reviewer_policy_digest`, `runtime_digest`, `schema_version`.
 - Ownership: `state`, `generation`, `owner_id`, `owner_nonce`, `lease_expires_at`.
-- Model boundary: `model_attempt_id`, `model_request_digest`, `model_result_digest`, and a protected durable result reference or encrypted result envelope when continuation requires the result.
-- Comment boundary: `comment_attempt_id`, `comment_payload_digest`, `comment_marker_id`, `comment_remote_id`, `comment_accepted_at`.
+- Model boundary: `model_attempt_id`, `model_request_digest`, `model_result_digest`, `model_attempt_deadline_at`, and a protected durable result reference or encrypted result envelope when continuation requires the result.
+- Comment boundary: `comment_attempt_id`, `comment_payload_digest`, `comment_marker_id`, `comment_marker_key_id`, `comment_marker_signature`, `comment_remote_id`, `comment_accepted_at`, `comment_attempt_deadline_at`.
 - Diagnosis: `unknown_stage`, `unknown_reason_code`, `last_error_class`.
 - Audit: monotonic `record_version`, `created_at`, `updated_at`, and append-only transition events with actor, prior/new state, generation, operation ID, server timestamp, and reason.
 
-Secrets, provider credentials, raw authorization headers, and unredacted prompts MUST NOT be stored in the reservation record. If a model result must survive a worker restart, the result reference must resolve to an access-controlled, integrity-checked, encrypted durable object. The record may enter `MODEL_COMPLETED` only after the result is durably retrievable and its digest is committed. An orphaned result object is safe to garbage-collect only after proving no live record references it.
+The model/comment attempt deadline fields are written in the same transaction as the one-time attempt transition and are used only by a recovery worker to classify a lost worker as UNKNOWN; they never authorize a retry. A marker signature is an HMAC over the canonical reservation tuple, policy digest, marker ID, and payload digest, using a separately protected signing key identified by `comment_marker_key_id`. Reconciliation requires the expected bot author identity and a valid signature; a user-authored or invalidly signed lookalike is not a match.
+
+Secrets, provider credentials, raw authorization headers, signing keys, and unredacted prompts MUST NOT be stored in the reservation record. If a model result must survive a worker restart, the result reference must resolve to an access-controlled, integrity-checked, encrypted durable object. The record may enter `MODEL_COMPLETED` only after the result is durably retrievable and its digest is committed. An orphaned result object is safe to garbage-collect only after proving no live record references it.
 
 ### 4. State machine
 
@@ -653,7 +655,7 @@ Normative states:
 | `UNCLAIMED` | No reservation row exists | Initial claim only |
 | `CLAIMED` | One owner has a valid lease; no external effect has been authorized | Yes, after authoritative expiry and generation increment |
 | `MODEL_ATTEMPTED` | The one-time model dispatch boundary was durably consumed; remote execution may or may not have started | Never |
-| `MODEL_COMPLETED` | One model result is durably recorded and bound to the reservation | No owner takeover; continuation may resume only without repeating model dispatch |
+| `MODEL_COMPLETED` | One model result is durably recorded and bound to the reservation | Yes, by a continuation-only lease that cannot repeat model dispatch |
 | `COMMENT_ATTEMPTED` | The one-time GitHub comment POST boundary was durably consumed; remote acceptance may or may not have occurred | Never |
 | `PUBLISHED` | Exactly one matching remote comment ID is recorded from validated positive evidence | Terminal |
 | `UNKNOWN` | An external effect may have happened, but evidence is insufficient to determine the result | Never automatically |
@@ -669,7 +671,10 @@ Allowed transitions:
 | expired `CLAIMED` | `CLAIMED` | Server-time expiry predicate and CAS; increment generation and replace owner/nonce |
 | `CLAIMED` | `MODEL_ATTEMPTED` | One-time CAS consumes the model attempt before any provider request |
 | `MODEL_ATTEMPTED` | `MODEL_COMPLETED` | Matching attempt ID; durable result reference and digest committed |
-| `MODEL_ATTEMPTED` | `UNKNOWN` | Provider timeout, worker crash recovery, lost acknowledgement, or any ambiguous result |
+| `MODEL_ATTEMPTED` | `UNKNOWN` | Provider timeout, attempt deadline expiry, worker crash recovery, lost acknowledgement, or any ambiguous result |
+| `MODEL_COMPLETED` | `MODEL_COMPLETED` | Continuation lease acquisition by CAS; increment generation and replace owner/nonce; no model dispatch is authorized |
+| `MODEL_COMPLETED` | `PUBLISHED` | Positive exact reconciliation finds one comment matching this reservation's persisted signed marker; no POST |
+| `MODEL_COMPLETED` | `DUPLICATE_ACCEPTED` | Positive exact reconciliation finds more than one comment matching this reservation's persisted signed marker; no POST |
 | `MODEL_COMPLETED` | `COMMENT_ATTEMPTED` | Snapshot revalidation; complete duplicate preflight; one-time CAS consumes the comment attempt before POST |
 | `MODEL_COMPLETED` | `ABORTED` | Explicit safe abort before comment-attempt boundary |
 | `COMMENT_ATTEMPTED` | `PUBLISHED` | Validated 201 response plus durable remote ID commit, or authoritative positive reconciliation |
@@ -677,7 +682,7 @@ Allowed transitions:
 | `UNKNOWN` | `PUBLISHED` | Positive reconciliation identifies exactly one matching remote comment |
 | `UNKNOWN` | `DUPLICATE_ACCEPTED` | Positive reconciliation identifies more than one matching remote comment |
 
-No transition from `MODEL_ATTEMPTED`, `COMMENT_ATTEMPTED`, `UNKNOWN`, `PUBLISHED`, `ABORTED`, or `DUPLICATE_ACCEPTED` back to `CLAIMED` is permitted. Lease expiry never authorizes a second model request or comment POST after the corresponding attempt boundary has been consumed.
+No transition from `MODEL_ATTEMPTED`, `COMMENT_ATTEMPTED`, `UNKNOWN`, `PUBLISHED`, `ABORTED`, or `DUPLICATE_ACCEPTED` back to `CLAIMED` is permitted. A `MODEL_COMPLETED` row may receive a new continuation lease with a higher generation, but that lease authorizes only comment preparation/publication and cannot repeat inference. Lease expiry never authorizes a second model request or comment POST after the corresponding attempt boundary has been consumed.
 
 ### 5. Adapter interface and operation semantics
 
@@ -685,11 +690,13 @@ The storage-independent adapter MUST expose equivalent typed operations. Names b
 
 - `claim(key, owner_id, owner_nonce, lease_duration, policy_digest) -> CLAIMED | BUSY | EXISTING(state) | KEY_CONFLICT`
 - `renew(key, owner_id, owner_nonce, generation, expected_record_version, lease_duration) -> RENEWED(new_record_version) | LOST_OWNERSHIP | EXPIRED`
+- `resumeCompletedModel(key, owner_id, owner_nonce, expected_record_version, lease_duration) -> RESUMED(new_generation) | BUSY | TERMINAL`
 - `beginModelAttempt(key, owner_id, owner_nonce, generation, expected_record_version, attempt_id, request_digest) -> MODEL_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`
 - `completeModelAttempt(key, generation, attempt_id, result_reference, result_digest) -> MODEL_COMPLETED | CONFLICT | UNKNOWN`
 - `beginCommentAttempt(key, generation, expected_record_version, attempt_id, marker_id, payload_digest, snapshot_validation_id) -> COMMENT_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`
 - `completeCommentAttempt(key, attempt_id, remote_comment_id) -> PUBLISHED | CONFLICT | UNKNOWN`
 - `markUnknown(key, attempt_id, stage, reason_code) -> UNKNOWN | CONFLICT`
+- `expireAmbiguousAttempt(key, attempt_id, stage, authoritative_server_time) -> UNKNOWN | NOT_DUE | CONFLICT`
 - `readAuthoritative(key) -> RECORD | NOT_FOUND | UNAVAILABLE`
 - `reconcileComment(key, positive_evidence) -> PUBLISHED | DUPLICATE_ACCEPTED | UNKNOWN`
 
@@ -705,11 +712,11 @@ A returned `MODEL_PERMIT` or `COMMENT_PERMIT` is an in-memory authorization to m
 4. Revalidate the live PR snapshot and confirm it still equals the reservation tuple before model dispatch.
 5. Atomically consume `beginModelAttempt`. Only after the durable acknowledgement may the caller issue one provider request. If the commit acknowledgement is lost, read the authoritative row; if the state cannot be established, do not call the provider.
 6. Persist the model result durably, then atomically transition to `MODEL_COMPLETED`. If the process crashes or the result cannot be proven durable after the model boundary, mark or retain `UNKNOWN`; do not invoke the model again.
-7. Revalidate the live PR snapshot again. Perform complete duplicate-marker reconciliation. If a matching comment already exists, record positive evidence and do not POST. If listing is partial, paginated incompletely, stale, or unavailable, do not infer absence; remain blocked/UNKNOWN.
+7. Revalidate the live PR snapshot again. Perform complete duplicate-marker reconciliation using the persisted marker ID, HMAC signature, expected bot author ID, snapshot tuple, and payload digest. If exactly one matching comment exists, transition `MODEL_COMPLETED -> PUBLISHED`; if more than one exists, transition to `DUPLICATE_ACCEPTED`. If listing is partial, paginated incompletely, stale, or unavailable, do not infer absence; remain blocked/UNKNOWN. A comment with a matching visible marker but invalid signature or wrong author is not accepted as publication evidence.
 8. Construct the final comment with an unambiguous marker bound to repository ID, PR number, head SHA, base SHA, policy digest, and payload digest. Persist only the required marker/payload digests in the reservation record.
 9. Atomically consume `beginCommentAttempt`. Only after durable acknowledgement may the caller issue one GitHub POST. Configure redirects to error and disable automatic retries in the HTTP client, SDK, proxy, and middleware. A retry at any layer violates this contract.
 10. On a validated 201 response, atomically persist the remote comment ID and `PUBLISHED`. If the response or storage acknowledgement is ambiguous, retain/mark `UNKNOWN` and reconcile read-only.
-11. Reconciliation may move `UNKNOWN` to `PUBLISHED` only on exactly one positive exact match. More than one match becomes `DUPLICATE_ACCEPTED`. Zero matches, incomplete pagination, API failure, eventual visibility uncertainty, or stale reads remain `UNKNOWN`; they never authorize a second POST.
+11. Comment-stage reconciliation may move `UNKNOWN` to `PUBLISHED` only on exactly one positive exact match. More than one match becomes `DUPLICATE_ACCEPTED`. Zero matches, incomplete pagination, API failure, eventual visibility uncertainty, or stale reads remain `UNKNOWN`; they never authorize a second POST. Model-stage `UNKNOWN` is not eligible for comment reconciliation and remains terminal unless the provider exposes an independently verifiable operation-status/result API; even then, recovery may record evidence but MUST NOT issue another model request.
 
 ### 7. Fencing, clocks, and consistency
 
@@ -727,7 +734,7 @@ The PR head/base check and GitHub comment POST are not one cross-service transac
 
 GitHub comment listing may not provide a transactional negative proof under every failure/visibility condition. Reconciliation is therefore positive-evidence oriented. A zero-result list is not proof that a POST was never accepted. If exactly-one positive evidence cannot be obtained, retain `UNKNOWN` and require a separately reviewed manual disposition; do not auto-retry.
 
-The model provider may also lack a caller-supplied idempotency key or execution-status query. The durable `MODEL_ATTEMPTED` boundary prevents automatic duplicate dispatch by this application, but cannot prove provider-side execution or billing count after an ambiguous timeout.
+The model provider may also lack a caller-supplied idempotency key or execution-status query. A recovery worker may move an overdue `MODEL_ATTEMPTED` row to `UNKNOWN` using the attempt ID and server time, but cannot infer whether the provider executed or billed the request. Model-stage `UNKNOWN` is distinct from comment-stage `UNKNOWN`; `reconcileComment` MUST reject a model-stage row.
 
 ### 9. Safety invariants
 
@@ -780,6 +787,9 @@ Every test must run against the same adapter contract with at least two independ
 | A28 | Retention cleanup races with replay | Tombstone/unique key remains; no duplicate reservation |
 | A29 | HTTP client/SDK/proxy retry configured | Conformance test detects more than one transport invocation; candidate integration rejected |
 | A30 | Process termination at every transition boundary | Recovery outcome matches the state table; no transition regresses across an irreversible boundary |
+| A31 | Worker crashes in MODEL_COMPLETED before comment preparation | New continuation generation resumes from the durable result; model transport count remains one |
+| A32 | Recovery worker sees overdue MODEL_ATTEMPTED or COMMENT_ATTEMPTED | Stage-specific UNKNOWN is recorded; no external retry is authorized |
+| A33 | User forges marker text or copies marker without valid HMAC/bot identity | Reconciliation rejects it as publication evidence |
 
 ### 11. Adversarial design review — findings and disposition
 
@@ -795,6 +805,10 @@ The design was challenged against the reproduced interleaving, independent-host 
 - **AR-08 — Hidden retries below the application layer could violate the guarantee.** Added explicit transport/SDK/proxy retry prohibition and a transport-call-count test.
 - **AR-09 — Policy/runtime changes could silently reuse an existing key.** Added policy/runtime digest binding and explicit conflict behavior.
 - **AR-10 — Result loss after model completion could force duplicate inference.** Added durable result-reference/digest requirement before MODEL_COMPLETED and a resume-without-reinference test.
+- **AR-11 — MODEL_COMPLETED had no explicit crash-resume ownership protocol.** Added `resumeCompletedModel`, which atomically increments generation and grants a continuation-only lease; it cannot reissue the model permit.
+- **AR-12 — Recovery workers lacked a bounded rule for abandoned attempt states.** Added attempt deadlines and `expireAmbiguousAttempt`; expiry moves an attempt to UNKNOWN only and never authorizes retry.
+- **AR-13 — A visible marker could be forged by a user or copied into an unrelated comment.** Added HMAC marker signature, key ID, exact snapshot/payload binding, and expected bot-author verification.
+- **AR-14 — Existing-comment reconciliation had no explicit MODEL_COMPLETED transition.** Added positive-evidence transitions to PUBLISHED or DUPLICATE_ACCEPTED before a new POST; incomplete or untrusted evidence remains non-publishable.
 
 **Residual design limitations (not defects that this contract can eliminate):**
 

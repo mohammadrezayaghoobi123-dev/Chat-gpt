@@ -27,9 +27,14 @@ function version(value) {
   if (!Number.isSafeInteger(value) || value < 0) throw fail("INVALID_TENANT_DIRECTORY_INPUT", "expectedVersion must be a non-negative safe integer.");
   return value;
 }
-function defaultDeny({ principalId, tenantId, projectId, action, resourceDigest }) {
+function defaultDeny({
+  principalId, tenantId, projectId, action, resourceDigest,
+  membershipVersion = null, membershipStatus = "absent", policyScopeEpoch = 0,
+}) {
   return {
     principalId, tenantId, projectId, action, resourceDigest, effect: "deny",
+    membershipVersion, membershipStatus, policyScopeEpoch,
+    policyRuleVersion: null, policyRuleResourceDigest: null,
     decisionId: "default-deny-" + crypto.randomUUID(), policyVersion: "default-deny-v1",
   };
 }
@@ -68,7 +73,13 @@ export class TenantDirectory extends DurableObject {
     );
     sql.exec("CREATE INDEX IF NOT EXISTS tenant_project_policy_rules_active ON tenant_project_policy_rules(tenant_id, project_id, principal_id, action, status)");
     sql.exec(
-      "CREATE TABLE IF NOT EXISTS tenant_directory_audit_events (" +
+      "CREATE TABLE IF NOT EXISTS tenant_project_policy_scope_epochs (" +
+      "tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, principal_id TEXT NOT NULL, action TEXT NOT NULL, " +
+      "epoch INTEGER NOT NULL CHECK(epoch >= 0), " +
+      "PRIMARY KEY(tenant_id, project_id, principal_id, action))"
+    );
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS tenant_directory_audit_events ("+
       "sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, tenant_id TEXT NOT NULL, " +
       "project_id TEXT, actor_id TEXT NOT NULL, operation TEXT NOT NULL, target_digest TEXT NOT NULL, " +
       "before_version INTEGER, after_version INTEGER NOT NULL, details_json TEXT NOT NULL CHECK(json_valid(details_json)), " +
@@ -78,11 +89,12 @@ export class TenantDirectory extends DurableObject {
     sql.exec("CREATE TRIGGER IF NOT EXISTS tenant_directory_audit_no_update BEFORE UPDATE ON tenant_directory_audit_events BEGIN SELECT RAISE(ABORT, 'TENANT_DIRECTORY_AUDIT_APPEND_ONLY'); END");
     sql.exec("CREATE TRIGGER IF NOT EXISTS tenant_directory_audit_no_delete BEFORE DELETE ON tenant_directory_audit_events BEGIN SELECT RAISE(ABORT, 'TENANT_DIRECTORY_AUDIT_APPEND_ONLY'); END");
     sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(1, ?)", Date.now());
+    sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(2, ?)", Date.now());
   }
 
   ping() {
     const row = this.ctx.storage.sql.exec("SELECT MAX(version) AS version FROM tenant_directory_schema_migrations").one();
-    return { ok: Number(row.version) === 1, schemaVersion: Number(row.version ?? 0) };
+    return { ok: Number(row.version) >= 2, schemaVersion: Number(row.version ?? 0) };
   }
 
   async #verifyAdmin(assertion, operation, tenantId, projectId, target, now) {
@@ -106,6 +118,33 @@ export class TenantDirectory extends DurableObject {
       beforeVersion, afterVersion, JSON.stringify(target), now
     );
     return eventId;
+  }
+
+  #advancePolicyScopeEpoch(sql, tenantId, projectId, principalId, action) {
+    sql.exec(
+      "INSERT INTO tenant_project_policy_scope_epochs(tenant_id, project_id, principal_id, action, epoch) " +
+      "VALUES(?, ?, ?, ?, 1) ON CONFLICT(tenant_id, project_id, principal_id, action) " +
+      "DO UPDATE SET epoch=epoch+1",
+      tenantId, projectId, principalId, action
+    );
+    const row = sql.exec(
+      "SELECT epoch FROM tenant_project_policy_scope_epochs " +
+      "WHERE tenant_id=? AND project_id=? AND principal_id=? AND action=?",
+      tenantId, projectId, principalId, action
+    ).one();
+    return Number(row.epoch);
+  }
+
+  #advanceActivePolicyScopesForPrincipal(sql, tenantId, principalId) {
+    const scopes = sql.exec(
+      "SELECT DISTINCT project_id, action FROM tenant_project_policy_rules " +
+      "WHERE tenant_id=? AND principal_id=? AND status='active' ORDER BY project_id, action",
+      tenantId, principalId
+    ).toArray();
+    for (const scope of scopes) {
+      this.#advancePolicyScopeEpoch(sql, tenantId, scope.project_id, principalId, scope.action);
+    }
+    return scopes.length;
   }
 
   getActiveMembership(input) {
@@ -152,6 +191,7 @@ export class TenantDirectory extends DurableObject {
         tenantId, principalId, membershipId, role, status, nextVersion, current?.created_at ?? now, now
       );
       if (status !== "active") {
+        this.#advanceActivePolicyScopesForPrincipal(sql, tenantId, principalId);
         sql.exec(
           "UPDATE tenant_project_policy_rules SET status='disabled', version=version+1, updated_at=? " +
           "WHERE tenant_id=? AND principal_id=? AND status='active'",
@@ -189,6 +229,7 @@ export class TenantDirectory extends DurableObject {
         "UPDATE tenant_memberships SET status='revoked', version=?, updated_at=?, revoked_at=? WHERE tenant_id=? AND principal_id=? AND version=?",
         nextVersion, now, now, tenantId, principalId, expectedVersion
       );
+      this.#advanceActivePolicyScopesForPrincipal(sql, tenantId, principalId);
       sql.exec(
         "UPDATE tenant_project_policy_rules SET status='disabled', version=version+1, updated_at=? " +
         "WHERE tenant_id=? AND principal_id=? AND status='active'",
@@ -234,10 +275,14 @@ export class TenantDirectory extends DurableObject {
         tenantId, projectId, principalId, action, resourceDigest, effect, policyVersion, decisionId, status,
         nextVersion, current?.created_at ?? now, now
       );
+      const policyScopeEpoch = this.#advancePolicyScopeEpoch(sql, tenantId, projectId, principalId, action);
       const auditEventId = this.#appendAuditEvent(
         sql, verified, "upsertProjectPolicy", tenantId, projectId, target, current?.version ?? null, nextVersion, now
       );
-      return { tenantId, projectId, principalId, action, resourceDigest, effect, policyVersion, decisionId, status, version: nextVersion, auditEventId };
+      return {
+        tenantId, projectId, principalId, action, resourceDigest, effect, policyVersion,
+        decisionId, status, version: nextVersion, policyScopeEpoch, auditEventId,
+      };
     });
   }
 
@@ -248,18 +293,45 @@ export class TenantDirectory extends DurableObject {
     const action = requiredString(input?.action, "action", 128);
     const resourceDigest = input?.resourceDigest;
     if (!SHA256.test(resourceDigest ?? "")) throw fail("INVALID_TENANT_DIRECTORY_INPUT", "resourceDigest must be a SHA-256 digest.");
-    const membership = this.ctx.storage.sql.exec(
-      "SELECT 1 AS active FROM tenant_memberships WHERE tenant_id=? AND principal_id=? AND status='active'",
+    const sql = this.ctx.storage.sql;
+    const membership = sql.exec(
+      "SELECT membership_id, status, version FROM tenant_memberships WHERE tenant_id=? AND principal_id=?",
       tenantId, principalId
+    ).toArray()[0] ?? null;
+    const epochRow = sql.exec(
+      "SELECT epoch FROM tenant_project_policy_scope_epochs " +
+      "WHERE tenant_id=? AND project_id=? AND principal_id=? AND action=?",
+      tenantId, projectId, principalId, action
     ).toArray()[0];
-    if (!membership) return defaultDeny({ principalId, tenantId, projectId, action, resourceDigest });
-    const rule = this.ctx.storage.sql.exec(
-      "SELECT effect, policy_version, decision_id FROM tenant_project_policy_rules " +
+    const policyScopeEpoch = Number(epochRow?.epoch ?? 0);
+    const membershipVersion = membership ? Number(membership.version) : null;
+    const membershipStatus = membership?.status ?? "absent";
+
+    if (!membership || membership.status !== "active") {
+      return defaultDeny({
+        principalId, tenantId, projectId, action, resourceDigest,
+        membershipVersion, membershipStatus, policyScopeEpoch,
+      });
+    }
+
+    const rule = sql.exec(
+      "SELECT effect, policy_version, decision_id, resource_digest, version FROM tenant_project_policy_rules " +
       "WHERE tenant_id=? AND project_id=? AND principal_id=? AND action=? AND status='active' " +
       "AND resource_digest IN (?, '*') ORDER BY CASE WHEN resource_digest=? THEN 0 ELSE 1 END LIMIT 1",
       tenantId, projectId, principalId, action, resourceDigest, resourceDigest
     ).toArray()[0];
-    if (!rule) return defaultDeny({ principalId, tenantId, projectId, action, resourceDigest });
-    return { principalId, tenantId, projectId, action, resourceDigest, effect: rule.effect, decisionId: rule.decision_id, policyVersion: rule.policy_version };
+    if (!rule) {
+      return defaultDeny({
+        principalId, tenantId, projectId, action, resourceDigest,
+        membershipVersion, membershipStatus, policyScopeEpoch,
+      });
+    }
+    return {
+      principalId, tenantId, projectId, action, resourceDigest,
+      effect: rule.effect, decisionId: rule.decision_id, policyVersion: rule.policy_version,
+      membershipVersion, membershipStatus, policyScopeEpoch,
+      policyRuleVersion: Number(rule.version),
+      policyRuleResourceDigest: rule.resource_digest,
+    };
   }
 }

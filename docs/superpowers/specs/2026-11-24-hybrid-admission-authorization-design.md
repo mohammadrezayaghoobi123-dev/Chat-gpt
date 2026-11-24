@@ -395,3 +395,247 @@ Cloudflare platform references:
 - Worker scheduled handler and ScheduledController fields: https://developers.cloudflare.com/workers/runtime-apis/handlers/scheduled/
 - Cron Trigger configuration: https://developers.cloudflare.com/workers/configuration/cron-triggers/
 
+## 17. Hostile Contract-Closure Addendum
+
+- **Status:** Engineering recommendations for owner review; not owner-approved and not implementation authorization.
+- **Review date:** 2026-11-24.
+- **Review inputs:** PR #428 hostile findings; fresh GitHub branch/PR reads; fresh Cloudflare GET-only inventory; Cloudflare documentation reviewed on 2026-11-24.
+- **Change class:** Design clarification only. No runtime behavior is authorized by this addendum.
+
+This section converts each blocking/high-risk finding into a proposed contract, an explicit decision boundary, and falsifiable acceptance criteria. Recommendations are not silently promoted to requirements. The owner decisions in Section 15 remain open until explicitly accepted.
+
+### 17.1 Evidence delta and deployment boundary
+
+The following observations were freshly rechecked:
+
+| Surface | Observed fact | Consequence |
+|---|---|---|
+| GitHub main | `main` remained at `919b19ca3d3887352cdef06b03c668ead04fbce7`. | This addendum is based on the same reviewed baseline. |
+| PR #425 | Open, draft, unmerged; design branch head `422ef1e4a40d8ef15eb3af47bf4e52ab61f2318f` before this addendum. | The design is still under review. |
+| PR #428 | Open, draft, unmerged; hostile review head `4009cdd4929dce6d65ec090630247f3ab24cbdc6`. | The blockers remain review findings, not resolved implementation facts. |
+| Cloudflare schedules | `chat-gpt111`, `chat-gpt111-staging`, and `master-brain-cloud-agent` each returned an empty schedule list. | No active Cron Trigger was observed for these Workers. |
+| Cloudflare Durable Object namespaces | The inspected account listed `AgentBudget`, `AgentSession`, and staging `WriteControl`; no `OrchestratorLedger` or `TenantDirectory` namespace was listed. | The proposed admission objects are not present in this inspected live account inventory. This does not prove that no other account/environment ever held legacy data. |
+| Worker bindings | Production `chat-gpt111` had no Durable Object namespace binding. Staging exposed `WriteControl`, not the proposed admission namespaces. | Source declarations must not be treated as proof of deployed bindings. |
+| Worker secrets | Only binding names/types were read; secret values were not accessed. | No secret value is included in this review. |
+
+The deployment delta is a release-readiness fact, not a claim that the source design is invalid. Any future staging implementation must first establish the exact account, script, namespace, binding, migration, and data-inventory scope.
+
+### 17.2 Decision D1 — Revocation semantics and the meaning of start
+
+**Recommended v1 contract: reservation-time authorization, not instantaneous effect-time revocation.**
+
+Define three distinct events:
+
+1. `ADMITTED`: the Authority commits a valid admission and Outbox record.
+2. `START_RESERVED`: the Authority serializes a one-time start reservation against membership and policy mutations. The reservation commit is the authorization linearization point.
+3. `LEASE_CONSUMED`: the Ledger consumes the matching permit and commits the executor lease.
+
+The name `START_AUTHORIZED` must not be described as proof that the worker's first instruction or an external side effect has already occurred. A reservation committed before a revocation is ordered before that revocation, even if the Ledger lease or worker execution happens later.
+
+Under the recommended v1 semantics:
+
+- A revocation prevents new start reservations whose Authority transaction linearizes after the revocation.
+- An admission with no committed start reservation becomes stale when its membership version or policy-scope epoch changes.
+- A start reservation committed before revocation is treated as in-flight authorization. The system does not claim that revocation can retroactively erase it.
+- A permit has a short, explicit expiry and one immutable reservation identity; expiry does not create a second reservation.
+- Any UI, audit, and API status must distinguish `START_RESERVED` from `LEASE_CONSUMED` and `RUNNING`.
+
+**Stronger effect-boundary guarantee:** If the product requires no effect to commit after revocation, each effect adapter must carry the monotonic fencing epoch and the external effect boundary itself must atomically reject stale epochs. A check performed only before a remote API call is not sufficient: revocation can race between the check and the provider's commit. Where the provider cannot enforce a fencing condition at its own commit boundary, an absolute post-revocation no-effect guarantee is unavailable and must not be advertised.
+
+**Owner decision remains required:** accept reservation-time semantics for v1, or defer execution until every effectful integration has a provider-enforced fencing contract. This document recommends the former only as a scoped, accurately labelled first release.
+
+**Falsification tests:**
+
+- Pause after `START_RESERVED` commits but before the Ledger RPC; revoke membership; resume. The result must match reservation-time ordering, with no new reservation created after revoke.
+- Pause before `START_RESERVED`; revoke membership; resume. The Authority must reject the stale admission.
+- Pause after `LEASE_CONSUMED` and before an effect adapter; revoke membership. An adapter claiming strong fencing must reject a stale epoch at its provider commit boundary; otherwise the test must record that the provider cannot supply the strong guarantee.
+- Expire a permit and retry the same reservation. The system must return the same terminal reservation outcome, not mint a second reservation.
+
+### 17.3 Decision D2 — Outbox wake-up and recovery
+
+Cloudflare's current Alarms documentation says alarms are modified through the Durable Object Storage API and that alarm operations follow the same rules as other storage operations. The SQLite `transactionSync` documentation separately states that its callback must be synchronous and that synchronous storage operations can participate in the transaction. The reviewed documentation does not explicitly state, in one normative example or guarantee, that `setAlarm()` is rolled back atomically with a SQLite `transactionSync()` callback.
+
+Therefore, documentation alone is not accepted as proof of the Outbox wake-up invariant.
+
+**Required test gate before choosing the alarm path:**
+
+- In a real `cloudflare:test` SQLite Durable Object integration test, write an Outbox row and call `setAlarm()` within the intended transaction boundary, then force the callback to throw. After object re-instantiation, assert that neither the row nor the newly scheduled alarm exists.
+- In the commit case, write the row and alarm, commit, evict/restart the object, and assert that both remain discoverable.
+- Exercise an already-existing alarm to ensure the next-due calculation does not overwrite an earlier or later due item incorrectly.
+- Exercise duplicate scheduling and concurrent request interleavings. The single alarm slot must remain a wake-up pointer to the earliest durable due-work item, not the source of truth for individual work records.
+
+**Decision rule:**
+
+- If the commit/rollback/restart tests pass on the exact runtime and compatibility configuration selected for staging, the same-object Outbox plus alarm may be used, subject to regression tests on runtime upgrades.
+- If any result is failing, inconsistent, or unavailable, alarm atomicity remains `UNKNOWN`; do not claim no-lost-wakeup behavior and do not implement an after-commit best-effort alarm as an equivalent substitute.
+- The fallback is a periodic reconciler over a pre-provisioned durable tenant registry. Tenant registration must complete before a tenant can be admitted; the reconciler stores a durable cursor, scans bounded batches, asks each registered TenantDirectory for pending due work, and reschedules itself. Its own registry and cursor require independent failure/restart tests. This fallback is a separate component and cost decision, not a free side effect of the existing design.
+
+Alarm delivery remains at-least-once. The Outbox row and Ledger projection must remain idempotent after duplicate delivery, retry exhaustion, object restart, and downstream outage.
+
+### 17.4 Decision D3 — Canonical Ledger object identity and partitioning
+
+**Recommended model for a new deployment:** one OrchestratorLedger Durable Object per tenant, using one documented, stable canonical name derivation shared by every production entrypoint and test fixture. The proposed v1 derivation is `idFromName(tenantId)`, matching the existing TenantDirectory tenant-name convention. The selected string must be treated as immutable once any task is persisted.
+
+Consequences of this recommendation:
+
+- Each tenant receives an independent Ledger storage/transaction boundary.
+- Existing per-object `task_id` and `idempotency_key` uniqueness constraints remain local to that tenant's Ledger.
+- Cross-tenant rows in one Ledger object are no longer the test topology. Tests must create one canonical Ledger stub per tenant.
+- The tenant-wide object may become a throughput hotspot for a very large tenant; this is an explicit trade-off, not a hidden scalability claim.
+
+**Migration safety gate:** do not switch an existing shared Ledger to per-tenant naming by changing `idFromName()` in place. First inventory every deployed environment and legacy namespace/object-name convention, determine whether persisted tasks or idempotency keys exist, and produce a deterministic migration/backfill/rollback map. If any persisted legacy object is found, the current identity must be preserved until a separately reviewed migration can prove row conservation and replay safety.
+
+The fresh Cloudflare inventory found no Ledger namespace or Ledger binding for the three inspected Workers. That is useful evidence for a clean new rollout in this account, but it does not prove that there is no legacy object or data in another account, script, environment, or previously deployed namespace.
+
+**Falsification tests:**
+
+- Every production route for the same tenant resolves to the same Ledger object ID.
+- Different tenant IDs resolve to different Ledger object IDs.
+- A tenant ID cannot be changed or normalized differently across API, Scheduler, adapter, and test paths.
+- Migration rehearsal preserves every legacy task ID, idempotency identity, status, claim, and audit reference; counts and canonical row digests must reconcile before/after.
+- A simulated interrupted migration can resume without duplicate or unreachable tasks.
+
+### 17.5 Decision D4 — Receipt projection API and legacy createTask closure
+
+**Recommended API:** introduce `projectAdmittedTask(input)` as the only Ledger write path for a newly scheduled Task.
+
+The input contains the immutable Task payload plus the Admission Receipt. The Ledger must:
+
+1. Reject malformed, expired, wrong-audience, wrong-issuer, unknown-key, invalid-signature, wrong-tenant, wrong-project, wrong-task, wrong-resource, or wrong-digest receipts.
+2. Resolve the verification key through a trusted TenantDirectory lookup keyed by tenant and key ID. It must never trust a public key supplied by the receipt sender.
+3. Recompute the canonical Task digest from the exact bounded payload bytes; never treat a caller-supplied `inputHash` as proof.
+4. Preserve `assertNoSecretFields`, canonical JSON serialization, and the existing 32 KiB serialized Task limit.
+5. In one Ledger transaction, consume the receipt identity and insert the Task plus the local claim-candidate projection.
+6. Return the original result for an identical replay; reject conflicting reuse without writing a second Task.
+
+**Required unique identities (subject to compatibility review of current indexes):**
+
+- `task_id`: existing primary key within the chosen Ledger partition.
+- `admission_id`: unique for the tenant's immutable admission.
+- `(issuer, receipt_jti)`: unique receipt replay identity.
+- `(tenant_id, project_id, idempotency_key_digest)`: unique idempotency scope, or an equivalent exact constraint proved equivalent under the selected partition model.
+- `start_reservation_id`: unique and immutable per Admission.
+- `(permit_issuer, permit_jti)`: unique one-time permit consumption identity.
+
+The database migration must explicitly define conflict behavior for every identity; application-only pre-checks are not substitutes for unique constraints.
+
+**Legacy `createTask()` disposition:** it must not remain a second route that can insert a newly scheduled Task using only the existing HMAC Worker Assertion. Recommended transition:
+
+- Retain the method temporarily only as a compatibility shim.
+- Without a valid Admission Receipt, return a stable `ADMISSION_RECEIPT_REQUIRED` error before any Task, idempotency, JTI, or claim-candidate write.
+- With a receipt, delegate to the exact same validation and transaction path as `projectAdmittedTask`; do not duplicate persistence logic.
+- Keep the HMAC assertion only as a separate workload-authentication factor during migration, if existing deployment policy requires it. It is never authorization evidence and never replaces the Receipt. Bind it to the same tenant, project, task digest, audience, operation, and Scheduler invocation.
+- Remove the shim and retire the old assertion only in a separate reviewed migration after every caller and test has been migrated. No legacy bypass is implied by the compatibility period.
+
+If a non-scheduled legacy producer is discovered, it must receive a separate explicitly scoped API and authorization contract; it must not be silently grandfathered through the scheduled-task admission path.
+
+**Falsification tests:**
+
+- Call every task-creation method with no Receipt but with a valid legacy HMAC assertion. Assert rejection and zero writes to Task, idempotency, JTI, and claim-candidate state.
+- Submit a valid Receipt and Task twice. Assert exactly one Task and one receipt-consumption row.
+- Reuse an admission ID or JTI with a different task digest, task ID, or tenant. Assert conflict and no second write.
+- Mutate the caller object after digest calculation. Assert the persisted bytes remain exactly those that were signed.
+- Submit a secret-bearing or over-limit Task. Assert rejection before persistence.
+
+### 17.6 Decision D5 — Complete policy-scope epoch mutation semantics
+
+The policy-scope key is the exact tuple `(tenant_id, project_id, principal_id, action)`.
+
+In the same TenantDirectory SQL transaction as the policy/membership mutation:
+
+- Increment the epoch exactly once for each distinct affected tuple whose effective rule set changes.
+- For an individual policy update, increment the affected tuple even when the selected rule was not previously the winning rule; insertion of an exact-resource rule can change precedence over a wildcard rule.
+- For membership revoke/suspend, derive the distinct set of tuples from every active policy row being disabled, then increment each distinct tuple exactly once.
+- Do not increment unrelated tuples.
+- Append an audit record containing the affected tuple set or a canonical digest plus count of that set.
+- If the transaction fails, neither policy rows, membership state, epochs, nor audit event may partially commit.
+
+**Required test matrix:** multiple projects, multiple actions, exact and wildcard resources, duplicate rows within a tuple, inactive rows, already-revoked membership, and forced transaction rollback. Assert exact epoch deltas and exact affected-set digest.
+
+### 17.7 Decision D6 — Execution Permit and start-reservation binding
+
+An Execution Permit is not a general bearer capability. It is a one-time authorization for one immutable start reservation and one expected Ledger lease transition.
+
+The signed permit must bind at least:
+
+- contract version, issuer, audience, key ID, permit ID, and unique JTI;
+- tenant, project, admission ID, task ID, and task digest;
+- expected Task version and expected Task state;
+- immutable `startReservationId`;
+- exact executor identity;
+- lease identifier and expected lease generation/fencing value;
+- exact operation/transition and bounded expiry.
+
+The Ledger must atomically validate and consume the permit, verify the expected Task version/state, bind the executor and lease reservation, increment or confirm the lease generation, and persist the resulting transition. A competing executor, stale Task version, changed state, different reservation ID, or second permit JTI must fail without partial state.
+
+The Authority must persist the immutable reservation before issuing/retrying the permit. An uncertain RPC outcome is recovered by querying/replaying the same `startReservationId`; the system must not create a second reservation to recover an acknowledgement.
+
+### 17.8 Decision D7 — Scheduler principal and allowed schedules
+
+The platform scheduled handler proves invocation origin; it does not confer tenant project permission.
+
+Before any Cron Trigger is configured, define a versioned allowlist mapping:
+
+`cron_identifier -> task_class -> tenant_service_principal -> allowed_action/resource_scope`
+
+Each entry must include the target environment and a versioned configuration identifier. The scheduled handler must compare the exact platform-provided cron value against this allowlist and use the configured service principal; it must not accept a principal, cron identifier, tenant, or action override from an HTTP caller.
+
+A valid scheduled event with an unknown cron, unprovisioned service principal, disabled task class, or unauthorized target project must create no Admission, Outbox, Task, or lease record.
+
+**Owner decision remains required:** supply the exact cron identifiers, task classes, tenant-scoped principal IDs, and target policy actions. The empty live schedule inventory means none of these values may be inferred from the current deployment.
+
+### 17.9 Decision D8 — Signing-key custody, rotation, and recovery
+
+Cloudflare Workers Secrets documentation describes encrypted secret bindings available to Worker code. That protects secret values at rest in the platform, but a secret binding is not by itself a per-tenant Hardware Security Module boundary: code running with the binding can access it. The Workers Web Crypto documentation lists Ed25519 support, but the exact standard algorithm/compatibility configuration and import/export behavior still require a runtime compatibility test.
+
+**Do not claim HSM-grade or per-tenant isolation from a shared Worker secret binding. Do not persist plaintext private signing material in TenantDirectory SQL.**
+
+Candidate custody models:
+
+| Model | Security boundary | Trade-off | Review state |
+|---|---|---|---|
+| Dedicated external KMS/HSM signer | Private signing key remains outside Worker and DO storage. | Stronger separation; introduces a network dependency, cost, and availability/failure semantics. | Preferred where the required assurance and service availability are supportable. |
+| Dedicated signing Worker with narrowly scoped secret access | Private key is accessible to the signer Worker code only; other Workers call a constrained signing API. | Reduced exposure compared with a shared application binding, but still depends on signer Worker isolation and its secret scope. | Viable fallback after separate Worker, authentication, rate, and audit design. |
+| Shared application Worker secret binding | Secret is encrypted at rest by Cloudflare but available to code with that binding. | Simplest operationally; broadest code-compromise blast radius; not per-tenant key isolation. | Not recommended for a high-assurance per-tenant isolation claim. |
+
+For any selected model, specify generation, provisioning, access policy, key ID format, rotation overlap, old-key verification policy, emergency revocation, backup/restore, loss-of-key behavior, and audit trail. A key rotation must not strand pending Outbox records or silently invalidate receipts already admitted; verification and new-signing permissions must be separate.
+
+Before implementation, test the exact Ed25519 Web Crypto algorithm, compatibility date/flags, key generation/import, signature verification after object restart, and rotation with pending Admissions and permits. Unknown or revoked key IDs fail closed.
+
+**Owner decision remains required:** select a supported custody model and accept its blast radius and operational dependency. No key or secret is to be created or changed as part of this design review.
+
+### 17.10 Consolidated implementation gates
+
+The design remains **DESIGN HOLD** until all of the following evidence exists:
+
+| Gate | Required artifact/evidence | Failure classification |
+|---|---|---|
+| G-01 Revocation semantics | Owner-approved reservation/effect guarantee wording and race tests. | BLOCKED |
+| G-02 Alarm/Outbox | Deterministic commit, rollback, restart, and failure-injection integration tests, or an independently tested registry reconciler. | UNKNOWN until run |
+| G-03 Ledger identity | Cross-environment namespace/data inventory, canonical object mapping, and migration rehearsal. | BLOCKED |
+| G-04 Receipt-only Task creation | API contract, schema constraints, legacy bypass-negative tests, and transaction tests. | BLOCKED |
+| G-05 Policy epoch completeness | Revocation bulk-update tests proving exact affected tuple increments. | BLOCKED |
+| G-06 Permit binding | Executor/task-version/reservation/lease-generation race and replay tests. | BLOCKED |
+| G-07 Scheduler trust | Exact allowlist, service-principal mapping, real scheduled-handler test, and no HTTP minting path. | BLOCKED |
+| G-08 Key custody | Owner-approved custody model plus restart, rotation, revocation, restore, and crypto runtime tests. | BLOCKED |
+| G-09 Live staging parity | Staging-only binding/migration/cron inventory and a full end-to-end admission-to-lease test. | NOT STARTED |
+| G-10 Security/CI signal | PR-diff scan and historical findings triage reported separately; no historical finding is silently waived. | OPEN |
+
+An unexecuted test is `UNKNOWN`, not pass or fail. A design statement is not a runtime test. A source binding is not a deployed binding. A signed receipt is not current authorization. A committed reservation is not proof of an external side effect's timing.
+
+### 17.11 Owner decision ledger
+
+The following are recommendations for review, not decisions attributed to the owner:
+
+| Decision | Engineering recommendation | Owner status |
+|---|---|---|
+| Revocation | Reservation-time semantics for v1; do not claim absolute post-revocation suppression of arbitrary remote effects. | OPEN |
+| Outbox recovery | Prefer same-object alarm only after the deterministic transaction test; otherwise use a separately designed pre-provisioned registry reconciler. | OPEN |
+| Ledger partition | One Ledger object per tenant for a new deployment, only after legacy inventory proves a safe cutover. | OPEN |
+| Task creation | `projectAdmittedTask` is the only scheduled-task writer; legacy `createTask` has no Receipt-free write capability. | OPEN |
+| Policy epoch | Increment every distinct affected tuple exactly once inside the same mutation transaction. | OPEN |
+| Execution Permit | Bind executor, task version/state, immutable start reservation, permit JTI, and lease generation. | OPEN |
+| Scheduler | Exact allowlist mapping from cron to task class and tenant service principal; no caller-provided provenance. | OPEN |
+| Key custody | External signer where assurance/service constraints permit; otherwise isolated signer Worker, with shared binding explicitly treated as lower assurance. | OPEN |
+
+No implementation, schema migration, Worker binding, Cron Trigger, secret, staging deployment, Production deployment, or merge is authorized by this addendum. The next engineering phase is implementation planning only after the owner decisions are accepted and the blocking evidence gates are closed.

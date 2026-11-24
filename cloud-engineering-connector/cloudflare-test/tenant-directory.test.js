@@ -689,10 +689,10 @@ describe("persistent Tenant Directory", () => {
         tenantId, "project-epoch-row", principalId, "project.read",
       );
     });
-    await expect(stub.authorizeProjectAction({
+    await expect(runInDurableObject(stub, instance => instance.authorizeProjectAction({
       principalId, tenantId, projectId: "project-epoch-row", action: "project.read",
       resource: { test: true }, resourceDigest, expectedMembershipVersion: 1,
-    })).rejects.toMatchObject({ code: "TENANT_DIRECTORY_SCHEMA_CORRUPT" });
+    }))).rejects.toMatchObject({ code: "TENANT_DIRECTORY_SCHEMA_CORRUPT" });
   });
 
 });

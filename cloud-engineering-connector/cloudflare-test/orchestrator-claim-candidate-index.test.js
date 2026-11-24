@@ -404,6 +404,7 @@ describe("OrchestratorLedger reconciliation fail-closed policy", () => {
       now,
     });
     expect(first).toMatchObject({ claimed: true, leaseGeneration: 1 });
+    wallClockNow = now + 101;
     const result = await ledger.claimTask({
       workerId: "agent:worker-1",
       workerAssertion: await createWorkerAssertion({
@@ -544,6 +545,7 @@ describe("OrchestratorLedger cursor expiry and storage bounds", () => {
     expect(first.reason).toBe("CLAIM_SCAN_BUDGET_EXHAUSTED");
     const cursorHash = await sha256Canonical({ token: first.nextCursor });
     const expiredAt = now + 15 * 60_000 + 1;
+    wallClockNow = expiredAt;
     const result = await ledger.claimTask({
       workerId: "agent:worker-1",
       workerAssertion: await createWorkerAssertion({

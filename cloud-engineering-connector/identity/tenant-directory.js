@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { canonicalJson } from "../orchestrator-protocol.js";
 import { verifySchedulerInvocationAssertion } from "../orchestrator-scheduler-invocation.js";
+import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.js";
 import { verifyTenantDirectoryAdminAssertion } from "./tenant-directory-assertion.js";
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -654,6 +655,163 @@ export class TenantDirectory extends DurableObject {
         replay: false,
       };
     });
+  }
+
+  async alarm(alarmInfo = {}) {
+    const now = Date.now();
+    const sql = this.ctx.storage.sql;
+    const dueRows = sql.exec(
+      "SELECT o.event_id, o.admission_id, o.attempts, a.tenant_id, a.project_id, a.principal_id, " +
+      "a.task_id, a.task_digest, a.idempotency_key, a.task_json, a.claims_json, a.signing_key_id, " +
+      "a.public_key, a.signature, a.expires_at " +
+      "FROM tenant_admission_outbox o JOIN tenant_admissions a ON a.admission_id=o.admission_id " +
+      "WHERE o.status IN ('PENDING','RETRY_WAIT') AND o.next_attempt_at<=? " +
+      "ORDER BY o.next_attempt_at, o.created_at LIMIT 10",
+      now,
+    ).toArray();
+
+    for (const row of dueRows) {
+      try {
+        if (
+          typeof row.task_json !== "string" ||
+          typeof row.idempotency_key !== "string" ||
+          typeof row.claims_json !== "string"
+        ) {
+          throw fail("LEGACY_ADMISSION_MISSING_TASK_PAYLOAD", "The Admission does not contain a recoverable Task payload.");
+        }
+        if (row.expires_at <= now) {
+          throw fail("ADMISSION_RECEIPT_EXPIRED", "The Admission Receipt expired before Ledger projection.");
+        }
+
+        const ledgerNamespace = this.env?.ORCHESTRATOR_LEDGER;
+        if (!ledgerNamespace || typeof ledgerNamespace.idFromName !== "function" || typeof ledgerNamespace.get !== "function") {
+          throw fail("ORCHESTRATOR_LEDGER_UNAVAILABLE", "The OrchestratorLedger binding is unavailable.");
+        }
+        const workerKeySet = this.env?.LEDGER_WORKER_ASSERTION_KEYS;
+        const workerKeyId = this.env?.LEDGER_WORKER_ASSERTION_ACTIVE_KEY_ID;
+        if (typeof workerKeySet !== "string" || typeof workerKeyId !== "string" || workerKeyId.length === 0) {
+          throw fail("LEDGER_WORKER_ASSERTION_UNAVAILABLE", "The Ledger worker assertion key is unavailable.");
+        }
+
+        const task = JSON.parse(row.task_json);
+        const claims = JSON.parse(row.claims_json);
+        const ledger = ledgerNamespace.get(ledgerNamespace.idFromName(row.tenant_id));
+        const deliveryTime = Date.now();
+        const workerAssertion = await createScheduledWorkerAssertion(workerKeySet, workerKeyId, {
+          subject: "orchestrator-scheduler",
+          role: "system",
+          operation: "createTask",
+          nowMs: deliveryTime,
+        });
+        const admissionReceipt = {
+          tenantId: row.tenant_id,
+          claims,
+          keyId: row.signing_key_id,
+          algorithm: "Ed25519",
+          publicKey: row.public_key,
+          signature: row.signature,
+        };
+        const result = await ledger.createTask({
+          task,
+          idempotencyKey: row.idempotency_key,
+          inputHash: row.task_digest,
+          now: deliveryTime,
+          workerId: "orchestrator-scheduler",
+          workerAssertion,
+          admissionReceipt,
+        });
+        if (!(result?.created === true || result?.replay === true)) {
+          throw fail(
+            typeof result?.reason === "string" ? result.reason : "LEDGER_ADMISSION_REJECTED",
+            "The OrchestratorLedger rejected the Admission projection.",
+          );
+        }
+
+        const completedAt = Date.now();
+        this.ctx.storage.transactionSync(() => {
+          const current = sql.exec(
+            "SELECT status FROM tenant_admission_outbox WHERE event_id=?",
+            row.event_id,
+          ).toArray()[0];
+          if (!current || current.status === "DELIVERED") return;
+          sql.exec(
+            "UPDATE tenant_admission_outbox SET status='DELIVERED', attempts=attempts+1, " +
+            "last_error_code=NULL, updated_at=? WHERE event_id=?",
+            completedAt,
+            row.event_id,
+          );
+          this.#appendAuditEvent(
+            sql,
+            { subject: "orchestrator-ledger", targetDigest: row.task_digest },
+            "projectAdmissionToLedger",
+            row.tenant_id,
+            row.project_id,
+            {
+              admissionId: row.admission_id,
+              taskId: row.task_id,
+              taskDigest: row.task_digest,
+              replay: result.replay === true,
+            },
+            null,
+            null,
+            completedAt,
+          );
+        });
+      } catch (error) {
+        const failedAt = Date.now();
+        const errorCode = typeof error?.code === "string" &&
+          /^[A-Z0-9_:-]{1,96}$/.test(error.code)
+          ? error.code
+          : "ADMISSION_PROJECTION_FAILED";
+        this.ctx.storage.transactionSync(() => {
+          const current = sql.exec(
+            "SELECT status, attempts FROM tenant_admission_outbox WHERE event_id=?",
+            row.event_id,
+          ).toArray()[0];
+          if (!current || current.status === "DELIVERED" || current.status === "DEAD_LETTER") return;
+          const attempts = current.attempts + 1;
+          const status = attempts >= 8 ? "DEAD_LETTER" : "RETRY_WAIT";
+          const delay = Math.min(1_000 * (2 ** Math.min(attempts, 12)), 3_600_000);
+          sql.exec(
+            "UPDATE tenant_admission_outbox SET status=?, attempts=?, next_attempt_at=?, " +
+            "last_error_code=?, updated_at=? WHERE event_id=?",
+            status,
+            attempts,
+            failedAt + delay,
+            errorCode,
+            failedAt,
+            row.event_id,
+          );
+          this.#appendAuditEvent(
+            sql,
+            { subject: "orchestrator-admission-dispatcher", targetDigest: row.task_digest },
+            "retryAdmissionProjection",
+            row.tenant_id,
+            row.project_id,
+            {
+              admissionId: row.admission_id,
+              taskId: row.task_id,
+              attempt: attempts,
+              status,
+              errorCode,
+            },
+            null,
+            null,
+            failedAt,
+          );
+        });
+      }
+    }
+
+    const next = sql.exec(
+      "SELECT MIN(next_attempt_at) AS next_attempt_at FROM tenant_admission_outbox " +
+      "WHERE status IN ('PENDING','RETRY_WAIT')",
+    ).one().next_attempt_at;
+    if (Number.isSafeInteger(next)) {
+      this.ctx.storage.setAlarm(Math.max(Date.now() + 1_000, next));
+    } else {
+      this.ctx.storage.deleteAlarm();
+    }
   }
 
   async #verifyAdmin(assertion, operation, tenantId, projectId, target, now) {

@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const admission = await import("../orchestrator-admission.js").catch(() => null);
+const admission = await import("../orchestrator-admission.js").catch(() => ({}));
+
+function requireFunction(name) {
+  assert.equal(typeof admission[name], "function", name + " must be exported");
+  return admission[name];
+}
 
 async function makeKeyPair() {
   const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
@@ -36,9 +41,9 @@ function claims(nowMs = 1_800_000_000_000) {
 }
 
 test("normalizes the Task projection consistently before computing its digest", async () => {
-  assert.equal(typeof admission?.normalizeTaskForAdmission, "function");
-  assert.equal(typeof admission?.taskAdmissionDigest, "function");
-  const normalized = admission.normalizeTaskForAdmission({
+  const normalizeTaskForAdmission = requireFunction("normalizeTaskForAdmission");
+  const taskAdmissionDigest = requireFunction("taskAdmissionDigest");
+  const normalized = normalizeTaskForAdmission({
     taskId: "task-normalize-01",
     tenantId: "tenant-normalize-01",
     projectId: "project-normalize-01",
@@ -57,18 +62,18 @@ test("normalizes the Task projection consistently before computing its digest", 
     updatedAt: 1_800_000_000_000,
     agentRound: 0,
   });
-  assert.match(await admission.taskAdmissionDigest(normalized), /^[a-f0-9]{64}$/);
-  assert.throws(() => admission.normalizeTaskForAdmission({ ...normalized, tenantId: "../foreign" }));
+  assert.match(await taskAdmissionDigest(normalized), /^[a-f0-9]{64}$/);
+  assert.throws(() => normalizeTaskForAdmission({ ...normalized, tenantId: "../foreign" }));
 });
 
 test("issues an Ed25519 admission grant and verifies the exact tenant, project, Task, and policy claims", async () => {
-  assert.equal(typeof admission?.createTaskAdmissionGrant, "function");
-  assert.equal(typeof admission?.verifyTaskAdmissionGrant, "function");
+  const createTaskAdmissionGrant = requireFunction("createTaskAdmissionGrant");
+  const verifyTaskAdmissionGrant = requireFunction("verifyTaskAdmissionGrant");
   const keys = await makeKeyPair();
   const nowMs = 1_800_000_000_000;
   const expected = claims(nowMs);
-  const token = await admission.createTaskAdmissionGrant(keys.privateKeys, "test", expected);
-  const verified = await admission.verifyTaskAdmissionGrant(keys.publicKeys, token, {
+  const token = await createTaskAdmissionGrant(keys.privateKeys, "test", expected);
+  const verified = await verifyTaskAdmissionGrant(keys.publicKeys, token, {
     ...expected,
     nowMs,
   });

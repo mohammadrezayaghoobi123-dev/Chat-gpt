@@ -903,6 +903,7 @@ describe("Owner command atomic Ledger contract", () => {
       actorId: ownerId,
       taskId: failed.command.taskId,
       operation: failed.command.operation,
+      issueNumber: 7,
       commentCreatedAt: now,
     };
     const authorize = input => typeof ledger.authorizeOwnerWebhookRetry === "function"
@@ -981,6 +982,7 @@ describe("Owner command atomic Ledger contract", () => {
       actorId: ownerId,
       taskId: failed.command.taskId,
       operation: failed.command.operation,
+      issueNumber: 7,
       commentCreatedAt: now,
     };
     const authorize = input => typeof ledger.authorizeOwnerWebhookRetry === "function"

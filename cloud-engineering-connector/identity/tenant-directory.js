@@ -642,7 +642,7 @@ export class TenantDirectory extends DurableObject {
       );
 
       // Alarm creation shares the same local transaction as Admission and Outbox persistence.
-      this.ctx.storage.setAlarm(now + 1_000);
+      this.ctx.storage.setAlarm(now + 5_000);
 
       return {
         tenantId,
@@ -671,6 +671,7 @@ export class TenantDirectory extends DurableObject {
     ).toArray();
 
     for (const row of dueRows) {
+      let claimsForAudit = null;
       try {
         if (
           typeof row.task_json !== "string" ||
@@ -695,6 +696,7 @@ export class TenantDirectory extends DurableObject {
 
         const task = JSON.parse(row.task_json);
         const claims = JSON.parse(row.claims_json);
+        claimsForAudit = claims;
         const ledger = ledgerNamespace.get(ledgerNamespace.idFromName(row.tenant_id));
         const deliveryTime = Date.now();
         const workerAssertion = await createScheduledWorkerAssertion(workerKeySet, workerKeyId, {
@@ -752,8 +754,8 @@ export class TenantDirectory extends DurableObject {
               taskDigest: row.task_digest,
               replay: result.replay === true,
             },
-            null,
-            null,
+            claims.membershipVersion,
+            claims.membershipVersion,
             completedAt,
           );
         });
@@ -795,8 +797,8 @@ export class TenantDirectory extends DurableObject {
               status,
               errorCode,
             },
-            null,
-            null,
+            Number.isSafeInteger(claimsForAudit?.membershipVersion) ? claimsForAudit.membershipVersion : 0,
+            Number.isSafeInteger(claimsForAudit?.membershipVersion) ? claimsForAudit.membershipVersion : 0,
             failedAt,
           );
         });

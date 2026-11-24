@@ -109,7 +109,7 @@ Add renewOutboxLease with this contract:
 - reject expired leases; renewal must never resurrect an expired lease;
 - require bounded positive leaseMs <= MAX_LEASE_MS;
 - set lease_until = max(current_lease_until, now + leaseMs);
-- rotate the capability token in the same transactionSync transaction and return the new plaintext token only to the successful caller;
+- rotate the capability token in the same asynchronous storage transaction (`ctx.storage.transaction`) that recalculates the next Alarm, and return the new plaintext token only to the successful caller's trusted Worker memory;
 - consume the assertion JTI in the same transaction as the token rotation.
 
 The generation is unchanged by renewal. Only a successful reclaim increments the generation. This keeps generation as a claim/reclaim epoch and the random token as a one-time delivery capability.
@@ -124,7 +124,7 @@ Extend failOutbox to require the current token and exact active lease. It must d
 
 Only the two fixed actor/role pairs are permitted. The Worker-assertion signer allowlist is extended only for these exact fixed principals and operations; alarm-originated publisher claims and Queue-originated consumer operations are not exposed through the MCP/HTTP request path. Failure settlement clears the token. Retryable failures schedule the existing bounded exponential retry (1s base, 15m cap, 8 attempts); permanent failures set retry_state = 'DEAD_LETTER' on the durable Outbox row; the existing status column remains PENDING. The Queue message is acknowledged after the Ledger has durably accepted the retry/dead-letter decision, preventing Queue retries from reusing a now-invalid token.
 
-The Queue DLQ archiver also checks the original envelope token and generation. It may terminalize the source row only when that exact capability is still current. A stale DLQ message can be archived but cannot change a newer lease. The persisted archive body must redact the plaintext leaseToken; its stored body hash is calculated over the original pre-redaction envelope.
+The Queue DLQ archiver decrypts the authenticated capability only in Worker memory, then checks its token digest and generation in the owning Ledger. It may terminalize the source row only when that exact capability is still current. A stale DLQ message can be archived but cannot change a newer lease. The persisted archive body retains the original encrypted envelope (not plaintext); its stored body hash is calculated over the exact original Queue body before any normalization.
 
 ### 3.4 HTTPS webhook contract
 
@@ -169,7 +169,7 @@ Proposed Wrangler source configuration, mirrored for production and staging:
 
 The Worker's queue(batch, env, ctx) handler dispatches based on the actual batch queue name and processes messages individually. It explicitly acknowledges a message only after the Ledger has durably committed receipt, retry, dead-letter, or archive state. A stale token/generation is acknowledged as obsolete; transient infrastructure failures before a durable Ledger decision use Queue retry. Cloudflare supports per-message ack()/retry() so one failed message need not redeliver unrelated batch entries ([batching and retries](https://developers.cloudflare.com/queues/configuration/batching-retries/)).
 
-The main Queue is a transport retry layer. Known webhook failures use the Ledger's own retry schedule and the original Queue message is acknowledged after durable scheduling. The platform DLQ is for messages the consumer cannot safely process or durably archive. The DLQ archiver persists the original envelope hash and a redacted body in the owning Ledger. If archival fails repeatedly, Cloudflare routes the message to quarantine.
+The main Queue is a transport retry layer. Known webhook failures use the Ledger's own retry schedule and the original Queue message is acknowledged after durable scheduling. The platform DLQ is for messages the consumer cannot safely process or durably archive. The DLQ archiver persists the original envelope hash and encrypted capability envelope in the owning Ledger. If archival fails repeatedly, Cloudflare routes the message to quarantine.
 
 The currently inspected Quarantine Queues have a one-day retention period and no consumer. Cloudflare documents retention up to 14 days where the account plan supports it; the observed 24-hour setting does not establish that longer retention is available on this account. Before live activation, verify the plan limit and approve either supported retention or an independent durable export/archive for quarantine. This PR must not mutate that policy.
 

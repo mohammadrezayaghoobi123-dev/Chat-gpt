@@ -798,6 +798,7 @@ The model provider may also lack a caller-supplied idempotency key or execution-
 - **I25 — Restore monotonicity:** point-in-time restore never silently re-enables model/comment effects; restore requires an independent monotonic recovery epoch and complete audit reconciliation.
 - **I26 — Write-ahead effect inventory:** no external effect is issued unless both the independent ledger intent and the primary-store attempt transition are durably acknowledged.
 - **I27 — Security-scan provenance:** a secret scan is evidence only when its actual scanned base/head range equals the exact PR base/head; a stale, partial, or unbound range is UNKNOWN, not PASS.
+- **I28 — Ledger policy integrity:** the R2 writer cannot modify bucket-lock configuration; any detected policy drift or privilege expansion globally blocks effectful operations.
 
 ### 10. Adversarial conformance matrix
 
@@ -846,6 +847,7 @@ Every test must run against the same adapter contract with at least two independ
 | A39 | Comment pagination exceeds its configured bound or returns inconsistent continuation metadata | Listing is classified incomplete; no inference/publication transition is authorized |
 | A40 | Provider SDK or proxy silently retries one model request | More than one provider transport invocation is detected; integration is rejected |
 | A41 | Authoritative store is restored to a point before one or more effect-boundary commits | Enter global RECOVERY_LOCKED mode; no model/comment transport is permitted until the independent monotonic recovery anchor and complete audit inventory are reconciled; if completeness cannot be proven, keep the store quarantined |
+| A42 | R2 Bucket Lock rule is removed/changed, or runtime writer has bucket-configuration permissions | Enter global RECOVERY_LOCKED; reject new ledger intents and all external effects until lock policy and identity separation are independently re-established |
 
 ### 11. Adversarial design review — findings and disposition
 
@@ -880,6 +882,7 @@ The design was challenged against the reproduced interleaving, independent-host 
 - **AR-27 — Point-in-time restore could roll the reservation authority behind an already-consumed external-effect boundary.** Added a system-level `RECOVERY_LOCKED` mode and an independent monotonic recovery anchor requirement. A restored store cannot resume effectful operations until its audit inventory is proven complete; if that proof is unavailable, the store remains quarantined.
 - **AR-28 — A backup restore cannot reconstruct external attempts from the database alone.** Added an independent append-only effect ledger with write-ahead intent acknowledgements and outcome evidence; the database remains the transactional reservation authority, while the ledger is the rollback-independent recovery inventory.
 - **AR-29 — The hosted Gitleaks PR-diff action reported a commit range unrelated to the PR's exact base/head, while push runs scanned only the latest commit.** Those zero-finding results cannot establish current PR-diff clearance. Require scan provenance to bind to the exact PR base SHA and head SHA and fail closed on any mismatch; no suppression is permitted.
+- **AR-30 — R2 Bucket Lock is an administrative policy, not protection against a privileged account administrator.** The runtime writer must have object-level permissions only; a separate administrator controls bucket-lock configuration, and continuous policy-drift detection must switch the system to RECOVERY_LOCKED. The ledger is immutable against the runtime identity only while the lock policy remains intact.
 
 **Residual design limitations (not defects that this contract can eliminate):**
 
@@ -902,7 +905,7 @@ No vendor is selected in this phase. At least two candidate backends must be ass
 - least-privilege credentials, audit trail, encryption, backup, retention, and restore;
 - data residency, operational burden, rate limits, and failure modes;
 - actual total cost at forecast read/write volume, retention, backup, and egress, including free-tier ceilings and card requirements;
-- executable A01–A41 conformance results on the candidate, not only vendor marketing claims.
+- executable A01–A42 conformance results on the candidate, not only vendor marketing claims.
 
 A backend that cannot satisfy every mandatory safety property is rejected regardless of price or convenience. Workflow concurrency groups may be defense in depth only; they are not the authority.
 
@@ -930,7 +933,7 @@ Official evidence: [SQLite-backed Durable Object Storage](https://developers.clo
 
 **Free-tier envelope:** R2 Standard documents 10 GB-month storage, 1 million Class A operations, 10 million Class B operations, and free egress. The published R2 free tier is documented, but account-specific eligibility, payment-card requirements, and the effect of exceeding quotas remain NOT_VERIFIED. R2 operations are separately metered from Durable Objects.
 
-**Critical caveats:** (1) R2 is a separate storage product and rollback domain from a Durable Object's SQLite PITR, but it remains in the same Cloudflare account/vendor failure domain; it is not independent protection against account compromise or account deletion. (2) Bucket-lock configuration is privileged and can be changed by an administrator; the runtime writer identity must not have bucket-configuration permissions. (3) R2 documents that a negative read during an earlier in-flight PUT does not prove that the write failed. The ledger adapter must use a stable unique attempt ID as the custom write-id metadata, create-only conditional writes, immutable retention, and positive reconciliation. If a PUT outcome is ambiguous, a negative HEAD/GET does not prove failure. The documented safe reconciliation is to retry the same PUT with If-None-Match: * and the same write ID: a 200 proves the retry committed; a 412 requires HEAD and exact write-ID comparison; a 404 after that 412 still leaves the original PUT potentially pending. The adapter must retain UNKNOWN until the outcome is definitive and must never issue a model/comment effect until the ledger intent is positively acknowledged. (4) Bucket-lock enforcement, conditional write behavior through the Workers binding, ambiguous PUT recovery, and writer/admin permission separation require hosted conformance tests.
+**Critical caveats:** (1) R2 is a separate storage product and rollback domain from a Durable Object's SQLite PITR, but it remains in the same Cloudflare account/vendor failure domain; it is not independent protection against account compromise or account deletion. (2) Bucket-lock configuration is privileged and can be changed by an administrator; the runtime writer identity must not have bucket-configuration permissions, and policy drift must trigger RECOVERY_LOCKED. (3) R2 documents that a negative read during an earlier in-flight PUT does not prove that the write failed. The ledger adapter must use a stable unique attempt ID as the custom write-id metadata, create-only conditional writes, immutable retention, and positive reconciliation. If a PUT outcome is ambiguous, a negative HEAD/GET does not prove failure. The documented safe reconciliation is to retry the same PUT with If-None-Match: * and the same write ID: a 200 proves the retry committed; a 412 requires HEAD and exact write-ID comparison; a 404 after that 412 still leaves the original PUT potentially pending. The adapter must retain UNKNOWN until the outcome is definitive and must never issue a model/comment effect until the ledger intent is positively acknowledged. (4) Bucket-lock enforcement, conditional write behavior through the Workers binding, ambiguous PUT recovery, and writer/admin permission separation require hosted conformance tests.
 
 Official evidence: [R2 Consistency Model](https://developers.cloudflare.com/r2/reference/consistency/), [R2 Conditional Operations](https://developers.cloudflare.com/r2/api/s3/conditional-operations/), [R2 Workers API](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/), [R2 Bucket Locks](https://developers.cloudflare.com/r2/buckets/bucket-locks/), [R2 Pricing](https://developers.cloudflare.com/r2/pricing/).
 
@@ -971,7 +974,7 @@ Current evidence:
 - The unresolved P1 redirect-replay review thread remains open. The shared GitHub request helper contains `redirect: "error"`, and the 307/308 comment-publication integration subtests passed in the verification run; however, the complete suite is not green and the P1 thread is intentionally not marked resolved.
 - Backend-neutral reference-oracle tranche T01–T19: **PASS 19/19** in hosted run [`45507214386`](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45507214386), exact test revision `190a709331118331ded43a953a28bc9ed39201f0`. The oracle is intentionally in-memory and non-production.
 - Full reviewer regression plus reference tranche at the same revision: **155 passed / 1 failed**. The sole failure is the preserved concurrency RED: 2 physical comment POSTs against the required maximum of 1. No assertion was weakened.
-- The executable tranche covers selected invariants only; the full A01–A41 matrix remains **PARTIALLY_COVERED / NOT_QUALIFIED**. Coverage mapping and explicit gaps are in `tools/9router-review/conformance/README.md`.
+- The executable tranche covers selected invariants only; the full A01–A42 matrix remains **PARTIALLY_COVERED / NOT_QUALIFIED**. Coverage mapping and explicit gaps are in `tools/9router-review/conformance/README.md`.
 - Independent-process / independent-host durable-store conformance: **NOT_RUN**. Candidate-specific DO/R2/Supabase tests: **NOT_RUN**.
 - Backend screening: **DOCUMENTATION_SCREENED, NOT_SELECTED**. Cloudflare SQLite-backed Durable Objects plus R2 is the leading candidate architecture; Supabase PostgreSQL remains an alternative with material Free-plan durability/availability caveats. No provider resources were created or changed.
 - Independent effect-ledger implementation, restore drill, quota-exhaustion behavior, R2 bucket-lock enforcement, and writer/admin permission separation: **NOT_RUN**.
@@ -982,7 +985,7 @@ Approval sequence:
 
 1. Review this integrated contract and adversarial findings.
 2. Resolve any design objections and freeze the contract version.
-3. Complete the backend-neutral A01–A41 conformance suite; T01–T19 are the first reference-oracle tranche, not backend qualification.
+3. Complete the backend-neutral A01–A42 conformance suite; T01–T19 are the first reference-oracle tranche, not backend qualification.
 4. Run the same suite against candidate adapters with independent processes, fault injection, restart/failover, quota exhaustion, and restore rollback.
 5. Obtain independent security review of the selected adapter and failure model.
 6. Only then request separate authorization for implementation. Reviewer activation, default-branch workflow registration, provider dispatch, and merge remain distinct later approvals.

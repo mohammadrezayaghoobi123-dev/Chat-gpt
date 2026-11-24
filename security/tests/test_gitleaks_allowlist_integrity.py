@@ -78,7 +78,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                 line = _source_fixture_line(ROOT, commit, path)
                 self.assertIsNotNone(line)
                 pattern = re.compile(entries[description]["regexes"][0])
-                self.assertRegex("\n" + line, pattern)
+                self.assertIsNotNone(pattern.fullmatch("\n" + line + "\n"))
 
     def test_validator_rejects_non_literal_line_pattern(self):
         changed = copy.deepcopy(self.config)

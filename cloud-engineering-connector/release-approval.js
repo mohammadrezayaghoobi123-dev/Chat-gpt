@@ -129,8 +129,8 @@ async function hasCurrentRepositoryPermission(fetchImpl, repoPath, review, token
     throw new Error("GitHub collaborator permission identity mismatch for a trusted reviewer.");
   }
 
-  if (permission.permission === "none") return false;
-  if (!["read", "write", "admin"].includes(permission.permission)) {
+  if (permission.permission === "none" || permission.permission === "read") return false;
+  if (!["write", "admin"].includes(permission.permission)) {
     throw new Error("GitHub returned an unsupported collaborator permission for a trusted reviewer.");
   }
   return true;

@@ -55,7 +55,7 @@ function fakeFetch(pulls, reviews, onRequest = () => {}, permissionOverrides = {
       if (override) return response(override.body, override.status ?? 200);
       const matchingReview = reviews.find(item => item.user?.login === login);
       const id = matchingReview?.user?.id ?? reviewerUserId(login);
-      return response({ permission: "read", role_name: "read", user: { id, login } });
+      return response({ permission: "write", role_name: "write", user: { id, login } });
     }
     if (parsed.pathname.includes("/commits/")) return response(pulls);
     if (parsed.pathname.endsWith("/reviews")) return response(reviews);
@@ -226,7 +226,7 @@ test("release approval paginates associated PRs and all reviews before accepting
       return response([]);
     }
     if (parsed.pathname.endsWith("/collaborators/" + reviewer + "/permission")) {
-      return response({ permission: "read", role_name: "read", user: { id: reviewerId, login: reviewer } });
+      return response({ permission: "write", role_name: "write", user: { id: reviewerId, login: reviewer } });
     }
     return response({ message: "not found" }, 404);
   };
@@ -388,4 +388,88 @@ test("fails closed when the live repository permission lookup is forbidden", asy
     }),
     /HTTP 403/,
   );
+});
+
+
+test("a trusted read-only reviewer cannot authorize a release", async () => {
+  const readOnlyReviewer = "read-only-reviewer";
+  const readOnlyReviewerId = 303;
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({ trustedReviewerIds: [readOnlyReviewerId] }),
+      fetchImpl: fakeFetch([stagingPull()], [
+        approval(sha, readOnlyReviewer, "APPROVED", date, readOnlyReviewerId),
+      ], undefined, {
+        [readOnlyReviewer]: {
+          body: {
+            permission: "read",
+            role_name: "triage",
+            user: { id: readOnlyReviewerId, login: readOnlyReviewer },
+          },
+        },
+      }),
+    }),
+    /no trusted independent approval/,
+  );
+});
+
+test("a trusted read-only reviewer cannot veto a write-authorized approval", async () => {
+  const readOnlyReviewer = "read-only-reviewer";
+  const readOnlyReviewerId = 303;
+  const result = await verifyReleaseApproval({
+    ...input({ trustedReviewerIds: [readOnlyReviewerId, reviewerId] }),
+    fetchImpl: fakeFetch([stagingPull()], [
+      approval(sha, readOnlyReviewer, "CHANGES_REQUESTED", "2026-11-02T12:05:00Z", readOnlyReviewerId),
+      approval(sha, reviewer, "APPROVED", "2026-11-02T12:10:00Z", reviewerId),
+    ], undefined, {
+      [readOnlyReviewer]: {
+        body: {
+          permission: "read",
+          role_name: "triage",
+          user: { id: readOnlyReviewerId, login: readOnlyReviewer },
+        },
+      },
+      [reviewer]: {
+        body: {
+          permission: "write",
+          role_name: "write",
+          user: { id: reviewerId, login: reviewer },
+        },
+      },
+    }),
+  });
+  assert.equal(result.reviewerId, reviewerId);
+});
+
+test("a trusted administrator reviewer remains eligible to authorize a release", async () => {
+  const result = await verifyReleaseApproval({
+    ...input({}),
+    fetchImpl: fakeFetch([stagingPull()], [approval()], undefined, {
+      [reviewer]: {
+        body: {
+          permission: "admin",
+          role_name: "admin",
+          user: { id: reviewerId, login: reviewer },
+        },
+      },
+    }),
+  });
+  assert.equal(result.reviewerId, reviewerId);
+});
+
+
+test("a trusted repository maintainer remains eligible through the legacy write permission mapping", async () => {
+  const result = await verifyReleaseApproval({
+    ...input({}),
+    fetchImpl: fakeFetch([stagingPull()], [approval()], undefined, {
+      [reviewer]: {
+        body: {
+          permission: "write",
+          role_name: "maintain",
+          user: { id: reviewerId, login: reviewer },
+        },
+      },
+    }),
+  });
+  assert.equal(result.reviewerId, reviewerId);
 });

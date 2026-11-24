@@ -3104,3 +3104,146 @@ it("persists valid initial version and agent-round boundaries with normalized de
     })).sort((a, b) => a.task_id.localeCompare(b.task_id)),
   });
 });
+
+
+it("atomically rolls back Task, Claim Candidate, and JTI when candidate insertion aborts", async () => {
+  const ledger = ledgerFor("ledger-create-task-candidate-insert-abort");
+  const jti = "jti-create-task-candidate-abort-0001";
+  const workerAssertion = await createWorkerAssertion({
+    subject: "orchestrator-scheduler",
+    role: "system",
+    operation: "createTask",
+    nowMs: now,
+    jti,
+  });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    state.storage.sql.exec(`
+      CREATE TRIGGER abort_claim_candidate_insert
+      BEFORE INSERT ON orchestrator_claim_candidates
+      WHEN NEW.task_id = 'task-candidate-abort-0001'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced claim candidate insert failure');
+      END
+    `);
+  });
+
+  let firstError = null;
+  try {
+    await ledger.createTask({
+      task: task("task-candidate-abort-0001"),
+      idempotencyKey: "create-candidate-abort-0001",
+      inputHash: "c".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion,
+    });
+  } catch (error) {
+    firstError = error;
+  }
+
+  const afterAbort = await runInDurableObject(ledger, async (_instance, state) => ({
+    tasks: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+      "task-candidate-abort-0001",
+    ).one().count,
+    candidates: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-abort-0001",
+    ).one().count,
+    consumedAssertions: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      jti,
+    ).one().count,
+  }));
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    state.storage.sql.exec("DROP TRIGGER abort_claim_candidate_insert");
+  });
+
+  expect(firstError?.message).toContain("forced claim candidate insert failure");
+  expect(afterAbort).toEqual({ tasks: 0, candidates: 0, consumedAssertions: 0 });
+
+  const retry = await ledger.createTask({
+    task: task("task-candidate-abort-0001"),
+    idempotencyKey: "create-candidate-abort-0001",
+    inputHash: "c".repeat(64),
+    now: now + 1,
+    workerId: "orchestrator-scheduler",
+    workerAssertion,
+  });
+
+  const afterRetry = await runInDurableObject(ledger, async (_instance, state) => ({
+    tasks: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+      "task-candidate-abort-0001",
+    ).one().count,
+    candidates: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-candidate-abort-0001",
+    ).one().count,
+    consumedAssertions: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      jti,
+    ).one().count,
+  }));
+
+  expect(retry).toMatchObject({ created: true, task: { taskId: "task-candidate-abort-0001" } });
+  expect(afterRetry).toEqual({ tasks: 1, candidates: 1, consumedAssertions: 1 });
+});
+
+it("recovers a committed createTask after simulated lost acknowledgement without duplicating Task or Claim Candidate", async () => {
+  const ledger = ledgerFor("ledger-create-task-lost-ack-recovery");
+  const request = {
+    task: task("task-lost-ack-0001"),
+    idempotencyKey: "create-lost-ack-0001",
+    inputHash: "d".repeat(64),
+    now,
+    workerId: "orchestrator-scheduler",
+  };
+  const firstAssertion = await createWorkerAssertion({
+    subject: "orchestrator-scheduler",
+    role: "system",
+    operation: "createTask",
+    nowMs: now,
+    jti: "jti-create-lost-ack-first-0001",
+  });
+
+  const committed = await ledger.createTask({ ...request, workerAssertion: firstAssertion });
+  expect(committed).toMatchObject({ created: true, task: { taskId: "task-lost-ack-0001" } });
+
+  // Model the caller losing the successful response after the Ledger commit.
+  const retryAssertion = await createWorkerAssertion({
+    subject: "orchestrator-scheduler",
+    role: "system",
+    operation: "createTask",
+    nowMs: now + 1,
+    jti: "jti-create-lost-ack-retry-0001",
+  });
+  const recovered = await ledger.createTask({
+    ...request,
+    now: now + 1,
+    workerAssertion: retryAssertion,
+  });
+
+  expect(recovered).toMatchObject({
+    created: false,
+    replay: true,
+    task: { taskId: "task-lost-ack-0001" },
+  });
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+      "task-lost-ack-0001",
+    ).one().count).toBe(1);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-lost-ack-0001",
+    ).one().count).toBe(1);
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti IN (?, ?)",
+      "jti-create-lost-ack-first-0001",
+      "jti-create-lost-ack-retry-0001",
+    ).one().count).toBe(2);
+  });
+});

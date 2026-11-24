@@ -35,38 +35,39 @@ const workflows = [
 for (const workflow of workflows) {
   test(workflow.name + " release revalidates authorization in the same step that deploys", () => {
     const source = readFileSync(workflow.path, "utf8");
-    assert.match(source, /pull-requests:\\s*read/, "release workflow must have read-only PR review access");
-    assert.equal((source.match(/node scripts\\/verify-release-approval\\.mjs/g) || []).length, 1,
+    assert.ok(source.includes("pull-requests: read"), "release workflow must have read-only PR review access");
+    assert.equal(source.split("node scripts/verify-release-approval.mjs").length - 1, 1,
       "only the early approval check may run as a separate step");
-    assert.equal((source.match(/bash scripts\\/verify-and-deploy-release\\.sh/g) || []).length, 1,
+    assert.equal(source.split("bash scripts/verify-and-deploy-release.sh").length - 1, 1,
       "the final authorization check and deployment must execute through one guarded runner");
 
     const deployStepName = workflow.name === "Staging"
       ? "      - name: Deploy candidate to Staging"
       : "      - name: Deploy candidate to Production";
     const deployStepStart = source.indexOf(deployStepName);
-    const deployStepEnd = source.indexOf("\\n      - name: ", deployStepStart + 1);
+    const deployStepEnd = source.indexOf("\n      - name: ", deployStepStart + 1);
     assert.ok(deployStepStart >= 0 && deployStepEnd > deployStepStart,
       "the deployment step must be uniquely identifiable");
     const deployStep = source.slice(deployStepStart, deployStepEnd);
 
-    assert.match(deployStep, /id: deploy/, "deployment step identity must remain stable for rollback and evidence");
-    assert.match(deployStep, /shell: bash/, "guarded runner must use an explicit Bash shell");
-    assert.match(deployStep, /bash scripts\\/verify-and-deploy-release\\.sh/,
+    assert.ok(deployStep.includes("id: deploy"), "deployment step identity must remain stable for rollback and evidence");
+    assert.ok(deployStep.includes("shell: bash"), "guarded runner must use an explicit Bash shell");
+    assert.ok(deployStep.includes("bash scripts/verify-and-deploy-release.sh"),
       "the same step must run the final approval check and Wrangler deployment");
-    assert.match(deployStep, /RELEASE_GITHUB_TOKEN:\\s*\\$\\{\\{\\s*github\\.token\\s*\\}\\}/,
+    assert.ok(deployStep.includes("RELEASE_GITHUB_TOKEN: $" + "{{ github.token }}"),
       "the final authorization check must receive its scoped GitHub token");
-    assert.match(deployStep, /RELEASE_REVIEWER_IDS:\\s*\\$\\{\\{\\s*vars\\.RELEASE_REVIEWER_IDS\\s*\\}\\}/,
+    assert.ok(deployStep.includes("RELEASE_REVIEWER_IDS: $" + "{{ vars.RELEASE_REVIEWER_IDS }}"),
       "the final authorization check must receive the configured reviewer policy");
-    assert.match(deployStep, /CLOUDFLARE_API_TOKEN:\\s*\\$\\{\\{\\s*secrets\\.CLOUDFLARE_API_TOKEN\\s*\\}\\}/,
+    assert.ok(deployStep.includes("CLOUDFLARE_API_TOKEN: $" + "{{ secrets.CLOUDFLARE_API_TOKEN }}"),
       "the deploy process must receive the Cloudflare API token");
-    assert.match(deployStep, /CLOUDFLARE_ACCOUNT_ID:\\s*\\$\\{\\{\\s*vars\\.CLOUDFLARE_ACCOUNT_ID\\s*\\}\\}/,
+    assert.ok(deployStep.includes("CLOUDFLARE_ACCOUNT_ID: $" + "{{ vars.CLOUDFLARE_ACCOUNT_ID }}"),
       "the deploy process must receive the exact Cloudflare account");
-    assert.doesNotMatch(deployStep, /npx wrangler deploy/,
+    assert.ok(!deployStep.includes("npx wrangler deploy"),
       "Wrangler invocation must be owned by the guarded runner, not duplicated in the workflow");
-    assert.doesNotMatch(source, /Revalidate trusted reviewer access immediately before/,
+    assert.ok(!source.includes("Revalidate trusted reviewer access immediately before"),
       "a separately scheduled final authorization step must not remain");
-    assert.match(source, /RELEASE_ENV:\\s*(staging|production)/, "release environment must remain explicit");
+    assert.ok(source.includes("RELEASE_ENV: " + workflow.name.toLowerCase()),
+      "release environment must remain explicit");
   });
 }
 

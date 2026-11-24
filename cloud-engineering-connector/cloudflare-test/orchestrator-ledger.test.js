@@ -8,7 +8,8 @@ function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
 }
 let now;
-beforeEach(() => { now = Date.now(); vi.spyOn(Date, "now").mockReturnValue(now); });
+let ledgerClock;
+beforeEach(() => { now = Date.now(); ledgerClock = vi.spyOn(Date, "now").mockReturnValue(now); });
 afterEach(() => vi.restoreAllMocks());
 const task = (taskId = "task-0001") => ({
   taskId, state: "SCHEDULED", version: 1, agentRound: 0, createdAt: now, updatedAt: now,
@@ -151,7 +152,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("fails closed when the earliest eligible task has an expired lease without reconciliation evidence", async () => {
     const ledger = ledgerFor("ledger-claim-skip-expired-lease");
     let ledgerNow = now;
-    vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
+    ledgerClock.mockImplementation(() => ledgerNow);
     await createTask(ledger, {
       task: task("task-expired-first"), idempotencyKey: "claim-skip-expired-first",
       inputHash: "a".repeat(64), now,
@@ -389,7 +390,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("uses monotonically increasing outbox fencing generations and rejects stale completion", async () => {
     const ledger = ledgerFor("ledger-outbox-fencing");
     let ledgerNow = now;
-    vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
+    ledgerClock.mockImplementation(() => ledgerNow);
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0009", inputHash: "7".repeat(64), now });
     await ledger.enqueueOutbox({
       eventId: "event-0002", idempotencyKey: "outbox-key-0002", taskId: "task-0001",
@@ -412,7 +413,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("schedules bounded outbox retries and dead-letters permanent failures", async () => {
     const ledger = ledgerFor("ledger-outbox-retry-dead-letter");
     let ledgerNow = now;
-    vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
+    ledgerClock.mockImplementation(() => ledgerNow);
     await createTask(ledger, {
       task: task(), idempotencyKey: "task-create-outbox-retry", inputHash: "9".repeat(64), now,
     });
@@ -519,7 +520,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("rejects an audit assertion that expires during asynchronous event hashing", async () => {
     const ledger = ledgerFor("ledger-audit-assertion-expiry-during-hash");
     let ledgerNow = now;
-    vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
+    ledgerClock.mockImplementation(() => ledgerNow);
     await createTask(ledger, {
       task: task(),
       idempotencyKey: "audit-expiry-during-hash-task",
@@ -593,7 +594,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
   it("requires reconciliation evidence before reclaiming an expired lease and preserves task state", async () => {
     const ledger = ledgerFor("ledger-expired-lease-reconciliation");
     let ledgerNow = now;
-    vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
+    ledgerClock.mockImplementation(() => ledgerNow);
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0012", inputHash: "b".repeat(64), now });
     const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
     ledgerNow = now + 101;
@@ -1044,7 +1045,7 @@ it("consumes a signed lease-renewal assertion once and rejects replay", async ()
     subject: "agent:worker-1", role: "agent", operation: "renewLease", nowMs: now + 1,
     jti: "jti-renew-once-000000000001",
   });
-  vi.spyOn(Date, "now").mockReturnValue(now + 1);
+  ledgerClock.mockReturnValue(now + 1);
   const renewed = await ledger.renewLease({
     taskId: "task-0001", workerId: "agent:worker-1", workerAssertion: assertion,
     leaseGeneration: claimed.leaseGeneration, leaseMs: 60_000, now: now + 1,
@@ -1227,7 +1228,7 @@ it("rejects unauthenticated and caller-forged task creation", async () => {
 it("prunes consumed assertion IDs only after expiry plus the retention margin", async () => {
   const ledger = ledgerFor("ledger-assertion-retention");
   let ledgerNow = now;
-  vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
+  ledgerClock.mockImplementation(() => ledgerNow);
   await createTask(ledger, { task: task(), idempotencyKey: "task-create-retention-1", inputHash: "2".repeat(64), now });
   const assertion = await createWorkerAssertion({
     subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: now,
@@ -1247,7 +1248,7 @@ it("prunes consumed assertion IDs only after expiry plus the retention margin", 
 it("moves an expired final-attempt outbox lease to a lease-free dead-letter state", async () => {
   const ledger = ledgerFor("ledger-outbox-final-attempt-crash");
   let ledgerNow = now;
-  vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
+  ledgerClock.mockImplementation(() => ledgerNow);
   await createTask(ledger, {
     task: task(), idempotencyKey: "task-create-final-attempt-crash", inputHash: "f".repeat(64), now,
   });
@@ -1533,7 +1534,7 @@ it("integrates the real Durable Object Ledger with publisher and Queue consumer 
 it("acknowledges a republished event after an uncertain send even when the publisher attempt counter changes", async () => {
   const integrationNow = Date.now();
   let clockNow = integrationNow;
-  const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+  const dateNow = ledgerClock.mockImplementation(() => clockNow);
   try {
     const ledger = ledgerFor("orchestrator-ledger-republish-e2e");
     const taskId = "task-queue-republish-e2e";
@@ -2326,7 +2327,7 @@ it("rejects an expired lease even when its generation is still current", async (
 it("fences a late publisher acknowledgement after lease reclamation and deduplicates concurrent consumer deliveries", async () => {
   const integrationNow = Date.now();
   let clockNow = integrationNow;
-  const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+  const dateNow = ledgerClock.mockImplementation(() => clockNow);
   let releaseFirstSend;
   let resolveFirstSendEntered;
   const firstSendRelease = new Promise(resolve => { releaseFirstSend = resolve; });
@@ -2455,7 +2456,7 @@ it("fences a late publisher acknowledgement after lease reclamation and deduplic
 it("recovers a Queue-accepted send with a lost acknowledgement through bounded retry and concurrent receipt deduplication", async () => {
   const integrationNow = Date.now();
   let clockNow = integrationNow;
-  const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+  const dateNow = ledgerClock.mockImplementation(() => clockNow);
   const queued = [];
   let sendCalls = 0;
   try {

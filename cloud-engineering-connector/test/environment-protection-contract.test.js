@@ -35,6 +35,14 @@ for (const workflow of workflows) {
     assert.ok(guardIndex > nodeSetupIndex, "guard must run after Node setup");
     assert.ok(guardIndex < approvalIndex, "guard must run before approval logic");
     assert.ok(guardIndex < firstCredentialIndex, "guard must run before any environment secret is mapped");
+    const environmentSecretReferences = source.split("\\n")
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) => /\\$\\{\\{\\s*secrets\\./.test(line));
+    assert.ok(environmentSecretReferences.length > 0, "release workflow must keep explicit step-scoped Environment secret mappings");
+    assert.ok(
+      environmentSecretReferences.every(({ index }) => guardIndex < index),
+      "the runtime Environment protection guard must precede every Environment Secret mapping, including future credential names",
+    );
 
     const stepStart = source.lastIndexOf("      - name: ", guardIndex);
     const stepEnd = source.indexOf("      - name: ", guardIndex + guardMarker.length);

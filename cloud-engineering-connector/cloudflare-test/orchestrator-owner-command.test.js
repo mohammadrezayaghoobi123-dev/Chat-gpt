@@ -2467,6 +2467,50 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+  it("does not let caller clock rollback renew an expired execution lease", async () => {
+    const ledger = ledgerFor("worker-assertion-caller-clock-lease-rollback");
+    let wallClockNow = now;
+    const wallClockSpy = vi.spyOn(Date, "now").mockImplementation(() => wallClockNow);
+    try {
+      await createTask(ledger);
+      const claim = await ledger.claimTask({
+        workerId: "agent:worker-1",
+        workerAssertion: await workerAssertion("agent:worker-1", "agent", "claimTask", now),
+        leaseMs: 100,
+        now,
+      });
+      expect(claim).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+      wallClockNow = now + 101;
+      const renewal = await ledger.renewLease({
+        taskId: "task-owner-0001",
+        workerId: "agent:worker-1",
+        workerAssertion: await workerAssertion(
+          "agent:worker-1", "agent", "renewLease", wallClockNow,
+        ),
+        leaseGeneration: claim.leaseGeneration,
+        leaseMs: 30_000,
+        now,
+      });
+      expect(renewal).toMatchObject({
+        renewed: false,
+        reason: "LEASE_FENCE_MISMATCH",
+      });
+    } finally {
+      wallClockSpy.mockRestore();
+    }
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-owner-0001",
+      ).one().lease_until).toBe(now + 100);
+      expect(state.storage.sql.exec(
+        "SELECT high_water_ms FROM orchestrator_security_clock WHERE clock_id = 1",
+      ).one().high_water_ms).toBe(now + 101);
+    });
+  });
+
   it("prevents caller time from pruning a consumed JTI and enabling replay", async () => {
     const ledger = ledgerFor("worker-assertion-caller-time-jti-pruning");
     const subject = "orchestrator-scheduler";

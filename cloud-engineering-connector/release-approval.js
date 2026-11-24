@@ -46,7 +46,7 @@ function validateInput({ repository, candidateSha, releaseEnvironment, token, fe
   if (typeof fetchImpl !== "function") throw new TypeError("fetchImpl must be a function.");
 }
 
-async function getJson(fetchImpl, url, token) {
+async function getJson(fetchImpl, url, token, { notFoundIsNull = false } = {}) {
   let response;
   try {
     response = await fetchImpl(url, {
@@ -63,6 +63,7 @@ async function getJson(fetchImpl, url, token) {
   }
   if (!response || response.ok !== true) {
     const status = Number.isInteger(response?.status) ? response.status : 0;
+    if (notFoundIsNull && status === 404) return null;
     throw new Error("GitHub release-approval API returned HTTP " + status + ".");
   }
   let body;
@@ -105,6 +106,34 @@ function latestReviewsByUserId(reviews) {
     if (!previous || timestamp >= previous.timestamp) latest.set(userId, { review, timestamp });
   }
   return [...latest.values()].map(item => item.review);
+}
+
+async function hasCurrentRepositoryPermission(fetchImpl, repoPath, review, token) {
+  const login = review?.user?.login;
+  const expectedUserId = review?.user?.id;
+  if (typeof login !== "string" || !login ||
+      !Number.isSafeInteger(expectedUserId) || expectedUserId < 1) {
+    throw new Error("Trusted reviewer identity is incomplete for live repository permission verification.");
+  }
+
+  const permission = await getJson(
+    fetchImpl,
+    API_ROOT + "/repos/" + repoPath + "/collaborators/" + encodeURIComponent(login) + "/permission",
+    token,
+    { notFoundIsNull: true },
+  );
+  if (permission === null) return false;
+
+  const resolvedUserId = permission.user?.id;
+  if (!Number.isSafeInteger(resolvedUserId) || resolvedUserId !== expectedUserId) {
+    throw new Error("GitHub collaborator permission identity mismatch for a trusted reviewer.");
+  }
+
+  if (permission.permission === "none") return false;
+  if (!["read", "write", "admin"].includes(permission.permission)) {
+    throw new Error("GitHub returned an unsupported collaborator permission for a trusted reviewer.");
+  }
+  return true;
 }
 
 export async function verifyReleaseApproval({
@@ -165,17 +194,23 @@ export async function verifyReleaseApproval({
     review.user.id !== authorId &&
     trustedIds.has(review.user.id);
 
-  const changeRequest = latest.find(review =>
-    isTrustedIndependentReviewer(review) &&
-    review.state === "CHANGES_REQUESTED" &&
-    review.commit_id === reviewCommitSha
-  );
-  if (changeRequest) throw new Error("Release blocked: an independent reviewer has an outstanding change request for this candidate.");
+  const currentlyAuthorizedReviews = [];
+  for (const review of latest) {
+    if (!isTrustedIndependentReviewer(review) ||
+        review.commit_id !== reviewCommitSha ||
+        !["APPROVED", "CHANGES_REQUESTED"].includes(review.state)) continue;
+    if (await hasCurrentRepositoryPermission(fetchImpl, repoPath, review, token)) {
+      currentlyAuthorizedReviews.push(review);
+    }
+  }
 
-  const approval = latest.find(review =>
-    isTrustedIndependentReviewer(review) &&
-    review.state === "APPROVED" &&
-    review.commit_id === reviewCommitSha
+  const changeRequest = currentlyAuthorizedReviews.find(review =>
+    review.state === "CHANGES_REQUESTED"
+  );
+  if (changeRequest) throw new Error("Release blocked: an independent reviewer with current repository access has an outstanding change request for this candidate.");
+
+  const approval = currentlyAuthorizedReviews.find(review =>
+    review.state === "APPROVED"
   );
   if (!approval) {
     throw new Error("Release blocked: no trusted independent approval exists for the exact PR head commit.");

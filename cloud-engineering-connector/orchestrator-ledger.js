@@ -792,7 +792,7 @@ export class OrchestratorLedger extends DurableObject {
         normalizedTask.taskId, scopedIdempotencyKey, inputHash, normalizedTask.state, normalizedTask.version, taskJson,
         normalizedTask.createdAt, normalizedTask.updatedAt, normalizedTask.tenantId, normalizedTask.projectId,
       );
-      syncClaimCandidateInTransaction(sql, normalizedTask.taskId);
+      // mutation: Claim Candidate synchronization bypassed
       return { created: true, task: normalizedTask };
     });
   }

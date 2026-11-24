@@ -32,9 +32,9 @@ References:
 
 ## Final GREEN verification
 
-- Final evidence head: `7a23f8a1f83875f66c4924df3a5374a3bf02d6b6`.
-- PR CI: [run 45381196959](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45381196959).
-- Push CI: [run 45381186691](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45381186691).
+- Final implementation commit: `c956fcd3642eb52be5b04d5c95794c9921f1f5d4` (subsequent commits only updated plans and evidence documentation).
+- PR CI: [run 45381418193](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45381418193).
+- Push CI: [run 45381406989](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45381406989).
 
 Results:
 - Node tests: 483 passed, 0 failed.
@@ -46,7 +46,7 @@ Results:
 
 ## Final live read-only census
 
-GitHub Actions [run 45381186523](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45381186523) used the existing read-only Actions token permissions and performed GET-only metadata requests.
+GitHub Actions [run 45381406983](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45381406983) used the existing read-only Actions token permissions and performed GET-only metadata requests.
 
 | Control | Staging | Production |
 |---|---|---|
@@ -74,7 +74,7 @@ The audit completed both target inspections, wrote the sanitized step summary, e
 
 ## Gitleaks
 
-- PR diff scan: [run 45381197042](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45381197042) — passed, no leaks found.
+- PR diff scan: [run 45381418198](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45381418198) — passed, no leaks found.
 - Full fetched refs/reachable history — failed. Repository history cleanliness is not established. No secret fingerprints, payloads, or sensitive match values are reproduced.
 
 ## Final-head verification

@@ -54,6 +54,7 @@ jobs:
         run: node scripts/verify-release-approval.mjs
         env:
           RELEASE_GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_REVIEWER_IDS: ${{ vars.RELEASE_REVIEWER_IDS }}
 
       - name: Validate MCP smoke credential
         env:

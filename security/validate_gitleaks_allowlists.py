@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import subprocess
@@ -138,9 +139,62 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
     return errors
 
 
+
+def diagnose_report(report: list[dict], config: dict) -> list[str]:
+    diagnostics: list[str] = []
+    entries = {
+        entry.get("description"): entry
+        for entry in config.get("allowlists", [])
+        if entry.get("description") in EXPECTED_FIXTURES
+    }
+    for description, (expected_commit, expected_path) in EXPECTED_FIXTURES.items():
+        entry = entries.get(description)
+        label = description.split(" from ", 1)[0]
+        if entry is None:
+            diagnostics.append(f"DIAGNOSTIC: {label}: allowlist=missing")
+            continue
+        candidates = [
+            finding for finding in report
+            if finding.get("Commit") == expected_commit
+            and finding.get("File") == expected_path
+            and finding.get("RuleID") == "generic-api-key"
+        ]
+        if not candidates:
+            diagnostics.append(f"DIAGNOSTIC: {label}: finding=absent")
+            continue
+        for finding in candidates:
+            rule_match = finding.get("RuleID") in entry.get("targetRules", [])
+            commit_match = finding.get("Commit") in entry.get("commits", [])
+            path_match = any(
+                re.search(pattern, finding.get("File", "")) is not None
+                for pattern in entry.get("paths", [])
+            )
+            target_field = {
+                "line": "Line",
+                "match": "Match",
+            }.get(entry.get("regexTarget"), "Secret")
+            target = finding.get(target_field) or ""
+            regex_match = any(
+                re.search(pattern, target) is not None
+                for pattern in entry.get("regexes", [])
+            )
+            if entry.get("condition") == "AND":
+                allowed = rule_match and commit_match and path_match and regex_match
+            else:
+                allowed = False
+            diagnostics.append(
+                f"DIAGNOSTIC: {label}: rule={rule_match} commit={commit_match} "
+                f"path={path_match} regex={regex_match} allowed={allowed} "
+                f"target_length={len(target)}"
+            )
+    return diagnostics
+
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate pinned Gitleaks allowlist integrity.")
     parser.add_argument("--config", default=".gitleaks.toml")
+    parser.add_argument("--report", default=None, help="Optional redacted Gitleaks JSON report for predicate diagnostics.")
     args = parser.parse_args()
     config_path = pathlib.Path(args.config).resolve()
     try:
@@ -155,6 +209,15 @@ def main() -> int:
             print(f"FAIL: {error}")
         return 1
     print("PASS: both synthetic HMAC allowlists are pinned to verified exact source lines.")
+    if args.report:
+        try:
+            with pathlib.Path(args.report).open("r", encoding="utf-8") as handle:
+                report = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"Report load failed: {type(exc).__name__}")
+            return 2
+        for diagnostic in diagnose_report(report, config):
+            print(diagnostic)
     return 0
 
 

@@ -138,3 +138,30 @@ Then compare that record independently with the pinned release manifest and GitH
 ## 9. Safety boundary
 
 Documentation-only. No application code, workflow file, repository setting, permission, secret, default branch, production service, Cloudflare resource, local machine, or running 9Router instance was changed. The PR must remain Draft and unmerged.
+
+
+## 10. Public registry artifact snapshot
+
+A read-only Docker Hub Registry API extraction was performed for the exact published tag `decolua/9router:0.5.123`. This is registry-side reference evidence, not evidence of the user's running container.
+
+Observed snapshot:
+- Multi-platform OCI index digest: `sha256:b5f68a9d0f89a805f574b32ed00103a7f205ae0ddaa4e508ad6440e58a9bd07b`.
+- `linux/amd64` child manifest digest: `sha256:8c0c9644f3707810f616fecc527d50e73ce7e7698126d993a73aa594171c27a6`.
+- `linux/arm64` child manifest digest: `sha256:011f257753857e18db323d0770dc2a9feee620907ed9d5246ada0f17d2707987`.
+- Tag metadata reported last push at `2026-11-23T02:21:57.760034Z`; both platform images were active.
+- At extraction time, the mutable `latest` tag returned the same index digest. This is a time-bounded observation only; do not use `latest` as the identity anchor.
+- Docker Hub layer detail pages exposed `APP_VERSION=0.5.123` and OCI title/version labels for both platform images. They did not expose the OCI revision label in the extracted metadata.
+
+Interpretation:
+- PASS: a public, immutable digest tuple is now available as the expected registry-side reference for the 0.5.123 tag.
+- UNKNOWN: whether any user runtime uses this index or either child digest.
+- UNKNOWN: whether the published image's OCI revision label equals source commit `5ae63d22847e07042e235b40e1d926b65e509013`; Docker Hub's extracted layer view did not expose that label.
+- UNKNOWN: the exact release workflow run and its `github.workflow_sha` for this publication; no provenance attestation was established by the inspected workflow.
+
+Sources:
+- [Docker Hub tag API — 0.5.123](https://hub.docker.com/v2/repositories/decolua/9router/tags/0.5.123)
+- [Docker Hub tag API — latest](https://hub.docker.com/v2/repositories/decolua/9router/tags/latest)
+- [linux/amd64 image detail](https://hub.docker.com/layers/decolua/9router/0.5.123/images/sha256-8c0c9644f3707810f616fecc527d50e73ce7e7698126d993a73aa594171c27a6)
+- [linux/arm64 image detail](https://hub.docker.com/layers/decolua/9router/0.5.123/images/sha256-011f257753857e18db323d0770dc2a9feee620907ed9d5246ada0f17d2707987)
+
+The runtime identity remains UNKNOWN until the already-running user's container image ID/RepoDigest and OCI labels are collected through an authorized read-only surface.

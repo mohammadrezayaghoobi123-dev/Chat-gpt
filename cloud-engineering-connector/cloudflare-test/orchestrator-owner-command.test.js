@@ -665,7 +665,6 @@ describe("Owner command atomic Ledger contract", () => {
   });
 
   it.each([8, 9])("bounds %i concurrent Owner commands against the shared Audit Head without partial commits", async requestCount => {
-    const maxAttempts = 8;
     const ledger = ledgerFor("owner-audit-nway-contention-" + requestCount);
     const inputs = [];
 

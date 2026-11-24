@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
+import { createScheduledWorkerAssertion, verifyWorkerAssertion } from "../orchestrator-worker-identity.js";
 import { consumeOrchestratorDeadLetters, consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
 function ledgerFor(name) {
@@ -111,6 +112,103 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_github_business_idempotency").one().count).toBe(1);
       expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries").one().count).toBe(2);
+    });
+  });
+
+  it("accepts only the production Scheduler system/createTask grant across signer and Ledger boundaries", async () => {
+    const ledger = ledgerFor("ledger-scheduler-signer-cross-layer-authority");
+    const workerId = "orchestrator-scheduler";
+    const workerAssertion = await createScheduledWorkerAssertion(
+      env.LEDGER_WORKER_ASSERTION_KEYS,
+      TEST_ASSERTION_KID,
+      { subject: workerId, role: "system", operation: "createTask", nowMs: now },
+    );
+    const verified = await verifyWorkerAssertion(
+      env.LEDGER_WORKER_ASSERTION_KEYS,
+      workerAssertion,
+      { subject: workerId, role: "system", operation: "createTask", nowMs: now },
+    );
+
+    expect(verified).toMatchObject({
+      subject: workerId,
+      role: "system",
+      operation: "createTask",
+      issuedAt: Math.floor(now / 1000),
+      expiresAt: Math.floor(now / 1000) + 60,
+    });
+
+    const result = await ledger.createTask({
+      task: task("task-scheduler-signer-cross-layer"),
+      idempotencyKey: "scheduler-signer-cross-layer-create",
+      inputHash: "c".repeat(64),
+      now,
+      workerId,
+      workerAssertion,
+    });
+    expect(result).toMatchObject({
+      created: true,
+      task: { taskId: "task-scheduler-signer-cross-layer", state: "SCHEDULED" },
+    });
+
+    const persisted = await runInDurableObject(ledger, async (_instance, state) => ({
+      task: state.storage.sql.exec(
+        "SELECT task_id, state, version FROM orchestrator_tasks WHERE task_id = ?",
+        "task-scheduler-signer-cross-layer",
+      ).toArray(),
+      candidate: state.storage.sql.exec(
+        "SELECT task_id, executor_id FROM orchestrator_claim_candidates WHERE task_id = ?",
+        "task-scheduler-signer-cross-layer",
+      ).toArray(),
+      assertion: state.storage.sql.exec(
+        "SELECT subject, role, operation, key_id FROM orchestrator_consumed_assertions WHERE jti = ?",
+        verified.jti,
+      ).toArray(),
+    }));
+    expect(persisted).toEqual({
+      task: [{ task_id: "task-scheduler-signer-cross-layer", state: "SCHEDULED", version: 1 }],
+      candidate: [{ task_id: "task-scheduler-signer-cross-layer", executor_id: "agent:worker-1" }],
+      assertion: [{
+        subject: workerId,
+        role: "system",
+        operation: "createTask",
+        key_id: TEST_ASSERTION_KID,
+      }],
+    });
+
+    await expect(createScheduledWorkerAssertion(
+      env.LEDGER_WORKER_ASSERTION_KEYS,
+      TEST_ASSERTION_KID,
+      { subject: workerId, role: "system", operation: "claimTask", nowMs: now },
+    )).rejects.toMatchObject({ code: "AUTHENTICATED_WORKER_REQUIRED" });
+    await expect(createScheduledWorkerAssertion(
+      env.LEDGER_WORKER_ASSERTION_KEYS,
+      TEST_ASSERTION_KID,
+      { subject: workerId, role: "publisher", operation: "createTask", nowMs: now },
+    )).rejects.toMatchObject({ code: "AUTHENTICATED_WORKER_REQUIRED" });
+    await expect(createScheduledWorkerAssertion(
+      env.LEDGER_WORKER_ASSERTION_KEYS,
+      TEST_ASSERTION_KID,
+      { subject: "orchestrator-scheduler-shadow", role: "system", operation: "createTask", nowMs: now },
+    )).rejects.toMatchObject({ code: "AUTHENTICATED_WORKER_REQUIRED" });
+
+    const replay = await ledger.createTask({
+      task: task("task-scheduler-signer-replay"),
+      idempotencyKey: "scheduler-signer-cross-layer-replay",
+      inputHash: "d".repeat(64),
+      now,
+      workerId,
+      workerAssertion,
+    });
+    expect(replay).toEqual({ created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+        "task-scheduler-signer-replay",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        verified.jti,
+      ).one().count).toBe(1);
     });
   });
 

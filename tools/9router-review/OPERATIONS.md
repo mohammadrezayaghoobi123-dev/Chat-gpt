@@ -627,7 +627,7 @@ The logical reservation key is:
 - `head_sha` and `base_sha` are full commit object IDs from one validated live PR snapshot.
 - Canonical serialization is versioned, length-delimited, UTF-8, and deterministic. A SHA-256 digest may be used as the physical primary key, but every original tuple field MUST be stored and compared after lookup; digest equality alone is insufficient.
 - A repository rename preserves the key. A changed head or base creates a different key.
-- The reviewer policy/runtime digest is recorded with the row. A policy mismatch for an existing key is a conflict requiring an explicit versioning decision; it MUST NOT silently create a second reservation and duplicate comment for the same PR snapshot. At claim time, derive a deterministic marker ID from the canonical key, policy digest, and runtime digest using the selected HMAC key, and persist its signing-key ID. After the review payload exists, compute its canonical digest and HMAC-sign the tuple, policy digest, marker ID, and payload digest. Retain verification capability for old signing-key IDs for at least the replay horizon.
+- The reviewer policy/runtime digest is recorded with the row. A policy mismatch for an existing key is a conflict requiring an explicit versioning decision; it MUST NOT silently create a second reservation and duplicate comment for the same PR snapshot. At claim time, derive a deterministic marker ID as SHA-256 over the versioned canonical reservation tuple plus policy and runtime digests. This ID MUST be independent of the HMAC signing key so key rotation cannot create a second marker identity. Persist the signing-key ID separately for signature verification. After the review payload exists, compute its canonical digest and HMAC-sign the tuple, policy digest, marker ID, and payload digest. Retain verification capability for old signing-key IDs for at least the replay horizon.
 - Rows are durable tombstones for at least the complete replay/retention horizon. Deletion or key reuse is prohibited unless a separately reviewed archival protocol preserves uniqueness and audit evidence.
 
 ### 3. Normative record
@@ -693,21 +693,21 @@ No transition from `MODEL_ATTEMPTED`, `COMMENT_ATTEMPTED`, `UNKNOWN`, `PUBLISHED
 
 The storage-independent adapter MUST expose equivalent typed operations. Names below are normative for this design; implementation language syntax may differ.
 
-- `claim(key, owner_id, owner_nonce, lease_duration, policy_digest, runtime_digest, marker_id, marker_key_id) -> CLAIMED | BUSY | EXISTING(state) | KEY_CONFLICT`
+- `claim(key, owner_id, owner_nonce, lease_duration, policy_digest, runtime_digest, marker_id, marker_key_id) -> CLAIMED | BUSY | EXISTING(record) | KEY_CONFLICT`; for an existing row, return its persisted marker ID/key ID and never replace them as a side effect of key rotation.
 - `renew(key, owner_id, owner_nonce, generation, expected_record_version, lease_duration) -> RENEWED(new_record_version) | LOST_OWNERSHIP | EXPIRED`
 - `resumeCompletedModel(key, owner_id, owner_nonce, expected_record_version, lease_duration) -> RESUMED(new_generation) | BUSY | TERMINAL`
 - `beginModelAttempt(key, owner_id, owner_nonce, generation, expected_record_version, attempt_id, request_digest, attempt_timeout) -> MODEL_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`; the backend computes and persists the deadline from server time in the same transaction.
 - `completeModelAttempt(key, generation, attempt_id, expected_record_version, result_reference, result_digest) -> MODEL_COMPLETED | CONFLICT | UNKNOWN`
 - `beginCommentAttempt(key, generation, expected_record_version, attempt_id, marker_id, payload_digest, snapshot_validation_id, attempt_timeout) -> COMMENT_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`; the backend computes and persists the deadline from server time in the same transaction.
 - `completeCommentAttempt(key, generation, attempt_id, expected_record_version, remote_comment_id) -> PUBLISHED | CONFLICT | UNKNOWN`
-- `markUnknown(key, generation, attempt_id, expected_record_version, stage, reason_code) -> UNKNOWN | CONFLICT`
+- `markUnknown(key, generation, attempt_id, expected_record_version, stage: MODEL | COMMENT, reason_code) -> UNKNOWN | CONFLICT`; the stage must match the consumed attempt ID and current state.
 - `expireAmbiguousAttempt(key, attempt_id, stage) -> UNKNOWN | NOT_DUE | CONFLICT`; the backend evaluates the persisted deadline against its own authoritative server time inside the atomic transition.
 - `readAuthoritative(key) -> RECORD | NOT_FOUND | UNAVAILABLE`
-- `reconcileComment(key, positive_evidence) -> PUBLISHED | DUPLICATE_ACCEPTED | UNKNOWN`
+- `reconcileComment(key, expected_record_version, verified_positive_evidence[]) -> PUBLISHED | DUPLICATE_ACCEPTED | NO_CHANGE | CONFLICT`; the caller must supply only evidence already verified against the exact key, expected bot identity, marker ID, HMAC, payload digest, and issue URL. One exact match permits PUBLISHED; multiple exact matches permit DUPLICATE_ACCEPTED; zero matches or incomplete listing produce NO_CHANGE and never prove absence.
 
 Every mutating operation is one atomic conditional transaction against the current record. It MUST check the expected state, generation, owner nonce where applicable, attempt ID, and record version. Completion calls are fenced by the generation and attempt ID captured before dispatch; recovery transitions are fenced by the attempt ID and stage. `readAuthoritative` MUST bypass stale replicas and provide a linearizable read for the key. Successful transitions and audit events commit atomically. A stale worker cannot mutate state by presenting an old generation or stale record version.
 
-The marker ID is deterministic for the reservation key, policy digest, and runtime digest; it is not a per-worker random value. The signed marker contains the canonical key, policy digest, runtime digest, marker ID, payload digest, and signing-key ID. The signature is HMAC-SHA-256 over a versioned length-delimited UTF-8 canonical envelope. The payload digest is computed over the exact comment body bytes after removing the marker envelope, with UTF-8 and LF line endings; no locale-dependent normalization is permitted. Reconciliation validates the expected bot author ID, HMAC, and digest of the comment body after removing the marker envelope. This lets pre-model reconciliation recognize a previously published result without rerunning inference.
+The marker ID is SHA-256-derived from the reservation key, policy digest, and runtime digest; it is not a per-worker random value and does not depend on the active HMAC key. HMAC key rotation changes only the signing-key ID/signature for newly created reservations; existing reservations retain their persisted marker identity and verification key ID. The signed marker contains the canonical key, policy digest, runtime digest, marker ID, payload digest, and signing-key ID. The signature is HMAC-SHA-256 over a versioned length-delimited UTF-8 canonical envelope. The payload digest is computed over the exact comment body bytes after removing the marker envelope, with UTF-8 and LF line endings; no locale-dependent normalization is permitted. Reconciliation validates the expected bot author ID, HMAC, and digest of the comment body after removing the marker envelope. This lets pre-model reconciliation recognize a previously published result without rerunning inference.
 
 A returned `MODEL_PERMIT` or `COMMENT_PERMIT` is an in-memory authorization to make exactly one transport invocation. It is not a reusable bearer token and MUST NOT be serialized, logged, queued, or retried. The production caller MUST consume it once and call the transport once. The durable state transition prevents another worker from obtaining a second permit. This contract does not claim to defend against malicious application code that deliberately sends the same request multiple times; transport-call-count conformance tests and code review cover that boundary.
 
@@ -766,6 +766,8 @@ The model provider may also lack a caller-supplied idempotency key or execution-
 - **I17 — No inference on uncertain preflight:** incomplete or unavailable pre-model comment listing retains CLAIMED and blocks model dispatch.
 - **I18 — No publication on uncertain post-model preflight:** incomplete or unavailable post-model listing retains MODEL_COMPLETED and blocks comment-attempt consumption.
 - **I19 — Bounded reconciliation:** pagination must complete within an explicit page/response budget; exceeding it is UNKNOWN/incomplete, never negative proof.
+- **I20 — Rotation-stable marker identity:** marker ID is independent of HMAC key rotation; existing rows retain their persisted signing-key ID.
+- **I21 — Fenced reconciliation:** reconciliation mutations require expected record version and verified positive evidence tied to the exact reservation key.
 
 ### 10. Adversarial conformance matrix
 
@@ -840,6 +842,7 @@ The design was challenged against the reproduced interleaving, independent-host 
 - **AR-20 — Preflight uncertainty did not distinguish safe pre-effect states.** Specified that incomplete pre-model listing retains CLAIMED and incomplete post-model listing retains MODEL_COMPLETED; neither permits the next external effect.
 - **AR-21 — A successful HTTP status alone could be mistaken for publication proof.** Required exact response ID, issue URL, body, bot identity/type, and marker verification before PUBLISHED.
 - **AR-22 — Pagination completion and provider-side retry layers were not fully bounded.** Added explicit pagination budgets and a provider transport-call-count test.
+- **AR-23 — Marker identity was coupled to the HMAC key, so signing-key rotation could derive a second marker for the same reservation.** Decoupled marker ID from signing-key material: SHA-256 binds the canonical tuple/policy/runtime, while HMAC key ID and signature remain separate and persisted.
 
 **Residual design limitations (not defects that this contract can eliminate):**
 
@@ -861,7 +864,7 @@ No vendor is selected in this phase. At least two candidate backends must be ass
 - least-privilege credentials, audit trail, encryption, backup, retention, and restore;
 - data residency, operational burden, rate limits, and failure modes;
 - actual total cost at forecast read/write volume, retention, backup, and egress, including free-tier ceilings and card requirements;
-- executable A01–A30 conformance results on the candidate, not only vendor marketing claims.
+- executable A01–A40 conformance results on the candidate, not only vendor marketing claims.
 
 A backend that cannot satisfy every mandatory safety property is rejected regardless of price or convenience. Workflow concurrency groups may be defense in depth only; they are not the authority.
 
@@ -871,7 +874,7 @@ Current evidence:
 
 - `9R-ATOMIC-001` duplicate-publication race: **REPRODUCED / CONFIRMED FOR TESTED IN-PROCESS INTERLEAVING** by hosted run `45468257408`; expected physical POST count 1, observed 2.
 - Independent-process / independent-host durable-store conformance: **NOT_RUN**.
-- This document's A01–A30 matrix: **SPECIFIED, NOT_EXECUTED**.
+- This document's A01–A40 matrix: **SPECIFIED, NOT_EXECUTED**.
 - Backend comparison: **NOT_STARTED**.
 - Production adapter implementation: **NOT_AUTHORIZED**.
 - Reviewer activation, workflow registration on `main`, provider dispatch, merge, secret changes, Cloudflare deployment, and local-host changes: **NOT_AUTHORIZED**.
@@ -880,7 +883,7 @@ Approval sequence:
 
 1. Review this integrated contract and adversarial findings.
 2. Resolve any design objections and freeze the contract version.
-3. Write backend-neutral conformance tests and prove the current implementation remains RED without weakening the existing regression.
+3. Write backend-neutral A01–A40 conformance tests, validate the test harness against a non-production reference oracle, and prove the current reviewer path remains RED without weakening the existing regression.
 4. Compare at least two backend candidates against those same tests and documented guarantees.
 5. Obtain independent security review of the selected adapter and failure model.
 6. Only then request separate authorization for implementation. Reviewer activation, default-branch workflow registration, provider dispatch, and merge remain distinct later approvals.

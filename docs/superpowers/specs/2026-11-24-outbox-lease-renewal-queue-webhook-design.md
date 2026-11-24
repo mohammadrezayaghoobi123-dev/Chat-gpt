@@ -28,7 +28,7 @@ The following were inspected at the exact parent head, not inferred from the def
 - recordOutboxReceipt atomically inserts a receipt and completes the matching active generation. It currently has no token fence against simultaneous duplicate Queue deliveries using the same generation.
 - worker.js exports only a fetch handler. It has no queue handler and does not call ORCHESTRATOR_LEDGER.
 - wrangler.toml declares the Ledger Durable Object namespace but has no Outbox Queue producer or consumer declarations.
-- No production caller of enqueueOutbox was found in the inspected Worker/runtime path. This proposal wires the transport to the existing Ledger API; it does not invent a new public task/event ingress contract.
+- Existing internal event producers are present: transitionTask() accepts an optional outboxEvent and inserts it through enqueueOutboxInTransaction; executeOwnerCommand() inserts an Outbox event for the release operation and terminalizes pending events for cancel/quarantine. The inspected worker.js HTTP/MCP fetch path does not call ORCHESTRATOR_LEDGER, so this design does not invent or expose a new public ingress. It wires alarms to the already-existing Ledger event producers.
 - PR #462 is Draft/Open/Unmerged and its exact head is the parent SHA above. Its parent CI is green, but its Full History Secret Scan remains a separate repository-wide blocker (13 historical findings were reported in the parent PR evidence).
 
 A fresh, read-only Cloudflare account inventory showed these six existing Queues, each with zero producers and zero consumers:
@@ -50,7 +50,7 @@ Use the owning OrchestratorLedger instance as the dispatch authority. The produc
 
 Do not use a global Cron poller: the inspected code has no authoritative registry for enumerating all Ledger object IDs. Do not send directly from the user-facing enqueue call as the only delivery mechanism: that creates a SQL-commit/Queue-send dual-write gap.
 
-**Wake-up invariant:** every transition that creates or reschedules dispatchable Outbox work must update the next Durable Object alarm in the same storage transaction as the corresponding SQL state change. Cloudflare states that alarm operations follow the Storage API rules, that each Durable Object has one alarm, and that SQLite transactionSync includes synchronous storage operations. This exact SQL-plus-alarm behavior is a mandatory runtime characterization test before implementation can pass ([Alarms](https://developers.cloudflare.com/durable-objects/api/alarms/), [Storage API transaction semantics](https://github.com/cloudflare/cloudflare-docs/blob/production/src/content/partials/durable-objects/api-storage-other-methods.mdx)).
+**Wake-up invariant:** every transition that creates or reschedules dispatchable Outbox work must update the next Durable Object alarm in the same storage transaction as the corresponding SQL state change. Do not use transactionSync() for this: setAlarm() is asynchronous and transactionSync() permits only synchronous storage operations. Use ctx.storage.transaction(async () => { ...ctx.storage.sql.exec(...); await ctx.storage.setAlarm(...); }); for SQLite-backed Durable Objects, Cloudflare documents that direct ctx.storage operations, including SQL, participate in the explicit transaction. This exact SQL-plus-alarm atomicity must be proved by a Workers runtime characterization test before the producer is accepted ([SQLite storage transactions and Alarms](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/), [Alarm semantics](https://developers.cloudflare.com/durable-objects/api/alarms/)).
 
 The scheduler computes the earliest of:
 - the next due PENDING/READY or PENDING/RETRY_WAIT event;
@@ -58,9 +58,9 @@ The scheduler computes the earliest of:
 
 It sets one alarm for that time, or deletes the alarm if no dispatchable/recoverable Outbox row remains. The scan is local to the owning Ledger object; there is no global Durable Object enumeration.
 
-When enqueueOutbox inserts a new row, it schedules the alarm as part of the same synchronous storage transaction. Idempotent enqueue replay also recomputes the alarm so a previous missed wake-up can be repaired. claimOutbox, lease renewal, failure settlement, receipt settlement, and dead-letter settlement recompute the next alarm after their state transitions.
+When enqueueOutbox, transitionTask(outboxEvent), or executeOwnerCommand(release) writes a new Outbox row, it schedules the alarm inside the same asynchronous storage transaction. Idempotent enqueue replay also recomputes the alarm so a previous missed wake-up can be repaired. claimOutbox, lease renewal, failure settlement, receipt settlement, completion, and owner-command cancellation/quarantine recompute the next alarm after their state transitions. The transaction never contains Queue sends, webhook calls, Web Crypto hashing, or other network I/O.
 
-The alarm handler claims one due row at a time, creates a signed fixed-principal publisher assertion, and sends a minimal versioned Queue envelope. The claim transaction schedules the lease-expiry watchdog before the external Queue send occurs. If Queue send fails, the publisher attempts a token-fenced failOutbox transition to durable retry state. If the process fails between claim and send, the existing lease-expiry alarm reclaims the row. If Queue send succeeds but the producer cannot observe/finish the call, a later lease reclaim can publish a duplicate; consumer fencing and destination idempotency handle this at-least-once case.
+The alarm handler claims one due row at a time, creates a signed fixed-principal publisher assertion, and sends a minimal versioned Queue envelope. The claim storage transaction schedules the lease-expiry watchdog before the external Queue send occurs. If Queue send fails, the publisher attempts a token-fenced failOutbox transition to durable retry state. If the process fails between claim and send, the existing lease-expiry alarm reclaims the row. If Queue send succeeds but the producer cannot observe/finish the call, a later lease reclaim can publish a duplicate; consumer fencing and destination idempotency handle this at-least-once case.
 
 Cloudflare confirms a resolved Queue.send() means the message has been written to disk ([Queue JavaScript API](https://developers.cloudflare.com/queues/configuration/javascript-apis/)). This is not a distributed transaction with SQLite; the recovery mechanism is deliberate at-least-once replay.
 
@@ -191,8 +191,8 @@ The currently inspected Quarantine Queues have a one-day retention period and no
 - migration from v10 preserves old rows while legacy active rows with no token remain untrusted until safely reclaimed.
 
 ### Alarm/producer tests
-- enqueue inserts row and schedules alarm;
-- a forced transaction abort after setAlarm leaves neither the row nor alarm;
+- each existing event producer (enqueueOutbox, transitionTask with outboxEvent, and owner release) inserts the row and schedules the Alarm atomically;
+- a forced setAlarm failure inside the asynchronous storage transaction rolls back the SQL row/state change; a successful transaction persists both the SQL mutation and Alarm;
 - repeated enqueue idempotency repairs/recalculates the wake-up;
 - one Durable Object alarm selects the earliest due/expiry across multiple rows;
 - claim schedules lease expiry before Queue send;
@@ -256,7 +256,7 @@ Live activation is prohibited until all of the following are deliberately resolv
 2. Provision LEDGER_WORKER_ASSERTION_KEYS, OUTBOX_WEBHOOK_URL, and OUTBOX_WEBHOOK_HMAC_KEY through an approved secret-management path.
 3. Select and independently verify the HTTPS receiver's HMAC and idempotency implementation.
 4. Approve quarantine retention/export policy; current quarantine Queue retention is one day.
-5. Identify the authenticated application caller that writes to enqueueOutbox. No production caller was found in the inspected Worker/runtime path.
+5. Verify the already-existing upstream invocation path for transitionTask(outboxEvent) and executeOwnerCommand(release); the inspected Worker.fetch handler does not itself invoke ORCHESTRATOR_LEDGER.
 6. Resolve the independent full-history secret-scan blocker.
 
 ### Rollback

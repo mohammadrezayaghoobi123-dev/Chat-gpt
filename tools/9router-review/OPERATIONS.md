@@ -797,6 +797,7 @@ The model provider may also lack a caller-supplied idempotency key or execution-
 - **I24 — Publication response evidence:** PUBLISHED requires a validated response digest committed with the remote comment ID.
 - **I25 — Restore monotonicity:** point-in-time restore never silently re-enables model/comment effects; restore requires an independent monotonic recovery epoch and complete audit reconciliation.
 - **I26 — Write-ahead effect inventory:** no external effect is issued unless both the independent ledger intent and the primary-store attempt transition are durably acknowledged.
+- **I27 — Security-scan provenance:** a secret scan is evidence only when its actual scanned base/head range equals the exact PR base/head; a stale, partial, or unbound range is UNKNOWN, not PASS.
 
 ### 10. Adversarial conformance matrix
 
@@ -878,6 +879,7 @@ The design was challenged against the reproduced interleaving, independent-host 
 - **AR-26 — PUBLISHED could be committed without a durable digest of the validated GitHub response.** Added `validated_response_digest` to the completion operation and snapshot-validation evidence fields.
 - **AR-27 — Point-in-time restore could roll the reservation authority behind an already-consumed external-effect boundary.** Added a system-level `RECOVERY_LOCKED` mode and an independent monotonic recovery anchor requirement. A restored store cannot resume effectful operations until its audit inventory is proven complete; if that proof is unavailable, the store remains quarantined.
 - **AR-28 — A backup restore cannot reconstruct external attempts from the database alone.** Added an independent append-only effect ledger with write-ahead intent acknowledgements and outcome evidence; the database remains the transactional reservation authority, while the ledger is the rollback-independent recovery inventory.
+- **AR-29 — The hosted Gitleaks PR-diff action reported a commit range unrelated to the PR's exact base/head, while push runs scanned only the latest commit.** Those zero-finding results cannot establish current PR-diff clearance. Require scan provenance to bind to the exact PR base SHA and head SHA and fail closed on any mismatch; no suppression is permitted.
 
 **Residual design limitations (not defects that this contract can eliminate):**
 
@@ -964,6 +966,7 @@ Official evidence: [Connect to your database](https://supabase.com/docs/guides/d
 Current evidence:
 
 - `9R-ATOMIC-001` duplicate-publication race: **REPRODUCED / CONFIRMED FOR TESTED IN-PROCESS INTERLEAVING** by hosted run `45468257408`; expected physical POST count 1, observed 2.
+- Gitleaks provenance: the PR-event run for the prior head logged range `2b0e8f74...^..e5745a25...` (30 commits), which does not match this PR's base `919b19ca...` and head `fe6cc6ee...`; the push-event run scanned only `-1`. Both zero-finding results are non-authoritative for the full PR diff. Exact current-head PR-diff scan remains **UNKNOWN**.
 - The unresolved P1 redirect-replay review thread remains open. The shared GitHub request helper contains `redirect: "error"`, and the 307/308 comment-publication integration subtests passed in the verification run; however, the complete suite is not green and the P1 thread is intentionally not marked resolved.
 - Backend-neutral reference-oracle tranche T01–T19: **PASS 19/19** in hosted run [`45507214386`](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45507214386), exact test revision `190a709331118331ded43a953a28bc9ed39201f0`. The oracle is intentionally in-memory and non-production.
 - Full reviewer regression plus reference tranche at the same revision: **155 passed / 1 failed**. The sole failure is the preserved concurrency RED: 2 physical comment POSTs against the required maximum of 1. No assertion was weakened.

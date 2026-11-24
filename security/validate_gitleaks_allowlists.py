@@ -124,10 +124,10 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
             marker = ""
         if marker != "0123456789abcdef" * 2:
             errors.append(f"{label}: historical fixture does not match the approved synthetic marker")
-        expected_pattern = rf"^\\s*{re.escape(line)}$"
+        expected_pattern = r"^\s*" + line + "$"
         if regexes[0] != expected_pattern:
             errors.append(f"{label}: regex must match only the exact historical fixture line, allowing Gitleaks line-prefix whitespace")
-        if not pattern.fullmatch(line) or not pattern.fullmatch("\\n" + line):
+        if not pattern.fullmatch(line) or not pattern.fullmatch("\n" + line):
             errors.append(f"{label}: regex does not match the exact historical fixture line representation")
         key = match.group(1)
         replacement = "1" if key[0] != "1" else "2"

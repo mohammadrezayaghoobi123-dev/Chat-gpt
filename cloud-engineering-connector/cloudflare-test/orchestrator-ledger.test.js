@@ -7,7 +7,7 @@ import { consumeOrchestratorDeadLetters, consumeOrchestratorOutbox, processOrche
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
 }
-const now = 1_800_000_000_000;
+const now = Math.floor(Date.now() / 1000) * 1000;
 const task = (taskId = "task-0001") => ({
   taskId, state: "SCHEDULED", version: 1, agentRound: 0, createdAt: now, updatedAt: now,
   executorId: "agent:worker-1", commitSha: "a".repeat(40),
@@ -60,7 +60,7 @@ const evidence = { kind: "test-evidence", reference: "ci://run/123" };
 describe("OrchestratorLedger durable coordination contract", () => {
   it("initializes its own SQLite schema and reports the schema version", async () => {
     const ledger = ledgerFor("ledger-schema-ping");
-    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 7 });
+    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 8 });
     await runInDurableObject(ledger, async (instance, state) => {
       const tables = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row => row.name);
       expect(tables).toEqual(expect.arrayContaining([

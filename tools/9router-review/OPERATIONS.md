@@ -314,7 +314,7 @@ Logical record fields:
 
 The implementation boundary MUST expose equivalent operations (names are proposed):
 
-- `claim(key, owner, lease_duration) -> CLAIMED | BUSY | ALREADY_PUBLISHED | UNKNOWN`
+- `claim(key, owner, lease_duration) -> CLAIMED | BUSY | ALREADY_PUBLISHED | DUPLICATE_ACCEPTED | UNKNOWN`
 - `renew(key, owner, generation, lease_duration) -> RENEWED | LOST_OWNERSHIP`
 - `startWork(key, owner, generation) -> IN_PROGRESS | LOST_OWNERSHIP`
 - `beginPublication(key, owner, generation, attempt_id, payload_hash) -> PUBLISHING | LOST_OWNERSHIP | TERMINAL`
@@ -334,6 +334,7 @@ Allowed states:
 - `PUBLISHING`: a single-use publication intent has been durably committed. This state is an irreversible safety boundary.
 - `PUBLISHED`: one matching remote comment is authoritatively identified and its ID recorded.
 - `UNKNOWN`: publication may have occurred, but the system cannot establish the remote outcome.
+- `DUPLICATE_ACCEPTED`: more than one matching remote comment is found; terminal invariant violation requiring incident handling.
 - `EXPIRED`: a pre-publication lease expired; a new generation may be claimed atomically.
 - `ABORTED`: a pre-publication run stopped safely and cannot publish under that generation.
 

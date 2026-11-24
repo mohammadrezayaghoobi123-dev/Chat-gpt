@@ -272,7 +272,7 @@ function inspectRequiredReviewers(environment, addFinding) {
       addFinding(
         "UNSUPPORTED_REVIEWER_TYPE",
         "BLOCKED",
-        "Every required reviewer must resolve to a GitHub User identity; Team identities are not accepted by this release policy.",
+        "Every required reviewer must resolve to a valid GitHub User reviewer identity; Team identities are not accepted by this release policy.",
       );
       continue;
     }

@@ -49,30 +49,36 @@ test("Production and Staging enable persisted custom logs without invocation log
   }
 });
 
-test("Production and Staging both declare the SQLite WriteControl binding and migration", () => {
+test("Production and Staging use declarative exports for the existing SQLite WriteControl class", () => {
   const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
-  assert.match(production, /\[\[durable_objects\.bindings\]\][\s\S]*?name\s*=\s*"WRITE_CONTROL"[\s\S]*?class_name\s*=\s*"WriteControl"/);
-  assert.match(production, /\[\[migrations\]\][\s\S]*?new_sqlite_classes\s*=\s*\["WriteControl"\]/);
-  assert.match(staging, /\[\[env\.staging\.durable_objects\.bindings\]\][\s\S]*?name\s*=\s*"WRITE_CONTROL"[\s\S]*?class_name\s*=\s*"WriteControl"/);
-  assert.match(staging, /\[\[env\.staging\.migrations\]\][\s\S]*?new_sqlite_classes\s*=\s*\["WriteControl"\]/);
+  const entrypoint = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  assert.match(production, /\\[\\[durable_objects\\.bindings\\]\\][\\s\\S]*?name\\s*=\\s*"WRITE_CONTROL"[\\s\\S]*?class_name\\s*=\\s*"WriteControl"/);
+  assert.match(staging, /\\[\\[env\\.staging\\.durable_objects\\.bindings\\]\\][\\s\\S]*?name\\s*=\\s*"WRITE_CONTROL"[\\s\\S]*?class_name\\s*=\\s*"WriteControl"/);
+  assert.match(config, /^\\[exports\\.WriteControl\\]\\s*\\ntype\\s*=\\s*"durable-object"\\s*\\nstorage\\s*=\\s*"sqlite"$/m);
+  assert.match(entrypoint, /export \\{ WriteControl \\} from "\\.\\/write-control\\.js"/);
 });
 
-
-test("Production and Staging declare independent OrchestratorLedger SQLite bindings and migrations", () => {
+test("Production and Staging declare KnowledgeStore and OrchestratorLedger as SQLite exports", () => {
   const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
-  assert.match(production, /\[\[durable_objects\.bindings\]\][\s\S]*?name\s*=\s*"ORCHESTRATOR_LEDGER"[\s\S]*?class_name\s*=\s*"OrchestratorLedger"/);
-  assert.match(production, /\[\[migrations\]\][\s\S]*?tag\s*=\s*"v3"[\s\S]*?new_sqlite_classes\s*=\s*\["OrchestratorLedger"\]/);
-  assert.match(staging, /\[\[env\.staging\.durable_objects\.bindings\]\][\s\S]*?name\s*=\s*"ORCHESTRATOR_LEDGER"[\s\S]*?class_name\s*=\s*"OrchestratorLedger"/);
-  assert.match(staging, /\[\[env\.staging\.migrations\]\][\s\S]*?tag\s*=\s*"v3"[\s\S]*?new_sqlite_classes\s*=\s*\["OrchestratorLedger"\]/);
+  const entrypoint = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  for (const [binding, className, modulePath] of [
+    ["KNOWLEDGE_STORE", "KnowledgeStore", "./knowledge-store.js"],
+    ["ORCHESTRATOR_LEDGER", "OrchestratorLedger", "./orchestrator-ledger.js"],
+  ]) {
+    assert.match(production, new RegExp("\\\\[\\\\[durable_objects\\\\.bindings\\\\]\\\\][\\\\s\\\\S]*?name\\\\s*=\\\\s*\"" + binding + "\"[\\\\s\\\\S]*?class_name\\\\s*=\\\\s*\"" + className + "\""));
+    assert.match(staging, new RegExp("\\\\[\\\\[env\\\\.staging\\\\.durable_objects\\\\.bindings\\\\]\\\\][\\\\s\\\\S]*?name\\\\s*=\\\\s*\"" + binding + "\"[\\\\s\\\\S]*?class_name\\\\s*=\\\\s*\"" + className + "\""));
+    assert.match(config, new RegExp("^\\\\[exports\\\\." + className + "\\]\\\\s*\\\\ntype\\\\s*=\\\\s*\"durable-object\"\\\\s*\\\\nstorage\\\\s*=\\\\s*\"sqlite\"$", "m"));
+    assert.ok(entrypoint.includes("export { " + className + " } from \"" + modulePath + "\""));
+  }
 });
 
-
-test("Production and Staging declare independent KnowledgeStore SQLite bindings and v2 migrations", () => {
-  const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
-  assert.match(production, /\[\[durable_objects\.bindings\]\][\s\S]*?name\s*=\s*"KNOWLEDGE_STORE"[\s\S]*?class_name\s*=\s*"KnowledgeStore"/);
-  assert.match(production, /\[\[migrations\]\][\s\S]*?tag\s*=\s*"v2"[\s\S]*?new_sqlite_classes\s*=\s*\["KnowledgeStore"\]/);
-  assert.match(staging, /\[\[env\.staging\.durable_objects\.bindings\]\][\s\S]*?name\s*=\s*"KNOWLEDGE_STORE"[\s\S]*?class_name\s*=\s*"KnowledgeStore"/);
-  assert.match(staging, /\[\[env\.staging\.migrations\]\][\s\S]*?tag\s*=\s*"v2"[\s\S]*?new_sqlite_classes\s*=\s*\["KnowledgeStore"\]/);
+test("Staging inherits the shared Durable Object exports map and no environment silently diverges", () => {
+  assert.doesNotMatch(config, /^\\[env\\.staging\\.exports\\./m);
+  assert.doesNotMatch(config, /^\\[\\[migrations\\]\\]/m);
+  assert.doesNotMatch(config, /^\\[\\[env\\.staging\\.migrations\\]\\]/m);
+  assert.match(config, /^\\[exports\\.WriteControl\\]/m);
+  assert.match(config, /^\\[exports\\.KnowledgeStore\\]/m);
+  assert.match(config, /^\\[exports\\.OrchestratorLedger\\]/m);
 });
 
 test("Production and Staging both declare the five-minute reconciliation Cron", () => {

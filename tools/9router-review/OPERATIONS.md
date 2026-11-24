@@ -1093,3 +1093,13 @@ T48 must be observed RED for the exact missing-boundary reason before implementa
 - Production adapter: **NOT_AUTHORIZED**.
 
 The current T01–T47 GREEN result remains valid only for the existing reference-oracle contract. It does not cover AR-40 and must not be described as full protocol conformance. Preserve the duplicate-publication RED test unchanged. Keep PR #463 Draft, reviewer disabled, and all default-branch, secret, cloud-resource, deployment, and local-host boundaries unchanged.
+
+
+#### 2026-11-25 execution checkpoint — T48 authored
+
+- T48 has been added to `conformance/reservation-adapter.contract.test.mjs` on verification commit `32b01c2271765f45005bfcc0bcceaccfc1713376`.
+- The test creates an acknowledged MODEL intent, calls `appendOutcome` without an attempt-boundary receipt, and asserts rejection plus unchanged event count and watermark.
+- Static inspection of the current reference ledger shows `appendOutcome` does not read or validate `attemptBoundaryReceipt`; therefore the current implementation is expected to violate T48. This is a source-level predicted RED, **not an observed test execution**.
+- The conformance workflow is configured for pushes to `verify/9router-reservation-conformance-*`. No workflow-run result has yet been retrieved for this exact commit; hosted execution is **NOT_VERIFIED**.
+- No adapter implementation was changed. T48 must be observed failing before a minimal correction is made.
+- T49/T50 remain design-only. AR-40 remains OPEN. The prior T01–T47 result is unchanged and does not include T48.

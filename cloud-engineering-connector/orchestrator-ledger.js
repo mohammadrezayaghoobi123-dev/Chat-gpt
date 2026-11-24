@@ -1674,11 +1674,6 @@ export class OrchestratorLedger extends DurableObject {
           occurredAt: now,
           previousHash,
         });
-        try {
-          assertOwnerAssertionFresh(verified);
-        } catch {
-          return { applied: false, reason: "OWNER_ASSERTION_REJECTED" };
-        }
         const successResult = conflictReason
           ? { applied: false, conflict: true, reason: conflictReason }
           : {

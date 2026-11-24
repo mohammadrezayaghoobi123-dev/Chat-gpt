@@ -640,7 +640,7 @@ describe("persistent Tenant Directory", () => {
     expect(decision).toMatchObject({
       effect: "allow",
       membershipVersion: 1,
-      policyScopeEpoch: 1,
+      policyScopeEpoch: 7,
       policyRuleVersion: 1,
     });
   });
@@ -655,4 +655,44 @@ describe("persistent Tenant Directory", () => {
     await expect(runInDurableObject(stub, instance => instance.ensureSchema()))
       .rejects.toMatchObject({ code: "TENANT_DIRECTORY_SCHEMA_CORRUPT" });
   });
+  it("fails closed when a schema-v2 policy scope has lost its epoch row", async () => {
+    const tenantId = "tenant-epoch-row-corruption";
+    const principalId = "principal-epoch-row-corruption";
+    const adapters = adaptersFor(tenantId);
+    const keySet = JSON.stringify({ test: "d".repeat(64) });
+    const now = 1_800_150_000_000;
+    await configureDirectory(tenantId, keySet);
+
+    const membership = {
+      principalId, membershipId: "membership-epoch-row", role: "tenant-member",
+      status: "active", expectedVersion: 0,
+    };
+    await adapters.provisioningStore.upsertMembership({
+      assertion: await adminAssertion(keySet, "upsertMembership", tenantId, null, now, membership),
+      tenantId, ...membership, now,
+    });
+    const resourceDigest = await sha256("epoch-row-corruption");
+    const policy = {
+      projectId: "project-epoch-row", principalId, action: "project.read",
+      resourceDigest, effect: "allow", policyVersion: "epoch-row-v1",
+      status: "active", expectedVersion: 0,
+    };
+    await adapters.provisioningStore.upsertProjectPolicy({
+      assertion: await adminAssertion(keySet, "upsertProjectPolicy", tenantId, "project-epoch-row", now + 1_000, policy),
+      tenantId, ...policy, now: now + 1_000,
+    });
+
+    const stub = env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName(tenantId));
+    await runInDurableObject(stub, instance => {
+      instance.ctx.storage.sql.exec(
+        "DELETE FROM tenant_policy_scope_epochs WHERE tenant_id=? AND project_id=? AND principal_id=? AND action=?",
+        tenantId, "project-epoch-row", principalId, "project.read",
+      );
+    });
+    await expect(stub.authorizeProjectAction({
+      principalId, tenantId, projectId: "project-epoch-row", action: "project.read",
+      resource: { test: true }, resourceDigest, expectedMembershipVersion: 1,
+    })).rejects.toMatchObject({ code: "TENANT_DIRECTORY_SCHEMA_CORRUPT" });
+  });
+
 });

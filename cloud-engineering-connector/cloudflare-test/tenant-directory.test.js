@@ -50,6 +50,7 @@ describe("persistent Tenant Directory", () => {
       action: "project.read",
       resource: null,
       resourceDigest: await sha256("null"),
+      expectedMembershipVersion: 1,
     });
     expect(decision).toMatchObject({
       effect: "deny",
@@ -124,6 +125,10 @@ describe("persistent Tenant Directory", () => {
       projectId: "project-red",
       action: "project.read",
       policyVersion: "policy-v1",
+      membershipId: "membership-01",
+      membershipVersion: 1,
+      policyScopeEpoch: 1,
+      policyRuleVersion: 1,
     });
 
     const directoryStub = env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName("tenant-alpha"));
@@ -172,6 +177,7 @@ describe("persistent Tenant Directory", () => {
       action: "project.read",
       resource: null,
       resourceDigest: await sha256("null"),
+      expectedMembershipVersion: 1,
     });
     expect(denied.effect).toBe("deny");
   });
@@ -279,6 +285,7 @@ describe("persistent Tenant Directory", () => {
       action: "project.read",
       resource: null,
       resourceDigest,
+      expectedMembershipVersion: 3,
     });
     expect(reactivatedDecision.effect).toBe("deny");
   });
@@ -487,5 +494,83 @@ describe("persistent Tenant Directory", () => {
       epoch: before.epoch,
       policyStatus: "active",
     });
+  });
+
+  it("rejects authorization when the resolved tenant context becomes stale", async () => {
+    const tenantId = "tenant-stale-context";
+    const principalId = "principal-stale-context";
+    const adapters = adaptersFor(tenantId);
+    const keySet = JSON.stringify({ test: "a".repeat(64) });
+    const now = 1_800_130_000_000;
+    await configureDirectory(tenantId, keySet);
+
+    const membershipV1 = {
+      principalId, membershipId: "membership-stale", role: "tenant-member",
+      status: "active", expectedVersion: 0,
+    };
+    await adapters.provisioningStore.upsertMembership({
+      assertion: await adminAssertion(keySet, "upsertMembership", tenantId, null, now, membershipV1),
+      tenantId, ...membershipV1, now,
+    });
+    const resourceDigest = await sha256("null");
+    const policy = {
+      projectId: "project-stale", principalId, action: "project.read",
+      resourceDigest, effect: "allow", policyVersion: "stale-context-v1",
+      status: "active", expectedVersion: 0,
+    };
+    await adapters.provisioningStore.upsertProjectPolicy({
+      assertion: await adminAssertion(keySet, "upsertProjectPolicy", tenantId, "project-stale", now + 1_000, policy),
+      tenantId, ...policy, now: now + 1_000,
+    });
+
+    const principal = await resolvePrincipal({
+      credential: "stale-context-session",
+      authenticator: { async authenticate() { return { authenticated: true, principalId, type: "human" }; } },
+    });
+    const staleContext = await resolveTenantContext({
+      principal, tenantSelector: tenantId, membershipStore: adapters.membershipStore,
+    });
+    const membershipV2 = {
+      principalId, membershipId: "membership-stale", role: "tenant-operator",
+      status: "active", expectedVersion: 1,
+    };
+    await adapters.provisioningStore.upsertMembership({
+      assertion: await adminAssertion(keySet, "upsertMembership", tenantId, null, now + 2_000, membershipV2),
+      tenantId, ...membershipV2, now: now + 2_000,
+    });
+
+    await expect(authorizeProjectAction({
+      principal,
+      tenantContext: staleContext,
+      projectSelector: "project-stale",
+      action: "project.read",
+      authorizationStore: adapters.authorizationStore,
+    })).rejects.toMatchObject({ code: "TENANT_MEMBERSHIP_STALE" });
+  });
+
+  it("rejects membership records without a positive numeric version", async () => {
+    const principal = await resolvePrincipal({
+      credential: "invalid-version-session",
+      authenticator: {
+        async authenticate() {
+          return { authenticated: true, principalId: "principal-invalid-version", type: "human" };
+        },
+      },
+    });
+    await expect(resolveTenantContext({
+      principal,
+      tenantSelector: "tenant-invalid-version",
+      membershipStore: {
+        async getActiveMembership() {
+          return {
+            principalId: "principal-invalid-version",
+            tenantId: "tenant-invalid-version",
+            membershipId: "membership-invalid-version",
+            role: "tenant-member",
+            status: "active",
+          };
+        },
+      },
+    })).rejects.toMatchObject({ code: "TENANT_MEMBERSHIP_REQUIRED" });
   });
 });

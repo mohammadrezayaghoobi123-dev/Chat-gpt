@@ -99,7 +99,7 @@ async function ownerAssertionWithJti(context, at, jti) {
     jti,
   };
   const payload = btoa(String.fromCharCode(...new TextEncoder().encode(canonicalJson(claims))))
-    .replace(/=/g, "").replace(/\\+/g, "-").replace(/\\//g, "_");
+    .split("=").join("").split("+").join("-").split("/").join("_");
   const signingInput = "v1.owner-v1." + payload;
   const key = await crypto.subtle.importKey(
     "raw", workerKey, { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
@@ -108,7 +108,7 @@ async function ownerAssertionWithJti(context, at, jti) {
     "HMAC", key, new TextEncoder().encode(signingInput),
   ));
   const encoded = btoa(String.fromCharCode(...signature))
-    .replace(/=/g, "").replace(/\\+/g, "-").replace(/\\//g, "_");
+    .split("=").join("").split("+").join("-").split("/").join("_");
   return signingInput + "." + encoded;
 }
 

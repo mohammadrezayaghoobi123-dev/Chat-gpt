@@ -2823,6 +2823,99 @@ it("rejects a task whose updatedAt precedes createdAt before durable persistence
   });
 });
 
+it("rolls back assertion consumption on task insert failure and permits same-assertion retry", async () => {
+  const ledger = ledgerFor("ledger-create-task-assertion-rollback-replay");
+  const jti = "jti-create-task-db-abort-retry-000001";
+  const workerAssertion = await createWorkerAssertion({
+    subject: "orchestrator-scheduler",
+    role: "system",
+    operation: "createTask",
+    nowMs: now,
+    jti,
+  });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    state.storage.sql.exec(`
+      CREATE TRIGGER abort_first_task_insert_for_assertion_retry
+      BEFORE INSERT ON orchestrator_tasks
+      WHEN NEW.task_id = 'task-db-abort-first'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced task insert failure');
+      END
+    `);
+  });
+
+  let firstError = null;
+  try {
+    await ledger.createTask({
+      task: task("task-db-abort-first"),
+      idempotencyKey: "create-db-abort-first",
+      inputHash: "a".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion,
+    });
+  } catch (error) {
+    firstError = error;
+  }
+
+  const afterFailure = await runInDurableObject(ledger, async (_instance, state) => ({
+    tasks: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+      "task-db-abort-first",
+    ).one().count,
+    claimCandidates: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_claim_candidates WHERE task_id = ?",
+      "task-db-abort-first",
+    ).one().count,
+    consumedAssertions: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      jti,
+    ).one().count,
+  }));
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    state.storage.sql.exec("DROP TRIGGER abort_first_task_insert_for_assertion_retry");
+  });
+
+  expect(firstError?.message).toContain("forced task insert failure");
+  expect(afterFailure).toEqual({
+    tasks: 0,
+    claimCandidates: 0,
+    consumedAssertions: 0,
+  });
+
+  const retryResult = await ledger.createTask({
+    task: task("task-db-abort-retry-different"),
+    idempotencyKey: "create-db-abort-retry-different",
+    inputHash: "b".repeat(64),
+    now,
+    workerId: "orchestrator-scheduler",
+    workerAssertion,
+  });
+
+  const afterRetry = await runInDurableObject(ledger, async (_instance, state) => ({
+    taskIds: state.storage.sql.exec(
+      "SELECT task_id FROM orchestrator_tasks WHERE task_id IN (?, ?) ORDER BY task_id",
+      "task-db-abort-first",
+      "task-db-abort-retry-different",
+    ).toArray().map(row => row.task_id),
+    consumedAssertions: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      jti,
+    ).one().count,
+  }));
+
+  expect(retryResult).toMatchObject({
+    created: true,
+    task: { taskId: "task-db-abort-retry-different" },
+  });
+  expect(afterRetry).toEqual({
+    taskIds: ["task-db-abort-retry-different"],
+    consumedAssertions: 1,
+  });
+});
+
 it("rejects invalid initial task versions without durable task or claim-candidate writes", async () => {
   const ledger = ledgerFor("ledger-create-task-invalid-version");
   const cases = [

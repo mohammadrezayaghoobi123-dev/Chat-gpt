@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,36 +33,41 @@ const workflows = [
 ];
 
 for (const workflow of workflows) {
-  test(workflow.name + " release refuses to deploy an unapproved or currently unauthorized candidate", () => {
+  test(workflow.name + " release revalidates authorization in the same step that deploys", () => {
     const source = readFileSync(workflow.path, "utf8");
-    assert.match(source, /pull-requests:\s*read/, "release workflow must have read-only PR review access");
-    assert.equal((source.match(/node scripts\/verify-release-approval\.mjs/g) || []).length, 2,
-      "approval must be checked once before preparation and revalidated immediately before deployment");
-    assert.equal((source.match(/RELEASE_GITHUB_TOKEN:/g) || []).length, 2,
-      "GitHub token must be scoped only to the two approval checks");
-    assert.equal((source.match(/RELEASE_REVIEWER_IDS:/g) || []).length, 2,
-      "trusted reviewer policy must be scoped only to the two approval checks");
-    assert.equal((source.match(/RELEASE_REVIEWER_IDS:\s*\$\{\{\s*vars\.RELEASE_REVIEWER_IDS\s*\}\}/g) || []).length, 2,
-      "both approval checks must use the explicit GitHub Actions reviewer policy variable");
+    assert.ok(source.includes("pull-requests: read"), "release workflow must have read-only PR review access");
+    assert.equal(source.split("node scripts/verify-release-approval.mjs").length - 1, 1,
+      "only the early approval check may run as a separate step");
+    assert.equal(source.split("bash scripts/verify-and-deploy-release.sh").length - 1, 1,
+      "the final authorization check and deployment must execute through one guarded runner");
 
-    const firstGuardPosition = source.indexOf("node scripts/verify-release-approval.mjs");
-    const secondGuardPosition = source.indexOf("node scripts/verify-release-approval.mjs", firstGuardPosition + 1);
-    const deployPosition = source.indexOf("npx wrangler deploy");
-    const secondGuardStepStart = source.lastIndexOf("      - name: ", secondGuardPosition);
-    const deployStepStart = source.lastIndexOf("      - name: ", deployPosition);
-    const secondGuardStepEnd = source.indexOf("\n      - name: ", secondGuardStepStart + 1) + 1;
-    const secondGuardStep = source.slice(secondGuardStepStart, secondGuardStepEnd);
-    assert.ok(firstGuardPosition < secondGuardPosition && secondGuardPosition < deployPosition,
-      "the second authorization check must execute after initial preparation and before deployment");
-    assert.match(secondGuardStep, /Revalidate trusted reviewer access immediately before/,
-      "the second check must be explicitly named as a just-in-time authorization revalidation");
-    assert.match(secondGuardStep, /RELEASE_GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/,
-      "the just-in-time gate must receive only the scoped GitHub token");
-    assert.match(secondGuardStep, /RELEASE_REVIEWER_IDS:\s*\$\{\{\s*vars\.RELEASE_REVIEWER_IDS\s*\}\}/,
-      "the just-in-time gate must receive the trusted reviewer policy");
-    assert.equal(secondGuardStepEnd, deployStepStart,
-      "the just-in-time authorization gate must be the immediately preceding workflow step");
-    assert.match(source, /RELEASE_ENV:\s*(staging|production)/, "release environment must be explicit");
+    const deployStepName = workflow.name === "Staging"
+      ? "      - name: Deploy candidate to Staging"
+      : "      - name: Deploy candidate to Production";
+    const deployStepStart = source.indexOf(deployStepName);
+    const deployStepEnd = source.indexOf("\n      - name: ", deployStepStart + 1);
+    assert.ok(deployStepStart >= 0 && deployStepEnd > deployStepStart,
+      "the deployment step must be uniquely identifiable");
+    const deployStep = source.slice(deployStepStart, deployStepEnd);
+
+    assert.ok(deployStep.includes("id: deploy"), "deployment step identity must remain stable for rollback and evidence");
+    assert.ok(deployStep.includes("shell: bash"), "guarded runner must use an explicit Bash shell");
+    assert.ok(deployStep.includes("bash scripts/verify-and-deploy-release.sh"),
+      "the same step must run the final approval check and Wrangler deployment");
+    assert.ok(deployStep.includes("RELEASE_GITHUB_TOKEN: $" + "{{ github.token }}"),
+      "the final authorization check must receive its scoped GitHub token");
+    assert.ok(deployStep.includes("RELEASE_REVIEWER_IDS: $" + "{{ vars.RELEASE_REVIEWER_IDS }}"),
+      "the final authorization check must receive the configured reviewer policy");
+    assert.ok(deployStep.includes("CLOUDFLARE_API_TOKEN: $" + "{{ secrets.CLOUDFLARE_API_TOKEN }}"),
+      "the deploy process must receive the Cloudflare API token");
+    assert.ok(deployStep.includes("CLOUDFLARE_ACCOUNT_ID: $" + "{{ vars.CLOUDFLARE_ACCOUNT_ID }}"),
+      "the deploy process must receive the exact Cloudflare account");
+    assert.ok(!deployStep.includes("npx wrangler deploy"),
+      "Wrangler invocation must be owned by the guarded runner, not duplicated in the workflow");
+    assert.ok(!source.includes("Revalidate trusted reviewer access immediately before"),
+      "a separately scheduled final authorization step must not remain");
+    assert.ok(source.includes("RELEASE_ENV: " + workflow.name.toLowerCase()),
+      "release environment must remain explicit");
   });
 }
 
@@ -391,7 +396,7 @@ test("live Staging smoke is post-deploy only and PR CI does not probe the previo
 for (const workflow of workflows) {
   test(workflow.name + " release validates the smoke credential before deployment and uses it only for live acceptance", () => {
     const source = readFileSync(workflow.path, "utf8");
-    const deployPosition = source.indexOf("npx wrangler deploy");
+    const deployPosition = source.indexOf("bash scripts/verify-and-deploy-release.sh");
     const credentialPreflightPosition = source.indexOf("- name: Validate MCP smoke credential");
     assert.ok(credentialPreflightPosition >= 0 && credentialPreflightPosition < deployPosition,
       "MCP smoke credential must be validated before deployment");
@@ -678,3 +683,108 @@ for (const workflow of workflows) {
       "preflight must not fall back to an arbitrary version when the 100% target is ambiguous");
   });
 }
+
+
+function createGuardedDeployCommandFixtures(directory) {
+  const nodeCommand = join(directory, "node");
+  const npxCommand = join(directory, "npx");
+  const commandSource = phase => [
+    "#!/bin/bash",
+    "set -euo pipefail",
+    "cf_token=false",
+    '[[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] && cf_token=true',
+    "cf_account=false",
+    '[[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] && cf_account=true',
+    "github_token=false",
+    '[[ -n "${RELEASE_GITHUB_TOKEN:-}" ]] && github_token=true',
+    "reviewer_policy=false",
+    '[[ -n "${RELEASE_REVIEWER_IDS:-}" ]] && reviewer_policy=true',
+    'printf \'{"phase":"' + phase + '","args":"%s","cloudflareTokenPresent":%s,"cloudflareAccountPresent":%s,"githubTokenPresent":%s,"reviewerPolicyPresent":%s}\\n\' "$*" "$cf_token" "$cf_account" "$github_token" "$reviewer_policy" >> "$RELEASE_EVENT_LOG"',
+    'if [[ "' + phase + '" == "approval" ]]; then exit "${FAKE_APPROVAL_EXIT:-0}"; fi',
+  ].join("\n");
+  writeFileSync(nodeCommand, commandSource("approval"));
+  writeFileSync(npxCommand, commandSource("deployment"));
+  chmodSync(nodeCommand, 0o755);
+  chmodSync(npxCommand, 0o755);
+}
+function guardedDeployEnvironment(directory, overrides = {}) {
+  return {
+    ...process.env,
+    PATH: directory + ":" + process.env.PATH,
+    RELEASE_EVENT_LOG: join(directory, "events.jsonl"),
+    RELEASE_ENV: "staging",
+    RELEASE_GITHUB_TOKEN: "github-token-sentinel",
+    RELEASE_REVIEWER_IDS: "101,202",
+    CLOUDFLARE_API_TOKEN: "cloudflare-token-sentinel",
+    CLOUDFLARE_ACCOUNT_ID: "cloudflare-account-sentinel",
+    GITHUB_REPOSITORY: "example/repository",
+    GITHUB_SHA: "0123456789abcdef0123456789abcdef01234567",
+    ...overrides,
+  };
+}
+
+test("final release runner validates authorization and deploys in one step with child-process credential isolation", () => {
+  const directory = mkdtempSync(join(tmpdir(), "guarded-release-deploy-"));
+  try {
+    createGuardedDeployCommandFixtures(directory);
+    const script = new URL("../scripts/verify-and-deploy-release.sh", import.meta.url).pathname;
+    const result = spawnSync("bash", [script], {
+      env: guardedDeployEnvironment(directory),
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+
+    const events = readFileSync(join(directory, "events.jsonl"), "utf8")
+      .trim().split("\n").map(line => JSON.parse(line));
+    assert.deepEqual(events.map(event => event.phase), ["approval", "deployment"]);
+    assert.equal(events[0].args, "scripts/verify-release-approval.mjs");
+    assert.equal(events[0].githubTokenPresent, true);
+    assert.equal(events[0].reviewerPolicyPresent, true);
+    assert.equal(events[0].cloudflareTokenPresent, false);
+    assert.equal(events[0].cloudflareAccountPresent, false);
+    assert.equal(events[1].args, "wrangler deploy --env staging");
+    assert.equal(events[1].cloudflareTokenPresent, true);
+    assert.equal(events[1].cloudflareAccountPresent, true);
+    assert.equal(events[1].githubTokenPresent, false);
+    assert.equal(events[1].reviewerPolicyPresent, false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("final release runner never invokes deployment when the last authorization check fails", () => {
+  const directory = mkdtempSync(join(tmpdir(), "guarded-release-deny-"));
+  try {
+    createGuardedDeployCommandFixtures(directory);
+    const script = new URL("../scripts/verify-and-deploy-release.sh", import.meta.url).pathname;
+    const result = spawnSync("bash", [script], {
+      env: guardedDeployEnvironment(directory, { FAKE_APPROVAL_EXIT: "29" }),
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 29, result.stderr || result.stdout);
+    const events = readFileSync(join(directory, "events.jsonl"), "utf8")
+      .trim().split("\n").map(line => JSON.parse(line));
+    assert.deepEqual(events.map(event => event.phase), ["approval"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("production release runner invokes Wrangler without staging-specific arguments", () => {
+  const directory = mkdtempSync(join(tmpdir(), "guarded-release-production-"));
+  try {
+    createGuardedDeployCommandFixtures(directory);
+    const script = new URL("../scripts/verify-and-deploy-release.sh", import.meta.url).pathname;
+    const result = spawnSync("bash", [script], {
+      env: guardedDeployEnvironment(directory, { RELEASE_ENV: "production" }),
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const events = readFileSync(join(directory, "events.jsonl"), "utf8")
+      .trim().split("\n").map(line => JSON.parse(line));
+    assert.deepEqual(events.map(event => event.phase), ["approval", "deployment"]);
+    assert.equal(events[1].args, "wrangler deploy");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

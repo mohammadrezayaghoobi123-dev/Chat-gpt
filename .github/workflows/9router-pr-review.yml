@@ -5,6 +5,7 @@ on:
     branches:
       - feature/independent-9router-pr-review
       - feature/9router-abc-provenance
+      - fix/9router-reject-redirects-2026-11-24
     paths:
       - "tools/9router-review/**"
       - ".github/workflows/9router-pr-review.yml"

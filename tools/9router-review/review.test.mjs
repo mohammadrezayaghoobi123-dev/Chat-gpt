@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { marked } from "marked";
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
 import * as reviewer from "./review.js";
 const { buildReviewMessages, runReview: runImmutableReview } = reviewer;
 const TEST_REVIEW_MARKER_KEY = "test-only-review-marker-key-32-bytes-minimum";
@@ -3340,4 +3341,99 @@ test("reconciles all 301 immutable changed paths when Compare API exposes only i
   assert.ok(modelPatch.includes("FILE: src/compare-boundary-000.txt"));
   assert.ok(modelPatch.includes("FILE: src/compare-boundary-299.txt"));
   assert.ok(modelPatch.includes("FILE: src/compare-boundary-300.txt"), "the path omitted by Compare must be reconstructed from immutable Git objects");
+});
+
+
+test("does not replay 9Router POST through HTTP 307 or 308 redirects", async t => {
+  const headSha = "a".repeat(40);
+  const baseSha = "b".repeat(40);
+
+  for (const status of [307, 308]) {
+    await t.test("HTTP " + status, async t => {
+      const received = [];
+      const server = createServer((request, response) => {
+        const chunks = [];
+        request.on("data", chunk => chunks.push(chunk));
+        request.on("end", () => {
+          received.push({
+            method: request.method,
+            path: request.url,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+          if (request.url === "/chat/completions") {
+            response.writeHead(status, { Location: "/redirected" });
+            response.end();
+            return;
+          }
+          response.writeHead(200, { "Content-Type": "application/json" });
+          response.end(JSON.stringify({
+            choices: [{ message: { content: "A sufficiently long placeholder review report." } }],
+          }));
+        });
+      });
+
+      await new Promise((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      t.after(() => new Promise((resolve, reject) => {
+        server.close(error => error ? reject(error) : resolve());
+      }));
+
+      const address = server.address();
+      assert.ok(address && typeof address === "object" && Number.isInteger(address.port));
+      let commentWrites = 0;
+      const fakeFetch = async (url, options = {}) => {
+        const target = String(url);
+        if (target.endsWith("/chat/completions")) {
+          return fetch("http://127.0.0.1:" + address.port + "/chat/completions", options);
+        }
+        if (target.endsWith("/pulls/281")) {
+          return new Response(JSON.stringify({
+            state: "open",
+            draft: false,
+            head: { sha: headSha },
+            base: { sha: baseSha },
+          }), { status: 200 });
+        }
+        if (target.includes("/pulls/281/files?")) {
+          return new Response(JSON.stringify([{
+            filename: "src/a.js",
+            status: "modified",
+            additions: 1,
+            deletions: 1,
+            patch: "@@ -1 +1 @@\\n-old\\n+new",
+          }]), { status: 200 });
+        }
+        if (target.includes("/issues/281/comments?")) {
+          return new Response("[]", { status: 200 });
+        }
+        if (target.endsWith("/issues/281/comments") && options.method === "POST") {
+          commentWrites += 1;
+          return createdCommentResponse(target, options, 1);
+        }
+        return new Response(JSON.stringify({ message: "Unexpected endpoint" }), { status: 404 });
+      };
+
+      await assert.rejects(runReview({
+        repository: "owner/repo",
+        pullRequest: 281,
+        expectedHeadSha: headSha,
+        expectedBaseSha: baseSha,
+        githubToken: "github-test-token",
+        routerBaseUrl: "https://router.example/v1",
+        routerApiKey: "router-test-token",
+        reviewMarkerKey: TEST_REVIEW_MARKER_KEY,
+        model: "test-model",
+        fetchImpl: fakeFetch,
+      }), /9Router request failed/);
+
+      assert.deepEqual(
+        received.map(({ method, path }) => ({ method, path })),
+        [{ method: "POST", path: "/chat/completions" }],
+        "a redirect response must not cause a second physical POST",
+      );
+      assert.equal(commentWrites, 0, "an ambiguous redirect response must fail closed before publication");
+    });
+  }
 });

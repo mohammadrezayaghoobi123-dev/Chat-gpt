@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile, readdir } from "node:fs/promises";
+import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createScheduledWorkerAssertion, verifyWorkerAssertion } from "../orchestrator-worker-identity.js";
 
 const key = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
@@ -133,4 +136,58 @@ test("legacy HMAC signer refuses to mint Executor assertions", async () => {
     }),
     error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
   );
+});
+
+const connectorRoot = fileURLToPath(new URL("../", import.meta.url));
+const excludedProductionScanDirectories = new Set([".git", ".wrangler", "cloudflare-test", "node_modules", "test"]);
+
+async function collectProductionJavaScriptFiles(directory = connectorRoot) {
+  const files = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (!excludedProductionScanDirectories.has(entry.name)) {
+        files.push(...await collectProductionJavaScriptFiles(join(directory, entry.name)));
+      }
+      continue;
+    }
+    if (entry.isFile() && /\.(?:cjs|js|mjs)$/.test(entry.name)) {
+      files.push(relative(connectorRoot, join(directory, entry.name)).split(sep).join("/"));
+    }
+  }
+  return files.sort();
+}
+
+test("production source keeps the dormant Scheduler createTask grant free of runtime mint call sites", async () => {
+  const files = await collectProductionJavaScriptFiles();
+  const sources = await Promise.all(files.map(async path => ({
+    path,
+    source: await readFile(join(connectorRoot, path), "utf8"),
+  })));
+  const signerReferences = sources
+    .filter(({ source }) => source.includes("createScheduledWorkerAssertion"))
+    .map(({ path }) => path);
+
+  assert.deepEqual(
+    signerReferences,
+    ["orchestrator-worker-identity.js", "worker.js"],
+    "Only the signer implementation and the reviewed Worker entrypoint may reference the internal signer.",
+  );
+
+  const workerSource = sources.find(({ path }) => path === "worker.js")?.source;
+  assert.ok(workerSource, "The production Worker source must be present in the scanned runtime.");
+  const signerCalls = workerSource.match(/\bcreateScheduledWorkerAssertion\s*\(/g) ?? [];
+
+  assert.equal(
+    signerCalls.length,
+    3,
+    "Only the publisher, receipt consumer, and DLQ archiver may mint internal Worker assertions in the current runtime.",
+  );
+  assert.doesNotMatch(
+    workerSource,
+    /orchestrator-scheduler/,
+    "The dormant Scheduler createTask grant must not acquire a Worker runtime caller without a separately reviewed Scheduler contract.",
+  );
+  assert.match(workerSource, /const workerId = "orchestrator-outbox-publisher"/);
+  assert.match(workerSource, /const consumerId = "orchestrator-outbox-consumer"/);
+  assert.match(workerSource, /const archiverId = "orchestrator-outbox-dlq-archiver"/);
 });

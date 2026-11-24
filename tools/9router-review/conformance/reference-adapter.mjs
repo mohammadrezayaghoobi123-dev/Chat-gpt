@@ -161,13 +161,25 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
       const events = [
         ...Array.from(intents.values()),
         ...Array.from(outcomes.values()),
-      ].filter(event => event.key_id === keyId)
-        .sort((a, b) => a.sequence - b.sequence)
+      ].sort((a, b) => a.sequence - b.sequence)
         .map(clone);
+      const watermark = ledgerSequence;
+      const anchor = {
+        watermark,
+        digest: digest({
+          watermark,
+          eventDigests: events.map(event => ({
+            event_id: event.event_id,
+            sequence: event.sequence,
+            digest: event.digest,
+          })),
+        }),
+      };
       return {
         status: complete ? "COMPLETE" : "INCOMPLETE",
         events,
-        watermark: ledgerSequence,
+        watermark,
+        anchor,
       };
     },
   };
@@ -484,11 +496,15 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
       const keyId = canonicalKey(args.key);
       const record = records.get(keyId);
       if (!record) return { status: "NOT_FOUND" };
+      if (recoveryMode !== "ACTIVE") return { status: "RECOVERY_LOCKED" };
       if (record.unknown_stage === "MODEL") return { status: "TERMINAL" };
       if (record.record_version !== args.expectedRecordVersion) return { status: "CONFLICT" };
-      const matches = (args.verifiedPositiveEvidence || [])
-        .filter(item => item && item.exactMatch === true &&
-          Number.isSafeInteger(item.remoteCommentId) && item.remoteCommentId > 0);
+      const matches = Array.from(new Map(
+        (args.verifiedPositiveEvidence || [])
+          .filter(item => item && item.exactMatch === true &&
+            Number.isSafeInteger(item.remoteCommentId) && item.remoteCommentId > 0)
+          .map(item => [item.remoteCommentId, item]),
+      ).values());
       // Positive evidence is sufficient even if later pagination is unavailable.
       // Incomplete zero-result listings never prove absence and never authorize a retry.
       if (matches.length === 0) return { status: "NO_CHANGE", record: clone(record) };
@@ -540,11 +556,54 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
       return { status: recoveryMode };
     },
 
-    async unlockRecovery({ ledgerInventory }) {
+    async unlockRecovery({ ledgerInventory, trustedAnchor }) {
       if (ledgerInventory?.status !== "COMPLETE" ||
           !Array.isArray(ledgerInventory.events) ||
-          !Number.isSafeInteger(ledgerInventory.watermark)) {
+          !Number.isSafeInteger(ledgerInventory.watermark) ||
+          ledgerInventory.watermark < 0) {
         return { status: "RECOVERY_INVENTORY_INCOMPLETE" };
+      }
+      if (!trustedAnchor ||
+          !Number.isSafeInteger(trustedAnchor.watermark) ||
+          typeof trustedAnchor.digest !== "string" ||
+          !trustedAnchor.digest) {
+        return { status: "RECOVERY_ANCHOR_REQUIRED" };
+      }
+      if (trustedAnchor.watermark !== ledgerInventory.watermark ||
+          ledgerInventory.anchor?.watermark !== trustedAnchor.watermark ||
+          ledgerInventory.anchor?.digest !== trustedAnchor.digest) {
+        return { status: "RECOVERY_ANCHOR_MISMATCH" };
+      }
+      const events = ledgerInventory.events;
+      if (events.length !== ledgerInventory.watermark) {
+        return { status: "RECOVERY_INVENTORY_INVALID" };
+      }
+      const eventIds = new Set();
+      for (let index = 0; index < events.length; index += 1) {
+        const event = events[index];
+        if (!event || event.sequence !== index + 1 ||
+            typeof event.event_id !== "string" || !event.event_id ||
+            eventIds.has(event.event_id) ||
+            typeof event.digest !== "string" || !event.digest) {
+          return { status: "RECOVERY_INVENTORY_INVALID" };
+        }
+        eventIds.add(event.event_id);
+        const unsignedEvent = clone(event);
+        delete unsignedEvent.digest;
+        if (digest(unsignedEvent) !== event.digest) {
+          return { status: "RECOVERY_INVENTORY_INVALID" };
+        }
+      }
+      const computedAnchorDigest = digest({
+        watermark: ledgerInventory.watermark,
+        eventDigests: events.map(event => ({
+          event_id: event.event_id,
+          sequence: event.sequence,
+          digest: event.digest,
+        })),
+      });
+      if (computedAnchorDigest !== trustedAnchor.digest) {
+        return { status: "RECOVERY_INVENTORY_INVALID" };
       }
       recoveryMode = "ACTIVE";
       return { status: "ACTIVE" };

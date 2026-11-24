@@ -293,3 +293,55 @@ async function createAdmittedTask(instance, fixture, { grant = fixture.grant, ta
   });
 
 });
+
+describe("OrchestratorLedger admission receipt probe", () => {
+  it("distinguishes absent, exactly admitted, and conflicting admission state without returning bearer material", async () => {
+    const fixture = await taskAdmissionFixture();
+    const ledger = env.ORCHESTRATOR_LEDGER.get(
+      env.ORCHESTRATOR_LEDGER.idFromName("ledger-admission-receipt-probe-" + crypto.randomUUID()),
+    );
+
+    await runInDurableObject(ledger, async instance => {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEY_SET;
+      instance.env.ORCHESTRATOR_LEDGER_ADMISSION_PUBLIC_KEYS = fixture.publicKeys;
+      const input = {
+        tenantId: fixture.tenantId,
+        projectId: fixture.projectId,
+        principalId: fixture.principalId,
+        taskId: fixture.task.taskId,
+        taskDigest: await taskAdmissionDigest(fixture.task),
+        idempotencyKey: fixture.idempotencyKey,
+        inputHash: fixture.inputHash,
+      };
+
+      expect(await instance.getTaskAdmissionReceipt(input)).toEqual({ status: "not_found" });
+      expect((await createAdmittedTask(instance, fixture)).created).toBe(true);
+
+      const admitted = await instance.getTaskAdmissionReceipt(input);
+      expect(admitted).toMatchObject({
+        status: "admitted",
+        receipt: {
+          admissionId: fixture.admissionId,
+          taskId: fixture.task.taskId,
+          tenantId: fixture.tenantId,
+          projectId: fixture.projectId,
+          principalId: fixture.principalId,
+          taskDigest: input.taskDigest,
+          inputHash: fixture.inputHash,
+        },
+      });
+      expect(JSON.stringify(admitted)).not.toContain(fixture.grant);
+      expect(admitted.receipt).not.toHaveProperty("grant");
+      expect(admitted.receipt).not.toHaveProperty("grantToken");
+
+      const conflict = await instance.getTaskAdmissionReceipt({
+        ...input,
+        inputHash: "b".repeat(64),
+      });
+      expect(conflict).toEqual({
+        status: "conflict",
+        reason: "TASK_ADMISSION_RECEIPT_MISMATCH",
+      });
+    });
+  });
+});

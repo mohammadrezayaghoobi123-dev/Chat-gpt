@@ -385,6 +385,138 @@ describe("TenantDirectory signed task admission reservation", () => {
     });
   });
 
+
+  it("does not renew inside the five-second old-Grant clock-skew fence", async () => {
+    const state = await fixture();
+    const store = admissionStore(state.adapters);
+    const first = await store.prepareTaskAdmission(state.input);
+    const clock = vi.spyOn(Date, "now").mockReturnValue((first.expiresAt + 4) * 1000);
+    try {
+      await expect(store.renewTaskAdmissionGrant(state.input))
+        .rejects.toMatchObject({ code: "TASK_ADMISSION_RENEWAL_NOT_READY" });
+    } finally {
+      clock.mockRestore();
+    }
+
+    await runInDurableObject(state.stub, instance => {
+      const row = instance.ctx.storage.sql.exec(
+        "SELECT admission_id, jti, expires_at FROM tenant_task_admission_reservations WHERE tenant_id=?",
+        state.tenantId,
+      ).one();
+      expect(row.admission_id).toBe(first.admissionId);
+      expect(row.jti).toBe(first.jti);
+      expect(Number(row.expires_at)).toBe(first.expiresAt);
+      expect(Number(instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM tenant_directory_audit_events WHERE tenant_id=? AND operation='renewTaskAdmissionGrant'",
+        state.tenantId,
+      ).one().count)).toBe(0);
+    });
+  });
+
+  it("fails closed when membership is revoked after the original Grant expires", async () => {
+    const state = await fixture();
+    const store = admissionStore(state.adapters);
+    const first = await store.prepareTaskAdmission(state.input);
+    const assertion = await adminAssertion("revokeMembership", state.tenantId, null, {
+      principalId: PRINCIPAL_ID,
+      expectedVersion: 1,
+    }, NOW + 1);
+    await state.adapters.provisioningStore.revokeMembership({
+      assertion,
+      tenantId: state.tenantId,
+      principalId: PRINCIPAL_ID,
+      expectedVersion: 1,
+      now: NOW + 1,
+    });
+
+    const clock = vi.spyOn(Date, "now").mockReturnValue((first.expiresAt + 6) * 1000);
+    try {
+      await expect(store.renewTaskAdmissionGrant(state.input))
+        .rejects.toMatchObject({ code: "TASK_ADMISSION_REAUTHORIZATION_DENIED" });
+    } finally {
+      clock.mockRestore();
+    }
+
+    await runInDurableObject(state.stub, instance => {
+      const row = instance.ctx.storage.sql.exec(
+        "SELECT admission_id, jti, expires_at FROM tenant_task_admission_reservations WHERE tenant_id=?",
+        state.tenantId,
+      ).one();
+      expect(row.admission_id).toBe(first.admissionId);
+      expect(row.jti).toBe(first.jti);
+      expect(Number(row.expires_at)).toBe(first.expiresAt);
+      expect(Number(instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM tenant_directory_audit_events WHERE tenant_id=? AND operation='renewTaskAdmissionGrant'",
+        state.tenantId,
+      ).one().count)).toBe(0);
+    });
+  });
+
+  it("serializes concurrent renewal attempts to one replacement Grant and one audit event", async () => {
+    const state = await fixture();
+    const store = admissionStore(state.adapters);
+    const first = await store.prepareTaskAdmission(state.input);
+    const clock = vi.spyOn(Date, "now").mockReturnValue((first.expiresAt + 6) * 1000);
+    let results;
+    try {
+      results = await Promise.all([
+        store.renewTaskAdmissionGrant(state.input),
+        store.renewTaskAdmissionGrant(state.input),
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(results[0].admissionId).toBe(results[1].admissionId);
+    expect(results[0].jti).toBe(results[1].jti);
+    expect(results[0].grant).toBe(results[1].grant);
+    expect(results.map(result => result.replay).sort()).toEqual([false, true]);
+
+    await runInDurableObject(state.stub, instance => {
+      expect(Number(instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM tenant_task_admission_reservations WHERE tenant_id=?",
+        state.tenantId,
+      ).one().count)).toBe(1);
+      expect(Number(instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM tenant_directory_audit_events WHERE tenant_id=? AND operation='renewTaskAdmissionGrant'",
+        state.tenantId,
+      ).one().count)).toBe(1);
+    });
+  });
+
+  it("rolls back the Grant replacement when its append-only audit event cannot be written", async () => {
+    const state = await fixture();
+    const store = admissionStore(state.adapters);
+    const first = await store.prepareTaskAdmission(state.input);
+    await runInDurableObject(state.stub, instance => {
+      instance.ctx.storage.sql.exec(
+        "CREATE TRIGGER reject_task_admission_renewal_audit BEFORE INSERT ON tenant_directory_audit_events " +
+        "WHEN NEW.operation='renewTaskAdmissionGrant' BEGIN SELECT RAISE(ABORT, 'TEST_RENEWAL_AUDIT_ABORT'); END",
+      );
+    });
+
+    const clock = vi.spyOn(Date, "now").mockReturnValue((first.expiresAt + 6) * 1000);
+    try {
+      await expect(store.renewTaskAdmissionGrant(state.input)).rejects.toThrow();
+    } finally {
+      clock.mockRestore();
+    }
+
+    await runInDurableObject(state.stub, instance => {
+      const row = instance.ctx.storage.sql.exec(
+        "SELECT admission_id, jti, expires_at FROM tenant_task_admission_reservations WHERE tenant_id=?",
+        state.tenantId,
+      ).one();
+      expect(row.admission_id).toBe(first.admissionId);
+      expect(row.jti).toBe(first.jti);
+      expect(Number(row.expires_at)).toBe(first.expiresAt);
+      expect(Number(instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM tenant_directory_audit_events WHERE tenant_id=? AND operation='renewTaskAdmissionGrant'",
+        state.tenantId,
+      ).one().count)).toBe(0);
+    });
+  });
+
 });
 
 async function digestText(value) {

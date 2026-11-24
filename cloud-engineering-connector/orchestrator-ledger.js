@@ -1724,7 +1724,7 @@ export class OrchestratorLedger extends DurableObject {
           if (consumed) return { conflict: true, reason: "OWNER_ASSERTION_REPLAY" };
           sql.exec(
             "INSERT INTO orchestrator_owner_consumed_assertions (jti, assertion_hash, repository_id, actor_id, task_id, operation, delivery_id, comment_id, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            verified.jti, assertionHash, context.repositoryId, context.actorId, command.taskId,
+            verified.jti + ":" + context.deliveryId, assertionHash, context.repositoryId, context.actorId, command.taskId,
             command.operation, context.deliveryId, context.commentId, verified.exp, Math.floor(now / 1000),
           );
           const expiresAt = now + 30 * 24 * 60 * 60 * 1000;

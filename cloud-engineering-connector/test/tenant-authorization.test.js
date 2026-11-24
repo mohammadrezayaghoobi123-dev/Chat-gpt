@@ -56,6 +56,7 @@ const activeMembership = Object.freeze({
   membershipId: "membership-01",
   status: "active",
   role: "tenant-member",
+  version: 1,
 });
 
 const tenantContext = await resolveTenantContext({
@@ -142,6 +143,7 @@ test("returns tenant context only from the verified membership record", async ()
     tenantId: "tenant-alpha",
     membershipId: "membership-01",
     role: "tenant-member",
+    membershipVersion: 1,
   });
   assert.equal(Object.isFrozen(context), true);
 });
@@ -225,6 +227,11 @@ test("accepts only an allow decision bound to the exact principal, tenant, proje
           projectId: "project-01",
           decisionId: "decision-02",
           policyVersion: "policy-v1",
+          membershipVersion: 1,
+          membershipStatus: "active",
+          policyScopeEpoch: 1,
+          policyRuleVersion: 1,
+          policyRuleResourceDigest: "*",
         };
       },
     },
@@ -237,6 +244,10 @@ test("accepts only an allow decision bound to the exact principal, tenant, proje
     resourceDigest: request.resourceDigest,
     decisionId: "decision-02",
     policyVersion: "policy-v1",
+    membershipVersion: 1,
+    policyScopeEpoch: 1,
+    policyRuleVersion: 1,
+    policyRuleResourceDigest: "*",
   });
 });
 
@@ -487,5 +498,37 @@ test("resolvePrincipal rejects OIDC identity without a verified email claim", as
       },
     }),
     error => error.code === "AUTHENTICATION_FAILED",
+  );
+});
+
+
+test("rejects an allow decision made against a stale membership version", async () => {
+  await assert.rejects(
+    authorizeProjectAction({
+      principal,
+      tenantContext,
+      projectSelector: "project-01",
+      action: "project.read",
+      authorizationStore: {
+        async authorizeProjectAction(input) {
+          return {
+            effect: "allow",
+            action: "project.read",
+            resourceDigest: input.resourceDigest,
+            principalId: principal.id,
+            tenantId: "tenant-alpha",
+            projectId: "project-01",
+            decisionId: "decision-stale-membership",
+            policyVersion: "policy-v1",
+            membershipVersion: 2,
+            membershipStatus: "active",
+            policyScopeEpoch: 1,
+            policyRuleVersion: 1,
+            policyRuleResourceDigest: "*",
+          };
+        },
+      },
+    }),
+    error => error.code === "TENANT_MEMBERSHIP_STALE",
   );
 });

@@ -112,6 +112,68 @@ async function ownerAssertionWithJti(context, at, jti) {
   return signingInput + "." + encoded;
 }
 
+
+async function ownerAuditContentionCohort(ledger, label) {
+  const inputs = [];
+  for (let index = 0; index < 4; index += 1) {
+    const suffix = String(index + 1).padStart(2, "0");
+    const taskId = "task-owner-redelivery-" + label + "-" + suffix;
+    await createTask(ledger, task(taskId));
+    inputs.push(await ownerInput({
+      command: {
+        taskId,
+        eventId: "owner-redelivery-" + label + "-" + suffix,
+      },
+      deliveryId: "delivery-owner-redelivery-" + label + "-" + suffix,
+      commentId: String(223458000 + index),
+      bodySha256: String(index + 1).repeat(64),
+    }));
+  }
+  return inputs;
+}
+
+async function runOwnerAuditContentionWaves(ledger, inputs) {
+  const waveSizes = [inputs.length, inputs.length - 1, inputs.length - 2];
+  const releases = [];
+  const reached = [];
+  const arrivals = waveSizes.map(() => 0);
+  const gates = waveSizes.map((_, index) => {
+    reached[index] = new Promise(resolve => { reached[index] = resolve; });
+    return new Promise(resolve => { releases[index] = resolve; });
+  });
+  let activeWave = 0;
+  const nativeDigest = crypto.subtle.digest.bind(crypto.subtle);
+  const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(
+    async (algorithm, data) => {
+      const digestInput = new TextDecoder().decode(data);
+      if (digestInput.includes('"previousHash"') && activeWave < waveSizes.length) {
+        const wave = activeWave;
+        arrivals[wave] += 1;
+        if (arrivals[wave] === waveSizes[wave]) reached[wave]();
+        await gates[wave];
+      }
+      return nativeDigest(algorithm, data);
+    },
+  );
+
+  try {
+    const results = await runInDurableObject(ledger, async instance => {
+      const pending = inputs.map(input => instance.executeOwnerCommand(input));
+      for (let wave = 0; wave < waveSizes.length; wave += 1) {
+        await reached[wave];
+        activeWave = wave + 1;
+        releases[wave]();
+      }
+      return await Promise.all(pending);
+    });
+    return { results, arrivals };
+  } finally {
+    activeWave = waveSizes.length;
+    for (const release of releases) release();
+    digestSpy.mockRestore();
+  }
+}
+
 describe("Owner command atomic Ledger contract", () => {
   it("atomically consumes Owner JTI, claims delivery/comment, cancels task, fences Agent and outbox leases, and appends audit", async () => {
     const ledger = ledgerFor("owner-atomic-cancel");
@@ -815,6 +877,167 @@ describe("Owner command atomic Ledger contract", () => {
         });
         expect(event.event_hash).toBe(expectedHash);
       }
+    });
+  });
+
+  it("records an exact-match Owner Audit contention retry with a three-redelivery cap and hard expiry", async () => {
+    const ledger = ledgerFor("owner-webhook-redelivery-cap");
+    const inputs = await ownerAuditContentionCohort(ledger, "cap");
+    const { results, arrivals } = await runOwnerAuditContentionWaves(ledger, inputs);
+    const failedIndex = results.findIndex(result => result.reason === "AUDIT_CHAIN_CONTENTION");
+
+    expect(arrivals).toEqual([4, 3, 2]);
+    expect(results.filter(result => result.applied === true)).toHaveLength(3);
+    expect(failedIndex).toBeGreaterThanOrEqual(0);
+    expect(results.filter(result => result.reason === "AUDIT_CHAIN_CONTENTION")).toHaveLength(1);
+
+    const failed = inputs[failedIndex];
+    const identity = {
+      deliveryId: failed.assertionContext.deliveryId,
+      bodySha256: failed.bodySha256,
+      commentId: failed.assertionContext.commentId,
+      commandHash: failed.assertionContext.commandHash,
+      repositoryId,
+      actorId: ownerId,
+      taskId: failed.command.taskId,
+      operation: failed.command.operation,
+      commentCreatedAt: now,
+    };
+    const authorize = input => typeof ledger.authorizeOwnerWebhookRetry === "function"
+      ? ledger.authorizeOwnerWebhookRetry(input)
+      : Promise.resolve({ registered: false });
+
+    await expect(authorize(identity)).resolves.toEqual({
+      registered: true,
+      retryAuthorized: true,
+      retryCount: 1,
+    });
+    await expect(authorize({ ...identity, bodySha256: "f".repeat(64) })).resolves.toMatchObject({
+      registered: true,
+      denied: true,
+      reason: "OWNER_REDELIVERY_CONFLICT",
+    });
+    await expect(authorize(identity)).resolves.toMatchObject({
+      registered: true,
+      retryAuthorized: true,
+      retryCount: 2,
+    });
+    await expect(authorize(identity)).resolves.toMatchObject({
+      registered: true,
+      retryAuthorized: true,
+      retryCount: 3,
+    });
+    await expect(authorize(identity)).resolves.toMatchObject({
+      registered: true,
+      denied: true,
+      reason: "OWNER_REDELIVERY_EXHAUSTED",
+    });
+
+    const marker = await runInDurableObject(ledger, async (_instance, state) =>
+      state.storage.sql.exec(
+        "SELECT * FROM orchestrator_owner_webhook_retries WHERE delivery_id = ?",
+        identity.deliveryId,
+      ).one(),
+    );
+    expect(marker).toMatchObject({
+      delivery_id: identity.deliveryId,
+      body_sha256: identity.bodySha256,
+      comment_id: identity.commentId,
+      command_hash: identity.commandHash,
+      repository_id: repositoryId,
+      actor_id: ownerId,
+      task_id: identity.taskId,
+      operation: "cancel",
+      retry_count: 3,
+      state: "RETRYABLE",
+      last_error_code: "AUDIT_CHAIN_CONTENTION",
+    });
+    expect(marker.expires_at - marker.first_failed_at).toBe(72 * 60 * 60 * 1000);
+
+    ledgerClock.mockReturnValue(marker.expires_at);
+    await expect(authorize(identity)).resolves.toMatchObject({
+      registered: true,
+      denied: true,
+      reason: "OWNER_REDELIVERY_EXPIRED",
+    });
+  });
+
+  it("closes a retry marker atomically with its terminal receipt and never re-executes a completed delivery", async () => {
+    const ledger = ledgerFor("owner-webhook-redelivery-completion");
+    const inputs = await ownerAuditContentionCohort(ledger, "complete");
+    const { results } = await runOwnerAuditContentionWaves(ledger, inputs);
+    const failedIndex = results.findIndex(result => result.reason === "AUDIT_CHAIN_CONTENTION");
+    expect(failedIndex).toBeGreaterThanOrEqual(0);
+
+    const failed = inputs[failedIndex];
+    const identity = {
+      deliveryId: failed.assertionContext.deliveryId,
+      bodySha256: failed.bodySha256,
+      commentId: failed.assertionContext.commentId,
+      commandHash: failed.assertionContext.commandHash,
+      repositoryId,
+      actorId: ownerId,
+      taskId: failed.command.taskId,
+      operation: failed.command.operation,
+      commentCreatedAt: now,
+    };
+    const authorize = input => typeof ledger.authorizeOwnerWebhookRetry === "function"
+      ? ledger.authorizeOwnerWebhookRetry(input)
+      : Promise.resolve({ registered: false });
+    await expect(authorize(identity)).resolves.toMatchObject({
+      registered: true,
+      retryAuthorized: true,
+      retryCount: 1,
+    });
+
+    const retryInput = await ownerInput({
+      command: failed.command,
+      deliveryId: identity.deliveryId,
+      commentId: identity.commentId,
+      bodySha256: identity.bodySha256,
+    });
+    const applied = await ledger.executeOwnerCommand(retryInput);
+    expect(applied).toMatchObject({
+      applied: true,
+      task: { taskId: identity.taskId, state: "CANCELLED", version: 2 },
+    });
+
+    await expect(authorize(identity)).resolves.toMatchObject({
+      registered: true,
+      completed: true,
+      result: {
+        applied: true,
+        operation: "cancel",
+        task: { taskId: identity.taskId, state: "CANCELLED", version: 2 },
+      },
+    });
+    await expect(ledger.executeOwnerCommand(retryInput)).resolves.toMatchObject({
+      applied: true,
+      replay: true,
+      task: { taskId: identity.taskId, state: "CANCELLED", version: 2 },
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT retry_count, state FROM orchestrator_owner_webhook_retries WHERE delivery_id = ?",
+        identity.deliveryId,
+      ).one()).toEqual({ retry_count: 1, state: "COMPLETED" });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions WHERE delivery_id = ?",
+        identity.deliveryId,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries WHERE delivery_id = ?",
+        identity.deliveryId,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE delivery_id = ?",
+        identity.deliveryId,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE event_id = ?",
+        "owner-" + failed.command.eventId,
+      ).one().count).toBe(1);
     });
   });
 

@@ -126,6 +126,14 @@ describe("TenantDirectory durable Admission Outbox dispatch", () => {
     );
     expect(typeof scheduledAlarm).toBe("number");
 
+    await runInDurableObject(data.directory, instance => {
+      instance.ctx.storage.sql.exec(
+        "UPDATE tenant_admission_outbox SET next_attempt_at = ? WHERE admission_id = ?",
+        Date.now() - 1,
+        data.admissionReceipt.claims.admissionId,
+      );
+      instance.ctx.storage.setAlarm(Date.now() + 1_000);
+    });
     const executed = await runDurableObjectAlarm(data.directory);
     expect(executed).toBe(true);
 
@@ -188,6 +196,14 @@ describe("TenantDirectory durable Admission Outbox dispatch", () => {
       };
     });
 
+    await runInDurableObject(data.directory, instance => {
+      instance.ctx.storage.sql.exec(
+        "UPDATE tenant_admission_outbox SET next_attempt_at = ? WHERE admission_id = ?",
+        Date.now() - 1,
+        data.admissionReceipt.claims.admissionId,
+      );
+      instance.ctx.storage.setAlarm(Date.now() + 1_000);
+    });
     const firstRun = await runDurableObjectAlarm(data.directory);
     expect(firstRun).toBe(true);
 

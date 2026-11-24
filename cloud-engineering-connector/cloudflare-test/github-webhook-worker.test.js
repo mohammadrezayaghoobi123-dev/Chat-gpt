@@ -215,6 +215,7 @@ describe("GitHub webhook Worker route", () => {
   it("classifies bounded Owner Audit contention as retryable service unavailability", async () => {
     let ledgerCalls = 0;
     const fakeLedger = {
+      authorizeOwnerWebhookRetry: async () => ({ registered: false }),
       executeOwnerCommand: async () => {
         ledgerCalls += 1;
         return { applied: false, reason: "AUDIT_CHAIN_CONTENTION" };
@@ -263,6 +264,186 @@ describe("GitHub webhook Worker route", () => {
     expect(ledgerCalls).toBe(1);
   });
 
+  it("consults the Ledger before rejecting a stale first-seen Owner comment", async () => {
+    let authorizationCalls = 0;
+    let executionCalls = 0;
+    const fakeLedger = {
+      authorizeOwnerWebhookRetry: async () => {
+        authorizationCalls += 1;
+        return { registered: false };
+      },
+      executeOwnerCommand: async () => {
+        executionCalls += 1;
+        return { applied: true };
+      },
+    };
+    const repository = "mohammadrezayaghoobi123-dev/Chat-gpt";
+    const ownerId = 335530603;
+    const taskId = "task-webhook-stale-first-seen-0001";
+    const event = payload({
+      action: "created",
+      repository: { id: 1398846697, full_name: repository },
+      issue: {
+        ...payload().issue,
+        html_url: "https://github.com/" + repository + "/issues/7",
+      },
+      comment: {
+        id: 900021,
+        body: '/orchestrator cancel ' + taskId + ' --reason "Stale first-seen must stay rejected"',
+        created_at: new Date(Date.now() - 600_000).toISOString(),
+        user: { id: ownerId, type: "User" },
+      },
+      sender: { id: ownerId, type: "User" },
+    });
+    const ownerEnv = {
+      ...testEnv(),
+      GITHUB_WEBHOOK_REPOSITORY: repository,
+      GITHUB_WEBHOOK_REPOSITORY_ID: "1398846697",
+      GITHUB_WEBHOOK_OWNER_ID: String(ownerId),
+      ORCHESTRATOR_LEDGER: { idFromName: name => name, get: () => fakeLedger },
+    };
+    const response = await worker.fetch(
+      await signedRequest(JSON.stringify(event), "gh-owner-stale-first-seen-0001", undefined, "issue_comment"),
+      ownerEnv,
+    );
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "owner_command_rejected",
+      reason: "COMMENT_TIMESTAMP_OUT_OF_RANGE",
+    });
+    expect(authorizationCalls).toBe(1);
+    expect(executionCalls).toBe(0);
+  });
+
+  it("admits an old Owner comment only for an exact Ledger-authorized redelivery", async () => {
+    let authorizationInput;
+    let executionInput;
+    const taskId = "task-webhook-owner-redelivery-0001";
+    const fakeLedger = {
+      authorizeOwnerWebhookRetry: async input => {
+        authorizationInput = input;
+        return { registered: true, retryAuthorized: true, retryCount: 1 };
+      },
+      executeOwnerCommand: async input => {
+        executionInput = input;
+        return {
+          applied: true,
+          operation: "cancel",
+          task: { taskId, state: "CANCELLED", version: 2 },
+        };
+      },
+    };
+    const repository = "mohammadrezayaghoobi123-dev/Chat-gpt";
+    const ownerId = 335530603;
+    const deliveryId = "gh-owner-redelivery-0000001";
+    const commentCreatedAt = Date.now() - 600_000;
+    const event = payload({
+      action: "created",
+      repository: { id: 1398846697, full_name: repository },
+      issue: {
+        ...payload().issue,
+        html_url: "https://github.com/" + repository + "/issues/7",
+      },
+      comment: {
+        id: 900022,
+        body: '/orchestrator cancel ' + taskId + ' --reason "Recover exact transient failure"',
+        created_at: new Date(commentCreatedAt).toISOString(),
+        user: { id: ownerId, type: "User" },
+      },
+      sender: { id: ownerId, type: "User" },
+    });
+    const body = JSON.stringify(event);
+    const ownerEnv = {
+      ...testEnv(),
+      GITHUB_WEBHOOK_REPOSITORY: repository,
+      GITHUB_WEBHOOK_REPOSITORY_ID: "1398846697",
+      GITHUB_WEBHOOK_OWNER_ID: String(ownerId),
+      ORCHESTRATOR_LEDGER: { idFromName: name => name, get: () => fakeLedger },
+    };
+    const response = await worker.fetch(
+      await signedRequest(body, deliveryId, undefined, "issue_comment"),
+      ownerEnv,
+    );
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "applied",
+      operation: "cancel",
+      deliveryId,
+      task: { taskId, state: "CANCELLED", version: 2 },
+    });
+    expect(authorizationInput).toMatchObject({
+      deliveryId,
+      commentId: "900022",
+      repositoryId: 1398846697,
+      actorId: String(ownerId),
+      taskId,
+      operation: "cancel",
+      commentCreatedAt,
+    });
+    expect(authorizationInput.bodySha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(authorizationInput.commandHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(executionInput.assertionContext.deliveryId).toBe(deliveryId);
+    expect(executionInput.bodySha256).toBe(authorizationInput.bodySha256);
+  });
+
+  it("returns a stored terminal Owner receipt for stale redelivery without executing the command again", async () => {
+    let executionCalls = 0;
+    const taskId = "task-webhook-owner-redelivery-complete-0001";
+    const fakeLedger = {
+      authorizeOwnerWebhookRetry: async () => ({
+        registered: true,
+        completed: true,
+        result: {
+          applied: true,
+          operation: "cancel",
+          task: { taskId, state: "CANCELLED", version: 2 },
+        },
+      }),
+      executeOwnerCommand: async () => {
+        executionCalls += 1;
+        return { applied: false, reason: "SHOULD_NOT_EXECUTE" };
+      },
+    };
+    const repository = "mohammadrezayaghoobi123-dev/Chat-gpt";
+    const ownerId = 335530603;
+    const event = payload({
+      action: "created",
+      repository: { id: 1398846697, full_name: repository },
+      issue: {
+        ...payload().issue,
+        html_url: "https://github.com/" + repository + "/issues/7",
+      },
+      comment: {
+        id: 900023,
+        body: '/orchestrator cancel ' + taskId + ' --reason "Already completed"',
+        created_at: new Date(Date.now() - 600_000).toISOString(),
+        user: { id: ownerId, type: "User" },
+      },
+      sender: { id: ownerId, type: "User" },
+    });
+    const ownerEnv = {
+      ...testEnv(),
+      GITHUB_WEBHOOK_REPOSITORY: repository,
+      GITHUB_WEBHOOK_REPOSITORY_ID: "1398846697",
+      GITHUB_WEBHOOK_OWNER_ID: String(ownerId),
+      ORCHESTRATOR_LEDGER: { idFromName: name => name, get: () => fakeLedger },
+    };
+    const response = await worker.fetch(
+      await signedRequest(JSON.stringify(event), "gh-owner-redelivery-complete-0001", undefined, "issue_comment"),
+      ownerEnv,
+    );
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "duplicate",
+      operation: "cancel",
+      task: { taskId, state: "CANCELLED", version: 2 },
+    });
+    expect(executionCalls).toBe(0);
+  });
+
   it("rejects Owner-like comments with invalid author, repository, PR, action, or freshness before Ledger access", async () => {
     const repository = "mohammadrezayaghoobi123-dev/Chat-gpt";
     const ownerId = 335530603;
@@ -289,7 +470,6 @@ describe("GitHub webhook Worker route", () => {
       { name: "pull request comment", expected: 422, patch: { issue: { ...base.issue, pull_request: { url: "https://api.github.com/repos/example/pulls/7" } } } },
       { name: "present but null pull request field", expected: 422, patch: { issue: { ...base.issue, pull_request: null } } },
       { name: "edited comment event", expected: 422, patch: { action: "edited" } },
-      { name: "stale comment timestamp", expected: 422, patch: { comment: { ...base.comment, created_at: new Date(Date.now() - 600_000).toISOString() } } },
     ];
     let ledgerRpcCalls = 0;
     const fakeLedger = {

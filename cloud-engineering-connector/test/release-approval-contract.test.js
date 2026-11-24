@@ -33,19 +33,36 @@ const workflows = [
 ];
 
 for (const workflow of workflows) {
-  test(`${workflow.name} release refuses to deploy an unapproved candidate`, () => {
+  test(`${workflow.name} release refuses to deploy an unapproved or currently unauthorized candidate`, () => {
     const source = readFileSync(workflow.path, "utf8");
-    assert.match(source, /pull-requests:\s*read/, "release workflow must have read-only PR review access");
-    assert.match(source, /node scripts\/verify-release-approval\.mjs/, "approval guard must run before deployment");
-    assert.equal((source.match(/RELEASE_GITHUB_TOKEN:/g) || []).length, 1, "token must be injected only once");
-    assert.equal((source.match(/RELEASE_REVIEWER_IDS:/g) || []).length, 1, "trusted reviewer policy must be injected only once");
-    assert.match(source, /RELEASE_REVIEWER_IDS:\s*\$\{\{\s*vars\.RELEASE_REVIEWER_IDS\s*\}\}/, "trusted reviewer IDs must come from the explicit GitHub Actions repository variable");
-    const guardPosition = source.indexOf("node scripts/verify-release-approval.mjs");
-    const tokenPosition = source.indexOf("RELEASE_GITHUB_TOKEN:");
-    const reviewerPolicyPosition = source.indexOf("RELEASE_REVIEWER_IDS:");
+    assert.match(source, /pull-requests:\\s*read/, "release workflow must have read-only PR review access");
+    assert.equal((source.match(/node scripts\\/verify-release-approval\\.mjs/g) || []).length, 2,
+      "approval must be checked once before preparation and revalidated immediately before deployment");
+    assert.equal((source.match(/RELEASE_GITHUB_TOKEN:/g) || []).length, 2,
+      "GitHub token must be scoped only to the two approval checks");
+    assert.equal((source.match(/RELEASE_REVIEWER_IDS:/g) || []).length, 2,
+      "trusted reviewer policy must be scoped only to the two approval checks");
+    assert.equal((source.match(/RELEASE_REVIEWER_IDS:\\s*\\$\\{\\{\\s*vars\\.RELEASE_REVIEWER_IDS\\s*\\}\\}/g) || []).length, 2,
+      "both approval checks must use the explicit GitHub Actions reviewer policy variable");
+
+    const firstGuardPosition = source.indexOf("node scripts/verify-release-approval.mjs");
+    const secondGuardPosition = source.indexOf("node scripts/verify-release-approval.mjs", firstGuardPosition + 1);
     const deployPosition = source.indexOf("npx wrangler deploy");
-    assert.ok(tokenPosition > guardPosition && reviewerPolicyPosition > guardPosition && guardPosition < deployPosition, "GitHub credentials and trusted reviewer policy must be scoped to the approval step before deploy");
-    assert.match(source, /RELEASE_ENV:\s*(staging|production)/, "release environment must be explicit");
+    const secondGuardStepStart = source.lastIndexOf("      - name: ", secondGuardPosition);
+    const deployStepStart = source.lastIndexOf("      - name: ", deployPosition);
+    const secondGuardStepEnd = source.indexOf("\\n      - name: ", secondGuardStepStart + 1) + 1;
+    const secondGuardStep = source.slice(secondGuardStepStart, secondGuardStepEnd);
+    assert.ok(firstGuardPosition < secondGuardPosition && secondGuardPosition < deployPosition,
+      "the second authorization check must execute after initial preparation and before deployment");
+    assert.match(secondGuardStep, /Revalidate trusted reviewer access immediately before/,
+      "the second check must be explicitly named as a just-in-time authorization revalidation");
+    assert.match(secondGuardStep, /RELEASE_GITHUB_TOKEN:\\s*\\$\\{\\{\\s*github\\.token\\s*\\}\\}/,
+      "the just-in-time gate must receive only the scoped GitHub token");
+    assert.match(secondGuardStep, /RELEASE_REVIEWER_IDS:\\s*\\$\\{\\{\\s*vars\\.RELEASE_REVIEWER_IDS\\s*\\}\\}/,
+      "the just-in-time gate must receive the trusted reviewer policy");
+    assert.equal(secondGuardStepEnd, deployStepStart,
+      "the just-in-time authorization gate must be the immediately preceding workflow step");
+    assert.match(source, /RELEASE_ENV:\\s*(staging|production)/, "release environment must be explicit");
   });
 }
 

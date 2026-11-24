@@ -43,21 +43,30 @@ Sources:
 
 ## 4. Allowlist design
 
-The `.gitleaks.toml` additions are limited by all of:
+The remediation adds **12 narrowly scoped allowlist blocks for 13 findings**. Two historical contexts contained two separate findings each; where two findings came from the same commit/path, they are represented by separate exact entries or by a shared entry only when the same source line is byte-identical across the two named commits.
+
+Every new entry requires all of:
 
 1. `targetRules = ["generic-api-key"]`;
 2. `condition = "AND"`;
-3. one or a small exact set of historical commit SHAs;
+3. an exact historical commit SHA (one entry permits the same identical test line in two named commits);
 4. one exact repository-relative path;
 5. `regexTarget = "line"`;
-6. a fully anchored regular expression for the exact finding line.
+6. a unique deterministic source fragment or literal from the observed finding line.
 
-No repository-wide path exemption, generic stopword, broad key-name suppression, detector disablement, or rule-level exclusion was added. The existing allowlists were preserved.
+The source fragments are deliberately line-scoped and tied to the commit and file; they are not repository-wide stopwords. No global path exemption, generic stopword, broad key-name suppression, detector disablement, or rule-level exclusion was added. The existing allowlists were preserved.
 
-The rationale is documented in each allowlist description. If any historical source line changes, its matching exception will no longer apply; if a new credential appears on another line, it remains detectable.
+The rationale is recorded in each allowlist description. The matching rules do not apply to unrelated files, commits, or newly introduced lines. A future credential on a different line remains in scope for normal detection.
 
-## 5. Security conclusion
+## 5. Security conclusion and verification
 
-The reviewed set contains no confirmed live credential. Therefore this remediation did not trigger credential rotation. This conclusion is bounded to the 13 reported findings and their exact historical context; it is not a claim that the repository has no secrets anywhere in its history.
+The reviewed set contains no confirmed live credential. The sequential API_KEY-shaped value was an unused comment placeholder; the review-marker string and Outbox values were test-only fixtures; the scheduler expression was deterministic idempotency metadata; and the ICU values were a public Git blob identifier and public-key fingerprint. Therefore this remediation did not trigger credential rotation.
 
-The Full History Secret Scan is the verification gate for the allowlist change. The PR diff scan must remain clean independently. Any additional or newly surfaced finding must be adjudicated separately rather than added to an existing broad expression.
+**Fresh Gitleaks verification on commit `3feedfd541ab6586fe308e9b053d023ccb7eaa3d`:**
+
+- Pull-request change range: **29 commits**, approximately **87.85 KB**, no leaks found.
+- Full repository history and fetched refs: **4,886 commits**, approximately **14.78 MB**, no leaks found.
+- Both the change-range scan and full-history scan completed successfully in workflow run `45388455471`.
+- The allowlist file contains 12 new exact-scope blocks for the 13 historical detections; no findings remain in the scan report.
+
+This conclusion is bounded to the scanned repository history and the source state at the verified commit. It is not a claim that no secret could exist outside the scanned refs or be introduced later. Any new or changed detection must be independently adjudicated rather than broadened into an existing exception.

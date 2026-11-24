@@ -94,7 +94,7 @@ The public `wrangler.toml`, main Worker entrypoint, secrets, live bindings, rout
 3. Provision and validate the Directory Grant private key and Ledger verification key, plus Scheduler assertion keys, under a documented key custody/rotation plan. No production secret is added in this PR.
 4. Verify Workflow plan limits, retention, step/storage consumption, and account billing tier. Account plan and production usage are not assumed.
 5. Run a separately approved staging deployment and actual platform Cron smoke test; neither is performed here.
-6. Resolve the existing Full History Secret Scan findings. The current failure is not waived or represented as a clean scan.
+6. Keep the PR-diff and Full History Secret Scan gates enabled and clean. Any newly detected value must be independently classified; existing exceptions must not be broadened.
 
 ## 9. Final verification snapshot
 
@@ -107,8 +107,8 @@ Verified against commit `61a053964b5eee011b858ccb614770121bd9085b`:
 - JavaScript syntax checks: passed.
 - Wrangler dry-runs: public Worker default config, public Worker staging config, scheduler test config, and isolated scheduler production config all passed.
 - The production scheduler config is parsed as a separate Worker and contains no Cron schedules. No deployment was performed.
-- PR diff/history-of-refs Gitleaks scan: no leaks found in the scanned PR diff segment.
-- Full repository history scan: **13 `generic-api-key` detections across 4,868 commits**. The scan remains failed and is not suppressed. Findings are in historical commits; one is the legacy computed scheduler idempotency-key expression in `cloud-engineering-connector/worker.js`. Remaining findings require separate evidence-based triage before promotion.
+- Gitleaks PR change-range scan: **29 commits / 87.85 KB; no leaks found**.
+- Full repository history and fetched-ref scan: **4,886 commits / 14.78 MB; no leaks found**. All 13 historical false positives were independently adjudicated and resolved by 12 commit/path/rule/line-scoped allowlist blocks; no repository-wide exemptions were added.
 - Post-deploy staging smoke: skipped; no staging deployment or actual Cron execution occurred.
 
 This record is test evidence, not production qualification. The source test validates `WorkflowEntrypoint.run()` with a deterministic `step.do` executor and local Durable Objects; it does not substitute for a real Workflow-service/Cron smoke test.

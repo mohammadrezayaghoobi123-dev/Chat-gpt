@@ -15,6 +15,6 @@
 - [x] Isolate scheduler Worker and Wrangler configuration from the public Worker; use remote `chat-gpt111` Durable Object namespace bindings.
 - [x] Add CI syntax and Wrangler dry-run for both scheduler test and production configurations.
 - [x] Verify CI for the source HEAD: 197 Node tests, 76 Durable Object tests, 5 Scheduler Workflow tests, npm audit, syntax checks, and all four Wrangler dry-runs passed. A docs-only evidence commit follows; its own CI is rechecked separately.
-- [x] Review Full History Secret Scan findings: PR diff scan is clean; 13 historical detections remain unresolved and are not waived.
+- [x] Adjudicate all 13 historical Gitleaks detections as deterministic metadata, test-only fixtures, or public ICU signing metadata. Add 12 commit/path/rule/line-scoped allowlist blocks. PR-range scan (29 commits) and full-history scan (4,886 commits) both report no leaks; no broad suppression or credential rotation was used.
 - [x] Verify PR remains Draft/open on the isolated branch with the original main base SHA.
 - [x] Keep production schedule absent; activation requires separate authorization and staging review.

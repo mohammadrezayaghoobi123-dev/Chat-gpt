@@ -775,6 +775,7 @@ The model provider may also lack a caller-supplied idempotency key or execution-
 - **I22 — Explicit terminal operations:** every normative transition to ABORTED or CLOSED_NO_PUBLISH has a typed, fenced adapter operation.
 - **I23 — Continuation ownership:** comment-attempt authorization requires the current continuation owner ID, nonce, and generation.
 - **I24 — Publication response evidence:** PUBLISHED requires a validated response digest committed with the remote comment ID.
+- **I25 — Restore monotonicity:** point-in-time restore never silently re-enables model/comment effects; restore requires an independent monotonic recovery epoch and complete audit reconciliation.
 
 ### 10. Adversarial conformance matrix
 
@@ -822,6 +823,7 @@ Every test must run against the same adapter contract with at least two independ
 | A38 | Post-model marker listing is incomplete or unavailable | MODEL_COMPLETED is retained; comment POST count remains zero |
 | A39 | Comment pagination exceeds its configured bound or returns inconsistent continuation metadata | Listing is classified incomplete; no inference/publication transition is authorized |
 | A40 | Provider SDK or proxy silently retries one model request | More than one provider transport invocation is detected; integration is rejected |
+| A41 | Authoritative store is restored to a point before one or more effect-boundary commits | Enter global RECOVERY_LOCKED mode; no model/comment transport is permitted until the independent monotonic recovery anchor and complete audit inventory are reconciled; if completeness cannot be proven, keep the store quarantined |
 
 ### 11. Adversarial design review — findings and disposition
 
@@ -853,6 +855,7 @@ The design was challenged against the reproduced interleaving, independent-host 
 - **AR-24 — The interface omitted explicit operations for two normative terminal transitions.** Added `abortBeforeModel` and `closeWithoutPublish` so ABORTED/CLOSED_NO_PUBLISH are not undocumented state mutations.
 - **AR-25 — A continuation lease holder was not explicitly required to prove owner nonce at the comment-attempt boundary.** Added owner ID and nonce to `beginCommentAttempt`.
 - **AR-26 — PUBLISHED could be committed without a durable digest of the validated GitHub response.** Added `validated_response_digest` to the completion operation and snapshot-validation evidence fields.
+- **AR-27 — Point-in-time restore could roll the reservation authority behind an already-consumed external-effect boundary.** Added a system-level `RECOVERY_LOCKED` mode and an independent monotonic recovery anchor requirement. A restored store cannot resume effectful operations until its audit inventory is proven complete; if that proof is unavailable, the store remains quarantined.
 
 **Residual design limitations (not defects that this contract can eliminate):**
 
@@ -861,6 +864,7 @@ The design was challenged against the reproduced interleaving, independent-host 
 3. A PR may change between the final snapshot read and comment POST. The marker makes staleness detectable, not impossible.
 4. At-most-one application attempt depends on the caller and transport honoring the single-use permit and disabling all retry layers. It is not a defense against a malicious or defective caller that deliberately duplicates requests.
 5. Backend linearizability, durability, server-side time, failover, and cost remain unproven until candidate-specific conformance tests and documentation review are completed.
+6. Point-in-time restore can roll state backward across an external-effect boundary. A backup feature alone is not a safety guarantee; restore must enter global RECOVERY_LOCKED mode until an independent monotonic anchor and complete event inventory prove that no consumed attempt was erased. Without that proof, the backend is not safe to resume.
 
 ### 12. Backend selection gate
 
@@ -874,9 +878,52 @@ No vendor is selected in this phase. At least two candidate backends must be ass
 - least-privilege credentials, audit trail, encryption, backup, retention, and restore;
 - data residency, operational burden, rate limits, and failure modes;
 - actual total cost at forecast read/write volume, retention, backup, and egress, including free-tier ceilings and card requirements;
-- executable A01–A40 conformance results on the candidate, not only vendor marketing claims.
+- executable A01–A41 conformance results on the candidate, not only vendor marketing claims.
 
 A backend that cannot satisfy every mandatory safety property is rejected regardless of price or convenience. Workflow concurrency groups may be defense in depth only; they are not the authority.
+
+### 12A. Evidence-based backend screening — 2026-11-25
+
+This is a documentation-based screening, not a deployed benchmark or an account-specific cost quote. No provider is selected and no account resource was created or modified.
+
+#### Candidate A — Cloudflare SQLite-backed Durable Objects
+
+**Documented fit:** each Durable Object has private, transactional, strongly consistent storage. The SQLite-backed storage API wraps operations in transactions; Cloudflare recommends SQLite for new Durable Object namespaces. A deterministic object identity derived from the canonical reservation key can route all contenders for one key to the same logical object. The implementation must persist all state in SQLite and must not rely on isolate memory, because objects can be evicted or restarted.
+
+**Proposed mapping:** one deterministic Durable Object identity per reservation key, with the full original tuple stored and compared inside the object. Use a SQL unique key plus conditional updates and monotonically increasing generation. Keep each transition and audit event in one local SQLite transaction. All callers route through a Worker RPC/HTTP boundary; no other Durable Object can directly access this object's private storage.
+
+**Free-tier envelope documented by Cloudflare (current documentation reviewed 2026-11-25):** Workers Free supports SQLite-backed Durable Objects; documented included limits are 100,000 requests/day, 13,000 GB-s/day, 5 million SQL rows read/day, 100,000 SQL rows written/day, and 5 GB total SQLite stored data. Exceeding a free-tier limit causes further operations of that type to fail until the daily reset; this is fail-closed only if the caller treats every such error as unavailable and emits no external effect. Paid overage rates and current billing rules must be recalculated before any usage forecast. Free-plan availability is documented; account-specific payment-card requirements are NOT_VERIFIED.
+
+**Critical caveats:** (1) point-in-time recovery can restore a Durable Object's SQLite contents to a point within the previous 30 days, which can roll back reservation/fencing history; the global RECOVERY_LOCKED protocol is mandatory. (2) Storage is private to each object, so global reporting, cross-key audit inventory, and independent monotonic restore anchoring require an additional design. (3) deterministic object routing and collision handling must be tested across independent clients and deployed versions. (4) free quota exhaustion is an availability failure, not a safe automatic retry signal.
+
+Official evidence: [SQLite-backed Durable Object Storage](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/), [Access Durable Objects Storage](https://developers.cloudflare.com/durable-objects/best-practices/access-durable-objects-storage/), [Durable Objects Pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/).
+
+#### Candidate B — Supabase-managed PostgreSQL
+
+**Documented fit:** PostgreSQL offers unique constraints, conditional updates, transactions, and row-level concurrency control suitable for the reservation record and append-only transition journal. The candidate must expose each adapter operation as one server-side SQL transaction, preferably a narrowly scoped RPC/database function; application-side read-then-write sequences over separate HTTP requests are rejected. Database-side time must decide lease expiry. Authoritative reads must target the primary, not a potentially stale read replica.
+
+**Runtime integration:** Supabase documents shared-pooler transaction mode for serverless/edge functions. That mode does not preserve session state and does not support prepared statements; the exact client and connection behavior must be tested. A Cloudflare Worker-style isolate cannot open a raw TCP PostgreSQL connection; use an HTTP Data API/RPC boundary or a different supported runtime, and verify the chosen path's transaction semantics rather than assuming a SQL driver is available.
+
+**Free-tier envelope and durability caveats:** the Free plan currently lists 500 MB database size and 5 GB egress, but projects can pause after a week of low activity. The Free plan does not include automatic backups or PITR. Pro starts at $25/month and includes daily backups retained for 7 days; PITR is an additional paid feature. A paused or unavailable database can safely block new effects, but absence of automatic backup/PITR and project pausing make Free unsuitable as the sole production-grade authoritative reservation store unless a separately tested off-site backup/restore and monotonic recovery process is provided. Account-specific payment requirements are NOT_VERIFIED.
+
+**Critical caveats:** (1) a database restore can erase committed reservation attempts and therefore requires the same global RECOVERY_LOCKED protocol. (2) transaction-pooler session limitations must be reflected in the adapter and tests. (3) connection exhaustion, project pausing, API gateway availability, RLS/function grants, and backup retention are operational dependencies. (4) Pro pricing and backup benefits do not by themselves prove linearizable application behavior or restore safety.
+
+Official evidence: [Connect to your database](https://supabase.com/docs/guides/database/connecting-to-postgres), [Free Project Pausing](https://supabase.com/docs/guides/platform/free-project-pausing), [Database Backups](https://supabase.com/docs/guides/platform/backups), [Supabase Pricing](https://supabase.com/pricing).
+
+#### Preliminary disposition
+
+| Criterion | Cloudflare SQLite Durable Objects | Supabase PostgreSQL |
+|---|---|---|
+| Atomic per-key state transition | Documented transactional/strongly consistent private storage; still requires implementation tests | Native SQL transactions/unique constraints; must be exposed as one atomic server-side operation |
+| Natural per-key arbitration | Strong fit via deterministic object identity per reservation key | Strong fit via unique key and conditional row updates |
+| Cross-key relational audit queries | Requires external index/journal or aggregation | Native relational queries |
+| Worker runtime compatibility | Native Workers/DO model | HTTP Data API/RPC preferred for Workers; raw TCP unavailable in Workers-style isolates |
+| Free plan availability | SQLite DO supported; finite hard quotas fail operations on exhaustion | Free DB available; pauses after low activity and lacks automatic backups/PITR |
+| Recovery rollback risk | PITR can roll state back; global restore lock mandatory | Backups/PITR can roll state back; global restore lock mandatory |
+| Payment-card requirement | NOT_VERIFIED for this account | NOT_VERIFIED for this account |
+| Qualification status | DOCUMENTATION_SCREENED; CONFORMANCE_NOT_RUN | DOCUMENTATION_SCREENED; CONFORMANCE_NOT_RUN |
+
+**Screening recommendation (not selection):** Cloudflare SQLite-backed Durable Objects is the leading candidate for a low-volume, Cloudflare-native, no-card-preferred implementation because its per-object transactional/strong-consistency model maps directly to one reservation key and a free tier is documented. This is not a deployment recommendation yet: it remains disqualified until independent-client concurrency, quota-exhaustion fail-closed behavior, object-ID collision handling, restart/failover, and restore-rollback tests pass. Supabase PostgreSQL remains a technically viable relational alternative, but its Free plan's inactivity pause and lack of automatic backups/PITR are material mismatches for a sole authoritative production store.
 
 ### 13. Verification and approval gates
 
@@ -884,7 +931,7 @@ Current evidence:
 
 - `9R-ATOMIC-001` duplicate-publication race: **REPRODUCED / CONFIRMED FOR TESTED IN-PROCESS INTERLEAVING** by hosted run `45468257408`; expected physical POST count 1, observed 2.
 - Independent-process / independent-host durable-store conformance: **NOT_RUN**.
-- This document's A01–A40 matrix: **SPECIFIED, NOT_EXECUTED**.
+- This document's A01–A41 matrix: **SPECIFIED, NOT_EXECUTED**.
 - Backend comparison: **NOT_STARTED**.
 - Production adapter implementation: **NOT_AUTHORIZED**.
 - Reviewer activation, workflow registration on `main`, provider dispatch, merge, secret changes, Cloudflare deployment, and local-host changes: **NOT_AUTHORIZED**.
@@ -893,7 +940,7 @@ Approval sequence:
 
 1. Review this integrated contract and adversarial findings.
 2. Resolve any design objections and freeze the contract version.
-3. Write backend-neutral A01–A40 conformance tests, validate the test harness against a non-production reference oracle, and prove the current reviewer path remains RED without weakening the existing regression.
+3. Write backend-neutral A01–A41 conformance tests, validate the test harness against a non-production reference oracle, and prove the current reviewer path remains RED without weakening the existing regression.
 4. Compare at least two backend candidates against those same tests and documented guarantees.
 5. Obtain independent security review of the selected adapter and failure model.
 6. Only then request separate authorization for implementation. Reviewer activation, default-branch workflow registration, provider dispatch, and merge remain distinct later approvals.

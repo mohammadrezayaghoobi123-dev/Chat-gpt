@@ -8,7 +8,7 @@ function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
 }
 let now;
-beforeEach(() => { now = Date.now(); });
+beforeEach(() => { now = Date.now(); vi.spyOn(Date, "now").mockReturnValue(now); });
 afterEach(() => vi.restoreAllMocks());
 const task = (taskId = "task-0001") => ({
   taskId, state: "SCHEDULED", version: 1, agentRound: 0, createdAt: now, updatedAt: now,

@@ -328,3 +328,35 @@ test("full census retains UNKNOWN branch-policy evidence without erasing BLOCKED
   assert.ok(staging.findings.some(finding => finding.code === "ADMIN_BYPASS_ENABLED"));
   assert.ok(staging.findings.some(finding => finding.code === "BRANCH_POLICY_ENDPOINT_NOT_FOUND"));
 });
+
+test("reports unrestricted deployment branches and zero required reviewers as explicit live posture", async () => {
+  const { auditEnvironmentProtection, renderEnvironmentAuditSummary } = await loadAudit();
+  const { fetchImpl, calls } = makeFetch({
+    staging: {
+      environmentStatus: 200,
+      environmentData: environment("staging", {
+        can_admins_bypass: true,
+        protection_rules: [],
+        deployment_branch_policy: null,
+      }),
+      branchStatus: 404,
+    },
+  });
+
+  const report = await auditEnvironmentProtection({ repository, token, fetchImpl });
+  const staging = report.environments[0];
+  const summary = renderEnvironmentAuditSummary(report);
+
+  assert.equal(staging.status, "BLOCKED");
+  assert.equal(staging.requiredReviewerRuleCount, 0);
+  assert.equal(staging.requiredReviewerCount, 0);
+  assert.equal(staging.deploymentBranchPolicy, null);
+  assert.equal(staging.branchPolicyMode, "ALL_BRANCHES");
+  assert.equal(staging.branchPolicyState, "UNRESTRICTED");
+  assert.ok(staging.findings.some(finding => finding.code === "ALL_BRANCHES_ALLOWED"));
+  assert.equal(calls.filter(call =>
+    call.path.endsWith("/environments/staging/deployment-branch-policies")
+  ).length, 0);
+  assert.match(summary, /ALL_BRANCHES|unrestricted/i);
+  assert.match(summary, /0\s*\|/);
+});

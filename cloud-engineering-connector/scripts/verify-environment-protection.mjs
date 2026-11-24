@@ -12,8 +12,16 @@ const RELEASE_POLICIES = Object.freeze({
   production: Object.freeze({ branchPattern: "integration/production-release-*" }),
 });
 
-function block(reason) {
-  throw new Error("GitHub Environment protection gate blocked release: " + reason);
+export class EnvironmentProtectionError extends Error {
+  constructor(code, reason) {
+    super("GitHub Environment protection gate blocked release: " + reason);
+    this.name = "EnvironmentProtectionError";
+    this.code = code;
+  }
+}
+
+function block(reason, code = "POLICY_MISMATCH") {
+  throw new EnvironmentProtectionError(code, reason);
 }
 
 function isRecord(value) {
@@ -35,7 +43,7 @@ function validateInput({ repository, releaseEnvironment, token, fetchImpl }) {
   }
 }
 
-async function getJson(fetchImpl, url, token, label) {
+async function getJson(fetchImpl, url, token, label, resourceType) {
   let response;
   try {
     response = await fetchImpl(url, {
@@ -49,22 +57,36 @@ async function getJson(fetchImpl, url, token, label) {
       signal: AbortSignal.timeout(15_000),
     });
   } catch {
-    block(label + " request failed; GitHub Environment metadata could not be verified.");
+    block(
+      label + " request failed; GitHub Environment metadata could not be verified.",
+      "API_REQUEST_FAILED",
+    );
   }
 
   if (!response || response.ok !== true) {
     const status = Number.isInteger(response?.status) ? response.status : 0;
-    block(label + " returned HTTP " + status + ".");
+    let code = "API_RESPONSE_INVALID";
+    if (resourceType === "environment" && status === 404) {
+      code = "ENVIRONMENT_NOT_FOUND";
+    } else if (resourceType === "branch-policy" && status === 404) {
+      code = "BRANCH_POLICY_ENDPOINT_NOT_FOUND";
+    } else if (status === 401 || status === 403 || status >= 500 || status === 0) {
+      code = "API_UNAVAILABLE";
+    }
+    const context = resourceType === "branch-policy" && status === 404
+      ? " after Environment metadata confirmed custom_branch_policies=true"
+      : "";
+    block(label + " returned HTTP " + status + context + ".", code);
   }
 
   let body;
   try {
     body = await response.json();
   } catch {
-    block(label + " returned invalid JSON.");
+    block(label + " returned invalid JSON.", "API_RESPONSE_INVALID");
   }
   if (!isRecord(body)) {
-    block(label + " returned an invalid object.");
+    block(label + " returned an invalid object.", "API_RESPONSE_INVALID");
   }
   return body;
 }
@@ -83,6 +105,7 @@ async function getBranchPolicies(fetchImpl, baseUrl, token) {
       url.toString(),
       token,
       "GitHub deployment branch-policy metadata",
+      "branch-policy",
     );
 
     if (
@@ -91,31 +114,44 @@ async function getBranchPolicies(fetchImpl, baseUrl, token) {
       !Array.isArray(body.branch_policies) ||
       body.branch_policies.length > 100
     ) {
-      block("GitHub deployment branch-policy metadata has an invalid pagination shape.");
+      block(
+        "GitHub deployment branch-policy metadata has an invalid pagination shape.",
+        "API_RESPONSE_INVALID",
+      );
     }
 
     if (expectedTotal === null) expectedTotal = body.total_count;
     if (body.total_count !== expectedTotal) {
-      block("GitHub deployment branch-policy count changed while the release gate was reading it.");
+      block(
+        "GitHub deployment branch-policy count changed while the release gate was reading it.",
+        "API_STATE_INCONSISTENT",
+      );
     }
 
     policies.push(...body.branch_policies);
     if (policies.length > expectedTotal) {
-      block("GitHub deployment branch-policy pagination returned duplicate or excess entries.");
+      block(
+        "GitHub deployment branch-policy pagination returned duplicate or excess entries.",
+        "API_STATE_INCONSISTENT",
+      );
     }
     if (policies.length === expectedTotal) return policies;
 
     if (body.branch_policies.length !== 100) {
-      block("GitHub deployment branch-policy pagination was incomplete.");
+      block(
+        "GitHub deployment branch-policy pagination was incomplete.",
+        "API_RESPONSE_INVALID",
+      );
     }
   }
 
-  block("GitHub deployment branch-policy pagination exceeded the safety limit.");
+  block(
+    "GitHub deployment branch-policy pagination exceeded the safety limit.",
+    "API_STATE_INCONSISTENT",
+  );
 }
 
-function assertEnvironmentProtection({ environment, branchPolicies, releaseEnvironment }) {
-  const expected = RELEASE_POLICIES[releaseEnvironment];
-
+function assertEnvironmentMetadata({ environment, releaseEnvironment }) {
   if (!isRecord(environment) || environment.name !== releaseEnvironment) {
     block("the returned Environment name does not match the fixed " + releaseEnvironment + " release target.");
   }
@@ -125,7 +161,7 @@ function assertEnvironmentProtection({ environment, branchPolicies, releaseEnvir
   }
 
   if (!Array.isArray(environment.protection_rules)) {
-    block("Environment protection rules are missing or malformed.");
+    block("Environment protection rules are missing or malformed.", "API_RESPONSE_INVALID");
   }
 
   const reviewerRules = environment.protection_rules.filter(
@@ -169,24 +205,50 @@ function assertEnvironmentProtection({ environment, branchPolicies, releaseEnvir
     deploymentBranchPolicy.protected_branches !== false ||
     deploymentBranchPolicy.custom_branch_policies !== true
   ) {
-    block("the Environment must use explicit custom deployment branch policies, not all branches or protected-branches-only mode.");
-  }
-
-  if (
-    !Array.isArray(branchPolicies) ||
-    branchPolicies.length !== 1 ||
-    !isRecord(branchPolicies[0]) ||
-    branchPolicies[0].name !== expected.branchPattern
-  ) {
-    block("the branch-policy set must contain exactly one pattern: " + expected.branchPattern + ".");
+    const protectedBranches = isRecord(deploymentBranchPolicy) &&
+      typeof deploymentBranchPolicy.protected_branches === "boolean"
+      ? String(deploymentBranchPolicy.protected_branches)
+      : "invalid";
+    const customBranchPolicies = isRecord(deploymentBranchPolicy) &&
+      typeof deploymentBranchPolicy.custom_branch_policies === "boolean"
+      ? String(deploymentBranchPolicy.custom_branch_policies)
+      : "invalid";
+    block(
+      "the Environment deployment branch policy must use explicit custom deployment branch policies with protected_branches=false and custom_branch_policies=true; observed protected_branches=" +
+        protectedBranches +
+        ", custom_branch_policies=" +
+        customBranchPolicies +
+        ".",
+    );
   }
 
   return Object.freeze({
-    environment: releaseEnvironment,
-    branchPattern: expected.branchPattern,
     requiredReviewerCount: reviewers.length,
     authorizedReviewerUserIds: Object.freeze([...reviewerIdentities].sort((left, right) => left - right)),
+    deploymentBranchPolicy: Object.freeze({
+      protected_branches: false,
+      custom_branch_policies: true,
+    }),
   });
+}
+
+function assertExpectedBranchPolicy({ branchPolicies, releaseEnvironment }) {
+  const expectedPattern = RELEASE_POLICIES[releaseEnvironment].branchPattern;
+
+  if (!Array.isArray(branchPolicies)) {
+    block("GitHub deployment branch-policy metadata is not an array.", "API_RESPONSE_INVALID");
+  }
+  if (branchPolicies.length !== 1) {
+    block("the branch-policy set must contain exactly one pattern: " + expectedPattern + ".");
+  }
+  if (!isRecord(branchPolicies[0]) || typeof branchPolicies[0].name !== "string") {
+    block("GitHub deployment branch-policy metadata contains a malformed policy.", "API_RESPONSE_INVALID");
+  }
+  if (branchPolicies[0].name !== expectedPattern) {
+    block("the branch-policy set must contain exactly one pattern: " + expectedPattern + ".");
+  }
+
+  return expectedPattern;
 }
 
 export async function verifyEnvironmentProtection({
@@ -210,13 +272,20 @@ export async function verifyEnvironmentProtection({
     baseUrl,
     token,
     "GitHub Environment metadata",
+    "environment",
   );
-  const branchPolicies = await getBranchPolicies(fetchImpl, baseUrl, token);
 
-  return assertEnvironmentProtection({
-    environment,
-    branchPolicies,
-    releaseEnvironment,
+  // Validate the Environment's declared policy mode before calling its dependent list endpoint.
+  const metadata = assertEnvironmentMetadata({ environment, releaseEnvironment });
+  const branchPolicies = await getBranchPolicies(fetchImpl, baseUrl, token);
+  const branchPattern = assertExpectedBranchPolicy({ branchPolicies, releaseEnvironment });
+
+  return Object.freeze({
+    environment: releaseEnvironment,
+    branchPattern,
+    requiredReviewerCount: metadata.requiredReviewerCount,
+    authorizedReviewerUserIds: metadata.authorizedReviewerUserIds,
+    deploymentBranchPolicy: metadata.deploymentBranchPolicy,
   });
 }
 

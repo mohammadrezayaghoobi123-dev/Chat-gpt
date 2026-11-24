@@ -271,3 +271,31 @@ test("rejects Team reviewers when their membership cannot be bound to the PR rev
   });
   await expectRejected({ fetchImpl }, /User reviewer identity/i);
 });
+
+test("rejects disabled custom branch policies before requesting the branch-policy endpoint", async () => {
+  const { verifyEnvironmentProtection } = await loadVerifier();
+  const { fetchImpl, calls } = makeFetch({
+    environmentData: environment("staging", {
+      deployment_branch_policy: {
+        protected_branches: true,
+        custom_branch_policies: false,
+      },
+    }),
+  });
+
+  await assert.rejects(
+    verifyEnvironmentProtection({
+      repository,
+      releaseEnvironment: "staging",
+      token,
+      fetchImpl,
+    }),
+    /explicit custom deployment branch policies/i,
+  );
+
+  assert.equal(
+    calls.filter(call => call.path.endsWith("/deployment-branch-policies")).length,
+    0,
+    "the branch-policy endpoint must not be queried when Environment metadata disables custom policies",
+  );
+});

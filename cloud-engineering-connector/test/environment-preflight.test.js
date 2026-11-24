@@ -206,3 +206,59 @@ test("rejects missing repository or token before calling GitHub", async () => {
   );
   assert.equal(calls, 0);
 });
+
+test("classifies disabled custom branch policies as BLOCKED before querying their endpoint", async () => {
+  const { auditEnvironmentProtection } = await loadAudit();
+  const { fetchImpl, calls } = makeFetch({
+    staging: {
+      environmentStatus: 200,
+      environmentData: environment("staging", {
+        deployment_branch_policy: {
+          protected_branches: true,
+          custom_branch_policies: false,
+        },
+      }),
+      branchStatus: 200,
+      branchBody: { total_count: 1, branch_policies: [{ id: 21, name: "integration/staging-release-*" }] },
+    },
+  });
+
+  const report = await auditEnvironmentProtection({ repository, token, fetchImpl });
+
+  assert.equal(report.environments[0].status, "BLOCKED");
+  assert.match(report.environments[0].reason, /explicit custom deployment branch policies/i);
+  assert.equal(
+    calls.filter(call =>
+      call.path.includes("/environments/staging/deployment-branch-policies")
+    ).length,
+    0,
+    "an unsafe Environment policy flag must be reported without a branch-policy endpoint request",
+  );
+});
+
+test("classifies branch-policy endpoint 404 as UNKNOWN after Environment metadata confirms custom policies are enabled", async () => {
+  const { auditEnvironmentProtection } = await loadAudit();
+  const { fetchImpl, calls } = makeFetch({
+    staging: {
+      environmentStatus: 200,
+      environmentData: environment("staging", {
+        deployment_branch_policy: {
+          protected_branches: false,
+          custom_branch_policies: true,
+        },
+      }),
+      branchStatus: 404,
+    },
+  });
+
+  const report = await auditEnvironmentProtection({ repository, token, fetchImpl });
+
+  assert.equal(report.environments[0].status, "UNKNOWN");
+  assert.match(report.environments[0].reason, /custom_branch_policies=true/i);
+  assert.equal(
+    calls.filter(call =>
+      call.path.includes("/environments/staging/deployment-branch-policies")
+    ).length,
+    1,
+  );
+});

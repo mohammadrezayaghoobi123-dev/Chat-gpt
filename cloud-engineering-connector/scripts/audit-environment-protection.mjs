@@ -1,7 +1,7 @@
 import { appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import { verifyEnvironmentProtection } from "./verify-environment-protection.mjs";
+import { verifyEnvironmentProtection, EnvironmentProtectionError } from "./verify-environment-protection.mjs";
 
 const TARGET_ENVIRONMENTS = Object.freeze(["staging", "production"]);
 
@@ -25,19 +25,24 @@ function safeReason(error) {
     .slice(0, 240);
 }
 
-function classifyFailure(reason) {
-  if (/GitHub Environment metadata returned HTTP 404\b/i.test(reason)) {
-    return "MISSING";
-  }
-
-  if (
-    /HTTP (?:401|403|5\d\d)\b/i.test(reason) ||
-    /request failed|invalid JSON|invalid object|invalid pagination|pagination .*?(?:changed|incomplete|exceeded)|metadata could not be verified/i.test(reason)
-  ) {
+function classifyFailure(error) {
+  if (!(error instanceof EnvironmentProtectionError)) {
     return "UNKNOWN";
   }
 
-  return "BLOCKED";
+  switch (error.code) {
+    case "ENVIRONMENT_NOT_FOUND":
+      return "MISSING";
+    case "POLICY_MISMATCH":
+      return "BLOCKED";
+    case "BRANCH_POLICY_ENDPOINT_NOT_FOUND":
+    case "API_REQUEST_FAILED":
+    case "API_UNAVAILABLE":
+    case "API_RESPONSE_INVALID":
+    case "API_STATE_INCONSISTENT":
+    default:
+      return "UNKNOWN";
+  }
 }
 
 async function auditOneEnvironment({ repository, token, fetchImpl, environment }) {
@@ -59,7 +64,7 @@ async function auditOneEnvironment({ repository, token, fetchImpl, environment }
     const reason = safeReason(error);
     return Object.freeze({
       environment,
-      status: classifyFailure(reason),
+      status: classifyFailure(error),
       branchPattern: "",
       requiredReviewerCount: null,
       reason,

@@ -40,3 +40,12 @@ test("preflight workflow invokes only the read-only audit script and contains no
   assert.match(source, /GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
   assert.match(source, /timeout-minutes:\s*[1-9]/);
 });
+
+test("read-only preflight also runs on the dedicated branch-policy diagnosis branch", () => {
+  const source = readWorkflow();
+  assert.match(
+    source,
+    /-\s+["']?security\/environment-branch-policy-state-disambiguation-\*["']?/,
+    "the diagnostic child branch must run the same GET-only Environment audit",
+  );
+});

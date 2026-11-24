@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "security/environment-read-only-preflight-*"
+      - "security/environment-branch-policy-state-disambiguation-*"
 
 permissions:
   actions: read

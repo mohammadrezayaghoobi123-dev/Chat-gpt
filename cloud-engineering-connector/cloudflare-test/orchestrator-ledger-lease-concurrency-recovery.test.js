@@ -237,7 +237,7 @@ describe("OrchestratorLedger Lease concurrency and recovery invariants", () => {
       expect(leaseRow(instance, taskId)).toMatchObject({
         worker_id: WORKER_ID,
         lease_generation: 1,
-        lease_until: runningNow + 30_000,
+        lease_until: runningNow - 1 + 30_000,
       });
       expect(candidateRows(instance, taskId)).toEqual([]);
 

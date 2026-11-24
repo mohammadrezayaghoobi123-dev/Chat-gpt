@@ -6,7 +6,7 @@ import { CLAIM_CANDIDATE_QUERY } from "../orchestrator-ledger.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 
 let now;
-beforeEach(() => { now = Date.now(); });
+beforeEach(() => { now = Date.now(); vi.spyOn(Date, "now").mockReturnValue(now); });
 afterEach(() => vi.restoreAllMocks());
 const TEST_ASSERTION_KID = "test-v1";
 const TEST_ASSERTION_KEY = Uint8Array.from(

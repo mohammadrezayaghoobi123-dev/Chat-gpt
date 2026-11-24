@@ -603,9 +603,9 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  authorizeOwnerWebhookRetry(input = {}) {
+  async authorizeOwnerWebhookRetry(input = {}) {
     const {
-      deliveryId, bodySha256, commentId, commandHash, repositoryId, actorId,
+      assertion, deliveryId, bodySha256, commentId, commandHash, repositoryId, actorId,
       taskId, operation, issueNumber, commentCreatedAt,
     } = input ?? {};
     const validIdentity =
@@ -623,7 +623,31 @@ export class OrchestratorLedger extends DurableObject {
       return { registered: true, denied: true, reason: "OWNER_REDELIVERY_CONTEXT_INVALID" };
     }
 
-    const now = Date.now();
+    if (repositoryId !== Number(this.env?.GITHUB_WEBHOOK_REPOSITORY_ID) ||
+        actorId !== String(this.env?.GITHUB_WEBHOOK_OWNER_ID ?? "")) {
+      return { registered: true, denied: true, reason: "OWNER_ASSERTION_REJECTED" };
+    }
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyOwnerAssertion(
+        this.env?.LEDGER_OWNER_ASSERTION_KEYS,
+        assertion,
+        {
+          actorId,
+          repositoryId,
+          taskId,
+          operation,
+          deliveryId,
+          commentId,
+          commandHash,
+          nowMs: Date.now,
+        },
+      );
+    } catch {
+      return { registered: true, denied: true, reason: "OWNER_ASSERTION_REJECTED" };
+    }
+
+    const now = verifiedAssertion.verifiedAtMs;
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       const priorReceipts = sql.exec(

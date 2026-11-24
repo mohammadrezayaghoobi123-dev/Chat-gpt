@@ -103,13 +103,15 @@ test("issues an Ed25519 admission grant and verifies the exact tenant, project, 
 });
 
 test("rejects an admission grant whose Ed25519 signature has been modified", async () => {
+  const createTaskAdmissionGrant = requireFunction("createTaskAdmissionGrant");
+  const verifyTaskAdmissionGrant = requireFunction("verifyTaskAdmissionGrant");
   const keys = await makeKeyPair();
   const expected = claims();
-  const token = await admission.createTaskAdmissionGrant(keys.privateKeys, "test", expected);
+  const token = await createTaskAdmissionGrant(keys.privateKeys, "test", expected);
   const parts = token.split(".");
   parts[3] = parts[3].slice(0, -1) + (parts[3].endsWith("A") ? "B" : "A");
   await assert.rejects(
-    admission.verifyTaskAdmissionGrant(keys.publicKeys, parts.join("."), {
+    verifyTaskAdmissionGrant(keys.publicKeys, parts.join("."), {
       ...expected,
       nowMs: 1_800_000_000_000,
     }),
@@ -118,9 +120,11 @@ test("rejects an admission grant whose Ed25519 signature has been modified", asy
 });
 
 test("rejects scope, digest, idempotency, and input-hash substitution", async () => {
+  const createTaskAdmissionGrant = requireFunction("createTaskAdmissionGrant");
+  const verifyTaskAdmissionGrant = requireFunction("verifyTaskAdmissionGrant");
   const keys = await makeKeyPair();
   const expected = claims();
-  const token = await admission.createTaskAdmissionGrant(keys.privateKeys, "test", expected);
+  const token = await createTaskAdmissionGrant(keys.privateKeys, "test", expected);
   for (const change of [
     { tenantId: "tenant-foreign" },
     { projectId: "project-foreign" },
@@ -130,7 +134,7 @@ test("rejects scope, digest, idempotency, and input-hash substitution", async ()
     { inputHash: "f".repeat(64) },
   ]) {
     await assert.rejects(
-      admission.verifyTaskAdmissionGrant(keys.publicKeys, token, {
+      verifyTaskAdmissionGrant(keys.publicKeys, token, {
         ...expected,
         ...change,
         nowMs: 1_800_000_000_000,
@@ -141,11 +145,13 @@ test("rejects scope, digest, idempotency, and input-hash substitution", async ()
 });
 
 test("rejects expired grants, unknown key IDs, malformed payloads, and private keys in the verifier key ring", async () => {
+  const createTaskAdmissionGrant = requireFunction("createTaskAdmissionGrant");
+  const verifyTaskAdmissionGrant = requireFunction("verifyTaskAdmissionGrant");
   const keys = await makeKeyPair();
   const expected = claims();
-  const token = await admission.createTaskAdmissionGrant(keys.privateKeys, "test", expected);
+  const token = await createTaskAdmissionGrant(keys.privateKeys, "test", expected);
   await assert.rejects(
-    admission.verifyTaskAdmissionGrant(keys.publicKeys, token, {
+    verifyTaskAdmissionGrant(keys.publicKeys, token, {
       ...expected,
       nowMs: (expected.expiresAt + 1) * 1000,
     }),
@@ -154,21 +160,21 @@ test("rejects expired grants, unknown key IDs, malformed payloads, and private k
   const parts = token.split(".");
   parts[1] = "unknown";
   await assert.rejects(
-    admission.verifyTaskAdmissionGrant(keys.publicKeys, parts.join("."), {
+    verifyTaskAdmissionGrant(keys.publicKeys, parts.join("."), {
       ...expected,
       nowMs: 1_800_000_000_000,
     }),
     error => error.code === "TASK_ADMISSION_INVALID",
   );
   await assert.rejects(
-    admission.verifyTaskAdmissionGrant(JSON.stringify({ test: keys.privateJwk }), token, {
+    verifyTaskAdmissionGrant(JSON.stringify({ test: keys.privateJwk }), token, {
       ...expected,
       nowMs: 1_800_000_000_000,
     }),
     error => error.code === "TASK_ADMISSION_INVALID",
   );
   await assert.rejects(
-    admission.verifyTaskAdmissionGrant(keys.publicKeys, "ad1.test.%%%bad", {
+    verifyTaskAdmissionGrant(keys.publicKeys, "ad1.test.%%%bad", {
       ...expected,
       nowMs: 1_800_000_000_000,
     }),

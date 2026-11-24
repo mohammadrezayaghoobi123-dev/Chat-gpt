@@ -42,7 +42,7 @@ async function adminAssertion(operation, tenantId, projectId, target, now = NOW)
   });
 }
 
-function taskFixture(overrides = {}) {
+function taskFixture(tenantId, overrides = {}) {
   return {
     taskId: TASK_ID,
     tenantId,
@@ -76,7 +76,7 @@ async function fixture({ policy = true, tenantId = TENANT_ID_PREFIX + "-" + cryp
     expectedVersion: 0,
     now: NOW,
   });
-  const task = taskFixture({ tenantId });
+  const task = taskFixture(tenantId);
   const taskDigest = await taskAdmissionDigest(task);
   if (policy) {
     await adapters.provisioningStore.upsertProjectPolicy({

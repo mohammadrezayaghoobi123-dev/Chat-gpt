@@ -9,14 +9,19 @@ const NOW = 1_800_000_000_000;
 const ADMIN_KEYS = JSON.stringify({ test: "e".repeat(64) });
 const SCHEDULER_KEYS = JSON.stringify({ "scheduler-k1": "a".repeat(64) });
 const CRON = "*/5 * * * *";
-const tenantId = "receipt-tenant";
-const principalId = "receipt-principal";
-const projectId = "receipt-project";
-const action = "project.read";
-const resourceDigest = "a".repeat(64);
 
-function stubFor() {
-  return env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName(tenantId));
+function scope(suffix) {
+  return {
+    tenantId: "receipt-tenant-" + suffix,
+    principalId: "receipt-principal-" + suffix,
+    projectId: "receipt-project-" + suffix,
+    action: "project.read",
+    resourceDigest: "a".repeat(64),
+  };
+}
+
+function stubFor(target) {
+  return env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName(target.tenantId));
 }
 
 async function configure(stub) {
@@ -26,42 +31,68 @@ async function configure(stub) {
   });
 }
 
-async function admin(operation, target, project = projectId, now = NOW) {
+async function admin(target, operation, body, projectId = target.projectId, now = NOW) {
   return createTenantDirectoryAdminAssertion(ADMIN_KEYS, "test", {
-    subject: "tenant-directory-provisioner", operation, tenantId,
-    projectId: project, target, nowMs: now,
+    subject: "tenant-directory-provisioner",
+    operation,
+    tenantId: target.tenantId,
+    projectId,
+    target: body,
+    nowMs: now,
   });
 }
 
-async function provision(stub) {
+async function provision(stub, target) {
   const membership = {
-    principalId, membershipId: "membership-" + principalId,
-    role: "tenant-member", status: "active", expectedVersion: 0,
+    principalId: target.principalId,
+    membershipId: "membership-" + target.principalId,
+    role: "tenant-member",
+    status: "active",
+    expectedVersion: 0,
   };
   await stub.upsertMembership({
-    assertion: await admin("upsertMembership", membership, null),
-    tenantId, ...membership, now: NOW,
+    assertion: await admin(target, "upsertMembership", membership, null),
+    tenantId: target.tenantId,
+    ...membership,
+    now: NOW,
   });
   const policy = {
-    projectId, principalId, action, resourceDigest: "*",
-    effect: "allow", policyVersion: "policy-v1", status: "active", expectedVersion: 0,
+    projectId: target.projectId,
+    principalId: target.principalId,
+    action: target.action,
+    resourceDigest: "*",
+    effect: "allow",
+    policyVersion: "policy-v1",
+    status: "active",
+    expectedVersion: 0,
   };
   await stub.upsertProjectPolicy({
-    assertion: await admin("upsertProjectPolicy", policy),
-    tenantId, ...policy, now: NOW + 1,
+    assertion: await admin(target, "upsertProjectPolicy", policy, target.projectId, NOW + 1),
+    tenantId: target.tenantId,
+    ...policy,
+    now: NOW + 1,
   });
 }
 
-async function scheduler(invocationId, nowMs = NOW, scheduledTime = NOW) {
+async function scheduler(invocationId, now = NOW + 2) {
   return createSchedulerInvocationAssertion(SCHEDULER_KEYS, "scheduler-k1", {
-    invocationId, cron: CRON, scheduledTime, nowMs,
+    invocationId,
+    cron: CRON,
+    scheduledTime: NOW,
+    nowMs: now,
   });
 }
 
-function task(taskId = "receipt-task-001") {
+function task(target, taskId = "receipt-task-001") {
   return {
-    taskId, tenantId, projectId, state: "SCHEDULED", version: 1,
-    createdAt: NOW, updatedAt: NOW, executorId: "worker-a",
+    taskId,
+    tenantId: target.tenantId,
+    projectId: target.projectId,
+    state: "SCHEDULED",
+    version: 1,
+    createdAt: NOW,
+    updatedAt: NOW,
+    executorId: "worker-a",
     title: "Daily reconciliation",
   };
 }
@@ -69,7 +100,7 @@ function task(taskId = "receipt-task-001") {
 async function verify(receipt) {
   const key = await crypto.subtle.importKey(
     "raw",
-    Uint8Array.from(atob(receipt.publicKey), c => c.charCodeAt(0)),
+    Uint8Array.from(atob(receipt.publicKey), character => character.charCodeAt(0)),
     { name: "Ed25519" },
     false,
     ["verify"],
@@ -77,14 +108,18 @@ async function verify(receipt) {
   return crypto.subtle.verify(
     { name: "Ed25519" },
     key,
-    Uint8Array.from(atob(receipt.signature), c => c.charCodeAt(0)),
+    Uint8Array.from(atob(receipt.signature), character => character.charCodeAt(0)),
     new TextEncoder().encode(canonicalJson(receipt.claims)),
   );
 }
 
-async function issue(stub, taskValue, invocationId, idempotencyKey, now = NOW) {
+async function issue(stub, target, taskValue, invocationId, idempotencyKey, now = NOW + 2) {
   return stub.issueAdmissionReceipt({
-    tenantId, principalId, projectId, action, resourceDigest,
+    tenantId: target.tenantId,
+    principalId: target.principalId,
+    projectId: target.projectId,
+    action: target.action,
+    resourceDigest: target.resourceDigest,
     task: taskValue,
     idempotencyKey,
     cron: CRON,
@@ -96,62 +131,97 @@ async function issue(stub, taskValue, invocationId, idempotencyKey, now = NOW) {
 }
 
 describe("TenantDirectory Admission Receipt", () => {
-  it("signs the authoritative version snapshot and commits Receipt plus Outbox atomically", async () => {
-    const stub = stubFor();
+  it("signs the authoritative snapshot and commits Receipt plus Outbox atomically", async () => {
+    const target = scope("valid");
+    const stub = stubFor(target);
     await configure(stub);
-    await provision(stub);
-    const result = await issue(stub, task(), "invocation-receipt-001", "request-001");
+    await provision(stub, target);
 
-    expect(result).toMatchObject({
-      tenantId,
+    const [first, second] = await Promise.all([
+      issue(stub, target, task(target, "receipt-task-001"), "invocation-valid-001", "request-001"),
+      issue(stub, target, task(target, "receipt-task-002"), "invocation-valid-002", "request-002"),
+    ]);
+
+    expect(first).toMatchObject({
+      tenantId: target.tenantId,
       algorithm: "Ed25519",
       claims: {
         version: 1,
         tokenType: "admission-receipt",
         issuer: "tenant-directory-admission",
         audience: "orchestrator-ledger",
-        tenantId,
-        principalId,
-        projectId,
-        action,
+        tenantId: target.tenantId,
+        principalId: target.principalId,
+        projectId: target.projectId,
+        action: target.action,
         membershipVersion: 1,
         policyScopeEpoch: 1,
         selectedRuleVersion: 1,
         selectedResourceDigest: "*",
-        resourceDigest,
+        resourceDigest: target.resourceDigest,
         taskId: "receipt-task-001",
-        schedulerInvocationId: "invocation-receipt-001",
+        schedulerInvocationId: "invocation-valid-001",
         schedulerCron: CRON,
         scheduledTime: NOW,
       },
     });
-    expect(result.claims.taskDigest).toMatch(/^[a-f0-9]{64}$/);
-    expect(result.claims.idempotencyKeyDigest).toMatch(/^[a-f0-9]{64}$/);
-    expect(await verify(result)).toBe(true);
+    expect(first.claims.taskDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(first.claims.idempotencyKeyDigest).toMatch(/^[a-f0-9]{64}$/);
+    await expect(verify(first)).resolves.toBe(true);
+    await expect(verify(second)).resolves.toBe(true);
+    expect(first.keyId).toBe(second.keyId);
+    expect(first.publicKey).toBe(second.publicKey);
+
+    const storedEnvelope = await runInDurableObject(stub, instance =>
+      instance.ctx.storage.get("admission:signing-key:v1:" + target.tenantId),
+    );
+    expect(storedEnvelope).toMatchObject({
+      tenantId: target.tenantId,
+      keyId: first.keyId,
+      publicKey: first.publicKey,
+    });
+    expect(storedEnvelope.wrappedPrivateKey).toBeTruthy();
+    expect(Object.keys(storedEnvelope)).not.toContain("privateKey");
+    expect(Object.keys(storedEnvelope)).not.toContain("pkcs8");
 
     const rows = await runInDurableObject(stub, instance => ({
       admission: instance.ctx.storage.sql.exec(
         "SELECT admission_id, receipt_jti FROM tenant_admissions WHERE admission_id = ?",
-        result.claims.admissionId,
+        first.claims.admissionId,
       ).one(),
       outbox: instance.ctx.storage.sql.exec(
         "SELECT admission_id, status FROM tenant_admission_outbox WHERE admission_id = ?",
-        result.claims.admissionId,
+        first.claims.admissionId,
       ).one(),
     }));
     expect(rows.admission).toEqual({
-      admission_id: result.claims.admissionId,
-      receipt_jti: result.claims.jti,
+      admission_id: first.claims.admissionId,
+      receipt_jti: first.claims.jti,
     });
-    expect(rows.outbox).toEqual({ admission_id: result.claims.admissionId, status: "PENDING" });
+    expect(rows.outbox).toEqual({
+      admission_id: first.claims.admissionId,
+      status: "PENDING",
+    });
+
+    const verificationKey = await stub.getAdmissionVerificationKey({
+      tenantId: target.tenantId,
+      keyId: first.keyId,
+    });
+    expect(verificationKey).toEqual({
+      tenantId: target.tenantId,
+      keyId: first.keyId,
+      algorithm: "Ed25519",
+      publicKey: first.publicKey,
+    });
   });
 
-  it("returns one identical receipt for idempotent retries and rejects task substitution", async () => {
-    const stub = stubFor();
+  it("returns the original receipt for idempotent retry and rejects Task substitution", async () => {
+    const target = scope("replay");
+    const stub = stubFor(target);
     await configure(stub);
-    await provision(stub);
-    const first = await issue(stub, task(), "invocation-replay-001", "same-key");
-    const replay = await issue(stub, task(), "invocation-replay-002", "same-key", NOW + 1);
+    await provision(stub, target);
+    const first = await issue(stub, target, task(target), "invocation-replay-001", "same-key");
+    const replay = await issue(stub, target, task(target), "invocation-replay-002", "same-key", NOW + 3);
     expect(replay.replay).toBe(true);
     expect(replay.claims).toEqual(first.claims);
     expect(replay.signature).toBe(first.signature);
@@ -159,10 +229,18 @@ describe("TenantDirectory Admission Receipt", () => {
     const conflict = await runInDurableObject(stub, async instance => {
       try {
         await instance.issueAdmissionReceipt({
-          tenantId, principalId, projectId, action, resourceDigest,
-          task: task("different-task"), idempotencyKey: "same-key",
-          cron: CRON, scheduledTime: NOW, invocationId: "invocation-replay-003",
-          schedulerAssertion: await scheduler("invocation-replay-003"), now: NOW + 2,
+          tenantId: target.tenantId,
+          principalId: target.principalId,
+          projectId: target.projectId,
+          action: target.action,
+          resourceDigest: target.resourceDigest,
+          task: task(target, "different-task"),
+          idempotencyKey: "same-key",
+          cron: CRON,
+          scheduledTime: NOW,
+          invocationId: "invocation-replay-003",
+          schedulerAssertion: await scheduler("invocation-replay-003", NOW + 4),
+          now: NOW + 4,
         });
         return "UNEXPECTED_SUCCESS";
       } catch (error) {
@@ -170,31 +248,71 @@ describe("TenantDirectory Admission Receipt", () => {
       }
     });
     expect(conflict).toBe("ADMISSION_IDEMPOTENCY_CONFLICT");
+
     const counts = await runInDurableObject(stub, instance => ({
-      admissions: instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM tenant_admissions").one().count,
-      outbox: instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM tenant_admission_outbox").one().count,
+      admissions: instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM tenant_admissions WHERE tenant_id = ?",
+        target.tenantId,
+      ).one().count,
+      outbox: instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM tenant_admission_outbox WHERE tenant_id = ?",
+        target.tenantId,
+      ).one().count,
     }));
     expect(counts).toEqual({ admissions: 1, outbox: 1 });
   });
 
-  it("rejects invalid scheduler proof and revalidates policy freshness after signing", async () => {
-    const stub = stubFor();
+  it("rejects invalid Scheduler proof and Task scope substitution", async () => {
+    const target = scope("invalid");
+    const stub = stubFor(target);
     await configure(stub);
-    await provision(stub);
-    const invalid = await runInDurableObject(stub, async instance => {
+    await provision(stub, target);
+
+    const invalidProof = await runInDurableObject(stub, async instance => {
       instance.env.SCHEDULER_INVOCATION_KEYS = JSON.stringify({ other: "f".repeat(64) });
       try {
         await instance.issueAdmissionReceipt({
-          tenantId, principalId, projectId, action, resourceDigest,
-          task: task("invalid-proof"), idempotencyKey: "invalid-proof",
-          cron: CRON, scheduledTime: NOW, invocationId: "invocation-invalid-proof",
-          schedulerAssertion: await scheduler("invocation-invalid-proof"), now: NOW,
+          tenantId: target.tenantId,
+          principalId: target.principalId,
+          projectId: target.projectId,
+          action: target.action,
+          resourceDigest: target.resourceDigest,
+          task: task(target, "invalid-proof-task"),
+          idempotencyKey: "invalid-proof-key",
+          cron: CRON,
+          scheduledTime: NOW,
+          invocationId: "invocation-invalid-proof",
+          schedulerAssertion: await scheduler("invocation-invalid-proof"),
+          now: NOW + 2,
         });
         return "UNEXPECTED_SUCCESS";
       } catch (error) {
         return error.code;
       }
     });
-    expect(invalid).toBe("SCHEDULER_INVOCATION_REQUIRED");
+    expect(invalidProof).toBe("SCHEDULER_INVOCATION_REQUIRED");
+
+    const mismatch = await runInDurableObject(stub, async instance => {
+      try {
+        await instance.issueAdmissionReceipt({
+          tenantId: target.tenantId,
+          principalId: target.principalId,
+          projectId: target.projectId,
+          action: target.action,
+          resourceDigest: target.resourceDigest,
+          task: { ...task(target, "scope-mismatch-task"), projectId: "other-project" },
+          idempotencyKey: "scope-mismatch-key",
+          cron: CRON,
+          scheduledTime: NOW,
+          invocationId: "invocation-scope-mismatch",
+          schedulerAssertion: await scheduler("invocation-scope-mismatch"),
+          now: NOW + 2,
+        });
+        return "UNEXPECTED_SUCCESS";
+      } catch (error) {
+        return error.code;
+      }
+    });
+    expect(mismatch).toBe("INVALID_ADMISSION_TASK");
   });
 });

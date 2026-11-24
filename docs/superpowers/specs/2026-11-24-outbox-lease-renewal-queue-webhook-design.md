@@ -146,7 +146,7 @@ Outbound body is canonical JSON containing the versioned event envelope and sour
 - X-Outbox-Timestamp: <Unix-seconds>
 - X-Outbox-Signature: v1=<hex-HMAC-SHA256>
 
-The HMAC input is exactly v1, a newline, timestamp, a newline, and rawBody. The destination must verify the HMAC and a bounded freshness window. For the same Idempotency-Key and same body, the destination must return 2xx for both first acceptance and duplicate acceptance. Reuse of the same key with a different body must return a permanent conflict (409).
+The HMAC input is exactly the bytes of `v1\\n{timestamp}\\n{rawBody}` (one LF byte between each field, UTF-8 encoded, without a trailing newline). The destination must verify the HMAC and a bounded freshness window. For the same Idempotency-Key and same body, the destination must return 2xx for both first acceptance and duplicate acceptance. Reuse of the same key with a different body must return a permanent conflict (409).
 
 Use a bounded request timeout (proposed 20 seconds), redirect: manual, no caller-controlled URL, and no token forwarding. Never log request bodies, capability tokens, HMAC keys, or response bodies.
 

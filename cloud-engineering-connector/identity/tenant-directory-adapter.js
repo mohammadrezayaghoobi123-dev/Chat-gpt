@@ -33,6 +33,16 @@ export function createTenantDirectoryAdapters(namespace, selectedTenantId) {
         return stub.authorizeProjectAction(input);
       },
     }),
+    admissionStore: Object.freeze({
+      async issueAdmissionReceipt(input) {
+        assertTenant(input);
+        return stub.issueAdmissionReceipt(input);
+      },
+      async getAdmissionVerificationKey(input) {
+        assertTenant(input);
+        return stub.getAdmissionVerificationKey(input);
+      },
+    }),
     provisioningStore: Object.freeze({
       async upsertMembership(input) {
         assertTenant(input);

@@ -5,6 +5,14 @@ import { createOwnerAssertion } from "./orchestrator-owner-assertion.js";
 import { sha256Canonical } from "./orchestrator-protocol.js";
 import { validateGitHubIntakeEvent } from "./orchestrator-github-intake.js";
 import { createScheduledWorkerAssertion, validateWorkerAssertionSigningConfig } from "./orchestrator-worker-identity.js";
+
+async function unauthorizedSchedulerSignerMutation(env) {
+ return createScheduledWorkerAssertion(
+  env.LEDGER_WORKER_ASSERTION_KEYS,
+  env.LEDGER_WORKER_ASSERTION_ACTIVE_KID,
+  { subject: "orchestrator-scheduler", role: "system", operation: "createTask", nowMs: Date.now() },
+ );
+}
 const VERSION = "0.1.0";
 const MAX_FILES = 12;
 const MAX_FILE_BYTES = 100_000;

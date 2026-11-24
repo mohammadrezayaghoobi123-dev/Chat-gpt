@@ -92,6 +92,7 @@ jobs:
           const account = process.env.CLOUDFLARE_ACCOUNT_ID;
           const token = process.env.CLOUDFLARE_API_TOKEN;
           const root = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/chat-gpt111-staging`;
+          const productionRoot = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/chat-gpt111`;
           async function api(path) {
             const response = await fetch(root + path, {
               headers: { authorization: `Bearer ${token}`, accept: "application/json" },
@@ -99,6 +100,15 @@ jobs:
             });
             const body = await response.json();
             assert.equal(response.ok && body.success, true, `Cloudflare API preflight failed: HTTP ${response.status}`);
+            return body.result;
+          }
+          async function productionApi(path) {
+            const response = await fetch(productionRoot + path, {
+              headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+              signal: AbortSignal.timeout(15000),
+            });
+            const body = await response.json();
+            assert.equal(response.ok && body.success, true, `Production Cloudflare API preflight failed: HTTP ${response.status}`);
             return body.result;
           }
           async function accountSecuritySettings() {
@@ -127,11 +137,21 @@ jobs:
             }
             throw new Error("Cloudflare Queue inventory exceeded the 1000-page safety limit");
           }
-          const [settings, deploymentData, accountSecurity, queues] = await Promise.all([
-            api("/settings"), api("/deployments?per_page=1&page=1"), accountSecuritySettings(), queueInventory(),
+          const [settings, productionSettings, deploymentData, accountSecurity, queues] = await Promise.all([
+            api("/settings"), productionApi("/settings"), api("/deployments?per_page=1&page=1"), accountSecuritySettings(), queueInventory(),
           ]);
           assert.equal(accountSecurity.enforce_twofactor, true, "Cloudflare account-level MFA enforcement must be enabled before Staging release");
           const bindings = new Map((settings.bindings || []).map((binding) => [binding.name, binding]));
+          const productionBindings = new Map((productionSettings.bindings || []).map((binding) => [binding.name, binding]));
+          const stagingLedger = bindings.get("ORCHESTRATOR_LEDGER");
+          const productionLedger = productionBindings.get("ORCHESTRATOR_LEDGER");
+          assert.equal(stagingLedger?.type, "durable_object_namespace", "Staging ORCHESTRATOR_LEDGER Durable Object namespace is required");
+          assert.equal(productionLedger?.type, "durable_object_namespace", "Production ORCHESTRATOR_LEDGER Durable Object namespace is required before Staging release");
+          assert.equal(typeof stagingLedger.namespace_id, "string", "Staging ORCHESTRATOR_LEDGER namespace ID must be a string");
+          assert.ok(stagingLedger.namespace_id.length > 0, "Staging ORCHESTRATOR_LEDGER namespace ID must not be empty");
+          assert.equal(typeof productionLedger.namespace_id, "string", "Production ORCHESTRATOR_LEDGER namespace ID must be a string");
+          assert.ok(productionLedger.namespace_id.length > 0, "Production ORCHESTRATOR_LEDGER namespace ID must not be empty");
+          assert.notEqual(productionLedger.namespace_id, stagingLedger.namespace_id, "Production and Staging ORCHESTRATOR_LEDGER namespaces must differ");
           const requiredSecrets = ["GITHUB_READONLY_TOKEN", "GITHUB_TOKEN", "MCP_AUTH_TOKEN", "MCP_ALLOWED_ORIGINS", "GITHUB_WEBHOOK_SECRET", "LEDGER_WORKER_ASSERTION_KEYS", "LEDGER_OWNER_ASSERTION_KEYS"];
           const missing = requiredSecrets.filter((name) => bindings.get(name)?.type !== "secret_text");
           if (missing.length) {
@@ -195,6 +215,7 @@ jobs:
           const account = process.env.CLOUDFLARE_ACCOUNT_ID;
           const token = process.env.CLOUDFLARE_API_TOKEN;
           const root = "https://api.cloudflare.com/client/v4/accounts/" + account + "/workers/scripts/chat-gpt111-staging";
+          const productionRoot = "https://api.cloudflare.com/client/v4/accounts/" + account + "/workers/scripts/chat-gpt111";
           async function api(path) {
             const response = await fetch(root + path, {
               headers: { authorization: "Bearer " + token, accept: "application/json" },
@@ -202,6 +223,15 @@ jobs:
             });
             const body = await response.json();
             assert.equal(response.ok && body.success, true, "Cloudflare verification failed: HTTP " + response.status);
+            return body.result;
+          }
+          async function productionApi(path) {
+            const response = await fetch(productionRoot + path, {
+              headers: { authorization: "Bearer " + token, accept: "application/json" },
+              signal: AbortSignal.timeout(15000),
+            });
+            const body = await response.json();
+            assert.equal(response.ok && body.success, true, "Production Cloudflare verification failed: HTTP " + response.status);
             return body.result;
           }
           async function queueInventory() {
@@ -221,14 +251,23 @@ jobs:
             }
             throw new Error("Cloudflare Queue inventory exceeded the 1000-page safety limit");
           }
-          const [settings, schedules, queues] = await Promise.all([api("/settings"), api("/schedules"), queueInventory()]);
+          const [settings, productionSettings, schedules, queues] = await Promise.all([
+            api("/settings"), productionApi("/settings"), api("/schedules"), queueInventory(),
+          ]);
           const bindings = new Map((settings.bindings || []).map((binding) => [binding.name, binding]));
           const knowledgeStore = bindings.get("KNOWLEDGE_STORE");
           assert.equal(knowledgeStore?.type, "durable_object_namespace", "Staging KNOWLEDGE_STORE Durable Object binding is required");
           assert.ok(knowledgeStore.namespace_id, "Staging KNOWLEDGE_STORE namespace ID must be present");
           const orchestratorLedger = bindings.get("ORCHESTRATOR_LEDGER");
+          const productionBindings = new Map((productionSettings.bindings || []).map((binding) => [binding.name, binding]));
+          const productionLedger = productionBindings.get("ORCHESTRATOR_LEDGER");
           assert.equal(orchestratorLedger?.type, "durable_object_namespace", "Staging ORCHESTRATOR_LEDGER Durable Object binding is required");
-          assert.ok(orchestratorLedger.namespace_id, "Staging ORCHESTRATOR_LEDGER namespace ID must be present");
+          assert.equal(productionLedger?.type, "durable_object_namespace", "Production ORCHESTRATOR_LEDGER Durable Object binding is required");
+          assert.equal(typeof orchestratorLedger.namespace_id, "string", "Staging ORCHESTRATOR_LEDGER namespace ID must be a string");
+          assert.ok(orchestratorLedger.namespace_id.length > 0, "Staging ORCHESTRATOR_LEDGER namespace ID must be present");
+          assert.equal(typeof productionLedger.namespace_id, "string", "Production ORCHESTRATOR_LEDGER namespace ID must be a string");
+          assert.ok(productionLedger.namespace_id.length > 0, "Production ORCHESTRATOR_LEDGER namespace ID must be present");
+          assert.notEqual(productionLedger.namespace_id, orchestratorLedger.namespace_id, "Production and Staging ORCHESTRATOR_LEDGER namespaces must differ");
           assert.ok(
             (schedules.schedules || []).some((schedule) => schedule.cron === "*/5 * * * *"),
             "Staging five-minute Knowledge Store reconciliation Cron must be active",

@@ -864,13 +864,17 @@ export class OrchestratorLedger extends DurableObject {
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
+      const current = taskFromRow(row);
+      const assignedAgentId = current.executorId ?? current.assignedAgentId;
+      if (assignedAgentId !== workerId) {
+        return { updated: false, reason: "ASSIGNEE_MISMATCH", task: current };
+      }
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       if (outboxRejectionReason) {
         return { updated: false, reason: outboxRejectionReason };
       }
-      const current = taskFromRow(row);
       let next;
       let nextTaskJson;
       try {
@@ -1267,11 +1271,21 @@ export class OrchestratorLedger extends DurableObject {
     }
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
-      const task = sql.exec(
-        "SELECT task_id FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
+      const taskRow = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
         taskId, tenantId, projectId,
       ).toArray()[0];
-      const lease = task ? sql.exec(
+      const task = taskRow ? taskFromRow(taskRow) : null;
+      if (task && !["SCHEDULED", "RUNNING", "VERIFYING"].includes(task.state)) {
+        return { renewed: false, reason: "TASK_NOT_LEASE_ELIGIBLE" };
+      }
+      if (task) {
+        const assignedAgentId = task.executorId ?? task.assignedAgentId;
+        if (assignedAgentId !== workerId) {
+          return { renewed: false, reason: "ASSIGNEE_MISMATCH" };
+        }
+      }
+      const lease = taskRow ? sql.exec(
         "SELECT * FROM orchestrator_execution_leases WHERE task_id = ? AND tenant_id = ? AND project_id = ?",
         taskId, tenantId, projectId,
       ).toArray()[0] : null;

@@ -515,6 +515,65 @@ describe("OrchestratorLedger durable coordination contract", () => {
     });
   });
 
+  it("rejects an audit assertion that expires during asynchronous event hashing", async () => {
+    const ledger = ledgerFor("ledger-audit-assertion-expiry-during-hash");
+    let ledgerNow = now;
+    vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
+    await createTask(ledger, {
+      task: task(),
+      idempotencyKey: "audit-expiry-during-hash-task",
+      inputHash: "a".repeat(64),
+      now,
+    });
+
+    const jti = "jti-audit-expiry-during-hash-0001";
+    const workerAssertion = await createWorkerAssertion({
+      subject: "agent:worker-1",
+      role: "agent",
+      operation: "appendAuditEvent",
+      nowMs: now,
+      jti,
+    });
+    const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+    const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(
+      async (algorithm, data) => {
+        const digest = await originalDigest(algorithm, data);
+        const canonicalInput = new TextDecoder().decode(data);
+        if (canonicalInput.includes("audit-expiry-during-hash-0001")) {
+          ledgerNow = now + 120_000;
+        }
+        return digest;
+      },
+    );
+
+    const result = await ledger.appendAuditEvent({
+      eventId: "audit-expiry-during-hash-0001",
+      taskId: "task-0001",
+      actor: agent,
+      workerId: "agent:worker-1",
+      workerAssertion,
+      eventType: "task.created",
+      details: { version: 1 },
+      now,
+    });
+
+    expect(digestSpy).toHaveBeenCalled();
+    expect(result).toMatchObject({
+      appended: false,
+      reason: "AUTHENTICATED_ACTOR_REQUIRED",
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE event_id = ?",
+        "audit-expiry-during-hash-0001",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        jti,
+      ).one().count).toBe(0);
+    });
+  });
+
   it("one hundred duplicate deliveries produce exactly one effective message record", async () => {
     const ledger = ledgerFor("ledger-message-100-duplicates");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0011", inputHash: "9".repeat(64), now });

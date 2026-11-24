@@ -265,7 +265,11 @@ export class OrchestratorLedger extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.env = env;
-    this.ctx.blockConcurrencyWhile(async () => this.ensureSchema());
+    this.ctx.blockConcurrencyWhile(async () => {
+      await this.ensureSchema();
+      // MUTATION CONTROL ONLY: simulate loss of Claim Candidate state on reconstruction.
+      this.ctx.storage.sql.exec("DELETE FROM orchestrator_claim_candidates");
+    });
   }
 
   ensureSchema() {

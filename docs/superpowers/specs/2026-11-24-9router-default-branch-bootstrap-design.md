@@ -9,7 +9,7 @@
 
 ## Intent
 
-Establish a safe, verifiable path for registering the 9Router PR-review workflow on the repository default branch without executing untrusted pull-request code in a privileged job, relying on `pull_request_target`, or treating an artifact as authoritative evidence.
+Establish a safe, verifiable path for registering the 9Router PR-review workflow on the repository default branch without executing untrusted pull-request code in a privileged job or treating an artifact as authoritative evidence. Automatic PR-update handling is conditional on the repository's effective `pull_request_target` policy; trusted manual events provide the policy-independent bootstrap and fallback.
 
 The immediate objective is **bootstrap and prove event reachability only**. The first default-branch deployment must not call 9Router, access its secrets, write PR comments, merge code, or deploy anything. Model inference and publication remain separately gated until the event path, cost controls, and durable dispatch semantics have been independently accepted.
 
@@ -46,15 +46,16 @@ The present artifact-based design has good structural controls (run/attempt bind
 
 ## Goals
 
-1. Register the source signal and trusted consumer in the default branch through a separate, reviewable bootstrap PR.
-2. Avoid `pull_request_target` entirely in the replacement design.
-3. Use an ordinary unprivileged `pull_request` run only as a trigger signal; it must have no secrets, no repository write permission, no checkout, no artifact upload, and no PR-code execution.
-4. Execute the resolver only from the trusted default-branch `workflow_run` workflow.
-5. Determine the causal PR from GitHub's commit-to-associated-pull-requests API and independently re-fetch the live PR.
-6. Fail closed for missing, ambiguous, stale, forked, malformed, or conflicting identity evidence.
-7. Bootstrap with the final reviewer job statically disabled, so a successful canary proves event resolution without provider inference or publication.
-8. Preserve current source review safeguards, including the PR #431 redirect-rejection fix.
-9. Keep all changes isolated from current PRs #324 and #431, from other workstreams, and from production infrastructure.
+1. Register one trusted review workflow and its minimal runtime on the default branch through a separate, reviewable bootstrap PR.
+2. Use a single default-branch `pull_request_target` workflow for automatic PR updates only if the effective Actions event policy is explicitly verified to allow it.
+3. Provide a policy-independent bootstrap/manual path using trusted default-branch `issue_comment` and `workflow_dispatch` events.
+4. Do not use a PR-controlled `pull_request` workflow as a trigger for any secret-bearing or write-capable downstream job.
+5. Use the direct PR number from a trusted GitHub event or an allowlisted manual input, then independently re-fetch the live PR; do not infer PR identity from a PR merge SHA or commit-association lookup.
+6. Separate the read-only resolver from the secret-bearing reviewer job; the reviewer job must not start unless the resolver has an exact same-repository, open, non-draft, unchanged PR snapshot.
+7. Fail closed for missing, ambiguous, stale, forked, malformed, conflicting, or unavailable identity evidence.
+8. Bootstrap with the reviewer job statically disabled, proving trusted event resolution without provider inference or publication.
+9. Preserve current source review safeguards, including the PR #431 redirect-rejection fix.
+10. Keep all changes isolated from current PRs #324 and #431, from other workstreams, and from production infrastructure.
 
 ## Non-goals and anti-goals
 
@@ -74,7 +75,7 @@ The present artifact-based design has good structural controls (run/attempt bind
 
 **Costs and residual risk:** this requires the public-repository `pull_request_target` event policy to be effective and available; that policy is currently UNKNOWN and a GitHub policy change is scheduled for 2026-12-02. It also retains artifact lifecycle/digest/retention complexity and a second trust object to validate. The default-branch registration gap remains.
 
-**Disposition:** technically defensible, but not the preferred bootstrap path for this public repository.
+**Disposition:** the old two-workflow/artifact form is not selected. Its automatic trigger depends on an Actions policy that remains UNKNOWN and it retains avoidable Artifact/Receipt complexity.
 
 ### B. Unprivileged `pull_request` signal plus trusted `workflow_run` resolver using commit-to-PR association — REJECTED
 
@@ -92,7 +93,15 @@ The present artifact-based design has good structural controls (run/attempt bind
 
 **Costs:** requires manual operation for every review, and operator-supplied values still need full API reconciliation. It does not satisfy the intended automatic review flow.
 
-**Disposition:** keep as a possible emergency/manual recovery path, not the primary architecture.
+**Disposition:** selected for the safe bootstrap and policy-independent manual fallback. It does not by itself provide automatic PR-open/synchronize delivery.
+
+### D. Single trusted default-branch workflow with split resolver/reviewer jobs
+
+**Advantages:** the workflow definition for `pull_request_target` is taken from the base repository's default branch. The PR head is treated as data only; no PR code, artifact, dependency manifest, or workflow file is checked out or executed. A read-only resolver consumes the trusted PR number and event head/base snapshot, re-fetches the live PR, and only then allows a separate reviewer job to receive router secrets and PR-comment write permission. This removes the `workflow_run` chain, source signal, commit-to-PR inference, and Artifact/Receipt transport.
+
+**Costs and residual risk:** the public-repository Actions event policy for `pull_request_target` must explicitly permit this trigger; the effective policy for this repository is UNKNOWN and GitHub's announced enforcement date is 2026-12-02. The event also runs for fork PRs, so the resolver must reject fork head repositories before any secret-bearing job can start. The design still does not establish durable cross-run dispatch uniqueness or exactly-once model execution.
+
+**Disposition:** **PREFERRED AUTOMATIC PATH, POLICY-GATED.** It is the most direct trusted design for automatic PR updates when the event policy is confirmed. It must not be activated by assuming policy state.
 
 ## Former recommended architecture — withdrawn by DCP-01V.1
 

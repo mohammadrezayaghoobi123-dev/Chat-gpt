@@ -895,6 +895,7 @@ describe("Owner command atomic Ledger contract", () => {
 
     const failed = inputs[failedIndex];
     const identity = {
+      assertion: failed.assertion,
       deliveryId: failed.assertionContext.deliveryId,
       bodySha256: failed.bodySha256,
       commentId: failed.assertionContext.commentId,
@@ -910,6 +911,11 @@ describe("Owner command atomic Ledger contract", () => {
       ? ledger.authorizeOwnerWebhookRetry(input)
       : Promise.resolve({ registered: false });
 
+    await expect(authorize({ ...identity, assertion: "invalid-owner-assertion" })).resolves.toMatchObject({
+      registered: true,
+      denied: true,
+      reason: "OWNER_ASSERTION_REJECTED",
+    });
     await expect(authorize(identity)).resolves.toEqual({
       registered: true,
       retryAuthorized: true,
@@ -974,6 +980,7 @@ describe("Owner command atomic Ledger contract", () => {
 
     const failed = inputs[failedIndex];
     const identity = {
+      assertion: failed.assertion,
       deliveryId: failed.assertionContext.deliveryId,
       bodySha256: failed.bodySha256,
       commentId: failed.assertionContext.commentId,

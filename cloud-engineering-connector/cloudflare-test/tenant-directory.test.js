@@ -605,7 +605,8 @@ describe("persistent Tenant Directory", () => {
     const stub = env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName(tenantId));
     await runInDurableObject(stub, instance => {
       instance.ctx.storage.sql.exec("DROP TABLE tenant_policy_scope_epochs");
-      instance.ctx.storage.sql.exec("DELETE FROM tenant_directory_schema_migrations WHERE version=2");
+      instance.ctx.storage.sql.exec("DROP TABLE tenant_admission_verification_keys");
+      instance.ctx.storage.sql.exec("DELETE FROM tenant_directory_schema_migrations WHERE version >= 2");
       instance.ensureSchema();
     });
 

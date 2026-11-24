@@ -722,7 +722,7 @@ A returned `MODEL_PERMIT` or `COMMENT_PERMIT` is an in-memory authorization to m
 7. Revalidate the live PR snapshot again. Perform complete duplicate-marker reconciliation using the persisted marker ID, HMAC signature, expected bot author ID, snapshot tuple, and payload digest. If exactly one matching comment exists, transition `MODEL_COMPLETED -> PUBLISHED`; if more than one exists, transition to `DUPLICATE_ACCEPTED`. If listing is partial, paginated incompletely, stale, or unavailable, do not infer absence; remain blocked/UNKNOWN. A comment with a matching visible marker but invalid signature or wrong author is not accepted as publication evidence. If the listing is incomplete or unavailable at this pre-publication stage, retain `MODEL_COMPLETED` and do not consume the comment permit; a later continuation lease may retry only the read-only reconciliation. If the live PR snapshot has changed, transition to `CLOSED_NO_PUBLISH`.
 8. Construct the final comment with an unambiguous marker bound to repository ID, PR number, head SHA, base SHA, policy digest, and payload digest. Persist only the required marker/payload digests in the reservation record.
 9. Atomically consume `beginCommentAttempt`. Only after durable acknowledgement may the caller issue one GitHub POST. Configure redirects to error and disable automatic retries in the HTTP client, SDK, proxy, and middleware. A retry at any layer violates this contract.
-10. On a validated 201 response, atomically persist the remote comment ID and `PUBLISHED`. If the response or storage acknowledgement is ambiguous, retain/mark `UNKNOWN` and reconcile read-only.
+10. On a validated 201 response, verify a positive comment ID, exact issue URL, exact expected body, expected bot user ID/type, and the signed marker before atomically persisting the remote comment ID and `PUBLISHED`. Any missing/mismatched field is UNKNOWN, not success. If the response or storage acknowledgement is ambiguous, retain/mark `UNKNOWN` and reconcile read-only.
 11. Comment-stage reconciliation may move `UNKNOWN` to `PUBLISHED` only on exactly one positive exact match. More than one match becomes `DUPLICATE_ACCEPTED`. Zero matches, incomplete pagination, API failure, eventual visibility uncertainty, or stale reads remain `UNKNOWN`; they never authorize a second POST. Model-stage `UNKNOWN` is not eligible for comment reconciliation and remains terminal for automatic execution. Provider-side evidence may be attached to the audit trail, but this contract defines no automatic transition out of model-stage UNKNOWN and MUST NOT issue another model request.
 
 ### 7. Fencing, clocks, and consistency
@@ -739,7 +739,7 @@ A returned `MODEL_PERMIT` or `COMMENT_PERMIT` is an in-memory authorization to m
 
 The PR head/base check and GitHub comment POST are not one cross-service transaction. A PR can change after the last live snapshot read but before the comment POST. The comment marker MUST therefore bind the exact repository/PR/head/base/policy tuple, and consumers must treat a comment for an older head as stale. The implementation should minimize this interval and recheck immediately before consuming the comment permit, but it cannot eliminate the cross-service time-of-check/time-of-use race without a GitHub-side conditional publication primitive.
 
-GitHub comment listing may not provide a transactional negative proof under every failure/visibility condition. Reconciliation is therefore positive-evidence oriented. A zero-result list is not proof that a POST was never accepted. If exactly-one positive evidence cannot be obtained, retain `UNKNOWN` and require a separately reviewed manual disposition; do not auto-retry.
+GitHub comment listing must traverse every page and verify pagination completion within an explicit bounded page/response budget. If the bound is exceeded, a page fails, or pagination metadata is inconsistent, the listing is incomplete and the caller must fail closed. GitHub comment listing may not provide a transactional negative proof under every failure/visibility condition. Reconciliation is therefore positive-evidence oriented. A zero-result list is not proof that a POST was never accepted. If exactly-one positive evidence cannot be obtained, retain `UNKNOWN` and require a separately reviewed manual disposition; do not auto-retry.
 
 A recovery worker may move an overdue `MODEL_ATTEMPTED` or `COMMENT_ATTEMPTED` row to stage-specific `UNKNOWN` using the persisted attempt deadline and authoritative server time. It cannot move the row back to a pre-effect state. `UNKNOWN` with `unknown_stage=MODEL` is terminal for automatic execution; comment reconciliation APIs must reject it. `UNKNOWN` with `unknown_stage=COMMENT` permits read-only positive reconciliation only.
 
@@ -757,7 +757,7 @@ The model provider may also lack a caller-supplied idempotency key or execution-
 - **I8 — Evidence-based publication:** `PUBLISHED` requires one validated remote comment ID, not merely a local intent or socket write.
 - **I9 — Audit atomicity:** every committed state transition has a durable audit event in the same transaction.
 - **I10 — Fail closed:** store outage, stale read, CAS conflict, schema mismatch, clock uncertainty, or incomplete reconciliation blocks the next external effect.
-- **I11 — No hidden transport retries:** redirects, SDK retries, proxy retries, and middleware retries are disabled or proven absent.
+- **I11 — No hidden transport retries:** provider and GitHub redirects, SDK retries, proxy retries, and middleware retries are disabled or proven absent.
 - **I12 — No silent key reuse:** retention/cleanup cannot delete or recycle a key while replay is possible.
 - **I13 — Stage-scoped UNKNOWN:** model-stage UNKNOWN cannot be resolved through comment lookup; comment-stage UNKNOWN permits only positive read-only reconciliation.
 - **I14 — Authenticated marker:** publication reconciliation requires the expected bot author, valid HMAC, exact reservation tuple, policy/runtime digests, marker ID, and body digest.
@@ -765,6 +765,7 @@ The model provider may also lack a caller-supplied idempotency key or execution-
 - **I16 — No false abort semantics:** ABORTED is pre-model only; post-model suppression is recorded as CLOSED_NO_PUBLISH.
 - **I17 — No inference on uncertain preflight:** incomplete or unavailable pre-model comment listing retains CLAIMED and blocks model dispatch.
 - **I18 — No publication on uncertain post-model preflight:** incomplete or unavailable post-model listing retains MODEL_COMPLETED and blocks comment-attempt consumption.
+- **I19 — Bounded reconciliation:** pagination must complete within an explicit page/response budget; exceeding it is UNKNOWN/incomplete, never negative proof.
 
 ### 10. Adversarial conformance matrix
 
@@ -810,6 +811,8 @@ Every test must run against the same adapter contract with at least two independ
 | A36 | `reconcileComment` is called for model-stage UNKNOWN | Adapter rejects the operation; no state transition or external call |
 | A37 | Pre-model marker listing is incomplete or unavailable | CLAIMED is retained; model transport count remains zero |
 | A38 | Post-model marker listing is incomplete or unavailable | MODEL_COMPLETED is retained; comment POST count remains zero |
+| A39 | Comment pagination exceeds its configured bound or returns inconsistent continuation metadata | Listing is classified incomplete; no inference/publication transition is authorized |
+| A40 | Provider SDK or proxy silently retries one model request | More than one provider transport invocation is detected; integration is rejected |
 
 ### 11. Adversarial design review — findings and disposition
 
@@ -835,6 +838,8 @@ The design was challenged against the reproduced interleaving, independent-host 
 - **AR-18 — Completion and recovery mutations were not fully fenced.** Added generation/record-version conditions to comment completion and made expiry use backend time inside the transaction.
 - **AR-19 — Later evidence of duplicate comments had no escalation path from PUBLISHED.** Added the explicit PUBLISHED -> DUPLICATE_ACCEPTED incident transition.
 - **AR-20 — Preflight uncertainty did not distinguish safe pre-effect states.** Specified that incomplete pre-model listing retains CLAIMED and incomplete post-model listing retains MODEL_COMPLETED; neither permits the next external effect.
+- **AR-21 — A successful HTTP status alone could be mistaken for publication proof.** Required exact response ID, issue URL, body, bot identity/type, and marker verification before PUBLISHED.
+- **AR-22 — Pagination completion and provider-side retry layers were not fully bounded.** Added explicit pagination budgets and a provider transport-call-count test.
 
 **Residual design limitations (not defects that this contract can eliminate):**
 

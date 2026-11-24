@@ -246,6 +246,7 @@ export async function resolveTenantContext({ principal, tenantSelector, membersh
     tenantId: membership.tenantId,
     membershipId: membership.membershipId,
     role: membership.role,
+    membershipVersion: Number.isSafeInteger(membership.version) ? membership.version : null,
   });
   VERIFIED_TENANT_CONTEXTS.add(context);
   return context;
@@ -310,7 +311,10 @@ export async function authorizeProjectAction({
     decision.projectId !== projectSelector ||
     decision.resourceDigest !== resourceDigest ||
     !nonEmptyString(decision.decisionId) ||
-    !nonEmptyString(decision.policyVersion)
+    !nonEmptyString(decision.policyVersion) ||
+    (decision.membershipVersion !== undefined && (!Number.isSafeInteger(decision.membershipVersion) || decision.membershipVersion < 1)) ||
+    (decision.policyScopeEpoch !== undefined && (!Number.isSafeInteger(decision.policyScopeEpoch) || decision.policyScopeEpoch < 0)) ||
+    (decision.selectedRuleVersion !== undefined && decision.selectedRuleVersion !== null && (!Number.isSafeInteger(decision.selectedRuleVersion) || decision.selectedRuleVersion < 1))
   ) {
     reject("POLICY_DECISION_SCOPE_MISMATCH");
   }
@@ -326,5 +330,9 @@ export async function authorizeProjectAction({
     resourceDigest,
     decisionId: decision.decisionId,
     policyVersion: decision.policyVersion,
+    membershipVersion: decision.membershipVersion ?? null,
+    policyScopeEpoch: decision.policyScopeEpoch ?? null,
+    selectedRuleVersion: decision.selectedRuleVersion ?? null,
+    selectedResourceDigest: decision.selectedResourceDigest ?? null,
   });
 }

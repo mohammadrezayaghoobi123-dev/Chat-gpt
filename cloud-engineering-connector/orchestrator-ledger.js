@@ -1703,7 +1703,7 @@ export class OrchestratorLedger extends DurableObject {
                  priorReceipt.comment_id === context.commentId) &&
                 priorReceipt.body_sha256 === bodySha256 &&
                 priorReceipt.command_hash === context.commandHash) {
-              return { replay: true, result: parseJson(priorReceipt.result_json, "Owner command receipt") };
+              return { conflict: true, reason: "OWNER_RECEIPT_CONFLICT" };
             }
             return { conflict: true, reason: "OWNER_RECEIPT_CONFLICT" };
           }

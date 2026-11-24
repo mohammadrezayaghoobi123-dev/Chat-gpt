@@ -5,8 +5,8 @@ import worker from "../worker.js";
 
 const MCP = "0123456789abcdef0123456789abcdef", GH = "ghp_FAKE_TOKEN_FOR_TEST_0123456789";
 const TENANT_DIRECTORY={idFromName:name=>name,get:name=>({
-  async getActiveMembership(input){return{tenantId:input.tenantId,principalId:input.principalId,membershipId:"test-membership",role:"service-operator",status:"active"}},
-  async authorizeProjectAction(input){return{...input,effect:"allow",decisionId:"test-decision",policyVersion:"test-policy-v1"}}
+  async getActiveMembership(input){return{tenantId:input.tenantId,principalId:input.principalId,membershipId:"test-membership",role:"service-operator",status:"active",version:1}},
+  async authorizeProjectAction(input){return{...input,effect:"allow",decisionId:"test-decision",policyVersion:"test-policy-v1",membershipVersion:1,membershipStatus:"active",policyScopeEpoch:1,policyRuleVersion:1,policyRuleResourceDigest:"*"}}
 })};
 const env = { MCP_AUTH_TOKEN: MCP, GITHUB_TOKEN: GH, MCP_RATE_LIMITER: { limit: async () => ({ success: true }) }, TENANT_DIRECTORY };
 const OWNER = "mohammadrezayaghoobi123-dev", REPO = "Chat-gpt";

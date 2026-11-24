@@ -117,6 +117,121 @@ describe("Owner command atomic Ledger contract", () => {
   });
 
 
+  it("rejects an expired Owner assertion when the caller backdates the Ledger timestamp", async () => {
+    const ledger = ledgerFor("owner-command-clock-rollback");
+    await createTask(ledger);
+    const input = await ownerInput({
+      deliveryId: "delivery-owner-clock-rollback-01",
+      commentId: "223456781",
+    });
+
+    ledgerClock.mockReturnValue(now + 36_000);
+    const result = await ledger.executeOwnerCommand({ ...input, now });
+
+    expect(result).toMatchObject({
+      applied: false,
+      reason: "OWNER_ASSERTION_REJECTED",
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT state, version FROM orchestrator_tasks WHERE task_id = ?",
+        "task-owner-0001",
+      ).one()).toMatchObject({ state: "SCHEDULED", version: 1 });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events",
+      ).one().count).toBe(0);
+    });
+  });
+
+  it("ignores a caller-forwarded clock when authenticating and timestamping an Owner command", async () => {
+    const ledger = ledgerFor("owner-command-clock-forward");
+    await createTask(ledger);
+    const input = await ownerInput({
+      deliveryId: "delivery-owner-clock-forward-01",
+      commentId: "223456782",
+      now: now + 600_000,
+    });
+
+    const result = await ledger.executeOwnerCommand(input);
+
+    expect(result).toMatchObject({
+      applied: true,
+      operation: "cancel",
+      task: { taskId: "task-owner-0001", state: "CANCELLED", version: 2 },
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT updated_at FROM orchestrator_tasks WHERE task_id = ?",
+        "task-owner-0001",
+      ).one().updated_at).toBe(now);
+      expect(state.storage.sql.exec(
+        "SELECT created_at FROM orchestrator_audit_events WHERE event_id = ?",
+        "owner-owner-event-0001",
+      ).one().created_at).toBe(now);
+      expect(state.storage.sql.exec(
+        "SELECT received_at FROM orchestrator_github_webhook_deliveries WHERE delivery_id = ?",
+        "delivery-owner-clock-forward-01",
+      ).one().received_at).toBe(now);
+    });
+  });
+
+  it("rejects an Owner assertion that expires during asynchronous command audit hashing", async () => {
+    const ledger = ledgerFor("owner-command-expiry-during-hash");
+    await createTask(ledger);
+    const input = await ownerInput({
+      command: { eventId: "owner-event-expiry-during-hash" },
+      deliveryId: "delivery-owner-expiry-hash-01",
+      commentId: "223456783",
+    });
+
+    const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+    const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(
+      async (algorithm, data) => {
+        const digest = await originalDigest(algorithm, data);
+        const canonicalInput = new TextDecoder().decode(data);
+        if (canonicalInput.includes("owner-event-expiry-during-hash")) {
+          ledgerClock.mockReturnValue(now + 36_000);
+        }
+        return digest;
+      },
+    );
+
+    const result = await ledger.executeOwnerCommand(input);
+
+    expect(digestSpy).toHaveBeenCalled();
+    expect(result).toMatchObject({
+      applied: false,
+      reason: "OWNER_ASSERTION_REJECTED",
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT state, version FROM orchestrator_tasks WHERE task_id = ?",
+        "task-owner-0001",
+      ).one()).toMatchObject({ state: "SCHEDULED", version: 1 });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events",
+      ).one().count).toBe(0);
+    });
+  });
+
   it("quarantines a non-terminal task and invalidates its active Agent lease", async () => {
     const ledger = ledgerFor("owner-command-quarantine");
     await createTask(ledger);

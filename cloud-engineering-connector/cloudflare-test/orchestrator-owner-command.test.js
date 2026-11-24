@@ -6,7 +6,7 @@ import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
-const now = 1_800_000_000_000;
+const now = Math.floor(Date.now() / 1000) * 1000;
 const ownerId = "335530603";
 const repositoryId = 1398846697;
 const ownerKeySet = JSON.stringify({
@@ -2461,6 +2461,9 @@ describe("Owner command atomic Ledger contract", () => {
         "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
         sharedJti,
       ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT high_water_ms FROM orchestrator_security_clock WHERE clock_id = 1",
+      ).one().high_water_ms).toBe(now + 120_000);
     });
   });
 

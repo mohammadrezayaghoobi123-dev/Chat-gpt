@@ -615,6 +615,7 @@ test("prepareTaskAdmission sends the exact canonical Task through the verified p
     idempotencyKeyDigest,
     inputHash,
     admissionId: "admission-context-0001",
+    jti: "jti-context-admission-0001",
     admissionGrant: grant,
     membershipId: tenantContext.membershipId,
     membershipVersion: tenantContext.membershipVersion,

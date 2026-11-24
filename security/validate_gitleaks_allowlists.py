@@ -18,6 +18,7 @@ EXPECTED_FIXTURES = {
     ),
 }
 FIXTURE_LINE = re.compile(r'const key = "([0-9a-f]{64})";')
+EXPECTED_ALLOWLIST_COUNT = 17
 
 
 def _source_fixture_line(repo_root: pathlib.Path, commit: str, path: str) -> str | None:
@@ -36,8 +37,40 @@ def _source_fixture_line(repo_root: pathlib.Path, commit: str, path: str) -> str
 
 def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
     errors: list[str] = []
+    allowlists = config.get("allowlists", [])
+    if not isinstance(allowlists, list) or len(allowlists) != EXPECTED_ALLOWLIST_COUNT:
+        errors.append("allowlist count changed; new exceptions require explicit review")
+        return errors
+
+    for index, entry in enumerate(allowlists, start=1):
+        prefix = f"allowlist {index}"
+        if not isinstance(entry.get("targetRules"), list) or not entry["targetRules"]:
+            errors.append(f"{prefix}: targetRules must be non-empty")
+        if entry.get("condition") != "AND":
+            errors.append(f"{prefix}: condition must remain AND")
+        commits = entry.get("commits")
+        if not isinstance(commits, list) or not commits or any(
+            not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None
+            for commit in commits
+        ):
+            errors.append(f"{prefix}: commits must be pinned full Git SHAs")
+        paths = entry.get("paths")
+        if not isinstance(paths, list) or not paths or any(
+            not isinstance(path, str) or not path.startswith("^") or not path.endswith("$")
+            for path in paths
+        ):
+            errors.append(f"{prefix}: paths must be non-empty and anchored")
+        if entry.get("regexTarget") != "line":
+            errors.append(f"{prefix}: regexTarget must be line")
+        regexes = entry.get("regexes")
+        if not isinstance(regexes, list) or not regexes or any(
+            not isinstance(pattern, str) or not pattern
+            for pattern in regexes
+        ):
+            errors.append(f"{prefix}: regexes must be non-empty strings")
+
     matching_entries = [
-        entry for entry in config.get("allowlists", [])
+        entry for entry in allowlists
         if entry.get("description") in EXPECTED_FIXTURES
     ]
     entries = {entry.get("description"): entry for entry in matching_entries}

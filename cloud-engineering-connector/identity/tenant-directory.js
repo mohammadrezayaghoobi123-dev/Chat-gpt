@@ -79,6 +79,11 @@ export class TenantDirectory extends DurableObject {
       "PRIMARY KEY(tenant_id, project_id, principal_id, action))"
     );
     sql.exec(
+      "INSERT OR IGNORE INTO tenant_policy_scope_epochs(tenant_id, project_id, principal_id, action, epoch, updated_at) " +
+      "SELECT tenant_id, project_id, principal_id, action, 1, MAX(updated_at) " +
+      "FROM tenant_project_policy_rules GROUP BY tenant_id, project_id, principal_id, action"
+    );
+    sql.exec(
       "CREATE TABLE IF NOT EXISTS tenant_directory_audit_events (" +
       "sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, tenant_id TEXT NOT NULL, " +
       "project_id TEXT, actor_id TEXT NOT NULL, operation TEXT NOT NULL, target_digest TEXT NOT NULL, " +

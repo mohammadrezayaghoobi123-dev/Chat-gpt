@@ -696,9 +696,9 @@ The storage-independent adapter MUST expose equivalent typed operations. Names b
 - `claim(key, owner_id, owner_nonce, lease_duration, policy_digest, marker_id, marker_key_id) -> CLAIMED | BUSY | EXISTING(state) | KEY_CONFLICT`
 - `renew(key, owner_id, owner_nonce, generation, expected_record_version, lease_duration) -> RENEWED(new_record_version) | LOST_OWNERSHIP | EXPIRED`
 - `resumeCompletedModel(key, owner_id, owner_nonce, expected_record_version, lease_duration) -> RESUMED(new_generation) | BUSY | TERMINAL`
-- `beginModelAttempt(key, owner_id, owner_nonce, generation, expected_record_version, attempt_id, request_digest) -> MODEL_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`
-- `completeModelAttempt(key, generation, attempt_id, result_reference, result_digest) -> MODEL_COMPLETED | CONFLICT | UNKNOWN`
-- `beginCommentAttempt(key, generation, expected_record_version, attempt_id, marker_id, payload_digest, snapshot_validation_id) -> COMMENT_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`
+- `beginModelAttempt(key, owner_id, owner_nonce, generation, expected_record_version, attempt_id, request_digest, attempt_timeout) -> MODEL_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`; the backend computes and persists the deadline from server time in the same transaction.
+- `completeModelAttempt(key, generation, attempt_id, expected_record_version, result_reference, result_digest) -> MODEL_COMPLETED | CONFLICT | UNKNOWN`
+- `beginCommentAttempt(key, generation, expected_record_version, attempt_id, marker_id, payload_digest, snapshot_validation_id, attempt_timeout) -> COMMENT_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`; the backend computes and persists the deadline from server time in the same transaction.
 - `completeCommentAttempt(key, generation, attempt_id, expected_record_version, remote_comment_id) -> PUBLISHED | CONFLICT | UNKNOWN`
 - `markUnknown(key, generation, attempt_id, expected_record_version, stage, reason_code) -> UNKNOWN | CONFLICT`
 - `expireAmbiguousAttempt(key, attempt_id, stage) -> UNKNOWN | NOT_DUE | CONFLICT`; the backend evaluates the persisted deadline against its own authoritative server time inside the atomic transition.
@@ -714,16 +714,16 @@ A returned `MODEL_PERMIT` or `COMMENT_PERMIT` is an in-memory authorization to m
 ### 6. Atomic execution protocol
 
 1. Obtain one live PR snapshot. Validate repository ID, repository full name, PR number, open/draft/locked policy, and full head/base SHAs.
-2. Canonicalize the immutable key and atomically `claim`. A loser MUST return without model or comment transport calls. Before model dispatch, perform complete read-only marker reconciliation using the deterministic marker ID. Exactly one valid signed match transitions `CLAIMED -> PUBLISHED`; multiple matches transition to `DUPLICATE_ACCEPTED`; incomplete or unavailable listing blocks progress and does not authorize inference.
+2. Canonicalize the immutable key and atomically `claim`. A loser MUST return without model or comment transport calls. Before model dispatch, perform complete read-only marker reconciliation using the deterministic marker ID. Exactly one valid signed match transitions `CLAIMED -> PUBLISHED`; multiple matches transition to `DUPLICATE_ACCEPTED`; incomplete or unavailable listing blocks progress and does not authorize inference; retain `CLAIMED` until safe lease expiry or explicit pre-model abort.
 3. Perform only local bounded preparation while in `CLAIMED`. Lease renewals are conditional CAS operations using server time.
 4. Revalidate the live PR snapshot and confirm it still equals the reservation tuple before model dispatch.
 5. Atomically consume `beginModelAttempt`. Only after the durable acknowledgement may the caller issue one provider request. If the commit acknowledgement is lost, read the authoritative row; if the state cannot be established, do not call the provider.
 6. Persist the model result durably, then atomically transition to `MODEL_COMPLETED`. If the process crashes or the result cannot be proven durable after the model boundary, mark or retain `UNKNOWN`; do not invoke the model again.
-7. Revalidate the live PR snapshot again. Perform complete duplicate-marker reconciliation using the persisted marker ID, HMAC signature, expected bot author ID, snapshot tuple, and payload digest. If exactly one matching comment exists, transition `MODEL_COMPLETED -> PUBLISHED`; if more than one exists, transition to `DUPLICATE_ACCEPTED`. If listing is partial, paginated incompletely, stale, or unavailable, do not infer absence; remain blocked/UNKNOWN. A comment with a matching visible marker but invalid signature or wrong author is not accepted as publication evidence.
+7. Revalidate the live PR snapshot again. Perform complete duplicate-marker reconciliation using the persisted marker ID, HMAC signature, expected bot author ID, snapshot tuple, and payload digest. If exactly one matching comment exists, transition `MODEL_COMPLETED -> PUBLISHED`; if more than one exists, transition to `DUPLICATE_ACCEPTED`. If listing is partial, paginated incompletely, stale, or unavailable, do not infer absence; remain blocked/UNKNOWN. A comment with a matching visible marker but invalid signature or wrong author is not accepted as publication evidence. If the listing is incomplete or unavailable at this pre-publication stage, retain `MODEL_COMPLETED` and do not consume the comment permit; a later continuation lease may retry only the read-only reconciliation. If the live PR snapshot has changed, transition to `CLOSED_NO_PUBLISH`.
 8. Construct the final comment with an unambiguous marker bound to repository ID, PR number, head SHA, base SHA, policy digest, and payload digest. Persist only the required marker/payload digests in the reservation record.
 9. Atomically consume `beginCommentAttempt`. Only after durable acknowledgement may the caller issue one GitHub POST. Configure redirects to error and disable automatic retries in the HTTP client, SDK, proxy, and middleware. A retry at any layer violates this contract.
 10. On a validated 201 response, atomically persist the remote comment ID and `PUBLISHED`. If the response or storage acknowledgement is ambiguous, retain/mark `UNKNOWN` and reconcile read-only.
-11. Comment-stage reconciliation may move `UNKNOWN` to `PUBLISHED` only on exactly one positive exact match. More than one match becomes `DUPLICATE_ACCEPTED`. Zero matches, incomplete pagination, API failure, eventual visibility uncertainty, or stale reads remain `UNKNOWN`; they never authorize a second POST. Model-stage `UNKNOWN` is not eligible for comment reconciliation and remains terminal unless the provider exposes an independently verifiable operation-status/result API; even then, recovery may record evidence but MUST NOT issue another model request.
+11. Comment-stage reconciliation may move `UNKNOWN` to `PUBLISHED` only on exactly one positive exact match. More than one match becomes `DUPLICATE_ACCEPTED`. Zero matches, incomplete pagination, API failure, eventual visibility uncertainty, or stale reads remain `UNKNOWN`; they never authorize a second POST. Model-stage `UNKNOWN` is not eligible for comment reconciliation and remains terminal for automatic execution. Provider-side evidence may be attached to the audit trail, but this contract defines no automatic transition out of model-stage UNKNOWN and MUST NOT issue another model request.
 
 ### 7. Fencing, clocks, and consistency
 
@@ -763,6 +763,8 @@ The model provider may also lack a caller-supplied idempotency key or execution-
 - **I14 — Authenticated marker:** publication reconciliation requires the expected bot author, valid HMAC, exact reservation tuple, policy/runtime digests, marker ID, and body digest.
 - **I15 — Generation-fenced completion:** asynchronous completion must match the consumed attempt ID and generation; stale owners cannot finalize another attempt.
 - **I16 — No false abort semantics:** ABORTED is pre-model only; post-model suppression is recorded as CLOSED_NO_PUBLISH.
+- **I17 — No inference on uncertain preflight:** incomplete or unavailable pre-model comment listing retains CLAIMED and blocks model dispatch.
+- **I18 — No publication on uncertain post-model preflight:** incomplete or unavailable post-model listing retains MODEL_COMPLETED and blocks comment-attempt consumption.
 
 ### 10. Adversarial conformance matrix
 
@@ -806,6 +808,8 @@ Every test must run against the same adapter contract with at least two independ
 | A34 | Existing exact signed marker is present before model dispatch | `CLAIMED -> PUBLISHED`; model transport count remains zero |
 | A35 | MODEL_COMPLETED owner crashes; continuation lease is reclaimed | Generation increments; old owner is fenced; persisted model result is reused |
 | A36 | `reconcileComment` is called for model-stage UNKNOWN | Adapter rejects the operation; no state transition or external call |
+| A37 | Pre-model marker listing is incomplete or unavailable | CLAIMED is retained; model transport count remains zero |
+| A38 | Post-model marker listing is incomplete or unavailable | MODEL_COMPLETED is retained; comment POST count remains zero |
 
 ### 11. Adversarial design review — findings and disposition
 
@@ -830,6 +834,7 @@ The design was challenged against the reproduced interleaving, independent-host 
 - **AR-17 — The original ABORTED definition conflicted with a post-model safe stop.** Restricted ABORTED to pre-model termination and introduced CLOSED_NO_PUBLISH for a completed model result that must not be published.
 - **AR-18 — Completion and recovery mutations were not fully fenced.** Added generation/record-version conditions to comment completion and made expiry use backend time inside the transaction.
 - **AR-19 — Later evidence of duplicate comments had no escalation path from PUBLISHED.** Added the explicit PUBLISHED -> DUPLICATE_ACCEPTED incident transition.
+- **AR-20 — Preflight uncertainty did not distinguish safe pre-effect states.** Specified that incomplete pre-model listing retains CLAIMED and incomplete post-model listing retains MODEL_COMPLETED; neither permits the next external effect.
 
 **Residual design limitations (not defects that this contract can eliminate):**
 

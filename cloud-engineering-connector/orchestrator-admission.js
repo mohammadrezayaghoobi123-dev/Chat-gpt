@@ -311,6 +311,50 @@ export async function createTaskAdmissionGrant(privateKeySet, activeKid, expecte
   }
 }
 
+/**
+ * Decode the canonical payload for claim binding only.
+ * The returned claims are untrusted until verifyTaskAdmissionGrant succeeds.
+ */
+export function decodeTaskAdmissionGrantClaims(token) {
+  try {
+    if (typeof token !== "string" || token.length > MAX_GRANT_BYTES) throw reject();
+    const parts = token.split(".");
+    if (parts.length !== 4 || parts[0] !== "ad1" || !KEY_ID.test(parts[1])) throw reject();
+    const payloadBytes = decodeBase64Url(parts[2]);
+    if (payloadBytes.byteLength > 2048) throw reject();
+    const payloadText = new TextDecoder("utf-8", { fatal: true }).decode(payloadBytes);
+    const claims = JSON.parse(payloadText);
+    if (!isRecord(claims) || canonicalJson(claims) !== payloadText) throw reject();
+    const keys = Object.keys(claims).sort();
+    if (keys.length !== CLAIM_KEYS.length ||
+        keys.some((key, index) => key !== CLAIM_KEYS[index]) ||
+        claims.v !== 1 || claims.iss !== "tenant-directory" ||
+        claims.aud !== "orchestrator-ledger") throw reject();
+    validateClaimsInput({
+      principalId: claims.sub,
+      tenantId: claims.tenantId,
+      projectId: claims.projectId,
+      taskId: claims.taskId,
+      taskDigest: claims.taskDigest,
+      idempotencyKeyDigest: claims.idempotencyKeyDigest,
+      inputHash: claims.inputHash,
+      membershipId: claims.membershipId,
+      membershipVersion: claims.membershipVersion,
+      policyScopeEpoch: claims.policyScopeEpoch,
+      policyRuleVersion: claims.policyRuleVersion,
+      policyRuleResourceDigest: claims.policyRuleResourceDigest,
+      policyDecisionId: claims.policyDecisionId,
+      admissionId: claims.admissionId,
+      jti: claims.jti,
+      issuedAt: claims.iat,
+      expiresAt: claims.exp,
+    });
+    return Object.freeze({ keyId: parts[1], claims: Object.freeze({ ...claims }) });
+  } catch {
+    throw reject();
+  }
+}
+
 function verifyExpectedClaims(claims, expected) {
   validateClaimsInput(expected);
   const expectedClaims = claimsForSigning(expected);

@@ -362,7 +362,7 @@
   Expected: configured environment routing is absent.
 
 - [ ] **Step 3 — Implement Wrangler bindings**
-  Preserve existing DO bindings/migrations and the producer bindings added in Task 6. Add main consumer (`max_batch_size = 1`, `max_concurrency = 4`, `max_retries = 3`, existing DLQ target). Add DLQ consumer (`max_batch_size = 1`, `max_retries = 3`, existing quarantine target). Leave quarantine without a consumer. Add non-secret `OUTBOX_QUEUE_NAME` and `OUTBOX_DLQ_NAME` vars for both environments. Extend `check` script syntax validation for new modules. Do not add secret values/placeholders or create live Queue resources.
+  Preserve existing DO bindings/migrations and the producer bindings added in Task 6. Add main consumer (`max_batch_size = 1`, `max_concurrency = 4`, `max_retries = 3`, existing DLQ target). Add DLQ consumer (`max_batch_size = 1`, `max_retries = 3`, existing quarantine target). Leave quarantine without a consumer. Add non-secret `OUTBOX_QUEUE_NAME` and `OUTBOX_DLQ_NAME` vars for both environments. Do not invent `OUTBOX_WEBHOOK_ALLOWED_HOSTS` values: Task 5 must fail closed if it is absent, and its exact per-environment value remains blocked until the real HTTPS receiver is selected and separately authorized. Extend `check` script syntax validation for new modules. Do not add secret values/placeholders or create live Queue resources.
 
 - [ ] **Step 4 — Verify GREEN**
   Run focused consumer tests, then `npm run check`.
@@ -416,7 +416,7 @@
 
 ## Release Gates and Explicit Unknowns
 
-- The real HTTPS destination has not been selected or verified; receiver HMAC validation and durable idempotency remain UNKNOWN.
+- The real HTTPS destination and exact per-environment `OUTBOX_WEBHOOK_ALLOWED_HOSTS` have not been selected or verified; receiver HMAC validation and durable idempotency remain UNKNOWN. The consumer must fail closed until the exact hostname allowlist and endpoint URL are supplied through an approved configuration path.
 - Deployed Worker bindings and secret names are not yet configured; no live bindings or secrets are modified by this plan.
 - Existing Queue consumers currently have zero registrations; Wrangler source changes plus future deployment would be required to activate them.
 - Quarantine Queues currently show 24-hour retention. Verify plan capability before requesting a retention change; otherwise an independent durable export/archive is required. No retention policy change is included.

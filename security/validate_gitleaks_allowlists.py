@@ -131,6 +131,7 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
         finding_match = f'key = "{key}"'
         if not pattern.fullmatch(finding_match):
             errors.append(f"{label}: regex does not match the exact Gitleaks finding match")
+        replacement = "1" if key[0] != "1" else "2"
         mutated_match = f'key = "{replacement + key[1:]}"'
         if pattern.fullmatch(mutated_match):
             errors.append(f"{label}: regex also matches a mutated fixture and is not literal-scoped")

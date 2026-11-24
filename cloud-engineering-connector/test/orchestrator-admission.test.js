@@ -109,7 +109,7 @@ test("rejects an admission grant whose Ed25519 signature has been modified", asy
   const expected = claims();
   const token = await createTaskAdmissionGrant(keys.privateKeys, "test", expected);
   const parts = token.split(".");
-  parts[3] = parts[3].slice(0, -1) + (parts[3].endsWith("A") ? "B" : "A");
+  parts[3] = (parts[3][0] === "A" ? "B" : "A") + parts[3].slice(1);
   await assert.rejects(
     verifyTaskAdmissionGrant(keys.publicKeys, parts.join("."), {
       ...expected,

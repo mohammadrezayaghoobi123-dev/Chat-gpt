@@ -6,11 +6,13 @@ import { CLAIM_CANDIDATE_QUERY } from "../orchestrator-ledger.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 
 let now = 0;
+let wallClockNow = 0;
 let wallClockSpy;
 
 beforeEach(() => {
   now = Math.floor(Date.now() / 1000) * 1000;
-  wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+  wallClockNow = now;
+  wallClockSpy = vi.spyOn(Date, "now").mockImplementation(() => wallClockNow);
 });
 
 afterEach(() => {

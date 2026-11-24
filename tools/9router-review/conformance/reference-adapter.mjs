@@ -486,10 +486,11 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
       if (!record) return { status: "NOT_FOUND" };
       if (record.unknown_stage === "MODEL") return { status: "TERMINAL" };
       if (record.record_version !== args.expectedRecordVersion) return { status: "CONFLICT" };
-      if (args.listingComplete !== true) return { status: "NO_CHANGE", record: clone(record) };
       const matches = (args.verifiedPositiveEvidence || [])
         .filter(item => item && item.exactMatch === true &&
           Number.isSafeInteger(item.remoteCommentId) && item.remoteCommentId > 0);
+      // Positive evidence is sufficient even if later pagination is unavailable.
+      // Incomplete zero-result listings never prove absence and never authorize a retry.
       if (matches.length === 0) return { status: "NO_CHANGE", record: clone(record) };
       if (matches.length > 1) {
         if (record.state === "ABORTED" || record.state === "CLOSED_NO_PUBLISH") {

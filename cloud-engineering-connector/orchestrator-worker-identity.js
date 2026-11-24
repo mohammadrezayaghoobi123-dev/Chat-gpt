@@ -3,7 +3,7 @@ import { canonicalJson } from "./orchestrator-protocol.js";
 const ISSUER = "chat-gpt111-worker";
 const AUDIENCE = "orchestrator-ledger";
 const MAX_LIFETIME_SECONDS = 60;
-const CLOCK_SKEW_SECONDS = 5;
+const CLOCK_SKEW_SECONDS = 4;
 const CLAIM_KEYS = ["aud", "exp", "iat", "iss", "jti", "op", "role", "sub", "v"];
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const KID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;

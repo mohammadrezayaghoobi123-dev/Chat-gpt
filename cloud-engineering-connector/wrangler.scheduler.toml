@@ -1,0 +1,23 @@
+name = "chat-gpt111-scheduler"
+main = "orchestrator-scheduler-worker.js"
+compatibility_date = "2026-10-23"
+compatibility_flags = ["global_fetch_strictly_public"]
+workers_dev = false
+
+# This Worker has no public fetch handler, routes, or Cron trigger in this
+# change. Runtime activation is a separate, explicitly reviewed operation.
+
+[[durable_objects.bindings]]
+name = "TENANT_DIRECTORY"
+class_name = "TenantDirectory"
+script_name = "chat-gpt111"
+
+[[durable_objects.bindings]]
+name = "ORCHESTRATOR_LEDGER"
+class_name = "OrchestratorLedger"
+script_name = "chat-gpt111"
+
+[[workflows]]
+binding = "SCHEDULED_TASK_ADMISSION"
+name = "scheduler-task-admission"
+class_name = "ScheduledTaskAdmissionWorkflow"

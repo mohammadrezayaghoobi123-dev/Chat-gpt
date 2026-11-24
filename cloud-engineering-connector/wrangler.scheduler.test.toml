@@ -1,0 +1,26 @@
+name = "chat-gpt111-scheduler-test"
+main = "orchestrator-scheduler-worker.js"
+compatibility_date = "2026-10-23"
+compatibility_flags = ["global_fetch_strictly_public"]
+workers_dev = false
+
+[vars]
+LEDGER_WORKER_ASSERTION_KEYS = "{\"test\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"}"
+LEDGER_WORKER_ASSERTION_ACTIVE_KID = "test"
+
+[[durable_objects.bindings]]
+name = "TENANT_DIRECTORY"
+class_name = "TenantDirectory"
+
+[[durable_objects.bindings]]
+name = "ORCHESTRATOR_LEDGER"
+class_name = "OrchestratorLedger"
+
+[[migrations]]
+tag = "scheduler-test-v1"
+new_sqlite_classes = ["TenantDirectory", "OrchestratorLedger"]
+
+[[workflows]]
+binding = "SCHEDULED_TASK_ADMISSION"
+name = "scheduler-task-admission-test"
+class_name = "ScheduledTaskAdmissionWorkflow"

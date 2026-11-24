@@ -80,6 +80,7 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
 
   const ledger = {
     async appendIntent({ key, stage, attemptId, requestDigest }) {
+      if (recoveryMode !== "ACTIVE") return { status: "RECOVERY_LOCKED" };
       let keyId;
       try {
         keyId = canonicalKey(key);
@@ -117,6 +118,7 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
     },
 
     async appendOutcome({ attemptId, outcomeType, evidenceDigest, evidenceReference }) {
+      if (recoveryMode !== "ACTIVE") return { status: "RECOVERY_LOCKED" };
       const intent = intents.get(attemptId);
       if (!intent) return { status: "NO_INTENT" };
       if (typeof outcomeType !== "string" || !outcomeType ||
@@ -280,6 +282,7 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
     },
 
     async renew(args) {
+      if (recoveryMode !== "ACTIVE") return { status: "RECOVERY_LOCKED" };
       const keyId = canonicalKey(args.key);
       const record = records.get(keyId);
       if (!record || record.state !== "CLAIMED" || !owns(record, args, false)) {
@@ -297,6 +300,7 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
     },
 
     async abortBeforeModel(args) {
+      if (recoveryMode !== "ACTIVE") return { status: "RECOVERY_LOCKED" };
       const keyId = canonicalKey(args.key);
       const record = records.get(keyId);
       if (!record || record.state !== "CLAIMED" || !owns(record, args)) {
@@ -312,6 +316,7 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
     },
 
     async resumeCompletedModel(args) {
+      if (recoveryMode !== "ACTIVE") return { status: "RECOVERY_LOCKED" };
       const keyId = canonicalKey(args.key);
       const record = records.get(keyId);
       if (!record || record.state !== "MODEL_COMPLETED") return { status: "TERMINAL" };
@@ -359,6 +364,7 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
     },
 
     async completeModelAttempt(args) {
+      if (recoveryMode !== "ACTIVE") return { status: "RECOVERY_LOCKED" };
       const keyId = canonicalKey(args.key);
       const record = records.get(keyId);
       if (!record || record.state !== "MODEL_ATTEMPTED" ||
@@ -419,6 +425,7 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
     },
 
     async completeCommentAttempt(args) {
+      if (recoveryMode !== "ACTIVE") return { status: "RECOVERY_LOCKED" };
       const keyId = canonicalKey(args.key);
       const record = records.get(keyId);
       if (!record || record.state !== "COMMENT_ATTEMPTED" ||
@@ -449,6 +456,7 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
     },
 
     async markUnknown(args) {
+      if (recoveryMode !== "ACTIVE") return { status: "RECOVERY_LOCKED" };
       const keyId = canonicalKey(args.key);
       const record = records.get(keyId);
       const expectedState = args.stage === "MODEL" ? "MODEL_ATTEMPTED" : "COMMENT_ATTEMPTED";
@@ -469,6 +477,7 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
     },
 
     async expireAmbiguousAttempt(args) {
+      if (recoveryMode !== "ACTIVE") return { status: "RECOVERY_LOCKED" };
       const keyId = canonicalKey(args.key);
       const record = records.get(keyId);
       if (!record) return { status: "NOT_FOUND" };
@@ -536,6 +545,7 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
     },
 
     async closeWithoutPublish(args) {
+      if (recoveryMode !== "ACTIVE") return { status: "RECOVERY_LOCKED" };
       const keyId = canonicalKey(args.key);
       const record = records.get(keyId);
       if (!record || record.state !== "MODEL_COMPLETED" || !owns(record, args)) {
@@ -552,6 +562,9 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
 
     async setRecoveryMode(mode) {
       if (!["ACTIVE", "RECOVERY_LOCKED"].includes(mode)) return { status: "INVALID_MODE" };
+      if (mode === "ACTIVE" && recoveryMode === "RECOVERY_LOCKED") {
+        return { status: "RECOVERY_UNLOCK_REQUIRES_ANCHOR" };
+      }
       recoveryMode = mode;
       return { status: recoveryMode };
     },

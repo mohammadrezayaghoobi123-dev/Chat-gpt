@@ -194,6 +194,12 @@ jobs:
           console.log("Production preflight passed; isolated namespace checks passed; immutable rollback target captured.");
           NODE
 
+      - name: Revalidate trusted reviewer access immediately before Production deployment
+        run: node scripts/verify-release-approval.mjs
+        env:
+          RELEASE_GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_REVIEWER_IDS: ${{ vars.RELEASE_REVIEWER_IDS }}
+
       - name: Deploy candidate to Production
         id: deploy
         run: npx wrangler deploy

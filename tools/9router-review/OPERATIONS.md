@@ -705,7 +705,7 @@ The storage-independent adapter MUST expose equivalent typed operations. Names b
 - `markUnknown(key, generation, attempt_id, expected_record_version, stage: MODEL | COMMENT, reason_code) -> UNKNOWN | CONFLICT`; the stage must match the consumed attempt ID and current state.
 - `expireAmbiguousAttempt(key, attempt_id, stage) -> UNKNOWN | NOT_DUE | CONFLICT`; the backend evaluates the persisted deadline against its own authoritative server time inside the atomic transition.
 - `readAuthoritative(key) -> RECORD | NOT_FOUND | UNAVAILABLE`
-- `reconcileComment(key, expected_record_version, verified_positive_evidence[]) -> PUBLISHED | DUPLICATE_ACCEPTED | NO_CHANGE | CONFLICT`; the caller must supply only evidence already verified against the exact key, expected bot identity, marker ID, HMAC, payload digest, and issue URL. One exact match permits PUBLISHED; multiple exact matches permit DUPLICATE_ACCEPTED; zero matches or incomplete listing produce NO_CHANGE and never prove absence.
+- `reconcileComment(key, expected_record_version, verified_positive_evidence[]) -> PUBLISHED | DUPLICATE_ACCEPTED | NO_CHANGE | CONFLICT`; the caller must supply only evidence already verified against the exact key, expected bot identity, marker ID, HMAC, payload digest, and issue URL. One exact match permits PUBLISHED; multiple exact matches permit DUPLICATE_ACCEPTED; zero positive matches produce NO_CHANGE and never prove absence. Incomplete pagination with zero positive matches also produces NO_CHANGE; one verified exact match is sufficient for PUBLISHED even if later pages are unavailable, and two or more verified exact matches are sufficient for DUPLICATE_ACCEPTED even if pagination is incomplete.
 
 Every mutating operation is one atomic conditional transaction against the current record. It MUST check the expected state, generation, owner nonce where applicable, attempt ID, and record version. Completion calls are fenced by the generation and attempt ID captured before dispatch; recovery transitions are fenced by the attempt ID and stage. `readAuthoritative` MUST bypass stale replicas and provide a linearizable read for the key. Successful transitions and audit events commit atomically. A stale worker cannot mutate state by presenting an old generation or stale record version.
 
@@ -799,6 +799,7 @@ The model provider may also lack a caller-supplied idempotency key or execution-
 - **I26 — Write-ahead effect inventory:** no external effect is issued unless both the independent ledger intent and the primary-store attempt transition are durably acknowledged.
 - **I27 — Security-scan provenance:** a secret scan is evidence only when its actual scanned base/head range equals the exact PR base/head; a stale, partial, or unbound range is UNKNOWN, not PASS.
 - **I28 — Ledger policy integrity:** the R2 writer cannot modify bucket-lock configuration; any detected policy drift or privilege expansion globally blocks effectful operations.
+- **I29 — Positive-evidence precedence:** a verified exact publication marker is sufficient positive evidence independent of pagination completeness; incomplete zero-result listings never prove absence.
 
 ### 10. Adversarial conformance matrix
 
@@ -883,6 +884,7 @@ The design was challenged against the reproduced interleaving, independent-host 
 - **AR-28 — A backup restore cannot reconstruct external attempts from the database alone.** Added an independent append-only effect ledger with write-ahead intent acknowledgements and outcome evidence; the database remains the transactional reservation authority, while the ledger is the rollback-independent recovery inventory.
 - **AR-29 — The hosted Gitleaks PR-diff action reported a commit range unrelated to the PR's exact base/head, while push runs scanned only the latest commit.** Those zero-finding results cannot establish current PR-diff clearance. Require scan provenance to bind to the exact PR base SHA and head SHA and fail closed on any mismatch; no suppression is permitted.
 - **AR-30 — R2 Bucket Lock is an administrative policy, not protection against a privileged account administrator.** The runtime writer must have object-level permissions only; a separate administrator controls bucket-lock configuration, and continuous policy-drift detection must switch the system to RECOVERY_LOCKED. The ledger is immutable against the runtime identity only while the lock policy remains intact.
+- **AR-31 — Reconciliation incorrectly discarded verified positive evidence when pagination was incomplete.** Clarified the evidence lattice: one verified exact match proves PUBLISHED; two or more prove DUPLICATE_ACCEPTED; only zero positive matches remain NO_CHANGE, regardless of whether the listing is complete. Incomplete pagination never proves absence.
 
 **Residual design limitations (not defects that this contract can eliminate):**
 

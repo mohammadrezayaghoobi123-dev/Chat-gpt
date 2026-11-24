@@ -5,6 +5,7 @@ import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orche
 import { verifyWorkerAssertion } from "./orchestrator-worker-identity.js";
 import { verifyReconciliationEvidence } from "./orchestrator-reconciliation-evidence.js";
 import { verifyOwnerAssertion } from "./orchestrator-owner-assertion.js";
+import { verifyAdmissionReceipt } from "./orchestrator-admission-receipt.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
@@ -623,6 +624,54 @@ export class OrchestratorLedger extends DurableObject {
       );
     });
 
+    // Schema v10: make the Admission Receipt's identity and the Task projection
+    // one durable Ledger fact. Existing v9 records remain intact.
+    const appliedV10 = sql.exec(
+      "SELECT version FROM orchestrator_schema_migrations WHERE version = 10",
+    ).toArray()[0];
+    const admissionTable = sql.exec(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='orchestrator_task_admissions'",
+    ).toArray()[0];
+    if (appliedV10 && !admissionTable) {
+      throw fail("Schema v10 requires the task admission identity table.", "LEDGER_SCHEMA_CORRUPT");
+    }
+    this.ctx.storage.transactionSync(() => {
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_task_admissions (
+          tenant_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          admission_id TEXT NOT NULL,
+          receipt_issuer TEXT NOT NULL,
+          receipt_jti TEXT NOT NULL,
+          receipt_digest TEXT NOT NULL CHECK(length(receipt_digest) = 64),
+          task_id TEXT NOT NULL,
+          task_digest TEXT NOT NULL CHECK(length(task_digest) = 64),
+          resource_digest TEXT NOT NULL CHECK(length(resource_digest) = 64),
+          idempotency_key_digest TEXT NOT NULL CHECK(length(idempotency_key_digest) = 64),
+          membership_version INTEGER NOT NULL CHECK(membership_version > 0),
+          policy_scope_epoch INTEGER NOT NULL CHECK(policy_scope_epoch > 0),
+          policy_rule_id TEXT NOT NULL,
+          policy_rule_version INTEGER NOT NULL CHECK(policy_rule_version > 0),
+          decision_id TEXT NOT NULL,
+          policy_version TEXT NOT NULL,
+          verification_key_id TEXT NOT NULL,
+          verification_key_version INTEGER NOT NULL CHECK(verification_key_version > 0),
+          consumed_at INTEGER NOT NULL,
+          PRIMARY KEY(tenant_id, admission_id),
+          UNIQUE(receipt_issuer, receipt_jti),
+          UNIQUE(tenant_id, project_id, task_id),
+          UNIQUE(tenant_id, project_id, idempotency_key_digest),
+          FOREIGN KEY(task_id) REFERENCES orchestrator_tasks(task_id) ON DELETE RESTRICT
+        )
+      `);
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_task_admissions_by_scope ON orchestrator_task_admissions(tenant_id, project_id, consumed_at)");
+      sql.exec(
+        "INSERT OR IGNORE INTO orchestrator_schema_migrations (version, applied_at, description) VALUES (10, ?, ?)",
+        Date.now(),
+        "Require tenant-scoped Admission Receipt identity for Task projection; enforce admission, JTI, Task and idempotency uniqueness",
+      );
+    });
+
   }
 
   ping() {
@@ -636,10 +685,11 @@ export class OrchestratorLedger extends DurableObject {
       "orchestrator_outbox_events",
       "orchestrator_audit_events",
       "orchestrator_owner_command_receipts",
+      "orchestrator_task_admissions",
     ].every(name => tableNames.has(name));
     return {
       ok: Number(result.ok) === 1 && requiredTablesOk,
-      schemaVersion: 9,
+      schemaVersion: 10,
       storage: {
         requiredTables: requiredTablesOk,
       },
@@ -727,72 +777,217 @@ export class OrchestratorLedger extends DurableObject {
     });
   }
 
-  async createTask({ task, idempotencyKey, inputHash, now, workerId, workerAssertion }) {
+  async createTask(input = {}) {
+    if (!input || !input.receipt) {
+      return { created: false, reason: "ADMISSION_RECEIPT_REQUIRED" };
+    }
+    return this.projectAdmittedTask(input);
+  }
+
+  async projectAdmittedTask(input = {}) {
+    const { task, receipt, now, workerId, workerAssertion } = input;
     if (!task || !hasTenantProjectScope(task.tenantId, task.projectId)) {
       return { created: false, reason: "TENANT_PROJECT_SCOPE_REQUIRED" };
     }
-    identifier(idempotencyKey, "idempotencyKey");
-    hash(inputHash, "inputHash");
-    timestamp(now);
+    try {
+      timestamp(now);
+    } catch {
+      return { created: false, reason: "INVALID_TASK" };
+    }
     if (workerId !== "orchestrator-scheduler") {
       return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
-    let verifiedAssertion;
-    try {
-      verifiedAssertion = await verifyWorkerAssertion(this.env?.LEDGER_WORKER_ASSERTION_KEYS, workerAssertion, {
-        subject: "orchestrator-scheduler", role: "system", operation: "createTask", nowMs: now,
-      });
-    } catch {
-      return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
-    }
+
     let normalizedTask;
     let taskJson;
-    let taskRejectionReason = null;
+    let taskDigest;
     try {
-      if (!task || typeof task !== "object" || Array.isArray(task)) throw fail("task must be an object.");
-      identifier(task.taskId, "taskId");
-      if (!TASK_STATES.includes(task.state) || !Number.isSafeInteger(task.version) || task.version < 1 ||
-          !Number.isSafeInteger(task.createdAt) || !Number.isSafeInteger(task.updatedAt) ||
-          task.createdAt < 1 || task.updatedAt < task.createdAt) {
-        throw fail("task projection is invalid.");
+      if (!task || typeof task !== "object" || Array.isArray(task)) {
+        throw fail("Task projection must be an object.", "INVALID_TASK");
       }
+      identifier(task.taskId, "taskId");
+      if (task.state !== "SCHEDULED" || task.version !== 1 ||
+          !Number.isSafeInteger(task.createdAt) || !Number.isSafeInteger(task.updatedAt) ||
+          task.createdAt < 1 || task.updatedAt !== task.createdAt ||
+          !SHA256.test(task.resourceDigest ?? "")) {
+        throw fail("Admission Receipt can project only a version-1 scheduled Task.", "INVALID_TASK");
+      }
+      const executorId = task.executorId ?? task.assignedAgentId;
+      identifier(executorId, "executorId");
       normalizedTask = { ...task, agentRound: task.agentRound ?? 0 };
-      if (!Number.isSafeInteger(normalizedTask.agentRound) || normalizedTask.agentRound < 0 || normalizedTask.agentRound > 4) {
+      if (!Number.isSafeInteger(normalizedTask.agentRound) ||
+          normalizedTask.agentRound < 0 || normalizedTask.agentRound > 4) {
         throw fail("agentRound must be an integer from zero through four.", "INVALID_AGENT_ROUND");
       }
       taskJson = serializeBounded(normalizedTask, "task");
+      taskDigest = await sha256Canonical(normalizedTask);
     } catch (error) {
-      taskRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_TASK";
+      return {
+        created: false,
+        reason: typeof error?.code === "string" ? error.code : "INVALID_TASK",
+      };
     }
+
+    let verifiedAssertion;
+    try {
+      verifiedAssertion = await verifyWorkerAssertion(
+        this.env?.LEDGER_WORKER_ASSERTION_KEYS,
+        workerAssertion,
+        {
+          subject: "orchestrator-scheduler",
+          role: "system",
+          operation: "projectAdmittedTask",
+          nowMs: now,
+        },
+      );
+    } catch {
+      return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+    }
+
+    const directoryNamespace = this.env?.TENANT_DIRECTORY;
+    if (!directoryNamespace || typeof directoryNamespace.get !== "function" ||
+        typeof directoryNamespace.idFromName !== "function") {
+      return { created: false, reason: "ADMISSION_RECEIPT_REJECTED" };
+    }
+    let verifiedReceipt;
+    try {
+      verifiedReceipt = await verifyAdmissionReceipt(receipt, {
+        now,
+        expectedTenantId: normalizedTask.tenantId,
+        expectedProjectId: normalizedTask.projectId,
+        expectedTaskId: normalizedTask.taskId,
+        expectedTaskDigest: taskDigest,
+        expectedResourceDigest: normalizedTask.resourceDigest,
+        expectedScheduledTime: normalizedTask.createdAt,
+        resolvePublicKey: async ({ tenantId, keyId, now: currentTime }) => {
+          const directory = directoryNamespace.get(directoryNamespace.idFromName(tenantId));
+          return directory.getAdmissionVerificationKey({
+            tenantId,
+            keyId,
+            now: currentTime,
+          });
+        },
+      });
+    } catch {
+      verifiedReceipt = null;
+    }
+    if (!verifiedReceipt) {
+      return { created: false, reason: "ADMISSION_RECEIPT_REJECTED" };
+    }
+
+    const claims = verifiedReceipt.claims;
+    let scopedIdempotencyKey;
+    let receiptDigest;
+    try {
+      scopedIdempotencyKey = tenantProjectIdempotencyKey(
+        claims.tenantId, claims.projectId, claims.idempotencyKeyDigest,
+      );
+      receiptDigest = await sha256Canonical(receipt);
+    } catch {
+      return { created: false, reason: "ADMISSION_RECEIPT_REJECTED" };
+    }
+
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
-      if (taskRejectionReason) {
-        return { created: false, reason: taskRejectionReason };
-      }
-      const scopedIdempotencyKey = tenantProjectIdempotencyKey(
-        normalizedTask.tenantId, normalizedTask.projectId, idempotencyKey,
-      );
-      const existing = sql.exec(
-        "SELECT * FROM orchestrator_tasks WHERE idempotency_key = ? AND tenant_id = ? AND project_id = ?",
-        scopedIdempotencyKey, normalizedTask.tenantId, normalizedTask.projectId,
+
+      const existingAdmissions = sql.exec(
+        "SELECT * FROM orchestrator_task_admissions WHERE " +
+        "(tenant_id=? AND admission_id=?) OR " +
+        "(receipt_issuer=? AND receipt_jti=?) OR " +
+        "(tenant_id=? AND project_id=? AND idempotency_key_digest=?) OR " +
+        "(tenant_id=? AND project_id=? AND task_id=?)",
+        claims.tenantId, claims.admissionId,
+        claims.iss, claims.jti,
+        claims.tenantId, claims.projectId, claims.idempotencyKeyDigest,
+        claims.tenantId, claims.projectId, claims.taskId,
+      ).toArray();
+
+      const existingTask = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE task_id=?",
+        claims.taskId,
       ).toArray()[0];
-      if (existing) {
-        if (existing.input_hash !== inputHash || existing.task_id !== normalizedTask.taskId) {
-          return { created: false, conflict: true, reason: "IDEMPOTENCY_CONFLICT" };
+      const existingIdempotencyTask = sql.exec(
+        "SELECT * FROM orchestrator_tasks WHERE tenant_id=? AND project_id=? AND idempotency_key=?",
+        claims.tenantId, claims.projectId, scopedIdempotencyKey,
+      ).toArray()[0];
+
+      if (existingAdmissions.length > 0 || existingTask || existingIdempotencyTask) {
+        const prior = existingAdmissions.length === 1 ? existingAdmissions[0] : null;
+        const priorTask = prior
+          ? sql.exec(
+            "SELECT * FROM orchestrator_tasks WHERE task_id=? AND tenant_id=? AND project_id=?",
+            prior.task_id, prior.tenant_id, prior.project_id,
+          ).toArray()[0]
+          : null;
+        const identical = Boolean(
+          prior && priorTask &&
+          prior.tenant_id === claims.tenantId &&
+          prior.project_id === claims.projectId &&
+          prior.admission_id === claims.admissionId &&
+          prior.receipt_issuer === claims.iss &&
+          prior.receipt_jti === claims.jti &&
+          prior.receipt_digest === receiptDigest &&
+          prior.task_id === claims.taskId &&
+          prior.task_digest === taskDigest &&
+          prior.resource_digest === claims.resourceDigest &&
+          prior.idempotency_key_digest === claims.idempotencyKeyDigest &&
+          priorTask.input_hash === taskDigest &&
+          priorTask.task_json === taskJson &&
+          priorTask.state === "SCHEDULED" &&
+          priorTask.version === 1
+        );
+        if (identical) {
+          return { created: false, replay: true, task: taskFromRow(priorTask) };
         }
-        return { created: false, replay: true, task: taskFromRow(existing) };
+        return { created: false, conflict: true, reason: "ADMISSION_IDENTITY_CONFLICT" };
       }
-      const taskIdExisting = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", normalizedTask.taskId).toArray()[0];
-      if (taskIdExisting) return { created: false, conflict: true, reason: "TASK_ID_CONFLICT" };
+
       sql.exec(
-        "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        normalizedTask.taskId, scopedIdempotencyKey, inputHash, normalizedTask.state, normalizedTask.version, taskJson,
-        normalizedTask.createdAt, normalizedTask.updatedAt, normalizedTask.tenantId, normalizedTask.projectId,
+        "INSERT INTO orchestrator_tasks " +
+        "(task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) " +
+        "VALUES (?, ?, ?, 'SCHEDULED', 1, ?, ?, ?, ?, ?)",
+        claims.taskId,
+        scopedIdempotencyKey,
+        taskDigest,
+        taskJson,
+        normalizedTask.createdAt,
+        normalizedTask.updatedAt,
+        claims.tenantId,
+        claims.projectId,
       );
-      syncClaimCandidateInTransaction(sql, normalizedTask.taskId);
+      sql.exec(
+        "INSERT INTO orchestrator_task_admissions " +
+        "(tenant_id, project_id, admission_id, receipt_issuer, receipt_jti, receipt_digest, " +
+        "task_id, task_digest, resource_digest, idempotency_key_digest, membership_version, " +
+        "policy_scope_epoch, policy_rule_id, policy_rule_version, decision_id, policy_version, " +
+        "verification_key_id, verification_key_version, consumed_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        claims.tenantId,
+        claims.projectId,
+        claims.admissionId,
+        claims.iss,
+        claims.jti,
+        receiptDigest,
+        claims.taskId,
+        taskDigest,
+        claims.resourceDigest,
+        claims.idempotencyKeyDigest,
+        claims.membershipVersion,
+        claims.policyScopeEpoch,
+        claims.policyRuleId,
+        claims.policyRuleVersion,
+        claims.decisionId,
+        claims.policyVersion,
+        verifiedReceipt.publicKeyId,
+        verifiedReceipt.publicKeyVersion,
+        now,
+      );
+      if (!syncClaimCandidateInTransaction(sql, claims.taskId)) {
+        throw fail("An admitted Task must produce a claim candidate.", "CLAIM_CANDIDATE_REQUIRED");
+      }
       return { created: true, task: normalizedTask };
     });
   }

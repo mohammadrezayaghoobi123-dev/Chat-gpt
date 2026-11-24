@@ -145,6 +145,58 @@ describe("OrchestratorLedger Outbox receipt-gated completion and ambiguous deliv
     });
   });
 
+  it("keeps legacy generation-zero receipts unverified and unable to complete an active Outbox event", async () => {
+    const ledger = ledgerFor("outbox-legacy-receipt-remains-unverified");
+    const taskId = "legacy-receipt-task";
+    const eventId = "legacy-receipt-event";
+    const createdAt = NOW + 50;
+    const claimNow = createdAt + 10;
+    const receiptNow = claimNow + 1;
+
+    await runInDurableObject(ledger, async instance => {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = KEY_SET;
+      const event = insertTaskAndOutbox(instance, { taskId, eventId, createdAt });
+      expect(await claimEvent(instance, event, claimNow))
+        .toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+      instance.ctx.storage.sql.exec(
+        "INSERT INTO orchestrator_outbox_receipts (event_id, event_type, schema_version, envelope_sha256, consumer_id, received_at, lease_generation, tenant_id, project_id) VALUES (?, ?, 1, ?, ?, ?, 0, ?, ?)",
+        eventId, event.eventType, "c".repeat(64), CONSUMER_ID, receiptNow, TENANT_ID, PROJECT_ID,
+      );
+
+      const receiptReplay = await recordReceipt(
+        instance,
+        event,
+        1,
+        receiptNow,
+        await assertionFor(CONSUMER_ID, "consumer", "recordOutboxReceipt", receiptNow),
+      );
+      expect(receiptReplay).toMatchObject({
+        recorded: false,
+        blocked: true,
+        reason: "LEGACY_OUTBOX_RECEIPT_UNVERIFIED",
+      });
+
+      const completion = await instance.completeOutbox({
+        eventId,
+        workerId: PUBLISHER_ID,
+        workerAssertion: await assertionFor(PUBLISHER_ID, "publisher", "completeOutbox", receiptNow + 1),
+        leaseGeneration: 1,
+        now: receiptNow + 1,
+      });
+      expect(completion).toMatchObject({
+        completed: false,
+        reason: "OUTBOX_RECEIPT_REQUIRED",
+      });
+      expect(storedOutbox(instance, eventId)).toMatchObject({
+        status: "IN_PROGRESS",
+        lease_generation: 1,
+        lease_worker_id: PUBLISHER_ID,
+      });
+      expect(receiptCount(instance, eventId)).toBe(1);
+    });
+  });
+
   it("rolls back receipt, completion, and consumer assertion together when SQLite aborts", async () => {
     const ledger = ledgerFor("outbox-receipt-transaction-rollback");
     const taskId = "receipt-rollback-task";

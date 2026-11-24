@@ -2300,8 +2300,11 @@ describe("Owner command atomic Ledger contract", () => {
     const subject = "orchestrator-scheduler";
     const role = "system";
     const operation = "createTask";
+    let ledgerNow = now;
+    const wallClockSpy = vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
     const createAt = async (offsetSeconds, taskId) => {
       const issuedAt = now + offsetSeconds * 1000;
+      ledgerNow = issuedAt;
       return ledger.createTask({
         task: {
           ...task(taskId),
@@ -2322,6 +2325,7 @@ describe("Owner command atomic Ledger contract", () => {
     expect(first).toMatchObject({ created: true, task: { taskId: "task-jti-retention-original" } });
 
     const originalToken = await workerAssertion(subject, role, operation, now, sharedJti);
+    ledgerNow = now + 66_000;
     const expiredReplay = await ledger.createTask({
       task: { ...task("task-jti-retention-expired-replay"), createdAt: now + 66_000, updatedAt: now + 66_000 },
       idempotencyKey: "retention-boundary-expired-replay",
@@ -2396,6 +2400,7 @@ describe("Owner command atomic Ledger contract", () => {
         "task-jti-retention-after-boundary",
       ).one().count).toBe(2);
     });
+    wallClockSpy.mockRestore();
   });
 
 

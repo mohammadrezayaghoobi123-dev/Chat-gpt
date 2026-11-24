@@ -2822,3 +2822,181 @@ it("rejects a task whose updatedAt precedes createdAt before durable persistence
     },
   });
 });
+
+it("rejects invalid initial task versions without durable task or claim-candidate writes", async () => {
+  const ledger = ledgerFor("ledger-create-task-invalid-version");
+  const cases = [
+    { taskId: "task-version-zero", key: "create-version-zero", jti: "jti-version-zero-000001", version: 0 },
+    { taskId: "task-version-negative", key: "create-version-negative", jti: "jti-version-negative-000001", version: -1 },
+    { taskId: "task-version-fractional", key: "create-version-fractional", jti: "jti-version-fractional-000001", version: 1.5 },
+    { taskId: "task-version-unsafe", key: "create-version-unsafe", jti: "jti-version-unsafe-000001", version: Number.MAX_SAFE_INTEGER + 1 },
+    { taskId: "task-version-nan", key: "create-version-nan", jti: "jti-version-nan-000001", version: Number.NaN },
+    { taskId: "task-version-infinity", key: "create-version-infinity", jti: "jti-version-infinity-000001", version: Number.POSITIVE_INFINITY },
+  ];
+
+  const results = [];
+  for (const item of cases) {
+    const workerAssertion = await createWorkerAssertion({
+      subject: "orchestrator-scheduler",
+      role: "system",
+      operation: "createTask",
+      nowMs: now,
+      jti: item.jti,
+    });
+    results.push(await ledger.createTask({
+      task: { ...task(item.taskId), version: item.version },
+      idempotencyKey: item.key,
+      inputHash: "f".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion,
+    }));
+  }
+
+  const taskIds = cases.map(item => item.taskId);
+  const jtis = cases.map(item => item.jti);
+  const placeholders = taskIds.map(() => "?").join(", ");
+  const persisted = await runInDurableObject(ledger, async (_instance, state) => ({
+    tasks: state.storage.sql.exec(
+      `SELECT task_id FROM orchestrator_tasks WHERE task_id IN (${placeholders}) ORDER BY task_id`,
+      ...taskIds,
+    ).toArray().map(row => row.task_id),
+    claimCandidates: state.storage.sql.exec(
+      `SELECT task_id FROM orchestrator_claim_candidates WHERE task_id IN (${placeholders}) ORDER BY task_id`,
+      ...taskIds,
+    ).toArray().map(row => row.task_id),
+    consumedAssertions: state.storage.sql.exec(
+      `SELECT jti FROM orchestrator_consumed_assertions WHERE jti IN (${jtis.map(() => "?").join(", ")}) ORDER BY jti`,
+      ...jtis,
+    ).toArray().map(row => row.jti),
+  }));
+
+  expect({ results, persisted }).toEqual({
+    results: Array.from({ length: 6 }, () => ({ created: false, reason: "INVALID_INPUT" })),
+    persisted: {
+      tasks: [],
+      claimCandidates: [],
+      consumedAssertions: [...jtis].sort(),
+    },
+  });
+});
+
+it("rejects invalid initial agent rounds without durable task or claim-candidate writes", async () => {
+  const ledger = ledgerFor("ledger-create-task-invalid-agent-round");
+  const cases = [
+    { taskId: "task-round-negative", key: "create-round-negative", jti: "jti-round-negative-000001", agentRound: -1 },
+    { taskId: "task-round-five", key: "create-round-five", jti: "jti-round-five-000001", agentRound: 5 },
+    { taskId: "task-round-fractional", key: "create-round-fractional", jti: "jti-round-fractional-000001", agentRound: 1.5 },
+    { taskId: "task-round-unsafe", key: "create-round-unsafe", jti: "jti-round-unsafe-000001", agentRound: Number.MAX_SAFE_INTEGER + 1 },
+    { taskId: "task-round-nan", key: "create-round-nan", jti: "jti-round-nan-000001", agentRound: Number.NaN },
+    { taskId: "task-round-infinity", key: "create-round-infinity", jti: "jti-round-infinity-000001", agentRound: Number.POSITIVE_INFINITY },
+  ];
+
+  const results = [];
+  for (const item of cases) {
+    const workerAssertion = await createWorkerAssertion({
+      subject: "orchestrator-scheduler",
+      role: "system",
+      operation: "createTask",
+      nowMs: now,
+      jti: item.jti,
+    });
+    results.push(await ledger.createTask({
+      task: { ...task(item.taskId), agentRound: item.agentRound },
+      idempotencyKey: item.key,
+      inputHash: "e".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion,
+    }));
+  }
+
+  const taskIds = cases.map(item => item.taskId);
+  const jtis = cases.map(item => item.jti);
+  const placeholders = taskIds.map(() => "?").join(", ");
+  const persisted = await runInDurableObject(ledger, async (_instance, state) => ({
+    tasks: state.storage.sql.exec(
+      `SELECT task_id FROM orchestrator_tasks WHERE task_id IN (${placeholders}) ORDER BY task_id`,
+      ...taskIds,
+    ).toArray().map(row => row.task_id),
+    claimCandidates: state.storage.sql.exec(
+      `SELECT task_id FROM orchestrator_claim_candidates WHERE task_id IN (${placeholders}) ORDER BY task_id`,
+      ...taskIds,
+    ).toArray().map(row => row.task_id),
+    consumedAssertions: state.storage.sql.exec(
+      `SELECT jti FROM orchestrator_consumed_assertions WHERE jti IN (${jtis.map(() => "?").join(", ")}) ORDER BY jti`,
+      ...jtis,
+    ).toArray().map(row => row.jti),
+  }));
+
+  expect({ results, persisted }).toEqual({
+    results: Array.from({ length: 6 }, () => ({ created: false, reason: "INVALID_AGENT_ROUND" })),
+    persisted: {
+      tasks: [],
+      claimCandidates: [],
+      consumedAssertions: [...jtis].sort(),
+    },
+  });
+});
+
+it("persists valid initial version and agent-round boundaries with normalized defaults", async () => {
+  const ledger = ledgerFor("ledger-create-task-version-agent-round-boundaries");
+  const cases = [
+    { taskId: "task-boundary-minimum", key: "create-boundary-minimum", jti: "jti-boundary-minimum-000001", version: 1, agentRound: undefined, expectedRound: 0 },
+    { taskId: "task-boundary-maximum", key: "create-boundary-maximum", jti: "jti-boundary-maximum-000001", version: Number.MAX_SAFE_INTEGER, agentRound: 4, expectedRound: 4 },
+    { taskId: "task-boundary-null", key: "create-boundary-null", jti: "jti-boundary-null-000001", version: 1, agentRound: null, expectedRound: 0 },
+    { taskId: "task-boundary-zero", key: "create-boundary-zero", jti: "jti-boundary-zero-000001", version: 1, agentRound: 0, expectedRound: 0 },
+  ];
+
+  const results = [];
+  for (const item of cases) {
+    const workerAssertion = await createWorkerAssertion({
+      subject: "orchestrator-scheduler",
+      role: "system",
+      operation: "createTask",
+      nowMs: now,
+      jti: item.jti,
+    });
+    results.push(await ledger.createTask({
+      task: { ...task(item.taskId), version: item.version, agentRound: item.agentRound },
+      idempotencyKey: item.key,
+      inputHash: "d".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion,
+    }));
+  }
+
+  const persisted = await runInDurableObject(ledger, async (_instance, state) => ({
+    tasks: state.storage.sql.exec(
+      "SELECT task_id, version, state, agent_round FROM orchestrator_tasks ORDER BY task_id",
+    ).toArray(),
+    claimCandidates: state.storage.sql.exec(
+      "SELECT task_id, executor_id FROM orchestrator_claim_candidates ORDER BY task_id",
+    ).toArray(),
+  }));
+
+  expect(results.map(result => ({
+    created: result.created,
+    taskId: result.task?.taskId,
+    version: result.task?.version,
+    agentRound: result.task?.agentRound,
+  }))).toEqual(cases.map(item => ({
+    created: true,
+    taskId: item.taskId,
+    version: item.version,
+    agentRound: item.expectedRound,
+  })));
+  expect(persisted).toEqual({
+    tasks: cases.map(item => ({
+      task_id: item.taskId,
+      version: item.version,
+      state: "SCHEDULED",
+      agent_round: item.expectedRound,
+    })).sort((a, b) => a.task_id.localeCompare(b.task_id)),
+    claimCandidates: cases.map(item => ({
+      task_id: item.taskId,
+      executor_id: "agent:worker-1",
+    })).sort((a, b) => a.task_id.localeCompare(b.task_id)),
+  });
+});

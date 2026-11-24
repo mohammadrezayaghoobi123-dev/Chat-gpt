@@ -2511,6 +2511,49 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+  it("linearizes concurrent createTask calls that share one Worker assertion JTI", async () => {
+    const ledger = ledgerFor("worker-assertion-concurrent-jti-time-authority");
+    const subject = "orchestrator-scheduler";
+    const token = await workerAssertion(
+      subject,
+      "system",
+      "createTask",
+      now,
+      "worker-jti-concurrent-ledger-clock-000001",
+    );
+    const create = taskId => ledger.createTask({
+      task: { ...task(taskId) },
+      idempotencyKey: "concurrent-ledger-clock-" + taskId,
+      inputHash: "7".repeat(64),
+      now: now + 600_000,
+      workerId: subject,
+      workerAssertion: token,
+    });
+
+    const results = await Promise.all([
+      create("task-concurrent-clock-a"),
+      create("task-concurrent-clock-b"),
+    ]);
+    expect(results.filter(result => result.created)).toHaveLength(1);
+    expect(results.filter(result => !result.created && result.reason === "AUTHENTICATED_WORKER_REQUIRED"))
+      .toHaveLength(1);
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id IN (?, ?)",
+        "task-concurrent-clock-a",
+        "task-concurrent-clock-b",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        "worker-jti-concurrent-ledger-clock-000001",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT high_water_ms FROM orchestrator_security_clock WHERE clock_id = 1",
+      ).one().high_water_ms).toBeGreaterThanOrEqual(now);
+    });
+  });
+
   it("prevents caller time from pruning a consumed JTI and enabling replay", async () => {
     const ledger = ledgerFor("worker-assertion-caller-time-jti-pruning");
     const subject = "orchestrator-scheduler";

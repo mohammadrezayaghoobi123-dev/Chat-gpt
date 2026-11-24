@@ -116,7 +116,7 @@ Extend failOutbox to require the current token and exact active lease. It must d
 - publisher actor for Queue send failure;
 - consumer actor for webhook/consumer settlement.
 
-Only the two fixed actor/role pairs are permitted. Failure settlement clears the token. Retryable failures schedule the existing bounded exponential retry (1s base, 15m cap, 8 attempts); permanent failures move the durable Outbox row to DEAD_LETTER. The Queue message is acknowledged after the Ledger has durably accepted the retry/dead-letter decision, preventing Queue retries from reusing a now-invalid token.
+Only the two fixed actor/role pairs are permitted. The Worker-assertion signer allowlist is extended only for these exact fixed principals and operations; alarm-originated publisher claims and Queue-originated consumer operations are not exposed through the MCP/HTTP request path. Failure settlement clears the token. Retryable failures schedule the existing bounded exponential retry (1s base, 15m cap, 8 attempts); permanent failures set retry_state = 'DEAD_LETTER' on the durable Outbox row; the existing status column remains PENDING. The Queue message is acknowledged after the Ledger has durably accepted the retry/dead-letter decision, preventing Queue retries from reusing a now-invalid token.
 
 The Queue DLQ archiver also checks the original envelope token and generation. It may terminalize the source row only when that exact capability is still current. A stale DLQ message can be archived but cannot change a newer lease. The persisted archive body must redact the plaintext leaseToken; its stored body hash is calculated over the original pre-redaction envelope.
 
@@ -143,7 +143,7 @@ Use a bounded request timeout (proposed 20 seconds), redirect: manual, no caller
 Response policy:
 - 2xx: submit a token-fenced recordOutboxReceipt; the event is complete only after that Ledger transaction succeeds.
 - 408, 425, 429, 5xx, network errors, and timeout: token-fenced retryable failOutbox.
-- other 4xx, 3xx, malformed configuration, or idempotency conflict: permanent failOutbox and durable DEAD_LETTER state.
+- other 4xx, 3xx, malformed configuration, or idempotency conflict: permanent failOutbox and durable retry_state = DEAD_LETTER.
 - If the remote endpoint accepted the event but the client cannot commit the receipt, the event will be replayed after lease expiry with the same event ID. No exactly-once external side-effect claim is made.
 
 The destination implementation itself is outside this repository's inspected scope and has not been selected or verified. This design defines the outbound contract, not proof that a real receiver implements it.

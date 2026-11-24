@@ -160,6 +160,79 @@ describe("Scheduler tenant Task admission", () => {
     });
   });
 
+  it("recovers a Directory reservation after a Ledger RPC interruption using the same scheduled identity", async () => {
+    const tenantId = "tenant-scheduled-recovery-" + crypto.randomUUID();
+    const fixture = await provisionTenant(tenantId);
+    const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+    const policy = {
+      servicePrincipalId: fixture.principalId,
+      tasks: [taskPolicy(fixture.tenantId, fixture.projectId, suffix)],
+    };
+    const baseEnv = makeSchedulerEnv({ [CRON]: policy });
+    const scheduledTime = Date.now();
+    const controller = createScheduledController({
+      scheduledTime: new Date(scheduledTime),
+      cron: CRON,
+    });
+    const realNamespace = env.ORCHESTRATOR_LEDGER;
+    let failNextLedgerCall = true;
+    const faultedNamespace = {
+      idFromName(name) {
+        return realNamespace.idFromName(name);
+      },
+      get(id) {
+        const stub = realNamespace.get(id);
+        return {
+          async createTask(input) {
+            if (failNextLedgerCall) {
+              failNextLedgerCall = false;
+              throw Object.assign(new Error("Simulated Ledger transport interruption."), {
+                code: "LEDGER_RPC_UNAVAILABLE",
+              });
+            }
+            return stub.createTask(input);
+          },
+        };
+      },
+    };
+    const faultEnv = Object.create(baseEnv);
+    faultEnv.ORCHESTRATOR_LEDGER = faultedNamespace;
+
+    await expect(schedulerWorker.scheduled(controller, faultEnv, {}))
+      .rejects.toMatchObject({
+        code: "SCHEDULED_ADMISSION_PARTIAL_FAILURE",
+        completed: 0,
+        directoryReserved: true,
+        causeCode: "LEDGER_RPC_UNAVAILABLE",
+      });
+
+    await runInDurableObject(fixture.directory, instance => {
+      expect(Number(instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM tenant_task_admission_reservations",
+      ).one().count)).toBe(1);
+    });
+    await runInDurableObject(fixture.ledger, instance => {
+      expect(Number(instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks",
+      ).one().count)).toBe(0);
+    });
+
+    const retry = await schedulerWorker.scheduled(controller, baseEnv, {});
+    expect(retry).toMatchObject({ processed: 1, created: 1, replayed: 0 });
+
+    await runInDurableObject(fixture.ledger, instance => {
+      expect(Number(instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks",
+      ).one().count)).toBe(1);
+      expect(Number(instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_task_admission_receipts",
+      ).one().count)).toBe(1);
+      expect(Number(instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE event_type='task.admitted'",
+      ).one().count)).toBe(1);
+    });
+  });
+
   it("preflights every task policy entry before creating any Directory reservation", async () => {
     const tenantId = "tenant-scheduled-preflight-" + crypto.randomUUID();
     const fixture = await provisionTenant(tenantId);

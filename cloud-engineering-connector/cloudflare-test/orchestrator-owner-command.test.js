@@ -818,6 +818,149 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+  it("rejects a forged Validator principal without a persisted lease or trusted Validator role", async () => {
+    const taskId = "task-owner-forged-validator-principal-0001";
+    const workerId = "agent:worker-1";
+    const validatorId = "orchestrator-validator";
+    const ledger = ledgerFor("owner-forged-validator-principal");
+    await createTask(ledger, { ...task(taskId), state: "SCHEDULED" });
+
+    const claim = await ledger.claimTask({
+      taskId,
+      workerId,
+      workerAssertion: await workerAssertion(workerId, "agent", "claimTask", now),
+      leaseMs: 30_000,
+      now,
+    });
+    expect(claim).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    const quarantine = await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        operation: "quarantine",
+        taskId,
+        eventId: "owner-forged-validator-quarantine-01",
+      },
+      deliveryId: "delivery-forged-validator-quarantine-01",
+      commentId: "123456821",
+      now: now + 1,
+    }));
+    expect(quarantine).toMatchObject({
+      applied: true,
+      task: { taskId, state: "QUARANTINED", version: 2 },
+    });
+
+    const release = await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        operation: "release",
+        taskId,
+        eventId: "owner-forged-validator-release-01",
+      },
+      deliveryId: "delivery-forged-validator-release-01",
+      commentId: "123456822",
+      now: now + 2,
+    }));
+    expect(release).toMatchObject({
+      applied: true,
+      task: { taskId, state: "VALIDATING", version: 3 },
+    });
+
+    // Sign directly with the test HMAC key, bypassing the scheduled-principal
+    // helper. This models a key holder attempting to self-assign Validator authority.
+    const validatorRoleJti = "jti-forged-validator-role-000001";
+    const validatorRoleAssertion = await workerAssertion(
+      validatorId, "validator", "transitionTask", now + 3, validatorRoleJti,
+    );
+    const rejectedValidatorRole = await ledger.transitionTask({
+      taskId,
+      expectedVersion: 3,
+      expectedState: "VALIDATING",
+      nextState: "READY",
+      actor: { id: validatorId, role: "validator", authenticated: true, identityVerified: true },
+      evidence: { validationOutcome: "PASS", evidenceDigest: "d".repeat(64) },
+      now: now + 3,
+      workerId: validatorId,
+      workerAssertion: validatorRoleAssertion,
+      leaseGeneration: 3,
+    });
+    expect(rejectedValidatorRole).toEqual({
+      updated: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    // A validly signed agent-role assertion for the same principal must still
+    // fail at the authoritative Lease fence: the Owner release cleared ownership.
+    const forgedAgentJti = "jti-forged-validator-agent-000001";
+    const forgedAgentAssertion = await workerAssertion(
+      validatorId, "agent", "transitionTask", now + 4, forgedAgentJti,
+    );
+    const rejectedForgedAgent = await ledger.transitionTask({
+      taskId,
+      expectedVersion: 3,
+      expectedState: "VALIDATING",
+      nextState: "READY",
+      actor: { id: validatorId, role: "agent", authenticated: true, identityVerified: true },
+      evidence: { validationOutcome: "PASS", evidenceDigest: "e".repeat(64) },
+      now: now + 4,
+      workerId: validatorId,
+      workerAssertion: forgedAgentAssertion,
+      leaseGeneration: 3,
+    });
+    expect(rejectedForgedAgent).toEqual({
+      updated: false,
+      reason: "LEASE_FENCE_MISMATCH",
+    });
+
+    const claimJti = "jti-forged-validator-claim-000001";
+    const validatorClaim = await ledger.claimTask({
+      taskId,
+      workerId: validatorId,
+      workerAssertion: await workerAssertion(
+        validatorId, "agent", "claimTask", now + 5, claimJti,
+      ),
+      leaseMs: 30_000,
+      now: now + 5,
+      reconciliationEvidence: {
+        checked: true,
+        validationOutcome: "PASS",
+        evidenceDigest: "f".repeat(64),
+        issuer: validatorId,
+      },
+    });
+    expect(validatorClaim).toEqual({
+      claimed: false,
+      reason: "NO_TASK_AVAILABLE",
+    });
+
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+      taskId,
+      state: "VALIDATING",
+      version: 3,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        taskId,
+      ).one()).toEqual({
+        worker_id: null,
+        lease_generation: 3,
+        lease_until: 0,
+        updated_at: now + 2,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti IN (?, ?, ?)",
+        validatorRoleJti, forgedAgentJti, claimJti,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ?",
+        taskId,
+      ).one().count).toBe(2);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_audit_events WHERE task_id = ? AND event_type IN ('OWNER_TASK_QUARANTINED','OWNER_TASK_RELEASED')",
+        taskId,
+      ).one().count).toBe(2);
+    });
+  });
+
   it("keeps a released task fail-closed until a trusted validation authority exists", async () => {
     const taskId = "task-owner-validation-authority-gap-0001";
     const workerId = "agent:worker-1";

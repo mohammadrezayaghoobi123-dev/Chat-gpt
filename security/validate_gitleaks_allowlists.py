@@ -53,7 +53,7 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
             errors.append(f"{label}: condition must remain AND")
         if entry.get("commits") != [expected_commit]:
             errors.append(f"{label}: commit scope changed")
-        escaped_path = expected_path.replace(".", r"\\.")
+        escaped_path = expected_path.replace(".", r"\.")
         if entry.get("paths") != [f"^{escaped_path}$"]:
             errors.append(f"{label}: path scope changed or is not anchored")
         if entry.get("regexTarget") != "line":

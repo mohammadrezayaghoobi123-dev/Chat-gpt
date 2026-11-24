@@ -29,7 +29,8 @@ The following observations were verified against the stated main baseline:
 | identity/tenant-directory.js, authorizeProjectAction | The authorization result currently returns decisionId and policyVersion, but not membership version, selected policy rule version, or a policy-scope epoch. | The current decision cannot be used as a complete freshness proof. |
 | identity/tenant-context.js | The verified tenant context currently omits the membership version; the final authorization result also omits the policy row version. | Version provenance is discarded before it can be bound to admission. |
 | orchestrator-ledger.js, createTask | Task creation verifies a Scheduler worker assertion and tenant/project syntax, then consumes the assertion and persists the task. It does not accept or verify a Tenant Directory decision or signed admission receipt. | A cryptographic Scheduler identity assertion is not a substitute for project authorization. |
-| worker.js | The current default handler exposes fetch; no scheduled handler or Scheduler-to-Ledger createTask path was found in this bounded source review. | Runtime scheduling reachability is not implemented in the reviewed Worker path. |
+| worker.js and index.js | The default Worker exports fetch only; index.js re-exports TenantDirectory and OrchestratorLedger, but no scheduled handler or Scheduler-to-Ledger createTask path was found. | Runtime scheduling reachability is not implemented in the reviewed Worker path. |
+| wrangler.toml | The source configuration contains no Cron trigger declaration. | Adding a scheduled handler alone would not activate a schedule; the Cron trigger must be separately reviewed and configured in staging. |
 | wrangler.toml | Source configuration declares both ORCHESTRATOR_LEDGER and TENANT_DIRECTORY bindings for production and staging. | Source bindings do not prove that the live Production Worker has those bindings or an active scheduler. |
 
 No production exploitability conclusion is made from these facts. The design addresses a source-level authorization and reachability gap.
@@ -111,6 +112,8 @@ The selected rule and epoch must be read from one consistent TenantDirectory sta
 
 Use the repository's canonical JSON and SHA-256 primitives, with a documented, versioned canonicalization contract.
 
+Canonicalize the Task exactly once at request admission into immutable serialized bytes. The exact bytes used for signing and Outbox delivery must be the same; do not re-read a mutable caller object after hashing.
+
 Compute independently:
 - resourceDigest: exact resource descriptor used by policy evaluation;
 - taskDigest: complete canonical Task payload accepted by the Ledger;
@@ -138,7 +141,7 @@ The signed claim set must contain at least:
 - task identifier and idempotency-key digest;
 - Scheduler invocation identifier, configured cron identifier, and scheduled time.
 
-The private key must remain inside the TenantDirectory authority boundary and must never be returned by RPC. The Ledger receives only public verification material and key identifiers. Private-key persistence, encryption-at-rest, restore behavior, rotation, and emergency replacement must be tested before enabling production signing.
+The private key must remain inside the TenantDirectory authority boundary and must never be returned by RPC. The Ledger receives only public verification material and key identifiers. It resolves a key identifier through a narrow read-only TenantDirectory RPC for the receipt's tenant; it must not accept a public key supplied by the receipt sender. Unknown identifiers fail closed. Private-key persistence, encryption-at-rest, restore behavior, rotation, and emergency replacement must be tested before enabling production signing.
 
 Do not reuse the existing Scheduler HMAC key as the Admission Receipt signing key. Use domain separation and independent key identifiers.
 
@@ -234,6 +237,7 @@ The Authority:
 7. Atomically records START_AUTHORIZED, the unique permit/JTI, and a monotonic fencing value.
 8. Commits. This is the linearization point for execution-start authorization.
 9. The Ledger consumes the permit and persists the lease in its own transaction. Duplicate permit delivery returns the same lease result; conflicting use is rejected.
+10. If the authority commit succeeded but the Ledger acknowledgement is uncertain, recovery must reuse the same logical permit identifier and admission start reservation. It must not create a second start authorization. Permit expiry and recovery horizon are configuration decisions; once START_AUTHORIZED committed, later revocation does not retroactively erase that ordering.
 
 A revocation that commits before step 7 prevents execution-start authorization. A start authorization that commits before revocation is ordered before that revocation. This is a precise serialization rule, not a claim that the remote worker's first CPU instruction or external side effect is part of the Authority transaction.
 
@@ -319,6 +323,7 @@ Tests must run against the actual TenantDirectory and OrchestratorLedger classes
 
 Required test properties:
 - Every race test has deterministic barriers and asserts both legal commit orders.
+- Alarm delivery tests use the Cloudflare Durable Object test API to trigger the alarm deterministically and verify duplicate/ retry safety.
 - All rejected cases assert no Task, lease, or unauthorized Outbox side effect was committed.
 - Replay tests assert both the stored digest and admission identity.
 - Key-rotation tests include restart and previous-key retirement.
@@ -349,6 +354,7 @@ The design is implementation-ready only after:
 - execution-start authorization is serialized with Membership/Policy mutation in the same TenantDirectory object;
 - no code path can create a new scheduled Task without verified Admission evidence;
 - Scheduler provenance is reachable only from the platform scheduled handler;
+- the approved Cron expression is declared explicitly in Wrangler staging configuration and exercised through the actual scheduled handler;
 - all retries and uncertain outcomes are idempotently reconciled;
 - key rotation, restore, and failure behavior are verified;
 - staging passes the full suite, and Production remains unchanged until explicitly approved.
@@ -380,4 +386,7 @@ Cloudflare platform references:
 - Durable Object coordination and transaction boundaries: https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/
 - Workers Web Crypto algorithm support, including Ed25519: https://developers.cloudflare.com/workers/runtime-apis/web-crypto/
 - Durable Object automatic retries and idempotency requirements: https://developers.cloudflare.com/durable-objects/best-practices/automatic-retries/
+- Durable Object alarm execution and retry semantics: https://developers.cloudflare.com/durable-objects/api/alarms/
+- Worker scheduled handler and ScheduledController fields: https://developers.cloudflare.com/workers/runtime-apis/handlers/scheduled/
+- Cron Trigger configuration: https://developers.cloudflare.com/workers/configuration/cron-triggers/
 

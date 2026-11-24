@@ -1,5 +1,6 @@
 import { authorizeProjectAction, resolvePrincipal, resolveTenantContext } from "./identity/tenant-context.js";
 import { createTenantDirectoryAdapters } from "./identity/tenant-directory-adapter.js";
+import { createSchedulerInvocationAssertion } from "./orchestrator-scheduler-invocation.js";
 const VERSION = "0.1.0";
 const MAX_FILES = 12;
 const MAX_FILE_BYTES = 100_000;
@@ -225,4 +226,87 @@ function applySecurityHeaders(request,response){
  if(!headers.has("cache-control"))headers.set("cache-control","no-store");
  return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
 }
-export default{async fetch(request,env){let response;try{response=await handleRequest(request,env)}catch{response=json({error:"internal_error"},500)}return applySecurityHeaders(request,applyCors(request,env,response))}};
+async function runScheduledAdmission(controller, env) {
+ if(!controller||typeof controller!=="object"||typeof controller.cron!=="string"||!Number.isSafeInteger(controller.scheduledTime)||controller.scheduledTime<1)throw new Error("Invalid Scheduled Event controller.");
+ const rawPolicies=env?.SCHEDULED_ADMISSION_POLICIES;
+ if(typeof rawPolicies!=="string"||rawPolicies.length===0)return{processed:0,skipped:true,reason:"NO_SCHEDULE_POLICY"};
+ if(rawPolicies.length>65536)throw new Error("Scheduled admission policy configuration is oversized.");
+ let policies;try{policies=JSON.parse(rawPolicies)}catch{throw new Error("Scheduled admission policy configuration is invalid.")}
+ if(!policies||typeof policies!=="object"||Array.isArray(policies))throw new Error("Scheduled admission policy configuration is invalid.");
+ const policy=policies[controller.cron];
+ if(policy===undefined)return{processed:0,skipped:true,reason:"CRON_NOT_ALLOWLISTED"};
+ if(!policy||typeof policy!=="object"||Array.isArray(policy)||!Array.isArray(policy.tasks)||policy.tasks.length<1||policy.tasks.length>20)throw new Error("Scheduled admission policy is invalid.");
+ const principalId=policy.servicePrincipalId;
+ if(typeof principalId!=="string"||!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(principalId))throw new Error("Scheduled service principal is invalid.");
+ if(!env?.TENANT_DIRECTORY||typeof env.TENANT_DIRECTORY.get!=="function")throw new Error("TenantDirectory binding is unavailable.");
+ if(typeof env.SCHEDULER_INVOCATION_KEYS!=="string"||typeof env.SCHEDULER_INVOCATION_ACTIVE_KEY_ID!=="string")throw new Error("Scheduler invocation signing is not configured.");
+ const now=Date.now();
+ if(controller.scheduledTime>now+5000||now-controller.scheduledTime>86400000)throw new Error("Scheduled Event timestamp is outside the accepted execution window.");
+ const invocationId="scheduled-"+controller.scheduledTime+"-"+crypto.randomUUID();
+ const created=[];
+ for(const item of policy.tasks){
+  if(!item||typeof item!=="object"||Array.isArray(item))throw new Error("Scheduled task policy entry is invalid.");
+  const tenantId=item.tenantId;
+  const projectId=item.projectId;
+  const action=item.action;
+  const resourceDigest=item.resourceDigest;
+  const taskIdPrefix=item.taskIdPrefix;
+  const idempotencyPrefix=item.idempotencyPrefix;
+  const template=item.taskTemplate;
+  if(
+   typeof tenantId!=="string"||!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(tenantId)||
+   typeof projectId!=="string"||!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(projectId)||
+   typeof action!=="string"||action.length<1||action.length>128||
+   typeof resourceDigest!=="string"||!/^[a-f0-9]{64}$/.test(resourceDigest)||
+   typeof taskIdPrefix!=="string"||!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,60}$/.test(taskIdPrefix)||
+   typeof idempotencyPrefix!=="string"||!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,80}$/.test(idempotencyPrefix)||
+   !template||typeof template!=="object"||Array.isArray(template)
+  )throw new Error("Scheduled task policy entry is invalid.");
+  const taskId=taskIdPrefix+"-"+controller.scheduledTime;
+  if(taskId.length>128)throw new Error("Scheduled task identifier exceeds the supported length.");
+  const task={
+   ...template,
+   taskId,
+   tenantId,
+   projectId,
+   state:"SCHEDULED",
+   version:1,
+   createdAt:controller.scheduledTime,
+   updatedAt:controller.scheduledTime
+  };
+  const idempotencyKey=idempotencyPrefix+":"+controller.scheduledTime+":"+taskId;
+  const schedulerAssertion=await createSchedulerInvocationAssertion(
+   env.SCHEDULER_INVOCATION_KEYS,
+   env.SCHEDULER_INVOCATION_ACTIVE_KEY_ID,
+   {invocationId,cron:controller.cron,scheduledTime:controller.scheduledTime,nowMs:now}
+  );
+  const directory=env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName(tenantId));
+  const receipt=await directory.issueAdmissionReceipt({
+   tenantId,principalId,projectId,action,resourceDigest,task,idempotencyKey,
+   cron:controller.cron,scheduledTime:controller.scheduledTime,invocationId,
+   schedulerAssertion,now
+  });
+  created.push({
+   tenantId,
+   projectId,
+   taskId,
+   admissionId:receipt.claims.admissionId,
+   replay:receipt.replay===true
+  });
+ }
+ return{processed:created.length,invocationId,admissions:created};
+}
+
+export default{
+ async fetch(request,env){
+  let response;
+  try{response=await handleRequest(request,env)}catch{response=json({error:"internal_error"},500)}
+  return applySecurityHeaders(request,applyCors(request,env,response));
+ },
+ async scheduled(controller,env,ctx){
+  const result=await runScheduledAdmission(controller,env);
+  if(result.processed>0&&ctx&&typeof ctx.waitUntil==="function"){
+   ctx.waitUntil(Promise.resolve());
+  }
+ }
+};

@@ -539,9 +539,9 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const ledger = ledgerFor("ledger-expired-lease-reconciliation");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0012", inputHash: "b".repeat(64), now });
     const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
+    wallClockNow = now + 101;
     await expect(ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101 }))
       .resolves.toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
-    wallClockNow = now + 101;
     const untrustedEvidence = await ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101,
       reconciliationEvidence: { checked: true, priorGeneration: first.leaseGeneration, evidenceRef: "github://caller-controlled/reference" },
@@ -983,6 +983,7 @@ it("consumes a signed lease-renewal assertion once and rejects replay", async ()
     workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"),
     leaseMs: 30_000, now,
   });
+  wallClockNow = now + 1;
   const assertion = await createWorkerAssertion({
     subject: "agent:worker-1", role: "agent", operation: "renewLease", nowMs: now + 1,
     jti: "jti-renew-once-000000000001",
@@ -1175,6 +1176,7 @@ it("prunes consumed assertion IDs only after expiry plus the retention margin", 
   });
   await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: assertion, leaseMs: 30_000, now });
   const later = now + 12 * 60 * 1000;
+  wallClockNow = later;
   await createTask(ledger, { task: task("task-0002"), idempotencyKey: "task-create-retention-2", inputHash: "3".repeat(64), now: later });
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti='jti-claim-retention-000000000001'").one().count).toBe(0);

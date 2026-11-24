@@ -63,6 +63,33 @@ async function provisionVerificationKey(tenantId, pair, keyId = "admission-key-1
   return { publicKey, keyId };
 }
 
+async function setVerificationKeyStatus(fixture, status, now = NOW + 100) {
+  const adapters = directoryAdapters(fixture.tenantId);
+  const target = {
+    keyId: fixture.key.keyId,
+    algorithm: "Ed25519",
+    publicKey: fixture.key.publicKey,
+    status,
+    notBefore: NOW - 60_000,
+    notAfter: NOW + 86_400_000,
+    expectedVersion: 1,
+  };
+  const assertion = await createTenantDirectoryAdminAssertion(ADMIN_KEYS, "test", {
+    subject: "tenant-directory-provisioner",
+    operation: "upsertAdmissionVerificationKey",
+    tenantId: fixture.tenantId,
+    projectId: null,
+    nowMs: now,
+    target,
+  });
+  return adapters.provisioningStore.upsertAdmissionVerificationKey({
+    assertion,
+    tenantId: fixture.tenantId,
+    ...target,
+    now,
+  });
+}
+
 async function signReceipt(pair, header, claims) {
   const signingBytes = new TextEncoder().encode(canonicalJson({ header, claims }));
   const signature = new Uint8Array(await crypto.subtle.sign(
@@ -141,7 +168,7 @@ async function fixture(name, overrides = {}) {
     nowMs: NOW,
   });
   return {
-    ledger, task, receipt, claims, pair, tenantId, projectId, taskId,
+    ledger, task, receipt, claims, pair, key, tenantId, projectId, taskId,
     idempotencyKey, mintWorkerAssertion, mintLegacyWorkerAssertion,
   };
 }
@@ -488,6 +515,80 @@ describe("OrchestratorLedger Admission Receipt projection", () => {
         "SELECT COUNT(*) AS count FROM orchestrator_task_admissions WHERE idempotency_key_digest=?",
         first.claims.idempotencyKeyDigest,
       ).one().count)).toBe(2);
+    });
+  });
+
+  it("accepts verification-only keys and rejects the same key after revocation", async () => {
+    const verifyOnly = await fixture("verify-only-key");
+    await setVerificationKeyStatus(verifyOnly, "verify_only");
+    await runInDurableObject(verifyOnly.ledger, async instance => {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEYS;
+      const result = await instance.projectAdmittedTask({
+        task: verifyOnly.task,
+        receipt: verifyOnly.receipt,
+        now: NOW + 100,
+        workerId: "orchestrator-scheduler",
+        workerAssertion: await verifyOnly.mintWorkerAssertion(NOW + 100),
+      });
+      expect(result.created).toBe(true);
+      expect(Number(instance.ctx.storage.sql.exec(
+        "SELECT verification_key_version FROM orchestrator_task_admissions WHERE admission_id=?",
+        verifyOnly.claims.admissionId,
+      ).one().verification_key_version)).toBe(2);
+    });
+
+    const revoked = await fixture("revoked-key");
+    await setVerificationKeyStatus(revoked, "revoked");
+    await runInDurableObject(revoked.ledger, async instance => {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEYS;
+      const result = await instance.projectAdmittedTask({
+        task: revoked.task,
+        receipt: revoked.receipt,
+        now: NOW + 100,
+        workerId: "orchestrator-scheduler",
+        workerAssertion: await revoked.mintWorkerAssertion(NOW + 100),
+      });
+      expect(result).toMatchObject({ created: false, reason: "ADMISSION_RECEIPT_REJECTED" });
+      expect(Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count)).toBe(0);
+    });
+  });
+
+  it("persists the exact canonical Task snapshot bound by the signed digest", async () => {
+    const f = await fixture("immutable-task-snapshot");
+    const task = {
+      ...f.task,
+      metadata: { nested: { state: "signed-snapshot" } },
+    };
+    const normalizedTask = { ...task, agentRound: 0 };
+    const claims = {
+      ...f.claims,
+      admissionId: "admission-immutable-snapshot",
+      jti: "receipt-jti-immutable-snapshot",
+      taskDigest: await sha256Canonical(normalizedTask),
+    };
+    const receipt = await signReceipt(f.pair, f.receipt.header, claims);
+
+    await runInDurableObject(f.ledger, async instance => {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEYS;
+      const pending = instance.projectAdmittedTask({
+        task,
+        receipt,
+        now: NOW,
+        workerId: "orchestrator-scheduler",
+        workerAssertion: await f.mintWorkerAssertion(),
+      });
+      task.metadata.nested.state = "caller-mutated-after-submit";
+      const result = await pending;
+      expect(result.created).toBe(true);
+
+      const row = instance.ctx.storage.sql.exec(
+        "SELECT task_json, input_hash FROM orchestrator_tasks WHERE task_id=?",
+        f.taskId,
+      ).one();
+      const persisted = JSON.parse(row.task_json);
+      expect(persisted.metadata.nested.state).toBe("signed-snapshot");
+      expect(row.input_hash).toBe(claims.taskDigest);
+      expect(row.input_hash).toBe(await sha256Canonical(persisted));
     });
   });
 });

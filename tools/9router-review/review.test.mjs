@@ -3585,6 +3585,6 @@ test("deterministic concurrent duplicate-publication red test", async () => {
 
   assert.equal(commentHistoryReads, 2, "both independent runs must complete the empty-history preflight");
   assert.ok(results.every(result => result.publishedNewComment === true));
-  assert.equal(modelCalls, 1, "only the reservation winner may incur model inference");
   assert.equal(commentPosts, 1, "one immutable PR snapshot must produce at most one comment POST");
+  assert.equal(modelCalls, 1, "only the reservation winner may incur model inference");
 });

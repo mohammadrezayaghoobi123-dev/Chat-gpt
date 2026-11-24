@@ -534,7 +534,15 @@ export class TenantDirectory extends DurableObject {
         claims.membershipVersion,
         commitNow,
       );
-      retur
+      return {
+        reserved: true,
+        replay: false,
+        ...claims,
+        grant,
+        auditEventId,
+      };
+    });
+  }
 
   async renewTaskAdmissionGrant(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
@@ -738,14 +746,5 @@ export class TenantDirectory extends DurableObject {
         grant_token: grant,
       }, false, auditEventId);
     });
-  }n {
-        reserved: true,
-        replay: false,
-        ...claims,
-        grant,
-        auditEventId,
-      };
-    });
   }
-
 }

@@ -118,7 +118,7 @@ condition = "AND"
 commits = ["d5ffafb6df54e26189d8494548f7693fdcfdf108"]
 paths = ['''^cloud-engineering-connector/test/orchestrator-worker-identity\.test\.js$''']
 regexTarget = "line"
-regexes = ['''^\s*const key = "3031323334353637383961626364656630313233343536373839616263646566";\s*'']
+regexes = ['''^\s*const key = "3031323334353637383961626364656630313233343536373839616263646566";\s*$''']
 [[allowlists]]
 description = "Synthetic ephemeral HMAC test-key fixture from one historical outbox publisher test commit; restricted to that exact commit, file, and generic-api-key rule."
 targetRules = ["generic-api-key"]
@@ -126,7 +126,7 @@ condition = "AND"
 commits = ["a5c36d1c2e7461e38578a688133c797f541b4b46"]
 paths = ['''^cloud-engineering-connector/test/orchestrator-outbox-publisher\.test\.js$''']
 regexTarget = "line"
-regexes = ['''^\s*const key = "3031323334353637383961626364656630313233343536373839616263646566";\s*'']
+regexes = ['''^\s*const key = "3031323334353637383961626364656630313233343536373839616263646566";\s*$''']
 [[allowlists]]
 description = "Synthetic Queue-consumer event and idempotency identifiers in one historical unit-test commit; exact commit, file, and literals only."
 targetRules = ["generic-api-key"]

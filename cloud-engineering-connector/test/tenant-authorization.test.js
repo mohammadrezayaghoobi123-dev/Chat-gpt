@@ -6,6 +6,8 @@ import {
   resolveTenantContext,
   authorizeProjectAction,
 } from "../identity/tenant-context.js";
+import * as tenantContextModule from "../identity/tenant-context.js";
+import { taskAdmissionDigest, admissionTextDigest } from "../orchestrator-admission.js";
 
 const principal = await resolvePrincipal({
   credential: "opaque-test-session",
@@ -530,5 +532,218 @@ test("rejects an allow decision made against a stale membership version", async 
       },
     }),
     error => error.code === "TENANT_MEMBERSHIP_STALE",
+  );
+});
+
+
+function requireTaskAdmission() {
+  assert.equal(typeof tenantContextModule.prepareTaskAdmission, "function");
+  return tenantContextModule.prepareTaskAdmission;
+}
+
+function taskAdmissionFixture(overrides = {}) {
+  return {
+    taskId: "task-context-admission-01",
+    tenantId: "tenant-alpha",
+    projectId: "project-01",
+    state: "SCHEDULED",
+    version: 1,
+    createdAt: 1_800_000_000_000,
+    updatedAt: 1_800_000_000_000,
+    agentRound: 0,
+    ...overrides,
+  };
+}
+
+test("prepareTaskAdmission sends the exact canonical Task through the verified principal and tenant context", async () => {
+  const prepareTaskAdmission = requireTaskAdmission();
+  const task = taskAdmissionFixture();
+  const inputHash = "a".repeat(64);
+  const idempotencyKey = "task-context-admission-request-01";
+  const taskDigest = await taskAdmissionDigest(task);
+  const idempotencyKeyDigest = await admissionTextDigest(idempotencyKey);
+  let directoryInput;
+  const grant = "ad1.test.payload.signature";
+  const result = await prepareTaskAdmission({
+    principal,
+    tenantContext,
+    task,
+    idempotencyKey,
+    inputHash,
+    admissionStore: {
+      async prepareTaskAdmission(input) {
+        directoryInput = input;
+        return {
+          reserved: true,
+          replay: false,
+          tenantId: tenantContext.tenantId,
+          projectId: task.projectId,
+          principalId: principal.id,
+          taskId: task.taskId,
+          taskDigest,
+          idempotencyKeyDigest,
+          inputHash,
+          membershipId: tenantContext.membershipId,
+          membershipVersion: tenantContext.membershipVersion,
+          policyScopeEpoch: 4,
+          policyRuleVersion: 2,
+          policyRuleResourceDigest: "*",
+          policyDecisionId: "policy-context-admission-01",
+          admissionId: "admission-context-0001",
+          jti: "jti-context-admission-0001",
+          issuedAt: 1_800_000_000,
+          expiresAt: 1_800_000_300,
+          grant,
+        };
+      },
+    },
+  });
+
+  assert.deepEqual(directoryInput, {
+    tenantId: "tenant-alpha",
+    projectId: "project-01",
+    principalId: principal.id,
+    taskId: task.taskId,
+    taskDigest,
+    idempotencyKey,
+    inputHash,
+  });
+  assert.deepEqual(result, {
+    task,
+    taskDigest,
+    idempotencyKey,
+    idempotencyKeyDigest,
+    inputHash,
+    admissionId: "admission-context-0001",
+    admissionGrant: grant,
+    membershipId: tenantContext.membershipId,
+    membershipVersion: tenantContext.membershipVersion,
+    policyScopeEpoch: 4,
+    policyRuleVersion: 2,
+    policyRuleResourceDigest: "*",
+    policyDecisionId: "policy-context-admission-01",
+    replay: false,
+  });
+  assert.equal(Object.isFrozen(result), true);
+});
+
+test("prepareTaskAdmission rejects fabricated principal and tenant context before calling the admission authority", async () => {
+  const prepareTaskAdmission = requireTaskAdmission();
+  const task = taskAdmissionFixture();
+  let calls = 0;
+  const admissionStore = {
+    async prepareTaskAdmission() {
+      calls += 1;
+      return {};
+    },
+  };
+
+  await assert.rejects(
+    prepareTaskAdmission({
+      principal: { ...principal },
+      tenantContext,
+      task,
+      idempotencyKey: "task-context-admission-request-02",
+      inputHash: "b".repeat(64),
+      admissionStore,
+    }),
+    error => error.code === "AUTHENTICATED_PRINCIPAL_REQUIRED",
+  );
+  await assert.rejects(
+    prepareTaskAdmission({
+      principal,
+      tenantContext: { ...tenantContext },
+      task,
+      idempotencyKey: "task-context-admission-request-03",
+      inputHash: "b".repeat(64),
+      admissionStore,
+    }),
+    error => error.code === "TENANT_CONTEXT_MISMATCH",
+  );
+  assert.equal(calls, 0);
+});
+
+test("prepareTaskAdmission rejects Task scope substitution and malformed idempotency before Directory access", async () => {
+  const prepareTaskAdmission = requireTaskAdmission();
+  const task = taskAdmissionFixture({ tenantId: "tenant-beta" });
+  let calls = 0;
+  const admissionStore = {
+    async prepareTaskAdmission() {
+      calls += 1;
+      return {};
+    },
+  };
+
+  await assert.rejects(
+    prepareTaskAdmission({
+      principal,
+      tenantContext,
+      task,
+      idempotencyKey: "task-context-admission-request-04",
+      inputHash: "c".repeat(64),
+      admissionStore,
+    }),
+    error => error.code === "TASK_SCOPE_MISMATCH",
+  );
+  await assert.rejects(
+    prepareTaskAdmission({
+      principal,
+      tenantContext,
+      task: taskAdmissionFixture(),
+      idempotencyKey: "invalid key",
+      inputHash: "c".repeat(64),
+      admissionStore,
+    }),
+    error => error.code === "INVALID_TASK_ADMISSION_INPUT",
+  );
+  assert.equal(calls, 0);
+});
+
+test("prepareTaskAdmission rejects an unsigned or scope-mismatched Directory reservation", async () => {
+  const prepareTaskAdmission = requireTaskAdmission();
+  const task = taskAdmissionFixture();
+  const taskDigest = await taskAdmissionDigest(task);
+  const base = {
+    reserved: true,
+    replay: false,
+    tenantId: tenantContext.tenantId,
+    projectId: task.projectId,
+    principalId: principal.id,
+    taskId: task.taskId,
+    taskDigest,
+    idempotencyKeyDigest: await admissionTextDigest("task-context-admission-request-05"),
+    inputHash: "d".repeat(64),
+    membershipId: tenantContext.membershipId,
+    membershipVersion: tenantContext.membershipVersion,
+    policyScopeEpoch: 1,
+    policyRuleVersion: 1,
+    policyRuleResourceDigest: "*",
+    policyDecisionId: "policy-context-admission-02",
+    admissionId: "admission-context-0002",
+    jti: "jti-context-admission-0002",
+    issuedAt: 1_800_000_000,
+    expiresAt: 1_800_000_300,
+  };
+  const args = {
+    principal,
+    tenantContext,
+    task,
+    idempotencyKey: "task-context-admission-request-05",
+    inputHash: base.inputHash,
+  };
+
+  await assert.rejects(
+    prepareTaskAdmission({
+      ...args,
+      admissionStore: { async prepareTaskAdmission() { return { ...base, grant: "" }; } },
+    }),
+    error => error.code === "TASK_ADMISSION_RESPONSE_INVALID",
+  );
+  await assert.rejects(
+    prepareTaskAdmission({
+      ...args,
+      admissionStore: { async prepareTaskAdmission() { return { ...base, grant: "ad1.test.valid", projectId: "project-foreign" }; } },
+    }),
+    error => error.code === "TASK_ADMISSION_RESPONSE_INVALID",
   );
 });

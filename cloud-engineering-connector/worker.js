@@ -928,16 +928,18 @@ async function handleOwnerGitHubComment(authenticated, payload, ledger, env) {
  if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs < 1_000 || maxAgeMs > 900_000 ||
      !Number.isSafeInteger(futureSkewMs) || futureSkewMs < 0 || futureSkewMs > 60_000 ||
      !Number.isFinite(occurredAt) || occurredAt < 1 ||
-     occurredAt > now + futureSkewMs || now - occurredAt > maxAgeMs) {
+     occurredAt > now + futureSkewMs) {
   return json({ error: "owner_command_rejected", reason: "COMMENT_TIMESTAMP_OUT_OF_RANGE" }, 422);
  }
+ const commentIsStale = now - occurredAt > maxAgeMs;
  const parsed = parseOwnerCommand(comment.body);
  if (!parsed) {
   return commandLike
    ? json({ error: "owner_command_rejected", reason: "COMMAND_INVALID" }, 422)
    : ignored();
  }
- if (!ledger || typeof ledger.executeOwnerCommand !== "function") {
+ if (!ledger || typeof ledger.executeOwnerCommand !== "function" ||
+     typeof ledger.authorizeOwnerWebhookRetry !== "function") {
   return json({ error: "owner_ledger_unavailable" }, 503);
  }
  const commentId = String(comment.id);
@@ -978,6 +980,78 @@ async function handleOwnerGitHubComment(authenticated, payload, ledger, env) {
  } catch {
   return json({ error: "owner_assertion_unavailable" }, 503);
  }
+
+ let retryAuthorization;
+ try {
+  retryAuthorization = await ledger.authorizeOwnerWebhookRetry({
+   assertion,
+   deliveryId: authenticated.deliveryId,
+   bodySha256: authenticated.bodySha256,
+   commentId,
+   commandHash,
+   repositoryId: Number(repositoryIdText),
+   actorId: ownerId,
+   taskId: command.taskId,
+   operation: command.operation,
+   issueNumber: issue.number,
+   commentCreatedAt: occurredAt,
+  });
+ } catch {
+  return json({ error: "owner_command_unavailable" }, 503);
+ }
+ if (!retryAuthorization || typeof retryAuthorization !== "object") {
+  return json({ error: "owner_command_unavailable" }, 503);
+ }
+ if (retryAuthorization.completed === true) {
+  const storedResult = retryAuthorization.result;
+  if (storedResult?.applied === true) {
+   return json({
+    status: "duplicate",
+    operation: command.operation,
+    deliveryId: authenticated.deliveryId,
+    task: storedResult.task,
+   }, 202);
+  }
+  if (storedResult?.conflict === true) {
+   return json({
+    error: "owner_command_conflict",
+    reason: storedResult.reason,
+    deliveryId: authenticated.deliveryId,
+   }, 409);
+  }
+  return json({
+   error: "owner_command_rejected",
+   reason: storedResult?.reason || "OWNER_COMMAND_DENIED",
+   deliveryId: authenticated.deliveryId,
+  }, 422);
+ }
+ if (retryAuthorization.retryAuthorized === true && retryAuthorization.registered !== true) {
+  return json({ error: "owner_command_unavailable" }, 503);
+ }
+ if (retryAuthorization.denied === true &&
+     retryAuthorization.reason === "OWNER_ASSERTION_REJECTED") {
+  return json({
+   error: "owner_command_rejected",
+   reason: "OWNER_ASSERTION_REJECTED",
+   deliveryId: authenticated.deliveryId,
+  }, 403);
+ }
+ if (retryAuthorization.denied === true) {
+  return json({
+   error: "owner_command_conflict",
+   reason: retryAuthorization.reason || "OWNER_REDELIVERY_DENIED",
+   deliveryId: authenticated.deliveryId,
+  }, 409);
+ }
+ if (retryAuthorization.retryAuthorized !== true) {
+  if (retryAuthorization.registered !== false) {
+   return json({ error: "owner_command_unavailable" }, 503);
+  }
+  if (commentIsStale) {
+   return json({ error: "owner_command_rejected", reason: "COMMENT_TIMESTAMP_OUT_OF_RANGE" }, 422);
+  }
+ }
+
  let result;
  try {
   result = await ledger.executeOwnerCommand({

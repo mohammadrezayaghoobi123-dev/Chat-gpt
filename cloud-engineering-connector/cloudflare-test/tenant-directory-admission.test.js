@@ -307,6 +307,84 @@ describe("TenantDirectory signed task admission reservation", () => {
 
     expect(signingResult?.code).toBe("TASK_ADMISSION_SNAPSHOT_STALE");
   });
+
+  it("renews an expired Grant only against the original unchanged membership and policy snapshot", async () => {
+    const state = await fixture();
+    const store = admissionStore(state.adapters);
+    const first = await store.prepareTaskAdmission(state.input);
+    const renewalNow = (first.expiresAt + 6) * 1000;
+    let renewed;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(renewalNow);
+    try {
+      renewed = await store.renewTaskAdmissionGrant(state.input);
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(renewed).toMatchObject({
+      reserved: true,
+      replay: false,
+      tenantId: state.tenantId,
+      projectId: PROJECT_ID,
+      principalId: PRINCIPAL_ID,
+      taskId: TASK_ID,
+      taskDigest: state.taskDigest,
+      inputHash: state.input.inputHash,
+      membershipId: MEMBERSHIP_ID,
+      membershipVersion: 1,
+      policyScopeEpoch: 1,
+      policyRuleVersion: 1,
+      policyRuleResourceDigest: "*",
+      policyDecisionId: first.policyDecisionId,
+    });
+    expect(renewed.admissionId).not.toBe(first.admissionId);
+    expect(renewed.jti).not.toBe(first.jti);
+    expect(renewed.expiresAt).toBeGreaterThan(first.expiresAt);
+    expect(renewed.grant).toMatch(/^ad1\.test\./);
+
+    const verified = await verifyTaskAdmissionGrant(state.publicKeys, renewed.grant, {
+      principalId: PRINCIPAL_ID,
+      tenantId: state.tenantId,
+      projectId: PROJECT_ID,
+      taskId: TASK_ID,
+      taskDigest: state.taskDigest,
+      idempotencyKeyDigest: await digestText(state.input.idempotencyKey),
+      inputHash: state.input.inputHash,
+      membershipId: MEMBERSHIP_ID,
+      membershipVersion: 1,
+      policyScopeEpoch: 1,
+      policyRuleVersion: 1,
+      policyRuleResourceDigest: "*",
+      policyDecisionId: first.policyDecisionId,
+      admissionId: renewed.admissionId,
+      jti: renewed.jti,
+      issuedAt: renewed.issuedAt,
+      expiresAt: renewed.expiresAt,
+      nowMs: renewalNow,
+    });
+    expect(verified.jti).toBe(renewed.jti);
+
+    await runInDurableObject(state.stub, instance => {
+      const reservation = instance.ctx.storage.sql.exec(
+        "SELECT admission_id, jti, expires_at FROM tenant_task_admission_reservations WHERE tenant_id=?",
+        state.tenantId,
+      ).one();
+      expect(reservation.admission_id).toBe(renewed.admissionId);
+      expect(reservation.jti).toBe(renewed.jti);
+      const audits = instance.ctx.storage.sql.exec(
+        "SELECT details_json FROM tenant_directory_audit_events WHERE tenant_id=? AND operation='renewTaskAdmissionGrant'",
+        state.tenantId,
+      ).toArray();
+      expect(audits).toHaveLength(1);
+      expect(JSON.parse(audits[0].details_json)).toMatchObject({
+        previousAdmissionId: first.admissionId,
+        previousJti: first.jti,
+        admissionId: renewed.admissionId,
+        jti: renewed.jti,
+      });
+    });
+  });
+
 });
 
 async function digestText(value) {

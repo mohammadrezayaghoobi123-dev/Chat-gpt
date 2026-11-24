@@ -1,4 +1,4 @@
-import { verifyReleaseApproval } from "../release-approval.js";
+import { parseTrustedReviewerIds, verifyReleaseApproval } from "../release-approval.js";
 
 try {
   const result = await verifyReleaseApproval({
@@ -6,12 +6,15 @@ try {
     candidateSha: process.env.GITHUB_SHA,
     releaseEnvironment: process.env.RELEASE_ENV,
     token: process.env.RELEASE_GITHUB_TOKEN,
+    trustedReviewerIds: parseTrustedReviewerIds(process.env.RELEASE_REVIEWER_IDS),
   });
   console.log(
     "Independent release approval verified: PR #" +
       result.pullNumber +
       ", reviewer=" +
       result.reviewer +
+      ", reviewer_id=" +
+      result.reviewerId +
       ", review_commit=" +
       result.reviewCommitSha,
   );

@@ -1027,3 +1027,12 @@ The reference oracle is still a single-process executable specification. Its Map
 **TDD evidence:** T46 and T47 were observed RED on revision `ce456a927da09be3a50279140e30604b209e8692`: each test expected `INVALID_OUTCOME_STAGE` but received `ACK`. The minimal correction was applied at `27dcb0828e051adc09f81a914a9d9d641933c658`. The hosted GREEN result must be recorded only against the exact post-fix revision and complete workflow output.
 
 This correction is confined to the in-memory reference oracle. It does not prove that a future durable ledger implementation enforces the same invariant; every candidate adapter must run T46–T47 unchanged.
+
+
+#### AR-39 hosted RED/GREEN verification record
+
+- RED revision `ce456a927da09be3a50279140e30604b209e8692`: T46 and T47 both failed for the expected reason (`INVALID_OUTCOME_STAGE` expected; `ACK` observed). The full suite also retained the independent duplicate-publication RED.
+- GREEN code revision `27dcb0828e051adc09f81a914a9d9d641933c658`, with coverage/docs revision `0232ae321a8e856353c325dce928369a1113c198`.
+- Hosted run [45511958154](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45511958154) completed: **T01–T47, 47/47 PASS**; full reviewer regression plus conformance: **183 passed / 1 failed**.
+- The sole full-suite failure remains the preserved deterministic duplicate-publication race (2 POSTs observed; maximum allowed 1). No test assertion was weakened or removed.
+- The green result qualifies only the in-memory reference implementation. Provider-backed linearizability and durable crash recovery remain NOT_EXECUTED.

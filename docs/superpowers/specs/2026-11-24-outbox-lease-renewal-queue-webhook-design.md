@@ -225,8 +225,8 @@ The currently inspected Quarantine Queues have a one-day retention period and no
 - no endpoint is read from message content.
 
 ### DLQ/quarantine tests
-- archive hash is checked against the original envelope before redaction;
-- persisted body contains no leaseToken;
+- archive hash is computed over the exact original encrypted Queue envelope bytes;
+- persisted body contains the encrypted capability envelope only and no plaintext lease token;
 - archive replay is idempotent and conflicting message IDs are rejected;
 - only an exact current token/generation can terminalize the source event;
 - stale or malformed envelopes cannot mutate a newer event generation;
@@ -272,10 +272,11 @@ Live activation is prohibited until all of the following are deliberately resolv
 
 ### Rollback
 
-- Revert the implementation commit/configuration only after pausing new Queue consumption and recording in-flight message IDs.
-- Keep additive schema columns; the previous code can ignore the nullable token-hash column.
-- Do not delete Queue objects or purge messages.
-- In-flight leases expire and must be reconciled by generation; never clear leases with an un-fenced bulk update.
+- First stop new Outbox publication through an approved code/configuration gate, then pause Queue consumption through the approved deployment control and record queue names, message IDs, and in-flight event IDs.
+- Do not roll back the Ledger class to code that cannot safely handle schema v11 or active capability fields while v1 encrypted Queue messages remain in flight. Prefer a forward-compatible consumer pause/disable release; if a prior Worker version must be restored, retain a compatibility shim that preserves the v11 schema, Alarm scheduler, and encrypted-message handling until the backlog is drained or quarantined.
+- Keep additive schema columns; never downgrade or drop the nullable token-hash column. Do not delete Queue objects or purge messages.
+- Let in-flight leases expire and reconcile only through exact generation/token fences; never clear leases with an un-fenced bulk update.
+- Drain main and DLQ messages encrypted with an old key before removing that key from the decrypt key set.
 - A rollback does not reverse an external webhook side effect. Destination idempotency remains required across retries and deployments.
 
 ## 7. Alternatives rejected

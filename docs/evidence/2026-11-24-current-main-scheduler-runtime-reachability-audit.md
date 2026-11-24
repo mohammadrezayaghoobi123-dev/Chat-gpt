@@ -272,3 +272,100 @@ Do not create a corrective deployment solely to make Production match current `m
 5. Obtain explicit release authorization before changing Production.
 
 All Cloudflare calls for this chronology section were GET operations. No source bytes, secret values, or key material were retrieved. No deployment, version, binding, migration, trigger, or Worker setting was changed.
+
+## 12. Expanded external-trigger inventory and branch-provenance reconciliation
+
+**Inspection date:** 2026-11-24  
+**Repository baseline:** `main` at `919b19ca3d3887352cdef06b03c668ead04fbce7`  
+**Cloudflare scope:** the single account returned by the connected Cloudflare account-list endpoint  
+**Inspection mode:** read-only; Cloudflare requests were GET-only
+
+### 12.1 Connected Cloudflare account inventory
+
+The connected identity's `GET /accounts` response returned exactly one account and no additional account pages. This establishes the visibility scope of this connector session; it does not establish that the user has no other Cloudflare account or that no external platform exists.
+
+The account-level inventory returned exactly three Worker scripts:
+
+- `chat-gpt111`
+- `chat-gpt111-staging`
+- `master-brain-cloud-agent`
+
+The following trigger and orchestration resources were then enumerated:
+
+| Resource surface | Observed result | Coverage qualification |
+|---|---:|---|
+| Cron schedules for the three listed Workers | 0 schedules across 3 scripts | Exact script-level schedule endpoint responses |
+| Cloudflare Workflows | 0 workflows | Account-level workflow listing; page 1, 100/page |
+| Cloudflare Queues | 6 queues | Account-level queue listing; one page |
+| Configured Queue consumers | 0 across all 6 queues | Each queue's consumer listing returned an empty collection |
+
+The six queues were:
+
+- `chat-gpt111-orchestrator-outbox`
+- `chat-gpt111-orchestrator-outbox-dlq`
+- `chat-gpt111-orchestrator-outbox-dlq-quarantine`
+- `chat-gpt111-staging-orchestrator-outbox`
+- `chat-gpt111-staging-orchestrator-outbox-dlq`
+- `chat-gpt111-staging-orchestrator-outbox-dlq-quarantine`
+
+The queues exist as resources, but the inspected account has no configured consumers attached to them. Queue existence alone is not evidence of an active background consumer or Scheduler.
+
+### 12.2 GitHub Actions scheduled-trigger inventory
+
+The recursive Git tree for the pinned current-main commit contained exactly four files under `.github/workflows/`:
+
+- `.github/workflows/cloud-agent-ci.yml`
+- `.github/workflows/connector-ci.yml`
+- `.github/workflows/secret-history-scan.yml`
+- `.github/workflows/static.yml`
+
+Only `secret-history-scan.yml` declares a `schedule` trigger, with cron expression `17 4 * * 1`. Its job checks out repository history and runs Gitleaks against the PR diff and fetched Git history. It does not invoke the Connector Worker, Cloudflare APIs, `OrchestratorLedger`, `createTask`, or a Scheduler signer. The other three workflow files do not declare a schedule trigger.
+
+Therefore, the repository does contain one scheduled GitHub Actions job, but the inspected workflow is a secret-scanning maintenance job, not an Orchestrator task Scheduler.
+
+### 12.3 Reconciliation of PR #411's three signer call sites
+
+PR #411's evidence describes three `createScheduledWorkerAssertion` call sites in `worker.js`. That count is reproducible on the PR's own historical source snapshot, but it must not be applied to current `main`.
+
+Exact provenance:
+
+- PR #411 base branch: `security/scheduler-signer-ledger-authority-contract`
+- PR #411 base SHA: `97ba7b66b4c227b2dedaee9ab42a8e9973f1220d`
+- PR #411 head SHA: `aedf5101460bd4d1631efb78a51daa1a62d4f2c6`
+- `worker.js` blob at both those refs: `8eb660a8e25e20b84583c9f93f44432638cef0b2`
+- PR #411 snapshot: 1,610-line `worker.js`, with three signer call expressions at the Outbox Publisher, receipt Consumer, and DLQ Archiver paths.
+
+The PR #411 snapshot does not call the Scheduler principal for `system/createTask`; its own audit explicitly distinguishes those three publisher/consumer assertions from the Scheduler grant.
+
+GitHub's compare endpoint, using current `main` as base and PR #411's base SHA as head, returned `diverged`, with the PR #411 base **1,786 commits ahead and 131 commits behind** current `main`. This is a materially different history, not a current-main test base.
+
+By contrast, current `main` at `919b19ca3d3887352cdef06b03c668ead04fbce7` has:
+
+- `worker.js` blob SHA `8911b4fc7df279ecbea7689506e0f814b2414dff`
+- 229 lines
+- no occurrence of `createScheduledWorkerAssertion`, `orchestrator-scheduler`, or `createTask`
+
+**Reconciliation:** PR #411's three signer calls and PR #416's no-caller result describe different, substantially diverged snapshots. They are not contradictory findings about the same source state. The three calls on PR #411's branch are not evidence of a Scheduler-to-Ledger runtime path on current `main`.
+
+Do not merge or transplant PR #411's source-level guard without first rebasing/re-deriving its contract on current `main`. The branch divergence is a provenance warning; it does not establish why the source snapshots differ.
+
+### 12.4 Combined reachability disposition
+
+Across the inspected current-main repository, the connected Cloudflare account, and the account's visible trigger resources:
+
+- Current-main production source: no Scheduler signer or `createTask` call site demonstrated.
+- Connected Cloudflare Workers: three scripts; no Cron schedules returned.
+- Connected Cloudflare Workflows: none returned.
+- Connected Cloudflare Queues: six resources; no configured consumers returned.
+- GitHub Actions: one scheduled workflow, limited to Gitleaks history scanning.
+- External Cloudflare accounts, separately owned Workers, third-party schedulers, and out-of-repository callers: **Unknown**.
+
+The evidence supports the bounded conclusion that no active Scheduler-to-`OrchestratorLedger.createTask` path was demonstrated in the inspected current-main and connected-account surfaces. It does not prove global non-existence, and it does not support either a safe or vulnerable verdict for an external runtime.
+
+### 12.5 Data handling and non-actions
+
+- Only resource names, trigger presence/counts, binding names/types, and source control metadata were inspected.
+- No secret values, secret fingerprints, key material, or deployed Worker source bytes were retrieved.
+- Cloudflare calls for this addendum were GET-only.
+- No Cloudflare Worker, Queue, Workflow, Durable Object, binding, trigger, secret, version, or deployment was changed.
+- No repository production source, `main`, merge state, or deployment was changed.

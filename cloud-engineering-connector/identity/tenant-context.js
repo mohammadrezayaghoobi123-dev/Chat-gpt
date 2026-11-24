@@ -236,7 +236,9 @@ export async function resolveTenantContext({ principal, tenantSelector, membersh
     membership.principalId !== principal.id ||
     membership.tenantId !== tenantSelector ||
     !nonEmptyString(membership.membershipId) ||
-    !nonEmptyString(membership.role)
+    !nonEmptyString(membership.role) ||
+    !Number.isSafeInteger(membership.version) ||
+    membership.version < 1
   ) {
     reject("TENANT_MEMBERSHIP_REQUIRED");
   }
@@ -246,6 +248,7 @@ export async function resolveTenantContext({ principal, tenantSelector, membersh
     tenantId: membership.tenantId,
     membershipId: membership.membershipId,
     role: membership.role,
+    membershipVersion: membership.version,
   });
   VERIFIED_TENANT_CONTEXTS.add(context);
   return context;
@@ -317,6 +320,21 @@ export async function authorizeProjectAction({
   if (decision.effect !== "allow") {
     reject("PROJECT_ACCESS_DENIED");
   }
+  if (
+    decision.membershipVersion !== tenantContext.membershipVersion ||
+    decision.membershipStatus !== "active"
+  ) {
+    reject("TENANT_MEMBERSHIP_STALE");
+  }
+  if (
+    !Number.isSafeInteger(decision.policyScopeEpoch) ||
+    decision.policyScopeEpoch < 0 ||
+    !Number.isSafeInteger(decision.policyRuleVersion) ||
+    decision.policyRuleVersion < 1 ||
+    (decision.policyRuleResourceDigest !== resourceDigest && decision.policyRuleResourceDigest !== "*")
+  ) {
+    reject("POLICY_DECISION_VERSION_INVALID");
+  }
 
   return Object.freeze({
     principalId: principal.id,
@@ -326,5 +344,9 @@ export async function authorizeProjectAction({
     resourceDigest,
     decisionId: decision.decisionId,
     policyVersion: decision.policyVersion,
+    membershipVersion: decision.membershipVersion,
+    policyScopeEpoch: decision.policyScopeEpoch,
+    policyRuleVersion: decision.policyRuleVersion,
+    policyRuleResourceDigest: decision.policyRuleResourceDigest,
   });
 }

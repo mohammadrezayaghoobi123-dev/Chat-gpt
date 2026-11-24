@@ -79,3 +79,50 @@ The source workflow's automatic triggers and signal/receipt components are delib
 - `actionlint 1.7.7` on the exact current workflow: **PASS**, exit 0.
 - GitHub Combined Status returned no status checks for the current head; this does not substitute for the isolated test run or a hosted canary.
 - Current reviewer job remains disabled; no 9Router request, provider/model dispatch, comment publication, secret read, merge, default-branch workflow registration, deployment, Cloudflare operation, or local-host change occurred.
+
+## Repository Control-Plane Preflight — 2026-11-24
+
+This section records read-only observations made after the bootstrap design was approved. It does not authorize a repository settings, policy, secret, or workflow change.
+
+### Repository identity and default branch
+
+- Repository: `mohammadrezayaghoobi123-dev/Chat-gpt`, repository ID `1398846697`, public visibility, personal-account owner ID `335530603`.
+- Default branch: `main`, observed commit `919b19ca3d3887352cdef06b03c668ead04fbce7`.
+- The current `main` workflow directory contains exactly `cloud-agent-ci.yml`, `connector-ci.yml`, `secret-history-scan.yml`, and `static.yml`. The 9Router bootstrap workflow is not registered on `main`.
+
+### Active repository ruleset
+
+- Repository ruleset `main`, ID `26740429`, is active and targets `refs/heads/main`.
+- Returned rules: prevent branch deletion; prevent non-fast-forward updates; require one approving pull-request review; dismiss stale approvals after new pushes; require review-thread resolution.
+- Returned configuration has no bypass actors, no code-owner-review requirement, no last-push-approval requirement, and no required-status-check rule. This is only the observed repository-level ruleset; it does not prove the absence of other controls.
+- The branch-protection read endpoint returned HTTP 403 (integration lacks access). Additional branch-protection state is therefore `UNKNOWN`.
+- PR #463 cannot be treated as merge-ready merely because GitHub reports it mergeable. Its required independent approval remains outstanding unless separately evidenced.
+
+### Actions policy and secret-scope boundary
+
+- The GitHub connector does not expose the repository Actions-permissions endpoint through its approved read interface. Effective Actions policy is `UNKNOWN`: this includes permitted event triggers, fork workflow approval behavior, default `GITHUB_TOKEN` permissions, and any organization-level inheritance.
+- The connector explicitly excludes secrets APIs. Repository, organization, and environment secret names, storage scopes, selected-environment availability, and values were not read. Secret scope and actual credential reuse remain `UNKNOWN`.
+- No attempt was made to read, print, enumerate, export, or test secret values. No Actions policy, repository setting, permission, secret, or environment was changed.
+- GitHub documents that repository Actions settings control fork workflow behavior and default `GITHUB_TOKEN` permissions, and that same-repository pull-request workflows can have different token/secret exposure from fork pull requests. Consequently, the missing policy and secret-scope evidence is a hard gate, not a presumed-safe default.
+
+### Existing full-history scan workflow
+
+- The default-branch `.github/workflows/secret-history-scan.yml` declares `contents: read`, checks out with `fetch-depth: 0` and `persist-credentials: false`, pins `gitleaks/gitleaks-action` to commit `e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e`, sets `GITLEAKS_VERSION=8.30.1`, disables comments and artifact upload, and then runs the full-ref scan with `--log-opts="--all"`.
+- The pinned action source confirms that it installs the requested Gitleaks version under the runner temporary directory `gitleaks-8.30.1` and adds that directory to PATH. The subsequent absolute binary path is therefore consistent with the action's installation behavior, conditional on the action step completing successfully.
+- The workflow is structurally configured to scan the PR range and then all fetched refs. A successful PR-diff scan does not prove the all-ref scan passed; the two outcomes must remain separately recorded.
+- No new hosted run was triggered in this preflight. Current-head all-ref scan remains `NOT_RUN`; the last completed all-ref run remains a failure with 13 provisionally classified detections, with no suppression or allowlisting.
+
+### Gate disposition
+
+| Gate | State | Evidence needed |
+|---|---|---|
+| Repository identity/default branch | `PASS` | Repository metadata and current branch SHA |
+| Repository-level main ruleset observed | `PASS` | Ruleset ID `26740429` |
+| Additional branch-protection state | `UNKNOWN` | Authorized read of branch-protection settings |
+| Effective Actions event and token policy | `UNKNOWN` | Owner inspection of Settings → Actions → General |
+| Secret names and scopes | `UNKNOWN` | Owner inspection of repository/org/environment secret metadata; never disclose values |
+| Current-head all-ref Gitleaks result | `NOT_RUN` | A completed hosted scan on the exact current head |
+| Hosted manual canary | `NOT_RUN` | Separate default-branch registration and explicitly approved canary |
+| Reviewer/provider execution | `BLOCKED` | Separate approval after durable reservation, budgets, and provider semantics are proven |
+
+**Disposition:** continue with read-only evidence gathering and isolated tests only. Do not register the workflow on `main`, alter Actions policy, modify secrets, activate the reviewer, or merge PR #463 until the unknown gates are resolved and separately approved.

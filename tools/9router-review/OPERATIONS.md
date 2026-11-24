@@ -483,3 +483,16 @@ Static control-flow analysis predicts that the current implementation has no sha
 - Durable reservation implementation: **NOT_STARTED**.
 - Reviewer activation: **BLOCKED**.
 - PR #463 remains Draft / Open / Unmerged. No workflow, dependency, source implementation, main-branch, secret, Cloudflare, or local-host changes were made.
+
+
+## Hosted security scan for the red-test parent snapshot — 2026-11-24
+
+- Gitleaks hosted run: `45463837165`.
+- Scanned PR head: `fc96e7419fefda43be305f3e40ce06c6db19b72b` (the parent snapshot before the final assertion-order correction and documentation reconciliation).
+- PR-diff scan: **PASS**, 29 commits / approximately 285.38 KB, zero findings.
+- All-fetched-refs scan: **FAIL**, 4,971 commits / approximately 15.28 MB, 13 `generic-api-key` detections, exit code 2.
+- The 13 detections match the previously observed historical set: one application idempotency-key construction, nine synthetic test fixtures, one local marker-key test fixture, and two public ICU repository/commit/fingerprint references. This is a provisional classification, not clearance. No suppression or allowlist was added. Actual credential reuse/revocation remains `UNKNOWN`.
+- The run did not execute `npm test`; it is not evidence that the new concurrency test passed or failed.
+- The current branch has advanced beyond the scanned parent. This run MUST NOT be represented as an exact-current-head security scan. Await the run associated with the final current PR head.
+
+**Disposition:** PR-diff secret scan PASS on the recorded parent; full-history secret scan FAIL; concurrency test runtime NOT_RUN; no implementation or activation authorization.

@@ -2969,8 +2969,13 @@ it("persists valid initial version and agent-round boundaries with normalized de
 
   const persisted = await runInDurableObject(ledger, async (_instance, state) => ({
     tasks: state.storage.sql.exec(
-      "SELECT task_id, version, state, agent_round FROM orchestrator_tasks ORDER BY task_id",
-    ).toArray(),
+      "SELECT task_id, version, state, task_json FROM orchestrator_tasks ORDER BY task_id",
+    ).toArray().map(row => ({
+      task_id: row.task_id,
+      version: row.version,
+      state: row.state,
+      agent_round: JSON.parse(row.task_json).agentRound,
+    })),
     claimCandidates: state.storage.sql.exec(
       "SELECT task_id, executor_id FROM orchestrator_claim_candidates ORDER BY task_id",
     ).toArray(),

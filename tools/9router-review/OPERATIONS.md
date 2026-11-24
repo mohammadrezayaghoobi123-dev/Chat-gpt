@@ -974,8 +974,9 @@ Current evidence:
 - `9R-ATOMIC-001` duplicate-publication race: **REPRODUCED / CONFIRMED FOR TESTED IN-PROCESS INTERLEAVING** by hosted run `45468257408`; expected physical POST count 1, observed 2.
 - Gitleaks provenance: the PR-event run for the prior head logged range `2b0e8f74...^..e5745a25...` (30 commits), which does not match this PR's base `919b19ca...` and head `fe6cc6ee...`; the push-event run scanned only `-1`. Both zero-finding results are non-authoritative for the full PR diff. Exact current-head PR-diff scan remains **UNKNOWN**.
 - The unresolved P1 redirect-replay review thread remains open. The shared GitHub request helper contains `redirect: "error"`, and the 307/308 comment-publication integration subtests passed in the verification run; however, the complete suite is not green and the P1 thread is intentionally not marked resolved.
-- Backend-neutral reference-oracle tranche T01–T19: **PASS 19/19** in hosted run [`45507214386`](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45507214386), exact test revision `190a709331118331ded43a953a28bc9ed39201f0`. The oracle is intentionally in-memory and non-production.
-- Full reviewer regression plus reference tranche at the same revision: **155 passed / 1 failed**. The sole failure is the preserved concurrency RED: 2 physical comment POSTs against the required maximum of 1. No assertion was weakened.
+- Backend-neutral reference-oracle tranche T01–T31: **PASS 31/31** in hosted run [`45508109846`](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45508109846), exact test revision `63b52a33b50b18c3f0b7e70f04d920e1899443d8`. The oracle is intentionally in-memory and non-production.
+- TDD evidence: before the reconciliation fix, run [`45507977197`](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45507977197) failed T20, T22, and T26 (28/31 passed), demonstrating that verified positive evidence was incorrectly suppressed by incomplete pagination. The reference oracle was corrected without weakening assertions; all 31 tranche tests now pass.
+- Full reviewer regression plus reference tranche at the green revision: **167 passed / 1 failed**. The sole failure is the preserved concurrency RED: 2 physical comment POSTs against the required maximum of 1. No assertion was weakened.
 - The executable tranche covers selected invariants only; the full A01–A42 matrix remains **PARTIALLY_COVERED / NOT_QUALIFIED**. Coverage mapping and explicit gaps are in `tools/9router-review/conformance/README.md`.
 - Independent-process / independent-host durable-store conformance: **NOT_RUN**. Candidate-specific DO/R2/Supabase tests: **NOT_RUN**.
 - Backend screening: **DOCUMENTATION_SCREENED, NOT_SELECTED**. Cloudflare SQLite-backed Durable Objects plus R2 is the leading candidate architecture; Supabase PostgreSQL remains an alternative with material Free-plan durability/availability caveats. No provider resources were created or changed.
@@ -987,7 +988,7 @@ Approval sequence:
 
 1. Review this integrated contract and adversarial findings.
 2. Resolve any design objections and freeze the contract version.
-3. Complete the backend-neutral A01–A42 conformance suite; T01–T19 are the first reference-oracle tranche, not backend qualification.
+3. Complete the backend-neutral A01–A42 conformance suite; T01–T31 are the reference-oracle tranche, not backend qualification.
 4. Run the same suite against candidate adapters with independent processes, fault injection, restart/failover, quota exhaustion, and restore rollback.
 5. Obtain independent security review of the selected adapter and failure model.
 6. Only then request separate authorization for implementation. Reviewer activation, default-branch workflow registration, provider dispatch, and merge remain distinct later approvals.

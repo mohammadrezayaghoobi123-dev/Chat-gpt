@@ -1114,6 +1114,17 @@ export class OrchestratorLedger extends DurableObject {
       );
 
       syncClaimCandidateInTransaction(sql, normalizedTask.taskId);
+      const outboxPayloadJson = serializeBounded({
+        task: normalizedTask,
+        admissionReceipt: {
+          tenantId: normalizedTask.tenantId,
+          claims,
+          keyId: verifiedReceipt.keyId,
+          algorithm: "Ed25519",
+          signature: verifiedReceipt.signature,
+        },
+        taskDigest: verifiedReceipt.taskDigest,
+      }, "Task admission Outbox payload");
       const outbox = enqueueOutboxInTransaction(sql, {
         eventId: "task-admitted-" + claims.admissionId,
         idempotencyKey: "task-admitted:" + claims.admissionId,
@@ -1121,15 +1132,7 @@ export class OrchestratorLedger extends DurableObject {
         tenantId: normalizedTask.tenantId,
         projectId: normalizedTask.projectId,
         eventType: "task.admitted",
-        payload: {
-          taskId: normalizedTask.taskId,
-          tenantId: normalizedTask.tenantId,
-          projectId: normalizedTask.projectId,
-          admissionId: claims.admissionId,
-          admissionJti: claims.jti,
-          taskDigest: verifiedReceipt.taskDigest,
-          taskVersion: normalizedTask.version,
-        },
+        payloadJson: outboxPayloadJson,
         now: Date.now(),
       });
       if (!outbox.enqueued) {

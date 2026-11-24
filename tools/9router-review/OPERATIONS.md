@@ -591,3 +591,253 @@ Static control-flow analysis predicts that the current implementation has no sha
 5. Implement only after the adapter contract and backend evidence are independently reviewed; then require a fresh GREEN run of this exact regression plus the full suite.
 
 **Disposition:** race reproduction **CONFIRMED for the tested interleaving**; durable fix **NOT_STARTED**; backend **NOT_SELECTED**; reviewer activation **BLOCKED**; PR #463 remains Draft / Open / Unmerged.
+
+## Integrated Reservation Adapter Contract and Adversarial Design Review — 9R-ATOMIC-001 — 2026-11-24
+
+**Authority:** This section is the current normative design for 9R-ATOMIC-001. It supersedes earlier draft text in this file wherever state names, transition rules, retry semantics, model-dispatch treatment, or recovery behavior conflict. Earlier sections remain historical evidence and are not an implementation contract.
+
+**Design disposition:** integrated contract drafted and adversarially reviewed at design level; implementation NOT_AUTHORIZED; backend NOT_SELECTED; conformance tests NOT_EXECUTED; independent external security review NOT_COMPLETED; reviewer activation BLOCKED.
+
+### 1. Problem statement and guarantee boundary
+
+The reproduced defect is two concurrent reviewer invocations observing an empty marker-comment history and both issuing a physical GitHub comment POST for the same immutable PR snapshot. The durable reservation authority must arbitrate this race across independent processes and hosts, not merely within one process.
+
+The system has two potentially costly or externally visible effects:
+
+1. A model-provider request, which may incur cost or consume quota.
+2. A GitHub comment-creation request, which has no transactional idempotency key coupled to the reservation database.
+
+The contract therefore makes two deliberately narrow claims:
+
+- **At-most-one authorized model-dispatch attempt per reservation key.**
+- **At-most-one authorized GitHub comment-creation attempt per reservation key.**
+
+These are application-protocol guarantees contingent on a conforming linearizable store, a single-use transition discipline, and a transport that performs no hidden retries. They are NOT exactly-once execution, exactly-once billing, exactly-once delivery, or proof that a remote service received the request exactly once.
+
+A durable pre-effect transition is committed before each external request. If a worker crashes after that transition but before sending, the operation may never happen. If the remote service accepts a request but the response or local acknowledgement is lost, the outcome is UNKNOWN. The system chooses safety over automatic liveness and MUST NOT repeat that effect automatically.
+
+### 2. Immutable identity and canonicalization
+
+The logical reservation key is:
+
+`(repository_id, pull_request_number, head_sha, base_sha)`
+
+- `repository_id` is the immutable numeric GitHub repository ID. Repository owner/name is metadata, not identity.
+- `pull_request_number` is the canonical positive repository-local integer.
+- `head_sha` and `base_sha` are full commit object IDs from one validated live PR snapshot.
+- Canonical serialization is versioned, length-delimited, UTF-8, and deterministic. A SHA-256 digest may be used as the physical primary key, but every original tuple field MUST be stored and compared after lookup; digest equality alone is insufficient.
+- A repository rename preserves the key. A changed head or base creates a different key.
+- The reviewer policy/runtime digest is recorded with the row. A policy mismatch for an existing key is a conflict requiring an explicit versioning decision; it MUST NOT silently create a second reservation and duplicate comment for the same PR snapshot.
+- Rows are durable tombstones for at least the complete replay/retention horizon. Deletion or key reuse is prohibited unless a separately reviewed archival protocol preserves uniqueness and audit evidence.
+
+### 3. Normative record
+
+The logical record contains:
+
+- Identity: `key_version`, `reservation_key`, `repository_id`, `pull_request_number`, `head_sha`, `base_sha`.
+- Contract identity: `reviewer_policy_digest`, `runtime_digest`, `schema_version`.
+- Ownership: `state`, `generation`, `owner_id`, `owner_nonce`, `lease_expires_at`.
+- Model boundary: `model_attempt_id`, `model_request_digest`, `model_result_digest`, and a protected durable result reference or encrypted result envelope when continuation requires the result.
+- Comment boundary: `comment_attempt_id`, `comment_payload_digest`, `comment_marker_id`, `comment_remote_id`, `comment_accepted_at`.
+- Diagnosis: `unknown_stage`, `unknown_reason_code`, `last_error_class`.
+- Audit: monotonic `record_version`, `created_at`, `updated_at`, and append-only transition events with actor, prior/new state, generation, operation ID, server timestamp, and reason.
+
+Secrets, provider credentials, raw authorization headers, and unredacted prompts MUST NOT be stored in the reservation record. If a model result must survive a worker restart, the result reference must resolve to an access-controlled, integrity-checked, encrypted durable object. The record may enter `MODEL_COMPLETED` only after the result is durably retrievable and its digest is committed. An orphaned result object is safe to garbage-collect only after proving no live record references it.
+
+### 4. State machine
+
+Normative states:
+
+| State | Meaning | Lease takeover |
+|---|---|---|
+| `UNCLAIMED` | No reservation row exists | Initial claim only |
+| `CLAIMED` | One owner has a valid lease; no external effect has been authorized | Yes, after authoritative expiry and generation increment |
+| `MODEL_ATTEMPTED` | The one-time model dispatch boundary was durably consumed; remote execution may or may not have started | Never |
+| `MODEL_COMPLETED` | One model result is durably recorded and bound to the reservation | No owner takeover; continuation may resume only without repeating model dispatch |
+| `COMMENT_ATTEMPTED` | The one-time GitHub comment POST boundary was durably consumed; remote acceptance may or may not have occurred | Never |
+| `PUBLISHED` | Exactly one matching remote comment ID is recorded from validated positive evidence | Terminal |
+| `UNKNOWN` | An external effect may have happened, but evidence is insufficient to determine the result | Never automatically |
+| `ABORTED` | Safely stopped before either external-effect boundary | Terminal for this key |
+| `DUPLICATE_ACCEPTED` | More than one matching remote comment is positively observed | Terminal incident state |
+
+Allowed transitions:
+
+| From | To | Atomic preconditions |
+|---|---|---|
+| absent / `UNCLAIMED` | `CLAIMED` | Unique insert or linearizable CAS; allocate generation 1 and owner nonce |
+| `CLAIMED` | `CLAIMED` | Renew only if owner, nonce, generation, record version, and server-side lease validity match |
+| expired `CLAIMED` | `CLAIMED` | Server-time expiry predicate and CAS; increment generation and replace owner/nonce |
+| `CLAIMED` | `MODEL_ATTEMPTED` | One-time CAS consumes the model attempt before any provider request |
+| `MODEL_ATTEMPTED` | `MODEL_COMPLETED` | Matching attempt ID; durable result reference and digest committed |
+| `MODEL_ATTEMPTED` | `UNKNOWN` | Provider timeout, worker crash recovery, lost acknowledgement, or any ambiguous result |
+| `MODEL_COMPLETED` | `COMMENT_ATTEMPTED` | Snapshot revalidation; complete duplicate preflight; one-time CAS consumes the comment attempt before POST |
+| `MODEL_COMPLETED` | `ABORTED` | Explicit safe abort before comment-attempt boundary |
+| `COMMENT_ATTEMPTED` | `PUBLISHED` | Validated 201 response plus durable remote ID commit, or authoritative positive reconciliation |
+| `COMMENT_ATTEMPTED` | `UNKNOWN` | Any ambiguous POST or persistence outcome |
+| `UNKNOWN` | `PUBLISHED` | Positive reconciliation identifies exactly one matching remote comment |
+| `UNKNOWN` | `DUPLICATE_ACCEPTED` | Positive reconciliation identifies more than one matching remote comment |
+
+No transition from `MODEL_ATTEMPTED`, `COMMENT_ATTEMPTED`, `UNKNOWN`, `PUBLISHED`, `ABORTED`, or `DUPLICATE_ACCEPTED` back to `CLAIMED` is permitted. Lease expiry never authorizes a second model request or comment POST after the corresponding attempt boundary has been consumed.
+
+### 5. Adapter interface and operation semantics
+
+The storage-independent adapter MUST expose equivalent typed operations. Names below are normative for this design; implementation language syntax may differ.
+
+- `claim(key, owner_id, owner_nonce, lease_duration, policy_digest) -> CLAIMED | BUSY | EXISTING(state) | KEY_CONFLICT`
+- `renew(key, owner_id, owner_nonce, generation, expected_record_version, lease_duration) -> RENEWED(new_record_version) | LOST_OWNERSHIP | EXPIRED`
+- `beginModelAttempt(key, owner_id, owner_nonce, generation, expected_record_version, attempt_id, request_digest) -> MODEL_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`
+- `completeModelAttempt(key, generation, attempt_id, result_reference, result_digest) -> MODEL_COMPLETED | CONFLICT | UNKNOWN`
+- `beginCommentAttempt(key, generation, expected_record_version, attempt_id, marker_id, payload_digest, snapshot_validation_id) -> COMMENT_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`
+- `completeCommentAttempt(key, attempt_id, remote_comment_id) -> PUBLISHED | CONFLICT | UNKNOWN`
+- `markUnknown(key, attempt_id, stage, reason_code) -> UNKNOWN | CONFLICT`
+- `readAuthoritative(key) -> RECORD | NOT_FOUND | UNAVAILABLE`
+- `reconcileComment(key, positive_evidence) -> PUBLISHED | DUPLICATE_ACCEPTED | UNKNOWN`
+
+Every mutating operation is one atomic conditional transaction against the current record. It MUST check the expected state, generation, owner nonce where applicable, attempt ID, and record version. Successful transitions and audit events commit atomically. A stale worker cannot mutate state by presenting an old generation or stale record version.
+
+A returned `MODEL_PERMIT` or `COMMENT_PERMIT` is an in-memory authorization to make exactly one transport invocation. It is not a reusable bearer token and MUST NOT be serialized, logged, queued, or retried. The production caller MUST consume it once and call the transport once. The durable state transition prevents another worker from obtaining a second permit. This contract does not claim to defend against malicious application code that deliberately sends the same request multiple times; transport-call-count conformance tests and code review cover that boundary.
+
+### 6. Atomic execution protocol
+
+1. Obtain one live PR snapshot. Validate repository ID, repository full name, PR number, open/draft/locked policy, and full head/base SHAs.
+2. Canonicalize the immutable key and atomically `claim`. A loser MUST return without model or comment transport calls.
+3. Perform only local bounded preparation while in `CLAIMED`. Lease renewals are conditional CAS operations using server time.
+4. Revalidate the live PR snapshot and confirm it still equals the reservation tuple before model dispatch.
+5. Atomically consume `beginModelAttempt`. Only after the durable acknowledgement may the caller issue one provider request. If the commit acknowledgement is lost, read the authoritative row; if the state cannot be established, do not call the provider.
+6. Persist the model result durably, then atomically transition to `MODEL_COMPLETED`. If the process crashes or the result cannot be proven durable after the model boundary, mark or retain `UNKNOWN`; do not invoke the model again.
+7. Revalidate the live PR snapshot again. Perform complete duplicate-marker reconciliation. If a matching comment already exists, record positive evidence and do not POST. If listing is partial, paginated incompletely, stale, or unavailable, do not infer absence; remain blocked/UNKNOWN.
+8. Construct the final comment with an unambiguous marker bound to repository ID, PR number, head SHA, base SHA, policy digest, and payload digest. Persist only the required marker/payload digests in the reservation record.
+9. Atomically consume `beginCommentAttempt`. Only after durable acknowledgement may the caller issue one GitHub POST. Configure redirects to error and disable automatic retries in the HTTP client, SDK, proxy, and middleware. A retry at any layer violates this contract.
+10. On a validated 201 response, atomically persist the remote comment ID and `PUBLISHED`. If the response or storage acknowledgement is ambiguous, retain/mark `UNKNOWN` and reconcile read-only.
+11. Reconciliation may move `UNKNOWN` to `PUBLISHED` only on exactly one positive exact match. More than one match becomes `DUPLICATE_ACCEPTED`. Zero matches, incomplete pagination, API failure, eventual visibility uncertainty, or stale reads remain `UNKNOWN`; they never authorize a second POST.
+
+### 7. Fencing, clocks, and consistency
+
+- The reservation authority MUST provide a unique constraint and linearizable single-record conditional writes or serializable transactions for the key.
+- Generation allocation and row mutation occur in the same transaction. Generations are monotonically increasing and never reused.
+- Lease expiry is evaluated using authoritative backend time inside the conditional transaction, not worker wall clocks.
+- Every mutation before an irreversible effect requires the current generation, owner nonce, and expected record version.
+- Once `MODEL_ATTEMPTED` or `COMMENT_ATTEMPTED` is committed, the lease is no longer a takeover mechanism. The row is pinned to its consumed attempt; recovery is reconciliation, not reassignment.
+- Stale replicas, eventually consistent reads, last-write-wins updates, cache locks, workflow concurrency groups, and local mutexes are not reservation authorities.
+- A lost commit acknowledgement is an ambiguous commit. The caller must read the authoritative key and reconcile the exact attempt ID. It must not optimistically repeat the mutation or external request.
+
+### 8. Snapshot race and external-service limitations
+
+The PR head/base check and GitHub comment POST are not one cross-service transaction. A PR can change after the last live snapshot read but before the comment POST. The comment marker MUST therefore bind the exact repository/PR/head/base/policy tuple, and consumers must treat a comment for an older head as stale. The implementation should minimize this interval and recheck immediately before consuming the comment permit, but it cannot eliminate the cross-service time-of-check/time-of-use race without a GitHub-side conditional publication primitive.
+
+GitHub comment listing may not provide a transactional negative proof under every failure/visibility condition. Reconciliation is therefore positive-evidence oriented. A zero-result list is not proof that a POST was never accepted. If exactly-one positive evidence cannot be obtained, retain `UNKNOWN` and require a separately reviewed manual disposition; do not auto-retry.
+
+The model provider may also lack a caller-supplied idempotency key or execution-status query. The durable `MODEL_ATTEMPTED` boundary prevents automatic duplicate dispatch by this application, but cannot prove provider-side execution or billing count after an ambiguous timeout.
+
+### 9. Safety invariants
+
+- **I1 — Key uniqueness:** at most one durable row per canonical immutable key.
+- **I2 — Single pre-effect owner:** at most one current generation may mutate a `CLAIMED` row.
+- **I3 — Stale fencing:** stale owner nonce, generation, or record version cannot mutate the row or obtain an effect permit.
+- **I4 — Model single-attempt:** no provider request occurs before durable `MODEL_ATTEMPTED`; no second permit or automatic retry exists afterward.
+- **I5 — Comment single-attempt:** no comment POST occurs before durable `COMMENT_ATTEMPTED`; no second permit or automatic retry exists afterward.
+- **I6 — Irreversible ambiguity:** ambiguous effect outcomes remain `UNKNOWN`; timeouts and lease expiry never reset attempt state.
+- **I7 — Snapshot binding:** every record and comment marker binds the same repository ID, PR number, head SHA, and base SHA.
+- **I8 — Evidence-based publication:** `PUBLISHED` requires one validated remote comment ID, not merely a local intent or socket write.
+- **I9 — Audit atomicity:** every committed state transition has a durable audit event in the same transaction.
+- **I10 — Fail closed:** store outage, stale read, CAS conflict, schema mismatch, clock uncertainty, or incomplete reconciliation blocks the next external effect.
+- **I11 — No hidden transport retries:** redirects, SDK retries, proxy retries, and middleware retries are disabled or proven absent.
+- **I12 — No silent key reuse:** retention/cleanup cannot delete or recycle a key while replay is possible.
+
+### 10. Adversarial conformance matrix
+
+Every test must run against the same adapter contract with at least two independent clients and worker instances. Production-grade evidence requires separate processes; a single-process fake mutex is insufficient. The fake adapter may be used for deterministic unit tests but cannot establish backend linearizability.
+
+| ID | Adversarial schedule or fault | Required observation |
+|---|---|---|
+| A01 | 100 concurrent claims for one key | Exactly one current generation/owner; all others BUSY or observe existing state |
+| A02 | Two clients read absence before simultaneous insert | Unique constraint/CAS admits one row only |
+| A03 | Same digest with mismatched original tuple | KEY_CONFLICT; no overwrite or external call |
+| A04 | Old owner pauses; lease expires; new owner claims | Generation increments atomically; stale owner cannot mutate |
+| A05 | Old owner resumes after takeover | Renew, abort, beginModelAttempt, and beginCommentAttempt all reject |
+| A06 | Claim commit succeeds but response acknowledgement is lost | Authoritative read recovers same owner/attempt or blocks; no duplicate claim side effect |
+| A07 | Worker crashes after CLAIMED and before MODEL_ATTEMPTED | Expiry permits safe takeover |
+| A08 | Two workers race to beginModelAttempt | One permit only; one provider transport invocation maximum |
+| A09 | Crash after MODEL_ATTEMPTED commit but before provider socket write | No second model permit; row becomes/retains UNKNOWN |
+| A10 | Provider accepts request but response times out | UNKNOWN; no model retry |
+| A11 | Provider returns result but durable result write/ack is lost | No second model request; result recovered by digest or UNKNOWN |
+| A12 | Model result is durable; worker crashes before comment attempt | Resume from durable result without repeating model request |
+| A13 | Two workers race to beginCommentAttempt | One permit only; one physical POST maximum |
+| A14 | Crash after COMMENT_ATTEMPTED commit but before socket write | No second POST; UNKNOWN/stranded reservation is accepted safety cost |
+| A15 | GitHub accepts POST but client times out | UNKNOWN; no automatic retry |
+| A16 | GitHub returns 201 but completion transaction acknowledgement is lost | Authoritative read/reconciliation records same remote ID or UNKNOWN; no POST retry |
+| A17 | HTTP 307/308, 5xx, reset, cancellation, malformed response | No hidden retry; ambiguous outcomes remain UNKNOWN |
+| A18 | Comment listing is partial, paginated incompletely, stale, or unavailable | Zero result cannot authorize POST or reset |
+| A19 | Reconciliation finds exactly one exact marker/snapshot/payload match | PUBLISHED with remote comment ID |
+| A20 | Reconciliation finds two matching comments | DUPLICATE_ACCEPTED and incident evidence; no further POST |
+| A21 | PR head or base changes after reservation | Old key cannot authorize a new snapshot; marker remains bound to old snapshot |
+| A22 | PR head changes after last GET but before POST | Marker identifies stale snapshot; no false claim that cross-service TOCTOU is eliminated |
+| A23 | Repository rename with same repository ID | Same logical key |
+| A24 | Backend failover, stale replica, split brain, or lost commit acknowledgement | No fallback to local lock; reject unless linearizability is preserved |
+| A25 | Backend clock skew or lease comparison at exact expiry boundary | Server-side transactional time decides; no worker-clock takeover |
+| A26 | Storage outage before claim or either effect transition | No model request or comment POST |
+| A27 | Schema/policy digest mismatch | Fail closed; no implicit migration or second key |
+| A28 | Retention cleanup races with replay | Tombstone/unique key remains; no duplicate reservation |
+| A29 | HTTP client/SDK/proxy retry configured | Conformance test detects more than one transport invocation; candidate integration rejected |
+| A30 | Process termination at every transition boundary | Recovery outcome matches the state table; no transition regresses across an irreversible boundary |
+
+### 11. Adversarial design review — findings and disposition
+
+The design was challenged against the reproduced interleaving, independent-host races, lease expiry, process termination, ambiguous provider/GitHub outcomes, stale reads, partial pagination, PR snapshot changes, and hidden transport retries. The following weaknesses were identified and incorporated into the normative contract above:
+
+- **AR-01 — Model inference was not protected by an irreversible attempt boundary.** A lease takeover after a provider accepted a request could duplicate cost. Corrected by introducing `MODEL_ATTEMPTED` before the provider call and prohibiting takeover/retry afterward.
+- **AR-02 — A single PUBLISHING state conflated intent with actual transport authorization.** Corrected by using `COMMENT_ATTEMPTED` as the one-time durable boundary immediately before one transport invocation. It remains possible to strand a reservation if the process dies between commit and socket write; that is explicitly accepted and cannot be repaired by retry without weakening the at-most-one guarantee.
+- **AR-03 — “Exactly one publish permit” could be misread as exactly-once delivery.** Corrected by stating the guarantee as at-most-one authorized application-level attempt, contingent on no hidden retries; no exactly-once remote effect is claimed.
+- **AR-04 — Ambiguous commit acknowledgement was underspecified.** Corrected by requiring authoritative read/reconciliation by immutable key and attempt ID; no speculative retry.
+- **AR-05 — A lease could be mistaken for authority to reclaim an in-flight external call.** Corrected: leases are reclaimable only while in `CLAIMED`; both external-effect attempt states are non-reclaimable.
+- **AR-06 — The PR snapshot check cannot be atomic with GitHub comment creation.** Recorded as an unavoidable TOCTOU limitation; bind the marker to the snapshot and require stale-comment detection.
+- **AR-07 — Negative comment search could be mistaken for proof of non-publication.** Corrected: only positive exact evidence can reconcile to PUBLISHED; zero/incomplete results remain UNKNOWN.
+- **AR-08 — Hidden retries below the application layer could violate the guarantee.** Added explicit transport/SDK/proxy retry prohibition and a transport-call-count test.
+- **AR-09 — Policy/runtime changes could silently reuse an existing key.** Added policy/runtime digest binding and explicit conflict behavior.
+- **AR-10 — Result loss after model completion could force duplicate inference.** Added durable result-reference/digest requirement before MODEL_COMPLETED and a resume-without-reinference test.
+
+**Residual design limitations (not defects that this contract can eliminate):**
+
+1. A crash after an attempt boundary but before the network call can leave an operation that never happened in UNKNOWN. This is the cost of refusing blind retry.
+2. The store and external provider/GitHub API do not share a transaction. Remote acceptance cannot always be inferred from a lost response.
+3. A PR may change between the final snapshot read and comment POST. The marker makes staleness detectable, not impossible.
+4. At-most-one application attempt depends on the caller and transport honoring the single-use permit and disabling all retry layers. It is not a defense against a malicious or defective caller that deliberately duplicates requests.
+5. Backend linearizability, durability, server-side time, failover, and cost remain unproven until candidate-specific conformance tests and documentation review are completed.
+
+### 12. Backend selection gate
+
+No vendor is selected in this phase. At least two candidate backends must be assessed against the same contract and evidence checklist:
+
+- atomic unique insert and conditional update semantics under independent concurrent clients;
+- documented consistency and read-after-write behavior;
+- generation/fencing and server-side lease-time implementation;
+- transaction durability and acknowledgement-loss recovery;
+- behavior under regional failover, stale replica, network partition, and split brain;
+- least-privilege credentials, audit trail, encryption, backup, retention, and restore;
+- data residency, operational burden, rate limits, and failure modes;
+- actual total cost at forecast read/write volume, retention, backup, and egress, including free-tier ceilings and card requirements;
+- executable A01–A30 conformance results on the candidate, not only vendor marketing claims.
+
+A backend that cannot satisfy every mandatory safety property is rejected regardless of price or convenience. Workflow concurrency groups may be defense in depth only; they are not the authority.
+
+### 13. Verification and approval gates
+
+Current evidence:
+
+- `9R-ATOMIC-001` duplicate-publication race: **REPRODUCED / CONFIRMED FOR TESTED IN-PROCESS INTERLEAVING** by hosted run `45468257408`; expected physical POST count 1, observed 2.
+- Independent-process / independent-host durable-store conformance: **NOT_RUN**.
+- This document's A01–A30 matrix: **SPECIFIED, NOT_EXECUTED**.
+- Backend comparison: **NOT_STARTED**.
+- Production adapter implementation: **NOT_AUTHORIZED**.
+- Reviewer activation, workflow registration on `main`, provider dispatch, merge, secret changes, Cloudflare deployment, and local-host changes: **NOT_AUTHORIZED**.
+
+Approval sequence:
+
+1. Review this integrated contract and adversarial findings.
+2. Resolve any design objections and freeze the contract version.
+3. Write backend-neutral conformance tests and prove the current implementation remains RED without weakening the existing regression.
+4. Compare at least two backend candidates against those same tests and documented guarantees.
+5. Obtain independent security review of the selected adapter and failure model.
+6. Only then request separate authorization for implementation. Reviewer activation, default-branch workflow registration, provider dispatch, and merge remain distinct later approvals.
+
+**Final design verdict:** the contract is internally integrated and its identified design weaknesses have explicit mitigations or bounded residual limitations. It is NOT yet experimentally validated, backend-qualified, independently approved, or implementation-authorized. PR #463 must remain Draft; the reviewer remains disabled.

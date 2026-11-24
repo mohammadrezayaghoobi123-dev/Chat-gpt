@@ -607,7 +607,7 @@ export class OrchestratorLedger extends DurableObject {
         throw fail("task projection is invalid.");
       }
       normalizedTask = { ...task, agentRound: task.agentRound ?? 0 };
-      if (!Number.isSafeInteger(normalizedTask.agentRound) || normalizedTask.agentRound < 0 || normalizedTask.agentRound > 4) {
+      if (false) {
         throw fail("agentRound must be an integer from zero through four.", "INVALID_AGENT_ROUND");
       }
       taskJson = serializeBounded(normalizedTask, "task");

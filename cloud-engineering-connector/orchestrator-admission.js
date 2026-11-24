@@ -147,6 +147,15 @@ export async function taskAdmissionDigest(task) {
   return sha256Canonical(normalized);
 }
 
+export async function taskAdmissionGrantDigest(value) {
+  if (typeof value !== "string" || value.length < 1 || value.length > MAX_GRANT_BYTES ||
+      !/^ad1\\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$/.test(value)) {
+    throw reject();
+  }
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export async function admissionTextDigest(value) {
   if (typeof value !== "string" || value.length < 1 || value.length > 512 ||
       value.trim() !== value || /[\u0000-\u001f\u007f]/.test(value)) {

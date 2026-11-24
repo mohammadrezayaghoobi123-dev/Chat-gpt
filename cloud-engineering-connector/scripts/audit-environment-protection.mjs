@@ -122,7 +122,7 @@ export function renderEnvironmentAuditSummary(report) {
   });
 
   return [
-    "# GitHub Environment full posture census",
+    "# GitHub Environment read-only preflight — full posture census",
     "",
     "> Read-only metadata audit. This workflow does not bind a GitHub Environment, read Secrets or Variables, or authorize a release.",
     "",

@@ -7,6 +7,8 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const POLICY_EFFECTS = new Set(["allow", "deny"]);
 const MEMBERSHIP_STATUSES = new Set(["active", "suspended"]);
 const POLICY_STATUSES = new Set(["active", "disabled"]);
+const TASK_ADMISSION_GRANT_TTL_SECONDS = 300;
+const TASK_ADMISSION_RENEWAL_CLOCK_SKEW_SECONDS = 5;
 
 function fail(code, message) {
   return Object.assign(new Error(message), { code });
@@ -437,7 +439,7 @@ export class TenantDirectory extends DurableObject {
     }
     const policyRuleResourceDigest = snapshot.rule.resource_digest;
     const issuedAt = Math.floor(now / 1000);
-    const expiresAt = issuedAt + 300;
+    const expiresAt = issuedAt + TASK_ADMISSION_GRANT_TTL_SECONDS;
     const admissionId = "admission-" + crypto.randomUUID();
     const jti = "jti-" + crypto.randomUUID();
     const claims = {
@@ -532,7 +534,211 @@ export class TenantDirectory extends DurableObject {
         claims.membershipVersion,
         commitNow,
       );
-      return {
+      retur
+
+  async renewTaskAdmissionGrant(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
+    const principalId = identifier(input?.principalId, "principalId");
+    const taskId = identifier(input?.taskId, "taskId");
+    const taskDigest = input?.taskDigest;
+    if (!SHA256.test(taskDigest ?? "")) throw fail("INVALID_TENANT_DIRECTORY_INPUT", "taskDigest must be a SHA-256 digest.");
+    const idempotencyKey = identifier(input?.idempotencyKey, "idempotencyKey");
+    const inputHash = input?.inputHash;
+    if (!SHA256.test(inputHash ?? "")) throw fail("INVALID_TENANT_DIRECTORY_INPUT", "inputHash must be a SHA-256 digest.");
+
+    let idempotencyKeyDigest;
+    try {
+      idempotencyKeyDigest = await admissionTextDigest(idempotencyKey);
+    } catch {
+      throw fail("INVALID_TENANT_DIRECTORY_INPUT", "idempotencyKey cannot be fingerprinted.");
+    }
+
+    const sql = this.ctx.storage.sql;
+    const findExisting = () => sql.exec(
+      "SELECT * FROM tenant_task_admission_reservations WHERE tenant_id=? AND project_id=? AND idempotency_key_digest=?",
+      tenantId, projectId, idempotencyKeyDigest,
+    ).toArray()[0] ?? null;
+    const assertSameInput = existing => {
+      if (existing.principal_id !== principalId || existing.task_id !== taskId ||
+          existing.task_digest !== taskDigest || existing.input_hash !== inputHash) {
+        throw fail("TASK_ADMISSION_IDEMPOTENCY_CONFLICT", "Task admission idempotency key is already bound to different Task input.");
+      }
+    };
+    const response = (existing, replay = true, auditEventId = undefined) => ({
+      reserved: true,
+      replay,
+      tenantId: existing.tenant_id,
+      projectId: existing.project_id,
+      principalId: existing.principal_id,
+      taskId: existing.task_id,
+      taskDigest: existing.task_digest,
+      idempotencyKeyDigest: existing.idempotency_key_digest,
+      inputHash: existing.input_hash,
+      membershipId: existing.membership_id,
+      membershipVersion: Number(existing.membership_version),
+      policyScopeEpoch: Number(existing.policy_scope_epoch),
+      policyRuleVersion: Number(existing.policy_rule_version),
+      policyRuleResourceDigest: existing.policy_rule_resource_digest,
+      policyDecisionId: existing.policy_decision_id,
+      admissionId: existing.admission_id,
+      jti: existing.jti,
+      issuedAt: Number(existing.issued_at),
+      expiresAt: Number(existing.expires_at),
+      grant: existing.grant_token,
+      ...(auditEventId ? { auditEventId } : {}),
+    });
+    const snapshotMatches = (snapshot, existing) =>
+      !!snapshot.membership &&
+      snapshot.membership.status === "active" &&
+      snapshot.membership.membership_id === existing.membership_id &&
+      Number(snapshot.membership.version) === Number(existing.membership_version) &&
+      snapshot.policyScopeEpoch === Number(existing.policy_scope_epoch) &&
+      !!snapshot.rule &&
+      snapshot.rule.effect === "allow" &&
+      snapshot.rule.decision_id === existing.policy_decision_id &&
+      Number(snapshot.rule.version) === Number(existing.policy_rule_version) &&
+      snapshot.rule.resource_digest === existing.policy_rule_resource_digest;
+
+    const prior = findExisting();
+    if (!prior) {
+      throw fail("TASK_ADMISSION_RESERVATION_NOT_FOUND", "No matching Task admission reservation exists to renew.");
+    }
+    assertSameInput(prior);
+
+    const now = timestamp(Date.now());
+    const nowSeconds = Math.floor(now / 1000);
+    if (Number(prior.expires_at) > nowSeconds) return response(prior);
+    if (Number(prior.expires_at) + TASK_ADMISSION_RENEWAL_CLOCK_SKEW_SECONDS > nowSeconds) {
+      throw fail("TASK_ADMISSION_RENEWAL_NOT_READY", "The previous Grant is inside the bounded clock-skew fence; renewal must wait.");
+    }
+
+    const snapshot = this.#readTaskAdmissionSnapshot(sql, {
+      tenantId, projectId, principalId, taskDigest,
+    });
+    if (!snapshotMatches(snapshot, prior)) {
+      throw fail("TASK_ADMISSION_REAUTHORIZATION_DENIED", "The original membership or policy snapshot is no longer active and unchanged.");
+    }
+
+    const issuedAt = nowSeconds;
+    const expiresAt = issuedAt + TASK_ADMISSION_GRANT_TTL_SECONDS;
+    const admissionId = "admission-" + crypto.randomUUID();
+    const jti = "jti-" + crypto.randomUUID();
+    const claims = {
+      principalId,
+      tenantId,
+      projectId,
+      taskId,
+      taskDigest,
+      idempotencyKeyDigest,
+      inputHash,
+      membershipId: prior.membership_id,
+      membershipVersion: Number(prior.membership_version),
+      policyScopeEpoch: Number(prior.policy_scope_epoch),
+      policyRuleVersion: Number(prior.policy_rule_version),
+      policyRuleResourceDigest: prior.policy_rule_resource_digest,
+      policyDecisionId: prior.policy_decision_id,
+      admissionId,
+      jti,
+      issuedAt,
+      expiresAt,
+    };
+
+    let grant;
+    try {
+      grant = await createTaskAdmissionGrant(
+        this.env?.TENANT_DIRECTORY_ADMISSION_PRIVATE_KEYS,
+        this.env?.TENANT_DIRECTORY_ADMISSION_ACTIVE_KID,
+        claims,
+      );
+    } catch {
+      throw fail("TASK_ADMISSION_SIGNING_UNAVAILABLE", "Task admission signing is unavailable.");
+    }
+
+    return this.ctx.storage.transactionSync(() => {
+      const current = findExisting();
+      if (!current) {
+        throw fail("TASK_ADMISSION_RESERVATION_NOT_FOUND", "Task admission reservation disappeared during renewal.");
+      }
+      assertSameInput(current);
+
+      const commitNow = timestamp(Date.now());
+      const commitNowSeconds = Math.floor(commitNow / 1000);
+      const sameReservation =
+        current.admission_id === prior.admission_id &&
+        current.jti === prior.jti &&
+        Number(current.expires_at) === Number(prior.expires_at);
+
+      if (!sameReservation) {
+        if (Number(current.expires_at) > commitNowSeconds) return response(current);
+        throw fail("TASK_ADMISSION_RENEWAL_CONFLICT", "A concurrent renewal changed the reservation; retry from the current row.");
+      }
+      if (Number(current.expires_at) > commitNowSeconds) return response(current);
+      if (Number(current.expires_at) + TASK_ADMISSION_RENEWAL_CLOCK_SKEW_SECONDS > commitNowSeconds) {
+        throw fail("TASK_ADMISSION_RENEWAL_NOT_READY", "The previous Grant is inside the bounded clock-skew fence; renewal must wait.");
+      }
+      if (Math.floor(commitNow / 1000) >= expiresAt) {
+        throw fail("TASK_ADMISSION_EXPIRED", "The renewed Task admission Grant expired before its reservation committed.");
+      }
+
+      const currentSnapshot = this.#readTaskAdmissionSnapshot(sql, {
+        tenantId, projectId, principalId, taskDigest,
+      });
+      if (!snapshotMatches(currentSnapshot, current)) {
+        throw fail("TASK_ADMISSION_REAUTHORIZATION_DENIED", "The original membership or policy snapshot changed while the replacement Grant was being signed.");
+      }
+
+      const auditTarget = {
+        principalId,
+        projectId,
+        taskId,
+        taskDigest,
+        idempotencyKeyDigest,
+        inputHash,
+        previousAdmissionId: current.admission_id,
+        previousJti: current.jti,
+        previousExpiresAt: Number(current.expires_at),
+        admissionId,
+        jti,
+        issuedAt,
+        expiresAt,
+        membershipId: claims.membershipId,
+        membershipVersion: claims.membershipVersion,
+        policyScopeEpoch: claims.policyScopeEpoch,
+        policyRuleVersion: claims.policyRuleVersion,
+        policyRuleResourceDigest: claims.policyRuleResourceDigest,
+        policyDecisionId: claims.policyDecisionId,
+      };
+
+      sql.exec(
+        "UPDATE tenant_task_admission_reservations SET admission_id=?, jti=?, issued_at=?, expires_at=?, grant_token=? " +
+        "WHERE tenant_id=? AND project_id=? AND idempotency_key_digest=? AND admission_id=? AND jti=?",
+        admissionId, jti, issuedAt, expiresAt, grant,
+        tenantId, projectId, idempotencyKeyDigest, current.admission_id, current.jti,
+      );
+
+      const auditEventId = this.#appendAuditEvent(
+        sql,
+        { subject: principalId, targetDigest: taskDigest },
+        "renewTaskAdmissionGrant",
+        tenantId,
+        projectId,
+        auditTarget,
+        Number(current.membership_version),
+        claims.membershipVersion,
+        commitNow,
+      );
+
+      return response({
+        ...current,
+        admission_id: admissionId,
+        jti,
+        issued_at: issuedAt,
+        expires_at: expiresAt,
+        grant_token: grant,
+      }, false, auditEventId);
+    });
+  }n {
         reserved: true,
         replay: false,
         ...claims,

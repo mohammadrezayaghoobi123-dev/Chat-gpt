@@ -38,6 +38,10 @@ export function createTenantDirectoryAdapters(namespace, selectedTenantId) {
         assertTenant(input);
         return stub.prepareTaskAdmission(input);
       },
+      async renewTaskAdmissionGrant(input) {
+        assertTenant(input);
+        return stub.renewTaskAdmissionGrant(input);
+      },
     }),
     provisioningStore: Object.freeze({
       async upsertMembership(input) {

@@ -980,3 +980,37 @@ Approval sequence:
 6. Only then request separate authorization for implementation. Reviewer activation, default-branch workflow registration, provider dispatch, and merge remain distinct later approvals.
 
 **Final design verdict:** the contract is internally integrated and its identified design weaknesses have explicit mitigations or bounded residual limitations. It is NOT yet experimentally validated, backend-qualified, independently approved, or implementation-authorized. PR #463 must remain Draft; the reviewer remains disabled.
+
+
+### 14. Additional hostile findings and reference-oracle corrections — 2026-11-25
+
+This section records the next adversarial tranche. All implementation changes below are confined to the non-production in-memory reference oracle and its contract tests. They do not establish candidate-provider or production behavior.
+
+| Finding | Counterexample / failure mode | Reference-oracle correction | Evidence |
+|---|---|---|---|
+| AR-32 — Pagination overlap was counted as duplicate publication | The same remote comment ID appeared twice across overlapping pages and was counted as two comments | Deduplicate verified positive evidence by unique remote comment ID before applying duplicate escalation | T32 RED then GREEN |
+| AR-33 — Recovery quarantine did not cover reconciliation | A positive comment observation mutated a record to PUBLISHED while the global recovery lock was active | Reject reconciliation state transitions with RECOVERY_LOCKED | T33 RED then GREEN |
+| AR-34 — Recovery could be unlocked without an independent anchor | A COMPLETE inventory alone was sufficient to leave RECOVERY_LOCKED | Require a separately supplied trusted anchor and exact watermark/digest match | T34–T35 RED then GREEN |
+| AR-35 — Recovery inventory was incorrectly key-scoped | A per-key event list was paired with a global watermark, omitting other reservations from restore validation | Read the full cross-key append-only event inventory and anchor the complete sequence | T36 |
+| AR-36 — Restore validation did not verify inventory structure | Tampered payloads, sequence gaps, duplicate event IDs, and altered event digests could be accepted | Validate contiguous global sequence, unique immutable event IDs, per-event digest, and aggregate anchor digest before unlock | T37–T41 |
+| AR-37 — Ordinary mode setter bypassed recovery authorization | setRecoveryMode(ACTIVE) directly cleared a lock without the trusted-anchor path | Deny direct ACTIVE transitions while locked; only unlockRecovery may release the quarantine after validation | T43 RED then GREEN |
+| AR-38 — Recovery lock was not enforced at every mutation boundary | Renewal, completion, continuation, abort, expiry, UNKNOWN marking, and close operations could mutate state while recovery was locked | Add fail-closed recovery-mode guards to every reservation/ledger mutation path; read-only inventory inspection remains available | T44–T45 RED then GREEN |
+
+#### New recovery and reconciliation invariants
+
+- **I30 — Evidence identity:** duplicate observations of the same remote comment ID across overlapping pages count as one positive comment. DUPLICATE_ACCEPTED requires at least two distinct verified remote comment IDs.
+- **I31 — Global quarantine:** while RECOVERY_LOCKED, no ordinary reservation or effect-ledger mutation is permitted. The only state-changing exit is anchor-verified unlockRecovery; a mode setter cannot bypass it.
+- **I32 — Complete restore proof:** recovery unlock requires a complete cross-key event inventory with a contiguous global sequence, unique event IDs, valid per-event digests, and a matching independently supplied trusted anchor. A key-scoped subset is never a valid global recovery inventory.
+
+#### Hosted verification checkpoint
+
+- Verification branch: verify/9router-reservation-conformance-run7-2026-11-25.
+- Exact verified revision: 47981029139fd7c15c52c71d1c9c16de5f0b5443.
+- Contract reference tranche: **T01–T45, 45/45 PASS**, hosted run [45509849702](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45509849702).
+- Full reviewer regression plus reference tranche: **181 passed / 1 failed**. The sole failure remains the preserved duplicate-publication concurrency regression: expected at most one physical POST, observed two. The failure is intentionally retained.
+- These results qualify only the in-memory reference oracle. They do not prove multi-process linearizability, durable acknowledgement, provider failover, R2 conditional PUT semantics, Bucket Lock enforcement, quota behavior, or restore safety on Cloudflare Durable Objects/R2 or Supabase.
+- The original P1 redirect-replay review thread remains unresolved pending a full green suite. No reviewer activation, merge, provider dispatch, or deployment is permitted.
+
+#### Residual risk and next qualification boundary
+
+The reference oracle is still a single-process executable specification. Its Map state and JavaScript scheduling cannot prove arbitration across independent isolates, hosts, or process crashes. The next backend-neutral tranche must explicitly test the adapter boundary with independently scheduled clients and injected lost acknowledgements; the candidate-specific tranche must then test real Durable Objects transactions and R2 conditional create-once behavior in an isolated, non-production environment. No such provider test has run, and no provider has been selected.

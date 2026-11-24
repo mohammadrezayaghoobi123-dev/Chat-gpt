@@ -619,6 +619,19 @@ describe("persistent Tenant Directory", () => {
     expect(state.ping).toEqual({ ok: true, schemaVersion: 2 });
     expect(state.epoch).toBe(1);
 
+    await runInDurableObject(stub, instance => {
+      instance.ctx.storage.sql.exec(
+        "UPDATE tenant_policy_scope_epochs SET epoch=7 WHERE tenant_id=? AND project_id=? AND principal_id=? AND action=?",
+        tenantId, "project-migration", principalId, "project.read",
+      );
+      instance.ensureSchema();
+    });
+    const preservedEpoch = await runInDurableObject(stub, instance => Number(instance.ctx.storage.sql.exec(
+      "SELECT epoch FROM tenant_policy_scope_epochs WHERE tenant_id=? AND project_id=? AND principal_id=? AND action=?",
+      tenantId, "project-migration", principalId, "project.read",
+    ).one().epoch));
+    expect(preservedEpoch).toBe(7);
+
     const decision = await adapters.authorizationStore.authorizeProjectAction({
       principalId, tenantId, projectId: "project-migration", action: "project.read",
       resource: { migration: true }, resourceDigest,
@@ -630,5 +643,16 @@ describe("persistent Tenant Directory", () => {
       policyScopeEpoch: 1,
       policyRuleVersion: 1,
     });
+  });
+
+  it("fails closed when a schema-v2 directory has lost its policy epoch table", async () => {
+    const tenantId = "tenant-epoch-schema-corruption";
+    const stub = env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName(tenantId));
+    await runInDurableObject(stub, instance => {
+      expect(instance.ping()).toEqual({ ok: true, schemaVersion: 2 });
+      instance.ctx.storage.sql.exec("DROP TABLE tenant_policy_scope_epochs");
+    });
+    await expect(runInDurableObject(stub, instance => instance.ensureSchema()))
+      .rejects.toMatchObject({ code: "TENANT_DIRECTORY_SCHEMA_CORRUPT" });
   });
 });

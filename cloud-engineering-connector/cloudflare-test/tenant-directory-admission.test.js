@@ -6,7 +6,7 @@ import { createTenantDirectoryAdapters } from "../identity/tenant-directory-adap
 import { taskAdmissionDigest, verifyTaskAdmissionGrant } from "../orchestrator-admission.js";
 
 const NOW = 1_800_000_000_000;
-const TENANT_ID = "tenant-task-admission";
+const TENANT_ID_PREFIX = "tenant-task-admission";
 const PROJECT_ID = "project-task-admission";
 const PRINCIPAL_ID = "principal-task-admission";
 const MEMBERSHIP_ID = "membership-task-admission";
@@ -45,7 +45,7 @@ async function adminAssertion(operation, tenantId, projectId, target, now = NOW)
 function taskFixture(overrides = {}) {
   return {
     taskId: TASK_ID,
-    tenantId: TENANT_ID,
+    tenantId,
     projectId: PROJECT_ID,
     state: "SCHEDULED",
     version: 1,
@@ -56,7 +56,7 @@ function taskFixture(overrides = {}) {
   };
 }
 
-async function fixture({ policy = true, tenantId = TENANT_ID } = {}) {
+async function fixture({ policy = true, tenantId = TENANT_ID_PREFIX + "-" + crypto.randomUUID() } = {}) {
   const keys = await makeSigningKeys();
   const stub = await configureTenant(tenantId, keys.privateKeys);
   const adapters = createTenantDirectoryAdapters(env.TENANT_DIRECTORY, tenantId);
@@ -135,7 +135,7 @@ describe("TenantDirectory signed task admission reservation", () => {
     expect(first).toMatchObject({
       reserved: true,
       replay: false,
-      tenantId: TENANT_ID,
+      tenantId,
       projectId: PROJECT_ID,
       taskId: TASK_ID,
       taskDigest: state.taskDigest,
@@ -154,7 +154,7 @@ describe("TenantDirectory signed task admission reservation", () => {
 
     const verified = await verifyTaskAdmissionGrant(state.publicKeys, first.grant, {
       principalId: PRINCIPAL_ID,
-      tenantId: TENANT_ID,
+      tenantId,
       projectId: PROJECT_ID,
       taskId: TASK_ID,
       taskDigest: state.taskDigest,
@@ -176,7 +176,7 @@ describe("TenantDirectory signed task admission reservation", () => {
       iss: "tenant-directory",
       aud: "orchestrator-ledger",
       sub: PRINCIPAL_ID,
-      tenantId: TENANT_ID,
+      tenantId: state.tenantId,
       projectId: PROJECT_ID,
       taskId: TASK_ID,
       taskDigest: state.taskDigest,
@@ -203,11 +203,11 @@ describe("TenantDirectory signed task admission reservation", () => {
     await runInDurableObject(state.stub, instance => {
       const reservations = instance.ctx.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM tenant_task_admission_reservations WHERE tenant_id=? AND project_id=?",
-        TENANT_ID, PROJECT_ID,
+        state.tenantId, PROJECT_ID,
       ).one().count;
       const audits = instance.ctx.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM tenant_directory_audit_events WHERE tenant_id=? AND operation='prepareTaskAdmission'",
-        TENANT_ID,
+        state.tenantId,
       ).one().count;
       expect(reservations).toBe(1);
       expect(audits).toBe(1);
@@ -229,7 +229,7 @@ describe("TenantDirectory signed task admission reservation", () => {
   it("rejects an authorization snapshot changed during Ed25519 signing without writing a reservation", async () => {
     const state = await fixture();
     admissionStore(state.adapters);
-    const revokeAssertion = await adminAssertion("revokeMembership", TENANT_ID, null, {
+    const revokeAssertion = await adminAssertion("revokeMembership", state.tenantId, null, {
       principalId: PRINCIPAL_ID,
       expectedVersion: 1,
     }, NOW + 1);
@@ -252,7 +252,7 @@ describe("TenantDirectory signed task admission reservation", () => {
         await signingStarted;
         await instance.revokeMembership({
           assertion: revokeAssertion,
-          tenantId: TENANT_ID,
+          tenantId: state.tenantId,
           principalId: PRINCIPAL_ID,
           expectedVersion: 1,
           now: NOW + 1,

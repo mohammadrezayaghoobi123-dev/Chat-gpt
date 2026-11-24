@@ -448,7 +448,7 @@ Implementation is NOT authorized by this design record. The next implementation 
 ## Red-phase concurrency test authored — 2026-11-24
 
 **Test:** `tools/9router-review/review.test.mjs` — `deterministic concurrent duplicate-publication red test`  
-**Test-only commit:** `00d4313599585e0b4d60edef5365cdfb9189f3f0`  
+**Test-only commit:** `e5745a254eab612f9efa8c75636e71f2fc34e5ea`  
 **Test execution:** `NOT_RUN` in this environment. No RED result is claimed.
 
 ### Harness construction and falsification target
@@ -459,7 +459,7 @@ Implementation is NOT authorized by this design record. The next implementation 
 - This establishes the critical interleaving: both runs have independently observed the same empty marker history before either can continue.
 - The fake 9Router endpoint counts model requests and returns a deterministic valid report.
 - The fake GitHub comment endpoint counts physical POST requests and returns a structurally valid bot-authored 201 response.
-- The test asserts two completed empty-history reads, one model invocation, one successful publication result per invocation only if consistent with the reservation contract, and exactly one physical comment POST.
+- The test asserts two completed empty-history reads, exactly one physical comment POST, exactly one invocation reporting a newly published comment, and one model invocation.
 
 ### Expected current-code outcome (prediction, not execution evidence)
 

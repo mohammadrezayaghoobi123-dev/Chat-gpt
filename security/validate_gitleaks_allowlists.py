@@ -36,12 +36,12 @@ def _source_fixture_line(repo_root: pathlib.Path, commit: str, path: str) -> str
 
 def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
     errors: list[str] = []
-    entries = {
-        entry.get("description"): entry
-        for entry in config.get("allowlists", [])
+    matching_entries = [
+        entry for entry in config.get("allowlists", [])
         if entry.get("description") in EXPECTED_FIXTURES
-    }
-    if set(entries) != set(EXPECTED_FIXTURES):
+    ]
+    entries = {entry.get("description"): entry for entry in matching_entries}
+    if len(matching_entries) != len(EXPECTED_FIXTURES) or set(entries) != set(EXPECTED_FIXTURES):
         return ["expected exactly two pinned synthetic HMAC fixture allowlists"]
 
     for description, (expected_commit, expected_path) in EXPECTED_FIXTURES.items():
@@ -81,6 +81,8 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
             marker = ""
         if marker != "0123456789abcdef" * 2:
             errors.append(f"{label}: historical fixture does not match the approved synthetic marker")
+        if regexes[0] != f"^{line}$":
+            errors.append(f"{label}: regex must be the anchored exact historical fixture line")
         if not pattern.fullmatch(line):
             errors.append(f"{label}: regex does not match the exact historical fixture line")
         key = match.group(1)

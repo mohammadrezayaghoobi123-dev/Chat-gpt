@@ -99,10 +99,12 @@ export function renderEnvironmentAuditSummary(report) {
     const reviewerCount = Number.isSafeInteger(result.requiredReviewerCount)
       ? String(result.requiredReviewerCount)
       : "unknown";
-    const branchFlags = result.deploymentBranchPolicy
-      ? "protected=" + displayBoolean(result.deploymentBranchPolicy.protected_branches) +
-        ", custom=" + displayBoolean(result.deploymentBranchPolicy.custom_branch_policies)
-      : "unknown";
+    const branchFlags = result.branchPolicyMode === "ALL_BRANCHES"
+      ? "unrestricted (deployment_branch_policy=null)"
+      : result.deploymentBranchPolicy
+        ? "protected=" + displayBoolean(result.deploymentBranchPolicy.protected_branches) +
+          ", custom=" + displayBoolean(result.deploymentBranchPolicy.custom_branch_policies)
+        : "unknown";
     const findings = result.findings.length > 0
       ? result.findings.map(finding => finding.code + ": " + finding.message).join("; ")
       : "—";
@@ -115,6 +117,7 @@ export function renderEnvironmentAuditSummary(report) {
       " | " + displayBoolean(result.administratorBypassAllowed) +
       " | " + displayBoolean(result.preventSelfReview) +
       " | " + reviewerCount +
+      " | " + result.branchPolicyMode +
       " | " + branchFlags +
       " | " + result.branchPolicyState +
       " | " + branchPattern +
@@ -126,7 +129,7 @@ export function renderEnvironmentAuditSummary(report) {
     "",
     "> Read-only metadata audit. This workflow does not bind a GitHub Environment, read Secrets or Variables, or authorize a release.",
     "",
-    "| Environment | Status | Administrator bypass | Self-review prevention | Required reviewers | Branch-policy flags | Branch-policy state | Expected branch pattern | Findings |",
+    "| Environment | Status | Administrator bypass | Self-review prevention | Required reviewers | Branch-policy mode | Branch-policy flags | Branch-policy state | Expected branch pattern | Findings |",
     "|---|---|---|---|---:|---|---|---|---|",
     ...rows,
     "",
@@ -158,8 +161,11 @@ async function main() {
       ", prevent_self_review=" + displayBoolean(result.preventSelfReview) +
       ", required_reviewer_rules=" + (result.requiredReviewerRuleCount ?? "unknown") +
       ", required_reviewers=" + (result.requiredReviewerCount ?? "unknown") +
+      ", branch_policy_mode=" + result.branchPolicyMode +
       ", custom_branch_policies=" +
-        displayBoolean(result.deploymentBranchPolicy?.custom_branch_policies ?? null) +
+        (result.branchPolicyMode === "ALL_BRANCHES"
+          ? "not_configured"
+          : displayBoolean(result.deploymentBranchPolicy?.custom_branch_policies ?? null)) +
       ", branch_policy_state=" + result.branchPolicyState +
       ", branch_policy_count=" + (result.branchPolicyCount ?? "unknown") +
       ", findings=" + (result.findings.map(finding => finding.code).join(",") || "none"),

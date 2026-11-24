@@ -23,7 +23,7 @@
 - SQLite stores only SHA-256 token digests. Queue messages carry only AES-256-GCM ciphertext, never plaintext capability tokens.
 - Use `ctx.storage.transaction(async () => { ...ctx.storage.sql.exec(...); await ctx.storage.setAlarm(...); })` when SQL and Alarm state must commit together. Do not use `transactionSync()` for awaited Alarm operations. Keep Web Crypto, Queue sends, and HTTP fetch outside storage transactions.
 - Preserve the existing event producers: `transitionTask(outboxEvent)` and owner `release`. Do not invent a new public event-ingress endpoint.
-- Keep secrets and destination URLs deployment-configured. Reject missing or malformed configuration; do not read, create, update, or delete secret values.
+- Keep secrets and destination URLs deployment-configured. Require an exact per-environment `OUTBOX_WEBHOOK_ALLOWED_HOSTS` DNS hostname allowlist; reject wildcard, IP literal, localhost, suffix matching, and any webhook URL not matching an allowed hostname. Reject missing or malformed configuration; do not read, create, update, or delete secret values.
 - No merge, deployment, staging smoke, or real Queue/webhook delivery.
 - The full-history secret scan findings recorded in PR #462 remain a separate repository-wide release blocker.
 
@@ -212,7 +212,8 @@
   - `decryptOutboxCapability_rejects_unknown_key_and_malformed_nonce`.
   - `decryptOutboxCapability_accepts_previous_key_for_in_flight_message`: ciphertext created with the previous key remains decryptable while the active key rotates.
   - `buildOutboxWebhookRequest_signs_exact_raw_body_and_stable_event_id`: independently compute HMAC and assert `Idempotency-Key`, timestamp, signature.
-  - `buildOutboxWebhookRequest_rejects_non_https_credentials_and_fragments`.
+  - `buildOutboxWebhookRequest_rejects_non_https_credentials_query_and_fragments`.
+  - `buildOutboxWebhookRequest_rejects_non_allowlisted_host_ip_literal_wildcard_and_suffix_match`.
   - `classifyOutboxWebhookResponse_separates_retryable_and_permanent_statuses`.
   - `webhook_request_never_contains_capability_or_key_material`.
 
@@ -222,7 +223,7 @@
   Expected: helper exports/behavior are absent.
 
 - [ ] **Step 3 — Implement**
-  Strictly parse `OUTBOX_QUEUE_ENCRYPTION_KEYS` and active key ID; allow one active key and at most one previous decrypt-only key. Validate HTTPS URL without credentials or fragment. Build canonical JSON once and HMAC-SHA256 over `v1\n{timestamp}\n{rawBody}`. Construct fetch with `redirect: 'manual'` and `AbortSignal.timeout(20_000)`. Never log request/response bodies, capability tokens, or key values.
+  Strictly parse `OUTBOX_QUEUE_ENCRYPTION_KEYS` and active key ID; allow one active key and at most one previous decrypt-only key. Validate HTTPS URL without credentials, query, or fragment, and require exact parsed hostname membership in `OUTBOX_WEBHOOK_ALLOWED_HOSTS`. Reject IP literals, localhost, wildcard entries, suffix matches, and missing allowlists. Keep `global_fetch_strictly_public` enabled as a separate egress control. Build canonical JSON once and HMAC-SHA256 over `v1\n{timestamp}\n{rawBody}`. Construct fetch with `redirect: 'manual'` and `AbortSignal.timeout(20_000)`. Never log request/response bodies, capability tokens, or key values.
 
 - [ ] **Step 4 — Verify GREEN and commit**
   Re-run the focused crypto test, then:
@@ -420,6 +421,7 @@
 - Existing Queue consumers currently have zero registrations; Wrangler source changes plus future deployment would be required to activate them.
 - Quarantine Queues currently show 24-hour retention. Verify plan capability before requesting a retention change; otherwise an independent durable export/archive is required. No retention policy change is included.
 - Existing internal Outbox producers are `transitionTask(outboxEvent)` and owner `release`; the inspected Worker `fetch` path does not invoke the Ledger. Verify the upstream invocation/actor path without inventing a public ingress.
+- Exact webhook hostname allowlists and endpoint URL values are not selected in this implementation plan; absent settings fail closed. `global_fetch_strictly_public` is retained as a platform egress guard, not treated as a replacement for exact hostname allowlisting.
 - The parent PR #462's full-history secret-scan blocker remains independent of this branch.
 - No exactly-once external side effects, production resilience, or real provider delivery may be claimed from local Workers Vitest evidence.
 

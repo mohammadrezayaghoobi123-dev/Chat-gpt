@@ -7,7 +7,8 @@ import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 import { consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
 let now;
-beforeEach(() => { now = Date.now(); vi.spyOn(Date, "now").mockReturnValue(now); });
+let ledgerClock;
+beforeEach(() => { now = Date.now(); ledgerClock = vi.spyOn(Date, "now").mockReturnValue(now); });
 afterEach(() => vi.restoreAllMocks());
 const ownerId = "335530603";
 const repositoryId = 1398846697;
@@ -2303,7 +2304,7 @@ describe("Owner command atomic Ledger contract", () => {
     const role = "system";
     const operation = "createTask";
     let ledgerNow = now;
-    const wallClockSpy = vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
+    const wallClockSpy = ledgerClock.mockImplementation(() => ledgerNow);
     const createAt = async (offsetSeconds, taskId) => {
       const issuedAt = now + offsetSeconds * 1000;
       ledgerNow = issuedAt;
@@ -2416,7 +2417,7 @@ describe("Owner command atomic Ledger contract", () => {
 
     // Hold the Ledger wall clock beyond assertion expiry while the caller
     // supplies a later timestamp and then attempts to backdate it.
-    const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(now + 120_000);
+    const wallClockSpy = ledgerClock.mockReturnValue(now + 120_000);
     let afterExpiry;
     let afterRollback;
     try {
@@ -2477,7 +2478,7 @@ describe("Owner command atomic Ledger contract", () => {
   it("rejects issuer clocks more than five seconds ahead of the Ledger", async () => {
     const ledger = ledgerFor("worker-assertion-future-clock-skew-boundary");
     const ledgerNow = Math.floor(now / 1000) * 1000;
-    vi.spyOn(Date, "now").mockReturnValue(ledgerNow);
+    ledgerClock.mockReturnValue(ledgerNow);
 
     const atBoundary = await ledger.createTask({
       task: { ...task("task-clock-skew-future-boundary") },
@@ -2525,7 +2526,7 @@ describe("Owner command atomic Ledger contract", () => {
   it("rejects issuer clocks more than five seconds behind the Ledger expiry boundary", async () => {
     const ledger = ledgerFor("worker-assertion-expiry-clock-skew-boundary");
     const ledgerNow = Math.floor(now / 1000) * 1000;
-    vi.spyOn(Date, "now").mockReturnValue(ledgerNow);
+    ledgerClock.mockReturnValue(ledgerNow);
 
     const atBoundary = await ledger.createTask({
       task: { ...task("task-clock-skew-expiry-boundary") },
@@ -2573,7 +2574,7 @@ describe("Owner command atomic Ledger contract", () => {
   it("pins future-issued assertion skew to whole-second NumericDate quantization", async () => {
     const ledger = ledgerFor("worker-assertion-clock-skew-future-quantization");
     const ledgerNow = Math.floor(now / 1000) * 1000;
-    vi.spyOn(Date, "now").mockReturnValue(ledgerNow);
+    ledgerClock.mockReturnValue(ledgerNow);
     const withinQuantizedBoundary = await ledger.createTask({
       task: {
         ...task("task-clock-skew-quantized-future-accepted"),
@@ -2632,7 +2633,7 @@ describe("Owner command atomic Ledger contract", () => {
     const ledger = ledgerFor("worker-assertion-clock-skew-expiry-quantization");
     const ledgerBase = Math.floor(now / 1000) * 1000;
     let ledgerNow = ledgerBase + 999;
-    vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
+    ledgerClock.mockImplementation(() => ledgerNow);
     const withinQuantizedBoundaryNow = ledgerBase + 999;
     const outsideQuantizedBoundaryNow = ledgerBase + 1_000;
 
@@ -2699,7 +2700,7 @@ describe("Owner command atomic Ledger contract", () => {
     const operation = "createTask";
     const originalJti = "worker-jti-clock-forward-original-0001";
     const forwardJti = "worker-jti-clock-forward-cleanup-0001";
-    const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const wallClockSpy = ledgerClock.mockReturnValue(now);
     const originalToken = await workerAssertion(
       subject, role, operation, now, originalJti,
     );

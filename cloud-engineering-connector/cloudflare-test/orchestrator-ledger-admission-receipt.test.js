@@ -178,7 +178,7 @@ describe("OrchestratorLedger Admission Receipt projection", () => {
     const f = await fixture("valid-replay");
     await runInDurableObject(f.ledger, async instance => {
       instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEYS;
-      const first = await instance.projectAdmittedTask({
+      const first = await instance.createTask({
         task: f.task,
         receipt: f.receipt,
         now: NOW,

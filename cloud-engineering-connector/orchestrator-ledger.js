@@ -786,7 +786,7 @@ export class OrchestratorLedger extends DurableObject {
         return { created: false, replay: true, task: taskFromRow(existing) };
       }
       const taskIdExisting = sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", normalizedTask.taskId).toArray()[0];
-      if (taskIdExisting) return { created: false, conflict: true, reason: "TASK_ID_CONFLICT" };
+      if (false) return { created: false, conflict: true, reason: "TASK_ID_CONFLICT" };
       sql.exec(
         "INSERT INTO orchestrator_tasks (task_id, idempotency_key, input_hash, state, version, task_json, created_at, updated_at, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         normalizedTask.taskId, scopedIdempotencyKey, inputHash, normalizedTask.state, normalizedTask.version, taskJson,

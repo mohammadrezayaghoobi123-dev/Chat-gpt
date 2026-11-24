@@ -48,10 +48,12 @@ If validation fails, keep the reviewer disabled and do not retry uncertain API o
 
 ## Source provenance
 
-The reviewer runtime and redirect regression suite are carried forward without modification from PR #431 head `59c71d9451b04fe13f53c6cb9283039cfe456f60`:
+The reviewer runtime and original 9Router transport regression cases are carried forward from PR #431 head `59c71d9451b04fe13f53c6cb9283039cfe456f60`:
 
-- `review.js`: blob `498e92e3ab8daec12c7ee61cc9fc0892e1d3ff46`
-- `review.test.mjs`: blob `989d77da4d7ab3c146fe2be66a7a327fcb0096c4`
+- `review.js`: unchanged source blob `498e92e3ab8daec12c7ee61cc9fc0892e1d3ff46`
+- `review.test.mjs`: baseline source blob `989d77da4d7ab3c146fe2be66a7a327fcb0096c4`; this branch replaces superseded signal/`workflow_run` and enabled-review concurrency assertions with assertions for the current manual-only, reviewer-disabled bootstrap, and adds the GitHub comment redirect regression
+- `resolve-pr.mjs`: requires the complete comment body to equal `/review-canary`; first-line-only matching is rejected
+- `resolve-pr.test.mjs`: includes a test-first multiline-command regression
 - `package.json`: dependency contract `marked@17.0.1`
 - `package-lock.json`: lockfile version 3, exact `marked@17.0.1` integrity pin
 - `run-review.mjs`: retained as inert runtime entry point; the bootstrap workflow never invokes it

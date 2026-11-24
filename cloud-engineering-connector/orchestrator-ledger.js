@@ -2,7 +2,10 @@ import { DurableObject } from "cloudflare:workers";
 import { transitionTask as transitionTaskCore, TASK_STATES } from "./orchestrator-core.js";
 import { assertAgentRoundLimit } from "./orchestrator-protocol.js";
 import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orchestrator-protocol.js";
-import { verifyWorkerAssertion } from "./orchestrator-worker-identity.js";
+import {
+  verifyWorkerAssertion,
+  WORKER_ASSERTION_CLOCK_SKEW_SECONDS,
+} from "./orchestrator-worker-identity.js";
 import { verifyReconciliationEvidence } from "./orchestrator-reconciliation-evidence.js";
 import { verifyOwnerAssertion } from "./orchestrator-owner-assertion.js";
 import {
@@ -878,7 +881,18 @@ export class OrchestratorLedger extends DurableObject {
 
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+      const commitNow = Date.now();
+      const commitNowSeconds = Math.floor(commitNow / 1000);
+      if (admissionClaims.expiresAt <= commitNowSeconds) {
+        return { created: false, reason: "TASK_ADMISSION_EXPIRED" };
+      }
+      if (
+        verifiedAssertion.expiresAt < commitNowSeconds - WORKER_ASSERTION_CLOCK_SKEW_SECONDS ||
+        verifiedAssertion.issuedAt > commitNowSeconds + WORKER_ASSERTION_CLOCK_SKEW_SECONDS
+      ) {
+        return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
+      if (!consumeWorkerAssertion(sql, verifiedAssertion, commitNow)) {
         return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
 
@@ -975,7 +989,7 @@ export class OrchestratorLedger extends DurableObject {
         admissionClaims.membershipId, admissionClaims.membershipVersion, admissionClaims.policyScopeEpoch,
         admissionClaims.policyRuleVersion, admissionClaims.policyRuleResourceDigest,
         admissionClaims.policyDecisionId, admissionClaims.issuedAt, admissionClaims.expiresAt,
-        admissionClaims.keyId, grantDigest, now,
+        admissionClaims.keyId, grantDigest, commitNow,
       );
 
       const eventPayload = {
@@ -1002,7 +1016,7 @@ export class OrchestratorLedger extends DurableObject {
         payloadJson: serializeBounded(eventPayload, "task admission outbox payload"),
         tenantId: normalizedTask.tenantId,
         projectId: normalizedTask.projectId,
-        now,
+        now: commitNow,
       });
       if (!outboxResult.enqueued || outboxResult.conflict) {
         throw fail("Task admission Outbox persistence failed; transaction rolled back.", "TASK_ADMISSION_OUTBOX_FAILED");

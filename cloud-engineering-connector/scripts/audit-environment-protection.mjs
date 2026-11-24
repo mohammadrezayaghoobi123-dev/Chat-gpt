@@ -1,7 +1,7 @@
 import { appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import { verifyEnvironmentProtection, EnvironmentProtectionError } from "./verify-environment-protection.mjs";
+import { inspectEnvironmentProtection } from "./verify-environment-protection.mjs";
 
 const TARGET_ENVIRONMENTS = Object.freeze(["staging", "production"]);
 
@@ -17,59 +17,48 @@ function validateInput({ repository, token, fetchImpl }) {
   }
 }
 
-function safeReason(error) {
-  const message = error instanceof Error ? error.message : "Environment metadata verification failed.";
-  return message
+function safeReason(message) {
+  return String(message ?? "Environment metadata verification failed.")
     .replace(/Bearer\s+[^\s]+/gi, "Bearer [REDACTED]")
     .replace(/\s+/g, " ")
     .slice(0, 240);
 }
 
-function classifyFailure(error) {
-  if (!(error instanceof EnvironmentProtectionError)) {
-    return "UNKNOWN";
-  }
+function auditResultFromInspection(inspection) {
+  const findings = Object.freeze(
+    inspection.findings.map(finding => Object.freeze({
+      code: finding.code,
+      classification: finding.classification,
+      message: safeReason(finding.message),
+    })),
+  );
 
-  switch (error.code) {
-    case "ENVIRONMENT_NOT_FOUND":
-      return "MISSING";
-    case "POLICY_MISMATCH":
-      return "BLOCKED";
-    case "BRANCH_POLICY_ENDPOINT_NOT_FOUND":
-    case "API_REQUEST_FAILED":
-    case "API_UNAVAILABLE":
-    case "API_RESPONSE_INVALID":
-    case "API_STATE_INCONSISTENT":
-    default:
-      return "UNKNOWN";
-  }
+  const reason = findings.map(finding => finding.message).join("; ");
+  return Object.freeze({
+    environment: inspection.environment,
+    status: inspection.status,
+    administratorBypassAllowed: inspection.administratorBypassAllowed,
+    requiredReviewerRuleCount: inspection.requiredReviewerRuleCount,
+    requiredReviewerCount: inspection.requiredReviewerCount,
+    preventSelfReview: inspection.preventSelfReview,
+    deploymentBranchPolicy: inspection.deploymentBranchPolicy,
+    branchPolicyMode: inspection.branchPolicyMode,
+    branchPolicyState: inspection.branchPolicyState,
+    branchPolicyCount: inspection.branchPolicyCount,
+    branchPattern: inspection.branchPattern,
+    findings,
+    reason,
+  });
 }
 
 async function auditOneEnvironment({ repository, token, fetchImpl, environment }) {
-  try {
-    const verified = await verifyEnvironmentProtection({
-      repository,
-      releaseEnvironment: environment,
-      token,
-      fetchImpl,
-    });
-    return Object.freeze({
-      environment,
-      status: "READY",
-      branchPattern: verified.branchPattern,
-      requiredReviewerCount: verified.requiredReviewerCount,
-      reason: "",
-    });
-  } catch (error) {
-    const reason = safeReason(error);
-    return Object.freeze({
-      environment,
-      status: classifyFailure(error),
-      branchPattern: "",
-      requiredReviewerCount: null,
-      reason,
-    });
-  }
+  const inspection = await inspectEnvironmentProtection({
+    repository,
+    releaseEnvironment: environment,
+    token,
+    fetchImpl,
+  });
+  return auditResultFromInspection(inspection);
 }
 
 export async function auditEnvironmentProtection({ repository, token, fetchImpl = globalThis.fetch }) {
@@ -90,6 +79,12 @@ export async function auditEnvironmentProtection({ repository, token, fetchImpl 
   });
 }
 
+function displayBoolean(value) {
+  if (value === true) return "enabled";
+  if (value === false) return "disabled";
+  return "unknown";
+}
+
 export function renderEnvironmentAuditSummary(report) {
   if (
     report === null ||
@@ -103,28 +98,36 @@ export function renderEnvironmentAuditSummary(report) {
   const rows = report.environments.map(result => {
     const reviewerCount = Number.isSafeInteger(result.requiredReviewerCount)
       ? String(result.requiredReviewerCount)
+      : "unknown";
+    const branchFlags = result.deploymentBranchPolicy
+      ? "protected=" + displayBoolean(result.deploymentBranchPolicy.protected_branches) +
+        ", custom=" + displayBoolean(result.deploymentBranchPolicy.custom_branch_policies)
+      : "unknown";
+    const findings = result.findings.length > 0
+      ? result.findings.map(finding => finding.code + ": " + finding.message).join("; ")
       : "—";
     const branchPattern = result.branchPattern
       ? "`" + result.branchPattern.replace(/`/g, "") + "`"
       : "—";
-    const finding = result.reason
-      ? result.reason.replace(/[|\r\n]+/g, " ")
-      : "—";
 
     return "| " + result.environment +
       " | **" + result.status + "**" +
+      " | " + displayBoolean(result.administratorBypassAllowed) +
+      " | " + displayBoolean(result.preventSelfReview) +
       " | " + reviewerCount +
+      " | " + branchFlags +
+      " | " + result.branchPolicyState +
       " | " + branchPattern +
-      " | " + finding + " |";
+      " | " + findings.replace(/[|\r\n]+/g, " ") + " |";
   });
 
   return [
-    "# GitHub Environment read-only preflight",
+    "# GitHub Environment full posture census",
     "",
     "> Read-only metadata audit. This workflow does not bind a GitHub Environment, read Secrets or Variables, or authorize a release.",
     "",
-    "| Environment | Status | Required reviewers | Required branch pattern | Finding |",
-    "|---|---|---:|---|---|",
+    "| Environment | Status | Administrator bypass | Self-review prevention | Required reviewers | Branch-policy flags | Branch-policy state | Expected branch pattern | Findings |",
+    "|---|---|---|---|---:|---|---|---|---|",
     ...rows,
     "",
     "**Overall result:** " + (report.ready ? "READY" : "BLOCKED") + ".",
@@ -149,10 +152,17 @@ async function main() {
 
   for (const result of report.environments) {
     console.log(
-      "Environment audit result: environment=" + result.environment +
+      "Environment census: environment=" + result.environment +
       ", status=" + result.status +
+      ", administrator_bypass=" + displayBoolean(result.administratorBypassAllowed) +
+      ", prevent_self_review=" + displayBoolean(result.preventSelfReview) +
+      ", required_reviewer_rules=" + (result.requiredReviewerRuleCount ?? "unknown") +
       ", required_reviewers=" + (result.requiredReviewerCount ?? "unknown") +
-      (result.reason ? ", finding=" + result.reason : ""),
+      ", custom_branch_policies=" +
+        displayBoolean(result.deploymentBranchPolicy?.custom_branch_policies ?? null) +
+      ", branch_policy_state=" + result.branchPolicyState +
+      ", branch_policy_count=" + (result.branchPolicyCount ?? "unknown") +
+      ", findings=" + (result.findings.map(finding => finding.code).join(",") || "none"),
     );
   }
 

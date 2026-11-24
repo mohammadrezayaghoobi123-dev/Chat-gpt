@@ -46,6 +46,16 @@ export function createTenantDirectoryAdapters(namespace, selectedTenantId) {
         assertTenant(input);
         return stub.upsertProjectPolicy(input);
       },
+      async upsertAdmissionVerificationKey(input) {
+        assertTenant(input);
+        return stub.upsertAdmissionVerificationKey(input);
+      },
+    }),
+    admissionVerificationKeyStore: Object.freeze({
+      async getAdmissionVerificationKey(input) {
+        assertTenant(input);
+        return stub.getAdmissionVerificationKey(input);
+      },
     }),
   });
 }

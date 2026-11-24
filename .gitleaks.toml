@@ -187,3 +187,13 @@ regexes = [
   '''9523c0beaf609fc2c276dd8b4478c9471a9bbdec''',
   '''E52F07877A5805F9AF4AB0ACD46C5610D06E7001'''
 ]
+
+
+[[allowlists]]
+description = "Synthetic previous-key fixture accidentally shaped like a generic API key in one historical marker-rotation test commit; exact commit, test file, rule, and literal only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["ab525a63948822e195cc74f63c3a6b4340f705db"]
+paths = ['''^tools/9router-review/review\.test\.mjs$''']
+regexTarget = "line"
+regexes = ['''^\s*const previousKey = "previous-test-marker-key-with-at-least-32-bytes";$''']

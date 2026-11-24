@@ -44,6 +44,43 @@ function membershipRecord(row) {
   } : null;
 }
 
+const ADMISSION_SIGNING_MESSAGE_LIMIT = 32_768;
+const STANDARD_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+function base64ByteLength(value) {
+  if (typeof value !== "string" || value.length === 0 || !STANDARD_BASE64.test(value)) return -1;
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return value.length * 3 / 4 - padding;
+}
+
+function encodeBase64(bytes) {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 1) {
+    binary += String.fromCharCode(bytes[index]);
+  }
+  return btoa(binary);
+}
+
+function validAdmissionSigningEnvelope(envelope, tenantId, expectedKeyId = null) {
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return false;
+  if (
+    envelope.version !== 1 ||
+    envelope.tenantId !== tenantId ||
+    typeof envelope.keyId !== "string" ||
+    !IDENTIFIER.test(envelope.keyId) ||
+    (expectedKeyId !== null && envelope.keyId !== expectedKeyId) ||
+    typeof envelope.wrappingKeyId !== "string" ||
+    !IDENTIFIER.test(envelope.wrappingKeyId)
+  ) return false;
+  return (
+    base64ByteLength(envelope.publicKey) === 32 &&
+    base64ByteLength(envelope.kdfSalt) === 32 &&
+    base64ByteLength(envelope.iv) === 12 &&
+    base64ByteLength(envelope.wrappedPrivateKey) >= 64 &&
+    base64ByteLength(envelope.wrappedPrivateKey) <= 4096
+  );
+}
+
 function readPolicyScopeEpoch(sql, { tenantId, projectId, principalId, action }) {
   const row = sql.exec(
     "SELECT epoch FROM tenant_policy_scope_epochs WHERE tenant_id=? AND project_id=? AND principal_id=? AND action=?",
@@ -84,6 +121,7 @@ export class TenantDirectory extends DurableObject {
     super(ctx, env);
     this.ctx = ctx;
     this.env = env;
+    this.admissionSigningKeyPromises = new Map();
     this.ctx.blockConcurrencyWhile(async () => this.ensureSchema());
   }
 
@@ -129,6 +167,167 @@ export class TenantDirectory extends DurableObject {
   ping() {
     const row = this.ctx.storage.sql.exec("SELECT MAX(version) AS version FROM tenant_directory_schema_migrations").one();
     return { ok: Number(row.version) === 2, schemaVersion: Number(row.version ?? 0) };
+  }
+
+  async #provisionAdmissionSigningKey(tenantId) {
+    const storageKey = "admission:signing-key:v1:" + tenantId;
+    const pendingKey = "admission:signing-key-pending:v1:" + tenantId;
+    const storage = this.ctx.storage;
+    const existing = await storage.get(storageKey);
+    if (existing !== undefined) {
+      if (!validAdmissionSigningEnvelope(existing, tenantId)) {
+        throw fail("ADMISSION_SIGNING_KEY_STATE_INVALID", "The persisted tenant signing key state is invalid.");
+      }
+      return existing;
+    }
+
+    let pending = await storage.get(pendingKey);
+    if (pending !== undefined && (
+      !pending ||
+      pending.version !== 1 ||
+      pending.tenantId !== tenantId ||
+      typeof pending.keyId !== "string" ||
+      !IDENTIFIER.test(pending.keyId)
+    )) {
+      throw fail("ADMISSION_SIGNING_KEY_STATE_INVALID", "The pending tenant signing key state is invalid.");
+    }
+    if (pending === undefined) {
+      pending = { version: 1, tenantId, keyId: crypto.randomUUID() };
+      await storage.put(pendingKey, pending);
+    }
+
+    const signer = this.env?.ADMISSION_SIGNER;
+    if (!signer || typeof signer.fetch !== "function") {
+      throw fail("ADMISSION_SIGNER_UNAVAILABLE", "The isolated admission signer binding is unavailable.");
+    }
+
+    let response;
+    try {
+      response = await signer.fetch(new Request("https://admission-signer.internal/internal/v1/tenant-keys", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tenantId, keyId: pending.keyId }),
+      }));
+    } catch {
+      throw fail("ADMISSION_SIGNER_UNAVAILABLE", "The isolated admission signer could not be reached.");
+    }
+    if (!response || !response.ok) {
+      throw fail("ADMISSION_SIGNER_REJECTED", "The isolated admission signer rejected key provisioning.");
+    }
+
+    let envelope;
+    try {
+      envelope = await response.json();
+    } catch {
+      throw fail("ADMISSION_SIGNER_RESPONSE_INVALID", "The isolated admission signer returned an invalid response.");
+    }
+    if (!validAdmissionSigningEnvelope(envelope, tenantId, pending.keyId)) {
+      throw fail("ADMISSION_SIGNER_RESPONSE_INVALID", "The isolated admission signer returned an invalid key envelope.");
+    }
+
+    await storage.put(storageKey, envelope);
+    await storage.delete(pendingKey);
+    return envelope;
+  }
+
+  async #ensureAdmissionSigningKey(tenantId) {
+    const storageKey = "admission:signing-key:v1:" + tenantId;
+    const existing = await this.ctx.storage.get(storageKey);
+    if (existing !== undefined) {
+      if (!validAdmissionSigningEnvelope(existing, tenantId)) {
+        throw fail("ADMISSION_SIGNING_KEY_STATE_INVALID", "The persisted tenant signing key state is invalid.");
+      }
+      return existing;
+    }
+
+    let pending = this.admissionSigningKeyPromises.get(tenantId);
+    if (!pending) {
+      pending = this.#provisionAdmissionSigningKey(tenantId);
+      this.admissionSigningKeyPromises.set(tenantId, pending);
+    }
+    try {
+      return await pending;
+    } finally {
+      if (this.admissionSigningKeyPromises.get(tenantId) === pending) {
+        this.admissionSigningKeyPromises.delete(tenantId);
+      }
+    }
+  }
+
+  async getAdmissionVerificationKey(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const keyId = identifier(input?.keyId, "keyId");
+    const envelope = await this.#ensureAdmissionSigningKey(tenantId);
+    if (envelope.keyId !== keyId) {
+      throw fail("ADMISSION_SIGNING_KEY_NOT_FOUND", "The requested tenant signing key does not exist.");
+    }
+    return {
+      tenantId,
+      keyId,
+      algorithm: "Ed25519",
+      publicKey: envelope.publicKey,
+    };
+  }
+
+  async signAdmissionMessage(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    if (typeof input?.message !== "string" || input.message.length === 0) {
+      throw fail("INVALID_ADMISSION_SIGNING_MESSAGE", "A non-empty canonical signing message is required.");
+    }
+    const messageBytes = new TextEncoder().encode(input.message);
+    if (messageBytes.byteLength > ADMISSION_SIGNING_MESSAGE_LIMIT) {
+      messageBytes.fill(0);
+      throw fail("INVALID_ADMISSION_SIGNING_MESSAGE", "The canonical signing message exceeds the size limit.");
+    }
+
+    const envelope = await this.#ensureAdmissionSigningKey(tenantId);
+    const signer = this.env?.ADMISSION_SIGNER;
+    if (!signer || typeof signer.fetch !== "function") {
+      messageBytes.fill(0);
+      throw fail("ADMISSION_SIGNER_UNAVAILABLE", "The isolated admission signer binding is unavailable.");
+    }
+
+    let response;
+    try {
+      response = await signer.fetch(new Request("https://admission-signer.internal/internal/v1/sign", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...envelope,
+          message: encodeBase64(messageBytes),
+        }),
+      }));
+    } catch {
+      messageBytes.fill(0);
+      throw fail("ADMISSION_SIGNER_UNAVAILABLE", "The isolated admission signer could not be reached.");
+    } finally {
+      messageBytes.fill(0);
+    }
+    if (!response || !response.ok) {
+      throw fail("ADMISSION_SIGNER_REJECTED", "The isolated admission signer rejected the signing request.");
+    }
+
+    let result;
+    try {
+      result = await response.json();
+    } catch {
+      throw fail("ADMISSION_SIGNER_RESPONSE_INVALID", "The isolated admission signer returned an invalid signature response.");
+    }
+    if (
+      !result ||
+      result.keyId !== envelope.keyId ||
+      result.algorithm !== "Ed25519" ||
+      base64ByteLength(result.signature) !== 64
+    ) {
+      throw fail("ADMISSION_SIGNER_RESPONSE_INVALID", "The isolated admission signer returned an invalid signature.");
+    }
+    return {
+      tenantId,
+      keyId: envelope.keyId,
+      algorithm: "Ed25519",
+      publicKey: envelope.publicKey,
+      signature: result.signature,
+    };
   }
 
   async #verifyAdmin(assertion, operation, tenantId, projectId, target, now) {

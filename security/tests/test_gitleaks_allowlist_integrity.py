@@ -59,6 +59,12 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
         changed["allowlists"].append(copy.deepcopy(changed["allowlists"][0]))
         self.assertTrue(validate_config(changed, ROOT))
 
+    def test_global_policy_rejects_invalid_path_regex(self):
+        changed = copy.deepcopy(self.config)
+        changed["allowlists"][0]["paths"] = ["^[$"]
+        self.assertTrue(validate_config(changed, ROOT))
+
+
     def test_validator_rejects_non_literal_line_pattern(self):
         changed = copy.deepcopy(self.config)
         target = next(

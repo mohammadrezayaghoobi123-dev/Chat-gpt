@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createScheduledWorkerAssertion, verifyWorkerAssertion } from "../orchestrator-worker-identity.js";
 
@@ -150,8 +150,8 @@ async function collectProductionJavaScriptFiles(directory = connectorRoot) {
       }
       continue;
     }
-    if (entry.isFile() && /\\.(?:cjs|js|mjs)$/.test(entry.name)) {
-      files.push(relative(connectorRoot, join(directory, entry.name)).replaceAll("\\\\", "/"));
+    if (entry.isFile() && /\.(?:cjs|js|mjs)$/.test(entry.name)) {
+      files.push(relative(connectorRoot, join(directory, entry.name)).split(sep).join("/"));
     }
   }
   return files.sort();
@@ -175,7 +175,7 @@ test("production source keeps the dormant Scheduler createTask grant free of run
 
   const workerSource = sources.find(({ path }) => path === "worker.js")?.source;
   assert.ok(workerSource, "The production Worker source must be present in the scanned runtime.");
-  const signerCalls = workerSource.match(/\\bcreateScheduledWorkerAssertion\\s*\\(/g) ?? [];
+  const signerCalls = workerSource.match(/\bcreateScheduledWorkerAssertion\s*\(/g) ?? [];
 
   assert.equal(
     signerCalls.length,

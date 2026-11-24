@@ -147,7 +147,7 @@ describe("TenantDirectory Admission Receipt", () => {
       algorithm: "Ed25519",
       claims: {
         version: 1,
-        tokenType: "admission-receipt",
+        receiptType: "admission-receipt",
         issuer: "tenant-directory-admission",
         audience: "orchestrator-ledger",
         tenantId: target.tenantId,

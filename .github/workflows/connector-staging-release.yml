@@ -178,16 +178,13 @@ jobs:
           console.log("Staging binding preflight passed; rollback target captured by immutable version ID.");
           NODE
 
-      - name: Revalidate trusted reviewer access immediately before Staging deployment
-        run: node scripts/verify-release-approval.mjs
+      - name: Deploy candidate to Staging
+        id: deploy
+        shell: bash
+        run: bash scripts/verify-and-deploy-release.sh
         env:
           RELEASE_GITHUB_TOKEN: ${{ github.token }}
           RELEASE_REVIEWER_IDS: ${{ vars.RELEASE_REVIEWER_IDS }}
-
-      - name: Deploy candidate to Staging
-        id: deploy
-        run: npx wrangler deploy --env staging
-        env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
 

@@ -645,7 +645,7 @@ export class OrchestratorLedger extends DurableObject {
           priorReceipt.issue_number === issueNumber &&
           priorReceipt.comment_created_at === commentCreatedAt;
         if (!receiptMatches) {
-          return { registered: true, denied: true, reason: "OWNER_REDELIVERY_CONFLICT" };
+          return { registered: true, denied: true, reason: "OWNER_RECEIPT_CONFLICT" };
         }
         sql.exec(
           "UPDATE orchestrator_owner_webhook_retries SET state = 'COMPLETED', last_error_code = NULL, updated_at = ? WHERE delivery_id = ? AND body_sha256 = ? AND comment_id = ? AND command_hash = ? AND state = 'RETRYABLE'",

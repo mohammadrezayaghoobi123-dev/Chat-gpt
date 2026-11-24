@@ -175,3 +175,116 @@ commits = ["fe0302ea9927936f70c8a4acc577cae0b140e2d7"]
 paths = ['''^cloud-agent/test/memory-sync\.test\.js$''']
 regexTarget = "line"
 regexes = ["api_key = 'abcd1234efgh5678'"]
+
+
+[[allowlists]]
+description = "Historical scheduler idempotency metadata expression; exact commit, file, and deterministic source fragment only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["2729a325991c989cbab182967135aa76f864ac29"]
+paths = ['''^cloud-engineering-connector/worker\.js$''']
+regexTarget = "line"
+regexes = ['''idempotencyKey=idempotencyPrefix''']
+
+[[allowlists]]
+description = "Synthetic Outbox idempotency fixture in a historical owner-command test; exact commit, file, and literal only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["0222e99d941ded0910ae4252f66b9dfb1dd39025"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-owner-command\.test\.js$''']
+regexTarget = "line"
+regexes = ['''receipt-jti-cancel-gap-key-1''']
+
+[[allowlists]]
+description = "Synthetic Outbox idempotency fixture in a historical owner-command test; exact commit, file, and literal only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["75ca4409487e887279b45b66563c346015ce2342"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-owner-command\.test\.js$''']
+regexTarget = "line"
+regexes = ['''owner-late-publish-cancel-key-01''']
+
+[[allowlists]]
+description = "Sequential placeholder in an unused historical test comment; exact commit, file, and comment line only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["04d76f8fd734eaf4053c86461e1204caf18d9c9c"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-owner-command\.test\.js$''']
+regexTarget = "line"
+regexes = ['''^// API_KEY = "0123456789abcdef0123456789abcdef"$''']
+
+[[allowlists]]
+description = "Synthetic idempotency identifier used only by the historical stale-receipt Outbox test; identical fixture line appears in two exact commits."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = [
+  "93214555f5aa752a670c1c7c9a6d5f7b58f41cdf",
+  "a5f3a65dbe8e41d09c5d23131beca4eb73342fb2"
+]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-owner-command\.test\.js$''']
+regexTarget = "line"
+regexes = ['''^      idempotencyKey: "attacker-rebound-dedupe-01",$''']
+
+[[allowlists]]
+description = "Synthetic stale Outbox idempotency identifier in one historical owner-command test; exact commit, file, and line only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["167b676479f855a92d63b2aca575b8798128c143"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-owner-command\.test\.js$''']
+regexTarget = "line"
+regexes = ['''^    const staleIdempotencyKey = "owner-late-delivery-stale-dedupe-01";$''']
+
+[[allowlists]]
+description = "Synthetic rebound Outbox idempotency identifier in one historical owner-command test; exact commit, file, and literal only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["b12a3e068c8cba44039cf478f174814fc1d8f6b5"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-owner-command\.test\.js$''']
+regexTarget = "line"
+regexes = ['''attacker-rebound-idempotency-01''']
+
+[[allowlists]]
+description = "Synthetic stale Outbox idempotency identifier in one historical owner-command test; exact commit, file, and literal only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["5a750037bc1bec098184b7890f66b407582b94d8"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-owner-command\.test\.js$''']
+regexTarget = "line"
+regexes = ['''owner-late-delivery-stale-key-01''']
+
+[[allowlists]]
+description = "Synthetic rebound Outbox idempotency identifier in one historical owner-command test; exact commit, file, and literal only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["5a750037bc1bec098184b7890f66b407582b94d8"]
+paths = ['''^cloud-engineering-connector/cloudflare-test/orchestrator-owner-command\.test\.js$''']
+regexTarget = "line"
+regexes = ['''attacker-rebound-idempotency-01''']
+
+[[allowlists]]
+description = "Synthetic previous review-marker key used only by a historical marker-key rotation test; exact commit, file, and literal only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["ab525a63948822e195cc74f63c3a6b4340f705db"]
+paths = ['''^tools/9router-review/review\.test\.mjs$''']
+regexTarget = "line"
+regexes = ['''previous-test-marker-key-with-at-least-32-bytes''']
+
+[[allowlists]]
+description = "Public upstream ICU KEYS Git blob identifier; verified against the exact upstream source commit and exact historical report line."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["3082b80fbaf71685827ba63de882c3d93083b96f"]
+paths = ['''^docs/MASTER_BRAIN_GATE2P_R1U17_ICU79_SIGNING_IDENTITY_CANDIDATE_RECONCILIATION_2026-11-16\.md$''']
+regexTarget = "line"
+regexes = ['''9523c0beaf609fc2c276dd8b4478c9471a9bbdec''']
+
+[[allowlists]]
+description = "Public ICU Release Robot GPG primary-key fingerprint; verified in upstream ICU KEYS and downstream public trust metadata, exact historical commit and file only."
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["3082b80fbaf71685827ba63de882c3d93083b96f"]
+paths = ['''^docs/MASTER_BRAIN_GATE2P_R1U17_ICU79_SIGNING_IDENTITY_CANDIDATE_RECONCILIATION_2026-11-16\.md$''']
+regexTarget = "line"
+regexes = ['''E52F07877A5805F9AF4AB0ACD46C5610D06E7001''']
+

@@ -1,11 +1,14 @@
 import { DurableObject } from "cloudflare:workers";
 import { verifyTenantDirectoryAdminAssertion } from "./tenant-directory-assertion.js";
+import { admissionTextDigest, createTaskAdmissionGrant } from "../orchestrator-admission.js";
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const POLICY_EFFECTS = new Set(["allow", "deny"]);
 const MEMBERSHIP_STATUSES = new Set(["active", "suspended"]);
 const POLICY_STATUSES = new Set(["active", "disabled"]);
+const TASK_ADMISSION_GRANT_TTL_SECONDS = 300;
+const TASK_ADMISSION_RENEWAL_CLOCK_SKEW_SECONDS = 5;
 
 function fail(code, message) {
   return Object.assign(new Error(message), { code });
@@ -27,9 +30,14 @@ function version(value) {
   if (!Number.isSafeInteger(value) || value < 0) throw fail("INVALID_TENANT_DIRECTORY_INPUT", "expectedVersion must be a non-negative safe integer.");
   return value;
 }
-function defaultDeny({ principalId, tenantId, projectId, action, resourceDigest }) {
+function defaultDeny({
+  principalId, tenantId, projectId, action, resourceDigest,
+  membershipVersion = null, membershipStatus = "absent", policyScopeEpoch = 0,
+}) {
   return {
     principalId, tenantId, projectId, action, resourceDigest, effect: "deny",
+    membershipVersion, membershipStatus, policyScopeEpoch,
+    policyRuleVersion: null, policyRuleResourceDigest: null,
     decisionId: "default-deny-" + crypto.randomUUID(), policyVersion: "default-deny-v1",
   };
 }
@@ -68,7 +76,25 @@ export class TenantDirectory extends DurableObject {
     );
     sql.exec("CREATE INDEX IF NOT EXISTS tenant_project_policy_rules_active ON tenant_project_policy_rules(tenant_id, project_id, principal_id, action, status)");
     sql.exec(
-      "CREATE TABLE IF NOT EXISTS tenant_directory_audit_events (" +
+      "CREATE TABLE IF NOT EXISTS tenant_project_policy_scope_epochs (" +
+      "tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, principal_id TEXT NOT NULL, action TEXT NOT NULL, " +
+      "epoch INTEGER NOT NULL CHECK(epoch >= 0), " +
+      "PRIMARY KEY(tenant_id, project_id, principal_id, action))"
+    );
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS tenant_task_admission_reservations (" +
+      "admission_id TEXT PRIMARY KEY, jti TEXT NOT NULL UNIQUE, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, " +
+      "principal_id TEXT NOT NULL, task_id TEXT NOT NULL, task_digest TEXT NOT NULL CHECK(length(task_digest)=64), " +
+      "idempotency_key_digest TEXT NOT NULL CHECK(length(idempotency_key_digest)=64), input_hash TEXT NOT NULL CHECK(length(input_hash)=64), " +
+      "membership_id TEXT NOT NULL, membership_version INTEGER NOT NULL CHECK(membership_version > 0), " +
+      "policy_scope_epoch INTEGER NOT NULL CHECK(policy_scope_epoch >= 0), policy_rule_version INTEGER NOT NULL CHECK(policy_rule_version > 0), " +
+      "policy_rule_resource_digest TEXT NOT NULL, policy_decision_id TEXT NOT NULL, issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, " +
+      "grant_token TEXT NOT NULL CHECK(length(grant_token) <= 4096), created_at INTEGER NOT NULL, " +
+      "UNIQUE(tenant_id, project_id, idempotency_key_digest), UNIQUE(tenant_id, project_id, task_id))"
+    );
+    sql.exec("CREATE INDEX IF NOT EXISTS tenant_task_admission_reservations_by_expiry ON tenant_task_admission_reservations(expires_at)");
+    sql.exec(
+      "CREATE TABLE IF NOT EXISTS tenant_directory_audit_events ("+
       "sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, tenant_id TEXT NOT NULL, " +
       "project_id TEXT, actor_id TEXT NOT NULL, operation TEXT NOT NULL, target_digest TEXT NOT NULL, " +
       "before_version INTEGER, after_version INTEGER NOT NULL, details_json TEXT NOT NULL CHECK(json_valid(details_json)), " +
@@ -78,11 +104,13 @@ export class TenantDirectory extends DurableObject {
     sql.exec("CREATE TRIGGER IF NOT EXISTS tenant_directory_audit_no_update BEFORE UPDATE ON tenant_directory_audit_events BEGIN SELECT RAISE(ABORT, 'TENANT_DIRECTORY_AUDIT_APPEND_ONLY'); END");
     sql.exec("CREATE TRIGGER IF NOT EXISTS tenant_directory_audit_no_delete BEFORE DELETE ON tenant_directory_audit_events BEGIN SELECT RAISE(ABORT, 'TENANT_DIRECTORY_AUDIT_APPEND_ONLY'); END");
     sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(1, ?)", Date.now());
+    sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(2, ?)", Date.now());
+    sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(3, ?)", Date.now());
   }
 
   ping() {
     const row = this.ctx.storage.sql.exec("SELECT MAX(version) AS version FROM tenant_directory_schema_migrations").one();
-    return { ok: Number(row.version) === 1, schemaVersion: Number(row.version ?? 0) };
+    return { ok: Number(row.version) >= 3, schemaVersion: Number(row.version ?? 0) };
   }
 
   async #verifyAdmin(assertion, operation, tenantId, projectId, target, now) {
@@ -106,6 +134,55 @@ export class TenantDirectory extends DurableObject {
       beforeVersion, afterVersion, JSON.stringify(target), now
     );
     return eventId;
+  }
+
+  #advancePolicyScopeEpoch(sql, tenantId, projectId, principalId, action) {
+    sql.exec(
+      "INSERT INTO tenant_project_policy_scope_epochs(tenant_id, project_id, principal_id, action, epoch) " +
+      "VALUES(?, ?, ?, ?, 1) ON CONFLICT(tenant_id, project_id, principal_id, action) " +
+      "DO UPDATE SET epoch=epoch+1",
+      tenantId, projectId, principalId, action
+    );
+    const row = sql.exec(
+      "SELECT epoch FROM tenant_project_policy_scope_epochs " +
+      "WHERE tenant_id=? AND project_id=? AND principal_id=? AND action=?",
+      tenantId, projectId, principalId, action
+    ).one();
+    return Number(row.epoch);
+  }
+
+  #readTaskAdmissionSnapshot(sql, { tenantId, projectId, principalId, taskDigest }) {
+    const membership = sql.exec(
+      "SELECT membership_id, status, version FROM tenant_memberships WHERE tenant_id=? AND principal_id=?",
+      tenantId, principalId
+    ).toArray()[0] ?? null;
+    const epochRow = sql.exec(
+      "SELECT epoch FROM tenant_project_policy_scope_epochs WHERE tenant_id=? AND project_id=? AND principal_id=? AND action='task.create'",
+      tenantId, projectId, principalId
+    ).toArray()[0];
+    const rule = sql.exec(
+      "SELECT effect, policy_version, decision_id, resource_digest, version FROM tenant_project_policy_rules " +
+      "WHERE tenant_id=? AND project_id=? AND principal_id=? AND action='task.create' AND status='active' " +
+      "AND resource_digest IN (?, '*') ORDER BY CASE WHEN resource_digest=? THEN 0 ELSE 1 END LIMIT 1",
+      tenantId, projectId, principalId, taskDigest, taskDigest
+    ).toArray()[0] ?? null;
+    return {
+      membership,
+      policyScopeEpoch: Number(epochRow?.epoch ?? 0),
+      rule,
+    };
+  }
+
+  #advanceActivePolicyScopesForPrincipal(sql, tenantId, principalId) {
+    const scopes = sql.exec(
+      "SELECT DISTINCT project_id, action FROM tenant_project_policy_rules " +
+      "WHERE tenant_id=? AND principal_id=? AND status='active' ORDER BY project_id, action",
+      tenantId, principalId
+    ).toArray();
+    for (const scope of scopes) {
+      this.#advancePolicyScopeEpoch(sql, tenantId, scope.project_id, principalId, scope.action);
+    }
+    return scopes.length;
   }
 
   getActiveMembership(input) {
@@ -152,6 +229,7 @@ export class TenantDirectory extends DurableObject {
         tenantId, principalId, membershipId, role, status, nextVersion, current?.created_at ?? now, now
       );
       if (status !== "active") {
+        this.#advanceActivePolicyScopesForPrincipal(sql, tenantId, principalId);
         sql.exec(
           "UPDATE tenant_project_policy_rules SET status='disabled', version=version+1, updated_at=? " +
           "WHERE tenant_id=? AND principal_id=? AND status='active'",
@@ -189,6 +267,7 @@ export class TenantDirectory extends DurableObject {
         "UPDATE tenant_memberships SET status='revoked', version=?, updated_at=?, revoked_at=? WHERE tenant_id=? AND principal_id=? AND version=?",
         nextVersion, now, now, tenantId, principalId, expectedVersion
       );
+      this.#advanceActivePolicyScopesForPrincipal(sql, tenantId, principalId);
       sql.exec(
         "UPDATE tenant_project_policy_rules SET status='disabled', version=version+1, updated_at=? " +
         "WHERE tenant_id=? AND principal_id=? AND status='active'",
@@ -234,10 +313,14 @@ export class TenantDirectory extends DurableObject {
         tenantId, projectId, principalId, action, resourceDigest, effect, policyVersion, decisionId, status,
         nextVersion, current?.created_at ?? now, now
       );
+      const policyScopeEpoch = this.#advancePolicyScopeEpoch(sql, tenantId, projectId, principalId, action);
       const auditEventId = this.#appendAuditEvent(
         sql, verified, "upsertProjectPolicy", tenantId, projectId, target, current?.version ?? null, nextVersion, now
       );
-      return { tenantId, projectId, principalId, action, resourceDigest, effect, policyVersion, decisionId, status, version: nextVersion, auditEventId };
+      return {
+        tenantId, projectId, principalId, action, resourceDigest, effect, policyVersion,
+        decisionId, status, version: nextVersion, policyScopeEpoch, auditEventId,
+      };
     });
   }
 
@@ -248,18 +331,420 @@ export class TenantDirectory extends DurableObject {
     const action = requiredString(input?.action, "action", 128);
     const resourceDigest = input?.resourceDigest;
     if (!SHA256.test(resourceDigest ?? "")) throw fail("INVALID_TENANT_DIRECTORY_INPUT", "resourceDigest must be a SHA-256 digest.");
-    const membership = this.ctx.storage.sql.exec(
-      "SELECT 1 AS active FROM tenant_memberships WHERE tenant_id=? AND principal_id=? AND status='active'",
+    const sql = this.ctx.storage.sql;
+    const membership = sql.exec(
+      "SELECT membership_id, status, version FROM tenant_memberships WHERE tenant_id=? AND principal_id=?",
       tenantId, principalId
+    ).toArray()[0] ?? null;
+    const epochRow = sql.exec(
+      "SELECT epoch FROM tenant_project_policy_scope_epochs " +
+      "WHERE tenant_id=? AND project_id=? AND principal_id=? AND action=?",
+      tenantId, projectId, principalId, action
     ).toArray()[0];
-    if (!membership) return defaultDeny({ principalId, tenantId, projectId, action, resourceDigest });
-    const rule = this.ctx.storage.sql.exec(
-      "SELECT effect, policy_version, decision_id FROM tenant_project_policy_rules " +
+    const policyScopeEpoch = Number(epochRow?.epoch ?? 0);
+    const membershipVersion = membership ? Number(membership.version) : null;
+    const membershipStatus = membership?.status ?? "absent";
+
+    if (!membership || membership.status !== "active") {
+      return defaultDeny({
+        principalId, tenantId, projectId, action, resourceDigest,
+        membershipVersion, membershipStatus, policyScopeEpoch,
+      });
+    }
+
+    const rule = sql.exec(
+      "SELECT effect, policy_version, decision_id, resource_digest, version FROM tenant_project_policy_rules " +
       "WHERE tenant_id=? AND project_id=? AND principal_id=? AND action=? AND status='active' " +
       "AND resource_digest IN (?, '*') ORDER BY CASE WHEN resource_digest=? THEN 0 ELSE 1 END LIMIT 1",
       tenantId, projectId, principalId, action, resourceDigest, resourceDigest
     ).toArray()[0];
-    if (!rule) return defaultDeny({ principalId, tenantId, projectId, action, resourceDigest });
-    return { principalId, tenantId, projectId, action, resourceDigest, effect: rule.effect, decisionId: rule.decision_id, policyVersion: rule.policy_version };
+    if (!rule) {
+      return defaultDeny({
+        principalId, tenantId, projectId, action, resourceDigest,
+        membershipVersion, membershipStatus, policyScopeEpoch,
+      });
+    }
+    return {
+      principalId, tenantId, projectId, action, resourceDigest,
+      effect: rule.effect, decisionId: rule.decision_id, policyVersion: rule.policy_version,
+      membershipVersion, membershipStatus, policyScopeEpoch,
+      policyRuleVersion: Number(rule.version),
+      policyRuleResourceDigest: rule.resource_digest,
+    };
+  }
+  async prepareTaskAdmission(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
+    const principalId = identifier(input?.principalId, "principalId");
+    const taskId = identifier(input?.taskId, "taskId");
+    const taskDigest = input?.taskDigest;
+    if (!SHA256.test(taskDigest ?? "")) throw fail("INVALID_TENANT_DIRECTORY_INPUT", "taskDigest must be a SHA-256 digest.");
+    const idempotencyKey = identifier(input?.idempotencyKey, "idempotencyKey");
+    const inputHash = input?.inputHash;
+    if (!SHA256.test(inputHash ?? "")) throw fail("INVALID_TENANT_DIRECTORY_INPUT", "inputHash must be a SHA-256 digest.");
+    const now = timestamp(Date.now());
+    let idempotencyKeyDigest;
+    try {
+      idempotencyKeyDigest = await admissionTextDigest(idempotencyKey);
+    } catch {
+      throw fail("INVALID_TENANT_DIRECTORY_INPUT", "idempotencyKey cannot be fingerprinted.");
+    }
+
+    const sql = this.ctx.storage.sql;
+    const findExisting = () => sql.exec(
+      "SELECT * FROM tenant_task_admission_reservations WHERE tenant_id=? AND project_id=? AND idempotency_key_digest=?",
+      tenantId, projectId, idempotencyKeyDigest
+    ).toArray()[0] ?? null;
+    const existingResponse = existing => {
+      if (existing.principal_id !== principalId || existing.task_id !== taskId ||
+          existing.task_digest !== taskDigest || existing.input_hash !== inputHash) {
+        throw fail("TASK_ADMISSION_IDEMPOTENCY_CONFLICT", "Task admission idempotency key is already bound to different Task input.");
+      }
+      if (existing.expires_at <= Math.floor(Date.now() / 1000)) {
+        throw fail("TASK_ADMISSION_RETRY_WINDOW_EXPIRED", "The original Task admission grant has expired.");
+      }
+      return {
+        reserved: true,
+        replay: true,
+        tenantId: existing.tenant_id,
+        projectId: existing.project_id,
+        principalId: existing.principal_id,
+        taskId: existing.task_id,
+        taskDigest: existing.task_digest,
+        idempotencyKeyDigest: existing.idempotency_key_digest,
+        inputHash: existing.input_hash,
+        membershipId: existing.membership_id,
+        membershipVersion: Number(existing.membership_version),
+        policyScopeEpoch: Number(existing.policy_scope_epoch),
+        policyRuleVersion: Number(existing.policy_rule_version),
+        policyRuleResourceDigest: existing.policy_rule_resource_digest,
+        policyDecisionId: existing.policy_decision_id,
+        admissionId: existing.admission_id,
+        jti: existing.jti,
+        issuedAt: Number(existing.issued_at),
+        expiresAt: Number(existing.expires_at),
+        grant: existing.grant_token,
+      };
+    };
+
+    const prior = findExisting();
+    if (prior) return existingResponse(prior);
+
+    const snapshot = this.#readTaskAdmissionSnapshot(sql, {
+      tenantId, projectId, principalId, taskDigest,
+    });
+    if (!snapshot.membership || snapshot.membership.status !== "active" ||
+        !snapshot.rule || snapshot.rule.effect !== "allow") {
+      throw fail("TASK_ADMISSION_DENIED", "An active membership and an allow policy for task.create are required.");
+    }
+    const policyRuleResourceDigest = snapshot.rule.resource_digest;
+    const issuedAt = Math.floor(now / 1000);
+    const expiresAt = issuedAt + TASK_ADMISSION_GRANT_TTL_SECONDS;
+    const admissionId = "admission-" + crypto.randomUUID();
+    const jti = "jti-" + crypto.randomUUID();
+    const claims = {
+      principalId,
+      tenantId,
+      projectId,
+      taskId,
+      taskDigest,
+      idempotencyKeyDigest,
+      inputHash,
+      membershipId: snapshot.membership.membership_id,
+      membershipVersion: Number(snapshot.membership.version),
+      policyScopeEpoch: snapshot.policyScopeEpoch,
+      policyRuleVersion: Number(snapshot.rule.version),
+      policyRuleResourceDigest,
+      policyDecisionId: snapshot.rule.decision_id,
+      admissionId,
+      jti,
+      issuedAt,
+      expiresAt,
+    };
+    let grant;
+    try {
+      grant = await createTaskAdmissionGrant(
+        this.env?.TENANT_DIRECTORY_ADMISSION_PRIVATE_KEYS,
+        this.env?.TENANT_DIRECTORY_ADMISSION_ACTIVE_KID,
+        claims,
+      );
+    } catch {
+      throw fail("TASK_ADMISSION_SIGNING_UNAVAILABLE", "Task admission signing is unavailable.");
+    }
+
+    return this.ctx.storage.transactionSync(() => {
+      const concurrent = findExisting();
+      if (concurrent) return existingResponse(concurrent);
+
+      const commitNow = timestamp(Date.now());
+      if (Math.floor(commitNow / 1000) >= expiresAt) {
+        throw fail("TASK_ADMISSION_EXPIRED", "Task admission grant expired before its reservation committed.");
+      }
+
+      const taskOwner = sql.exec(
+        "SELECT admission_id FROM tenant_task_admission_reservations WHERE tenant_id=? AND project_id=? AND task_id=?",
+        tenantId, projectId, taskId
+      ).toArray()[0];
+      if (taskOwner) {
+        throw fail("TASK_ADMISSION_TASK_ID_CONFLICT", "Task ID is already reserved by another admission.");
+      }
+
+      const current = this.#readTaskAdmissionSnapshot(sql, {
+        tenantId, projectId, principalId, taskDigest,
+      });
+      if (!current.membership || current.membership.status !== "active" ||
+          current.membership.membership_id !== snapshot.membership.membership_id ||
+          Number(current.membership.version) !== Number(snapshot.membership.version) ||
+          current.policyScopeEpoch !== snapshot.policyScopeEpoch ||
+          !current.rule || current.rule.effect !== "allow" ||
+          current.rule.decision_id !== snapshot.rule.decision_id ||
+          Number(current.rule.version) !== Number(snapshot.rule.version) ||
+          current.rule.resource_digest !== snapshot.rule.resource_digest) {
+        throw fail("TASK_ADMISSION_SNAPSHOT_STALE", "Tenant membership or policy changed while the admission grant was being signed.");
+      }
+
+      const target = {
+        principalId, projectId, taskId, taskDigest, idempotencyKeyDigest, inputHash,
+        membershipId: claims.membershipId,
+        membershipVersion: claims.membershipVersion,
+        policyScopeEpoch: claims.policyScopeEpoch,
+        policyRuleVersion: claims.policyRuleVersion,
+        policyRuleResourceDigest,
+        policyDecisionId: claims.policyDecisionId,
+        admissionId, jti, issuedAt, expiresAt,
+      };
+      sql.exec(
+        "INSERT INTO tenant_task_admission_reservations(" +
+        "admission_id, jti, tenant_id, project_id, principal_id, task_id, task_digest, idempotency_key_digest, input_hash, " +
+        "membership_id, membership_version, policy_scope_epoch, policy_rule_version, policy_rule_resource_digest, " +
+        "policy_decision_id, issued_at, expires_at, grant_token, created_at) " +
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        admissionId, jti, tenantId, projectId, principalId, taskId, taskDigest, idempotencyKeyDigest, inputHash,
+        claims.membershipId, claims.membershipVersion, claims.policyScopeEpoch, claims.policyRuleVersion,
+        policyRuleResourceDigest, claims.policyDecisionId, issuedAt, expiresAt, grant, commitNow,
+      );
+      const auditEventId = this.#appendAuditEvent(
+        sql,
+        { subject: principalId, targetDigest: taskDigest },
+        "prepareTaskAdmission",
+        tenantId,
+        projectId,
+        target,
+        null,
+        claims.membershipVersion,
+        commitNow,
+      );
+      return {
+        reserved: true,
+        replay: false,
+        ...claims,
+        grant,
+        auditEventId,
+      };
+    });
+  }
+
+  async renewTaskAdmissionGrant(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const projectId = identifier(input?.projectId, "projectId");
+    const principalId = identifier(input?.principalId, "principalId");
+    const taskId = identifier(input?.taskId, "taskId");
+    const taskDigest = input?.taskDigest;
+    if (!SHA256.test(taskDigest ?? "")) throw fail("INVALID_TENANT_DIRECTORY_INPUT", "taskDigest must be a SHA-256 digest.");
+    const idempotencyKey = identifier(input?.idempotencyKey, "idempotencyKey");
+    const inputHash = input?.inputHash;
+    if (!SHA256.test(inputHash ?? "")) throw fail("INVALID_TENANT_DIRECTORY_INPUT", "inputHash must be a SHA-256 digest.");
+
+    let idempotencyKeyDigest;
+    try {
+      idempotencyKeyDigest = await admissionTextDigest(idempotencyKey);
+    } catch {
+      throw fail("INVALID_TENANT_DIRECTORY_INPUT", "idempotencyKey cannot be fingerprinted.");
+    }
+
+    const sql = this.ctx.storage.sql;
+    const findExisting = () => sql.exec(
+      "SELECT * FROM tenant_task_admission_reservations WHERE tenant_id=? AND project_id=? AND idempotency_key_digest=?",
+      tenantId, projectId, idempotencyKeyDigest,
+    ).toArray()[0] ?? null;
+    const assertSameInput = existing => {
+      if (existing.principal_id !== principalId || existing.task_id !== taskId ||
+          existing.task_digest !== taskDigest || existing.input_hash !== inputHash) {
+        throw fail("TASK_ADMISSION_IDEMPOTENCY_CONFLICT", "Task admission idempotency key is already bound to different Task input.");
+      }
+    };
+    const response = (existing, replay = true, auditEventId = undefined) => ({
+      reserved: true,
+      replay,
+      tenantId: existing.tenant_id,
+      projectId: existing.project_id,
+      principalId: existing.principal_id,
+      taskId: existing.task_id,
+      taskDigest: existing.task_digest,
+      idempotencyKeyDigest: existing.idempotency_key_digest,
+      inputHash: existing.input_hash,
+      membershipId: existing.membership_id,
+      membershipVersion: Number(existing.membership_version),
+      policyScopeEpoch: Number(existing.policy_scope_epoch),
+      policyRuleVersion: Number(existing.policy_rule_version),
+      policyRuleResourceDigest: existing.policy_rule_resource_digest,
+      policyDecisionId: existing.policy_decision_id,
+      admissionId: existing.admission_id,
+      jti: existing.jti,
+      issuedAt: Number(existing.issued_at),
+      expiresAt: Number(existing.expires_at),
+      grant: existing.grant_token,
+      ...(auditEventId ? { auditEventId } : {}),
+    });
+    const snapshotMatches = (snapshot, existing) =>
+      !!snapshot.membership &&
+      snapshot.membership.status === "active" &&
+      snapshot.membership.membership_id === existing.membership_id &&
+      Number(snapshot.membership.version) === Number(existing.membership_version) &&
+      snapshot.policyScopeEpoch === Number(existing.policy_scope_epoch) &&
+      !!snapshot.rule &&
+      snapshot.rule.effect === "allow" &&
+      snapshot.rule.decision_id === existing.policy_decision_id &&
+      Number(snapshot.rule.version) === Number(existing.policy_rule_version) &&
+      snapshot.rule.resource_digest === existing.policy_rule_resource_digest;
+
+    const prior = findExisting();
+    if (!prior) {
+      throw fail("TASK_ADMISSION_RESERVATION_NOT_FOUND", "No matching Task admission reservation exists to renew.");
+    }
+    assertSameInput(prior);
+
+    const now = timestamp(Date.now());
+    const nowSeconds = Math.floor(now / 1000);
+    if (Number(prior.expires_at) > nowSeconds) return response(prior);
+    if (Number(prior.expires_at) + TASK_ADMISSION_RENEWAL_CLOCK_SKEW_SECONDS > nowSeconds) {
+      throw fail("TASK_ADMISSION_RENEWAL_NOT_READY", "The previous Grant is inside the bounded clock-skew fence; renewal must wait.");
+    }
+
+    const snapshot = this.#readTaskAdmissionSnapshot(sql, {
+      tenantId, projectId, principalId, taskDigest,
+    });
+    if (!snapshotMatches(snapshot, prior)) {
+      throw fail("TASK_ADMISSION_REAUTHORIZATION_DENIED", "The original membership or policy snapshot is no longer active and unchanged.");
+    }
+
+    const issuedAt = nowSeconds;
+    const expiresAt = issuedAt + TASK_ADMISSION_GRANT_TTL_SECONDS;
+    const admissionId = "admission-" + crypto.randomUUID();
+    const jti = "jti-" + crypto.randomUUID();
+    const claims = {
+      principalId,
+      tenantId,
+      projectId,
+      taskId,
+      taskDigest,
+      idempotencyKeyDigest,
+      inputHash,
+      membershipId: prior.membership_id,
+      membershipVersion: Number(prior.membership_version),
+      policyScopeEpoch: Number(prior.policy_scope_epoch),
+      policyRuleVersion: Number(prior.policy_rule_version),
+      policyRuleResourceDigest: prior.policy_rule_resource_digest,
+      policyDecisionId: prior.policy_decision_id,
+      admissionId,
+      jti,
+      issuedAt,
+      expiresAt,
+    };
+
+    let grant;
+    try {
+      grant = await createTaskAdmissionGrant(
+        this.env?.TENANT_DIRECTORY_ADMISSION_PRIVATE_KEYS,
+        this.env?.TENANT_DIRECTORY_ADMISSION_ACTIVE_KID,
+        claims,
+      );
+    } catch {
+      throw fail("TASK_ADMISSION_SIGNING_UNAVAILABLE", "Task admission signing is unavailable.");
+    }
+
+    return this.ctx.storage.transactionSync(() => {
+      const current = findExisting();
+      if (!current) {
+        throw fail("TASK_ADMISSION_RESERVATION_NOT_FOUND", "Task admission reservation disappeared during renewal.");
+      }
+      assertSameInput(current);
+
+      const commitNow = timestamp(Date.now());
+      const commitNowSeconds = Math.floor(commitNow / 1000);
+      const sameReservation =
+        current.admission_id === prior.admission_id &&
+        current.jti === prior.jti &&
+        Number(current.expires_at) === Number(prior.expires_at);
+
+      if (!sameReservation) {
+        if (Number(current.expires_at) > commitNowSeconds) return response(current);
+        throw fail("TASK_ADMISSION_RENEWAL_CONFLICT", "A concurrent renewal changed the reservation; retry from the current row.");
+      }
+      if (Number(current.expires_at) > commitNowSeconds) return response(current);
+      if (Number(current.expires_at) + TASK_ADMISSION_RENEWAL_CLOCK_SKEW_SECONDS > commitNowSeconds) {
+        throw fail("TASK_ADMISSION_RENEWAL_NOT_READY", "The previous Grant is inside the bounded clock-skew fence; renewal must wait.");
+      }
+      if (Math.floor(commitNow / 1000) >= expiresAt) {
+        throw fail("TASK_ADMISSION_EXPIRED", "The renewed Task admission Grant expired before its reservation committed.");
+      }
+
+      const currentSnapshot = this.#readTaskAdmissionSnapshot(sql, {
+        tenantId, projectId, principalId, taskDigest,
+      });
+      if (!snapshotMatches(currentSnapshot, current)) {
+        throw fail("TASK_ADMISSION_REAUTHORIZATION_DENIED", "The original membership or policy snapshot changed while the replacement Grant was being signed.");
+      }
+
+      const auditTarget = {
+        principalId,
+        projectId,
+        taskId,
+        taskDigest,
+        idempotencyKeyDigest,
+        inputHash,
+        previousAdmissionId: current.admission_id,
+        previousJti: current.jti,
+        previousExpiresAt: Number(current.expires_at),
+        admissionId,
+        jti,
+        issuedAt,
+        expiresAt,
+        membershipId: claims.membershipId,
+        membershipVersion: claims.membershipVersion,
+        policyScopeEpoch: claims.policyScopeEpoch,
+        policyRuleVersion: claims.policyRuleVersion,
+        policyRuleResourceDigest: claims.policyRuleResourceDigest,
+        policyDecisionId: claims.policyDecisionId,
+      };
+
+      sql.exec(
+        "UPDATE tenant_task_admission_reservations SET admission_id=?, jti=?, issued_at=?, expires_at=?, grant_token=? " +
+        "WHERE tenant_id=? AND project_id=? AND idempotency_key_digest=? AND admission_id=? AND jti=?",
+        admissionId, jti, issuedAt, expiresAt, grant,
+        tenantId, projectId, idempotencyKeyDigest, current.admission_id, current.jti,
+      );
+
+      const auditEventId = this.#appendAuditEvent(
+        sql,
+        { subject: principalId, targetDigest: taskDigest },
+        "renewTaskAdmissionGrant",
+        tenantId,
+        projectId,
+        auditTarget,
+        Number(current.membership_version),
+        claims.membershipVersion,
+        commitNow,
+      );
+
+      return response({
+        ...current,
+        admission_id: admissionId,
+        jti,
+        issued_at: issuedAt,
+        expires_at: expiresAt,
+        grant_token: grant,
+      }, false, auditEventId);
+    });
   }
 }

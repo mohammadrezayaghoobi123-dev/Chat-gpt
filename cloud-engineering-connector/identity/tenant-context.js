@@ -1,3 +1,9 @@
+import {
+  admissionTextDigest,
+  normalizeTaskForAdmission,
+  taskAdmissionDigest,
+} from "../orchestrator-admission.js";
+
 const AUTHENTICATED_PRINCIPALS = new WeakSet();
 const VERIFIED_TENANT_CONTEXTS = new WeakSet();
 
@@ -236,7 +242,9 @@ export async function resolveTenantContext({ principal, tenantSelector, membersh
     membership.principalId !== principal.id ||
     membership.tenantId !== tenantSelector ||
     !nonEmptyString(membership.membershipId) ||
-    !nonEmptyString(membership.role)
+    !nonEmptyString(membership.role) ||
+    !Number.isSafeInteger(membership.version) ||
+    membership.version < 1
   ) {
     reject("TENANT_MEMBERSHIP_REQUIRED");
   }
@@ -246,6 +254,7 @@ export async function resolveTenantContext({ principal, tenantSelector, membersh
     tenantId: membership.tenantId,
     membershipId: membership.membershipId,
     role: membership.role,
+    membershipVersion: membership.version,
   });
   VERIFIED_TENANT_CONTEXTS.add(context);
   return context;
@@ -317,6 +326,21 @@ export async function authorizeProjectAction({
   if (decision.effect !== "allow") {
     reject("PROJECT_ACCESS_DENIED");
   }
+  if (
+    decision.membershipVersion !== tenantContext.membershipVersion ||
+    decision.membershipStatus !== "active"
+  ) {
+    reject("TENANT_MEMBERSHIP_STALE");
+  }
+  if (
+    !Number.isSafeInteger(decision.policyScopeEpoch) ||
+    decision.policyScopeEpoch < 0 ||
+    !Number.isSafeInteger(decision.policyRuleVersion) ||
+    decision.policyRuleVersion < 1 ||
+    (decision.policyRuleResourceDigest !== resourceDigest && decision.policyRuleResourceDigest !== "*")
+  ) {
+    reject("POLICY_DECISION_VERSION_INVALID");
+  }
 
   return Object.freeze({
     principalId: principal.id,
@@ -326,5 +350,147 @@ export async function authorizeProjectAction({
     resourceDigest,
     decisionId: decision.decisionId,
     policyVersion: decision.policyVersion,
+    membershipVersion: decision.membershipVersion,
+    policyScopeEpoch: decision.policyScopeEpoch,
+    policyRuleVersion: decision.policyRuleVersion,
+    policyRuleResourceDigest: decision.policyRuleResourceDigest,
   });
+}
+
+
+const ADMISSION_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
+const ADMISSION_SHA256 = /^[a-f0-9]{64}$/;
+const ADMISSION_KID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+export async function prepareTaskAdmission({
+  principal,
+  tenantContext,
+  task,
+  idempotencyKey,
+  inputHash,
+  admissionStore,
+} = {}) {
+  if (!principal || !AUTHENTICATED_PRINCIPALS.has(principal)) {
+    reject("AUTHENTICATED_PRINCIPAL_REQUIRED");
+  }
+  if (
+    !tenantContext ||
+    !VERIFIED_TENANT_CONTEXTS.has(tenantContext) ||
+    tenantContext.principalId !== principal.id ||
+    !nonEmptyString(tenantContext.membershipId) ||
+    !Number.isSafeInteger(tenantContext.membershipVersion) ||
+    tenantContext.membershipVersion < 1
+  ) {
+    reject("TENANT_CONTEXT_MISMATCH");
+  }
+  if (
+    !isPlainTaskRecord(task) ||
+    task.tenantId !== tenantContext.tenantId ||
+    !nonEmptyString(task.projectId)
+  ) {
+    reject("TASK_SCOPE_MISMATCH");
+  }
+  if (
+    typeof idempotencyKey !== "string" ||
+    !ADMISSION_IDENTIFIER.test(idempotencyKey) ||
+    typeof inputHash !== "string" ||
+    !ADMISSION_SHA256.test(inputHash)
+  ) {
+    reject("INVALID_TASK_ADMISSION_INPUT");
+  }
+  if (!admissionStore || typeof admissionStore.prepareTaskAdmission !== "function") {
+    reject("ADMISSION_STORE_UNAVAILABLE");
+  }
+
+  let normalizedTask;
+  let taskDigest;
+  let idempotencyKeyDigest;
+  try {
+    normalizedTask = normalizeTaskForAdmission(task);
+    taskDigest = await taskAdmissionDigest(normalizedTask);
+    idempotencyKeyDigest = await admissionTextDigest(idempotencyKey);
+  } catch {
+    reject("INVALID_TASK_ADMISSION_INPUT");
+  }
+
+  let reservation;
+  try {
+    reservation = await admissionStore.prepareTaskAdmission({
+      tenantId: tenantContext.tenantId,
+      projectId: normalizedTask.projectId,
+      principalId: principal.id,
+      taskId: normalizedTask.taskId,
+      taskDigest,
+      idempotencyKey,
+      inputHash,
+    });
+  } catch (error) {
+    if (typeof error?.code === "string" && /^[A-Z0-9_]{3,96}$/.test(error.code)) {
+      reject(error.code);
+    }
+    reject("TASK_ADMISSION_FAILED");
+  }
+
+  const validGrant = typeof reservation?.grant === "string" &&
+    reservation.grant.length <= 4096 &&
+    /^ad1\.[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(reservation.grant);
+  if (
+    !reservation ||
+    reservation.reserved !== true ||
+    reservation.tenantId !== tenantContext.tenantId ||
+    reservation.projectId !== normalizedTask.projectId ||
+    reservation.principalId !== principal.id ||
+    reservation.taskId !== normalizedTask.taskId ||
+    reservation.taskDigest !== taskDigest ||
+    reservation.idempotencyKeyDigest !== idempotencyKeyDigest ||
+    reservation.inputHash !== inputHash ||
+    reservation.membershipId !== tenantContext.membershipId ||
+    reservation.membershipVersion !== tenantContext.membershipVersion ||
+    !Number.isSafeInteger(reservation.policyScopeEpoch) ||
+    reservation.policyScopeEpoch < 0 ||
+    !Number.isSafeInteger(reservation.policyRuleVersion) ||
+    reservation.policyRuleVersion < 1 ||
+    (reservation.policyRuleResourceDigest !== "*" &&
+      reservation.policyRuleResourceDigest !== taskDigest) ||
+    !nonEmptyString(reservation.policyDecisionId) ||
+    !nonEmptyString(reservation.admissionId) ||
+    !nonEmptyString(reservation.jti) ||
+    !Number.isSafeInteger(reservation.issuedAt) ||
+    !Number.isSafeInteger(reservation.expiresAt) ||
+    reservation.expiresAt <= reservation.issuedAt ||
+    reservation.expiresAt - reservation.issuedAt > 300 ||
+    !validGrant
+  ) {
+    reject("TASK_ADMISSION_RESPONSE_INVALID");
+  }
+
+  const kid = reservation.grant.split(".")[1];
+  if (!ADMISSION_KID.test(kid)) {
+    reject("TASK_ADMISSION_RESPONSE_INVALID");
+  }
+
+  return Object.freeze({
+    task: normalizedTask,
+    taskDigest,
+    idempotencyKey,
+    idempotencyKeyDigest,
+    inputHash,
+    admissionId: reservation.admissionId,
+    jti: reservation.jti,
+    admissionGrant: reservation.grant,
+    membershipId: reservation.membershipId,
+    membershipVersion: reservation.membershipVersion,
+    policyScopeEpoch: reservation.policyScopeEpoch,
+    policyRuleVersion: reservation.policyRuleVersion,
+    policyRuleResourceDigest: reservation.policyRuleResourceDigest,
+    policyDecisionId: reservation.policyDecisionId,
+    replay: reservation.replay === true,
+  });
+}
+
+function isPlainTaskRecord(task) {
+  if (!task || typeof task !== "object" || Array.isArray(task)) return false;
+  const prototype = Object.getPrototypeOf(task);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  return true;
 }

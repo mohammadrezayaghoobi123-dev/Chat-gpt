@@ -19,8 +19,12 @@ describe("OrchestratorLedger task API scope admission", () => {
         updatedAt: now,
       };
 
+      const receiptFreeTask = await instance.createTask({
+        task, idempotencyKey: "scope-required-idem", inputHash: "a".repeat(64), now,
+      });
+      expect(receiptFreeTask.reason).toBe("ADMISSION_RECEIPT_REQUIRED");
+
       const results = await Promise.all([
-        instance.createTask({ task, idempotencyKey: "scope-required-idem", inputHash: "a".repeat(64), now }),
         instance.transitionTask({
           taskId: task.taskId, expectedVersion: 1, expectedState: "SCHEDULED",
           nextState: "RUNNING", actor: { id: "worker-a", role: "agent" },

@@ -1011,6 +1011,13 @@ async function handleOwnerGitHubComment(authenticated, payload, ledger, env) {
    deliveryId: authenticated.deliveryId,
   }, 409);
  }
+ if (result?.reason === "AUDIT_CHAIN_CONTENTION") {
+  return json({
+   error: "owner_command_unavailable",
+   reason: result.reason,
+   deliveryId: authenticated.deliveryId,
+  }, 503, { "retry-after": "1" });
+ }
  if (result?.reason === "OWNER_ASSERTION_REJECTED") {
   return json({ error: "owner_command_rejected", reason: result.reason }, 403);
  }

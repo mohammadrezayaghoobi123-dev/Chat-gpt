@@ -664,6 +664,160 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+  it.each([8, 9])("bounds %i concurrent Owner commands against the shared Audit Head without partial commits", async requestCount => {
+    const ledger = ledgerFor("owner-audit-nway-contention-" + requestCount);
+    const inputs = [];
+
+    for (let index = 0; index < requestCount; index += 1) {
+      const suffix = String(index + 1).padStart(2, "0");
+      const taskId = "task-owner-audit-nway-" + requestCount + "-" + suffix;
+      await createTask(ledger, task(taskId));
+      inputs.push(await ownerInput({
+        command: {
+          taskId,
+          eventId: "owner-audit-nway-" + requestCount + "-" + suffix,
+        },
+        deliveryId: "delivery-owner-audit-nway-" + requestCount + "-" + suffix,
+        commentId: String(223457000 + requestCount * 10 + index),
+        bodySha256: String(index + 1).repeat(64),
+      }));
+    }
+
+    const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+    let initialAuditHashArrivals = 0;
+    const initialAuditSnapshots = [];
+    let initialAuditWaveReleased = false;
+    let releaseInitialAuditWave;
+    let signalInitialAuditWave;
+    const initialAuditWaveGate = new Promise(resolve => {
+      releaseInitialAuditWave = resolve;
+    });
+    const initialAuditWaveReached = new Promise(resolve => {
+      signalInitialAuditWave = resolve;
+    });
+    const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(
+      async (algorithm, data) => {
+        const digestInput = new TextDecoder().decode(data);
+        if (!initialAuditWaveReleased && digestInput.includes('"previousHash"')) {
+          const auditEvent = JSON.parse(digestInput);
+          initialAuditSnapshots.push({
+            eventId: auditEvent.eventId,
+            previousHash: auditEvent.previousHash,
+          });
+          initialAuditHashArrivals += 1;
+          if (initialAuditHashArrivals === requestCount) signalInitialAuditWave();
+          await initialAuditWaveGate;
+        }
+        return originalDigest(algorithm, data);
+      },
+    );
+
+    let results;
+    try {
+      results = await runInDurableObject(ledger, async instance => {
+        const pending = inputs.map(input => instance.executeOwnerCommand(input));
+        await initialAuditWaveReached;
+        initialAuditWaveReleased = true;
+        releaseInitialAuditWave();
+        return await Promise.all(pending);
+      });
+    } finally {
+      initialAuditWaveReleased = true;
+      releaseInitialAuditWave();
+      digestSpy.mockRestore();
+    }
+
+    const expectedAppliedCount = requestCount;
+    const appliedIndexes = results
+      .map((result, index) => result.applied === true ? index : -1)
+      .filter(index => index >= 0);
+    const contentionIndexes = results
+      .map((result, index) => result.reason === "AUDIT_CHAIN_CONTENTION" ? index : -1)
+      .filter(index => index >= 0);
+
+    expect(initialAuditHashArrivals).toBe(requestCount);
+    expect(initialAuditSnapshots.map(snapshot => snapshot.eventId).sort()).toEqual(
+      inputs.map(input => "owner-" + input.command.eventId).sort(),
+    );
+    expect(new Set(initialAuditSnapshots.map(snapshot => snapshot.previousHash)).size).toBe(1);
+    expect(appliedIndexes).toHaveLength(expectedAppliedCount);
+    expect(contentionIndexes).toHaveLength(requestCount - expectedAppliedCount);
+    expect(results.every(result =>
+      result.applied === true || result.reason === "AUDIT_CHAIN_CONTENTION",
+    )).toBe(true);
+
+    for (let index = 0; index < requestCount; index += 1) {
+      const taskId = inputs[index].command.taskId;
+      if (results[index].applied === true) {
+        expect(results[index]).toMatchObject({
+          applied: true,
+          operation: "cancel",
+          task: { taskId, state: "CANCELLED", version: 2 },
+        });
+        await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+          taskId,
+          state: "CANCELLED",
+          version: 2,
+        });
+      } else {
+        expect(results[index]).toMatchObject({
+          applied: false,
+          reason: "AUDIT_CHAIN_CONTENTION",
+        });
+        await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+          taskId,
+          state: "SCHEDULED",
+          version: 1,
+        });
+      }
+    }
+
+    const expectedJtis = appliedIndexes.map(index => assertionJti(inputs[index].assertion)).sort();
+    const expectedDeliveries = appliedIndexes.map(index => inputs[index].assertionContext.deliveryId).sort();
+    const expectedAuditIds = appliedIndexes.map(index => "owner-" + inputs[index].command.eventId).sort();
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      const consumedJtis = state.storage.sql.exec(
+        "SELECT jti FROM orchestrator_owner_consumed_assertions ORDER BY jti",
+      ).toArray().map(row => row.jti);
+      expect(consumedJtis).toEqual(expectedJtis);
+
+      const deliveries = state.storage.sql.exec(
+        "SELECT delivery_id FROM orchestrator_github_webhook_deliveries ORDER BY delivery_id",
+      ).toArray().map(row => row.delivery_id);
+      expect(deliveries).toEqual(expectedDeliveries);
+
+      const receiptDeliveries = state.storage.sql.exec(
+        "SELECT delivery_id FROM orchestrator_owner_command_receipts ORDER BY delivery_id",
+      ).toArray().map(row => row.delivery_id);
+      expect(receiptDeliveries).toEqual(expectedDeliveries);
+
+      const ownerAuditIds = state.storage.sql.exec(
+        "SELECT event_id FROM orchestrator_audit_events WHERE event_type = 'OWNER_TASK_CANCELLED' ORDER BY event_id",
+      ).toArray().map(row => row.event_id);
+      expect(ownerAuditIds).toEqual(expectedAuditIds);
+
+      const auditEvents = state.storage.sql.exec(
+        "SELECT sequence, event_id, task_id, actor_id, actor_role, event_type, details_json, previous_hash, event_hash, created_at FROM orchestrator_audit_events ORDER BY sequence ASC",
+      ).toArray();
+      for (let index = 0; index < auditEvents.length; index += 1) {
+        const event = auditEvents[index];
+        expect(event.previous_hash).toBe(index === 0 ? null : auditEvents[index - 1].event_hash);
+        const expectedHash = await sha256Canonical({
+          eventId: event.event_id,
+          taskId: event.task_id,
+          actorId: event.actor_id,
+          actorRole: event.actor_role,
+          eventType: event.event_type,
+          details: JSON.parse(event.details_json),
+          occurredAt: event.created_at,
+          previousHash: event.previous_hash,
+        });
+        expect(event.event_hash).toBe(expectedHash);
+      }
+    });
+  });
+
   it("rejects caller-supplied expected state/version overrides before mutation", async () => {
     const ledger = ledgerFor("owner-command-stale-version");
     await createTask(ledger);

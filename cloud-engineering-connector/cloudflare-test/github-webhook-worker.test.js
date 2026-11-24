@@ -212,6 +212,57 @@ describe("GitHub webhook Worker route", () => {
     });
   });
 
+  it("classifies bounded Owner Audit contention as retryable service unavailability", async () => {
+    let ledgerCalls = 0;
+    const fakeLedger = {
+      executeOwnerCommand: async () => {
+        ledgerCalls += 1;
+        return { applied: false, reason: "AUDIT_CHAIN_CONTENTION" };
+      },
+    };
+    const repository = "mohammadrezayaghoobi123-dev/Chat-gpt";
+    const ownerId = 335530603;
+    const ownerEnv = {
+      ...testEnv(),
+      ORCHESTRATOR_LEDGER: {
+        idFromName: name => name,
+        get: () => fakeLedger,
+      },
+      GITHUB_WEBHOOK_REPOSITORY: repository,
+      GITHUB_WEBHOOK_REPOSITORY_ID: "1398846697",
+      GITHUB_WEBHOOK_OWNER_ID: String(ownerId),
+    };
+    const taskId = "task-webhook-owner-audit-contention-0001";
+    const event = payload({
+      action: "created",
+      repository: { id: 1398846697, full_name: repository },
+      issue: {
+        ...payload().issue,
+        html_url: `https://github.com/${repository}/issues/7`,
+      },
+      comment: {
+        id: 900011,
+        body: `/orchestrator cancel ${taskId} --reason "Retry after bounded Audit contention"`,
+        created_at: nowIso(),
+        user: { id: ownerId, type: "User" },
+      },
+      sender: { id: ownerId, type: "User" },
+    });
+    const deliveryId = "gh-owner-audit-contention-0001";
+    const response = await worker.fetch(
+      await signedRequest(JSON.stringify(event), deliveryId, undefined, "issue_comment"),
+      ownerEnv,
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("1");
+    await expect(response.json()).resolves.toMatchObject({
+      error: "owner_command_unavailable",
+      reason: "AUDIT_CHAIN_CONTENTION",
+    });
+    expect(ledgerCalls).toBe(1);
+  });
+
   it("rejects Owner-like comments with invalid author, repository, PR, action, or freshness before Ledger access", async () => {
     const repository = "mohammadrezayaghoobi123-dev/Chat-gpt";
     const ownerId = 335530603;

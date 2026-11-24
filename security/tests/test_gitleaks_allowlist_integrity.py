@@ -67,7 +67,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
 
 
 
-    def test_line_target_allowlists_tolerate_gitleaks_leading_newline(self):
+    def test_secret_target_allowlists_match_only_exact_extracted_fixture(self):
         entries = {
             entry.get("description"): entry
             for entry in self.config["allowlists"]
@@ -77,8 +77,14 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
             with self.subTest(description=description):
                 line = _source_fixture_line(ROOT, commit, path)
                 self.assertIsNotNone(line)
+                fixture = re.fullmatch(r'const key = "([0-9a-f]{64})";', line)
+                self.assertIsNotNone(fixture)
+                self.assertEqual(entries[description]["regexTarget"], "secret")
                 pattern = re.compile(entries[description]["regexes"][0])
-                self.assertIsNotNone(pattern.fullmatch("\n" + line + "\n"))
+                key = fixture.group(1)
+                self.assertIsNotNone(pattern.fullmatch(key))
+                mutated = ("0" if key[0] != "0" else "1") + key[1:]
+                self.assertIsNone(pattern.fullmatch(mutated))
 
     def test_validator_rejects_non_literal_line_pattern(self):
         changed = copy.deepcopy(self.config)

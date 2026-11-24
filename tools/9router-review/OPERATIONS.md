@@ -95,7 +95,7 @@ This section records read-only observations made after the bootstrap design was 
 - Repository ruleset `main`, ID `26740429`, is active and targets `refs/heads/main`.
 - Returned rules: prevent branch deletion; prevent non-fast-forward updates; require one approving pull-request review; dismiss stale approvals after new pushes; require review-thread resolution.
 - Returned configuration has no bypass actors, no code-owner-review requirement, no last-push-approval requirement, and no required-status-check rule. This is only the observed repository-level ruleset; it does not prove the absence of other controls.
-- The branch-protection read endpoint returned HTTP 403 (integration lacks access). Additional branch-protection state is therefore `UNKNOWN`.
+- The branch API reports `protected=true`; its exposed protection summary reports required-status-check enforcement `off`. The detailed branch-protection endpoint returned HTTP 403, so other protection details remain `UNKNOWN`.
 - PR #463 cannot be treated as merge-ready merely because GitHub reports it mergeable. Its required independent approval remains outstanding unless separately evidenced.
 
 ### Actions policy and secret-scope boundary
@@ -107,10 +107,13 @@ This section records read-only observations made after the bootstrap design was 
 
 ### Existing full-history scan workflow
 
-- The default-branch `.github/workflows/secret-history-scan.yml` declares `contents: read`, checks out with `fetch-depth: 0` and `persist-credentials: false`, pins `gitleaks/gitleaks-action` to commit `e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e`, sets `GITLEAKS_VERSION=8.30.1`, disables comments and artifact upload, and then runs the full-ref scan with `--log-opts="--all"`.
-- The pinned action source confirms that it installs the requested Gitleaks version under the runner temporary directory `gitleaks-8.30.1` and adds that directory to PATH. The subsequent absolute binary path is therefore consistent with the action's installation behavior, conditional on the action step completing successfully.
-- The workflow is structurally configured to scan the PR range and then all fetched refs. A successful PR-diff scan does not prove the all-ref scan passed; the two outcomes must remain separately recorded.
-- No new hosted run was triggered in this preflight. Current-head all-ref scan remains `NOT_RUN`; the last completed all-ref run remains a failure with 13 provisionally classified detections, with no suppression or allowlisting.
+- The default-branch `.github/workflows/secret-history-scan.yml` declares `contents: read`, checks out with `fetch-depth: 0` and `persist-credentials: false`, pins `gitleaks/gitleaks-action` to commit `e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e`, sets `GITLEAKS_VERSION=8.30.1`, disables comments and artifact upload, and runs the all-fetched-refs scan with `--log-opts="--all"` using `.gitleaks.toml`.
+- The pinned action source confirms it installs the requested Gitleaks version under the runner temporary directory `gitleaks-8.30.1`; the workflow's absolute binary path is consistent with that installation.
+- Exact-head hosted runs on `dbbbf363119f67640b4a1280b918589021e5d1af`: PR run [45456122725](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45456122725) and push run [45456110580](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45456110580). Both PR-diff scans passed with zero findings. Both all-fetched-ref scans examined 4,953 commits / approximately 15.22 MB and failed with 13 `generic-api-key` findings (exit 2).
+- The 13 remaining findings are source/commit-context triaged as `PROVISIONALLY_SUPPORTED` non-credential cases (application idempotency identifier, test fixtures, and public ICU metadata/fingerprint); none was suppressed or allowlisted. Secret-store reuse and revocation remain `UNKNOWN`.
+- A separate unconfigured Gitleaks run (without `.gitleaks.toml`) found 44 branch/tag findings and 49 when all pull-request refs were added. These are not equivalent to the configured workflow result: the project config narrowly allowlists several historical test fixtures, so the official hosted result remains 13. Do not substitute the unconfigured count for the hosted result.
+- The config audit found two historical HMAC test-fixture allowlists constrained by exact commit and path but without a literal/line regex. They are not current secrets and do not explain the 13 remaining findings; precision hardening is a separate follow-up, not an automatic suppression.
+- The historical invalid-bearer probe fixture is explicitly synthetic and its allowlist is restricted to its exact commit, workflow path, and literal. Its 2026-10-31 run predates current auth configuration; the current production endpoint now rejects both absent and invalid bearer credentials.
 
 ### Gate disposition
 
@@ -118,10 +121,10 @@ This section records read-only observations made after the bootstrap design was 
 |---|---|---|
 | Repository identity/default branch | `PASS` | Repository metadata and current branch SHA |
 | Repository-level main ruleset observed | `PASS` | Ruleset ID `26740429` |
-| Additional branch-protection state | `UNKNOWN` | Authorized read of branch-protection settings |
+| Branch protected flag / status-check enforcement | `PASS / OFF` | Branch API: protected=true; required-status-check enforcement off |
 | Effective Actions event and token policy | `UNKNOWN` | Owner inspection of Settings → Actions → General |
 | Secret names and scopes | `UNKNOWN` | Owner inspection of repository/org/environment secret metadata; never disclose values |
-| Current-head all-ref Gitleaks result | `NOT_RUN` | A completed hosted scan on the exact current head |
+| Current-head PR-diff Gitleaks | `PASS` | Hosted runs 45456122725 / 45456110580, zero diff findings |\n| Current-head all-fetched-refs Gitleaks | `FAIL` | Hosted runs 45456122725 / 45456110580, 13 findings |
 | Hosted manual canary | `NOT_RUN` | Separate default-branch registration and explicitly approved canary |
 | Reviewer/provider execution | `BLOCKED` | Separate approval after durable reservation, budgets, and provider semantics are proven |
 

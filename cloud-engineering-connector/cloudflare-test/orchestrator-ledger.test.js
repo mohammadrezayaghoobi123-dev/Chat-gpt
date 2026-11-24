@@ -2728,3 +2728,64 @@ it("recovers a Queue-accepted send with a lost acknowledgement through bounded r
     dateNow.mockRestore();
   }
 }, 15000);
+
+it("rejects scheduler-created tasks that bypass the RECEIVED validation gate", async () => {
+  const ledger = ledgerFor("ledger-create-task-initial-state-bypass");
+  const cases = [
+    {
+      state: "READY",
+      taskId: "task-create-ready-bypass",
+      idempotencyKey: "task-create-ready-bypass",
+      inputHash: "a".repeat(64),
+    },
+    {
+      state: "SCHEDULED",
+      taskId: "task-create-scheduled-bypass",
+      idempotencyKey: "task-create-scheduled-bypass",
+      inputHash: "b".repeat(64),
+    },
+  ];
+
+  const results = [];
+  for (const item of cases) {
+    results.push(await createTask(ledger, {
+      task: { ...task(item.taskId), state: item.state },
+      idempotencyKey: item.idempotencyKey,
+      inputHash: item.inputHash,
+      now,
+    }));
+  }
+
+  const persisted = await runInDurableObject(ledger, async (_instance, state) =>
+    state.storage.sql.exec(
+      "SELECT task_id, state FROM orchestrator_tasks WHERE task_id IN (?, ?) ORDER BY task_id",
+      "task-create-ready-bypass",
+      "task-create-scheduled-bypass",
+    ).toArray(),
+  );
+
+  expect({
+    created: results.map(result => result.created),
+    persisted,
+  }).toEqual({
+    created: [false, false],
+    persisted: [],
+  });
+});
+
+it("accepts RECEIVED as the initial state for a newly created task", async () => {
+  const ledger = ledgerFor("ledger-create-task-received-control");
+  const result = await createTask(ledger, {
+    task: { ...task("task-create-received-control"), state: "RECEIVED" },
+    idempotencyKey: "task-create-received-control",
+    inputHash: "c".repeat(64),
+    now,
+  });
+
+  expect(result).toMatchObject({
+    created: true,
+    task: { taskId: "task-create-received-control", state: "RECEIVED", version: 1 },
+  });
+  await expect(ledger.getTask({ taskId: "task-create-received-control" }))
+    .resolves.toMatchObject({ state: "RECEIVED", version: 1 });
+});

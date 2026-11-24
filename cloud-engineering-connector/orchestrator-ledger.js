@@ -615,7 +615,7 @@ export class OrchestratorLedger extends DurableObject {
       taskRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_TASK";
     }
     const sql = this.ctx.storage.sql;
-    return this.ctx.storage.transactionSync(() => {
+    return (() => {
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
@@ -637,9 +637,8 @@ export class OrchestratorLedger extends DurableObject {
       );
       syncClaimCandidateInTransaction(sql, normalizedTask.taskId);
       return { created: true, task: normalizedTask };
-    });
+    })();
   }
-
   getTask({ taskId }) {
     identifier(taskId, "taskId");
     const row = this.ctx.storage.sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];

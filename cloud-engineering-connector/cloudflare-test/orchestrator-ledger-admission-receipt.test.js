@@ -63,10 +63,18 @@ async function provisionVerificationKey(tenantId, pair, keyId = "admission-key-1
   return { publicKey, keyId };
 }
 
+async function signReceipt(pair, header, claims) {
+  const signingBytes = new TextEncoder().encode(canonicalJson({ header, claims }));
+  const signature = new Uint8Array(await crypto.subtle.sign(
+    { name: "Ed25519" }, pair.privateKey, signingBytes,
+  ));
+  return { header, claims, signature: encodeBase64Url(signature) };
+}
+
 async function fixture(name, overrides = {}) {
   const tenantId = overrides.tenantId ?? "tenant-receipt-" + name;
   const projectId = overrides.projectId ?? "project-receipt";
-  const ledger = ledgerFor(name);
+  const ledger = overrides.ledger ?? ledgerFor(name);
   const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
   const key = await provisionVerificationKey(tenantId, pair, overrides.keyId ?? "admission-key-1");
   const taskId = overrides.taskId ?? "task-" + name;
@@ -119,11 +127,7 @@ async function fixture(name, overrides = {}) {
     typ: "AdmissionReceipt",
     v: 1,
   };
-  const signingBytes = new TextEncoder().encode(canonicalJson({ header, claims }));
-  const signature = new Uint8Array(await crypto.subtle.sign(
-    { name: "Ed25519" }, pair.privateKey, signingBytes,
-  ));
-  const receipt = { header, claims, signature: encodeBase64Url(signature) };
+  const receipt = await signReceipt(pair, header, claims);
   const mintWorkerAssertion = (nowMs = NOW) => createScheduledWorkerAssertion(WORKER_KEYS, "test", {
     subject: "orchestrator-scheduler",
     role: "system",
@@ -312,6 +316,178 @@ describe("OrchestratorLedger Admission Receipt projection", () => {
       });
       expect(result).toMatchObject({ created: false, reason: "RECORD_TOO_LARGE" });
       expect(Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count)).toBe(0);
+    });
+  });
+
+
+  it("rolls back the Task, admission identity, claim candidate, and consumed workload assertion on a mid-transaction failure", async () => {
+    const f = await fixture("atomic-rollback");
+    await runInDurableObject(f.ledger, async instance => {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEYS;
+      const sql = instance.ctx.storage.sql;
+      const before = {
+        tasks: Number(sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count),
+        admissions: Number(sql.exec("SELECT COUNT(*) AS count FROM orchestrator_task_admissions").one().count),
+        candidates: Number(sql.exec("SELECT COUNT(*) AS count FROM orchestrator_claim_candidates").one().count),
+        assertions: Number(sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count),
+      };
+      sql.exec(
+        "CREATE TRIGGER test_abort_admission_insert BEFORE INSERT ON orchestrator_task_admissions " +
+        "BEGIN SELECT RAISE(ABORT, 'TEST_ADMISSION_INSERT_ABORT'); END",
+      );
+
+      await expect(instance.projectAdmittedTask({
+        task: f.task,
+        receipt: f.receipt,
+        now: NOW,
+        workerId: "orchestrator-scheduler",
+        workerAssertion: await f.mintWorkerAssertion(),
+      })).rejects.toThrow();
+
+      expect({
+        tasks: Number(sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count),
+        admissions: Number(sql.exec("SELECT COUNT(*) AS count FROM orchestrator_task_admissions").one().count),
+        candidates: Number(sql.exec("SELECT COUNT(*) AS count FROM orchestrator_claim_candidates").one().count),
+        assertions: Number(sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count),
+      }).toEqual(before);
+    });
+  });
+
+  it("rejects expired, unknown-key, wrong-audience, and caller-key-injected Receipts before writes", async () => {
+    const expired = await fixture("expired-receipt");
+    await runInDurableObject(expired.ledger, async instance => {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEYS;
+      const result = await instance.projectAdmittedTask({
+        task: expired.task,
+        receipt: expired.receipt,
+        now: NOW + 61_000,
+        workerId: "orchestrator-scheduler",
+        workerAssertion: await expired.mintWorkerAssertion(NOW + 61_000),
+      });
+      expect(result).toMatchObject({ created: false, reason: "ADMISSION_RECEIPT_REJECTED" });
+      expect(Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count)).toBe(0);
+    });
+
+    const unknownKey = await fixture("unknown-receipt-key");
+    await runInDurableObject(unknownKey.ledger, async instance => {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEYS;
+      const header = { ...unknownKey.receipt.header, kid: "unregistered-key" };
+      const receipt = await signReceipt(unknownKey.pair, header, unknownKey.claims);
+      const result = await instance.projectAdmittedTask({
+        task: unknownKey.task, receipt, now: NOW,
+        workerId: "orchestrator-scheduler", workerAssertion: await unknownKey.mintWorkerAssertion(),
+      });
+      expect(result).toMatchObject({ created: false, reason: "ADMISSION_RECEIPT_REJECTED" });
+      expect(Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count)).toBe(0);
+    });
+
+    const wrongAudience = await fixture("wrong-receipt-audience");
+    await runInDurableObject(wrongAudience.ledger, async instance => {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEYS;
+      const claims = { ...wrongAudience.claims, aud: "untrusted-consumer" };
+      const receipt = await signReceipt(wrongAudience.pair, wrongAudience.receipt.header, claims);
+      const result = await instance.projectAdmittedTask({
+        task: wrongAudience.task, receipt, now: NOW,
+        workerId: "orchestrator-scheduler", workerAssertion: await wrongAudience.mintWorkerAssertion(),
+      });
+      expect(result).toMatchObject({ created: false, reason: "ADMISSION_RECEIPT_REJECTED" });
+      expect(Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count)).toBe(0);
+    });
+
+    const injectedKey = await fixture("caller-public-key-injection");
+    await runInDurableObject(injectedKey.ledger, async instance => {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEYS;
+      const receipt = { ...injectedKey.receipt, publicKey: injectedKey.receipt.header.kid };
+      const result = await instance.projectAdmittedTask({
+        task: injectedKey.task, receipt, now: NOW,
+        workerId: "orchestrator-scheduler", workerAssertion: await injectedKey.mintWorkerAssertion(),
+      });
+      expect(result).toMatchObject({ created: false, reason: "ADMISSION_RECEIPT_REJECTED" });
+      expect(Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count)).toBe(0);
+    });
+  });
+
+  it("enforces receipt-JTI and idempotency digest uniqueness independently of admission ID", async () => {
+    const f = await fixture("independent-identities");
+    await runInDurableObject(f.ledger, async instance => {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEYS;
+      const first = await instance.projectAdmittedTask({
+        task: f.task, receipt: f.receipt, now: NOW,
+        workerId: "orchestrator-scheduler", workerAssertion: await f.mintWorkerAssertion(),
+      });
+      expect(first.created).toBe(true);
+
+      const otherTask = {
+        ...f.task,
+        taskId: "task-independent-jti",
+        executorId: "worker-b",
+      };
+      const otherTaskDigest = await sha256Canonical({ ...otherTask, agentRound: 0 });
+
+      const jtiClaims = {
+        ...f.claims,
+        admissionId: "admission-independent-jti",
+        taskId: otherTask.taskId,
+        taskDigest: otherTaskDigest,
+        idempotencyKeyDigest: await sha256("different-idempotency-key"),
+      };
+      const jtiReceipt = await signReceipt(f.pair, f.receipt.header, jtiClaims);
+      const jtiConflict = await instance.projectAdmittedTask({
+        task: otherTask, receipt: jtiReceipt, now: NOW + 1,
+        workerId: "orchestrator-scheduler",
+        workerAssertion: await f.mintWorkerAssertion(NOW + 1),
+      });
+      expect(jtiConflict).toMatchObject({ created: false, conflict: true });
+
+      const idempotencyClaims = {
+        ...f.claims,
+        admissionId: "admission-independent-idempotency",
+        jti: "receipt-jti-independent-idempotency",
+        taskId: otherTask.taskId,
+        taskDigest: otherTaskDigest,
+      };
+      const idempotencyReceipt = await signReceipt(f.pair, f.receipt.header, idempotencyClaims);
+      const idempotencyConflict = await instance.projectAdmittedTask({
+        task: otherTask, receipt: idempotencyReceipt, now: NOW + 2,
+        workerId: "orchestrator-scheduler",
+        workerAssertion: await f.mintWorkerAssertion(NOW + 2),
+      });
+      expect(idempotencyConflict).toMatchObject({ created: false, conflict: true });
+
+      expect(Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count)).toBe(1);
+      expect(Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_task_admissions").one().count)).toBe(1);
+    });
+  });
+
+  it("preserves the same caller idempotency digest across independent tenant namespaces", async () => {
+    const sharedLedger = ledgerFor("cross-tenant-shared-idempotency-ledger");
+    const first = await fixture("cross-tenant-idempotency-a", {
+      ledger: sharedLedger,
+      tenantId: "tenant-cross-idempotency-a",
+      idempotencyKey: "same-caller-idempotency-key",
+    });
+    const second = await fixture("cross-tenant-idempotency-b", {
+      ledger: sharedLedger,
+      tenantId: "tenant-cross-idempotency-b",
+      idempotencyKey: "same-caller-idempotency-key",
+    });
+
+    await runInDurableObject(sharedLedger, async instance => {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEYS;
+      const firstResult = await instance.projectAdmittedTask({
+        task: first.task, receipt: first.receipt, now: NOW,
+        workerId: "orchestrator-scheduler", workerAssertion: await first.mintWorkerAssertion(),
+      });
+      const secondResult = await instance.projectAdmittedTask({
+        task: second.task, receipt: second.receipt, now: NOW,
+        workerId: "orchestrator-scheduler", workerAssertion: await second.mintWorkerAssertion(),
+      });
+      expect(firstResult.created).toBe(true);
+      expect(secondResult.created).toBe(true);
+      expect(Number(instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_task_admissions WHERE idempotency_key_digest=?",
+        first.claims.idempotencyKeyDigest,
+      ).one().count)).toBe(2);
     });
   });
 });

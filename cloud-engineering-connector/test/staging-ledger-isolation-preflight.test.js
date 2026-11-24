@@ -415,3 +415,26 @@ test("Staging post-deploy verification fails closed when the Production metadata
   assert.match(result.stderr + result.stdout, /Production Cloudflare verification failed: HTTP 403/);
   assert.doesNotMatch(result.stdout + result.stderr, /mock-staging-deploy-token|mock-production-metadata-token/);
 });
+
+
+test("Staging preflight rejects reuse of the Staging deploy credential as the Production metadata credential", () => {
+  const result = runPreflight({
+    productionLedgerId: "production-ledger-namespace",
+    stagingLedgerId: "staging-ledger-namespace",
+    productionMetadataToken: "mock-staging-deploy-token",
+  });
+
+  assert.notEqual(result.status, 0, "Production metadata credential must be distinct from the Staging deploy credential");
+  assert.doesNotMatch(result.stdout + result.stderr, /mock-staging-deploy-token/);
+});
+
+test("Staging post-deploy verification rejects reuse of the Staging deploy credential as the Production metadata credential", () => {
+  const result = runPostDeploy({
+    productionLedgerId: "production-ledger-namespace",
+    stagingLedgerId: "staging-ledger-namespace",
+    productionMetadataToken: "mock-staging-deploy-token",
+  });
+
+  assert.notEqual(result.status, 0, "Post-deploy Production metadata credential must be distinct from the Staging deploy credential");
+  assert.doesNotMatch(result.stdout + result.stderr, /mock-staging-deploy-token/);
+});

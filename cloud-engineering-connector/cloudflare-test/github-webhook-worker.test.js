@@ -603,6 +603,7 @@ describe("GitHub webhook Worker route", () => {
         get: name => {
           const stub = ledgerBinding.get(name);
           return {
+            authorizeOwnerWebhookRetry: input => stub.authorizeOwnerWebhookRetry(input),
             executeOwnerCommand: async input => {
               executeOwnerCommandCalls += 1;
               return stub.executeOwnerCommand(input);

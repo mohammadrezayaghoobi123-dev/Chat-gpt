@@ -133,8 +133,10 @@ describe("OrchestratorLedger globally unique identifiers across tenant scopes", 
         tenant_id: taskA.tenantId,
         project_id: taskA.projectId,
         task_id: taskA.taskId,
-        details_json: JSON.string
-
+        details_json: JSON.stringify({ owner: "tenant-alpha" }),
+      });
+    });
+  });
   it("rejects a Task ID already owned by another tenant/project without altering the original Task or Claim Candidate", async () => {
     const ledger = ledgerFor("global-task-id-collision-across-tenant-scopes");
     await runInDurableObject(ledger, async instance => {

@@ -29,7 +29,7 @@ Allow a GitHub Owner issue-comment delivery that was already authenticated and f
 ## Contract
 
 - The Ledger records a retry marker only after the Owner assertion has been verified and the three-attempt Audit contention loop is exhausted.
-- Marker identity includes delivery ID, body digest, comment ID, command hash, repository ID, actor ID, task ID, operation, and comment creation time.
+- Marker identity includes delivery ID, body digest, comment ID, command hash, repository ID, actor ID, task ID, operation, issue number, and comment creation time.
 - Marker lifetime is 72 hours from the first recorded contention failure; subsequent failures do not extend expiry.
 - The first failed attempt is not counted as a redelivery. The Ledger grants at most three retry authorizations, atomically incrementing the counter before execution.
 - A mismatched identity, expired marker, or exhausted counter is denied.
@@ -41,7 +41,7 @@ Allow a GitHub Owner issue-comment delivery that was already authenticated and f
 
 - Marker creation is a bounded SQLite transaction in the same Durable Object as Owner receipts and delivery claims.
 - Successful/terminal receipt persistence and marker closure occur in the existing Owner transaction.
-- Retry authorization and retry-count increment occur in one synchronous SQLite transaction.
+- The Ledger verifies a fresh signed Owner assertion bound to the exact context before authorizing recovery. Retry authorization and retry-count increment occur in one synchronous SQLite transaction.
 - No external I/O occurs inside a transaction.
 - Missing Ledger capability, storage failure, or malformed marker state fails closed with service unavailability or conflict; it never widens freshness.
 

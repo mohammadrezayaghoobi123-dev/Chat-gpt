@@ -52,8 +52,9 @@ function assertSignerOptions(expected) {
 
 function assertNowOnly(expected) {
   if (!expected || typeof expected !== "object" || Array.isArray(expected) ||
-      Object.keys(expected).length !== 1 || !Number.isSafeInteger(expected.nowMs) ||
-      expected.nowMs < 1) {
+      Object.keys(expected).length !== 1 ||
+      !(typeof expected.nowMs === "function" ||
+        (Number.isSafeInteger(expected.nowMs) && expected.nowMs >= 1))) {
     throw reject();
   }
 }
@@ -89,7 +90,7 @@ function validateKeyPolicy(entry) {
   return decodeBase64Url(entry.publicKey, 32);
 }
 
-function validateClaims(claims, nowMs) {
+function validateClaims(claims) {
   if (!claims || typeof claims !== "object" || Array.isArray(claims)) throw reject();
   const fields = Object.keys(claims).sort();
   if (fields.length !== CLAIM_KEYS.length ||
@@ -98,12 +99,16 @@ function validateClaims(claims, nowMs) {
       claims.sub !== EXECUTOR_PRINCIPAL || claims.role !== EXECUTOR_ROLE ||
       !EXECUTOR_OPERATIONS.includes(claims.op) || !ID.test(claims.sub) ||
       typeof claims.jti !== "string" || !/^jti-[A-Za-z0-9_-]{22}$/.test(claims.jti) ||
-      !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp)) {
+      !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp) ||
+      claims.exp <= claims.iat || claims.exp - claims.iat > MAX_LIFETIME_SECONDS) {
     throw reject();
   }
+}
+
+function validateClaimTime(claims, nowMs) {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 1) throw reject();
   const nowSeconds = Math.floor(nowMs / 1000);
-  if (claims.exp <= claims.iat || claims.exp - claims.iat > MAX_LIFETIME_SECONDS ||
-      claims.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
+  if (claims.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
       claims.exp < nowSeconds - CLOCK_SKEW_SECONDS) {
     throw reject();
   }
@@ -162,7 +167,7 @@ export async function verifyExecutorWorkerAssertion(publicKeySet, token, expecte
     const payloadText = new TextDecoder("utf-8", { fatal: true }).decode(payloadBytes);
     const claims = JSON.parse(payloadText);
     if (canonicalJson(claims) !== payloadText) throw reject();
-    validateClaims(claims, expected.nowMs);
+    validateClaims(claims);
     const signature = decodeBase64Url(parts[3], 64);
     if (signature.byteLength !== 64) throw reject();
     const publicKey = await crypto.subtle.importKey(
@@ -179,6 +184,8 @@ export async function verifyExecutorWorkerAssertion(publicKeySet, token, expecte
       encoder.encode(parts.slice(0, 3).join(".")),
     );
     if (!valid) throw reject();
+    const verifiedAtMs = typeof expected.nowMs === "function" ? expected.nowMs() : expected.nowMs;
+    validateClaimTime(claims, verifiedAtMs);
     return Object.freeze({
       jti: claims.jti,
       subject: claims.sub,
@@ -187,6 +194,7 @@ export async function verifyExecutorWorkerAssertion(publicKeySet, token, expecte
       kid: parts[1],
       issuedAt: claims.iat,
       expiresAt: claims.exp,
+      verifiedAtMs,
     });
   } catch {
     throw reject();

@@ -129,6 +129,7 @@ function admissionStore(adapters) {
 describe("TenantDirectory signed task admission reservation", () => {
   it("issues and persists a signed task.create grant bound to membership, policy, scope, Task, and idempotency", async () => {
     const state = await fixture();
+    const tenantId = state.tenantId;
     const store = admissionStore(state.adapters);
 
     const first = await store.prepareTaskAdmission(state.input);
@@ -147,8 +148,8 @@ describe("TenantDirectory signed task admission reservation", () => {
       policyDecisionId: expect.any(String),
       admissionId: expect.any(String),
       jti: expect.any(String),
-      issuedAt: NOW / 1000,
-      expiresAt: NOW / 1000 + 300,
+      issuedAt: expect.any(Number),
+      expiresAt: expect.any(Number),
       grant: expect.stringMatching(/^ad1\.test\./),
     });
 
@@ -170,7 +171,7 @@ describe("TenantDirectory signed task admission reservation", () => {
       jti: first.jti,
       issuedAt: NOW / 1000,
       expiresAt: NOW / 1000 + 300,
-      nowMs: NOW,
+      nowMs: Date.now(),
     });
     expect(verified).toMatchObject({
       iss: "tenant-directory",

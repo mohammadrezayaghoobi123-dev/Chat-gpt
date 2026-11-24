@@ -573,4 +573,62 @@ describe("persistent Tenant Directory", () => {
       },
     })).rejects.toMatchObject({ code: "TENANT_MEMBERSHIP_REQUIRED" });
   });
+
+  it("backfills a baseline scope epoch for policy rows present before schema v2", async () => {
+    const tenantId = "tenant-epoch-migration";
+    const principalId = "principal-epoch-migration";
+    const adapters = adaptersFor(tenantId);
+    const keySet = JSON.stringify({ test: "b".repeat(64) });
+    const now = 1_800_140_000_000;
+    await configureDirectory(tenantId, keySet);
+
+    const membership = {
+      principalId, membershipId: "membership-migration", role: "tenant-member",
+      status: "active", expectedVersion: 0,
+    };
+    await adapters.provisioningStore.upsertMembership({
+      assertion: await adminAssertion(keySet, "upsertMembership", tenantId, null, now, membership),
+      tenantId, ...membership, now,
+    });
+
+    const resourceDigest = await sha256("migration-resource");
+    const policy = {
+      projectId: "project-migration", principalId, action: "project.read",
+      resourceDigest, effect: "allow", policyVersion: "migration-v1",
+      status: "active", expectedVersion: 0,
+    };
+    await adapters.provisioningStore.upsertProjectPolicy({
+      assertion: await adminAssertion(keySet, "upsertProjectPolicy", tenantId, "project-migration", now + 1_000, policy),
+      tenantId, ...policy, now: now + 1_000,
+    });
+
+    const stub = env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName(tenantId));
+    await runInDurableObject(stub, instance => {
+      instance.ctx.storage.sql.exec("DROP TABLE tenant_policy_scope_epochs");
+      instance.ctx.storage.sql.exec("DELETE FROM tenant_directory_schema_migrations WHERE version=2");
+      instance.ensureSchema();
+    });
+
+    const state = await runInDurableObject(stub, instance => ({
+      ping: instance.ping(),
+      epoch: Number(instance.ctx.storage.sql.exec(
+        "SELECT epoch FROM tenant_policy_scope_epochs WHERE tenant_id=? AND project_id=? AND principal_id=? AND action=?",
+        tenantId, "project-migration", principalId, "project.read",
+      ).one().epoch),
+    }));
+    expect(state.ping).toEqual({ ok: true, schemaVersion: 2 });
+    expect(state.epoch).toBe(1);
+
+    const decision = await adapters.authorizationStore.authorizeProjectAction({
+      principalId, tenantId, projectId: "project-migration", action: "project.read",
+      resource: { migration: true }, resourceDigest,
+      expectedMembershipVersion: 1,
+    });
+    expect(decision).toMatchObject({
+      effect: "allow",
+      membershipVersion: 1,
+      policyScopeEpoch: 1,
+      policyRuleVersion: 1,
+    });
+  });
 });

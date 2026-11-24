@@ -2728,3 +2728,77 @@ it("recovers a Queue-accepted send with a lost acknowledgement through bounded r
     dateNow.mockRestore();
   }
 }, 15000);
+
+it("does not authenticate a caller-supplied evidence issuer independently of worker identity", async () => {
+  const ledger = ledgerFor("ledger-evidence-issuer-authenticity");
+  const targetTask = task("task-issuer-authenticity");
+  await createTask(ledger, {
+    task: targetTask,
+    idempotencyKey: "task-create-issuer-authenticity",
+    inputHash: "f".repeat(64),
+    now,
+  });
+  const lease = await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1", now),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+  const jti = "jti-evidence-issuer-authenticity-0001";
+  const evidence = {
+    kind: "validation-result",
+    issuer: "orchestrator-validator",
+    taskId: targetTask.taskId,
+    taskVersion: targetTask.version,
+    commitSha: targetTask.commitSha,
+    result: "PASS",
+    digest: "b".repeat(64),
+  };
+  const transition = await ledger.transitionTask({
+    taskId: targetTask.taskId,
+    expectedVersion: 1,
+    expectedState: "SCHEDULED",
+    nextState: "RUNNING",
+    actor: agent,
+    evidence,
+    now: now + 1,
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1",
+      role: "agent",
+      operation: "transitionTask",
+      nowMs: now + 1,
+      jti,
+    }),
+    leaseGeneration: lease.leaseGeneration,
+  });
+
+  expect(transition).toMatchObject({
+    updated: true,
+    task: {
+      taskId: targetTask.taskId,
+      state: "RUNNING",
+      version: 2,
+      lastTransition: { evidence },
+    },
+  });
+  await expect(ledger.getTask({ taskId: targetTask.taskId })).resolves.toMatchObject({
+    state: "RUNNING",
+    version: 2,
+    lastTransition: { evidence },
+  });
+
+  await runInDurableObject(ledger, async (_instance, state) => {
+    expect(state.storage.sql.exec(
+      "SELECT worker_id, lease_generation FROM orchestrator_execution_leases WHERE task_id = ?",
+      targetTask.taskId,
+    ).one()).toMatchObject({ worker_id: "agent:worker-1", lease_generation: 1 });
+    expect(state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      jti,
+    ).one().count).toBe(1);
+  });
+});
+

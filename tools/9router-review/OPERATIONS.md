@@ -627,7 +627,7 @@ The logical reservation key is:
 - `head_sha` and `base_sha` are full commit object IDs from one validated live PR snapshot.
 - Canonical serialization is versioned, length-delimited, UTF-8, and deterministic. A SHA-256 digest may be used as the physical primary key, but every original tuple field MUST be stored and compared after lookup; digest equality alone is insufficient.
 - A repository rename preserves the key. A changed head or base creates a different key.
-- The reviewer policy/runtime digest is recorded with the row. A policy mismatch for an existing key is a conflict requiring an explicit versioning decision; it MUST NOT silently create a second reservation and duplicate comment for the same PR snapshot.
+- The reviewer policy/runtime digest is recorded with the row. A policy mismatch for an existing key is a conflict requiring an explicit versioning decision; it MUST NOT silently create a second reservation and duplicate comment for the same PR snapshot. At claim time, derive a deterministic marker ID from the canonical key and policy digest, and persist its signing-key ID. After the review payload exists, compute its canonical digest and HMAC-sign the tuple, policy digest, marker ID, and payload digest. Retain verification capability for old signing-key IDs for at least the replay horizon.
 - Rows are durable tombstones for at least the complete replay/retention horizon. Deletion or key reuse is prohibited unless a separately reviewed archival protocol preserves uniqueness and audit evidence.
 
 ### 3. Normative record
@@ -666,13 +666,15 @@ Allowed transitions:
 
 | From | To | Atomic preconditions |
 |---|---|---|
-| absent / `UNCLAIMED` | `CLAIMED` | Unique insert or linearizable CAS; allocate generation 1 and owner nonce |
+| absent / `UNCLAIMED` | `CLAIMED` | Unique insert or linearizable CAS; allocate generation 1 and owner nonce; persist deterministic marker ID and signing-key ID |
+| `CLAIMED` | `PUBLISHED` | Complete pre-model reconciliation finds exactly one valid signed marker from the expected bot for this exact key; no model request |
+| `CLAIMED` | `DUPLICATE_ACCEPTED` | Complete pre-model reconciliation finds more than one valid signed marker for this exact key; no model request |
 | `CLAIMED` | `CLAIMED` | Renew only if owner, nonce, generation, record version, and server-side lease validity match |
 | expired `CLAIMED` | `CLAIMED` | Server-time expiry predicate and CAS; increment generation and replace owner/nonce |
 | `CLAIMED` | `MODEL_ATTEMPTED` | One-time CAS consumes the model attempt before any provider request |
 | `MODEL_ATTEMPTED` | `MODEL_COMPLETED` | Matching attempt ID; durable result reference and digest committed |
 | `MODEL_ATTEMPTED` | `UNKNOWN` | Provider timeout, attempt deadline expiry, worker crash recovery, lost acknowledgement, or any ambiguous result |
-| `MODEL_COMPLETED` | `MODEL_COMPLETED` | Continuation lease acquisition by CAS; increment generation and replace owner/nonce; no model dispatch is authorized |
+| `MODEL_COMPLETED` | `MODEL_COMPLETED` | Continuation lease acquisition by CAS only when no valid continuation lease exists or its server-time expiry is reached; increment generation and replace owner/nonce; no model dispatch is authorized |
 | `MODEL_COMPLETED` | `PUBLISHED` | Positive exact reconciliation finds one comment matching this reservation's persisted signed marker; no POST |
 | `MODEL_COMPLETED` | `DUPLICATE_ACCEPTED` | Positive exact reconciliation finds more than one comment matching this reservation's persisted signed marker; no POST |
 | `MODEL_COMPLETED` | `COMMENT_ATTEMPTED` | Snapshot revalidation; complete duplicate preflight; one-time CAS consumes the comment attempt before POST |
@@ -688,7 +690,7 @@ No transition from `MODEL_ATTEMPTED`, `COMMENT_ATTEMPTED`, `UNKNOWN`, `PUBLISHED
 
 The storage-independent adapter MUST expose equivalent typed operations. Names below are normative for this design; implementation language syntax may differ.
 
-- `claim(key, owner_id, owner_nonce, lease_duration, policy_digest) -> CLAIMED | BUSY | EXISTING(state) | KEY_CONFLICT`
+- `claim(key, owner_id, owner_nonce, lease_duration, policy_digest, marker_id, marker_key_id) -> CLAIMED | BUSY | EXISTING(state) | KEY_CONFLICT`
 - `renew(key, owner_id, owner_nonce, generation, expected_record_version, lease_duration) -> RENEWED(new_record_version) | LOST_OWNERSHIP | EXPIRED`
 - `resumeCompletedModel(key, owner_id, owner_nonce, expected_record_version, lease_duration) -> RESUMED(new_generation) | BUSY | TERMINAL`
 - `beginModelAttempt(key, owner_id, owner_nonce, generation, expected_record_version, attempt_id, request_digest) -> MODEL_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`
@@ -702,12 +704,14 @@ The storage-independent adapter MUST expose equivalent typed operations. Names b
 
 Every mutating operation is one atomic conditional transaction against the current record. It MUST check the expected state, generation, owner nonce where applicable, attempt ID, and record version. Successful transitions and audit events commit atomically. A stale worker cannot mutate state by presenting an old generation or stale record version.
 
+The marker ID is deterministic for the reservation key and policy digest; it is not a per-worker random value. The signed marker contains the canonical key, policy digest, marker ID, payload digest, and signing-key ID. Reconciliation validates the expected bot author ID, HMAC, and digest of the comment body after removing the marker envelope. This lets pre-model reconciliation recognize a previously published result without rerunning inference.
+
 A returned `MODEL_PERMIT` or `COMMENT_PERMIT` is an in-memory authorization to make exactly one transport invocation. It is not a reusable bearer token and MUST NOT be serialized, logged, queued, or retried. The production caller MUST consume it once and call the transport once. The durable state transition prevents another worker from obtaining a second permit. This contract does not claim to defend against malicious application code that deliberately sends the same request multiple times; transport-call-count conformance tests and code review cover that boundary.
 
 ### 6. Atomic execution protocol
 
 1. Obtain one live PR snapshot. Validate repository ID, repository full name, PR number, open/draft/locked policy, and full head/base SHAs.
-2. Canonicalize the immutable key and atomically `claim`. A loser MUST return without model or comment transport calls.
+2. Canonicalize the immutable key and atomically `claim`. A loser MUST return without model or comment transport calls. Before model dispatch, perform complete read-only marker reconciliation using the deterministic marker ID. Exactly one valid signed match transitions `CLAIMED -> PUBLISHED`; multiple matches transition to `DUPLICATE_ACCEPTED`; incomplete or unavailable listing blocks progress and does not authorize inference.
 3. Perform only local bounded preparation while in `CLAIMED`. Lease renewals are conditional CAS operations using server time.
 4. Revalidate the live PR snapshot and confirm it still equals the reservation tuple before model dispatch.
 5. Atomically consume `beginModelAttempt`. Only after the durable acknowledgement may the caller issue one provider request. If the commit acknowledgement is lost, read the authoritative row; if the state cannot be established, do not call the provider.
@@ -734,6 +738,8 @@ The PR head/base check and GitHub comment POST are not one cross-service transac
 
 GitHub comment listing may not provide a transactional negative proof under every failure/visibility condition. Reconciliation is therefore positive-evidence oriented. A zero-result list is not proof that a POST was never accepted. If exactly-one positive evidence cannot be obtained, retain `UNKNOWN` and require a separately reviewed manual disposition; do not auto-retry.
 
+A recovery worker may move an overdue `MODEL_ATTEMPTED` or `COMMENT_ATTEMPTED` row to stage-specific `UNKNOWN` using the persisted attempt deadline and authoritative server time. It cannot move the row back to a pre-effect state. `UNKNOWN` with `unknown_stage=MODEL` is terminal for automatic execution; comment reconciliation APIs must reject it. `UNKNOWN` with `unknown_stage=COMMENT` permits read-only positive reconciliation only.
+
 The model provider may also lack a caller-supplied idempotency key or execution-status query. A recovery worker may move an overdue `MODEL_ATTEMPTED` row to `UNKNOWN` using the attempt ID and server time, but cannot infer whether the provider executed or billed the request. Model-stage `UNKNOWN` is distinct from comment-stage `UNKNOWN`; `reconcileComment` MUST reject a model-stage row.
 
 ### 9. Safety invariants
@@ -750,6 +756,8 @@ The model provider may also lack a caller-supplied idempotency key or execution-
 - **I10 — Fail closed:** store outage, stale read, CAS conflict, schema mismatch, clock uncertainty, or incomplete reconciliation blocks the next external effect.
 - **I11 — No hidden transport retries:** redirects, SDK retries, proxy retries, and middleware retries are disabled or proven absent.
 - **I12 — No silent key reuse:** retention/cleanup cannot delete or recycle a key while replay is possible.
+- **I13 — Stage-scoped UNKNOWN:** model-stage UNKNOWN cannot be resolved through comment lookup; comment-stage UNKNOWN permits only positive read-only reconciliation.
+- **I14 — Authenticated marker:** publication reconciliation requires the expected bot author, valid HMAC, exact reservation tuple, policy digest, marker ID, and body digest.
 
 ### 10. Adversarial conformance matrix
 
@@ -790,6 +798,9 @@ Every test must run against the same adapter contract with at least two independ
 | A31 | Worker crashes in MODEL_COMPLETED before comment preparation | New continuation generation resumes from the durable result; model transport count remains one |
 | A32 | Recovery worker sees overdue MODEL_ATTEMPTED or COMMENT_ATTEMPTED | Stage-specific UNKNOWN is recorded; no external retry is authorized |
 | A33 | User forges marker text or copies marker without valid HMAC/bot identity | Reconciliation rejects it as publication evidence |
+| A34 | Existing exact signed marker is present before model dispatch | `CLAIMED -> PUBLISHED`; model transport count remains zero |
+| A35 | MODEL_COMPLETED owner crashes; continuation lease is reclaimed | Generation increments; old owner is fenced; persisted model result is reused |
+| A36 | `reconcileComment` is called for model-stage UNKNOWN | Adapter rejects the operation; no state transition or external call |
 
 ### 11. Adversarial design review — findings and disposition
 
@@ -809,6 +820,8 @@ The design was challenged against the reproduced interleaving, independent-host 
 - **AR-12 — Recovery workers lacked a bounded rule for abandoned attempt states.** Added attempt deadlines and `expireAmbiguousAttempt`; expiry moves an attempt to UNKNOWN only and never authorizes retry.
 - **AR-13 — A visible marker could be forged by a user or copied into an unrelated comment.** Added HMAC marker signature, key ID, exact snapshot/payload binding, and expected bot-author verification.
 - **AR-14 — Existing-comment reconciliation had no explicit MODEL_COMPLETED transition.** Added positive-evidence transitions to PUBLISHED or DUPLICATE_ACCEPTED before a new POST; incomplete or untrusted evidence remains non-publishable.
+- **AR-15 — The marker could not be checked before inference without a known output digest.** Made the marker ID deterministic per key/policy and the signed marker self-authenticating; its embedded payload digest is verified against the comment body, allowing trusted pre-model deduplication without rerunning inference.
+- **AR-16 — MODEL_COMPLETED continuation had no precise lease-reclaim condition.** Restricted continuation takeover to absent/expired server-time leases and required a new generation, leaving the model attempt permanently consumed.
 
 **Residual design limitations (not defects that this contract can eliminate):**
 

@@ -256,7 +256,7 @@
   Expected: no `alarm()` publisher currently exists.
 
 - [ ] **Step 3 — Implement**
-  Add only the production and staging `[[queues.producers]]` declarations that bind `OUTBOX_QUEUE` to the already-existing main Outbox Queues. Validate required bindings/config before claiming. Use fixed publisher identity `orchestrator-outbox-publisher` and `LEDGER_WORKER_ASSERTION_KEYS` plus active KID. Claim at most 8 rows. Encrypt each token before calling `this.env.OUTBOX_QUEUE.send(envelope)`. Queue send stays outside the storage transaction. On send failure call token-fenced publisher failure. Recalculate or preserve the earliest pending/lease-expiry Alarm before returning.
+  Add only the production and staging `[[queues.producers]]` declarations that bind `OUTBOX_QUEUE` to the already-existing main Outbox Queues. Validate required bindings/config before claiming. Use fixed publisher identity `orchestrator-outbox-publisher` and `LEDGER_WORKER_ASSERTION_KEYS` plus active KID. Claim at most 8 rows. Encrypt each token before calling `this.env.OUTBOX_QUEUE.send(envelope, { contentType: "json" })`. Queue send stays outside the storage transaction. On send failure call token-fenced publisher failure. Recalculate or preserve the earliest pending/lease-expiry Alarm before returning.
 
 - [ ] **Step 4 — Verify GREEN and commit**
   Re-run focused alarm-publisher test, then:
@@ -316,7 +316,8 @@
 - Produces: idempotent archive of exact original encrypted body; source mutation only when current owner/generation/token/expiry all match; DLQ consumer routes repeated archive failures to existing quarantine Queue.
 
 - [ ] **Step 1 — Write failing tests**
-  - `dlq_archiver_hashes_original_envelope_and_persists_ciphertext_only`.
+  - `dlq_archiver_hashes_canonical_envelope_and_queue_metadata_and_persists_ciphertext_only`.
+  - `dlq_archiver_digest_is_independent_of_object_property_order`.
   - `dlq_archiver_terminalizes_only_exact_current_capability`.
   - `dlq_archiver_stale_capability_archives_without_mutating_new_generation`.
   - `dlq_archiver_replay_is_idempotent_and_conflicts_are_rejected`.
@@ -328,7 +329,7 @@
   Expected: current archiver stores message content but lacks encrypted capability fencing and exact source mutation rules.
 
 - [ ] **Step 3 — Implement**
-  Hash the exact original Queue body before normalization. Persist the encrypted envelope only. Decrypt the capability only in trusted runtime memory, and extend `recordOutboxDeadLetter()` to terminalize the source row only when exact lease owner, generation, token digest, and active expiry match. Stale capabilities may be archived idempotently but cannot mutate a newer generation. Main Queue DLQ consumer sends repeated archive failures to the pre-existing quarantine Queue.
+  Compute the archive digest as `sha256Canonical({ queueName, messageId, messageAttempts, messageTimestamp, body: envelope })` over the validated received structured-clone object before redaction; Queue exposes `message.body`, not raw transport bytes. Persist the canonical JSON encrypted envelope only. Decrypt the capability only in trusted runtime memory, and extend `recordOutboxDeadLetter()` to terminalize the source row only when exact lease owner, generation, token digest, and active expiry match. Stale capabilities may be archived idempotently but cannot mutate a newer generation. Main Queue DLQ consumer sends repeated archive failures to the pre-existing quarantine Queue.
 
 - [ ] **Step 4 — Verify GREEN and commit**
   Re-run focused DLQ tests, then:

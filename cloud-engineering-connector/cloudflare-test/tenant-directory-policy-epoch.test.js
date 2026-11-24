@@ -27,13 +27,20 @@ async function assertion(operation, tenantId, projectId, now, target) {
   });
 }
 
-async function upsertMembership(stub, tenantId, principalId, now = BASE_TIME) {
+async function upsertMembership(
+  stub,
+  tenantId,
+  principalId,
+  now = BASE_TIME,
+  status = "active",
+  expectedVersion = 0,
+) {
   const target = {
     principalId,
     membershipId: "membership-" + principalId,
     role: "tenant-member",
-    status: "active",
-    expectedVersion: 0,
+    status,
+    expectedVersion,
   };
   return stub.upsertMembership({
     assertion: await assertion("upsertMembership", tenantId, null, now, target),
@@ -129,6 +136,84 @@ describe("TenantDirectory policy-scope epoch", () => {
         action,
         epoch: 2,
       }]);
+    });
+  });
+
+  it("advances every distinct affected scope once when membership is suspended", async () => {
+    const tenantId = "epoch-suspend-tenant";
+    const principalId = "principal-epoch-suspend";
+    const firstResourceDigest = await sha256("resource:suspend-first");
+    const secondResourceDigest = await sha256("resource:suspend-second");
+    const stub = directoryFor(tenantId);
+    await configureDirectory(stub);
+    await upsertMembership(stub, tenantId, principalId);
+
+    await upsertPolicy(stub, tenantId, {
+      projectId: "project-suspend-a",
+      principalId,
+      action: "project.read",
+      resourceDigest: "*",
+      now: BASE_TIME + 1,
+    });
+    await upsertPolicy(stub, tenantId, {
+      projectId: "project-suspend-a",
+      principalId,
+      action: "project.read",
+      resourceDigest: firstResourceDigest,
+      now: BASE_TIME + 2,
+    });
+    await upsertPolicy(stub, tenantId, {
+      projectId: "project-suspend-b",
+      principalId,
+      action: "project.write",
+      resourceDigest: secondResourceDigest,
+      now: BASE_TIME + 3,
+    });
+
+    await upsertMembership(
+      stub,
+      tenantId,
+      principalId,
+      BASE_TIME + 4,
+      "suspended",
+      1,
+    );
+
+    const state = await runInDurableObject(stub, instance => ({
+      membership: instance.ctx.storage.sql.exec(
+        "SELECT status, version FROM tenant_memberships WHERE tenant_id = ? AND principal_id = ?",
+        tenantId,
+        principalId,
+      ).one(),
+      policies: instance.ctx.storage.sql.exec(
+        "SELECT status FROM tenant_project_policy_rules WHERE tenant_id = ? AND principal_id = ?",
+        tenantId,
+        principalId,
+      ).toArray(),
+      epochs: instance.ctx.storage.sql.exec(
+        "SELECT project_id, principal_id, action, epoch FROM tenant_policy_scope_epochs ORDER BY project_id, action",
+      ).toArray(),
+    }));
+
+    expect(state.membership).toEqual({ status: "suspended", version: 2 });
+    expect(state.policies.every(row => row.status === "disabled")).toBe(true);
+    expect(state.epochs).toEqual([
+      { project_id: "project-suspend-a", principal_id: principalId, action: "project.read", epoch: 3 },
+      { project_id: "project-suspend-b", principal_id: principalId, action: "project.write", epoch: 2 },
+    ]);
+
+    const denied = await stub.authorizeProjectAction({
+      tenantId,
+      principalId,
+      projectId: "project-suspend-a",
+      action: "project.read",
+      resourceDigest: firstResourceDigest,
+    });
+    expect(denied).toMatchObject({
+      effect: "deny",
+      membershipVersion: 2,
+      policyScopeEpoch: 3,
+      selectedRuleVersion: null,
     });
   });
 

@@ -21,7 +21,7 @@ for (const workflow of workflows) {
   test(workflow.name + " release verifies real Environment protection before any secret-bearing step", () => {
     const source = readFileSync(workflow.path, "utf8");
     assert.match(source, /permissions:\n[\s\S]*?actions:\s*read/, "release token must have Actions read permission");
-    assert.match(source, new RegExp("name: " + workflow.environment + "\\s*$"), "job must remain bound to its fixed Environment");
+    assert.match(source, new RegExp("name: " + workflow.environment + "\\s*$", "m"), "job must remain bound to its fixed Environment");
 
     const guardMarker = "node scripts/verify-environment-protection.mjs";
     const guardIndex = source.indexOf(guardMarker);

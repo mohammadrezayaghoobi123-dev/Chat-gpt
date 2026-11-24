@@ -11,13 +11,18 @@ function fromBase64(value) {
   return Uint8Array.from(atob(value), character => character.charCodeAt(0));
 }
 
-async function createEnvironment(keyIds = ["kek-v1"], activeKeyId = "kek-v1") {
+async function createEnvironment(
+  keyIds = ["kek-v1"],
+  activeKeyId = "kek-v1",
+  previousKeys = {},
+) {
   const keys = {};
   for (const keyId of keyIds) {
-    keys[keyId] = toBase64(crypto.getRandomValues(new Uint8Array(32)));
+    keys[keyId] = previousKeys[keyId] ?? toBase64(crypto.getRandomValues(new Uint8Array(32)));
   }
   return {
     ADMISSION_SIGNER_MASTER_KEYS: JSON.stringify({ activeKeyId, keys }),
+    __testKeyMaterial: keys,
   };
 }
 
@@ -108,7 +113,11 @@ describe("Admission signer", () => {
     const oldEnvironment = await createEnvironment(["kek-v1"], "kek-v1");
     const wrappedKey = await createWrappedKey(oldEnvironment, "tenant-rotation");
 
-    const rotatedEnvironment = await createEnvironment(["kek-v1", "kek-v2"], "kek-v2");
+    const rotatedEnvironment = await createEnvironment(
+      ["kek-v1", "kek-v2"],
+      "kek-v2",
+      oldEnvironment.__testKeyMaterial,
+    );
     const message = "rotation-overlap";
     const duringOverlap = await sign(rotatedEnvironment, wrappedKey, "tenant-rotation", message);
     expect(duringOverlap.status).toBe(200);

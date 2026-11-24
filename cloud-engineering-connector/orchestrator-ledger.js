@@ -72,6 +72,14 @@ function serializeBounded(value, field) {
   return serialized;
 }
 
+async function sha256Text(value) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function parseJson(value, field) {
   try {
     return JSON.parse(value);
@@ -820,7 +828,7 @@ export class OrchestratorLedger extends DurableObject {
         throw fail("agentRound must be an integer from zero through four.", "INVALID_AGENT_ROUND");
       }
       taskJson = serializeBounded(normalizedTask, "task");
-      taskDigest = await sha256Canonical(normalizedTask);
+      taskDigest = await sha256Text(taskJson);
     } catch (error) {
       return {
         created: false,
@@ -877,12 +885,11 @@ export class OrchestratorLedger extends DurableObject {
 
     const claims = verifiedReceipt.claims;
     let scopedIdempotencyKey;
-    let receiptDigest;
+    const receiptDigest = verifiedReceipt.receiptDigest;
     try {
       scopedIdempotencyKey = tenantProjectIdempotencyKey(
         claims.tenantId, claims.projectId, claims.idempotencyKeyDigest,
       );
-      receiptDigest = await sha256Canonical(receipt);
     } catch {
       return { created: false, reason: "ADMISSION_RECEIPT_REJECTED" };
     }

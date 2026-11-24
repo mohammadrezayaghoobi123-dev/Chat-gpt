@@ -1,12 +1,13 @@
 import copy
 import pathlib
+import re
 import sys
 import tomllib
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "security"))
-from validate_gitleaks_allowlists import EXPECTED_FIXTURES, validate_config
+from validate_gitleaks_allowlists import EXPECTED_FIXTURES, _source_fixture_line, validate_config
 
 
 class GitleaksAllowlistIntegrityTests(unittest.TestCase):
@@ -64,6 +65,20 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
         changed["allowlists"][0]["paths"] = ["^[$"]
         self.assertTrue(validate_config(changed, ROOT))
 
+
+
+    def test_line_target_allowlists_tolerate_gitleaks_leading_newline(self):
+        entries = {
+            entry.get("description"): entry
+            for entry in self.config["allowlists"]
+            if entry.get("description") in EXPECTED_FIXTURES
+        }
+        for description, (commit, path) in EXPECTED_FIXTURES.items():
+            with self.subTest(description=description):
+                line = _source_fixture_line(ROOT, commit, path)
+                self.assertIsNotNone(line)
+                pattern = re.compile(entries[description]["regexes"][0])
+                self.assertRegex("\\n" + line, pattern)
 
     def test_validator_rejects_non_literal_line_pattern(self):
         changed = copy.deepcopy(self.config)

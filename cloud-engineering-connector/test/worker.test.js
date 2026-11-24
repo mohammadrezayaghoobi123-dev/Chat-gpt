@@ -442,6 +442,23 @@ test("modern MCP server/discover advertises the implemented modern era",async()=
 test("modern MCP tools/list requires metadata and returns bounded private cache policy",async()=>{const r=await worker.fetch(modernRequest("tools/list",{},2),env);assert.equal(r.status,200);const b=await r.json();assert.equal(b.result.resultType,"complete");assert.ok(Array.isArray(b.result.tools));assert.equal(b.result.cacheScope,"private");assert.equal(b.result.ttlMs,60000);assert.equal(b.result._meta["io.modelcontextprotocol/serverInfo"].name,"cloud-engineering-connector");assert.ok(b.result._meta["io.modelcontextprotocol/serverInfo"].version)});
 test("modern MCP tools/call validates routing headers against the JSON-RPC body",async()=>{const r=await worker.fetch(modernRequest("tools/call",{name:"engineering_standards",arguments:{}},3),env);assert.equal(r.status,200);const b=await r.json();assert.equal(b.result.content[0].type,"text");assert.equal(b.result.resultType,"complete");assert.equal(b.result.ttlMs,0);assert.equal(b.result.cacheScope,"private");assert.equal(b.result._meta["io.modelcontextprotocol/serverInfo"].name,"cloud-engineering-connector");const mismatch=await worker.fetch(modernRequest("tools/call",{name:"engineering_standards",arguments:{}},4,{"Mcp-Name":"project_inspect"}),env);assert.equal(mismatch.status,400);assert.equal((await mismatch.json()).error.code,-32020)});
 test("unimplemented task methods return method-not-found without requiring unsupported Mcp-Name routing",async()=>{for(const method of ["tasks/get","tasks/update","tasks/cancel"]){const request=modernRequest(method,{taskId:"task-123"},91,{"Mcp-Name":undefined});const r=await worker.fetch(request,env);assert.equal(r.status,404,method);assert.equal((await r.json()).error.code,-32601,method)}});
+test("Scheduler and Task Ledger operations are not reachable through the authenticated MCP or HTTP surface",async()=>{
+ const before=orchestratorLedger.calls.length;
+ const listed=await worker.fetch(modernRequest("tools/list",{},92),env);
+ assert.equal(listed.status,200);
+ const names=(await listed.json()).result.tools.map(tool=>tool.name);
+ for(const name of ["createTask","claimTask","renewLease","releaseLease","scheduler_enqueue"]) {
+  assert.equal(names.includes(name),false,name+" must not be advertised");
+  const denied=await worker.fetch(modernRequest("tools/call",{name,arguments:{}},93),env);
+  assert.equal(denied.status,200,name);
+  const body=await denied.json();
+  assert.equal(body.error.code,-32602,name);
+  assert.match(body.error.message,/Unknown tool/,name);
+ }
+ const direct=await worker.fetch(req("/orchestrator/createTask",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({taskId:"task-external"})}),env);
+ assert.equal(direct.status,404);
+ assert.equal(orchestratorLedger.calls.length,before,"denied external requests must not access the Ledger binding");
+});
 test("modern MCP rejects a missing method header",async()=>{const headers={authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream","MCP-Protocol-Version":"2026-07-28"};const r=await worker.fetch(req("/mcp",{method:"POST",headers,body:JSON.stringify({jsonrpc:"2.0",id:5,method:"ping",params:{_meta:{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"test","version":"1"}}}})}),env);assert.equal(r.status,400);assert.equal((await r.json()).error.code,-32020)});
 test("modern MCP rejects unsupported versions with a machine-readable supported list",async()=>{const request=modernRequest("ping",{},6,{"MCP-Protocol-Version":"2025-11-25"});const body=JSON.parse(await request.text());body.params._meta["io.modelcontextprotocol/protocolVersion"]="2025-11-25";const r=await worker.fetch(req("/mcp",{method:"POST",headers:request.headers,body:JSON.stringify(body)}),env);assert.equal(r.status,400);const error=(await r.json()).error;assert.equal(error.code,-32022);assert.deepEqual(error.data.supported,["2026-07-28"])});
 test("legacy initialize negotiates the current 2025-11-25 version when requested",async()=>{const r=await worker.fetch(req("/mcp",{method:"POST",headers:{authorization:"Bearer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","content-type":"application/json",accept:"application/json, text/event-stream"},body:JSON.stringify({jsonrpc:"2.0",id:61,method:"initialize",params:{protocolVersion:"2025-11-25",capabilities:{},clientInfo:{name:"legacy-test",version:"1.0"}}})}),env);assert.equal(r.status,200);assert.equal((await r.json()).result.protocolVersion,"2025-11-25")});

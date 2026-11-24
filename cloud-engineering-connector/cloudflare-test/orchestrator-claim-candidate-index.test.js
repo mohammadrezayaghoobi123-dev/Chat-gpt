@@ -6,7 +6,8 @@ import { CLAIM_CANDIDATE_QUERY } from "../orchestrator-ledger.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 
 let now;
-beforeEach(() => { now = Date.now(); vi.spyOn(Date, "now").mockReturnValue(now); });
+let ledgerClock;
+beforeEach(() => { now = Date.now(); ledgerClock = vi.spyOn(Date, "now").mockReturnValue(now); });
 afterEach(() => vi.restoreAllMocks());
 const TEST_ASSERTION_KID = "test-v1";
 const TEST_ASSERTION_KEY = Uint8Array.from(
@@ -395,7 +396,7 @@ describe("OrchestratorLedger reconciliation fail-closed policy", () => {
       now,
     });
     expect(first).toMatchObject({ claimed: true, leaseGeneration: 1 });
-    vi.spyOn(Date, "now").mockReturnValue(now + 101);
+    ledgerClock.mockReturnValue(now + 101);
     const result = await ledger.claimTask({
       workerId: "agent:worker-1",
       workerAssertion: await createWorkerAssertion({
@@ -511,7 +512,7 @@ describe("OrchestratorLedger cursor expiry and storage bounds", () => {
     const ledger = ledgerFor("claim-candidate-expired-cursor-token");
     const ledgerBase = Math.floor(now / 1000) * 1000;
     let ledgerNow = ledgerBase;
-    vi.spyOn(Date, "now").mockImplementation(() => ledgerNow);
+    ledgerClock.mockImplementation(() => ledgerNow);
     const taskIds = Array.from({ length: 129 }, (_value, index) =>
       "expiry-" + String(index).padStart(3, "0"),
     );

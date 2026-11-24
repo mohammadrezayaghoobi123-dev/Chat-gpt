@@ -110,8 +110,9 @@ async function fixture(suffix) {
     principalId,
     task,
     idempotencyKey,
-    inputHash: "b".repeat(64),
+    inputHash: null,
     admissionReceipt,
+    inputHash: admissionReceipt.claims.taskDigest,
     ledger,
   };
 }

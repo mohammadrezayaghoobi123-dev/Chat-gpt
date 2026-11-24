@@ -19,6 +19,9 @@ const MAX_EXPIRED_CLAIM_CURSORS_PER_CALL = 64;
 const EXECUTOR_PRINCIPAL = "orchestrator-executor";
 const EXECUTOR_OPERATIONS = Object.freeze(["claimTask", "renewLease", "releaseLease"]);
 const EXECUTOR_CLOCK_SKEW_SECONDS = 5;
+const OWNER_WEBHOOK_REDELIVERY_MAX = 3;
+const OWNER_WEBHOOK_REDELIVERY_TTL_MS = 72 * 60 * 60 * 1000;
+const OWNER_WEBHOOK_REDELIVERY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function assertionTrustedNow(assertion) {
   const trustedNow = Date.now();
@@ -484,6 +487,27 @@ export class OrchestratorLedger extends DurableObject {
     if (!ownerReceiptColumns.has("repository")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN repository TEXT NOT NULL DEFAULT ''");
     if (!ownerReceiptColumns.has("issue_number")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN issue_number INTEGER NOT NULL DEFAULT 0");
     if (!ownerReceiptColumns.has("comment_created_at")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN comment_created_at INTEGER NOT NULL DEFAULT 0");
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_owner_webhook_retries (
+        delivery_id TEXT PRIMARY KEY,
+        body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
+        comment_id TEXT NOT NULL,
+        command_hash TEXT NOT NULL CHECK(length(command_hash) = 64),
+        repository_id INTEGER NOT NULL CHECK(repository_id > 0),
+        actor_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        operation TEXT NOT NULL CHECK(operation IN ('cancel','quarantine','release')),
+        issue_number INTEGER NOT NULL CHECK(issue_number > 0),
+        comment_created_at INTEGER NOT NULL CHECK(comment_created_at > 0),
+        retry_count INTEGER NOT NULL CHECK(retry_count BETWEEN 0 AND 3),
+        state TEXT NOT NULL CHECK(state IN ('RETRYABLE','COMPLETED','EXHAUSTED','EXPIRED')),
+        first_failed_at INTEGER NOT NULL CHECK(first_failed_at > 0),
+        expires_at INTEGER NOT NULL CHECK(expires_at > first_failed_at),
+        last_error_code TEXT NOT NULL,
+        updated_at INTEGER NOT NULL CHECK(updated_at > 0)
+      )
+    `);
+    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_owner_webhook_retries_by_expiry ON orchestrator_owner_webhook_retries(expires_at, state)");
 
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_audit_events (
@@ -508,7 +532,7 @@ export class OrchestratorLedger extends DurableObject {
 
   ping() {
     const result = this.ctx.storage.sql.exec("SELECT 1 AS ok").one();
-    return { ok: Number(result.ok) === 1, schemaVersion: 7 };
+    return { ok: Number(result.ok) === 1, schemaVersion: 8 };
   }
 
   claimGitHubDelivery({ deliveryId, bodySha256, eventName, receivedAt, idempotencyKey, inputHash } = {}) {
@@ -576,6 +600,107 @@ export class OrchestratorLedger extends DurableObject {
         );
       }
       return { claimed: true, replay: false, deliveryId, bodySha256 };
+    });
+  }
+
+  authorizeOwnerWebhookRetry(input = {}) {
+    const {
+      deliveryId, bodySha256, commentId, commandHash, repositoryId, actorId,
+      taskId, operation, issueNumber, commentCreatedAt,
+    } = input ?? {};
+    const validIdentity =
+      typeof deliveryId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(deliveryId) &&
+      typeof bodySha256 === "string" && SHA256.test(bodySha256) &&
+      typeof commentId === "string" && /^[0-9]{1,20}$/.test(commentId) &&
+      typeof commandHash === "string" && SHA256.test(commandHash) &&
+      Number.isSafeInteger(repositoryId) && repositoryId > 0 &&
+      typeof actorId === "string" && /^[0-9]{1,20}$/.test(actorId) &&
+      typeof taskId === "string" && IDENTIFIER.test(taskId) &&
+      ["cancel", "quarantine", "release"].includes(operation) &&
+      Number.isSafeInteger(issueNumber) && issueNumber > 0 &&
+      Number.isSafeInteger(commentCreatedAt) && commentCreatedAt > 0;
+    if (!validIdentity) {
+      return { registered: true, denied: true, reason: "OWNER_REDELIVERY_CONTEXT_INVALID" };
+    }
+
+    const now = Date.now();
+    const sql = this.ctx.storage.sql;
+    return this.ctx.storage.transactionSync(() => {
+      const priorReceipts = sql.exec(
+        "SELECT * FROM orchestrator_owner_command_receipts WHERE delivery_id = ? OR comment_id = ?",
+        deliveryId, commentId,
+      ).toArray();
+      if (priorReceipts.length > 1) {
+        return { registered: true, denied: true, reason: "OWNER_REDELIVERY_CONFLICT" };
+      }
+      const priorReceipt = priorReceipts[0];
+      if (priorReceipt) {
+        const receiptMatches =
+          priorReceipt.comment_id === commentId &&
+          priorReceipt.body_sha256 === bodySha256 &&
+          priorReceipt.command_hash === commandHash &&
+          priorReceipt.task_id === taskId &&
+          priorReceipt.operation === operation &&
+          priorReceipt.repository === this.env?.GITHUB_WEBHOOK_REPOSITORY &&
+          priorReceipt.issue_number === issueNumber &&
+          priorReceipt.comment_created_at === commentCreatedAt;
+        if (!receiptMatches) {
+          return { registered: true, denied: true, reason: "OWNER_REDELIVERY_CONFLICT" };
+        }
+        sql.exec(
+          "UPDATE orchestrator_owner_webhook_retries SET state = 'COMPLETED', last_error_code = NULL, updated_at = ? WHERE delivery_id = ? AND body_sha256 = ? AND comment_id = ? AND command_hash = ? AND state = 'RETRYABLE'",
+          now, deliveryId, bodySha256, commentId, commandHash,
+        );
+        return {
+          registered: true,
+          completed: true,
+          result: parseJson(priorReceipt.result_json, "Owner command receipt"),
+        };
+      }
+
+      const marker = sql.exec(
+        "SELECT * FROM orchestrator_owner_webhook_retries WHERE delivery_id = ?",
+        deliveryId,
+      ).toArray()[0];
+      if (!marker) return { registered: false };
+
+      const markerMatches =
+        marker.body_sha256 === bodySha256 &&
+        marker.comment_id === commentId &&
+        marker.command_hash === commandHash &&
+        marker.repository_id === repositoryId &&
+        marker.actor_id === actorId &&
+        marker.task_id === taskId &&
+        marker.operation === operation &&
+        marker.issue_number === issueNumber &&
+        marker.comment_created_at === commentCreatedAt;
+      if (!markerMatches) {
+        return { registered: true, denied: true, reason: "OWNER_REDELIVERY_CONFLICT" };
+      }
+      if (now >= marker.expires_at || marker.state === "EXPIRED") {
+        sql.exec(
+          "UPDATE orchestrator_owner_webhook_retries SET state = 'EXPIRED', updated_at = ? WHERE delivery_id = ? AND state != 'COMPLETED'",
+          now, deliveryId,
+        );
+        return { registered: true, denied: true, reason: "OWNER_REDELIVERY_EXPIRED" };
+      }
+      if (marker.state === "EXHAUSTED" || marker.retry_count >= OWNER_WEBHOOK_REDELIVERY_MAX) {
+        sql.exec(
+          "UPDATE orchestrator_owner_webhook_retries SET state = 'EXHAUSTED', updated_at = ? WHERE delivery_id = ? AND state = 'RETRYABLE'",
+          now, deliveryId,
+        );
+        return { registered: true, denied: true, reason: "OWNER_REDELIVERY_EXHAUSTED" };
+      }
+      if (marker.state !== "RETRYABLE") {
+        return { registered: true, denied: true, reason: "OWNER_REDELIVERY_CONFLICT" };
+      }
+
+      const retryCount = marker.retry_count + 1;
+      sql.exec(
+        "UPDATE orchestrator_owner_webhook_retries SET retry_count = ?, updated_at = ? WHERE delivery_id = ? AND retry_count = ? AND state = 'RETRYABLE'",
+        retryCount, now, deliveryId, marker.retry_count,
+      );
+      return { registered: true, retryAuthorized: true, retryCount };
     });
   }
 
@@ -1701,8 +1826,18 @@ export class OrchestratorLedger extends DurableObject {
           if (priorReceipt) {
             if ((priorReceipt.delivery_id === context.deliveryId ||
                  priorReceipt.comment_id === context.commentId) &&
+                priorReceipt.comment_id === context.commentId &&
                 priorReceipt.body_sha256 === bodySha256 &&
-                priorReceipt.command_hash === context.commandHash) {
+                priorReceipt.command_hash === context.commandHash &&
+                priorReceipt.task_id === command.taskId &&
+                priorReceipt.operation === command.operation &&
+                priorReceipt.repository === provenance.repository &&
+                priorReceipt.issue_number === provenance.issueNumber &&
+                priorReceipt.comment_created_at === provenance.commentCreatedAt) {
+              sql.exec(
+                "UPDATE orchestrator_owner_webhook_retries SET state = 'COMPLETED', last_error_code = NULL, updated_at = ? WHERE delivery_id = ? AND body_sha256 = ? AND comment_id = ? AND command_hash = ? AND state = 'RETRYABLE'",
+                now, context.deliveryId, bodySha256, context.commentId, context.commandHash,
+              );
               return { replay: true, result: parseJson(priorReceipt.result_json, "Owner command receipt") };
             }
             return { conflict: true, reason: "OWNER_RECEIPT_CONFLICT" };
@@ -1793,13 +1928,113 @@ export class OrchestratorLedger extends DurableObject {
             command.taskId, command.operation, provenance.repository, provenance.issueNumber,
             provenance.commentCreatedAt, storedResult, now,
           );
+          sql.exec(
+            "UPDATE orchestrator_owner_webhook_retries SET state = 'COMPLETED', last_error_code = NULL, updated_at = ? WHERE delivery_id = ? AND body_sha256 = ? AND comment_id = ? AND command_hash = ? AND repository_id = ? AND actor_id = ? AND task_id = ? AND operation = ? AND issue_number = ? AND comment_created_at = ? AND state = 'RETRYABLE'",
+            now, context.deliveryId, bodySha256, context.commentId, context.commandHash,
+            context.repositoryId, context.actorId, command.taskId, command.operation,
+            provenance.issueNumber, provenance.commentCreatedAt,
+          );
           return { replay: false, result: successResult };
         });
         if (transactionResult.retry) continue;
         if (transactionResult.conflict) return { applied: false, conflict: true, reason: transactionResult.reason };
         return { ...transactionResult.result, ...(transactionResult.replay ? { replay: true } : {}) };
       }
-      return { applied: false, reason: "AUDIT_CHAIN_CONTENTION" };
+      const failedAt = Date.now();
+      const expiresAt = failedAt + OWNER_WEBHOOK_REDELIVERY_TTL_MS;
+      const retryMarkerResult = this.ctx.storage.transactionSync(() => {
+        const priorReceipts = sql.exec(
+          "SELECT * FROM orchestrator_owner_command_receipts WHERE delivery_id = ? OR comment_id = ?",
+          context.deliveryId, context.commentId,
+        ).toArray();
+        if (priorReceipts.length > 1) return { conflict: true };
+        const priorReceipt = priorReceipts[0];
+        if (priorReceipt) {
+          const receiptMatches =
+            priorReceipt.comment_id === context.commentId &&
+            priorReceipt.body_sha256 === bodySha256 &&
+            priorReceipt.command_hash === context.commandHash &&
+            priorReceipt.task_id === command.taskId &&
+            priorReceipt.operation === command.operation &&
+            priorReceipt.repository === provenance.repository &&
+            priorReceipt.issue_number === provenance.issueNumber &&
+            priorReceipt.comment_created_at === provenance.commentCreatedAt;
+          if (!receiptMatches) return { conflict: true };
+          return {
+            completed: true,
+            result: parseJson(priorReceipt.result_json, "Owner command receipt"),
+          };
+        }
+
+        const existingMarker = sql.exec(
+          "SELECT * FROM orchestrator_owner_webhook_retries WHERE delivery_id = ?",
+          context.deliveryId,
+        ).toArray()[0];
+        if (existingMarker) {
+          const markerMatches =
+            existingMarker.body_sha256 === bodySha256 &&
+            existingMarker.comment_id === context.commentId &&
+            existingMarker.command_hash === context.commandHash &&
+            existingMarker.repository_id === context.repositoryId &&
+            existingMarker.actor_id === context.actorId &&
+            existingMarker.task_id === command.taskId &&
+            existingMarker.operation === command.operation &&
+            existingMarker.issue_number === provenance.issueNumber &&
+            existingMarker.comment_created_at === provenance.commentCreatedAt;
+          if (!markerMatches) return { conflict: true };
+          if (failedAt >= existingMarker.expires_at || existingMarker.state === "EXPIRED") {
+            sql.exec(
+              "UPDATE orchestrator_owner_webhook_retries SET state = 'EXPIRED', updated_at = ? WHERE delivery_id = ? AND state != 'COMPLETED'",
+              failedAt, context.deliveryId,
+            );
+            return { expired: true };
+          }
+          if (existingMarker.state === "EXHAUSTED" ||
+              existingMarker.retry_count >= OWNER_WEBHOOK_REDELIVERY_MAX) {
+            sql.exec(
+              "UPDATE orchestrator_owner_webhook_retries SET state = 'EXHAUSTED', updated_at = ? WHERE delivery_id = ? AND state = 'RETRYABLE'",
+              failedAt, context.deliveryId,
+            );
+            return { exhausted: true };
+          }
+          if (existingMarker.state !== "RETRYABLE") return { conflict: true };
+          sql.exec(
+            "UPDATE orchestrator_owner_webhook_retries SET last_error_code = 'AUDIT_CHAIN_CONTENTION', updated_at = ? WHERE delivery_id = ? AND state = 'RETRYABLE'",
+            failedAt, context.deliveryId,
+          );
+          return { recorded: true, expiresAt: existingMarker.expires_at };
+        }
+
+        sql.exec(
+          "DELETE FROM orchestrator_owner_webhook_retries WHERE delivery_id IN (SELECT delivery_id FROM orchestrator_owner_webhook_retries WHERE expires_at <= ? ORDER BY expires_at LIMIT 100)",
+          failedAt - OWNER_WEBHOOK_REDELIVERY_RETENTION_MS,
+        );
+        sql.exec(
+          "INSERT INTO orchestrator_owner_webhook_retries (delivery_id, body_sha256, comment_id, command_hash, repository_id, actor_id, task_id, operation, issue_number, comment_created_at, retry_count, state, first_failed_at, expires_at, last_error_code, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'RETRYABLE', ?, ?, 'AUDIT_CHAIN_CONTENTION', ?)",
+          context.deliveryId, bodySha256, context.commentId, context.commandHash,
+          context.repositoryId, context.actorId, command.taskId, command.operation,
+          provenance.issueNumber, provenance.commentCreatedAt, failedAt, expiresAt, failedAt,
+        );
+        return { recorded: true, expiresAt };
+      });
+      if (retryMarkerResult.completed) {
+        return { ...retryMarkerResult.result, replay: true };
+      }
+      if (retryMarkerResult.conflict) {
+        return { applied: false, conflict: true, reason: "OWNER_REDELIVERY_CONFLICT" };
+      }
+      if (retryMarkerResult.expired) {
+        return { applied: false, reason: "OWNER_REDELIVERY_EXPIRED" };
+      }
+      if (retryMarkerResult.exhausted) {
+        return { applied: false, reason: "OWNER_REDELIVERY_EXHAUSTED" };
+      }
+      return {
+        applied: false,
+        reason: "AUDIT_CHAIN_CONTENTION",
+        deliveryId: context.deliveryId,
+        retryExpiresAt: retryMarkerResult.expiresAt,
+      };
     } catch (error) {
       if (error?.code === "OWNER_ASSERTION_REJECTED") {
         return { applied: false, reason: "OWNER_ASSERTION_REJECTED" };

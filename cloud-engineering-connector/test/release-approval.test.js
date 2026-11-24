@@ -19,7 +19,7 @@ function stagingPull(overrides = {}) {
     state: "open",
     draft: false,
     html_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/129",
-    user: { login: author },
+    user: { id: 111111, login: author },
     head: { sha },
     base: { ref: "integration/unify-main-and-integrated-2026-11-02" },
     ...overrides,
@@ -35,11 +35,32 @@ function approval(commitId = sha, login = reviewer, state = "APPROVED", submitte
   };
 }
 
-function fakeFetch(pulls, reviews, onRequest = () => {}) {
+function deploymentApproval({
+  environment = "staging",
+  userId = 335530603,
+  login = reviewer,
+  state = "approved",
+} = {}) {
+  return {
+    state,
+    environments: [{ id: 61, name: environment }],
+    user: { id: userId, login },
+  };
+}
+
+function fakeFetch(
+  pulls,
+  reviews,
+  onRequest = () => {},
+  deploymentApprovals = [deploymentApproval()],
+) {
   return async (url, options) => {
     onRequest(String(url), options);
     if (String(url).includes("/commits/")) return response(pulls);
     if (String(url).includes("/reviews?")) return response(reviews);
+    if (String(url).includes("/actions/runs/") && String(url).endsWith("/approvals")) {
+      return response(deploymentApprovals);
+    }
     return response({ message: "not found" }, 404);
   };
 }
@@ -49,6 +70,7 @@ const input = overrides => ({
   candidateSha: sha,
   releaseEnvironment: "staging",
   token: "test-token-not-a-real-secret",
+  workflowRunId: 45371559860,
   allowedReviewerIds: [335530603],
   ...overrides,
 });
@@ -61,6 +83,8 @@ test("Staging accepts an independent approval for the exact open PR head", async
   assert.equal(result.pullNumber, 129);
   assert.equal(result.reviewer, reviewer);
   assert.equal(result.reviewCommitSha, sha);
+  assert.equal(result.deploymentApproverUserId, 335530603);
+  assert.equal(result.workflowRunId, 45371559860);
 });
 
 test("Staging rejects draft or wrong-head PRs before checking reviews", async () => {
@@ -84,7 +108,7 @@ test("Staging rejects author self-approval and stale approvals", async () => {
   await assert.rejects(
     verifyReleaseApproval({
       ...input({}),
-      fetchImpl: fakeFetch([stagingPull()], [approval(sha, author)]),
+      fetchImpl: fakeFetch([stagingPull()], [approval(sha, "renamed-author-login", "APPROVED", date, 111111)]),
     }),
     /no independent approval/,
   );
@@ -120,7 +144,8 @@ test("Staging uses a scoped GitHub token and never places it in the URL", async 
       assert.equal(options.headers.authorization, "Bearer " + token);
     }),
   });
-  assert.equal(urls.length, 2);
+  assert.equal(urls.length, 3);
+  assert.ok(urls.some(url => url.endsWith("/actions/runs/45371559860/approvals")));
   assert.ok(urls.every(url => !url.includes(token)));
 });
 
@@ -131,13 +156,18 @@ test("Production accepts only a merged PR to main with independent approval on i
     merged_at: date,
     merge_commit_sha: sha,
     html_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/130",
-    user: { login: author },
+    user: { id: 111111, login: author },
     head: { sha: headSha },
     base: { ref: "main" },
   };
   const result = await verifyReleaseApproval({
     ...input({ releaseEnvironment: "production" }),
-    fetchImpl: fakeFetch([productionPull], [approval(headSha)]),
+    fetchImpl: fakeFetch(
+      [productionPull],
+      [approval(headSha)],
+      () => {},
+      [deploymentApproval({ environment: "production" })],
+    ),
   });
   assert.equal(result.pullNumber, 130);
   assert.equal(result.reviewCommitSha, headSha);
@@ -149,7 +179,7 @@ test("Production rejects unmerged PRs and approvals on the wrong PR head", async
     state: "open",
     draft: false,
     merge_commit_sha: null,
-    user: { login: author },
+    user: { id: 111111, login: author },
     head: { sha: headSha },
     base: { ref: "main" },
   };
@@ -235,4 +265,125 @@ test("fails closed when the Environment reviewer identity set is empty", async (
     }),
     /allowed Environment reviewer IDs/,
   );
+});
+
+
+test("blocks a valid PR approval when a different Environment reviewer approved the deployment", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch(
+        [stagingPull()],
+        [approval()],
+        () => {},
+        [deploymentApproval({ userId: 246802, login: "different-reviewer" })],
+      ),
+    }),
+    /same independent User who approved the exact PR head/i,
+  );
+});
+
+test("blocks deployment approval history that does not name the exact release Environment", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch(
+        [stagingPull()],
+        [approval()],
+        () => {},
+        [deploymentApproval({ environment: "production" })],
+      ),
+    }),
+    /approved deployment review.*exact Environment/i,
+  );
+});
+
+test("blocks a rejected Environment deployment review", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch(
+        [stagingPull()],
+        [approval()],
+        () => {},
+        [deploymentApproval({ state: "rejected" })],
+      ),
+    }),
+    /approved deployment review.*exact Environment/i,
+  );
+});
+
+test("blocks missing or ambiguous deployment approval history", async () => {
+  for (const deploymentApprovals of [
+    [],
+    [deploymentApproval(), deploymentApproval()],
+  ]) {
+    await assert.rejects(
+      verifyReleaseApproval({
+        ...input({}),
+        fetchImpl: fakeFetch([stagingPull()], [approval()], () => {}, deploymentApprovals),
+      }),
+      /deployment approval history is missing or ambiguous/i,
+    );
+  }
+});
+
+test("blocks malformed deployment approver identity", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch(
+        [stagingPull()],
+        [approval()],
+        () => {},
+        [{ state: "approved", environments: [{ id: 61, name: "staging" }], user: { login: reviewer } }],
+      ),
+    }),
+    /deployment approval identity is malformed/i,
+  );
+});
+
+test("blocks a missing workflow run identity before reading GitHub", async () => {
+  let requests = 0;
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({ workflowRunId: 0 }),
+      fetchImpl: async () => {
+        requests += 1;
+        return response([]);
+      },
+    }),
+    /GITHUB_RUN_ID/i,
+  );
+  assert.equal(requests, 0);
+});
+
+test("uses immutable GitHub user identity rather than login text for PR author exclusion", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({ allowedReviewerIds: [111111] }),
+      fetchImpl: fakeFetch(
+        [stagingPull()],
+        [approval(sha, "renamed-author-login", "APPROVED", date, 111111)],
+        () => {},
+        [deploymentApproval({ userId: 111111, login: "renamed-author-login" })],
+      ),
+    }),
+    /no independent approval from a configured Environment reviewer/i,
+  );
+});
+
+test("does not treat the PR author's change request as an independent reviewer's change request", async () => {
+  const result = await verifyReleaseApproval({
+    ...input({}),
+    fetchImpl: fakeFetch(
+      [stagingPull()],
+      [
+        approval(sha, reviewer, "APPROVED", date, 335530603),
+        approval(sha, "renamed-author-login", "CHANGES_REQUESTED", "2026-11-02T13:00:00Z", 111111),
+      ],
+    ),
+  });
+  assert.equal(result.reviewerUserId, 335530603);
+  assert.equal(result.deploymentApproverUserId, 335530603);
 });

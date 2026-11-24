@@ -56,6 +56,7 @@ const activeMembership = Object.freeze({
   membershipId: "membership-01",
   status: "active",
   role: "tenant-member",
+  version: 1,
 });
 
 const tenantContext = await resolveTenantContext({
@@ -142,6 +143,7 @@ test("returns tenant context only from the verified membership record", async ()
     tenantId: "tenant-alpha",
     membershipId: "membership-01",
     role: "tenant-member",
+    membershipVersion: 1,
   });
   assert.equal(Object.isFrozen(context), true);
 });
@@ -189,6 +191,10 @@ test("denies project access when the policy decision is not allow", async () => 
             projectId: "project-01",
             decisionId: "decision-01",
             policyVersion: "policy-v1",
+            membershipId: "membership-01",
+            membershipVersion: 1,
+            policyScopeEpoch: 2,
+            policyRuleVersion: null,
           };
         },
       },
@@ -203,6 +209,7 @@ test("denies project access when the policy decision is not allow", async () => 
     projectId: "project-01",
     action: "project.write",
     resource: { kind: "repository", id: "repo-01" },
+    expectedMembershipVersion: 1,
   });
 });
 
@@ -225,6 +232,10 @@ test("accepts only an allow decision bound to the exact principal, tenant, proje
           projectId: "project-01",
           decisionId: "decision-02",
           policyVersion: "policy-v1",
+          membershipId: "membership-01",
+          membershipVersion: 1,
+          policyScopeEpoch: 3,
+          policyRuleVersion: 4,
         };
       },
     },
@@ -237,6 +248,10 @@ test("accepts only an allow decision bound to the exact principal, tenant, proje
     resourceDigest: request.resourceDigest,
     decisionId: "decision-02",
     policyVersion: "policy-v1",
+    membershipId: "membership-01",
+    membershipVersion: 1,
+    policyScopeEpoch: 3,
+    policyRuleVersion: 4,
   });
 });
 
@@ -487,5 +502,41 @@ test("resolvePrincipal rejects OIDC identity without a verified email claim", as
       },
     }),
     error => error.code === "AUTHENTICATION_FAILED",
+  );
+});
+
+
+test("rejects membership records without a positive numeric version", async () => {
+  await assert.rejects(
+    resolveTenantContext({
+      principal,
+      tenantSelector: "tenant-alpha",
+      membershipStore: {
+        async getActiveMembership() {
+          return { ...activeMembership, version: undefined };
+        },
+      },
+    }),
+    error => error.code === "TENANT_MEMBERSHIP_REQUIRED",
+  );
+});
+
+test("maps an authoritative stale membership version to TENANT_MEMBERSHIP_STALE", async () => {
+  await assert.rejects(
+    authorizeProjectAction({
+      principal,
+      tenantContext,
+      projectSelector: "project-01",
+      action: "project.read",
+      authorizationStore: {
+        async authorizeProjectAction(input) {
+          assert.equal(input.expectedMembershipVersion, 1);
+          throw Object.assign(new Error("stale"), {
+            code: "TENANT_DIRECTORY_MEMBERSHIP_VERSION_STALE",
+          });
+        },
+      },
+    }),
+    error => error.code === "TENANT_MEMBERSHIP_STALE",
   );
 });

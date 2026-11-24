@@ -2398,4 +2398,55 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+
+  it("rejects a Scheduler assertion that expires during asynchronous HMAC verification", async () => {
+    const ledger = ledgerFor("hmac-assertion-post-verification-expiry");
+    const taskId = "task-hmac-post-verification-expiry-0001";
+    const jti = "worker-jti-hmac-post-verification-expiry-0001";
+    const assertion = await workerAssertion(
+      "orchestrator-scheduler", "system", "createTask", now - 60_000, jti,
+    );
+
+    let runtimeNow = now;
+    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => runtimeNow);
+    const originalVerify = crypto.subtle.verify.bind(crypto.subtle);
+    const verifySpy = vi.spyOn(crypto.subtle, "verify").mockImplementation(async (...args) => {
+      runtimeNow = now + 6_000;
+      return originalVerify(...args);
+    });
+
+    try {
+      const result = await ledger.createTask({
+        task: {
+          ...task(taskId),
+          createdAt: now,
+          updatedAt: now,
+        },
+        idempotencyKey: "hmac-post-verification-expiry-key-0001",
+        inputHash: "7".repeat(64),
+        now,
+        workerId: "orchestrator-scheduler",
+        workerAssertion: assertion,
+      });
+
+      expect(result).toMatchObject({
+        created: false,
+        reason: "AUTHENTICATED_WORKER_REQUIRED",
+      });
+      await runInDurableObject(ledger, async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          "SELECT task_id FROM orchestrator_tasks WHERE task_id = ?",
+          taskId,
+        ).toArray()).toEqual([]);
+        expect(state.storage.sql.exec(
+          "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
+          jti,
+        ).toArray()).toEqual([]);
+      });
+    } finally {
+      verifySpy.mockRestore();
+      dateNowSpy.mockRestore();
+    }
+  });
+
 });

@@ -976,6 +976,47 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+  it("linearizes concurrent Owner retry authorization and never grants more than three redeliveries", async () => {
+    const ledger = ledgerFor("owner-webhook-redelivery-concurrent-cap");
+    const inputs = await ownerAuditContentionCohort(ledger, "concurrent-cap");
+    const { results } = await runOwnerAuditContentionWaves(ledger, inputs);
+    const failedIndex = results.findIndex(result => result.reason === "AUDIT_CHAIN_CONTENTION");
+    expect(failedIndex).toBeGreaterThanOrEqual(0);
+
+    const failed = inputs[failedIndex];
+    const context = failed.assertionContext;
+    const identity = {
+      deliveryId: context.deliveryId,
+      bodySha256: failed.bodySha256,
+      commentId: context.commentId,
+      commandHash: context.commandHash,
+      repositoryId,
+      actorId: ownerId,
+      taskId: failed.command.taskId,
+      operation: failed.command.operation,
+      issueNumber: 7,
+      commentCreatedAt: now,
+    };
+    const authorizations = await Promise.all(Array.from({ length: 4 }, async () => {
+      const assertion = await createOwnerAssertion(ownerKeySet, "owner-v1", context, now);
+      return ledger.authorizeOwnerWebhookRetry({ ...identity, assertion });
+    }));
+
+    expect(authorizations.filter(result => result.retryAuthorized === true)).toHaveLength(3);
+    expect(authorizations.filter(result => result.denied === true &&
+      result.reason === "OWNER_REDELIVERY_EXHAUSTED")).toHaveLength(1);
+    expect(authorizations.map(result => result.retryCount).filter(Number.isInteger).sort())
+      .toEqual([1, 2, 3]);
+
+    const marker = await runInDurableObject(ledger, async (_instance, state) =>
+      state.storage.sql.exec(
+        "SELECT retry_count, state FROM orchestrator_owner_webhook_retries WHERE delivery_id = ?",
+        identity.deliveryId,
+      ).one(),
+    );
+    expect(marker).toEqual({ retry_count: 3, state: "EXHAUSTED" });
+  });
+
   it("closes a retry marker atomically with its terminal receipt and never re-executes a completed delivery", async () => {
     const ledger = ledgerFor("owner-webhook-redelivery-completion");
     const inputs = await ownerAuditContentionCohort(ledger, "complete");

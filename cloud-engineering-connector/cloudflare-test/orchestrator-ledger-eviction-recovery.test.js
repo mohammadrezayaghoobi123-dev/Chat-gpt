@@ -305,7 +305,7 @@ describe("OrchestratorLedger Durable Object eviction and recovery invariants", (
         attempts: 1,
         lease_worker_id: PUBLISHER_ID,
         lease_generation: 1,
-        lease_until: firstClaimNow + 6_001,
+        lease_until: firstClaimNow + 5_001,
       });
     });
 
@@ -325,7 +325,7 @@ describe("OrchestratorLedger Durable Object eviction and recovery invariants", (
         attempts: 1,
         lease_worker_id: PUBLISHER_ID,
         lease_generation: 1,
-        lease_until: firstClaimNow + 6_001,
+        lease_until: firstClaimNow + 5_001,
       });
 
       const reclaimed = await instance.claimOutbox({

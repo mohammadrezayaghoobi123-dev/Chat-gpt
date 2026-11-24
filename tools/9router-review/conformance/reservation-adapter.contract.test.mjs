@@ -927,3 +927,94 @@ test("T44: recovery lock blocks completion writes until verified recovery unlock
   assert.equal(completion.status, "RECOVERY_LOCKED");
   assert.equal((await system.adapter.readAuthoritative({ key: KEY })).record.state, "MODEL_ATTEMPTED");
 });
+
+
+test("T45: recovery lock blocks every non-recovery reservation mutation", async () => {
+  const claimedSystem = makeSystem();
+  const claimed = await claim(claimedSystem);
+  await claimedSystem.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const renewed = await claimedSystem.adapter.renew({
+    ...claimArgs(),
+    generation: claimed.record.generation,
+    expectedRecordVersion: claimed.record.record_version,
+    leaseDurationMs: 100,
+  });
+  const aborted = await claimedSystem.adapter.abortBeforeModel({
+    key: KEY,
+    ownerId: "owner-1",
+    ownerNonce: "nonce:owner-1",
+    generation: claimed.record.generation,
+    expectedRecordVersion: claimed.record.record_version,
+    reasonCode: "OPERATOR_ABORT",
+  });
+  assert.equal(renewed.status, "RECOVERY_LOCKED");
+  assert.equal(aborted.status, "RECOVERY_LOCKED");
+
+  const completedSystem = makeSystem();
+  const model = await completeModel(completedSystem);
+  await completedSystem.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const resumed = await completedSystem.adapter.resumeCompletedModel({
+    key: KEY,
+    ownerId: "owner-2",
+    ownerNonce: "nonce:owner-2",
+    expectedRecordVersion: model.completed.record.record_version,
+    leaseDurationMs: 100,
+  });
+  assert.equal(resumed.status, "RECOVERY_LOCKED");
+
+  const commentSystem = makeSystem();
+  const comment = await commentAttempt(commentSystem);
+  const outcome = await commentSystem.ledger.appendOutcome({
+    attemptId: comment.attemptId,
+    outcomeType: "COMMENT_ACCEPTED",
+    evidenceDigest: "validated-response-digest",
+    evidenceReference: "github-comment://777",
+  });
+  await commentSystem.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const publication = await commentSystem.adapter.completeCommentAttempt({
+    key: KEY,
+    generation: comment.resumed.record.generation,
+    attemptId: comment.attemptId,
+    expectedRecordVersion: comment.permit.record_version,
+    remoteCommentId: 777,
+    validatedResponseDigest: "validated-response-digest",
+    effectLedgerReceipt: outcome,
+  });
+  const unknown = await commentSystem.adapter.markUnknown({
+    key: KEY,
+    generation: comment.resumed.record.generation,
+    attemptId: comment.attemptId,
+    expectedRecordVersion: comment.permit.record_version,
+    stage: "COMMENT",
+    reasonCode: "RESPONSE_TIMEOUT",
+  });
+  commentSystem.advance(101);
+  const expired = await commentSystem.adapter.expireAmbiguousAttempt({
+    key: KEY,
+    stage: "COMMENT",
+    attemptId: comment.attemptId,
+  });
+  assert.equal(publication.status, "RECOVERY_LOCKED");
+  assert.equal(unknown.status, "RECOVERY_LOCKED");
+  assert.equal(expired.status, "RECOVERY_LOCKED");
+
+  const closeSystem = makeSystem();
+  const closeModel = await completeModel(closeSystem);
+  const closeResume = await closeSystem.adapter.resumeCompletedModel({
+    key: KEY,
+    ownerId: "owner-2",
+    ownerNonce: "nonce:owner-2",
+    expectedRecordVersion: closeModel.completed.record.record_version,
+    leaseDurationMs: 100,
+  });
+  await closeSystem.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const closed = await closeSystem.adapter.closeWithoutPublish({
+    key: KEY,
+    ownerId: "owner-2",
+    ownerNonce: "nonce:owner-2",
+    generation: closeResume.record.generation,
+    expectedRecordVersion: closeResume.record.record_version,
+    reasonCode: "STALE_SNAPSHOT",
+  });
+  assert.equal(closed.status, "RECOVERY_LOCKED");
+});

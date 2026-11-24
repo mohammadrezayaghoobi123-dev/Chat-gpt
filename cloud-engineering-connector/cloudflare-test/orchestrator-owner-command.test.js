@@ -2681,4 +2681,110 @@ describe("Owner command atomic Ledger contract", () => {
     });
   });
 
+
+  it("prevents caller clock fast-forward from pruning a consumed JTI before a backdated replay", async () => {
+    const ledger = ledgerFor("worker-assertion-jti-clock-forward-replay");
+    const subject = "orchestrator-scheduler";
+    const role = "system";
+    const operation = "createTask";
+    const originalJti = "worker-jti-clock-forward-original-0001";
+    const forwardJti = "worker-jti-clock-forward-cleanup-0001";
+    const originalToken = await workerAssertion(
+      subject, role, operation, now, originalJti,
+    );
+    const forwardNow = now + 661_000;
+    const forwardToken = await workerAssertion(
+      subject, role, operation, forwardNow, forwardJti,
+    );
+    const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+
+    let first;
+    let forwardAttempt;
+    let retainedJtiCount;
+    let replay;
+    let persistedTaskIds;
+    try {
+      first = await ledger.createTask({
+        task: {
+          ...task("task-jti-clock-forward-original"),
+          createdAt: now,
+          updatedAt: now,
+        },
+        idempotencyKey: "jti-clock-forward-original",
+        inputHash: "6".repeat(64),
+        now,
+        workerId: subject,
+        workerAssertion: originalToken,
+      });
+
+      forwardAttempt = await ledger.createTask({
+        task: {
+          ...task("task-jti-clock-forward-cleanup-attempt"),
+          createdAt: forwardNow,
+          updatedAt: forwardNow,
+        },
+        idempotencyKey: "jti-clock-forward-cleanup-attempt",
+        inputHash: "7".repeat(64),
+        now: forwardNow,
+        workerId: subject,
+        workerAssertion: forwardToken,
+      });
+
+      await runInDurableObject(ledger, async (_instance, state) => {
+        retainedJtiCount = state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+          originalJti,
+        ).one().count;
+      });
+
+      replay = await ledger.createTask({
+        task: {
+          ...task("task-jti-clock-forward-backdated-replay"),
+          createdAt: now,
+          updatedAt: now,
+        },
+        idempotencyKey: "jti-clock-forward-backdated-replay",
+        inputHash: "8".repeat(64),
+        now,
+        workerId: subject,
+        workerAssertion: originalToken,
+      });
+
+      await runInDurableObject(ledger, async (_instance, state) => {
+        persistedTaskIds = state.storage.sql.exec(
+          "SELECT task_id FROM orchestrator_tasks WHERE task_id LIKE 'task-jti-clock-forward-%' ORDER BY task_id",
+        ).toArray().map(row => row.task_id);
+      });
+    } finally {
+      wallClockSpy.mockRestore();
+    }
+
+    const observed = {
+      firstCreated: first?.created,
+      forwardAttempt: {
+        created: forwardAttempt?.created,
+        reason: forwardAttempt?.reason ?? null,
+      },
+      retainedJtiCount,
+      replay: {
+        created: replay?.created,
+        reason: replay?.reason ?? null,
+      },
+      persistedTaskIds,
+    };
+    expect(observed).toEqual({
+      firstCreated: true,
+      forwardAttempt: {
+        created: false,
+        reason: "AUTHENTICATED_WORKER_REQUIRED",
+      },
+      retainedJtiCount: 1,
+      replay: {
+        created: false,
+        reason: "AUTHENTICATED_WORKER_REQUIRED",
+      },
+      persistedTaskIds: ["task-jti-clock-forward-original"],
+    });
+  });
+
 });

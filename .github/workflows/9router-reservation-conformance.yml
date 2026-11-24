@@ -3,7 +3,7 @@ name: 9Router Reservation Contract Conformance
 on:
   push:
     branches:
-      - verify/9router-reservation-conformance-2026-11-25
+      - verify/9router-reservation-conformance-*
   workflow_dispatch:
 
 permissions:

@@ -686,6 +686,7 @@ describe("Owner command atomic Ledger contract", () => {
 
     const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
     let initialAuditHashArrivals = 0;
+    const initialAuditSnapshots = [];
     let initialAuditWaveReleased = false;
     let releaseInitialAuditWave;
     let signalInitialAuditWave;
@@ -699,6 +700,11 @@ describe("Owner command atomic Ledger contract", () => {
       async (algorithm, data) => {
         const digestInput = new TextDecoder().decode(data);
         if (!initialAuditWaveReleased && digestInput.includes('"previousHash"')) {
+          const auditEvent = JSON.parse(digestInput);
+          initialAuditSnapshots.push({
+            eventId: auditEvent.eventId,
+            previousHash: auditEvent.previousHash,
+          });
           initialAuditHashArrivals += 1;
           if (initialAuditHashArrivals === requestCount) signalInitialAuditWave();
           await initialAuditWaveGate;
@@ -731,6 +737,10 @@ describe("Owner command atomic Ledger contract", () => {
       .filter(index => index >= 0);
 
     expect(initialAuditHashArrivals).toBe(requestCount);
+    expect(initialAuditSnapshots.map(snapshot => snapshot.eventId).sort()).toEqual(
+      inputs.map(input => "owner-" + input.command.eventId).sort(),
+    );
+    expect(new Set(initialAuditSnapshots.map(snapshot => snapshot.previousHash)).size).toBe(1);
     expect(appliedIndexes).toHaveLength(expectedAppliedCount);
     expect(contentionIndexes).toHaveLength(requestCount - expectedAppliedCount);
     expect(results.every(result =>

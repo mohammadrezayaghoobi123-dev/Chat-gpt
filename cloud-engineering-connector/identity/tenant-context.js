@@ -236,7 +236,9 @@ export async function resolveTenantContext({ principal, tenantSelector, membersh
     membership.principalId !== principal.id ||
     membership.tenantId !== tenantSelector ||
     !nonEmptyString(membership.membershipId) ||
-    !nonEmptyString(membership.role)
+    !nonEmptyString(membership.role) ||
+    !Number.isSafeInteger(membership.version) ||
+    membership.version < 1
   ) {
     reject("TENANT_MEMBERSHIP_REQUIRED");
   }
@@ -245,6 +247,7 @@ export async function resolveTenantContext({ principal, tenantSelector, membersh
     principalId: principal.id,
     tenantId: membership.tenantId,
     membershipId: membership.membershipId,
+    membershipVersion: membership.version,
     role: membership.role,
   });
   VERIFIED_TENANT_CONTEXTS.add(context);
@@ -297,8 +300,12 @@ export async function authorizeProjectAction({
       action,
       resource,
       resourceDigest,
+      expectedMembershipVersion: tenantContext.membershipVersion,
     });
-  } catch {
+  } catch (error) {
+    if (error?.code === "TENANT_DIRECTORY_MEMBERSHIP_VERSION_STALE") {
+      reject("TENANT_MEMBERSHIP_STALE");
+    }
     reject("POLICY_EVALUATION_FAILED");
   }
 
@@ -314,6 +321,25 @@ export async function authorizeProjectAction({
   ) {
     reject("POLICY_DECISION_SCOPE_MISMATCH");
   }
+
+  if (
+    decision.membershipId !== tenantContext.membershipId ||
+    decision.membershipVersion !== tenantContext.membershipVersion
+  ) {
+    reject("TENANT_MEMBERSHIP_STALE");
+  }
+
+  if (
+    !Number.isSafeInteger(decision.policyScopeEpoch) ||
+    decision.policyScopeEpoch < 0 ||
+    (decision.policyRuleVersion !== null &&
+      (!Number.isSafeInteger(decision.policyRuleVersion) || decision.policyRuleVersion < 1)) ||
+    (decision.effect === "allow" &&
+      (!Number.isSafeInteger(decision.policyRuleVersion) || decision.policyRuleVersion < 1))
+  ) {
+    reject("POLICY_DECISION_SCOPE_MISMATCH");
+  }
+
   if (decision.effect !== "allow") {
     reject("PROJECT_ACCESS_DENIED");
   }
@@ -324,6 +350,10 @@ export async function authorizeProjectAction({
     projectId: projectSelector,
     action,
     resourceDigest,
+    membershipId: decision.membershipId,
+    membershipVersion: decision.membershipVersion,
+    policyScopeEpoch: decision.policyScopeEpoch,
+    policyRuleVersion: decision.policyRuleVersion,
     decisionId: decision.decisionId,
     policyVersion: decision.policyVersion,
   });

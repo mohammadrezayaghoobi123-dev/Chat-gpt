@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.js";
 import { createTenantDirectoryAdminAssertion } from "../identity/tenant-directory-assertion.js";
 import { createTenantDirectoryAdapters } from "../identity/tenant-directory-adapter.js";
-import { taskAdmissionDigest } from "../orchestrator-admission.js";
+import { admissionTextDigest, taskAdmissionDigest } from "../orchestrator-admission.js";
 
 describe("OrchestratorLedger tenant task admission", () => {
   it("rejects Task creation without a TenantDirectory-signed admission grant", async () => {
@@ -308,7 +308,7 @@ async function createAdmittedTask(instance, fixture, { grant = fixture.grant, ta
         principalId: fixture.principalId,
         taskId: fixture.task.taskId,
         taskDigest: await taskAdmissionDigest(fixture.task),
-        idempotencyKey: fixture.idempotencyKey,
+        idempotencyKeyDigest: await admissionTextDigest(fixture.idempotencyKey),
         inputHash: fixture.inputHash,
       };
 

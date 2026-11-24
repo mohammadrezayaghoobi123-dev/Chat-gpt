@@ -1037,6 +1037,65 @@ export class OrchestratorLedger extends DurableObject {
   }
 
 
+  getTaskAdmissionReceipt(input = {}) {
+    const tenantId = identifier(input.tenantId, "tenantId");
+    const projectId = identifier(input.projectId, "projectId");
+    const principalId = identifier(input.principalId, "principalId");
+    const taskId = identifier(input.taskId, "taskId");
+    const taskDigest = hash(input.taskDigest, "taskDigest");
+    const idempotencyKeyDigest = hash(input.idempotencyKeyDigest, "idempotencyKeyDigest");
+    const inputHash = hash(input.inputHash, "inputHash");
+
+    const sql = this.ctx.storage.sql;
+    return this.ctx.storage.transactionSync(() => {
+      const receipt = sql.exec(
+        "SELECT admission_id, task_id, tenant_id, project_id, principal_id, task_digest, " +
+        "idempotency_key_digest, input_hash, created_at " +
+        "FROM orchestrator_task_admission_receipts WHERE task_id=?",
+        taskId,
+      ).toArray()[0] ?? null;
+      const task = sql.exec(
+        "SELECT task_id, tenant_id, project_id FROM orchestrator_tasks WHERE task_id=?",
+        taskId,
+      ).toArray()[0] ?? null;
+
+      if (!receipt && !task) return { status: "not_found" };
+      if (!receipt || !task) {
+        return { status: "conflict", reason: "TASK_ADMISSION_RECEIPT_INTEGRITY_ERROR" };
+      }
+
+      const scopeMatches =
+        receipt.tenant_id === tenantId &&
+        receipt.project_id === projectId &&
+        receipt.principal_id === principalId &&
+        task.tenant_id === tenantId &&
+        task.project_id === projectId;
+      const admissionMatches =
+        receipt.task_id === taskId &&
+        receipt.task_digest === taskDigest &&
+        receipt.idempotency_key_digest === idempotencyKeyDigest &&
+        receipt.input_hash === inputHash;
+      if (!scopeMatches || !admissionMatches) {
+        return { status: "conflict", reason: "TASK_ADMISSION_RECEIPT_MISMATCH" };
+      }
+
+      return {
+        status: "admitted",
+        receipt: {
+          admissionId: receipt.admission_id,
+          taskId: receipt.task_id,
+          tenantId: receipt.tenant_id,
+          projectId: receipt.project_id,
+          principalId: receipt.principal_id,
+          taskDigest: receipt.task_digest,
+          idempotencyKeyDigest: receipt.idempotency_key_digest,
+          inputHash: receipt.input_hash,
+          createdAt: Number(receipt.created_at),
+        },
+      };
+    });
+  }
+
   getTask({ taskId, tenantId, projectId } = {}) {
     try {
       identifier(taskId, "taskId");

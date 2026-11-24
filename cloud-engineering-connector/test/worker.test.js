@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import worker, { consumeOrchestratorOutbox, processKnowledgeOutbox } from "../worker.js";
+import { ORCHESTRATOR_LEDGER_SCHEMA_VERSION } from "../orchestrator-ledger-contract.js";
 import { createWriteControlBinding, createGitHubWriteMock } from "./helpers/write-control-mocks.js";
 let idempotencyCounter=0;
 function createKnowledgeStoreBinding(){
@@ -31,7 +32,7 @@ function createKnowledgeStoreBinding(){
 const knowledgeStore=createKnowledgeStoreBinding();
 function createOrchestratorLedgerBinding(){
  const calls=[];
- const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:6}}};
+ const stub={ping:async()=>{calls.push({method:"ping"});return{ok:true,schemaVersion:ORCHESTRATOR_LEDGER_SCHEMA_VERSION}}};
  return{calls,binding:{idFromName(name){calls.push({method:"idFromName",name});return name},get(id){calls.push({method:"get",id});return stub}}};
 }
 const orchestratorLedger=createOrchestratorLedgerBinding();

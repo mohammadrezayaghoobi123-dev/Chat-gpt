@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolveCandidateRef } from "./candidate-ref.js";
+import { ORCHESTRATOR_LEDGER_SCHEMA_VERSION } from "../orchestrator-ledger-contract.js";
 
 const smoke = readFileSync(new URL("./staging-smoke.mjs", import.meta.url), "utf8");
 const worker = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
@@ -69,7 +70,9 @@ test("readiness requires the independent OrchestratorLedger SQLite probe", () =>
   const worker = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
   assert.match(worker, /env\.ORCHESTRATOR_LEDGER/, "readyz must fail closed when the Ledger binding is absent");
   assert.match(worker, /orchestratorLedgerStub\.ping\(\)/, "readyz must execute the Ledger SQLite probe");
-  assert.match(worker, /orchestratorLedgerProbe\.schemaVersion\s*!==\s*6/, "readyz must enforce the Ledger schema version");
+  assert.match(worker, /import\s*\{\s*ORCHESTRATOR_LEDGER_SCHEMA_VERSION\s*\}\s*from\s*["']\.\/orchestrator-ledger-contract\.js["']/, "readyz must import the shared Ledger schema contract");
+  assert.match(worker, /orchestratorLedgerProbe\.schemaVersion\s*!==\s*ORCHESTRATOR_LEDGER_SCHEMA_VERSION/, "readyz must enforce the shared Ledger schema version");
+  assert.equal(ORCHESTRATOR_LEDGER_SCHEMA_VERSION, 8, "the deployed Ledger schema contract must remain at v8");
   assert.match(worker, /readinessState\.orchestrator_ledger\s*=\s*"ok"/, "readyz must report Ledger readiness separately");
 });
 

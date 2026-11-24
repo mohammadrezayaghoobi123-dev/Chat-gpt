@@ -1,0 +1,40 @@
+name: 9Router Concurrency Red Verification
+
+on:
+  push:
+    branches:
+      - verify/9router-concurrency-red-2026-11-24
+
+permissions:
+  contents: read
+
+concurrency:
+  group: 9router-concurrency-red-{github.ref}
+  cancel-in-progress: false
+
+jobs:
+  targeted-red-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact verification commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Install locked dependencies without lifecycle scripts
+        working-directory: tools/9router-review
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Execute only the deterministic concurrency regression
+        working-directory: tools/9router-review
+        run: node --test --test-name-pattern="deterministic concurrent duplicate-publication red test" review.test.mjs

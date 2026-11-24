@@ -21,6 +21,14 @@ FIXTURE_LINE = re.compile(r'const key = "([0-9a-f]{64})";')
 EXPECTED_ALLOWLIST_COUNT = 17
 
 
+def _invalid_regex(pattern: str) -> bool:
+    try:
+        re.compile(pattern)
+    except re.error:
+        return True
+    return False
+
+
 def _source_fixture_line(repo_root: pathlib.Path, commit: str, path: str) -> str | None:
     result = subprocess.run(
         ["git", "show", f"{commit}:{path}"],
@@ -60,6 +68,8 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
             for path in paths
         ):
             errors.append(f"{prefix}: paths must be non-empty and anchored")
+        elif any(_invalid_regex(path) for path in paths):
+            errors.append(f"{prefix}: path regex is invalid")
         if entry.get("regexTarget") != "line":
             errors.append(f"{prefix}: regexTarget must be line")
         regexes = entry.get("regexes")

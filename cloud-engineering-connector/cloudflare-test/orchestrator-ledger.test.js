@@ -2764,10 +2764,12 @@ it("rejects an unsupported task state before durable persistence", async () => {
     ).one().count,
   }));
 
-  expect(result).toEqual({ created: false, reason: "INVALID_INPUT" });
-  expect(persisted).toEqual({
-    tasks: 0,
-    claimCandidates: 0,
-    consumedAssertions: 1,
+  expect({ result, persisted }).toEqual({
+    result: { created: false, reason: "INVALID_INPUT" },
+    persisted: {
+      tasks: 0,
+      claimCandidates: 0,
+      consumedAssertions: 1,
+    },
   });
 });

@@ -221,10 +221,10 @@ describe("TenantDirectory policy-scope epoch", () => {
     expect(afterRevoke.membership).toEqual({ status: "revoked", version: 2 });
     expect(afterRevoke.policyRows.every(row => row.status === "disabled")).toBe(true);
     expect(afterRevoke.epochs).toEqual([
-      { project_id: "project-a", principal_id, action: "project.read", epoch: 3 },
-      { project_id: "project-a", principal_id, action: "project.write", epoch: 2 },
+      { project_id: "project-a", principal_id: principalId, action: "project.read", epoch: 3 },
+      { project_id: "project-a", principal_id: principalId, action: "project.write", epoch: 2 },
       { project_id: "project-a", principal_id: unrelatedPrincipalId, action: "project.read", epoch: 1 },
-      { project_id: "project-b", principal_id, action: "project.read", epoch: 2 },
+      { project_id: "project-b", principal_id: principalId, action: "project.read", epoch: 2 },
     ]);
 
     const denied = await stub.authorizeProjectAction({

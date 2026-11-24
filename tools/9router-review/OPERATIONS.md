@@ -201,3 +201,51 @@ This snapshot records the latest completed code/security evidence before this fi
 - This addendum itself is a documentation-only update to `OPERATIONS.md`; run `45461675413` covers its parent head `a2793da`, not the commit that adds this addendum. No executable source, test, workflow, package, or lockfile changes are included.
 
 **Gate:** full-history Gitleaks remains FAIL. Keep PR #463 Draft and preserve all existing activation, review, and merge blocks.
+
+
+## Atomicity adversarial finding — concurrent reviewer publication
+
+**Finding ID:** `9R-ATOMIC-001`  
+**Disposition:** `OPEN / FAIL-CLOSED`  
+**Severity:** `HIGH` for any future reviewer activation; no current publication path is enabled by the bootstrap because `reviewer.if: false`.
+
+### Evidence from the reviewed source tree
+
+- `runReview()` performs `findMatchingReviewComments()` and returns early only when a matching signed marker already exists (currently source lines approximately 860–891).
+- If no marker exists, the run proceeds through model inference and only later reaches the final PR SHA gate and comment POST (approximately lines 895–966).
+- There is no atomic reservation, compare-and-set, lease, or durable unique constraint between the duplicate check and publication.
+- The workflow `.github/workflows/9router-pr-review.yml` has no workflow-level or job-level `concurrency` group. Its reviewer job remains statically disabled (`if: false`).
+- Therefore two runs for the same repository/PR/head/base can both observe no marker and both publish. This is a source-level race analysis, not a reproduced runtime exploit; disposition is `PROVISIONALLY_SUPPORTED` until the concurrency regression test is executed.
+
+### Required red-phase regression
+
+Create a deterministic test that starts two `runReview()` invocations behind a barrier:
+
+1. Both runs complete the matching-comment preflight and observe an empty history.
+2. Both are released to proceed concurrently.
+3. Count model requests and GitHub comment POSTs.
+4. Assert the system-wide invariant for one immutable key `(repository_id, pull_request, head_sha, base_sha)`: at most one publication may be accepted.
+5. Force one reservation holder to crash/timeout and verify lease expiry/recovery cannot create a second accepted publication.
+6. Repeat with changed head SHA and changed base SHA; distinct immutable snapshots must not incorrectly block one another.
+
+The first test must fail against the current implementation because both invocations can reach POST. A test that only checks sequential duplicate calls is insufficient.
+
+### Remediation decision — do not implement an in-memory lock
+
+An in-process mutex is not a valid fix: GitHub Actions jobs execute in separate processes/runners. A workflow `concurrency` group with `cancel-in-progress: false` is a useful serialization defense, but by itself it does not prove durable at-most-once behavior across cancellation, reruns, manual dispatch, or other invocation paths.
+
+Before activation, choose and document a durable reservation authority with:
+- an atomic unique key for `repository_id + pull_request + head_sha + base_sha`;
+- lease owner, lease expiry, monotonic fencing token, and explicit terminal states;
+- safe recovery after worker death;
+- publication reconciliation after an ambiguous POST response;
+- a rule that UNKNOWN publication state blocks automatic retry until the remote comment history is reconciled;
+- tests for simultaneous claims, lease expiry, stale lease holders, process restart, API timeout after remote acceptance, and changed snapshots.
+
+The reservation store and its trust boundary must be reviewed independently. Do not assume GitHub Actions concurrency is a transactional database.
+
+### Scope and gate
+
+No source, test, workflow, dependency, secret, repository-policy, `main`, Cloudflare, production, or local-host changes were made for this finding. No canary or provider call was run.
+
+**Gate:** `9R-ATOMIC-001` blocks reviewer activation and any claim of cross-run at-most-once publication. Keep PR #463 Draft. The required next engineering action is a red-phase concurrency test and an explicit durable-reservation design review; implementation must follow only after the test demonstrates the defect.

@@ -5,6 +5,7 @@ on:
     branches:
       - "security/environment-read-only-preflight-*"
       - "security/environment-branch-policy-state-disambiguation-*"
+      - "security/environment-full-posture-census-*"
 
 permissions:
   actions: read

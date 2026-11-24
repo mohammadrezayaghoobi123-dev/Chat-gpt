@@ -32,7 +32,7 @@ function stagingPull(overrides = {}) {
 function reviewerUserId(login) {
   if (login === author) return authorId;
   if (login === reviewer) return reviewerId;
-  const commenter = /^commenter-(\\d+)$/.exec(login);
+  const commenter = /^commenter-(\d+)$/.exec(login);
   return commenter ? 1000 + Number(commenter[1]) : unlistedReviewerId;
 }
 
@@ -141,7 +141,7 @@ test("Production accepts only a merged PR to main with independent approval on i
     merged_at: date,
     merge_commit_sha: sha,
     html_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/130",
-    user: { login: author },
+    user: { id: authorId, login: author },
     head: { sha: headSha },
     base: { ref: "main" },
   };
@@ -159,7 +159,7 @@ test("Production rejects unmerged PRs and approvals on the wrong PR head", async
     state: "open",
     draft: false,
     merge_commit_sha: null,
-    user: { login: author },
+    user: { id: authorId, login: author },
     head: { sha: headSha },
     base: { ref: "main" },
   };

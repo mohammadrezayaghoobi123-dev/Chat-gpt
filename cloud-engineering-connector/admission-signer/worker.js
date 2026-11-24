@@ -176,8 +176,12 @@ async function deriveWrappingKey(masterKeyBytes, envelope, usages) {
 
 async function createTenantKey(env, body) {
   const tenantId = body.tenantId;
+  const keyId = body.keyId ?? crypto.randomUUID();
   if (!validIdentifier(tenantId)) {
     return jsonError(400, "INVALID_TENANT_ID", "A valid tenant identifier is required.");
+  }
+  if (!validIdentifier(keyId, KEY_ID_PATTERN)) {
+    return jsonError(400, "INVALID_KEY_ID", "A valid signing key identifier is required.");
   }
 
   const ring = parseMasterKeyRing(env);
@@ -189,7 +193,7 @@ async function createTenantKey(env, body) {
     const envelope = {
       version: ENVELOPE_VERSION,
       tenantId,
-      keyId: crypto.randomUUID(),
+      keyId,
       wrappingKeyId: ring.activeKeyId,
       publicKey: bytesToBase64(publicKeyBytes),
       kdfSalt: bytesToBase64(crypto.getRandomValues(new Uint8Array(32))),

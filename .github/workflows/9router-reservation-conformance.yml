@@ -1,0 +1,36 @@
+name: 9Router Reservation Contract Conformance
+
+on:
+  push:
+    branches:
+      - verify/9router-reservation-conformance-2026-11-25
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact verification revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Install locked dependencies without lifecycle scripts
+        working-directory: tools/9router-review
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run complete reviewer regression suite and reservation conformance tranche
+        working-directory: tools/9router-review
+        run: npm test

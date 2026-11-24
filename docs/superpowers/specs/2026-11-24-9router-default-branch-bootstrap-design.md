@@ -459,8 +459,8 @@ Initial Bootstrap PR contains:
 - `tools/9router-review/package-lock.json`
 - `tools/9router-review/resolve-pr.mjs` — direct PR-number and live-snapshot resolver; no commit-to-PR endpoint.
 - `tools/9router-review/resolve-pr.test.mjs`
-- `tools/9router-review/review.js` — source from PR #431 exact candidate, including `redirect: "error"`.
-- `tools/9router-review/review.test.mjs` — source from PR #431 exact candidate, including 307/308 regression coverage.
+- `tools/9router-review/review.js` — import only from PR #431 head `59c71d9451b04fe13f53c6cb9283039cfe456f60`, blob `498e92e3ab8daec12c7ee61cc9fc0892e1d3ff46`, including `redirect: "error"`.
+- `tools/9router-review/review.test.mjs` — import only from PR #431 head `59c71d9451b04fe13f53c6cb9283039cfe456f60`, blob `989d77da4d7ab3c146fe2be66a7a327fcb0096c4`, including 307/308 regression coverage.
 - `tools/9router-review/run-review.mjs`
 - `tools/9router-review/OPERATIONS.md`
 

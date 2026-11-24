@@ -104,6 +104,7 @@ async function fixture({ policy = true, tenantId = TENANT_ID_PREFIX + "-" + cryp
   }
   return {
     ...keys,
+    tenantId,
     stub,
     adapters,
     task,
@@ -169,8 +170,8 @@ describe("TenantDirectory signed task admission reservation", () => {
       policyDecisionId: first.policyDecisionId,
       admissionId: first.admissionId,
       jti: first.jti,
-      issuedAt: NOW / 1000,
-      expiresAt: NOW / 1000 + 300,
+      issuedAt: first.issuedAt,
+      expiresAt: first.expiresAt,
       nowMs: Date.now(),
     });
     expect(verified).toMatchObject({

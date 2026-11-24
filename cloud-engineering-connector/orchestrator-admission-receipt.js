@@ -60,6 +60,14 @@ function validPositiveInteger(value) {
   return Number.isSafeInteger(value) && value > 0;
 }
 
+async function sha256Text(value) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function validBoundedText(value, maxLength) {
   return typeof value === "string" && value.length > 0 &&
     value.length <= maxLength && value.trim() === value &&
@@ -91,7 +99,9 @@ export async function verifyAdmissionReceipt(receipt, {
     if (!isPlainDataRecord(receipt.header, HEADER_KEYS)) return null;
     if (!isPlainDataRecord(receipt.claims, CLAIM_KEYS)) return null;
 
-    const { header, claims } = receipt;
+    const header = Object.freeze({ ...receipt.header });
+    const claims = Object.freeze({ ...receipt.claims });
+    const signatureText = receipt.signature;
     if (header.alg !== "Ed25519" || header.typ !== "AdmissionReceipt" ||
         header.v !== 1 || !KEY_ID.test(header.kid ?? "")) return null;
 
@@ -135,10 +145,11 @@ export async function verifyAdmissionReceipt(receipt, {
         !["active", "verify_only"].includes(keyRecord.status) ||
         !Number.isSafeInteger(keyRecord.notBefore) ||
         !Number.isSafeInteger(keyRecord.notAfter) ||
+        !validPositiveInteger(keyRecord.version) ||
         keyRecord.notBefore > now || keyRecord.notAfter <= now) return null;
 
     const publicKeyBytes = decodeCanonicalBase64Url(keyRecord.publicKey, 32);
-    const signatureBytes = decodeCanonicalBase64Url(receipt.signature, 64);
+    const signatureBytes = decodeCanonicalBase64Url(signatureText, 64);
     if (!publicKeyBytes || !signatureBytes) return null;
 
     const publicKey = await crypto.subtle.importKey(
@@ -150,9 +161,12 @@ export async function verifyAdmissionReceipt(receipt, {
     );
     if (!valid) return null;
 
+    const receiptJson = canonicalJson({ header, claims, signature: signatureText });
+    const receiptDigest = await sha256Text(receiptJson);
     return Object.freeze({
-      header: Object.freeze({ ...header }),
-      claims: Object.freeze({ ...claims }),
+      header,
+      claims,
+      receiptDigest,
       publicKeyId: keyRecord.keyId,
       publicKeyVersion: keyRecord.version,
     });

@@ -12,6 +12,7 @@ import { createTenantDirectoryAdminAssertion } from "../identity/tenant-director
 import { createTenantDirectoryAdapters } from "../identity/tenant-directory-adapter.js";
 
 const DIRECTORY_ADMIN_KEY_SET = JSON.stringify({ test: "e".repeat(64) });
+const WORKER_KEY_SET = JSON.stringify({ test: "f".repeat(64) });
 const CRON = "0 * * * *";
 const PROJECT_ID = "project-scheduler-workflow";
 
@@ -104,7 +105,11 @@ function taskPolicy(tenantId, suffix) {
 
 function schedulerEnv(policies) {
   const result = Object.create(env);
-  Object.assign(result, { SCHEDULED_ADMISSION_POLICIES: JSON.stringify(policies) });
+  Object.assign(result, {
+    SCHEDULED_ADMISSION_POLICIES: JSON.stringify(policies),
+    LEDGER_WORKER_ASSERTION_KEYS: WORKER_KEY_SET,
+    LEDGER_WORKER_ASSERTION_ACTIVE_KID: "test",
+  });
   return result;
 }
 

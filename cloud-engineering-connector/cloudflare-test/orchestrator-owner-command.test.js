@@ -728,7 +728,7 @@ describe("Owner command atomic Ledger contract", () => {
       digestSpy.mockRestore();
     }
 
-    const expectedAppliedCount = Math.min(requestCount, maxAttempts);
+    const expectedAppliedCount = requestCount;
     const appliedIndexes = results
       .map((result, index) => result.applied === true ? index : -1)
       .filter(index => index >= 0);

@@ -55,8 +55,8 @@ for (const workflow of workflows) {
     assert.ok(jobEnvironmentMatch, "job-level environment block must be identifiable");
     assert.doesNotMatch(
       jobEnvironment,
-      /CLOUDFLARE_API_TOKEN|CLOUDFLARE_ACCOUNT_ID/,
-      "Cloudflare deployment credentials must be scoped to the individual steps that need them, not every test/install step",
+      /CLOUDFLARE_API_TOKEN|CLOUDFLARE_PRODUCTION_METADATA_TOKEN|CLOUDFLARE_ACCOUNT_ID/,
+      "Cloudflare credentials must be scoped to individual release steps, not every test/install step",
     );
     const validationStepStart = source.indexOf("      - name: Validate immutable release branch");
     const validationStepEnd = source.indexOf("      - name:", validationStepStart + 1);
@@ -66,12 +66,32 @@ for (const workflow of workflows) {
     assert.ok(validationStep, "immutable release validation step must be identifiable");
     assert.doesNotMatch(
       validationStep,
-      /CLOUDFLARE_API_TOKEN|CLOUDFLARE_ACCOUNT_ID/,
-      "immutable SHA validation must not receive Cloudflare deployment credentials",
+      /CLOUDFLARE_API_TOKEN|CLOUDFLARE_PRODUCTION_METADATA_TOKEN|CLOUDFLARE_ACCOUNT_ID/,
+      "immutable SHA validation must not receive Cloudflare credentials",
     );
     const lines = source.split("\n");
     const credentialLines = lines.map((line, index) => ({ line, index })).filter(
       ({ line }) => line.includes("CLOUDFLARE_API_TOKEN:") || line.includes("CLOUDFLARE_ACCOUNT_ID:"),
+    );
+    const metadataCredentialLines = lines.map((line, index) => ({ line, index })).filter(
+      ({ line }) => line.includes("CLOUDFLARE_PRODUCTION_METADATA_TOKEN:"),
+    );
+    const metadataCredentialSteps = metadataCredentialLines.map(({ index }) => {
+      for (let cursor = index; cursor >= 0; cursor -= 1) {
+        if (lines[cursor].startsWith("      - name: ")) return lines[cursor].slice("      - name: ".length);
+      }
+      return "";
+    });
+    const expectedMetadataSteps = workflow.name === "Staging"
+      ? [
+          "Preflight Staging bindings and capture rollback target",
+          "Verify Staging KnowledgeStore binding and scheduled reconciliation",
+        ]
+      : [];
+    assert.deepEqual(
+      metadataCredentialSteps,
+      expectedMetadataSteps,
+      "Production metadata credential must be exposed only to the two Staging steps that read Production settings",
     );
     const credentialSteps = credentialLines.map(({ index }) => {
       for (let cursor = index; cursor >= 0; cursor -= 1) {
@@ -197,6 +217,7 @@ function runPreflightWithMissingObservability(source, stepName, production, expe
         ...process.env,
         CLOUDFLARE_ACCOUNT_ID: "test-account",
         CLOUDFLARE_API_TOKEN: "test-token",
+        CLOUDFLARE_PRODUCTION_METADATA_TOKEN: "test-production-metadata-token",
         GITHUB_OUTPUT: output,
       },
     });
@@ -311,7 +332,13 @@ function runPreflightWithMfaDisabled(source, stepName, production) {
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", prelude + "\n" + script], {
       encoding: "utf8",
-      env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: "test-account", CLOUDFLARE_API_TOKEN: "test-token", GITHUB_OUTPUT: output },
+      env: {
+        ...process.env,
+        CLOUDFLARE_ACCOUNT_ID: "test-account",
+        CLOUDFLARE_API_TOKEN: "test-token",
+        CLOUDFLARE_PRODUCTION_METADATA_TOKEN: "test-production-metadata-token",
+        GITHUB_OUTPUT: output,
+      },
     });
     assert.notEqual(result.status, 0, (production ? "Production" : "Staging") + " release must reject disabled account-level MFA");
     assert.match(result.stderr + result.stdout, /MFA|two-factor|two.factor/i, "preflight must identify the account MFA gate");

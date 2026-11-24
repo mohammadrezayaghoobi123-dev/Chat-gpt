@@ -228,6 +228,36 @@ describe("TenantDirectory signed task admission reservation", () => {
     });
   });
 
+  it("does not persist a reservation when the grant expires before the signing transaction commits", async () => {
+    const state = await fixture();
+    admissionStore(state.adapters);
+    let result;
+    let clockCalls = 0;
+
+    await runInDurableObject(state.stub, async instance => {
+      const clock = vi.spyOn(Date, "now").mockImplementation(() =>
+        clockCalls++ === 0 ? NOW : NOW + 301_000,
+      );
+      try {
+        result = await instance.prepareTaskAdmission(state.input).then(() => null, error => error);
+      } finally {
+        clock.mockRestore();
+      }
+
+      expect(clockCalls).toBe(2);
+      expect(instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM tenant_task_admission_reservations WHERE tenant_id=?",
+        state.tenantId,
+      ).one().count).toBe(0);
+      expect(instance.ctx.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM tenant_directory_audit_events WHERE tenant_id=? AND operation='prepareTaskAdmission'",
+        state.tenantId,
+      ).one().count).toBe(0);
+    });
+
+    expect(result?.code).toBe("TASK_ADMISSION_EXPIRED");
+  });
+
   it("rejects an authorization snapshot changed during Ed25519 signing without writing a reservation", async () => {
     const state = await fixture();
     admissionStore(state.adapters);

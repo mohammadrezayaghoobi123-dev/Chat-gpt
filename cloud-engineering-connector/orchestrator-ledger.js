@@ -1325,7 +1325,7 @@ export class OrchestratorLedger extends DurableObject {
         "UPDATE orchestrator_execution_leases SET worker_id = NULL, lease_until = 0, updated_at = ? WHERE task_id = ? AND tenant_id = ? AND project_id = ? AND worker_id = ? AND lease_generation = ?",
         now, taskId, tenantId, projectId, workerId, leaseGeneration,
       );
-      syncClaimCandidateInTransaction(sql, taskId);
+      // mutation: Candidate restoration bypassed after release.
       return { released: true, leaseGeneration };
     });
   }

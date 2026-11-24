@@ -155,7 +155,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     });
   });
 
-  it("rolls back every schema DDL change when the version marker cannot commit", async () => {
+  it("rolls back schema DDL when the version marker cannot commit", async () => {
     const ledger = ledgerFor("ledger-schema-migration-atomic-rollback");
     await runInDurableObject(ledger, (instance, state) => {
       const sql = state.storage.sql;

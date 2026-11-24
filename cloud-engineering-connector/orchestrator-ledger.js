@@ -293,42 +293,42 @@ export class OrchestratorLedger extends DurableObject {
       if (recordedSchemaVersion > LEDGER_SCHEMA_VERSION) {
         throw fail("Ledger schema is newer than this Worker version.", "LEDGER_SCHEMA_VERSION_AHEAD");
       }
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS orchestrator_tasks (
-        task_id TEXT PRIMARY KEY,
-        idempotency_key TEXT NOT NULL UNIQUE,
-        input_hash TEXT NOT NULL CHECK(length(input_hash) = 64),
-        state TEXT NOT NULL,
-        version INTEGER NOT NULL CHECK(version > 0),
-        task_json TEXT NOT NULL CHECK(json_valid(task_json)),
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      )
-    `);
-    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_state ON orchestrator_tasks(state, created_at)");
-    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_executor_state_created ON orchestrator_tasks(state, COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')), created_at, task_id)");
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS orchestrator_processed_messages (
-        message_id TEXT PRIMARY KEY,
-        task_id TEXT NOT NULL,
-        input_hash TEXT NOT NULL CHECK(length(input_hash) = 64),
-        envelope_json TEXT NOT NULL CHECK(json_valid(envelope_json)),
-        received_at INTEGER NOT NULL,
-        status TEXT NOT NULL CHECK(status IN ('ACCEPTED','QUARANTINED'))
-      )
-    `);
-    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_messages_by_task ON orchestrator_processed_messages(task_id, received_at)");
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS orchestrator_execution_leases (
-        task_id TEXT PRIMARY KEY,
-        worker_id TEXT,
-        lease_generation INTEGER NOT NULL CHECK(lease_generation >= 0),
-        lease_until INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      )
-    `);
-    // Derived index: task eligibility is authoritative in orchestrator_tasks;
-    // lease eligibility is always rechecked inside claimTask's transaction.
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_tasks (
+          task_id TEXT PRIMARY KEY,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          input_hash TEXT NOT NULL CHECK(length(input_hash) = 64),
+          state TEXT NOT NULL,
+          version INTEGER NOT NULL CHECK(version > 0),
+          task_json TEXT NOT NULL CHECK(json_valid(task_json)),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_state ON orchestrator_tasks(state, created_at)");
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_tasks_by_executor_state_created ON orchestrator_tasks(state, COALESCE(json_extract(task_json, '$.executorId'), json_extract(task_json, '$.assignedAgentId')), created_at, task_id)");
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_processed_messages (
+          message_id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL,
+          input_hash TEXT NOT NULL CHECK(length(input_hash) = 64),
+          envelope_json TEXT NOT NULL CHECK(json_valid(envelope_json)),
+          received_at INTEGER NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('ACCEPTED','QUARANTINED'))
+        )
+      `);
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_messages_by_task ON orchestrator_processed_messages(task_id, received_at)");
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_execution_leases (
+          task_id TEXT PRIMARY KEY,
+          worker_id TEXT,
+          lease_generation INTEGER NOT NULL CHECK(lease_generation >= 0),
+          lease_until INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      // Derived index: task eligibility is authoritative in orchestrator_tasks;
+      // lease eligibility is always rechecked inside claimTask's transaction.
       sql.exec(`
         CREATE TABLE IF NOT EXISTS orchestrator_claim_candidates (
           candidate_seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -396,158 +396,158 @@ export class OrchestratorLedger extends DurableObject {
         ON CONFLICT(task_id) DO UPDATE
           SET executor_id = excluded.executor_id, created_at = excluded.created_at
       `);
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS orchestrator_outbox_events (
-        event_id TEXT PRIMARY KEY,
-        idempotency_key TEXT NOT NULL UNIQUE,
-        task_id TEXT NOT NULL,
-        event_type TEXT NOT NULL,
-        payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
-        status TEXT NOT NULL CHECK(status IN ('PENDING','IN_PROGRESS','COMPLETED')),
-        attempts INTEGER NOT NULL CHECK(attempts >= 0),
-        lease_worker_id TEXT,
-        lease_generation INTEGER NOT NULL CHECK(lease_generation >= 0),
-        lease_until INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      )
-    `);
-    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_by_status ON orchestrator_outbox_events(status, created_at)");
-    const outboxColumns = sql.exec("PRAGMA table_info(orchestrator_outbox_events)").toArray().map(column => column.name);
-    if (!outboxColumns.includes("retry_state")) {
-      sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN retry_state TEXT NOT NULL DEFAULT 'READY' CHECK(retry_state IN ('READY','RETRY_WAIT','DEAD_LETTER'))");
-    }
-    if (!outboxColumns.includes("next_attempt_at")) {
-      sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0 CHECK(next_attempt_at >= 0)");
-    }
-    if (!outboxColumns.includes("last_error_code")) {
-      sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN last_error_code TEXT");
-    }
-    if (!outboxColumns.includes("dead_lettered_at")) {
-      sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN dead_lettered_at INTEGER");
-    }
-    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_retry_schedule ON orchestrator_outbox_events(status, retry_state, next_attempt_at, created_at)");
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS orchestrator_outbox_receipts (
-        event_id TEXT PRIMARY KEY,
-        event_type TEXT NOT NULL,
-        schema_version INTEGER NOT NULL CHECK(schema_version = 1),
-        envelope_sha256 TEXT NOT NULL CHECK(length(envelope_sha256) = 64),
-        consumer_id TEXT NOT NULL,
-        received_at INTEGER NOT NULL
-      )
-    `);
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS orchestrator_outbox_dead_letters (
-        source_queue TEXT NOT NULL,
-        message_id TEXT NOT NULL,
-        message_attempts INTEGER NOT NULL CHECK(message_attempts BETWEEN 1 AND 100),
-        message_timestamp INTEGER NOT NULL,
-        body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
-        body_json TEXT NOT NULL CHECK(json_valid(body_json)),
-        archived_at INTEGER NOT NULL,
-        PRIMARY KEY (source_queue, message_id)
-      )
-    `);
-    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_dead_letters_by_time ON orchestrator_outbox_dead_letters(archived_at)");
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS orchestrator_consumed_assertions (
-        jti TEXT PRIMARY KEY,
-        subject TEXT NOT NULL,
-        role TEXT NOT NULL,
-        operation TEXT NOT NULL,
-        key_id TEXT NOT NULL,
-        issued_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL,
-        consumed_at INTEGER NOT NULL
-      )
-    `);
-    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_consumed_assertions_by_expiry ON orchestrator_consumed_assertions(expires_at)");
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS orchestrator_security_clock (
-        clock_id INTEGER PRIMARY KEY CHECK(clock_id = 1),
-        high_water_ms INTEGER NOT NULL CHECK(high_water_ms >= 1)
-      )
-    `);
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS orchestrator_github_webhook_deliveries (
-        delivery_id TEXT PRIMARY KEY,
-        body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
-        event_name TEXT NOT NULL,
-        received_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL
-      )
-    `);
-    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_github_deliveries_by_expiry ON orchestrator_github_webhook_deliveries(expires_at)");
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS orchestrator_github_business_idempotency (
-        idempotency_key TEXT PRIMARY KEY,
-        input_hash TEXT NOT NULL CHECK(length(input_hash) = 64),
-        first_delivery_id TEXT NOT NULL,
-        first_seen_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL
-      )
-    `);
-    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_github_business_idempotency_by_expiry ON orchestrator_github_business_idempotency(expires_at)");
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS orchestrator_owner_consumed_assertions (
-        jti TEXT PRIMARY KEY,
-        assertion_hash TEXT NOT NULL CHECK(length(assertion_hash) = 64),
-        repository_id INTEGER NOT NULL,
-        actor_id TEXT NOT NULL,
-        task_id TEXT NOT NULL,
-        operation TEXT NOT NULL,
-        delivery_id TEXT NOT NULL,
-        comment_id TEXT NOT NULL,
-        expires_at INTEGER NOT NULL,
-        consumed_at INTEGER NOT NULL
-      )
-    `);
-    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_owner_assertions_by_expiry ON orchestrator_owner_consumed_assertions(expires_at)");
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS orchestrator_owner_command_receipts (
-        delivery_id TEXT PRIMARY KEY,
-        comment_id TEXT NOT NULL UNIQUE,
-        body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
-        command_hash TEXT NOT NULL CHECK(length(command_hash) = 64),
-        assertion_jti TEXT NOT NULL,
-        task_id TEXT NOT NULL,
-        operation TEXT NOT NULL,
-        repository TEXT NOT NULL,
-        issue_number INTEGER NOT NULL,
-        comment_created_at INTEGER NOT NULL,
-        result_json TEXT NOT NULL CHECK(json_valid(result_json)),
-        created_at INTEGER NOT NULL
-      )
-    `);
-    const ownerReceiptColumns = new Set(
-      sql.exec("PRAGMA table_info(orchestrator_owner_command_receipts)").toArray().map(column => column.name),
-    );
-    if (!ownerReceiptColumns.has("task_id")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN task_id TEXT NOT NULL DEFAULT ''");
-    if (!ownerReceiptColumns.has("operation")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN operation TEXT NOT NULL DEFAULT ''");
-    if (!ownerReceiptColumns.has("repository")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN repository TEXT NOT NULL DEFAULT ''");
-    if (!ownerReceiptColumns.has("issue_number")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN issue_number INTEGER NOT NULL DEFAULT 0");
-    if (!ownerReceiptColumns.has("comment_created_at")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN comment_created_at INTEGER NOT NULL DEFAULT 0");
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_outbox_events (
+          event_id TEXT PRIMARY KEY,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          task_id TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
+          status TEXT NOT NULL CHECK(status IN ('PENDING','IN_PROGRESS','COMPLETED')),
+          attempts INTEGER NOT NULL CHECK(attempts >= 0),
+          lease_worker_id TEXT,
+          lease_generation INTEGER NOT NULL CHECK(lease_generation >= 0),
+          lease_until INTEGER NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_by_status ON orchestrator_outbox_events(status, created_at)");
+      const outboxColumns = sql.exec("PRAGMA table_info(orchestrator_outbox_events)").toArray().map(column => column.name);
+      if (!outboxColumns.includes("retry_state")) {
+        sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN retry_state TEXT NOT NULL DEFAULT 'READY' CHECK(retry_state IN ('READY','RETRY_WAIT','DEAD_LETTER'))");
+      }
+      if (!outboxColumns.includes("next_attempt_at")) {
+        sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0 CHECK(next_attempt_at >= 0)");
+      }
+      if (!outboxColumns.includes("last_error_code")) {
+        sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN last_error_code TEXT");
+      }
+      if (!outboxColumns.includes("dead_lettered_at")) {
+        sql.exec("ALTER TABLE orchestrator_outbox_events ADD COLUMN dead_lettered_at INTEGER");
+      }
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_retry_schedule ON orchestrator_outbox_events(status, retry_state, next_attempt_at, created_at)");
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_outbox_receipts (
+          event_id TEXT PRIMARY KEY,
+          event_type TEXT NOT NULL,
+          schema_version INTEGER NOT NULL CHECK(schema_version = 1),
+          envelope_sha256 TEXT NOT NULL CHECK(length(envelope_sha256) = 64),
+          consumer_id TEXT NOT NULL,
+          received_at INTEGER NOT NULL
+        )
+      `);
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_outbox_dead_letters (
+          source_queue TEXT NOT NULL,
+          message_id TEXT NOT NULL,
+          message_attempts INTEGER NOT NULL CHECK(message_attempts BETWEEN 1 AND 100),
+          message_timestamp INTEGER NOT NULL,
+          body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
+          body_json TEXT NOT NULL CHECK(json_valid(body_json)),
+          archived_at INTEGER NOT NULL,
+          PRIMARY KEY (source_queue, message_id)
+        )
+      `);
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_outbox_dead_letters_by_time ON orchestrator_outbox_dead_letters(archived_at)");
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_consumed_assertions (
+          jti TEXT PRIMARY KEY,
+          subject TEXT NOT NULL,
+          role TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          key_id TEXT NOT NULL,
+          issued_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL,
+          consumed_at INTEGER NOT NULL
+        )
+      `);
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_consumed_assertions_by_expiry ON orchestrator_consumed_assertions(expires_at)");
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_security_clock (
+          clock_id INTEGER PRIMARY KEY CHECK(clock_id = 1),
+          high_water_ms INTEGER NOT NULL CHECK(high_water_ms >= 1)
+        )
+      `);
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_github_webhook_deliveries (
+          delivery_id TEXT PRIMARY KEY,
+          body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
+          event_name TEXT NOT NULL,
+          received_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL
+        )
+      `);
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_github_deliveries_by_expiry ON orchestrator_github_webhook_deliveries(expires_at)");
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_github_business_idempotency (
+          idempotency_key TEXT PRIMARY KEY,
+          input_hash TEXT NOT NULL CHECK(length(input_hash) = 64),
+          first_delivery_id TEXT NOT NULL,
+          first_seen_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL
+        )
+      `);
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_github_business_idempotency_by_expiry ON orchestrator_github_business_idempotency(expires_at)");
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_owner_consumed_assertions (
+          jti TEXT PRIMARY KEY,
+          assertion_hash TEXT NOT NULL CHECK(length(assertion_hash) = 64),
+          repository_id INTEGER NOT NULL,
+          actor_id TEXT NOT NULL,
+          task_id TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          delivery_id TEXT NOT NULL,
+          comment_id TEXT NOT NULL,
+          expires_at INTEGER NOT NULL,
+          consumed_at INTEGER NOT NULL
+        )
+      `);
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_owner_assertions_by_expiry ON orchestrator_owner_consumed_assertions(expires_at)");
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_owner_command_receipts (
+          delivery_id TEXT PRIMARY KEY,
+          comment_id TEXT NOT NULL UNIQUE,
+          body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
+          command_hash TEXT NOT NULL CHECK(length(command_hash) = 64),
+          assertion_jti TEXT NOT NULL,
+          task_id TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          repository TEXT NOT NULL,
+          issue_number INTEGER NOT NULL,
+          comment_created_at INTEGER NOT NULL,
+          result_json TEXT NOT NULL CHECK(json_valid(result_json)),
+          created_at INTEGER NOT NULL
+        )
+      `);
+      const ownerReceiptColumns = new Set(
+        sql.exec("PRAGMA table_info(orchestrator_owner_command_receipts)").toArray().map(column => column.name),
+      );
+      if (!ownerReceiptColumns.has("task_id")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN task_id TEXT NOT NULL DEFAULT ''");
+      if (!ownerReceiptColumns.has("operation")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN operation TEXT NOT NULL DEFAULT ''");
+      if (!ownerReceiptColumns.has("repository")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN repository TEXT NOT NULL DEFAULT ''");
+      if (!ownerReceiptColumns.has("issue_number")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN issue_number INTEGER NOT NULL DEFAULT 0");
+      if (!ownerReceiptColumns.has("comment_created_at")) sql.exec("ALTER TABLE orchestrator_owner_command_receipts ADD COLUMN comment_created_at INTEGER NOT NULL DEFAULT 0");
 
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS orchestrator_audit_events (
-        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_id TEXT NOT NULL UNIQUE,
-        task_id TEXT NOT NULL,
-        actor_id TEXT NOT NULL,
-        actor_role TEXT NOT NULL,
-        event_type TEXT NOT NULL,
-        details_json TEXT NOT NULL CHECK(json_valid(details_json)),
-        previous_hash TEXT,
-        event_hash TEXT NOT NULL CHECK(length(event_hash) = 64),
-        created_at INTEGER NOT NULL
-      )
-    `);
-    const auditColumns = sql.exec("PRAGMA table_info(orchestrator_audit_events)").toArray().map(column => column.name);
-    if (!auditColumns.includes("actor_role")) {
-      sql.exec("ALTER TABLE orchestrator_audit_events ADD COLUMN actor_role TEXT NOT NULL DEFAULT 'unknown'");
-    }
-    sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_audit_by_task ON orchestrator_audit_events(task_id, sequence)");
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS orchestrator_audit_events (
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_id TEXT NOT NULL UNIQUE,
+          task_id TEXT NOT NULL,
+          actor_id TEXT NOT NULL,
+          actor_role TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          details_json TEXT NOT NULL CHECK(json_valid(details_json)),
+          previous_hash TEXT,
+          event_hash TEXT NOT NULL CHECK(length(event_hash) = 64),
+          created_at INTEGER NOT NULL
+        )
+      `);
+      const auditColumns = sql.exec("PRAGMA table_info(orchestrator_audit_events)").toArray().map(column => column.name);
+      if (!auditColumns.includes("actor_role")) {
+        sql.exec("ALTER TABLE orchestrator_audit_events ADD COLUMN actor_role TEXT NOT NULL DEFAULT 'unknown'");
+      }
+      sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_audit_by_task ON orchestrator_audit_events(task_id, sequence)");
       if (recordedSchemaVersion < LEDGER_SCHEMA_VERSION) {
         const appliedAtMs = Date.now();
         if (!Number.isSafeInteger(appliedAtMs) || appliedAtMs < 1) {

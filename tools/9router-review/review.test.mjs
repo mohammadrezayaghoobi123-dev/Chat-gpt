@@ -1038,38 +1038,28 @@ test("an ambiguous POST timeout is reconciled before rerun publication", async (
   assert.equal(comments.length, 1, "an ambiguous first POST must not create a duplicate when its comment is visible");
 });
 
-test("review workflow keeps per-PR serialization and bounded queue semantics explicit", () => {
+test("manual bootstrap workflow remains trusted, manual-only, and reviewer-disabled", () => {
   const workflow = readFileSync(new URL("../../.github/workflows/9router-pr-review.yml", import.meta.url), "utf8");
-  assert.ok(
-    workflow.includes("group: 9router-pr-review-${{ needs.resolve-signal.outputs.pull_request }}"),
-    "each review must share a concurrency group keyed by PR number",
-  );
-  assert.ok(workflow.includes("queue: max"), "pending reviews must use the bounded multi-run queue");
-  assert.ok(workflow.includes("REVIEW_MARKER_KEY: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_KEY }}"), "the privileged reviewer must receive the dedicated marker-signing secret");
-  assert.ok(workflow.includes("id: reviewer-config"), "configuration validation must publish a readiness output");
-  const configStep = workflow.split("      - name: Check reviewer configuration")[1].split("      - name: Checkout trusted default-branch reviewer code only")[0];
-  assert.ok(configStep.includes("ROUTER_BASE_URL_CONFIGURED: ${{ secrets.NINE_ROUTER_API_URL != '' }}"),
-    "configuration validation must receive only a boolean for router URL presence");
-  assert.ok(configStep.includes("ROUTER_API_KEY_CONFIGURED: ${{ secrets.NINE_ROUTER_API_KEY != '' }}"),
-    "configuration validation must receive only a boolean for router API key presence");
-  assert.ok(configStep.includes("REVIEW_MARKER_KEY_CONFIGURED: ${{ secrets.NINE_ROUTER_REVIEW_MARKER_KEY != '' }}"),
-    "configuration validation must receive only a boolean for marker key presence");
-  assert.ok(!configStep.includes("PREVIOUS_REVIEW_MARKER_KEY"),
-    "configuration validation must not receive previous marker key material");
-  assert.ok(!configStep.includes("PREVIOUS_REVIEW_MARKER_KEY_EXPIRES_AT"),
-    "configuration validation must not receive previous marker key expiry metadata");
-  assert.equal(workflow.split("\n").filter((line) => line.trimStart().startsWith("REVIEW_MARKER_KEY:")).length, 1,
-    "the active marker secret must be scoped only to the final reviewer step");
-  assert.equal(workflow.split("PREVIOUS_REVIEW_MARKER_KEY:").length - 1, 1,
-    "the optional previous marker key must be scoped only to the final reviewer step");
-  assert.equal(workflow.split("PREVIOUS_REVIEW_MARKER_KEY_EXPIRES_AT:").length - 1, 1,
-    "the previous key expiry variable must be scoped only to the final reviewer step");
-  assert.equal(workflow.split("\n").filter((line) => line.trimStart().startsWith("ROUTER_API_KEY:")).length, 1,
-    "the router API key must be scoped only to the final reviewer step");
-  const runner = readFileSync(new URL("./run-review.mjs", import.meta.url), "utf8");
-  assert.ok(runner.includes("previousReviewMarkerKeyValidUntil: process.env.PREVIOUS_REVIEW_MARKER_KEY_EXPIRES_AT"));
-  assert.equal(workflow.split("steps.reviewer-config.outputs.ready == 'true'").length - 1, 5, "every privileged reviewer step must be gated on validated configuration");
-  assert.ok(!workflow.includes("cancel-in-progress: true"), "a running review must not be canceled by a later signal");
+  const triggers = workflow.split(/^permissions:/m, 1)[0];
+  const resolverJob = workflow.split("  resolve:\\n")[1]?.split("  reviewer:\\n")[0];
+
+  assert.match(triggers, /^on:\\s*\\n\\s+issue_comment:/m);
+  assert.match(triggers, /^\\s+workflow_dispatch:/m);
+  assert.doesNotMatch(triggers, /^\\s+(pull_request|pull_request_target|workflow_run|push|schedule):/m);
+  assert.match(workflow, /github\\.event\\.comment\\.body == '\\/review-canary'/);
+  assert.match(workflow, /github\\.actor_id == '335530603'/);
+  assert.match(workflow, /github\\.ref == 'refs\\/heads\\/main'/);
+  assert.match(workflow, /ref: \\$\\{\\{ github\\.workflow_sha \\}\\}/);
+  assert.match(workflow, /persist-credentials: false/);
+  assert.ok(resolverJob, "the read-only live PR resolver job must exist");
+  assert.match(resolverJob, /contents: read/);
+  assert.match(resolverJob, /pull-requests: read/);
+  assert.match(resolverJob, /npm ci --ignore-scripts/);
+  assert.match(resolverJob, /npm test/);
+  assert.match(workflow, /reviewer:\\n\\s+if: false\\n\\s+needs: resolve\\n\\s+runs-on: ubuntu-24\\.04\\n\\s+permissions: \\{\\}/m);
+  assert.doesNotMatch(workflow, /\\$\\{\\{\\s*secrets\\./);
+  assert.doesNotMatch(workflow, /NINE_ROUTER_API_URL|NINE_ROUTER_API_KEY|NINE_ROUTER_REVIEW_MARKER_KEY|PREVIOUS_REVIEW_MARKER_KEY/);
+  assert.doesNotMatch(workflow, /actions\\/(?:upload|download)-artifact|actions\\/cache/);
 });
 
 test("oversized model reports fail closed without comment publication", async () => {
@@ -1877,54 +1867,6 @@ test("GitHub rate-limit responses fail closed without automatic retries", async 
   );
   assert.equal(calls, 1, "a rate-limited request must fail closed without an automatic retry");
 });
-
-test("pull_request_target signal workflow is inert and grants no repository permissions", () => {
-  const signal = readFileSync(new URL("../../.github/workflows/9router-pr-review-signal.yml", import.meta.url), "utf8");
-
-  assert.match(signal, /^on:\s*\n\s+pull_request_target:/m);
-  assert.match(signal, /types:\s*\[[^\]]*\bedited\b[^\]]*\]/, "base-branch edits must emit a fresh review signal");
-  assert.match(signal, /^\s+if:\s+github\.event\.action != 'edited' \|\| github\.event\.changes\.base != null$/m,
-    "edited events must be limited to base-branch changes to avoid unnecessary model calls");
-  assert.match(signal, /^permissions:\s*\{\s*\}\s*$/m);
-  assert.match(signal, /^\s+permissions:\s*\{\s*\}\s*$/m);
-  assert.doesNotMatch(signal, /^\s+uses:\s+actions\/(?:checkout|download-artifact)@/m);
-  assert.doesNotMatch(signal, /\$\{\{\s*secrets\./i);
-  assert.doesNotMatch(signal, /\b(?:npm|curl|wget|git clone)\b/i);
-  assert.match(signal, /actions\/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9/);
-  assert.match(signal, /retention-days: 1/);
-  assert.match(signal, /9router-pr-signal-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/);
-  assert.match(signal, /node <<'NODE'/);
-});
-
-test("privileged workflow validates the exact source run before report-only review", () => {
-  const workflow = readFileSync(new URL("../../.github/workflows/9router-pr-review.yml", import.meta.url), "utf8");
-  const resolverJob = workflow.split("  resolve-signal:\n")[1]?.split("  review:\n")[0];
-  const reviewJob = workflow.split("  review:\n")[1];
-  assert.ok(resolverJob, "the read-only signal resolver job must exist");
-  assert.ok(reviewJob, "the privileged reviewer job must exist");
-  const reviewConfiguration = reviewJob.split("    steps:\n")[0];
-  const reviewSteps = reviewJob.split("    steps:\n")[1];
-
-  assert.match(workflow, /^  workflow_run:\s*\n/m);
-  assert.match(resolverJob, /github\.event_name == 'workflow_run'/);
-  assert.match(resolverJob, /github\.event\.workflow_run\.event == 'pull_request_target'/);
-  assert.match(resolverJob, /github\.event\.workflow_run\.conclusion == 'success'/);
-  assert.match(resolverJob, /github\.event\.workflow_run\.path == '\.github\/workflows\/9router-pr-review-signal\.yml'/);
-  assert.match(resolverJob, /actions\/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333/);
-  assert.match(resolverJob, /actions: read/);
-  assert.match(resolverJob, /pull-requests: read/);
-  assert.match(resolverJob, /persist-credentials: false/);
-  assert.doesNotMatch(resolverJob, /NINE_ROUTER_API_KEY|NINE_ROUTER_REVIEW_MARKER_KEY|NINE_ROUTER_API_URL/);
-  assert.match(reviewConfiguration, /group: 9router-pr-review-\$\{\{ needs\.resolve-signal\.outputs\.pull_request \}\}/);
-  assert.match(reviewConfiguration, /pull-requests: write/);
-  assert.match(reviewSteps, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
-  assert.match(reviewSteps, /persist-credentials: false/);
-  assert.doesNotMatch(reviewSteps, /actions\/download-artifact@/);
-  assert.doesNotMatch(workflow, /workflow_run\.pull_requests/);
-  assert.equal((reviewSteps.match(/uses: actions\/checkout@/g) || []).length, 1,
-    "the privileged job must have exactly one checkout, for trusted default-branch code");
-});
-
 
 test("published report states its exact snapshot scope and stale or unverifiable status", async () => {
   const headSha = "e".repeat(40);

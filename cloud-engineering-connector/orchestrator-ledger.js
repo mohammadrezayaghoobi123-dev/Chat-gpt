@@ -10,6 +10,7 @@ import {
   decodeTaskAdmissionGrantClaims,
   normalizeTaskForAdmission,
   taskAdmissionDigest,
+  taskAdmissionGrantDigest,
   verifyTaskAdmissionGrant,
 } from "./orchestrator-admission.js";
 
@@ -870,7 +871,7 @@ export class OrchestratorLedger extends DurableObject {
         expiresAt: verifiedAdmission.exp,
         keyId: decoded.keyId,
       };
-      grantDigest = await admissionTextDigest(admissionGrant);
+      grantDigest = await taskAdmissionGrantDigest(admissionGrant);
     } catch {
       return { created: false, reason: "TASK_ADMISSION_INVALID" };
     }

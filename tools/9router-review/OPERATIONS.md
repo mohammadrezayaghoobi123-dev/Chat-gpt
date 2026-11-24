@@ -1036,3 +1036,60 @@ This correction is confined to the in-memory reference oracle. It does not prove
 - Hosted run [45511958154](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45511958154) completed: **T01–T47, 47/47 PASS**; full reviewer regression plus conformance: **183 passed / 1 failed**.
 - The sole full-suite failure remains the preserved deterministic duplicate-publication race (2 POSTs observed; maximum allowed 1). No test assertion was weakened or removed.
 - The green result qualifies only the in-memory reference implementation. Provider-backed linearizability and durable crash recovery remain NOT_EXECUTED.
+
+
+### 16. Cross-store attempt-boundary authorization — 2026-11-25
+
+**AR-40 — Outcome append is not cryptographically or transactionally bound to the committed reservation attempt boundary.**
+
+#### Adversarial counterexample
+
+The current reference-ledger API accepts:
+
+`appendOutcome({ attemptId, outcomeType, evidenceDigest, evidenceReference })`
+
+It verifies that an intent exists and that the outcome type matches the intent stage. It does not require evidence that the reservation authority has committed the corresponding `beginModelAttempt` or `beginCommentAttempt` transition. A caller can therefore append an immutable outcome after INTENT but before the reservation attempt boundary. The reservation adapter may later reject completion, but the audit ledger has already accepted a result event for an attempt that was never authorized at the authoritative state boundary.
+
+This is a cross-store protocol defect. Stage matching (I33) does not prove attempt authorization or causal order.
+
+#### Required contract correction — proposed, not yet implemented
+
+The outcome append operation must require a verifiable **attempt-boundary receipt** issued only after the reservation authority has durably committed the single-use attempt transition. The receipt must bind at minimum:
+
+- canonical reservation key and key schema version;
+- stage (`MODEL` or `COMMENT`);
+- attempt ID and immutable request/payload digest;
+- generation and committed record version;
+- reservation authority identity and protocol version;
+- unique boundary event/nonce and issuance metadata.
+
+The receipt must be integrity-protected and non-replayable across keys, stages, attempts, generations, or record versions. The ledger must verify it before appending OUTCOME. The caller must not be able to construct a valid receipt by copying caller-controlled fields. A signed capability or an equivalent independently verifiable proof is required; the final mechanism must account for key rotation, verifier availability, and compromise of the reservation authority.
+
+The causal order becomes:
+
+1. Append and positively acknowledge INTENT.
+2. Atomically commit the one-time reservation attempt boundary.
+3. Return a verifiable boundary receipt only after durable commit acknowledgement.
+4. Perform the external effect once, with transport retries disabled.
+5. Append OUTCOME with the boundary receipt and positive effect evidence.
+6. Complete the reservation using the immutable ledger outcome receipt.
+
+If step 2 has an ambiguous acknowledgement, no external effect is permitted. If step 5 is ambiguous, reconcile the same immutable attempt/event identity; do not create a new attempt or infer success from a negative read. If the boundary receipt cannot be verified, reject the outcome without advancing the ledger sequence.
+
+#### Required test-first tranche
+
+- **T48 — Outcome before boundary:** create INTENT, omit the boundary receipt, attempt OUTCOME; expect `ATTEMPT_BOUNDARY_NOT_ACKNOWLEDGED`, no event append, and unchanged global sequence.
+- **T49 — Boundary receipt binding:** reject receipts with a different reservation key, stage, attempt ID, request digest, generation, or committed record version; accept only the exact committed boundary receipt.
+- **T50 — Lost boundary acknowledgement:** simulate a committed reservation transition with a lost response; prove the system can recover the same boundary receipt from authoritative durable state without reissuing the attempt permit or repeating the external effect.
+
+T48 must be observed RED for the exact missing-boundary reason before implementation. T49 and T50 must be added before declaring the protocol corrected. These tests must run against the reference oracle first and later unchanged against each persistent candidate adapter.
+
+#### Current disposition
+
+- AR-40: **OPEN / DESIGN DEFECT IDENTIFIED**.
+- I34 — Attempt-bound outcome authorization: **PROPOSED, NOT YET ENFORCED**.
+- T48–T50: **SPECIFIED, NOT YET IMPLEMENTED OR EXECUTED**.
+- Provider-backed receipt verification: **NOT_RUN**.
+- Production adapter: **NOT_AUTHORIZED**.
+
+The current T01–T47 GREEN result remains valid only for the existing reference-oracle contract. It does not cover AR-40 and must not be described as full protocol conformance. Preserve the duplicate-publication RED test unchanged. Keep PR #463 Draft, reviewer disabled, and all default-branch, secret, cloud-resource, deployment, and local-host boundaries unchanged.

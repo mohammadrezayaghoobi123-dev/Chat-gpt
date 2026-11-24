@@ -1,11 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { verifyReleaseApproval } from "../release-approval.js";
+import { parseTrustedReviewerIds, verifyReleaseApproval } from "../release-approval.js";
 
 const sha = "a".repeat(40);
 const headSha = "b".repeat(40);
 const author = "candidate-author";
 const reviewer = "independent-reviewer";
+const authorId = 202;
+const reviewerId = 101;
+const unlistedReviewerId = 909;
 const repo = "mohammadrezayaghoobi123-dev/Chat-gpt";
 const date = "2026-11-02T12:00:00Z";
 
@@ -19,16 +22,23 @@ function stagingPull(overrides = {}) {
     state: "open",
     draft: false,
     html_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/129",
-    user: { login: author },
+    user: { id: authorId, login: author },
     head: { sha },
     base: { ref: "integration/unify-main-and-integrated-2026-11-02" },
     ...overrides,
   };
 }
 
-function approval(commitId = sha, login = reviewer, state = "APPROVED", submittedAt = date) {
+function reviewerUserId(login) {
+  if (login === author) return authorId;
+  if (login === reviewer) return reviewerId;
+  const commenter = /^commenter-(\d+)$/.exec(login);
+  return commenter ? 1000 + Number(commenter[1]) : unlistedReviewerId;
+}
+
+function approval(commitId = sha, login = reviewer, state = "APPROVED", submittedAt = date, userId = reviewerUserId(login)) {
   return {
-    user: { login },
+    user: { id: userId, login },
     state,
     commit_id: commitId,
     submitted_at: submittedAt,
@@ -49,6 +59,7 @@ const input = overrides => ({
   candidateSha: sha,
   releaseEnvironment: "staging",
   token: "test-token-not-a-real-secret",
+  trustedReviewerIds: [reviewerId],
   ...overrides,
 });
 
@@ -85,14 +96,14 @@ test("Staging rejects author self-approval and stale approvals", async () => {
       ...input({}),
       fetchImpl: fakeFetch([stagingPull()], [approval(sha, author)]),
     }),
-    /no independent approval/,
+    /no trusted independent approval/,
   );
   await assert.rejects(
     verifyReleaseApproval({
       ...input({}),
       fetchImpl: fakeFetch([stagingPull()], [approval(headSha)]),
     }),
-    /no independent approval/,
+    /no trusted independent approval/,
   );
 });
 
@@ -130,7 +141,7 @@ test("Production accepts only a merged PR to main with independent approval on i
     merged_at: date,
     merge_commit_sha: sha,
     html_url: "https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/pull/130",
-    user: { login: author },
+    user: { id: authorId, login: author },
     head: { sha: headSha },
     base: { ref: "main" },
   };
@@ -148,7 +159,7 @@ test("Production rejects unmerged PRs and approvals on the wrong PR head", async
     state: "open",
     draft: false,
     merge_commit_sha: null,
-    user: { login: author },
+    user: { id: authorId, login: author },
     head: { sha: headSha },
     base: { ref: "main" },
   };
@@ -215,19 +226,90 @@ test("release approval paginates associated PRs and all reviews before accepting
   assert.ok(requestedUrls.some(url => url.includes("/pulls/129/reviews") && url.includes("page=2")));
 });
 
-test("characterizes acceptance of a non-code-owner reviewer without an authorization lookup", async () => {
-  const unlistedReviewer = "reviewer-not-listed-in-codeowners";
+test("rejects a non-author review when its immutable GitHub user ID is outside the trusted reviewer policy", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch([stagingPull()], [
+        approval(sha, "reviewer-not-listed-in-codeowners", "APPROVED", date, unlistedReviewerId),
+      ]),
+    }),
+    /no trusted independent approval/,
+  );
+});
+
+test("fails closed before GitHub access when the trusted reviewer policy is missing", async () => {
   const requestedUrls = [];
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({ trustedReviewerIds: [] }),
+      fetchImpl: fakeFetch([stagingPull()], [approval()], url => requestedUrls.push(url)),
+    }),
+    /RELEASE_REVIEWER_IDS/,
+  );
+  assert.equal(requestedUrls.length, 0);
+});
+
+test("does not trust an allowlisted login when the immutable GitHub user ID differs", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({}),
+      fetchImpl: fakeFetch([stagingPull()], [
+        approval(sha, reviewer, "APPROVED", date, unlistedReviewerId),
+      ]),
+    }),
+    /no trusted independent approval/,
+  );
+});
+
+test("accepts an allowlisted immutable reviewer ID and returns it for traceability", async () => {
   const result = await verifyReleaseApproval({
     ...input({}),
-    fetchImpl: fakeFetch([stagingPull()], [approval(sha, unlistedReviewer)], url => {
-      requestedUrls.push(url);
-    }),
+    fetchImpl: fakeFetch([stagingPull()], [
+      approval(sha, "renamed-reviewer-login", "APPROVED", date, reviewerId),
+    ]),
   });
+  assert.equal(result.reviewerId, reviewerId);
+  assert.equal(result.reviewCommitSha, sha);
+});
 
-  assert.equal(result.reviewer, unlistedReviewer);
-  assert.equal(requestedUrls.length, 2);
-  assert.ok(requestedUrls.some(url => url.includes("/commits/" + sha + "/pulls")));
-  assert.ok(requestedUrls.some(url => url.includes("/pulls/129/reviews")));
-  assert.ok(requestedUrls.every(url => !/collaborators|permissions|teams|codeowners/i.test(url)));
+test("parses only unique positive decimal GitHub user IDs", () => {
+  assert.deepEqual(parseTrustedReviewerIds("101, 202"), [101, 202]);
+  assert.deepEqual(parseTrustedReviewerIds(undefined), []);
+  assert.throws(() => parseTrustedReviewerIds("101,not-a-number"), /positive decimal GitHub user IDs/);
+  assert.throws(() => parseTrustedReviewerIds("101,101"), /duplicate GitHub user IDs/);
+  assert.throws(() => parseTrustedReviewerIds("9007199254740992"), /safe integer range/);
+});
+
+test("never accepts the PR author even when their numeric ID is configured", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({ trustedReviewerIds: [authorId, reviewerId] }),
+      fetchImpl: fakeFetch([stagingPull()], [approval(sha, author)]),
+    }),
+    /no trusted independent approval/,
+  );
+});
+
+test("ignores an untrusted change request when a trusted reviewer approved the exact candidate", async () => {
+  const result = await verifyReleaseApproval({
+    ...input({}),
+    fetchImpl: fakeFetch([stagingPull()], [
+      approval(sha, "untrusted-reviewer", "CHANGES_REQUESTED", "2026-11-02T12:05:00Z", unlistedReviewerId),
+      approval(sha, reviewer, "APPROVED", "2026-11-02T12:10:00Z", reviewerId),
+    ]),
+  });
+  assert.equal(result.reviewerId, reviewerId);
+});
+
+test("tracks a trusted reviewer latest state by immutable user ID across login changes", async () => {
+  const result = await verifyReleaseApproval({
+    ...input({}),
+    fetchImpl: fakeFetch([stagingPull()], [
+      approval(sha, reviewer, "CHANGES_REQUESTED", "2026-11-02T11:00:00Z", reviewerId),
+      approval(sha, "renamed-reviewer-login", "APPROVED", "2026-11-02T12:00:00Z", reviewerId),
+    ]),
+  });
+  assert.equal(result.reviewer, "renamed-reviewer-login");
+  assert.equal(result.reviewerId, reviewerId);
 });

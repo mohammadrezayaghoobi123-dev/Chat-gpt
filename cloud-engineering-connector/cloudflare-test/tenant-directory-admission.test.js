@@ -228,6 +228,7 @@ describe("TenantDirectory signed task admission reservation", () => {
 
   it("rejects an authorization snapshot changed during Ed25519 signing without writing a reservation", async () => {
     const state = await fixture();
+    admissionStore(state.adapters);
     const revokeAssertion = await adminAssertion("revokeMembership", TENANT_ID, null, {
       principalId: PRINCIPAL_ID,
       expectedVersion: 1,

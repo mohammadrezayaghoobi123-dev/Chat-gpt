@@ -395,7 +395,7 @@ test("live Staging smoke is post-deploy only and PR CI does not probe the previo
 for (const workflow of workflows) {
   test(workflow.name + " release validates the smoke credential before deployment and uses it only for live acceptance", () => {
     const source = readFileSync(workflow.path, "utf8");
-    const deployPosition = source.indexOf("npx wrangler deploy");
+    const deployPosition = source.indexOf("bash scripts/verify-and-deploy-release.sh");
     const credentialPreflightPosition = source.indexOf("- name: Validate MCP smoke credential");
     assert.ok(credentialPreflightPosition >= 0 && credentialPreflightPosition < deployPosition,
       "MCP smoke credential must be validated before deployment");

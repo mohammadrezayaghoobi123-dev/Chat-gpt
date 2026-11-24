@@ -153,3 +153,76 @@ describe("OrchestratorLedger tenant/project idempotency isolation", () => {
     });
   });
 });
+
+  it("rejects a reused idempotency key with a different Task ID inside the same tenant/project scope", async () => {
+    const ledger = ledgerFor("task-idempotency-different-task-same-scope");
+    await runInDurableObject(ledger, async instance => {
+      const now = 1_800_000_000_000;
+      const keySet = JSON.stringify({ test: "f".repeat(64) });
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = keySet;
+      const create = async taskId => {
+        const workerAssertion = await createScheduledWorkerAssertion(keySet, "test", {
+          subject: "orchestrator-scheduler",
+          role: "system",
+          operation: "createTask",
+          nowMs: now,
+        });
+        return instance.createTask({
+          task: {
+            taskId,
+            tenantId: "tenant-alpha",
+            projectId: "project-red",
+            state: "SCHEDULED",
+            version: 1,
+            createdAt: now,
+            updatedAt: now,
+            executorId: "worker-a",
+          },
+          idempotencyKey: "client-request-task-identity-42",
+          inputHash: "a".repeat(64),
+          now,
+          workerId: "orchestrator-scheduler",
+          workerAssertion,
+        });
+      };
+
+      const first = await create("tenant-alpha-task-original");
+      const replayWithDifferentTask = await create("tenant-alpha-task-substitute");
+
+      expect(first).toMatchObject({
+        created: true,
+        task: {
+          taskId: "tenant-alpha-task-original",
+          tenantId: "tenant-alpha",
+          projectId: "project-red",
+        },
+      });
+      expect(replayWithDifferentTask).toEqual({
+        created: false,
+        conflict: true,
+        reason: "IDEMPOTENCY_CONFLICT",
+      });
+      expect(instance.getTask({
+        taskId: "tenant-alpha-task-original",
+        tenantId: "tenant-alpha",
+        projectId: "project-red",
+      })).toMatchObject({
+        taskId: "tenant-alpha-task-original",
+        tenantId: "tenant-alpha",
+        projectId: "project-red",
+        version: 1,
+      });
+      expect(instance.getTask({
+        taskId: "tenant-alpha-task-substitute",
+        tenantId: "tenant-alpha",
+        projectId: "project-red",
+      })).toBeNull();
+      const rows = instance.ctx.storage.sql.exec(
+        "SELECT task_id FROM orchestrator_tasks WHERE tenant_id = ? AND project_id = ?",
+        "tenant-alpha",
+        "project-red",
+      ).toArray();
+      expect(rows).toEqual([{ task_id: "tenant-alpha-task-original" }]);
+    });
+  });
+

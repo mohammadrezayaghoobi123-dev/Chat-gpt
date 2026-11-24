@@ -2698,6 +2698,7 @@ describe("Owner command atomic Ledger contract", () => {
     const operation = "createTask";
     const originalJti = "worker-jti-clock-forward-original-0001";
     const forwardJti = "worker-jti-clock-forward-cleanup-0001";
+    const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     const originalToken = await workerAssertion(
       subject, role, operation, now, originalJti,
     );
@@ -2705,7 +2706,6 @@ describe("Owner command atomic Ledger contract", () => {
     const forwardToken = await workerAssertion(
       subject, role, operation, forwardNow, forwardJti,
     );
-    const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(now);
 
     let first;
     let forwardAttempt;

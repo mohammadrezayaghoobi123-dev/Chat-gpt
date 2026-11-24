@@ -138,7 +138,7 @@ async function fixture(name, overrides = {}) {
   });
   return {
     ledger, task, receipt, claims, pair, tenantId, projectId, taskId,
-    idempotencyKey, mintWorkerAssertion,
+    idempotencyKey, mintWorkerAssertion, mintLegacyWorkerAssertion,
   };
 }
 

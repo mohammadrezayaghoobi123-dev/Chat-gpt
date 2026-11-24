@@ -257,8 +257,11 @@ export class TenantDirectory extends DurableObject {
   async getAdmissionVerificationKey(input) {
     const tenantId = identifier(input?.tenantId, "tenantId");
     const keyId = identifier(input?.keyId, "keyId");
-    const envelope = await this.#ensureAdmissionSigningKey(tenantId);
-    if (envelope.keyId !== keyId) {
+    const envelope = await this.ctx.storage.get("admission:signing-key:v1:" + tenantId);
+    if (
+      envelope === undefined ||
+      !validAdmissionSigningEnvelope(envelope, tenantId, keyId)
+    ) {
       throw fail("ADMISSION_SIGNING_KEY_NOT_FOUND", "The requested tenant signing key does not exist.");
     }
     return {

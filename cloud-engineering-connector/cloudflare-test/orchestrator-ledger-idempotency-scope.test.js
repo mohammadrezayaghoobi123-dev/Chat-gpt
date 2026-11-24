@@ -8,12 +8,17 @@ function ledgerFor(name) {
 }
 
 describe("OrchestratorLedger tenant/project idempotency isolation", () => {
-  it("allows the same caller idempotency key in different tenant/project scopes", async () => {
-    const ledger = ledgerFor("task-idempotency-same-key-different-tenants");
+  it("rejects Receipt-free HMAC task creation before any Ledger write", async () => {
+    const ledger = ledgerFor("task-idempotency-receipt-required");
     await runInDurableObject(ledger, async instance => {
       const now = 1_800_000_000_000;
       const keySet = JSON.stringify({ test: "f".repeat(64) });
       instance.env.LEDGER_WORKER_ASSERTION_KEYS = keySet;
+      const before = {
+        tasks: Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count),
+        assertions: Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count),
+        candidates: Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_claim_candidates").one().count),
+      };
       const create = async ({ taskId, tenantId, projectId, inputHash }) => {
         const workerAssertion = await createScheduledWorkerAssertion(keySet, "test", {
           subject: "orchestrator-scheduler",
@@ -34,34 +39,27 @@ describe("OrchestratorLedger tenant/project idempotency isolation", () => {
         });
       };
 
-      const first = await create({
-        taskId: "tenant-alpha-task-42",
-        tenantId: "tenant-alpha",
-        projectId: "project-red",
-        inputHash: "1".repeat(64),
-      });
-      const second = await create({
-        taskId: "tenant-beta-task-42",
-        tenantId: "tenant-beta",
-        projectId: "project-blue",
-        inputHash: "2".repeat(64),
-      });
-
-      expect(first.created).toBe(true);
-      expect(second.created).toBe(true);
-      expect(second.task).toMatchObject({
-        taskId: "tenant-beta-task-42",
-        tenantId: "tenant-beta",
-        projectId: "project-blue",
-      });
-      const rows = instance.ctx.storage.sql.exec(
-        "SELECT task_id, tenant_id, project_id FROM orchestrator_tasks WHERE tenant_id IN (?, ?) ORDER BY tenant_id",
-        "tenant-alpha", "tenant-beta",
-      ).toArray();
-      expect(rows).toEqual([
-        { task_id: "tenant-alpha-task-42", tenant_id: "tenant-alpha", project_id: "project-red" },
-        { task_id: "tenant-beta-task-42", tenant_id: "tenant-beta", project_id: "project-blue" },
+      const [first, second] = await Promise.all([
+        create({
+          taskId: "tenant-alpha-task-42",
+          tenantId: "tenant-alpha",
+          projectId: "project-red",
+          inputHash: "1".repeat(64),
+        }),
+        create({
+          taskId: "tenant-beta-task-42",
+          tenantId: "tenant-beta",
+          projectId: "project-blue",
+          inputHash: "2".repeat(64),
+        }),
       ]);
+      expect(first).toMatchObject({ created: false, reason: "ADMISSION_RECEIPT_REQUIRED" });
+      expect(second).toMatchObject({ created: false, reason: "ADMISSION_RECEIPT_REQUIRED" });
+      expect({
+        tasks: Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count),
+        assertions: Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count),
+        candidates: Number(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_claim_candidates").one().count),
+      }).toEqual(before);
     });
   });
 

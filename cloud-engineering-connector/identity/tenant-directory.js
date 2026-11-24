@@ -6,6 +6,8 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const POLICY_EFFECTS = new Set(["allow", "deny"]);
 const MEMBERSHIP_STATUSES = new Set(["active", "suspended"]);
 const POLICY_STATUSES = new Set(["active", "disabled"]);
+const ADMISSION_KEY_STATUSES = new Set(["active", "verify_only", "revoked"]);
+const ADMISSION_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
 
 function fail(code, message) {
   return Object.assign(new Error(message), { code });
@@ -26,6 +28,37 @@ function timestamp(value) {
 function version(value) {
   if (!Number.isSafeInteger(value) || value < 0) throw fail("INVALID_TENANT_DIRECTORY_INPUT", "expectedVersion must be a non-negative safe integer.");
   return value;
+}
+function decodeAdmissionPublicKey(value) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(value)) {
+    throw fail("INVALID_ADMISSION_VERIFICATION_KEY", "Ed25519 public key must be canonical base64url.");
+  }
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(normalized + "=");
+    const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+    let encodedBinary = "";
+    for (const byte of bytes) encodedBinary += String.fromCharCode(byte);
+    const canonical = btoa(encodedBinary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+    if (bytes.byteLength !== 32 || canonical !== value) {
+      throw new Error("Invalid Ed25519 public key encoding.");
+    }
+    return bytes;
+  } catch {
+    throw fail("INVALID_ADMISSION_VERIFICATION_KEY", "Ed25519 public key must encode exactly 32 bytes.");
+  }
+}
+function admissionKeyRecord(row) {
+  return row ? {
+    tenantId: row.tenant_id,
+    keyId: row.key_id,
+    algorithm: row.algorithm,
+    publicKey: row.public_key,
+    status: row.status,
+    notBefore: row.not_before,
+    notAfter: row.not_after,
+    version: row.version,
+  } : null;
 }
 function defaultDeny({
   principalId, tenantId, projectId, action, resourceDigest,
@@ -69,6 +102,15 @@ export class TenantDirectory extends DurableObject {
         "Schema version 2 requires the tenant policy scope epoch table."
       );
     }
+    const admissionKeyTable = sql.exec(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='tenant_admission_verification_keys'"
+    ).toArray()[0];
+    if (schemaVersionBefore >= 3 && !admissionKeyTable) {
+      throw fail(
+        "TENANT_DIRECTORY_SCHEMA_CORRUPT",
+        "Schema version 3 requires the admission verification key table."
+      );
+    }
     sql.exec(
       "CREATE TABLE IF NOT EXISTS tenant_memberships (" +
       "tenant_id TEXT NOT NULL, principal_id TEXT NOT NULL, membership_id TEXT NOT NULL, role TEXT NOT NULL, " +
@@ -97,6 +139,15 @@ export class TenantDirectory extends DurableObject {
       "FROM tenant_project_policy_rules GROUP BY tenant_id, project_id, principal_id, action"
     );
     sql.exec(
+      "CREATE TABLE IF NOT EXISTS tenant_admission_verification_keys (" +
+      "tenant_id TEXT NOT NULL, key_id TEXT NOT NULL, algorithm TEXT NOT NULL CHECK(algorithm='Ed25519'), " +
+      "public_key TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('active','verify_only','revoked')), " +
+      "not_before INTEGER NOT NULL, not_after INTEGER NOT NULL CHECK(not_after > not_before), " +
+      "version INTEGER NOT NULL CHECK(version > 0), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, " +
+      "PRIMARY KEY(tenant_id, key_id))"
+    );
+    sql.exec("CREATE INDEX IF NOT EXISTS tenant_admission_verification_keys_by_status ON tenant_admission_verification_keys(tenant_id, status, not_before, not_after)");
+    sql.exec(
       "CREATE TABLE IF NOT EXISTS tenant_directory_audit_events (" +
       "sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, tenant_id TEXT NOT NULL, " +
       "project_id TEXT, actor_id TEXT NOT NULL, operation TEXT NOT NULL, target_digest TEXT NOT NULL, " +
@@ -115,11 +166,14 @@ export class TenantDirectory extends DurableObject {
       );
       sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(2, ?)", Date.now());
     }
+    if (schemaVersionBefore < 3) {
+      sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(3, ?)", Date.now());
+    }
   }
 
   ping() {
     const row = this.ctx.storage.sql.exec("SELECT MAX(version) AS version FROM tenant_directory_schema_migrations").one();
-    return { ok: Number(row.version) === 2, schemaVersion: Number(row.version ?? 0) };
+    return { ok: Number(row.version) === 3, schemaVersion: Number(row.version ?? 0) };
   }
 
   async #verifyAdmin(assertion, operation, tenantId, projectId, target, now) {
@@ -182,6 +236,120 @@ export class TenantDirectory extends DurableObject {
         projectId: scope.projectId,
         action: scope.action,
         epoch: this.#advancePolicyScopeEpoch(sql, scope, now),
+      };
+    });
+  }
+
+  getAdmissionVerificationKey(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const keyId = input?.keyId;
+    if (typeof keyId !== "string" || !ADMISSION_KEY_ID.test(keyId)) {
+      throw fail("INVALID_ADMISSION_VERIFICATION_KEY", "keyId is invalid.");
+    }
+    const now = timestamp(input?.now);
+    const row = this.ctx.storage.sql.exec(
+      "SELECT tenant_id, key_id, algorithm, public_key, status, not_before, not_after, version " +
+      "FROM tenant_admission_verification_keys WHERE tenant_id=? AND key_id=?",
+      tenantId, keyId
+    ).toArray()[0];
+    if (!row || row.status === "revoked" || row.not_before > now || row.not_after <= now) return null;
+    return admissionKeyRecord(row);
+  }
+
+  async upsertAdmissionVerificationKey(input) {
+    const tenantId = identifier(input?.tenantId, "tenantId");
+    const keyId = input?.keyId;
+    if (typeof keyId !== "string" || !ADMISSION_KEY_ID.test(keyId)) {
+      throw fail("INVALID_ADMISSION_VERIFICATION_KEY", "keyId is invalid.");
+    }
+    const algorithm = input?.algorithm;
+    const publicKey = input?.publicKey;
+    if (algorithm !== "Ed25519") {
+      throw fail("INVALID_ADMISSION_VERIFICATION_KEY", "Only Ed25519 verification keys are accepted.");
+    }
+    decodeAdmissionPublicKey(publicKey);
+    const status = input?.status;
+    if (!ADMISSION_KEY_STATUSES.has(status)) {
+      throw fail("INVALID_ADMISSION_VERIFICATION_KEY", "Admission verification key status is invalid.");
+    }
+    if (status === "revoked" && input?.expectedVersion === 0) {
+      throw fail("INVALID_ADMISSION_VERIFICATION_KEY", "A key cannot be created in the revoked state.");
+    }
+    const notBefore = timestamp(input?.notBefore);
+    const notAfter = timestamp(input?.notAfter);
+    if (notAfter <= notBefore) {
+      throw fail("INVALID_ADMISSION_VERIFICATION_KEY", "notAfter must be later than notBefore.");
+    }
+    const expectedVersion = version(input?.expectedVersion);
+    const now = timestamp(input?.now);
+    const target = {
+      keyId, algorithm, publicKey, status, notBefore, notAfter, expectedVersion,
+    };
+    const verified = await this.#verifyAdmin(
+      input?.assertion, "upsertAdmissionVerificationKey", tenantId, null, target, now
+    );
+    const publicKeyDigestBytes = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(publicKey)
+    );
+    const publicKeyDigest = Array.from(new Uint8Array(publicKeyDigestBytes),
+      byte => byte.toString(16).padStart(2, "0")).join("");
+
+    return this.ctx.storage.transactionSync(() => {
+      const sql = this.ctx.storage.sql;
+      const current = sql.exec(
+        "SELECT algorithm, public_key, status, not_before, not_after, version, created_at " +
+        "FROM tenant_admission_verification_keys WHERE tenant_id=? AND key_id=?",
+        tenantId, keyId
+      ).toArray()[0];
+      if (!current && expectedVersion !== 0) {
+        throw fail("TENANT_DIRECTORY_VERSION_CONFLICT", "Admission key does not exist at the expected version.");
+      }
+      if (current && current.version !== expectedVersion) {
+        throw fail("TENANT_DIRECTORY_VERSION_CONFLICT", "Admission key version changed.");
+      }
+      if (current && (
+        current.algorithm !== algorithm ||
+        current.public_key !== publicKey ||
+        current.not_before !== notBefore ||
+        current.not_after !== notAfter
+      )) {
+        throw fail("TENANT_DIRECTORY_KEY_ID_IMMUTABLE", "A key ID cannot be rebound to different key material or validity bounds.");
+      }
+      if (current?.status === "revoked" && status !== "revoked") {
+        throw fail("TENANT_DIRECTORY_KEY_REVOKED_IMMUTABLE", "A revoked key ID cannot be reactivated.");
+      }
+      const transitions = {
+        active: new Set(["active", "verify_only", "revoked"]),
+        verify_only: new Set(["verify_only", "revoked"]),
+        revoked: new Set(["revoked"]),
+      };
+      if (current && !transitions[current.status]?.has(status)) {
+        throw fail("INVALID_ADMISSION_VERIFICATION_KEY", "Admission verification key status transition is invalid.");
+      }
+      const nextVersion = current ? current.version + 1 : 1;
+      sql.exec(
+        "INSERT INTO tenant_admission_verification_keys(tenant_id, key_id, algorithm, public_key, status, not_before, not_after, version, created_at, updated_at) " +
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(tenant_id, key_id) DO UPDATE SET " +
+        "status=excluded.status, version=excluded.version, updated_at=excluded.updated_at",
+        tenantId, keyId, algorithm, publicKey, status, notBefore, notAfter,
+        nextVersion, current?.created_at ?? now, now
+      );
+      const auditEventId = this.#appendAuditEvent(
+        sql, verified, "upsertAdmissionVerificationKey", tenantId, null,
+        { keyId, algorithm, status, notBefore, notAfter, expectedVersion, publicKeyDigest },
+        current?.version ?? null, nextVersion, now
+      );
+      const row = sql.exec(
+        "SELECT tenant_id, key_id, algorithm, public_key, status, not_before, not_after, version " +
+        "FROM tenant_admission_verification_keys WHERE tenant_id=? AND key_id=?",
+        tenantId, keyId
+      ).one();
+      return {
+        created: !current,
+        updated: Boolean(current),
+        key: admissionKeyRecord(row),
+        auditEventId,
       };
     });
   }

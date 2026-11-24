@@ -14,7 +14,7 @@ describe("OrchestratorLedger readiness and integrity diagnostics", () => {
       const result = instance.ping();
 
       expect(result.ok).toBe(true);
-      expect(result.schemaVersion).toBe(9);
+      expect(result.schemaVersion).toBe(10);
       expect(result.storage.requiredTables).toBe(true);
       expect(result.storage).not.toHaveProperty("integrityCheck");
       expect(execSpy.mock.calls.some(([statement]) =>
@@ -40,20 +40,29 @@ describe("OrchestratorLedger readiness and integrity diagnostics", () => {
       execSpy.mockRestore();
     });
   });
-});
 
+  it("keeps OrchestratorLedger persistence isolated from Brain Store tables", async () => {
+    const ledger = ledgerFor("orchestration-ownership-boundary");
+    await runInDurableObject(ledger, async instance => {
+      const tables = new Set(instance.ctx.storage.sql
+        .exec("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .toArray()
+        .map(row => row.name));
+      expect(tables.has("orchestrator_tasks")).toBe(true);
+      expect(tables.has("orchestrator_execution_leases")).toBe(true);
+      for (const name of ["knowledge_entities", "knowledge_relationships", "knowledge_tags"]) {
+        expect(tables.has(name)).toBe(false);
+      }
+    });
+  });
 
-it("owns orchestration persistence without creating Brain Store tables", async () => {
-  const ledger = ledgerFor("orchestration-ownership-boundary");
-  await runInDurableObject(ledger, async instance => {
-    const tables = new Set(instance.ctx.storage.sql
-      .exec("SELECT name FROM sqlite_master WHERE type = 'table'")
-      .toArray()
-      .map(row => row.name));
-    expect(tables.has("orchestrator_tasks")).toBe(true);
-    expect(tables.has("orchestrator_execution_leases")).toBe(true);
-    for (const name of ["knowledge_entities", "knowledge_relationships", "knowledge_tags"]) {
-      expect(tables.has(name)).toBe(false);
-    }
+  it("fails closed when a schema-v10 Ledger loses its admission identity table", async () => {
+    const ledger = ledgerFor("ledger-admission-schema-corruption");
+    await runInDurableObject(ledger, instance => {
+      expect(instance.ping()).toMatchObject({ ok: true, schemaVersion: 10 });
+      instance.ctx.storage.sql.exec("DROP TABLE orchestrator_task_admissions");
+    });
+    await expect(runInDurableObject(ledger, instance => instance.ensureSchema()))
+      .rejects.toMatchObject({ code: "LEDGER_SCHEMA_CORRUPT" });
   });
 });

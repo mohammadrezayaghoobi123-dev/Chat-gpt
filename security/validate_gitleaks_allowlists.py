@@ -125,14 +125,14 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
         if marker != "0123456789abcdef" * 2:
             errors.append(f"{label}: historical fixture does not match the approved synthetic marker")
         key = match.group(1)
-        expected_pattern = f"^{key}$"
+        expected_pattern = f'^key = "{key}"$'
         if regexes[0] != expected_pattern:
             errors.append(f"{label}: regex must match only the exact extracted historical fixture secret")
-        if not pattern.fullmatch(key):
-            errors.append(f"{label}: regex does not match the exact extracted historical fixture secret")
-        replacement = "1" if key[0] != "1" else "2"
-        mutated_key = replacement + key[1:]
-        if pattern.fullmatch(mutated_key):
+        finding_match = f'key = "{key}"'
+        if not pattern.fullmatch(finding_match):
+            errors.append(f"{label}: regex does not match the exact Gitleaks finding match")
+        mutated_match = f'key = "{replacement + key[1:]}"'
+        if pattern.fullmatch(mutated_match):
             errors.append(f"{label}: regex also matches a mutated fixture and is not literal-scoped")
     return errors
 

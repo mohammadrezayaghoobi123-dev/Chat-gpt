@@ -2,6 +2,9 @@ import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.js";
+import { createTenantDirectoryAdminAssertion } from "../identity/tenant-directory-assertion.js";
+import { createTenantDirectoryAdapters } from "../identity/tenant-directory-adapter.js";
+import { taskAdmissionDigest } from "../orchestrator-admission.js";
 
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
@@ -9,44 +12,121 @@ function ledgerFor(name) {
 
 describe("OrchestratorLedger tenant/project idempotency isolation", () => {
   it("allows the same caller idempotency key in different tenant/project scopes", async () => {
-    const ledger = ledgerFor("task-idempotency-same-key-different-tenants");
+    const ledger = ledgerFor("task-idempotency-same-key-different-tenants-" + crypto.randomUUID());
+    const now = Date.now();
+    const adminKeySet = JSON.stringify({ test: "f".repeat(64) });
+    const workerKeySet = JSON.stringify({ test: "e".repeat(64) });
+    const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+    const privateKeys = JSON.stringify({ test: await crypto.subtle.exportKey("jwk", pair.privateKey) });
+    const publicKeys = JSON.stringify({ test: await crypto.subtle.exportKey("jwk", pair.publicKey) });
+
+    const createDirectoryGrant = async ({ taskId, tenantId, projectId, inputHash }) => {
+      const principalId = "principal-" + tenantId;
+      const membershipId = "membership-" + tenantId;
+      const directoryStub = env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName(tenantId));
+      await runInDurableObject(directoryStub, instance => {
+        instance.env.TENANT_DIRECTORY_ADMIN_ASSERTION_KEYS = adminKeySet;
+        instance.env.TENANT_DIRECTORY_ADMISSION_PRIVATE_KEYS = privateKeys;
+        instance.env.TENANT_DIRECTORY_ADMISSION_ACTIVE_KID = "test";
+      });
+      const adapters = createTenantDirectoryAdapters(env.TENANT_DIRECTORY, tenantId);
+      const adminAssertion = async (operation, project, target) =>
+        createTenantDirectoryAdminAssertion(adminKeySet, "test", {
+          subject: "tenant-directory-provisioner",
+          operation,
+          tenantId,
+          projectId: project,
+          nowMs: now,
+          target,
+        });
+
+      await adapters.provisioningStore.upsertMembership({
+        assertion: await adminAssertion("upsertMembership", null, {
+          principalId, membershipId, role: "tenant-member", status: "active", expectedVersion: 0,
+        }),
+        tenantId,
+        principalId,
+        membershipId,
+        role: "tenant-member",
+        status: "active",
+        expectedVersion: 0,
+        now,
+      });
+      await adapters.provisioningStore.upsertProjectPolicy({
+        assertion: await adminAssertion("upsertProjectPolicy", projectId, {
+          projectId, principalId, action: "task.create", resourceDigest: "*",
+          effect: "allow", policyVersion: "task-create-v1", status: "active", expectedVersion: 0,
+        }),
+        tenantId,
+        projectId,
+        principalId,
+        action: "task.create",
+        resourceDigest: "*",
+        effect: "allow",
+        policyVersion: "task-create-v1",
+        status: "active",
+        expectedVersion: 0,
+        now,
+      });
+      const task = {
+        taskId,
+        tenantId,
+        projectId,
+        state: "SCHEDULED",
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+        executorId: "worker-a",
+      };
+      const reservation = await adapters.admissionStore.prepareTaskAdmission({
+        tenantId,
+        projectId,
+        principalId,
+        taskId,
+        taskDigest: await taskAdmissionDigest(task),
+        idempotencyKey: "client-request-42",
+        inputHash,
+      });
+      return { task, grant: reservation.grant };
+    };
+
+    const firstAdmission = await createDirectoryGrant({
+      taskId: "tenant-alpha-task-42",
+      tenantId: "tenant-alpha",
+      projectId: "project-red",
+      inputHash: "1".repeat(64),
+    });
+    const secondAdmission = await createDirectoryGrant({
+      taskId: "tenant-beta-task-42",
+      tenantId: "tenant-beta",
+      projectId: "project-blue",
+      inputHash: "2".repeat(64),
+    });
+
     await runInDurableObject(ledger, async instance => {
-      const now = 1_800_000_000_000;
-      const keySet = JSON.stringify({ test: "f".repeat(64) });
-      instance.env.LEDGER_WORKER_ASSERTION_KEYS = keySet;
-      const create = async ({ taskId, tenantId, projectId, inputHash }) => {
-        const workerAssertion = await createScheduledWorkerAssertion(keySet, "test", {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = workerKeySet;
+      instance.env.ORCHESTRATOR_LEDGER_ADMISSION_PUBLIC_KEYS = publicKeys;
+      const create = async admission => {
+        const workerNow = Date.now();
+        const workerAssertion = await createScheduledWorkerAssertion(workerKeySet, "test", {
           subject: "orchestrator-scheduler",
           role: "system",
           operation: "createTask",
-          nowMs: now,
+          nowMs: workerNow,
         });
         return instance.createTask({
-          task: {
-            taskId, tenantId, projectId, state: "SCHEDULED", version: 1,
-            createdAt: now, updatedAt: now, executorId: "worker-a",
-          },
+          task: admission.task,
           idempotencyKey: "client-request-42",
-          inputHash,
-          now,
+          inputHash: admission.task.tenantId === "tenant-alpha" ? "1".repeat(64) : "2".repeat(64),
+          now: workerNow,
           workerId: "orchestrator-scheduler",
           workerAssertion,
+          admissionGrant: admission.grant,
         });
       };
 
-      const first = await create({
-        taskId: "tenant-alpha-task-42",
-        tenantId: "tenant-alpha",
-        projectId: "project-red",
-        inputHash: "1".repeat(64),
-      });
-      const second = await create({
-        taskId: "tenant-beta-task-42",
-        tenantId: "tenant-beta",
-        projectId: "project-blue",
-        inputHash: "2".repeat(64),
-      });
-
+      const first = await create(firstAdmission);
+      const second = await create(secondAdmission);
       expect(first.created).toBe(true);
       expect(second.created).toBe(true);
       expect(second.task).toMatchObject({
@@ -54,6 +134,7 @@ describe("OrchestratorLedger tenant/project idempotency isolation", () => {
         tenantId: "tenant-beta",
         projectId: "project-blue",
       });
+
       const rows = instance.ctx.storage.sql.exec(
         "SELECT task_id, tenant_id, project_id FROM orchestrator_tasks WHERE tenant_id IN (?, ?) ORDER BY tenant_id",
         "tenant-alpha", "tenant-beta",
@@ -61,6 +142,20 @@ describe("OrchestratorLedger tenant/project idempotency isolation", () => {
       expect(rows).toEqual([
         { task_id: "tenant-alpha-task-42", tenant_id: "tenant-alpha", project_id: "project-red" },
         { task_id: "tenant-beta-task-42", tenant_id: "tenant-beta", project_id: "project-blue" },
+      ]);
+      const receipts = instance.ctx.storage.sql.exec(
+        "SELECT task_id, tenant_id, project_id FROM orchestrator_task_admission_receipts WHERE tenant_id IN (?, ?) ORDER BY tenant_id",
+        "tenant-alpha", "tenant-beta",
+      ).toArray();
+      expect(receipts).toEqual(rows);
+
+      const outbox = instance.ctx.storage.sql.exec(
+        "SELECT task_id, tenant_id, project_id, event_type FROM orchestrator_outbox_events WHERE tenant_id IN (?, ?) ORDER BY tenant_id",
+        "tenant-alpha", "tenant-beta",
+      ).toArray();
+      expect(outbox).toEqual([
+        { task_id: "tenant-alpha-task-42", tenant_id: "tenant-alpha", project_id: "project-red", event_type: "task.admitted" },
+        { task_id: "tenant-beta-task-42", tenant_id: "tenant-beta", project_id: "project-blue", event_type: "task.admitted" },
       ]);
     });
   });

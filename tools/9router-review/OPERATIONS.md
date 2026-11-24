@@ -657,9 +657,10 @@ Normative states:
 | `MODEL_ATTEMPTED` | The one-time model dispatch boundary was durably consumed; remote execution may or may not have started | Never |
 | `MODEL_COMPLETED` | One model result is durably recorded and bound to the reservation | Yes, by a continuation-only lease that cannot repeat model dispatch |
 | `COMMENT_ATTEMPTED` | The one-time GitHub comment POST boundary was durably consumed; remote acceptance may or may not have occurred | Never |
-| `PUBLISHED` | Exactly one matching remote comment ID is recorded from validated positive evidence | Terminal |
+| `PUBLISHED` | One exact matching remote comment ID is recorded from validated positive evidence; this is not an exactly-once delivery claim | Terminal except escalation to `DUPLICATE_ACCEPTED` if later evidence proves duplicates |
 | `UNKNOWN` | An external effect may have happened, but evidence is insufficient to determine the result | Never automatically |
-| `ABORTED` | Safely stopped before either external-effect boundary | Terminal for this key |
+| `ABORTED` | Safely stopped before the model-attempt boundary | Terminal for this key |
+| `CLOSED_NO_PUBLISH` | Model result exists, but publication was safely suppressed (for example, the PR snapshot became stale) | Terminal for this key |
 | `DUPLICATE_ACCEPTED` | More than one matching remote comment is positively observed | Terminal incident state |
 
 Allowed transitions:
@@ -669,6 +670,7 @@ Allowed transitions:
 | absent / `UNCLAIMED` | `CLAIMED` | Unique insert or linearizable CAS; allocate generation 1 and owner nonce; persist deterministic marker ID and signing-key ID |
 | `CLAIMED` | `PUBLISHED` | Complete pre-model reconciliation finds exactly one valid signed marker from the expected bot for this exact key; no model request |
 | `CLAIMED` | `DUPLICATE_ACCEPTED` | Complete pre-model reconciliation finds more than one valid signed marker for this exact key; no model request |
+| `CLAIMED` | `ABORTED` | Explicit safe abort before model-attempt boundary |
 | `CLAIMED` | `CLAIMED` | Renew only if owner, nonce, generation, record version, and server-side lease validity match |
 | expired `CLAIMED` | `CLAIMED` | Server-time expiry predicate and CAS; increment generation and replace owner/nonce |
 | `CLAIMED` | `MODEL_ATTEMPTED` | One-time CAS consumes the model attempt before any provider request |
@@ -678,11 +680,12 @@ Allowed transitions:
 | `MODEL_COMPLETED` | `PUBLISHED` | Positive exact reconciliation finds one comment matching this reservation's persisted signed marker; no POST |
 | `MODEL_COMPLETED` | `DUPLICATE_ACCEPTED` | Positive exact reconciliation finds more than one comment matching this reservation's persisted signed marker; no POST |
 | `MODEL_COMPLETED` | `COMMENT_ATTEMPTED` | Snapshot revalidation; complete duplicate preflight; one-time CAS consumes the comment attempt before POST |
-| `MODEL_COMPLETED` | `ABORTED` | Explicit safe abort before comment-attempt boundary |
+| `MODEL_COMPLETED` | `CLOSED_NO_PUBLISH` | Explicit safe stop after model completion (for example, stale PR snapshot); no comment POST |
 | `COMMENT_ATTEMPTED` | `PUBLISHED` | Validated 201 response plus durable remote ID commit, or authoritative positive reconciliation |
+| `PUBLISHED` | `DUPLICATE_ACCEPTED` | Later complete exact reconciliation positively identifies more than one matching comment |
 | `COMMENT_ATTEMPTED` | `UNKNOWN` | Any ambiguous POST or persistence outcome |
 | `UNKNOWN` | `PUBLISHED` | Positive reconciliation identifies exactly one matching remote comment |
-| `UNKNOWN` | `DUPLICATE_ACCEPTED` | Positive reconciliation identifies more than one matching remote comment |
+| `UNKNOWN` | `DUPLICATE_ACCEPTED` | Comment-stage positive reconciliation identifies more than one matching remote comment; model-stage UNKNOWN is ineligible |
 
 No transition from `MODEL_ATTEMPTED`, `COMMENT_ATTEMPTED`, `UNKNOWN`, `PUBLISHED`, `ABORTED`, or `DUPLICATE_ACCEPTED` back to `CLAIMED` is permitted. A `MODEL_COMPLETED` row may receive a new continuation lease with a higher generation, but that lease authorizes only comment preparation/publication and cannot repeat inference. Lease expiry never authorizes a second model request or comment POST after the corresponding attempt boundary has been consumed.
 
@@ -696,15 +699,15 @@ The storage-independent adapter MUST expose equivalent typed operations. Names b
 - `beginModelAttempt(key, owner_id, owner_nonce, generation, expected_record_version, attempt_id, request_digest) -> MODEL_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`
 - `completeModelAttempt(key, generation, attempt_id, result_reference, result_digest) -> MODEL_COMPLETED | CONFLICT | UNKNOWN`
 - `beginCommentAttempt(key, generation, expected_record_version, attempt_id, marker_id, payload_digest, snapshot_validation_id) -> COMMENT_PERMIT | LOST_OWNERSHIP | ALREADY_CONSUMED | TERMINAL`
-- `completeCommentAttempt(key, attempt_id, remote_comment_id) -> PUBLISHED | CONFLICT | UNKNOWN`
-- `markUnknown(key, attempt_id, stage, reason_code) -> UNKNOWN | CONFLICT`
-- `expireAmbiguousAttempt(key, attempt_id, stage, authoritative_server_time) -> UNKNOWN | NOT_DUE | CONFLICT`
+- `completeCommentAttempt(key, generation, attempt_id, expected_record_version, remote_comment_id) -> PUBLISHED | CONFLICT | UNKNOWN`
+- `markUnknown(key, generation, attempt_id, expected_record_version, stage, reason_code) -> UNKNOWN | CONFLICT`
+- `expireAmbiguousAttempt(key, attempt_id, stage) -> UNKNOWN | NOT_DUE | CONFLICT`; the backend evaluates the persisted deadline against its own authoritative server time inside the atomic transition.
 - `readAuthoritative(key) -> RECORD | NOT_FOUND | UNAVAILABLE`
 - `reconcileComment(key, positive_evidence) -> PUBLISHED | DUPLICATE_ACCEPTED | UNKNOWN`
 
-Every mutating operation is one atomic conditional transaction against the current record. It MUST check the expected state, generation, owner nonce where applicable, attempt ID, and record version. Successful transitions and audit events commit atomically. A stale worker cannot mutate state by presenting an old generation or stale record version.
+Every mutating operation is one atomic conditional transaction against the current record. It MUST check the expected state, generation, owner nonce where applicable, attempt ID, and record version. Completion calls are fenced by the generation and attempt ID captured before dispatch; recovery transitions are fenced by the attempt ID and stage. `readAuthoritative` MUST bypass stale replicas and provide a linearizable read for the key. Successful transitions and audit events commit atomically. A stale worker cannot mutate state by presenting an old generation or stale record version.
 
-The marker ID is deterministic for the reservation key and policy digest; it is not a per-worker random value. The signed marker contains the canonical key, policy digest, marker ID, payload digest, and signing-key ID. Reconciliation validates the expected bot author ID, HMAC, and digest of the comment body after removing the marker envelope. This lets pre-model reconciliation recognize a previously published result without rerunning inference.
+The marker ID is deterministic for the reservation key and policy digest; it is not a per-worker random value. The signed marker contains the canonical key, policy digest, runtime digest, marker ID, payload digest, and signing-key ID. The signature is HMAC-SHA-256 over a versioned length-delimited UTF-8 canonical envelope. The payload digest is computed over the exact comment body bytes after removing the marker envelope, with UTF-8 and LF line endings; no locale-dependent normalization is permitted. Reconciliation validates the expected bot author ID, HMAC, and digest of the comment body after removing the marker envelope. This lets pre-model reconciliation recognize a previously published result without rerunning inference.
 
 A returned `MODEL_PERMIT` or `COMMENT_PERMIT` is an in-memory authorization to make exactly one transport invocation. It is not a reusable bearer token and MUST NOT be serialized, logged, queued, or retried. The production caller MUST consume it once and call the transport once. The durable state transition prevents another worker from obtaining a second permit. This contract does not claim to defend against malicious application code that deliberately sends the same request multiple times; transport-call-count conformance tests and code review cover that boundary.
 
@@ -757,7 +760,9 @@ The model provider may also lack a caller-supplied idempotency key or execution-
 - **I11 — No hidden transport retries:** redirects, SDK retries, proxy retries, and middleware retries are disabled or proven absent.
 - **I12 — No silent key reuse:** retention/cleanup cannot delete or recycle a key while replay is possible.
 - **I13 — Stage-scoped UNKNOWN:** model-stage UNKNOWN cannot be resolved through comment lookup; comment-stage UNKNOWN permits only positive read-only reconciliation.
-- **I14 — Authenticated marker:** publication reconciliation requires the expected bot author, valid HMAC, exact reservation tuple, policy digest, marker ID, and body digest.
+- **I14 — Authenticated marker:** publication reconciliation requires the expected bot author, valid HMAC, exact reservation tuple, policy/runtime digests, marker ID, and body digest.
+- **I15 — Generation-fenced completion:** asynchronous completion must match the consumed attempt ID and generation; stale owners cannot finalize another attempt.
+- **I16 — No false abort semantics:** ABORTED is pre-model only; post-model suppression is recorded as CLOSED_NO_PUBLISH.
 
 ### 10. Adversarial conformance matrix
 
@@ -822,6 +827,9 @@ The design was challenged against the reproduced interleaving, independent-host 
 - **AR-14 — Existing-comment reconciliation had no explicit MODEL_COMPLETED transition.** Added positive-evidence transitions to PUBLISHED or DUPLICATE_ACCEPTED before a new POST; incomplete or untrusted evidence remains non-publishable.
 - **AR-15 — The marker could not be checked before inference without a known output digest.** Made the marker ID deterministic per key/policy and the signed marker self-authenticating; its embedded payload digest is verified against the comment body, allowing trusted pre-model deduplication without rerunning inference.
 - **AR-16 — MODEL_COMPLETED continuation had no precise lease-reclaim condition.** Restricted continuation takeover to absent/expired server-time leases and required a new generation, leaving the model attempt permanently consumed.
+- **AR-17 — The original ABORTED definition conflicted with a post-model safe stop.** Restricted ABORTED to pre-model termination and introduced CLOSED_NO_PUBLISH for a completed model result that must not be published.
+- **AR-18 — Completion and recovery mutations were not fully fenced.** Added generation/record-version conditions to comment completion and made expiry use backend time inside the transaction.
+- **AR-19 — Later evidence of duplicate comments had no escalation path from PUBLISHED.** Added the explicit PUBLISHED -> DUPLICATE_ACCEPTED incident transition.
 
 **Residual design limitations (not defects that this contract can eliminate):**
 

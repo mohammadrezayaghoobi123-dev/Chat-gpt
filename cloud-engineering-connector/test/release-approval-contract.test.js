@@ -685,3 +685,62 @@ for (const workflow of workflows) {
       "preflight must not fall back to an arbitrary version when the 100% target is ambiguous");
   });
 }
+
+
+test("Staging release keeps Production metadata access behind the protected Staging environment and immutable approval path", () => {
+  const stagingSource = readFileSync(
+    new URL("../../.github/workflows/connector-staging-release.yml", import.meta.url),
+    "utf8",
+  );
+  const productionSource = readFileSync(
+    new URL("../../.github/workflows/connector-production-release.yml", import.meta.url),
+    "utf8",
+  );
+
+  const triggerStart = stagingSource.indexOf("\\non:");
+  const permissionsStart = stagingSource.indexOf("\\npermissions:", triggerStart);
+  assert.ok(triggerStart >= 0 && permissionsStart > triggerStart, "Staging workflow trigger block must be bounded");
+  const triggerBlock = stagingSource.slice(triggerStart + 1, permissionsStart).trimEnd();
+  assert.equal(
+    triggerBlock,
+    'on:\\n  push:\\n    branches:\\n      - "integration/staging-release-*"',
+    "Staging release must be push-only on the immutable release-branch namespace",
+  );
+
+  assert.match(
+    stagingSource,
+    /^    environment:\\n      name: staging$/m,
+    "the credential-bearing release job must bind to the protected Staging GitHub Environment",
+  );
+  assert.match(
+    productionSource,
+    /^    environment:\\n      name: production$/m,
+    "the Production release job must remain bound to the Production GitHub Environment",
+  );
+  assert.doesNotMatch(
+    productionSource,
+    /CLOUDFLARE_PRODUCTION_METADATA_TOKEN/,
+    "the Staging-only metadata credential must never enter the Production release workflow",
+  );
+
+  const orderedGates = [
+    "Validate immutable release branch",
+    "Verify independent approval of the exact Staging candidate",
+    "Run complete test and configuration gates",
+    "Preflight Staging bindings and capture rollback target",
+    "Deploy candidate to Staging",
+  ];
+  const positions = orderedGates.map((stepName) => stagingSource.indexOf("- name: " + stepName));
+  assert.ok(positions.every((position) => position >= 0), "every required release gate must exist");
+  assert.ok(
+    positions.every((position, index) => index === 0 || position > positions[index - 1]),
+    "immutable SHA validation, independent approval, and complete tests must precede credential preflight and deployment",
+  );
+
+  const metadataCredentialReferences = stagingSource.match(/CLOUDFLARE_PRODUCTION_METADATA_TOKEN:\\s*\\$\\{\\{\\s*secrets\\.CLOUDFLARE_PRODUCTION_METADATA_TOKEN\\s*\\}\\}/g) || [];
+  assert.equal(
+    metadataCredentialReferences.length,
+    2,
+    "the Production metadata credential must be injected only into Staging preflight and post-deploy verification",
+  );
+});

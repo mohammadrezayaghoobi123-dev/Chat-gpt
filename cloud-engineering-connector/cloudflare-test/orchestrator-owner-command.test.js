@@ -938,7 +938,7 @@ describe("Owner command atomic Ledger contract", () => {
     });
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec(
-        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        "SELECT worker_id, lease_generation, lease_until, updated_at FROM orchestrator_execution_leases WHERE task_id = ?",
         taskId,
       ).one()).toEqual({
         worker_id: null,

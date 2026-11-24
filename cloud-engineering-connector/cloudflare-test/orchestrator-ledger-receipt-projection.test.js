@@ -207,8 +207,8 @@ describe("OrchestratorLedger signed Admission Receipt projection", () => {
         data.admissionReceipt.claims.admissionId,
       ).one().count,
       outbox: instance.ctx.storage.sql.exec(
-        "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE idempotency_key = ?",
-        "task-admitted:" + data.admissionReceipt.claims.admissionId,
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE task_id = ? AND event_type = 'task.admitted'",
+        data.task.taskId,
       ).one().count,
     }));
     expect(counts).toEqual({ tasks: 1, receipts: 1, outbox: 1 });

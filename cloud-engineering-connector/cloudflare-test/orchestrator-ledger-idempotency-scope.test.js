@@ -152,7 +152,6 @@ describe("OrchestratorLedger tenant/project idempotency isolation", () => {
       ).one().idempotency_key).toBe(eventKey);
     });
   });
-});
 
   it("rejects a reused idempotency key with a different Task ID inside the same tenant/project scope", async () => {
     const ledger = ledgerFor("task-idempotency-different-task-same-scope");
@@ -225,4 +224,4 @@ describe("OrchestratorLedger tenant/project idempotency isolation", () => {
       expect(rows).toEqual([{ task_id: "tenant-alpha-task-original" }]);
     });
   });
-
+});

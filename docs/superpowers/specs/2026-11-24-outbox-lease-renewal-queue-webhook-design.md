@@ -132,14 +132,15 @@ The Queue DLQ archiver decrypts the authenticated capability only in Worker memo
 The destination is a fixed deployment-time configuration, never a URL from Queue content or MCP arguments.
 
 Required settings:
-- OUTBOX_WEBHOOK_URL: configured HTTPS URL with no username/password or fragment;
+- OUTBOX_WEBHOOK_URL: configured HTTPS URL with no username/password, query string, or fragment;
+- OUTBOX_WEBHOOK_ALLOWED_HOSTS: comma-separated exact DNS host allowlist for this Worker environment; no wildcard, IP literal, localhost, or suffix matching;
 - OUTBOX_WEBHOOK_HMAC_KEY: base64url-encoded random key of at least 256 bits;
 - LEDGER_WORKER_ASSERTION_KEYS: existing Worker-assertion signing key set required by the Ledger boundary;
 - LEDGER_WORKER_ASSERTION_ACTIVE_KID: non-secret active key ID matching the assertion key set;
 - OUTBOX_QUEUE_ENCRYPTION_KEYS: JSON key set containing one active 256-bit AES key and, during rotation, at most one previous decrypt-only key;
 - OUTBOX_QUEUE_ENCRYPTION_ACTIVE_KID: non-secret key ID selecting the current encryption key.
 
-Fail closed when any setting is missing or invalid. Do not create or modify secrets in this PR.
+Fail closed when any setting is missing or invalid. Normalize hostnames to lowercase ASCII, reject trailing-dot ambiguity and IP literals, and require the parsed URL hostname to equal exactly one allowlisted hostname. The existing `global_fetch_strictly_public` compatibility flag remains enabled as a separate platform egress guard; it is not a substitute for the exact hostname allowlist. Never accept a hostname from Queue content. Do not create or modify secrets or live vars in this PR.
 
 Outbound body is canonical JSON containing the versioned event envelope and source metadata. Required headers:
 - Idempotency-Key: <eventId>
@@ -148,7 +149,7 @@ Outbound body is canonical JSON containing the versioned event envelope and sour
 
 The HMAC input is exactly the bytes of `v1\n{timestamp}\n{rawBody}` (one LF byte between each field, UTF-8 encoded, without a trailing newline). The destination must verify the HMAC and a bounded freshness window. For the same Idempotency-Key and same body, the destination must return 2xx for both first acceptance and duplicate acceptance. Reuse of the same key with a different body must return a permanent conflict (409).
 
-Use a bounded request timeout (proposed 20 seconds), redirect: manual, no caller-controlled URL, and no token forwarding. Never log request bodies, capability tokens, HMAC keys, or response bodies.
+Use a bounded request timeout (proposed 20 seconds), `redirect: "manual"`, exact hostname allowlisting before fetch, no caller-controlled URL, and no token forwarding. Do not follow or re-resolve an HTTP redirect target. Never log request bodies, capability tokens, HMAC keys, or response bodies.
 
 Response policy:
 - 2xx: submit a token-fenced recordOutboxReceipt; the event is complete only after that Ledger transaction succeeds.
@@ -220,6 +221,7 @@ The currently inspected Quarantine Queues have a one-day retention period and no
 - timeout/network error schedules Ledger retry;
 - HMAC byte sequence, timestamp, and signature are asserted against independently derived fixtures;
 - webhook request contains the stable event ID idempotency key and never contains the lease token;
+- webhook host is an exact match in the environment allowlist, while the existing global_fetch_strictly_public flag remains enabled;
 - Queue capability encryption binds key ID, IV, ciphertext, Ledger Object ID, event ID, and lease generation; tampering with any AAD-bound field fails authentication;
 - repeated accepted event uses the same idempotency key;
 - no endpoint is read from message content.
@@ -244,6 +246,8 @@ At least the following mutants must be killed by tests:
 - omit alarm scheduling in enqueue/claim/renew/fail/receipt transitions;
 - accept webhook 3xx or 5xx as success;
 - follow redirect;
+- accept a webhook hostname that is not an exact member of OUTBOX_WEBHOOK_ALLOWED_HOSTS;
+- allow an IP literal, localhost, wildcard, or suffix match in the webhook allowlist;
 - omit HMAC verification/signature or stable Idempotency-Key;
 - persist plaintext token in DLQ archive or Queue body;
 - allow stale DLQ capability to terminalize a newer generation.

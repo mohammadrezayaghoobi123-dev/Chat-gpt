@@ -39,7 +39,7 @@ for (const workflow of workflows) {
     assert.match(source, /node scripts\/verify-release-approval\.mjs/, "approval guard must run before deployment");
     assert.equal((source.match(/RELEASE_GITHUB_TOKEN:/g) || []).length, 1, "token must be injected only once");
     assert.equal((source.match(/RELEASE_REVIEWER_IDS:/g) || []).length, 1, "trusted reviewer policy must be injected only once");
-    assert.match(source, /RELEASE_REVIEWER_IDS:\\s*\\$\\{\\{\\s*vars\\.RELEASE_REVIEWER_IDS\\s*\\}\\}/, "trusted reviewer IDs must come from the explicit GitHub Actions repository variable");
+    assert.match(source, /RELEASE_REVIEWER_IDS:\s*\$\{\{\s*vars\.RELEASE_REVIEWER_IDS\s*\}\}/, "trusted reviewer IDs must come from the explicit GitHub Actions repository variable");
     const guardPosition = source.indexOf("node scripts/verify-release-approval.mjs");
     const tokenPosition = source.indexOf("RELEASE_GITHUB_TOKEN:");
     const reviewerPolicyPosition = source.indexOf("RELEASE_REVIEWER_IDS:");

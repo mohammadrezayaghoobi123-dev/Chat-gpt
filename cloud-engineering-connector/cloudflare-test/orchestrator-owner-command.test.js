@@ -964,7 +964,12 @@ describe("Owner command atomic Ledger contract", () => {
     expect(marker.expires_at - marker.first_failed_at).toBe(72 * 60 * 60 * 1000);
 
     ledgerClock.mockReturnValue(marker.expires_at);
-    await expect(authorize(identity)).resolves.toMatchObject({
+    const expiryAssertion = await ownerAssertionWithJti(
+      failed.assertionContext,
+      marker.expires_at,
+      "owner-jti-redelivery-expiry-0001",
+    );
+    await expect(authorize({ ...identity, assertion: expiryAssertion })).resolves.toMatchObject({
       registered: true,
       denied: true,
       reason: "OWNER_REDELIVERY_EXPIRED",

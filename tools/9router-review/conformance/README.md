@@ -46,6 +46,17 @@ Run with Node.js 22 from tools/9router-review:
 | T29 | I14 | Marker ID mismatch is a hard reservation conflict |
 | T30 | A18 | Zero evidence does not resolve comment-stage UNKNOWN |
 | T31 | A15, A16 | Comment deadline expiry becomes UNKNOWN and never authorizes retry |
+| T32 | A18, A19 | Duplicate pagination evidence for one remote comment is deduplicated |
+| T33 | A41 | RECOVERY_LOCKED blocks reconciliation state mutation |
+| T34 | A41 | Recovery unlock requires a separately supplied trusted anchor |
+| T35 | A41 | Recovery unlock rejects a watermark mismatch |
+| T36 | A41, I26 | Recovery anchor covers the complete cross-key ledger inventory |
+| T37 | A41, I26 | Recovery unlock rejects tampered event payloads |
+| T38 | A41, I26 | Recovery unlock rejects non-contiguous event sequences |
+| T39 | A41, I26 | Recovery unlock rejects duplicate event identifiers |
+| T40 | A41, I26 | Recovery unlock verifies each immutable event digest |
+| T41 | A41 | A stale or foreign anchor cannot authorize recovery |
+| T42 | A41 | Failed recovery validation preserves the global lock |
 | 
 
-This is not the A01–A42 backend qualification suite. The coverage map deliberately marks partial coverage. A02's controlled read-before-insert schedule, A03's forced tuple/hash-collision case, independent-process concurrency, backend failover, storage restore, R2 conditional writes, quota exhaustion, and the remaining matrix cases are still NOT_EXECUTED.
+This is not the A01–A42 backend qualification suite. T32–T42 extend the in-memory reference oracle's reconciliation and recovery-validation coverage; they do not qualify a real provider adapter. The coverage map deliberately marks partial coverage. A02's controlled read-before-insert schedule, A03's forced tuple/hash-collision case, independent-process concurrency, backend failover, storage restore, R2 conditional writes, quota exhaustion, and the remaining matrix cases are still NOT_EXECUTED.

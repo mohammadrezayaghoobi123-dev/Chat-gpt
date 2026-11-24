@@ -174,18 +174,23 @@ def diagnose_report(report: list[dict], config: dict) -> list[str]:
                 "match": "Match",
             }.get(entry.get("regexTarget"), "Secret")
             target = finding.get(target_field) or ""
-            regex_match = any(
+            redacted = target == "REDACTED" or "REDACTED" in (finding.get("Match") or "")
+            regex_match = None if redacted else any(
                 re.search(pattern, target) is not None
                 for pattern in entry.get("regexes", [])
             )
-            if entry.get("condition") == "AND":
-                allowed = rule_match and commit_match and path_match and regex_match
+            if redacted:
+                allowed = None
+            elif entry.get("condition") == "AND":
+                allowed = rule_match and commit_match and path_match and bool(regex_match)
             else:
                 allowed = False
+            regex_label = "redacted" if redacted else str(regex_match)
+            allowed_label = "unverifiable" if allowed is None else str(allowed)
             diagnostics.append(
                 f"DIAGNOSTIC: {label}: rule={rule_match} commit={commit_match} "
-                f"path={path_match} regex={regex_match} allowed={allowed} "
-                f"secret_length={len(finding.get('Secret') or '')} " 
+                f"path={path_match} regex={regex_label} allowed={allowed_label} "
+                f"secret_length={len(finding.get('Secret') or '')} "
                 f"match_length={len(finding.get('Match') or '')} line_length={len(finding.get('Line') or '')}"
             )
     return diagnostics

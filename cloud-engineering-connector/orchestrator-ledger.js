@@ -865,10 +865,6 @@ export class OrchestratorLedger extends DurableObject {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
       const current = taskFromRow(row);
-      const assignedAgentId = current.executorId ?? current.assignedAgentId;
-      if (assignedAgentId !== workerId) {
-        return { updated: false, reason: "ASSIGNEE_MISMATCH", task: current };
-      }
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }

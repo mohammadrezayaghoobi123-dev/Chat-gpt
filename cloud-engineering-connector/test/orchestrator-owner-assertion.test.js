@@ -30,6 +30,35 @@ test("creates and verifies a short-lived Owner assertion bound to the full comma
   assert.ok(verified.jti.length >= 22);
 });
 
+test("samples the supplied Ledger clock after verifying the Owner MAC", async () => {
+  const token = await createOwnerAssertion(keySet, "owner-v1", context, now);
+  const samples = [];
+  const verified = await verifyOwnerAssertion(keySet, token, {
+    ...context,
+    nowMs: () => {
+      samples.push(now + 1000);
+      return now + 1000;
+    },
+  });
+  assert.deepEqual(samples, [now + 1000]);
+  assert.equal(verified.verifiedAtMs, now + 1000);
+});
+
+test("does not sample the Ledger clock when the Owner MAC is invalid", async () => {
+  const token = await createOwnerAssertion(keySet, "owner-v1", context, now);
+  const parts = token.split(".");
+  parts[3] = (parts[3].endsWith("A") ? parts[3].slice(0, -1) + "B" : parts[3].slice(0, -1) + "A");
+  let samples = 0;
+  await assert.rejects(verifyOwnerAssertion(keySet, parts.join("."), {
+    ...context,
+    nowMs: () => {
+      samples += 1;
+      return now + 1000;
+    },
+  }));
+  assert.equal(samples, 0);
+});
+
 test("rejects an Owner assertion when any command context field is changed", async () => {
   const token = await createOwnerAssertion(keySet, "owner-v1", context, now);
   await assert.rejects(

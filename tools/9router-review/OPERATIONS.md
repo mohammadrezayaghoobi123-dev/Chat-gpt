@@ -1014,3 +1014,16 @@ This section records the next adversarial tranche. All implementation changes be
 #### Residual risk and next qualification boundary
 
 The reference oracle is still a single-process executable specification. Its Map state and JavaScript scheduling cannot prove arbitration across independent isolates, hosts, or process crashes. The next backend-neutral tranche must explicitly test the adapter boundary with independently scheduled clients and injected lost acknowledgements; the candidate-specific tranche must then test real Durable Objects transactions and R2 conditional create-once behavior in an isolated, non-production environment. No such provider test has run, and no provider has been selected.
+
+
+### 15. Stage-bound effect-ledger outcomes — 2026-11-25
+
+**AR-39 — An outcome receipt could be appended under the wrong effect stage.** The reference ledger accepted `COMMENT_ACCEPTED` for a `MODEL` intent and `MODEL_RESULT_STORED` for a `COMMENT` intent. Although downstream reservation transitions separately checked their expected outcome type, accepting the mismatched append polluted the immutable audit stream and weakened the ledger's stage contract.
+
+**Correction:** `appendOutcome` now derives the only permitted outcome type from the immutable intent stage: `MODEL` → `MODEL_RESULT_STORED`; `COMMENT` → `COMMENT_ACCEPTED`. A mismatch returns `INVALID_OUTCOME_STAGE` without appending an event or advancing the global sequence.
+
+**I33 — Stage-bound outcome integrity:** an outcome event must have the same reservation key and attempt identity as its intent, and its outcome type must be the one permitted for that intent stage. Invalid cross-stage outcomes are rejected before append and cannot produce a receipt.
+
+**TDD evidence:** T46 and T47 were observed RED on revision `ce456a927da09be3a50279140e30604b209e8692`: each test expected `INVALID_OUTCOME_STAGE` but received `ACK`. The minimal correction was applied at `27dcb0828e051adc09f81a914a9d9d641933c658`. The hosted GREEN result must be recorded only against the exact post-fix revision and complete workflow output.
+
+This correction is confined to the in-memory reference oracle. It does not prove that a future durable ledger implementation enforces the same invariant; every candidate adapter must run T46–T47 unchanged.

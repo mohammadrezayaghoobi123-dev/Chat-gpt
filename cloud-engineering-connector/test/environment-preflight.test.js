@@ -262,3 +262,101 @@ test("classifies branch-policy endpoint 404 as UNKNOWN after Environment metadat
     1,
   );
 });
+
+test("full posture census reports all independent controls and omits reviewer identifiers", async () => {
+  const { auditEnvironmentProtection, renderEnvironmentAuditSummary } = await loadAudit();
+  const { fetchImpl, calls } = makeFetch({
+    staging: {
+      environmentStatus: 200,
+      environmentData: environment("staging", {
+        can_admins_bypass: true,
+        protection_rules: [
+          {
+            id: 11,
+            type: "required_reviewers",
+            prevent_self_review: false,
+            reviewers: [
+              { type: "User", reviewer: { id: 335530603 } },
+              { type: "User", reviewer: { id: 246801357 } },
+            ],
+          },
+          { id: 12, type: "branch_policy" },
+        ],
+      }),
+      branchStatus: 200,
+      branchBody: { total_count: 1, branch_policies: [{ id: 21, name: "integration/*" }] },
+    },
+  });
+
+  const report = await auditEnvironmentProtection({ repository, token, fetchImpl });
+  const staging = report.environments[0];
+  const summary = renderEnvironmentAuditSummary(report);
+  const serialized = JSON.stringify(report);
+
+  assert.equal(staging.status, "BLOCKED");
+  assert.equal(staging.administratorBypassAllowed, true);
+  assert.equal(staging.preventSelfReview, false);
+  assert.equal(staging.requiredReviewerCount, 2);
+  assert.equal(staging.branchPolicyState, "MISMATCH");
+  assert.deepEqual(
+    staging.findings.map(finding => finding.code).sort(),
+    ["ADMIN_BYPASS_ENABLED", "BRANCH_POLICY_MISMATCH", "SELF_REVIEW_ALLOWED"],
+  );
+  assert.equal(calls.filter(call => call.path.endsWith("/environments/staging/deployment-branch-policies")).length, 1);
+  assert.doesNotMatch(serialized, /335530603|246801357|mock-github-actions-read-token/);
+  assert.doesNotMatch(summary, /335530603|246801357|mock-github-actions-read-token|Bearer\\s+\\S+/i);
+  assert.match(summary, /administrator bypass/i);
+  assert.match(summary, /self.review/i);
+  assert.match(summary, /branch.policy/i);
+});
+
+test("full census retains UNKNOWN branch-policy evidence without erasing BLOCKED findings", async () => {
+  const { auditEnvironmentProtection } = await loadAudit();
+  const { fetchImpl } = makeFetch({
+    staging: {
+      environmentStatus: 200,
+      environmentData: environment("staging", { can_admins_bypass: true }),
+      branchStatus: 404,
+    },
+  });
+
+  const report = await auditEnvironmentProtection({ repository, token, fetchImpl });
+  const staging = report.environments[0];
+
+  assert.equal(staging.status, "BLOCKED");
+  assert.equal(staging.branchPolicyState, "UNKNOWN");
+  assert.ok(staging.findings.some(finding => finding.code === "ADMIN_BYPASS_ENABLED"));
+  assert.ok(staging.findings.some(finding => finding.code === "BRANCH_POLICY_ENDPOINT_NOT_FOUND"));
+});
+
+test("reports unrestricted deployment branches and zero required reviewers as explicit live posture", async () => {
+  const { auditEnvironmentProtection, renderEnvironmentAuditSummary } = await loadAudit();
+  const { fetchImpl, calls } = makeFetch({
+    staging: {
+      environmentStatus: 200,
+      environmentData: environment("staging", {
+        can_admins_bypass: true,
+        protection_rules: [],
+        deployment_branch_policy: null,
+      }),
+      branchStatus: 404,
+    },
+  });
+
+  const report = await auditEnvironmentProtection({ repository, token, fetchImpl });
+  const staging = report.environments[0];
+  const summary = renderEnvironmentAuditSummary(report);
+
+  assert.equal(staging.status, "BLOCKED");
+  assert.equal(staging.requiredReviewerRuleCount, 0);
+  assert.equal(staging.requiredReviewerCount, 0);
+  assert.equal(staging.deploymentBranchPolicy, null);
+  assert.equal(staging.branchPolicyMode, "ALL_BRANCHES");
+  assert.equal(staging.branchPolicyState, "UNRESTRICTED");
+  assert.ok(staging.findings.some(finding => finding.code === "ALL_BRANCHES_ALLOWED"));
+  assert.equal(calls.filter(call =>
+    call.path.endsWith("/environments/staging/deployment-branch-policies")
+  ).length, 0);
+  assert.match(summary, /ALL_BRANCHES|unrestricted/i);
+  assert.match(summary, /0\s*\|/);
+});

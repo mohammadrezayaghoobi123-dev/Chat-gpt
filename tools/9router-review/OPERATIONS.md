@@ -124,9 +124,9 @@ This section records read-only observations made after the bootstrap design was 
 | Branch protected flag / status-check enforcement | `PASS / OFF` | Branch API: protected=true; required-status-check enforcement off |
 | Effective Actions event and token policy | `UNKNOWN` | Owner inspection of Settings → Actions → General |
 | Secret names and scopes | `UNKNOWN` | Owner inspection of repository/org/environment secret metadata; never disclose values |
-| Latest completed PR-diff scan (head 22243a9) | `PASS` | Run 45461043268: 16 commits / 248.45 KB, 0 findings |
-| Latest completed all-fetched-refs scan (head 22243a9) | `FAIL` | Run 45461043268: 4,958 commits / 15.24 MB, 13 findings |
-| Current documentation head (f3a4250) Gitleaks | `NOT_EVIDENCED` | No PR-triggered run returned; push-triggered run not exposed by this query |
+| Latest completed exact-head PR-diff scan (head f4c43a7) | `PASS` | Run 45461431988: 18 commits / 253.16 KB, 0 findings |
+| Latest completed exact-head all-fetched-refs scan (head f4c43a7) | `FAIL` | Run 45461431988: 4,960 commits / 15.25 MB, 13 findings |
+| Documentation snapshot head f3a4250 Gitleaks | `NOT_EVIDENCED` | Superseded by exact-head run 45461431988 on f4c43a7 |
 | Hosted manual canary | `NOT_RUN` | Separate default-branch registration and explicitly approved canary |
 | Reviewer/provider execution | `BLOCKED` | Separate approval after durable reservation, budgets, and provider semantics are proven |
 
@@ -166,7 +166,7 @@ This is the latest read-only state after the documentation-only evidence correct
 **Current disposition:** Draft / hold. Continue only with read-only evidence and isolated validation. Do not merge, activate, register, or deploy.
 
 
-## Latest branch-head status — 2026-11-24
+## Previous branch-head status snapshot — 2026-11-24 (superseded by the final snapshot below)
 
 - Current PR #463 head: `f3a425009dc42a08425ee0392f0101f38b53bcd2`; base SHA remains `919b19ca3d3887352cdef06b03c668ead04fbce7`; Draft / Open / Unmerged.
 - Compare from code/test commit `fcc83c57f647aa36ff30f8552e5524eca1d2b285` to current head reports ten commits and exactly one changed path, `tools/9router-review/OPERATIONS.md`. The executable code, test files, workflow, package manifest, and lockfile remain unchanged from the isolated test tree with 136/136 passing. That test result is inherited by identical executable inputs; the command was not rerun at `f3a4250`.
@@ -176,3 +176,18 @@ This is the latest read-only state after the documentation-only evidence correct
 - The only new repository changes in this continuation are documentation commits to `OPERATIONS.md` on the PR branch. No source, workflow, test, dependency, main-branch, secret, repository-policy, Cloudflare, deployment, or local-host change was made.
 
 **Disposition:** preserve Draft and all unresolved gates. Do not merge, register the workflow on `main`, activate reviewer execution, or deploy.
+
+
+## Final exact-head evidence snapshot — 2026-11-24
+
+This snapshot records the latest completed code/security evidence before this final documentation-only reconciliation.
+
+- Audited PR head: `f4c43a738df3ce7008e60d55efbf9ca8548b70dd`; base: `main` at `919b19ca3d3887352cdef06b03c668ead04fbce7`; 18 commits ahead, 0 behind; PR #463 Open / Draft / Unmerged.
+- Code/test provenance: isolated `npm ci --ignore-scripts --no-audit --no-fund` and `npm test` recorded **136/136 passing, 0 failing, 0 skipped** on `fcc83c57f647aa36ff30f8552e5524eca1d2b285`. Compare from that code/test commit to `f4c43a7` shows 11 commits and exactly one changed path, `tools/9router-review/OPERATIONS.md`; no executable source, test, workflow, package manifest, or lockfile changed. Therefore the same code/test tree is covered, but the command was not rerun literally at `f4c43a7`, and no hosted npm-test run is evidenced.
+- Exact-head hosted Gitleaks run `45461431988` completed with failure: PR-diff scan PASS (18 commits / 253.16 KB, zero findings); all-fetched-refs scan FAIL (4,960 commits / 15.25 MB, 13 `generic-api-key` findings; exit 2). The 13 detections remain `PROVISIONALLY_SUPPORTED` as non-credential source/test/public-identifier matches, not proven false positives. No allowlist or suppression was added; credential-store reuse and revocation remain `UNKNOWN`.
+- Combined Status returned no status checks. The Gitleaks run is the only workflow run returned for this head. This does not establish any additional CI or hosted npm-test execution.
+- The 307/308 GitHub comment POST regression exists on the reviewed code tree and asserts one physical POST, no redirect-target request, zero accepted comments, and an UNKNOWN publication failure. The review thread at `review.js:341` remains unresolved. The recorded reviews are `COMMENTED` by the PR author; no independent approving review is evidenced.
+- The bootstrap workflow is not registered on `main`; manual canary is `NOT_RUN`; reviewer execution remains statically disabled (`if: false`). Durable cross-run reservation, at-most-once provider dispatch, effective Actions policy, and secret scopes remain unproven or `UNKNOWN`.
+- This final record is itself a documentation-only update to `OPERATIONS.md`. Gitleaks run `45461431988` covers the pre-update head `f4c43a7`, not the resulting documentation commit. Do not represent it as a scan of the commit that adds this snapshot.
+
+**Disposition:** keep PR #463 Draft. Preserve the unresolved review thread, full-history Gitleaks failure, independent-review requirement, and manual-canary gate. No merge, default-branch workflow registration, reviewer activation, model/provider dispatch, secret read, repository-policy change, Cloudflare deployment, or local-host change is authorized by this record.

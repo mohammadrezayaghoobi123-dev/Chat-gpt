@@ -1688,6 +1688,12 @@ export class OrchestratorLedger extends DurableObject {
             };
         const resultJson = serializeBounded(successResult, "Owner command result");
         const transactionResult = this.ctx.storage.transactionSync(() => {
+          // Retain consumed Owner JTIs through assertion expiry, clock skew, and
+          // an additional 10-minute margin. Bound each transaction to 500 rows.
+          sql.exec(
+            "DELETE FROM orchestrator_owner_consumed_assertions WHERE jti IN (SELECT jti FROM orchestrator_owner_consumed_assertions WHERE expires_at < ? ORDER BY expires_at, jti LIMIT 500)",
+            Math.floor(now / 1000) - 600,
+          );
           const priorReceipt = sql.exec(
             "SELECT * FROM orchestrator_owner_command_receipts WHERE delivery_id = ? OR comment_id = ?",
             context.deliveryId, context.commentId,

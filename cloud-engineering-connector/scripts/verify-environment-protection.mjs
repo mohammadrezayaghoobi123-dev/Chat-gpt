@@ -205,7 +205,7 @@ function inspectRequiredReviewers(environment, addFinding) {
   if (requiredReviewerRuleCount !== 1) {
     return {
       requiredReviewerRuleCount,
-      requiredReviewerCount: null,
+      requiredReviewerCount: requiredReviewerRuleCount === 0 ? 0 : null,
       preventSelfReview: null,
       authorizedReviewerUserIds: Object.freeze([]),
     };
@@ -331,7 +331,7 @@ function inspectDeploymentBranchPolicy(environment, addFinding) {
       deploymentBranchPolicy: null,
       branchPolicyMode: "ALL_BRANCHES",
       shouldFetchBranchPolicies: false,
-      branchPolicyState: "NOT_APPLICABLE",
+      branchPolicyState: "UNRESTRICTED",
     };
   }
 

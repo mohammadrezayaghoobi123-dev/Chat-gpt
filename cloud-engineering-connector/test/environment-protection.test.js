@@ -105,6 +105,7 @@ test("accepts the exact protected Staging Environment and reads metadata only", 
   assert.equal(result.environment, "staging");
   assert.equal(result.branchPattern, "integration/staging-release-*");
   assert.equal(result.requiredReviewerCount, 1);
+  assert.deepEqual(result.authorizedReviewerUserIds, [335530603]);
   assert.equal(calls.length, 2);
   assert.ok(calls.every(call => call.method === "GET"));
   assert.ok(calls.every(call => call.authorization === "Bearer " + token));
@@ -251,4 +252,22 @@ test("reads every branch-policy page before accepting an exact allowlist", async
   assert.ok(caught instanceof Error, "unexpected policies on later pages must block release");
   assert.match(caught.message, /branch policy|exactly one|additional/i);
   assert.equal(calls.filter(call => call.path.endsWith("/deployment-branch-policies")).length, 2);
+});
+
+
+test("rejects Team reviewers when their membership cannot be bound to the PR review identity", async () => {
+  const { fetchImpl } = makeFetch({
+    environmentData: environment("staging", {
+      protection_rules: [
+        {
+          id: 11,
+          type: "required_reviewers",
+          prevent_self_review: true,
+          reviewers: [{ type: "Team", reviewer: { id: 24680 } }],
+        },
+        { id: 12, type: "branch_policy" },
+      ],
+    }),
+  });
+  await expectRejected({ fetchImpl }, /User reviewer identity/i);
 });

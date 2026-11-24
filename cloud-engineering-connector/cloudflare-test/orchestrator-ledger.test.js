@@ -134,6 +134,24 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ objective: "bounded task", version: 1 });
   });
 
+  it("rejects idempotency-key reuse with a different task ID without creating a second task", async () => {
+    const ledger = ledgerFor("ledger-task-idempotency-task-conflict");
+    await createTask(ledger, {
+      task: task("task-0001"), idempotencyKey: "task-create-task-conflict-0001",
+      inputHash: "f".repeat(64), now,
+    });
+    await expect(createTask(ledger, {
+      task: task("task-0002"), idempotencyKey: "task-create-task-conflict-0001",
+      inputHash: "f".repeat(64), now: now + 1,
+    })).resolves.toMatchObject({ created: false, conflict: true, reason: "IDEMPOTENCY_CONFLICT" });
+    await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({
+      taskId: "task-0001", objective: "bounded task", version: 1,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count).toBe(1);
+    });
+  });
+
   it("allows at most one concurrent task lease claimant", async () => {
     const ledger = ledgerFor("ledger-concurrent-claim");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0003", inputHash: "e".repeat(64), now });

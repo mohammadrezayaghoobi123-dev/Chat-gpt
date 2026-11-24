@@ -81,11 +81,11 @@ async function claimEvent(instance, event, now, leaseMs = 5_000) {
   });
 }
 
-async function recordReceipt(instance, event, leaseGeneration, now, workerAssertion) {
+async function recordReceipt(instance, event, leaseGeneration, now, workerAssertion, envelopeSha256 = "c".repeat(64)) {
   return instance.recordOutboxReceipt({
     ...event,
     schemaVersion: 1,
-    envelopeSha256: "c".repeat(64),
+    envelopeSha256,
     consumerId: CONSUMER_ID,
     workerAssertion: workerAssertion ?? await assertionFor(CONSUMER_ID, "consumer", "recordOutboxReceipt", now),
     leaseGeneration,
@@ -221,8 +221,25 @@ describe("OrchestratorLedger Outbox receipt-gated completion and ambiguous deliv
         await assertionFor(CONSUMER_ID, "consumer", "recordOutboxReceipt", receiptNow + 2),
       );
       expect(replay).toMatchObject({ recorded: false, replay: true, eventId });
+      const conflict = await recordReceipt(
+        instance,
+        event,
+        1,
+        receiptNow + 3,
+        await assertionFor(CONSUMER_ID, "consumer", "recordOutboxReceipt", receiptNow + 3),
+        "d".repeat(64),
+      );
+      expect(conflict).toMatchObject({
+        recorded: false,
+        conflict: true,
+        reason: "OUTBOX_EVENT_ID_CONFLICT",
+      });
       expect(storedOutbox(instance, eventId)).toMatchObject({ status: "COMPLETED" });
       expect(receiptCount(instance, eventId)).toBe(1);
+      expect(instance.ctx.storage.sql.exec(
+        "SELECT lease_generation FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        eventId,
+      ).one().lease_generation).toBe(1);
     });
   });
 
@@ -250,7 +267,21 @@ describe("OrchestratorLedger Outbox receipt-gated completion and ambiguous deliv
       const reclaimedAt = firstClaimAt + firstLeaseMs + 1;
       await runInDurableObject(ledger, async instance => {
         instance.env.LEDGER_WORKER_ASSERTION_KEYS = KEY_SET;
-        const reclaimed = await claimEvent(instance, event, reclaimedAt, 5_000);
+        const expiredReceipt = await recordReceipt(
+          instance,
+          event,
+          1,
+          reclaimedAt,
+          await assertionFor(CONSUMER_ID, "consumer", "recordOutboxReceipt", reclaimedAt),
+        );
+        expect(expiredReceipt).toMatchObject({
+          recorded: false,
+          blocked: true,
+          reason: "OUTBOX_LEASE_FENCE_MISMATCH",
+        });
+
+        const claimedAt = reclaimedAt + 1;
+        const reclaimed = await claimEvent(instance, event, claimedAt, 5_000);
         expect(reclaimed).toMatchObject({
           claimed: true,
           leaseGeneration: 2,
@@ -261,8 +292,8 @@ describe("OrchestratorLedger Outbox receipt-gated completion and ambiguous deliv
           instance,
           event,
           1,
-          reclaimedAt + 1,
-          await assertionFor(CONSUMER_ID, "consumer", "recordOutboxReceipt", reclaimedAt + 1),
+          claimedAt + 1,
+          await assertionFor(CONSUMER_ID, "consumer", "recordOutboxReceipt", claimedAt + 1),
         );
         expect(staleReceipt).toMatchObject({
           recorded: false,
@@ -278,7 +309,7 @@ describe("OrchestratorLedger Outbox receipt-gated completion and ambiguous deliv
           effects: idempotent ? 1 : 2,
         });
 
-        const settled = await recordReceipt(instance, event, 2, reclaimedAt + 2);
+        const settled = await recordReceipt(instance, event, 2, claimedAt + 2);
         expect(settled).toMatchObject({
           recorded: true,
           completed: true,

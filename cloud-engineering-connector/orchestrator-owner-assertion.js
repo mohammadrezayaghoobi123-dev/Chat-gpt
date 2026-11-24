@@ -62,6 +62,18 @@ function validateNow(nowMs) {
   if (!Number.isSafeInteger(nowMs) || nowMs < 1) throw reject();
 }
 
+function validateClaimTime(claims, nowMs) {
+  validateNow(nowMs);
+  const nowSeconds = Math.floor(nowMs / 1000);
+  if (claims.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
+      claims.exp < nowSeconds - CLOCK_SKEW_SECONDS) throw reject();
+}
+
+export function assertOwnerAssertionFresh(assertion, nowMs = Date.now()) {
+  validateClaimTime(assertion, nowMs);
+  return nowMs;
+}
+
 async function verifyMac(keyBytes, input, signature) {
   const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
   return crypto.subtle.verify("HMAC", key, signature, new TextEncoder().encode(input));
@@ -102,7 +114,7 @@ export async function createOwnerAssertion(keySet, activeKid, context, nowMs) {
 export async function verifyOwnerAssertion(keySet, token, expected) {
   try {
     validateContext(expected);
-    validateNow(expected.nowMs);
+    if (typeof expected.nowMs !== "function") validateNow(expected.nowMs);
     if (typeof token !== "string" || token.length > 4096) throw reject();
     const parts = token.split(".");
     if (parts.length !== 4 || parts[0] !== "v1" || !KID.test(parts[1])) throw reject();
@@ -119,15 +131,14 @@ export async function verifyOwnerAssertion(keySet, token, expected) {
         claims.taskId !== expected.taskId || claims.operation !== expected.operation ||
         claims.deliveryId !== expected.deliveryId || claims.commentId !== expected.commentId ||
         claims.commandHash !== expected.commandHash || !ID.test(claims.jti) || claims.jti.length < 22 ||
-        !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp)) throw reject();
-    const nowSeconds = Math.floor(expected.nowMs / 1000);
-    if (claims.exp <= claims.iat || claims.exp - claims.iat > MAX_LIFETIME_SECONDS ||
-        claims.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
-        claims.exp < nowSeconds - CLOCK_SKEW_SECONDS) throw reject();
+        !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp) ||
+        claims.exp <= claims.iat || claims.exp - claims.iat > MAX_LIFETIME_SECONDS) throw reject();
     const supplied = decodeBase64Url(parts[3]);
     if (supplied.byteLength !== 32 ||
         !(await verifyMac(keyBytes, parts.slice(0, 3).join("."), supplied))) throw reject();
-    return Object.freeze({ ...claims, kid: parts[1] });
+    const verifiedAtMs = typeof expected.nowMs === "function" ? expected.nowMs() : expected.nowMs;
+    validateClaimTime(claims, verifiedAtMs);
+    return Object.freeze({ ...claims, kid: parts[1], verifiedAtMs });
   } catch {
     throw reject();
   }

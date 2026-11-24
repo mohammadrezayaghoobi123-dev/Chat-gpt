@@ -4,7 +4,7 @@ import { assertAgentRoundLimit } from "./orchestrator-protocol.js";
 import { canonicalJson, sha256Canonical, validateMessageEnvelope } from "./orchestrator-protocol.js";
 import { verifyWorkerAssertion } from "./orchestrator-worker-identity.js";
 import { verifyExecutorWorkerAssertion } from "./orchestrator-executor-assertion.js";
-import { verifyOwnerAssertion } from "./orchestrator-owner-assertion.js";
+import { assertOwnerAssertionFresh, verifyOwnerAssertion } from "./orchestrator-owner-assertion.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
@@ -1526,7 +1526,7 @@ export class OrchestratorLedger extends DurableObject {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       return { applied: false, reason: "INVALID_OWNER_COMMAND" };
     }
-    const { assertion, assertionContext, command, bodySha256, provenance, now } = input;
+    let { assertion, assertionContext, command, bodySha256, provenance, now } = input;
     try {
       timestamp(now);
       if (!command || typeof command !== "object" || Array.isArray(command) ||
@@ -1575,9 +1575,15 @@ export class OrchestratorLedger extends DurableObject {
       const verified = await verifyOwnerAssertion(
         this.env?.LEDGER_OWNER_ASSERTION_KEYS,
         assertion,
-        { ...context, nowMs: now },
+        { ...context, nowMs: Date.now },
       );
+      now = verified.verifiedAtMs;
       const assertionHash = await sha256Canonical({ assertion });
+      try {
+        now = assertOwnerAssertionFresh(verified);
+      } catch {
+        return { applied: false, reason: "OWNER_ASSERTION_REJECTED" };
+      }
       const sql = this.ctx.storage.sql;
       const eventType = {
         cancel: "OWNER_TASK_CANCELLED",
@@ -1668,6 +1674,11 @@ export class OrchestratorLedger extends DurableObject {
           occurredAt: now,
           previousHash,
         });
+        try {
+          assertOwnerAssertionFresh(verified);
+        } catch {
+          return { applied: false, reason: "OWNER_ASSERTION_REJECTED" };
+        }
         const successResult = conflictReason
           ? { applied: false, conflict: true, reason: conflictReason }
           : {

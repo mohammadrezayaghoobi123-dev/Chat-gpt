@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { createScheduledController, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import schedulerWorker from "../orchestrator-scheduler-worker.js";
+import { runScheduledAdmission } from "../orchestrator-scheduler-admission.js";
 import { createTenantDirectoryAdminAssertion } from "../identity/tenant-directory-assertion.js";
 import { createTenantDirectoryAdapters } from "../identity/tenant-directory-adapter.js";
 
@@ -132,13 +133,13 @@ describe("Scheduler tenant Task admission", () => {
     expect(typeof controller.scheduledTime).toBe("number");
     expect(schedulerWorker.fetch).toBeUndefined();
 
-    const first = await schedulerWorker.scheduled(controller, schedulerEnv, context);
+    const first = await runScheduledAdmission(controller, schedulerEnv);
     expect(first).toMatchObject({ processed: 1, created: 1, replayed: 0 });
     expect(first.admissions).toEqual([
       expect.objectContaining({ tenantId, projectId: fixture.projectId, taskId }),
     ]);
 
-    const replay = await schedulerWorker.scheduled(controller, schedulerEnv, context);
+    const replay = await runScheduledAdmission(controller, schedulerEnv);
     expect(replay).toMatchObject({ processed: 1, created: 0, replayed: 1 });
     expect(context.waitUntil).not.toHaveBeenCalled();
 
@@ -186,6 +187,9 @@ describe("Scheduler tenant Task admission", () => {
       get(id) {
         const stub = realNamespace.get(id);
         return {
+          async getTaskAdmissionReceipt(input) {
+            return stub.getTaskAdmissionReceipt(input);
+          },
           async createTask(input) {
             if (failNextLedgerCall) {
               failNextLedgerCall = false;
@@ -201,7 +205,7 @@ describe("Scheduler tenant Task admission", () => {
     const faultEnv = Object.create(baseEnv);
     faultEnv.ORCHESTRATOR_LEDGER = faultedNamespace;
 
-    await expect(schedulerWorker.scheduled(controller, faultEnv, {}))
+    await expect(runScheduledAdmission(controller, faultEnv))
       .rejects.toMatchObject({
         code: "SCHEDULED_ADMISSION_PARTIAL_FAILURE",
         completed: 0,
@@ -215,7 +219,7 @@ describe("Scheduler tenant Task admission", () => {
       ).one().count)).toBe(1);
     });
 
-    const retry = await schedulerWorker.scheduled(controller, baseEnv, {});
+    const retry = await runScheduledAdmission(controller, baseEnv);
     expect(retry).toMatchObject({ processed: 1, created: 1, replayed: 0 });
 
     await runInDurableObject(fixture.ledger, instance => {
@@ -248,7 +252,7 @@ describe("Scheduler tenant Task admission", () => {
       cron: CRON,
     });
 
-    await expect(schedulerWorker.scheduled(controller, schedulerEnv, {}))
+    await expect(runScheduledAdmission(controller, schedulerEnv))
       .rejects.toMatchObject({ code: "SCHEDULED_ADMISSION_POLICY_INVALID" });
 
     await runInDurableObject(fixture.directory, instance => {

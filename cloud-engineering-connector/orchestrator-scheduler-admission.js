@@ -135,8 +135,10 @@ function resolveBindings(env, task) {
   const directory = directoryNamespace.get(directoryNamespace.idFromName(task.tenantId));
   const ledger = ledgerNamespace.get(ledgerNamespace.idFromName(task.tenantId));
   if (!directory || typeof directory.prepareTaskAdmission !== "function" ||
-      !ledger || typeof ledger.createTask !== "function") {
-    throw fail("SCHEDULED_ADMISSION_BINDINGS_UNAVAILABLE", "TenantDirectory or OrchestratorLedger RPC methods are unavailable.");
+      typeof directory.renewTaskAdmissionGrant !== "function" ||
+      !ledger || typeof ledger.getTaskAdmissionReceipt !== "function" ||
+      typeof ledger.createTask !== "function") {
+    throw fail("SCHEDULED_ADMISSION_BINDINGS_UNAVAILABLE", "TenantDirectory or OrchestratorLedger admission RPC methods are unavailable.");
   }
   return { directory, ledger };
 }
@@ -155,12 +157,10 @@ async function makeWorkerAssertion(keySet, activeKid, nowMs) {
 }
 
 /**
- * Each Task is admitted through two independent Durable Object transactions:
- * TenantDirectory reservation, then OrchestratorLedger persistence. The
- * deterministic event identity makes completed Tasks safe to replay, but a
- * multi-Task batch is deliberately not represented as a distributed transaction.
+ * Build a canonical, immutable-in-practice payload for a durable Workflow.
+ * No signing keys, Durable Object stubs, or bearer grants are included.
  */
-export async function runScheduledAdmission(controller, env) {
+export async function prepareScheduledAdmission(controller, env) {
   const schedule = readSchedulePolicy(controller, env);
   const keySet = env?.LEDGER_WORKER_ASSERTION_KEYS;
   const activeKid = env?.LEDGER_WORKER_ASSERTION_ACTIVE_KID;
@@ -168,12 +168,10 @@ export async function runScheduledAdmission(controller, env) {
     throw fail("SCHEDULED_ADMISSION_SIGNER_UNAVAILABLE", "Scheduler worker assertion signing configuration is unavailable.");
   }
 
-  // Validate signer configuration before the first Directory reservation.
   await makeWorkerAssertion(keySet, activeKid, Date.now());
-
   const prepared = [];
   for (const item of schedule.tasks) {
-    const digest = await taskAdmissionDigest(item.task);
+    const taskDigest = await taskAdmissionDigest(item.task);
     const inputHash = await admissionTextDigest(canonicalJson({
       version: 1,
       cron: schedule.cron,
@@ -182,79 +180,246 @@ export async function runScheduledAdmission(controller, env) {
       tenantId: item.tenantId,
       projectId: item.projectId,
       taskId: item.taskId,
-      taskDigest: digest,
+      taskDigest,
       idempotencyKey: item.idempotencyKey,
     }));
-    const bindings = resolveBindings(env, item);
-    prepared.push({ ...item, taskDigest: digest, inputHash, ...bindings });
+    const idempotencyKeyDigest = await admissionTextDigest(item.idempotencyKey);
+    resolveBindings(env, item);
+    prepared.push({ ...item, taskDigest, inputHash, idempotencyKeyDigest });
   }
 
+  return JSON.parse(canonicalJson({
+    version: 1,
+    servicePrincipalId: schedule.servicePrincipalId,
+    cron: schedule.cron,
+    scheduledTime: schedule.scheduledTime,
+    tasks: prepared,
+  }));
+}
+
+export async function verifyPreparedScheduledAdmission(value) {
+  if (!isRecord(value) || !hasOnlyKeys(value, [
+    "version", "servicePrincipalId", "cron", "scheduledTime", "tasks",
+  ]) || value.version !== 1) {
+    throw fail("SCHEDULED_ADMISSION_SNAPSHOT_INVALID", "Scheduled Workflow snapshot has an invalid envelope.");
+  }
+  const servicePrincipalId = requireIdentifier(value.servicePrincipalId, "servicePrincipalId");
+  if (typeof value.cron !== "string" || value.cron.length < 1 || value.cron.length > 128 ||
+      /[\u0000-\u001f\u007f]/.test(value.cron) ||
+      !Number.isSafeInteger(value.scheduledTime) || value.scheduledTime < 1 ||
+      !Array.isArray(value.tasks) || value.tasks.length < 1 ||
+      value.tasks.length > MAX_TASKS_PER_INVOCATION) {
+    throw fail("SCHEDULED_ADMISSION_SNAPSHOT_INVALID", "Scheduled Workflow snapshot schedule fields are invalid.");
+  }
+
+  const seenTaskScopes = new Set();
+  const seenIdempotencyScopes = new Set();
+  const tasks = [];
+  for (const [index, item] of value.tasks.entries()) {
+    if (!isRecord(item) || !hasOnlyKeys(item, [
+      "tenantId", "projectId", "taskId", "idempotencyKey", "task",
+      "taskDigest", "inputHash", "idempotencyKeyDigest",
+    ])) {
+      throw fail("SCHEDULED_ADMISSION_SNAPSHOT_INVALID", "Scheduled Workflow task " + index + " has an invalid shape.");
+    }
+    const tenantId = requireIdentifier(item.tenantId, "tenantId");
+    const projectId = requireIdentifier(item.projectId, "projectId");
+    const taskId = requireIdentifier(item.taskId, "taskId");
+    const idempotencyKey = requireIdentifier(item.idempotencyKey, "idempotencyKey");
+    if (!isRecord(item.task) || item.task.tenantId !== tenantId ||
+        item.task.projectId !== projectId || item.task.taskId !== taskId) {
+      throw fail("SCHEDULED_ADMISSION_SNAPSHOT_INVALID", "Scheduled Workflow Task scope does not match its envelope.");
+    }
+
+    let normalizedTask;
+    try {
+      normalizedTask = normalizeTaskForAdmission(item.task);
+    } catch {
+      throw fail("SCHEDULED_ADMISSION_SNAPSHOT_INVALID", "Scheduled Workflow Task is not admissible.");
+    }
+    if (canonicalJson(normalizedTask) !== canonicalJson(item.task)) {
+      throw fail("SCHEDULED_ADMISSION_SNAPSHOT_INVALID", "Scheduled Workflow Task is not in canonical normalized form.");
+    }
+
+    const taskDigest = await taskAdmissionDigest(normalizedTask);
+    const idempotencyKeyDigest = await admissionTextDigest(idempotencyKey);
+    const inputHash = await admissionTextDigest(canonicalJson({
+      version: 1,
+      cron: value.cron,
+      scheduledTime: value.scheduledTime,
+      principalId: servicePrincipalId,
+      tenantId,
+      projectId,
+      taskId,
+      taskDigest,
+      idempotencyKey,
+    }));
+    if (item.taskDigest !== taskDigest ||
+        item.idempotencyKeyDigest !== idempotencyKeyDigest ||
+        item.inputHash !== inputHash) {
+      throw fail("SCHEDULED_ADMISSION_SNAPSHOT_INVALID", "Scheduled Workflow Task digests do not match the canonical payload.");
+    }
+
+    const taskScope = tenantId + "\u0000" + projectId + "\u0000" + taskId;
+    const idempotencyScope = tenantId + "\u0000" + projectId + "\u0000" + idempotencyKey;
+    if (seenTaskScopes.has(taskScope) || seenIdempotencyScopes.has(idempotencyScope)) {
+      throw fail("SCHEDULED_ADMISSION_SNAPSHOT_INVALID", "Scheduled Workflow snapshot contains duplicate Task identities.");
+    }
+    seenTaskScopes.add(taskScope);
+    seenIdempotencyScopes.add(idempotencyScope);
+    tasks.push({
+      tenantId, projectId, taskId, idempotencyKey,
+      task: normalizedTask, taskDigest, inputHash, idempotencyKeyDigest,
+    });
+  }
+
+  return {
+    version: 1,
+    servicePrincipalId,
+    cron: value.cron,
+    scheduledTime: value.scheduledTime,
+    tasks,
+  };
+}
+
+export async function scheduledWorkflowId(snapshot) {
+  const cron = typeof snapshot?.cron === "string" ? snapshot.cron : "";
+  const scheduledTime = snapshot?.scheduledTime;
+  if (!cron || !Number.isSafeInteger(scheduledTime) || scheduledTime < 1) {
+    throw fail("SCHEDULED_EVENT_INVALID", "Cron expression and numeric scheduledTime are required for deterministic Workflow identity.");
+  }
+  const digest = await admissionTextDigest(canonicalJson({ version: 1, cron, scheduledTime }));
+  return "schedule-" + digest;
+}
+
+export async function admitPreparedScheduledTask(schedule, item, env) {
+  let directoryReserved = false;
+  try {
+    const { directory, ledger } = resolveBindings(env, item);
+    const probe = await ledger.getTaskAdmissionReceipt({
+      tenantId: item.tenantId,
+      projectId: item.projectId,
+      principalId: schedule.servicePrincipalId,
+      taskId: item.taskId,
+      taskDigest: item.taskDigest,
+      idempotencyKeyDigest: item.idempotencyKeyDigest,
+      inputHash: item.inputHash,
+    });
+
+    if (probe?.status === "admitted") {
+      return {
+        tenantId: item.tenantId,
+        projectId: item.projectId,
+        taskId: item.taskId,
+        admissionId: probe.receipt.admissionId,
+        outcome: "replayed",
+      };
+    }
+    if (probe?.status === "conflict") {
+      throw fail(
+        typeof probe.reason === "string" ? probe.reason : "TASK_ADMISSION_RECEIPT_CONFLICT",
+        "OrchestratorLedger found a conflicting or incomplete admission receipt.",
+      );
+    }
+    if (probe?.status !== "not_found") {
+      throw fail("TASK_ADMISSION_RECEIPT_INVALID", "OrchestratorLedger returned an invalid admission receipt probe.");
+    }
+
+    const admissionInput = {
+      tenantId: item.tenantId,
+      projectId: item.projectId,
+      principalId: schedule.servicePrincipalId,
+      taskId: item.taskId,
+      taskDigest: item.taskDigest,
+      idempotencyKey: item.idempotencyKey,
+      inputHash: item.inputHash,
+    };
+    let reservation;
+    try {
+      reservation = await directory.prepareTaskAdmission(admissionInput);
+      directoryReserved = true;
+    } catch (error) {
+      if (error?.code !== "TASK_ADMISSION_RETRY_WINDOW_EXPIRED") throw error;
+      directoryReserved = true;
+      reservation = await directory.renewTaskAdmissionGrant(admissionInput);
+    }
+
+    if (!reservation || typeof reservation.grant !== "string" ||
+        reservation.taskId !== item.taskId ||
+        reservation.taskDigest !== item.taskDigest ||
+        reservation.inputHash !== item.inputHash) {
+      throw fail("TASK_ADMISSION_RESERVATION_INVALID", "TenantDirectory returned a reservation that does not match the scheduled Task.");
+    }
+
+    const keySet = env?.LEDGER_WORKER_ASSERTION_KEYS;
+    const activeKid = env?.LEDGER_WORKER_ASSERTION_ACTIVE_KID;
+    if (typeof keySet !== "string" || typeof activeKid !== "string") {
+      throw fail("SCHEDULED_ADMISSION_SIGNER_UNAVAILABLE", "Scheduler worker assertion signing configuration is unavailable.");
+    }
+    const workerNow = Date.now();
+    const workerAssertion = await makeWorkerAssertion(keySet, activeKid, workerNow);
+    const result = await ledger.createTask({
+      task: item.task,
+      idempotencyKey: item.idempotencyKey,
+      inputHash: item.inputHash,
+      now: workerNow,
+      workerId: SCHEDULER_SUBJECT,
+      workerAssertion,
+      admissionGrant: reservation.grant,
+    });
+
+    if (result?.created === true) {
+      return {
+        tenantId: item.tenantId,
+        projectId: item.projectId,
+        taskId: item.taskId,
+        admissionId: reservation.admissionId,
+        outcome: "created",
+      };
+    }
+    if (result?.created === false && result?.replay === true) {
+      return {
+        tenantId: item.tenantId,
+        projectId: item.projectId,
+        taskId: item.taskId,
+        admissionId: reservation.admissionId,
+        outcome: "replayed",
+      };
+    }
+    throw fail(
+      typeof result?.reason === "string" ? result.reason : "TASK_ADMISSION_REJECTED",
+      "OrchestratorLedger rejected the scheduled Task admission.",
+    );
+  } catch (error) {
+    if (error && typeof error === "object") {
+      try { error.directoryReserved = directoryReserved; } catch {}
+    }
+    throw error;
+  }
+}
+
+/**
+ * Synchronous adapter retained for unit-level fault injection. Production
+ * Scheduled events use a Workflow and never process the Task batch inline.
+ */
+export async function runScheduledAdmission(controller, env) {
+  const schedule = await prepareScheduledAdmission(controller, env);
   const admissions = [];
   let created = 0;
   let replayed = 0;
 
-  for (const item of prepared) {
-    let directoryReserved = false;
+  for (const item of schedule.tasks) {
     try {
-      const reservation = await item.directory.prepareTaskAdmission({
-        tenantId: item.tenantId,
-        projectId: item.projectId,
-        principalId: schedule.servicePrincipalId,
-        taskId: item.taskId,
-        taskDigest: item.taskDigest,
-        idempotencyKey: item.idempotencyKey,
-        inputHash: item.inputHash,
-      });
-      directoryReserved = true;
-
-      if (!reservation || typeof reservation.grant !== "string" ||
-          reservation.taskId !== item.taskId ||
-          reservation.taskDigest !== item.taskDigest) {
-        throw fail("TASK_ADMISSION_RESERVATION_INVALID", "TenantDirectory returned a reservation that does not match the scheduled Task.");
-      }
-
-      const workerNow = Date.now();
-      const workerAssertion = await makeWorkerAssertion(keySet, activeKid, workerNow);
-      const result = await item.ledger.createTask({
-        task: item.task,
-        idempotencyKey: item.idempotencyKey,
-        inputHash: item.inputHash,
-        now: workerNow,
-        workerId: SCHEDULER_SUBJECT,
-        workerAssertion,
-        admissionGrant: reservation.grant,
-      });
-
-      if (result?.created === true) {
-        created += 1;
-        admissions.push({
-          tenantId: item.tenantId,
-          projectId: item.projectId,
-          taskId: item.taskId,
-          admissionId: reservation.admissionId,
-          outcome: "created",
-        });
-      } else if (result?.created === false && result?.replay === true) {
-        replayed += 1;
-        admissions.push({
-          tenantId: item.tenantId,
-          projectId: item.projectId,
-          taskId: item.taskId,
-          admissionId: reservation.admissionId,
-          outcome: "replayed",
-        });
-      } else {
-        throw fail(
-          typeof result?.reason === "string" ? result.reason : "TASK_ADMISSION_REJECTED",
-          "OrchestratorLedger rejected the scheduled Task admission.",
-        );
-      }
+      const result = await admitPreparedScheduledTask(schedule, item, env);
+      if (result.outcome === "created") created += 1;
+      else if (result.outcome === "replayed") replayed += 1;
+      admissions.push(result);
     } catch (error) {
       const causeCode = typeof error?.code === "string" ? error.code : "UNCLASSIFIED_ADMISSION_FAILURE";
       throw fail("SCHEDULED_ADMISSION_PARTIAL_FAILURE", "Scheduled Task admission stopped at the first failed Task.", {
         completed: admissions.length,
         failedTaskId: item.taskId,
-        directoryReserved,
+        directoryReserved: error?.directoryReserved === true,
         causeCode,
       });
     }

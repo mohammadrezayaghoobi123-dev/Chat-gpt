@@ -31,17 +31,19 @@
 - Consumes: createTenantDirectoryAdapters, createTenantDirectoryAdminAssertion, upsertMembership, upsertProjectPolicy, revokeMembership, authorizeProjectAction.
 - Produces: executable assertions for the version-complete authorization snapshot and tenant_policy_scope_epochs.
 
-- [ ] **Step 1: Add the focused failing test**
+- [x] **Step 1: Add the focused failing test**
 
 Test these behaviors:
 
 1. Create active membership and an allow wildcard policy. Verify authorization returns membership version, selected rule version, policy-scope epoch, selected resource digest, and decision ID.
+2. Add exact-resource precedence and epoch increments.
+3. Suspend membership and verify all affected distinct policy scopes advance exactly once and deny remains enforced.
 2. Add an exact-resource rule for the same project/action. Verify exact-resource precedence and exactly one additional epoch increment.
 3. Seed active policy rows spanning multiple projects and actions, including wildcard and exact-resource rows. Revoke membership. Verify every distinct affected scope advances exactly once, all active rules are disabled in the same transaction, and an unrelated principal's epoch does not change.
 4. Query authorization after revocation. Verify deny, the new membership version, current policy-scope epoch, and no selected active rule.
 5. Force a transaction failure after epoch updates with a test-only abort trigger. Verify membership state, policy statuses, scope epochs, and audit row count all roll back together.
 
-- [ ] **Step 2: Verify the relevant failure**
+- [x] **Step 2: Verify the relevant failure**
 
 Run: npm run test:do -- cloudflare-test/tenant-directory-policy-epoch.test.js
 
@@ -58,35 +60,35 @@ Expected: the test fails because version metadata/table/epoch behavior is missin
 - Consumes: existing TenantDirectory membership, project-policy tables, and transaction boundary.
 - Produces: tenant_policy_scope_epochs with a composite primary key and monotonic integer epoch; complete authorization decision metadata.
 
-- [ ] **Step 1: Create the storage table**
+- [x] **Step 1: Create the storage table**
 
 Add an idempotent table with tenant_id, project_id, principal_id, action, epoch, and updated_at. Use a composite primary key over the four scope fields and constrain epoch to a non-negative integer.
 
-- [ ] **Step 2: Add synchronous epoch helpers**
+- [x] **Step 2: Add synchronous epoch helpers**
 
 Implement a transaction-local helper that increments one scope with an UPSERT. Implement a second helper that reads distinct active policy scopes for one tenant/principal and increments each exactly once. Both helpers use the active transaction's SQL handle and perform no asynchronous operations.
 
-- [ ] **Step 3: Wire all relevant mutations**
+- [x] **Step 3: Wire all relevant mutations**
 
 - upsertProjectPolicy increments the exact policy scope once in the same transaction as the policy write and audit event.
 - upsertMembership with a non-active status enumerates distinct active policy scopes before disabling rules, then increments each once in the same transaction as membership status/version, policy disable, and audit writes.
 - revokeMembership applies the same operation in the same transaction as membership revocation, policy disabling, and audit append. An already-revoked membership may be a no-op only when no active policy rows remain.
 
-- [ ] **Step 4: Return a consistent authorization snapshot**
+- [x] **Step 4: Return a consistent authorization snapshot**
 
 Synchronously read membership status/version, the selected active rule, selected rule numeric version/resource digest, and policy-scope epoch without yielding between reads. Return these fields for allow and deny results. Missing epoch is zero. Missing/inactive membership or missing active rule remains deny.
 
-- [ ] **Step 5: Preserve the provider-neutral context**
+- [x] **Step 5: Preserve the provider-neutral context**
 
 Carry the Directory numeric membership version into the verified tenant context and carry decision version metadata out of authorizeProjectAction. Never infer a missing version from a caller-supplied label.
 
-- [ ] **Step 6: Verify the focused pass**
+- [x] **Step 6: Verify the focused pass**
 
 Run: npm run test:do -- cloudflare-test/tenant-directory-policy-epoch.test.js
 
 Expected: the identical tests pass with exact epoch deltas and rollback assertions.
 
-- [ ] **Step 7: Run all affected validation**
+- [x] **Step 7: Run all affected validation**
 
 Run: npm test
 
@@ -96,9 +98,20 @@ Run: npm run check
 
 Expected: JavaScript syntax checks and both Wrangler dry-run configuration checks complete with exit code zero. These commands do not deploy.
 
-- [ ] **Step 8: Review the diff**
+- [x] **Step 8: Review the diff**
 
 Verify only the plan, focused test, TenantDirectory, and tenant-context files changed. Verify there are no secret values, live resource changes, or unrelated formatting changes.
+
+## Execution Evidence
+
+- Red run: GitHub Actions run 45370294820, Cloudflare DO focused suite failed on missing version metadata and missing epoch table as expected.
+- Green run: GitHub Actions run 45371338047 completed successfully on commit de40d8897afb5daa506cec338ec64fd78d07a371.
+- Node tests: 185 passed, 0 failed.
+- Cloudflare Durable Object tests: 17 files, 55 passed, 0 failed.
+- npm dependency audit: `npm audit --audit-level=moderate` passed.
+- Syntax and config validation: `node --check` set passed; Production and Staging Wrangler `--dry-run` both exited successfully. No deploy was performed.
+- Security scan: PR diff-range clean; full-history scan still reports 12 existing historical `generic-api-key` findings. No finding was suppressed by this implementation.
+- Scope: TenantDirectory policy epochs and authorization metadata only. Receipt signing, Ledger receipt enforcement, Scheduler provenance, Outbox recovery, start reservation, and effect-boundary fencing remain subsequent implementation slices.
 
 ## Explicit scope boundary
 
@@ -106,4 +119,4 @@ This is the first independently testable implementation slice. It establishes th
 
 ## Acceptance rule
 
-The slice is complete only when the expected red failure is observed, the same focused test turns green, the full test suite and npm run check are freshly executed, and the changed-file diff matches the scope above. Until then, status is IN_PROGRESS or UNKNOWN, not complete.
+The policy-freshness slice is complete on commit de40d8897afb5daa506cec338ec64fd78d07a371, subject to the recorded historical Gitleaks finding backlog. It does not complete or authorize deployment of the full Admission protocol.

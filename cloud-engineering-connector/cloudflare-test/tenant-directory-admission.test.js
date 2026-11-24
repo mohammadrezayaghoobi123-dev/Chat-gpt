@@ -228,40 +228,41 @@ describe("TenantDirectory signed task admission reservation", () => {
 
   it("rejects an authorization snapshot changed during Ed25519 signing without writing a reservation", async () => {
     const state = await fixture();
-    const store = admissionStore(state.adapters);
-    const originalSign = crypto.subtle.sign.bind(crypto.subtle);
-    let markSigningStarted;
-    let releaseSigning;
-    const signingStarted = new Promise(resolve => { markSigningStarted = resolve; });
-    const signingGate = new Promise(resolve => { releaseSigning = resolve; });
-    const signSpy = vi.spyOn(crypto.subtle, "sign").mockImplementation(async (...args) => {
-      markSigningStarted();
-      await signingGate;
-      return originalSign(...args);
-    });
+    const revokeAssertion = await adminAssertion("revokeMembership", TENANT_ID, null, {
+      principalId: PRINCIPAL_ID,
+      expectedVersion: 1,
+    }, NOW + 1);
+    let signingResult;
 
-    try {
-      const pending = store.prepareTaskAdmission(state.input);
-      await signingStarted;
-      await state.adapters.provisioningStore.revokeMembership({
-        assertion: await adminAssertion("revokeMembership", TENANT_ID, null, {
+    await runInDurableObject(state.stub, async instance => {
+      const originalSign = globalThis.crypto.subtle.sign.bind(globalThis.crypto.subtle);
+      let markSigningStarted;
+      let releaseSigning;
+      const signingStarted = new Promise(resolve => { markSigningStarted = resolve; });
+      const signingGate = new Promise(resolve => { releaseSigning = resolve; });
+      const signSpy = vi.spyOn(globalThis.crypto.subtle, "sign").mockImplementation(async (...args) => {
+        markSigningStarted();
+        await signingGate;
+        return originalSign(...args);
+      });
+
+      try {
+        const pending = instance.prepareTaskAdmission(state.input);
+        await signingStarted;
+        await instance.revokeMembership({
+          assertion: revokeAssertion,
+          tenantId: TENANT_ID,
           principalId: PRINCIPAL_ID,
           expectedVersion: 1,
-        }, NOW + 1),
-        tenantId: TENANT_ID,
-        principalId: PRINCIPAL_ID,
-        expectedVersion: 1,
-        now: NOW + 1,
-      });
-      releaseSigning();
-      const result = await pending.then(() => null, error => error);
-      expect(result?.code).toBe("TASK_ADMISSION_SNAPSHOT_STALE");
-    } finally {
-      releaseSigning();
-      signSpy.mockRestore();
-    }
+          now: NOW + 1,
+        });
+        releaseSigning();
+        signingResult = await pending.then(() => null, error => error);
+      } finally {
+        releaseSigning();
+        signSpy.mockRestore();
+      }
 
-    await runInDurableObject(state.stub, instance => {
       expect(instance.ctx.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM tenant_task_admission_reservations",
       ).one().count).toBe(0);
@@ -270,6 +271,8 @@ describe("TenantDirectory signed task admission reservation", () => {
         TENANT_ID,
       ).one().count).toBe(0);
     });
+
+    expect(signingResult?.code).toBe("TASK_ADMISSION_SNAPSHOT_STALE");
   });
 });
 

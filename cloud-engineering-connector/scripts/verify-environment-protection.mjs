@@ -214,7 +214,7 @@ function assertEnvironmentMetadata({ environment, releaseEnvironment }) {
       ? String(deploymentBranchPolicy.custom_branch_policies)
       : "invalid";
     block(
-      "the Environment deployment branch policy must explicitly set protected_branches=false and custom_branch_policies=true; observed protected_branches=" +
+      "the Environment deployment branch policy must use explicit custom deployment branch policies with protected_branches=false and custom_branch_policies=true; observed protected_branches=" +
         protectedBranches +
         ", custom_branch_policies=" +
         customBranchPolicies +

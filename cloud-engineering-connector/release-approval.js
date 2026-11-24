@@ -26,7 +26,7 @@ export function parseTrustedReviewerIds(value) {
 }
 
 function validateInput({ repository, candidateSha, releaseEnvironment, token, fetchImpl, trustedReviewerIds }) {
-  if (typeof repository !== "string" || !/^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$/.test(repository)) {
+  if (typeof repository !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new TypeError("GITHUB_REPOSITORY must be an owner/repository pair.");
   }
   if (typeof candidateSha !== "string" || !/^[a-f0-9]{40}$/.test(candidateSha)) {

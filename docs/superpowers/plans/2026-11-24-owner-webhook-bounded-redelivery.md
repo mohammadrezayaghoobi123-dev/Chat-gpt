@@ -38,7 +38,7 @@
 
 **Interfaces:**
 - Add RPC `authorizeOwnerWebhookRetry(input)`.
-- Input: `{ deliveryId, bodySha256, commentId, commandHash, repositoryId, actorId, taskId, operation, commentCreatedAt }`.
+- Input: `{ assertion, deliveryId, bodySha256, commentId, commandHash, repositoryId, actorId, taskId, operation, issueNumber, commentCreatedAt }`. The Ledger verifies the signed Owner assertion against the full context before checking or incrementing a retry marker.
 - Result: one of `{ registered: false }`, `{ registered: true, retryAuthorized: true, retryCount }`, `{ registered: true, completed: true, result }`, or `{ registered: true, denied: true, reason }`.
 - Create markers privately inside `executeOwnerCommand` only after final `AUDIT_CHAIN_CONTENTION`.
 - Close matching markers in the same transaction that persists a terminal Owner receipt.

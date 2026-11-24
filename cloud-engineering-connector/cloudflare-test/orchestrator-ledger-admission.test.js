@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createScheduledWorkerAssertion } from "../orchestrator-worker-identity.js";
 import { createTenantDirectoryAdminAssertion } from "../identity/tenant-directory-assertion.js";
 import { createTenantDirectoryAdapters } from "../identity/tenant-directory-adapter.js";
@@ -187,6 +187,41 @@ async function createAdmittedTask(instance, fixture, { grant = fixture.grant, ta
         "SELECT COUNT(*) AS count FROM orchestrator_outbox_events WHERE idempotency_key=?",
         "task-admitted:" + fixture.admissionId,
       ).one().count).toBe(1);
+    });
+  });
+
+  it("rejects a grant that expires between cryptographic verification and Ledger commit", async () => {
+    const fixture = await taskAdmissionFixture();
+    const ledger = env.ORCHESTRATOR_LEDGER.get(
+      env.ORCHESTRATOR_LEDGER.idFromName("ledger-admission-expiry-fence-" + crypto.randomUUID()),
+    );
+    await runInDurableObject(ledger, async instance => {
+      instance.env.LEDGER_WORKER_ASSERTION_KEYS = WORKER_KEY_SET;
+      instance.env.ORCHESTRATOR_LEDGER_ADMISSION_PUBLIC_KEYS = fixture.publicKeys;
+      const workerNow = Date.now();
+      const proof = await workerAssertion(workerNow);
+      const { claims } = (await import("../orchestrator-admission.js"))
+        .decodeTaskAdmissionGrantClaims(fixture.grant);
+      let clockCalls = 0;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() =>
+        clockCalls++ === 0 ? (claims.exp - 1) * 1000 : claims.exp * 1000,
+      );
+      let result;
+      try {
+        result = await createAdmittedTask(instance, fixture, {
+          now: workerNow,
+          workerProof: proof,
+        });
+      } finally {
+        clock.mockRestore();
+      }
+
+      expect(result).toEqual({ created: false, reason: "TASK_ADMISSION_EXPIRED" });
+      expect(clockCalls).toBe(2);
+      expect(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_tasks").one().count).toBe(0);
+      expect(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_task_admission_receipts").one().count).toBe(0);
+      expect(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_outbox_events").one().count).toBe(0);
+      expect(instance.ctx.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(0);
     });
   });
 

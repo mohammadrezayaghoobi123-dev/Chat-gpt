@@ -294,7 +294,7 @@ test("blocks deployment approval history that does not name the exact release En
         [deploymentApproval({ environment: "production" })],
       ),
     }),
-    /approved deployment review.*exact Environment/i,
+    /deployment approval history.*exact Environment/i,
   );
 });
 

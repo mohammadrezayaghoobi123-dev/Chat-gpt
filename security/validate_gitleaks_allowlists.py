@@ -70,8 +70,8 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
             errors.append(f"{prefix}: paths must be non-empty and anchored")
         elif any(_invalid_regex(path) for path in paths):
             errors.append(f"{prefix}: path regex is invalid")
-        if entry.get("regexTarget") != "line":
-            errors.append(f"{prefix}: regexTarget must be line")
+        if entry.get("regexTarget") not in {"line", "secret"}:
+            errors.append(f"{prefix}: regexTarget must be line or secret")
         regexes = entry.get("regexes")
         if not isinstance(regexes, list) or not regexes or any(
             not isinstance(pattern, str) or not pattern
@@ -99,8 +99,8 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
         escaped_path = expected_path.replace(".", r"\.")
         if entry.get("paths") != [f"^{escaped_path}$"]:
             errors.append(f"{label}: path scope changed or is not anchored")
-        if entry.get("regexTarget") != "line":
-            errors.append(f"{label}: regexTarget must be line")
+        if entry.get("regexTarget") != "secret":
+            errors.append(f"{label}: regexTarget must be secret")
 
         regexes = entry.get("regexes")
         if not isinstance(regexes, list) or len(regexes) != 1 or not isinstance(regexes[0], str):

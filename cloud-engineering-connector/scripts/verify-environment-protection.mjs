@@ -151,107 +151,337 @@ async function getBranchPolicies(fetchImpl, baseUrl, token) {
   );
 }
 
-function assertEnvironmentMetadata({ environment, releaseEnvironment }) {
-  if (!isRecord(environment) || environment.name !== releaseEnvironment) {
-    block("the returned Environment name does not match the fixed " + releaseEnvironment + " release target.");
+function classifyApiError(error) {
+  if (!(error instanceof EnvironmentProtectionError)) {
+    return {
+      code: "API_RESPONSE_INVALID",
+      classification: "UNKNOWN",
+      message: "GitHub returned an unrecognized Environment metadata failure.",
+    };
   }
 
-  if (environment.can_admins_bypass !== false) {
-    block("administrator bypass must be explicitly disabled.");
-  }
+  return {
+    code: error.code,
+    classification: error.code === "ENVIRONMENT_NOT_FOUND" ? "MISSING" : "UNKNOWN",
+    message: error.message.replace(/^GitHub Environment protection gate blocked release:\s*/i, ""),
+  };
+}
 
+function freezeFinding(finding) {
+  return Object.freeze({
+    code: finding.code,
+    classification: finding.classification,
+    message: finding.message,
+  });
+}
+
+function inspectRequiredReviewers(environment, addFinding) {
   if (!Array.isArray(environment.protection_rules)) {
-    block("Environment protection rules are missing or malformed.", "API_RESPONSE_INVALID");
+    addFinding(
+      "PROTECTION_RULES_UNAVAILABLE",
+      "UNKNOWN",
+      "Environment protection rules are missing or malformed.",
+    );
+    return {
+      requiredReviewerRuleCount: null,
+      requiredReviewerCount: null,
+      preventSelfReview: null,
+      authorizedReviewerUserIds: Object.freeze([]),
+    };
   }
 
   const reviewerRules = environment.protection_rules.filter(
     rule => isRecord(rule) && rule.type === "required_reviewers",
   );
-  if (reviewerRules.length !== 1) {
-    block("exactly one required-reviewer rule must be configured.");
+  const requiredReviewerRuleCount = reviewerRules.length;
+  if (requiredReviewerRuleCount !== 1) {
+    addFinding(
+      "REQUIRED_REVIEWER_RULE_COUNT_MISMATCH",
+      "BLOCKED",
+      "Exactly one required-reviewer rule must be configured.",
+    );
+  }
+
+  if (requiredReviewerRuleCount !== 1) {
+    return {
+      requiredReviewerRuleCount,
+      requiredReviewerCount: null,
+      preventSelfReview: null,
+      authorizedReviewerUserIds: Object.freeze([]),
+    };
   }
 
   const reviewerRule = reviewerRules[0];
-  if (reviewerRule.prevent_self_review !== true) {
-    block("required reviewers must prevent self-review.");
+  const preventSelfReview = typeof reviewerRule.prevent_self_review === "boolean"
+    ? reviewerRule.prevent_self_review
+    : null;
+
+  if (preventSelfReview === false) {
+    addFinding(
+      "SELF_REVIEW_ALLOWED",
+      "BLOCKED",
+      "Required reviewers must prevent self-review.",
+    );
+  } else if (preventSelfReview === null) {
+    addFinding(
+      "SELF_REVIEW_STATE_UNKNOWN",
+      "UNKNOWN",
+      "The required-reviewer self-review setting is missing or malformed.",
+    );
   }
 
   const reviewers = reviewerRule.reviewers;
-  if (!Array.isArray(reviewers) || reviewers.length < 1 || reviewers.length > MAX_REVIEWERS) {
-    block("the required-reviewer set must contain between one and six reviewers.");
+  if (!Array.isArray(reviewers)) {
+    addFinding(
+      "REVIEWER_SET_UNAVAILABLE",
+      "UNKNOWN",
+      "The required-reviewer set is missing or malformed.",
+    );
+    return {
+      requiredReviewerRuleCount,
+      requiredReviewerCount: null,
+      preventSelfReview,
+      authorizedReviewerUserIds: Object.freeze([]),
+    };
+  }
+
+  const requiredReviewerCount = reviewers.length;
+  if (requiredReviewerCount < 1 || requiredReviewerCount > MAX_REVIEWERS) {
+    addFinding(
+      "REVIEWER_COUNT_OUT_OF_RANGE",
+      "BLOCKED",
+      "The required-reviewer set must contain between one and six reviewers.",
+    );
   }
 
   const reviewerIdentities = new Set();
+  let reviewerIdentitySetValid = true;
   for (const entry of reviewers) {
+    if (!isRecord(entry)) {
+      reviewerIdentitySetValid = false;
+      addFinding(
+        "REVIEWER_IDENTITY_MALFORMED",
+        "UNKNOWN",
+        "A required reviewer entry is not a valid object.",
+      );
+      continue;
+    }
+
+    if (entry.type !== "User") {
+      reviewerIdentitySetValid = false;
+      addFinding(
+        "UNSUPPORTED_REVIEWER_TYPE",
+        "BLOCKED",
+        "Every required reviewer must resolve to a GitHub User identity; Team identities are not accepted by this release policy.",
+      );
+      continue;
+    }
+
     if (
-      !isRecord(entry) ||
-      entry.type !== "User" ||
       !isRecord(entry.reviewer) ||
       !Number.isSafeInteger(entry.reviewer.id) ||
       entry.reviewer.id <= 0
     ) {
-      block("every required reviewer must resolve to a valid GitHub User reviewer identity.");
+      reviewerIdentitySetValid = false;
+      addFinding(
+        "REVIEWER_IDENTITY_MALFORMED",
+        "UNKNOWN",
+        "A required reviewer does not contain a valid GitHub User identity.",
+      );
+      continue;
     }
-    const identity = entry.reviewer.id;
-    if (reviewerIdentities.has(identity)) {
-      block("the required-reviewer set contains duplicate identities.");
+
+    if (reviewerIdentities.has(entry.reviewer.id)) {
+      reviewerIdentitySetValid = false;
+      addFinding(
+        "DUPLICATE_REVIEWER_IDENTITY",
+        "BLOCKED",
+        "The required-reviewer set contains duplicate identities.",
+      );
+      continue;
     }
-    reviewerIdentities.add(identity);
+
+    reviewerIdentities.add(entry.reviewer.id);
   }
 
-  const deploymentBranchPolicy = environment.deployment_branch_policy;
-  if (
-    !isRecord(deploymentBranchPolicy) ||
-    deploymentBranchPolicy.protected_branches !== false ||
-    deploymentBranchPolicy.custom_branch_policies !== true
-  ) {
-    const protectedBranches = isRecord(deploymentBranchPolicy) &&
-      typeof deploymentBranchPolicy.protected_branches === "boolean"
-      ? String(deploymentBranchPolicy.protected_branches)
-      : "invalid";
-    const customBranchPolicies = isRecord(deploymentBranchPolicy) &&
-      typeof deploymentBranchPolicy.custom_branch_policies === "boolean"
-      ? String(deploymentBranchPolicy.custom_branch_policies)
-      : "invalid";
-    block(
-      "the Environment deployment branch policy must use explicit custom deployment branch policies with protected_branches=false and custom_branch_policies=true; observed protected_branches=" +
-        protectedBranches +
-        ", custom_branch_policies=" +
-        customBranchPolicies +
-        ".",
+  const authorizedReviewerUserIds = reviewerIdentitySetValid &&
+    requiredReviewerCount >= 1 &&
+    requiredReviewerCount <= MAX_REVIEWERS
+    ? Object.freeze([...reviewerIdentities].sort((left, right) => left - right))
+    : Object.freeze([]);
+
+  return {
+    requiredReviewerRuleCount,
+    requiredReviewerCount,
+    preventSelfReview,
+    authorizedReviewerUserIds,
+  };
+}
+
+function inspectDeploymentBranchPolicy(environment, addFinding) {
+  const policy = environment.deployment_branch_policy;
+
+  if (policy === null) {
+    addFinding(
+      "ALL_BRANCHES_ALLOWED",
+      "BLOCKED",
+      "The Environment allows unrestricted deployment branches; explicit custom deployment branch policies are required.",
     );
+    return {
+      deploymentBranchPolicy: null,
+      branchPolicyMode: "ALL_BRANCHES",
+      shouldFetchBranchPolicies: false,
+      branchPolicyState: "NOT_APPLICABLE",
+    };
   }
 
-  return Object.freeze({
-    requiredReviewerCount: reviewers.length,
-    authorizedReviewerUserIds: Object.freeze([...reviewerIdentities].sort((left, right) => left - right)),
-    deploymentBranchPolicy: Object.freeze({
-      protected_branches: false,
-      custom_branch_policies: true,
-    }),
+  if (!isRecord(policy)) {
+    addFinding(
+      "DEPLOYMENT_BRANCH_POLICY_UNAVAILABLE",
+      "UNKNOWN",
+      "The Environment deployment_branch_policy object is missing or malformed.",
+    );
+    return {
+      deploymentBranchPolicy: null,
+      branchPolicyMode: "UNKNOWN",
+      shouldFetchBranchPolicies: false,
+      branchPolicyState: "UNKNOWN",
+    };
+  }
+
+  const protectedBranches = typeof policy.protected_branches === "boolean"
+    ? policy.protected_branches
+    : null;
+  const customBranchPolicies = typeof policy.custom_branch_policies === "boolean"
+    ? policy.custom_branch_policies
+    : null;
+
+  if (protectedBranches === null || customBranchPolicies === null) {
+    addFinding(
+      "DEPLOYMENT_BRANCH_POLICY_FLAGS_UNKNOWN",
+      "UNKNOWN",
+      "The Environment deployment-branch-policy flags are missing or malformed.",
+    );
+    return {
+      deploymentBranchPolicy: Object.freeze({
+        protected_branches: protectedBranches,
+        custom_branch_policies: customBranchPolicies,
+      }),
+      branchPolicyMode: "UNKNOWN",
+      shouldFetchBranchPolicies: customBranchPolicies === true,
+      branchPolicyState: customBranchPolicies === true ? "PENDING" : "UNKNOWN",
+    };
+  }
+
+  if (protectedBranches === customBranchPolicies) {
+    addFinding(
+      "DEPLOYMENT_BRANCH_POLICY_FLAGS_INCONSISTENT",
+      "UNKNOWN",
+      "The Environment deployment-branch-policy flags contradict the GitHub API contract.",
+    );
+    return {
+      deploymentBranchPolicy: Object.freeze({
+        protected_branches: protectedBranches,
+        custom_branch_policies: customBranchPolicies,
+      }),
+      branchPolicyMode: "INCONSISTENT",
+      shouldFetchBranchPolicies: customBranchPolicies === true,
+      branchPolicyState: customBranchPolicies === true ? "PENDING" : "UNKNOWN",
+    };
+  }
+
+  const deploymentBranchPolicy = Object.freeze({
+    protected_branches: protectedBranches,
+    custom_branch_policies: customBranchPolicies,
   });
+
+  if (customBranchPolicies === false) {
+    addFinding(
+      "CUSTOM_BRANCH_POLICIES_DISABLED",
+      "BLOCKED",
+      "The Environment must use explicit custom deployment branch policies with protected_branches=false and custom_branch_policies=true.",
+    );
+    return {
+      deploymentBranchPolicy,
+      branchPolicyMode: "PROTECTED_BRANCHES_ONLY",
+      shouldFetchBranchPolicies: false,
+      branchPolicyState: "NOT_APPLICABLE",
+    };
+  }
+
+  if (protectedBranches !== false) {
+    addFinding(
+      "DEPLOYMENT_BRANCH_POLICY_FLAGS_INCONSISTENT",
+      "UNKNOWN",
+      "Custom branch policies are enabled but protected_branches is not false.",
+    );
+    return {
+      deploymentBranchPolicy,
+      branchPolicyMode: "INCONSISTENT",
+      shouldFetchBranchPolicies: true,
+      branchPolicyState: "PENDING",
+    };
+  }
+
+  return {
+    deploymentBranchPolicy,
+    branchPolicyMode: "CUSTOM",
+    shouldFetchBranchPolicies: true,
+    branchPolicyState: "PENDING",
+  };
 }
 
-function assertExpectedBranchPolicy({ branchPolicies, releaseEnvironment }) {
+function inspectBranchPolicySet(branchPolicies, releaseEnvironment, addFinding) {
   const expectedPattern = RELEASE_POLICIES[releaseEnvironment].branchPattern;
-
   if (!Array.isArray(branchPolicies)) {
-    block("GitHub deployment branch-policy metadata is not an array.", "API_RESPONSE_INVALID");
-  }
-  if (branchPolicies.length !== 1) {
-    block("the branch-policy set must contain exactly one pattern: " + expectedPattern + ".");
-  }
-  if (!isRecord(branchPolicies[0]) || typeof branchPolicies[0].name !== "string") {
-    block("GitHub deployment branch-policy metadata contains a malformed policy.", "API_RESPONSE_INVALID");
-  }
-  if (branchPolicies[0].name !== expectedPattern) {
-    block("the branch-policy set must contain exactly one pattern: " + expectedPattern + ".");
+    addFinding(
+      "BRANCH_POLICY_SET_UNAVAILABLE",
+      "UNKNOWN",
+      "GitHub deployment branch-policy metadata is not an array.",
+    );
+    return { branchPolicyState: "UNKNOWN", branchPattern: "", branchPolicyCount: null };
   }
 
-  return expectedPattern;
+  if (branchPolicies.some(policy => !isRecord(policy) || typeof policy.name !== "string")) {
+    addFinding(
+      "BRANCH_POLICY_SET_MALFORMED",
+      "UNKNOWN",
+      "GitHub deployment branch-policy metadata contains a malformed policy.",
+    );
+    return {
+      branchPolicyState: "UNKNOWN",
+      branchPattern: "",
+      branchPolicyCount: branchPolicies.length,
+    };
+  }
+
+  if (branchPolicies.length !== 1 || branchPolicies[0]?.name !== expectedPattern) {
+    addFinding(
+      "BRANCH_POLICY_MISMATCH",
+      "BLOCKED",
+      "The branch-policy set must contain exactly one pattern: " + expectedPattern + ".",
+    );
+    return {
+      branchPolicyState: "MISMATCH",
+      branchPattern: "",
+      branchPolicyCount: branchPolicies.length,
+    };
+  }
+
+  return {
+    branchPolicyState: "VERIFIED",
+    branchPattern: expectedPattern,
+    branchPolicyCount: 1,
+  };
 }
 
-export async function verifyEnvironmentProtection({
+function overallStatus(findings) {
+  if (findings.some(finding => finding.classification === "BLOCKED")) return "BLOCKED";
+  if (findings.some(finding => finding.classification === "UNKNOWN")) return "UNKNOWN";
+  return "READY";
+}
+
+export async function inspectEnvironmentProtection({
   repository,
   releaseEnvironment,
   token,
@@ -267,25 +497,134 @@ export async function verifyEnvironmentProtection({
     "/environments/" +
     encodeURIComponent(releaseEnvironment);
 
-  const environment = await getJson(
-    fetchImpl,
-    baseUrl,
-    token,
-    "GitHub Environment metadata",
-    "environment",
-  );
+  let environment;
+  try {
+    environment = await getJson(
+      fetchImpl,
+      baseUrl,
+      token,
+      "GitHub Environment metadata",
+      "environment",
+    );
+  } catch (error) {
+    const finding = classifyApiError(error);
+    return Object.freeze({
+      environment: releaseEnvironment,
+      status: finding.classification === "MISSING" ? "MISSING" : "UNKNOWN",
+      administratorBypassAllowed: null,
+      requiredReviewerRuleCount: null,
+      requiredReviewerCount: null,
+      preventSelfReview: null,
+      deploymentBranchPolicy: null,
+      branchPolicyMode: "UNKNOWN",
+      branchPolicyState: "UNKNOWN",
+      branchPolicyCount: null,
+      branchPattern: "",
+      authorizedReviewerUserIds: Object.freeze([]),
+      findings: Object.freeze([freezeFinding(finding)]),
+    });
+  }
 
-  // Validate the Environment's declared policy mode before calling its dependent list endpoint.
-  const metadata = assertEnvironmentMetadata({ environment, releaseEnvironment });
-  const branchPolicies = await getBranchPolicies(fetchImpl, baseUrl, token);
-  const branchPattern = assertExpectedBranchPolicy({ branchPolicies, releaseEnvironment });
+  const findings = [];
+  const addFinding = (code, classification, message) => {
+    findings.push({ code, classification, message });
+  };
+
+  if (environment.name !== releaseEnvironment) {
+    addFinding(
+      "ENVIRONMENT_NAME_MISMATCH",
+      "UNKNOWN",
+      "The returned Environment name does not match the fixed " + releaseEnvironment + " release target.",
+    );
+  }
+
+  const administratorBypassAllowed = typeof environment.can_admins_bypass === "boolean"
+    ? environment.can_admins_bypass
+    : null;
+  if (administratorBypassAllowed === true) {
+    addFinding(
+      "ADMIN_BYPASS_ENABLED",
+      "BLOCKED",
+      "Administrator bypass must be explicitly disabled.",
+    );
+  } else if (administratorBypassAllowed === null) {
+    addFinding(
+      "ADMIN_BYPASS_STATE_UNKNOWN",
+      "UNKNOWN",
+      "The administrator-bypass setting is missing or malformed.",
+    );
+  }
+
+  const reviewerInspection = inspectRequiredReviewers(environment, addFinding);
+  const branchInspection = inspectDeploymentBranchPolicy(environment, addFinding);
+
+  let branchPolicyState = branchInspection.branchPolicyState;
+  let branchPolicyCount = null;
+  let branchPattern = "";
+
+  if (branchInspection.shouldFetchBranchPolicies) {
+    try {
+      const branchPolicies = await getBranchPolicies(fetchImpl, baseUrl, token);
+      const result = inspectBranchPolicySet(branchPolicies, releaseEnvironment, addFinding);
+      branchPolicyState = result.branchPolicyState;
+      branchPolicyCount = result.branchPolicyCount;
+      branchPattern = result.branchPattern;
+    } catch (error) {
+      const finding = classifyApiError(error);
+      findings.push(finding);
+      branchPolicyState = "UNKNOWN";
+    }
+  }
+
+  const frozenFindings = Object.freeze(findings.map(freezeFinding));
+  const status = overallStatus(frozenFindings);
 
   return Object.freeze({
     environment: releaseEnvironment,
+    status,
+    administratorBypassAllowed,
+    requiredReviewerRuleCount: reviewerInspection.requiredReviewerRuleCount,
+    requiredReviewerCount: reviewerInspection.requiredReviewerCount,
+    preventSelfReview: reviewerInspection.preventSelfReview,
+    deploymentBranchPolicy: branchInspection.deploymentBranchPolicy,
+    branchPolicyMode: branchInspection.branchPolicyMode,
+    branchPolicyState,
+    branchPolicyCount,
     branchPattern,
-    requiredReviewerCount: metadata.requiredReviewerCount,
-    authorizedReviewerUserIds: metadata.authorizedReviewerUserIds,
-    deploymentBranchPolicy: metadata.deploymentBranchPolicy,
+    authorizedReviewerUserIds: reviewerInspection.authorizedReviewerUserIds,
+    findings: frozenFindings,
+  });
+}
+
+export async function verifyEnvironmentProtection({
+  repository,
+  releaseEnvironment,
+  token,
+  fetchImpl = globalThis.fetch,
+}) {
+  const inspection = await inspectEnvironmentProtection({
+    repository,
+    releaseEnvironment,
+    token,
+    fetchImpl,
+  });
+
+  if (inspection.status !== "READY") {
+    const firstBlocked = inspection.findings.find(finding => finding.classification === "BLOCKED");
+    const firstFinding = firstBlocked ?? inspection.findings[0];
+    const code = firstBlocked
+      ? "POLICY_MISMATCH"
+      : firstFinding?.code ?? "API_RESPONSE_INVALID";
+    const reason = firstFinding?.message ?? "The Environment protection posture could not be verified.";
+    block(reason, code);
+  }
+
+  return Object.freeze({
+    environment: inspection.environment,
+    branchPattern: inspection.branchPattern,
+    requiredReviewerCount: inspection.requiredReviewerCount,
+    authorizedReviewerUserIds: inspection.authorizedReviewerUserIds,
+    deploymentBranchPolicy: inspection.deploymentBranchPolicy,
   });
 }
 

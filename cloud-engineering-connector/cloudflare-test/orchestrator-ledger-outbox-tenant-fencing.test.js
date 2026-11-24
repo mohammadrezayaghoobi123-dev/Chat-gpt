@@ -18,6 +18,15 @@ async function assertion(keySet, operation, nowMs) {
   });
 }
 
+async function consumerAssertion(keySet, nowMs) {
+  return createScheduledWorkerAssertion(keySet, "test", {
+    subject: "orchestrator-outbox-consumer",
+    role: "consumer",
+    operation: "recordOutboxReceipt",
+    nowMs,
+  });
+}
+
 describe("OrchestratorLedger outbox tenant attribution and lease fencing", () => {
   it("preserves source tenant/project attribution across reclaim and rejects stale publisher generations", async () => {
     const ledger = ledgerFor("outbox-tenant-attribution-lease-fencing");
@@ -98,14 +107,35 @@ describe("OrchestratorLedger outbox tenant attribution and lease fencing", () =>
       expect(staleFail).toMatchObject({ failed: false, reason: "LEASE_FENCE_MISMATCH" });
       expect(staleComplete).toMatchObject({ completed: false, reason: "LEASE_FENCE_MISMATCH" });
 
-      const completed = await instance.completeOutbox({
+      const receipt = await instance.recordOutboxReceipt({
         eventId,
-        workerId: PUBLISHER,
-        workerAssertion: await assertion(keySet, "completeOutbox", reclaimedAt + 3),
+        eventType: "task.created",
+        idempotencyKey: "scoped-outbox-idem",
+        taskId: task.taskId,
+        payload,
+        createdAt: now - 10,
+        schemaVersion: 1,
+        envelopeSha256: "c".repeat(64),
+        consumerId: "orchestrator-outbox-consumer",
+        workerAssertion: await consumerAssertion(keySet, reclaimedAt + 3),
         leaseGeneration: 2,
         now: reclaimedAt + 3,
       });
-      expect(completed).toMatchObject({ completed: true, eventId, leaseGeneration: 2 });
+      expect(receipt).toMatchObject({
+        recorded: true,
+        completed: true,
+        eventId,
+        leaseGeneration: 2,
+      });
+
+      const completed = await instance.completeOutbox({
+        eventId,
+        workerId: PUBLISHER,
+        workerAssertion: await assertion(keySet, "completeOutbox", reclaimedAt + 4),
+        leaseGeneration: 2,
+        now: reclaimedAt + 4,
+      });
+      expect(completed).toMatchObject({ completed: true, replay: true, eventId, leaseGeneration: 2 });
       expect(sql.exec(
         "SELECT status, lease_generation, tenant_id, project_id FROM orchestrator_outbox_events WHERE event_id = ?",
         eventId,

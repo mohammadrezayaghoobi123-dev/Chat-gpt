@@ -105,7 +105,7 @@ describe("OrchestratorLedger tenant/project idempotency isolation", () => {
       return ledger.createTask({
         task,
         idempotencyKey: "client-request-42",
-        inputHash,
+        inputHash: admissionReceipt.claims.taskDigest,
         now: now + 3,
         workerId: "orchestrator-scheduler",
         workerAssertion,

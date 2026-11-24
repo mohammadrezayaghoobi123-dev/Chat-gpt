@@ -648,7 +648,7 @@ export class OrchestratorLedger extends DurableObject {
           return { registered: true, denied: true, reason: "OWNER_RECEIPT_CONFLICT" };
         }
         sql.exec(
-          "UPDATE orchestrator_owner_webhook_retries SET state = 'COMPLETED', last_error_code = NULL, updated_at = ? WHERE delivery_id = ? AND body_sha256 = ? AND comment_id = ? AND command_hash = ? AND state = 'RETRYABLE'",
+          "UPDATE orchestrator_owner_webhook_retries SET state = 'COMPLETED', last_error_code = 'OWNER_COMMAND_COMPLETED', updated_at = ? WHERE delivery_id = ? AND body_sha256 = ? AND comment_id = ? AND command_hash = ? AND state = 'RETRYABLE'",
           now, deliveryId, bodySha256, commentId, commandHash,
         );
         return {
@@ -1835,7 +1835,7 @@ export class OrchestratorLedger extends DurableObject {
                 priorReceipt.issue_number === provenance.issueNumber &&
                 priorReceipt.comment_created_at === provenance.commentCreatedAt) {
               sql.exec(
-                "UPDATE orchestrator_owner_webhook_retries SET state = 'COMPLETED', last_error_code = NULL, updated_at = ? WHERE delivery_id = ? AND body_sha256 = ? AND comment_id = ? AND command_hash = ? AND state = 'RETRYABLE'",
+                "UPDATE orchestrator_owner_webhook_retries SET state = 'COMPLETED', last_error_code = 'OWNER_COMMAND_COMPLETED', updated_at = ? WHERE delivery_id = ? AND body_sha256 = ? AND comment_id = ? AND command_hash = ? AND state = 'RETRYABLE'",
                 now, context.deliveryId, bodySha256, context.commentId, context.commandHash,
               );
               return { replay: true, result: parseJson(priorReceipt.result_json, "Owner command receipt") };
@@ -1929,7 +1929,7 @@ export class OrchestratorLedger extends DurableObject {
             provenance.commentCreatedAt, storedResult, now,
           );
           sql.exec(
-            "UPDATE orchestrator_owner_webhook_retries SET state = 'COMPLETED', last_error_code = NULL, updated_at = ? WHERE delivery_id = ? AND body_sha256 = ? AND comment_id = ? AND command_hash = ? AND repository_id = ? AND actor_id = ? AND task_id = ? AND operation = ? AND issue_number = ? AND comment_created_at = ? AND state = 'RETRYABLE'",
+            "UPDATE orchestrator_owner_webhook_retries SET state = 'COMPLETED', last_error_code = 'OWNER_COMMAND_COMPLETED', updated_at = ? WHERE delivery_id = ? AND body_sha256 = ? AND comment_id = ? AND command_hash = ? AND repository_id = ? AND actor_id = ? AND task_id = ? AND operation = ? AND issue_number = ? AND comment_created_at = ? AND state = 'RETRYABLE'",
             now, context.deliveryId, bodySha256, context.commentId, context.commandHash,
             context.repositoryId, context.actorId, command.taskId, command.operation,
             provenance.issueNumber, provenance.commentCreatedAt,

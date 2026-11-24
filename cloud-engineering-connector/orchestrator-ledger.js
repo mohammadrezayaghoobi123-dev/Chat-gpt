@@ -1136,7 +1136,7 @@ export class OrchestratorLedger extends DurableObject {
       verifiedAssertion = await verifyLedgerWorkerAssertion(
         this.env, workerId, workerAssertion, "agent", "renewLease",
       );
-      now = verifiedAssertion.verifiedAtMs;
+      now = assertionTrustedNow(verifiedAssertion);
     } catch {
       return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }
@@ -1167,7 +1167,7 @@ export class OrchestratorLedger extends DurableObject {
       verifiedAssertion = await verifyLedgerWorkerAssertion(
         this.env, workerId, workerAssertion, "agent", "releaseLease",
       );
-      now = verifiedAssertion.verifiedAtMs;
+      now = assertionTrustedNow(verifiedAssertion);
     } catch {
       return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
     }

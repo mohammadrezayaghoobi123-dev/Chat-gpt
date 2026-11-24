@@ -902,6 +902,7 @@ export async function runReview({
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: "Bearer " + routerApiKey },
     body: JSON.stringify({ model, messages, temperature: 0.1, stream: false, max_tokens: 5000 }),
+    redirect: "error",
     signal: createRequestSignal(deadlineAt),
   }).catch(() => {
     if (Date.now() >= deadlineAt) {

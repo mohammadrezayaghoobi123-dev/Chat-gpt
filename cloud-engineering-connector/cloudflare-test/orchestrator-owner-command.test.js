@@ -2792,7 +2792,6 @@ describe("Owner command atomic Ledger contract", () => {
       task: { taskId: "task-clock-skew-quantized-future-accepted" },
     });
 
-    wallClockNow = outsideQuantizedBoundaryNow;
     const outsideQuantizedBoundary = await ledger.createTask({
       task: {
         ...task("task-clock-skew-quantized-future-rejected"),
@@ -2852,6 +2851,7 @@ describe("Owner command atomic Ledger contract", () => {
       task: { taskId: "task-clock-skew-quantized-expiry-accepted" },
     });
 
+    wallClockNow = outsideQuantizedBoundaryNow;
     const outsideQuantizedBoundary = await ledger.createTask({
       task: {
         ...task("task-clock-skew-quantized-expiry-rejected"),

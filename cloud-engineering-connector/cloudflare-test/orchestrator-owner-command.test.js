@@ -2399,7 +2399,7 @@ describe("Owner command atomic Ledger contract", () => {
   });
 
 
-  it("demonstrates that a caller clock rollback can resurrect an expired unconsumed worker assertion", async () => {
+  it("rejects caller clock rollback after the Ledger wall clock has advanced", async () => {
     const ledger = ledgerFor("worker-assertion-clock-rollback");
     const sharedJti = "worker-jti-clock-rollback-00000001";
     const subject = "orchestrator-scheduler";
@@ -2407,10 +2407,8 @@ describe("Owner command atomic Ledger contract", () => {
     const operation = "createTask";
     const token = await workerAssertion(subject, role, operation, now, sharedJti);
 
-    // Hold the actual wall clock beyond assertion expiry while the caller
-    // supplies logical timestamps. A Ledger-local clock check would reject
-    // the second request; the current caller-time check accepts it.
-    const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(now + 120_000);
+    let wallClockNow = now + 120_000;
+    const wallClockSpy = vi.spyOn(Date, "now").mockImplementation(() => wallClockNow);
     let afterExpiry;
     let afterRollback;
     try {
@@ -2427,9 +2425,8 @@ describe("Owner command atomic Ledger contract", () => {
         workerAssertion: token,
       });
 
-      // The first attempt did not consume the JTI because expiry verification
-      // rejected it before the SQL transaction. Rolling the caller's timestamp
-      // back by 66 seconds makes the same assertion valid again.
+      // Simulate a host clock rollback after the Ledger has observed future time.
+      wallClockNow = now;
       afterRollback = await ledger.createTask({
         task: {
           ...task("task-clock-rollback-resurrected"),
@@ -2450,8 +2447,8 @@ describe("Owner command atomic Ledger contract", () => {
       reason: "AUTHENTICATED_WORKER_REQUIRED",
     });
     expect(afterRollback).toMatchObject({
-      created: true,
-      task: { taskId: "task-clock-rollback-resurrected" },
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
     });
 
     await runInDurableObject(ledger, async (_instance, state) => {
@@ -2459,16 +2456,84 @@ describe("Owner command atomic Ledger contract", () => {
         "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id IN (?, ?)",
         "task-clock-rollback-expired",
         "task-clock-rollback-resurrected",
-      ).one().count).toBe(1);
+      ).one().count).toBe(0);
       expect(state.storage.sql.exec(
-        "SELECT jti, issued_at, expires_at, consumed_at FROM orchestrator_consumed_assertions WHERE jti = ?",
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
         sharedJti,
-      ).toArray()).toEqual([{
-        jti: sharedJti,
-        issued_at: Math.floor(now / 1000),
-        expires_at: Math.floor(now / 1000) + 60,
-        consumed_at: Math.floor((now + 54_000) / 1000),
-      }]);
+      ).one().count).toBe(0);
+    });
+  });
+
+  it("prevents caller time from pruning a consumed JTI and enabling replay", async () => {
+    const ledger = ledgerFor("worker-assertion-caller-time-jti-pruning");
+    const subject = "orchestrator-scheduler";
+    const role = "system";
+    const operation = "createTask";
+    const sharedJti = "worker-jti-caller-time-prune-000001";
+    const originalToken = await workerAssertion(subject, role, operation, now, sharedJti);
+    const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const first = await ledger.createTask({
+        task: { ...task("task-caller-time-jti-original") },
+        idempotencyKey: "caller-time-jti-original",
+        inputHash: "1".repeat(64),
+        now,
+        workerId: subject,
+        workerAssertion: originalToken,
+      });
+      expect(first).toMatchObject({ created: true });
+
+      const attackerFutureNow = now + 661_000;
+      const futureToken = await workerAssertion(
+        subject, role, operation, attackerFutureNow,
+        "worker-jti-caller-time-prune-future-0001",
+      );
+      const futureAttempt = await ledger.createTask({
+        task: {
+          ...task("task-caller-time-jti-future"),
+          createdAt: attackerFutureNow,
+          updatedAt: attackerFutureNow,
+        },
+        idempotencyKey: "caller-time-jti-future",
+        inputHash: "2".repeat(64),
+        now: attackerFutureNow,
+        workerId: subject,
+        workerAssertion: futureToken,
+      });
+
+      const replay = await ledger.createTask({
+        task: {
+          ...task("task-caller-time-jti-replay"),
+          createdAt: now + 54_000,
+          updatedAt: now + 54_000,
+        },
+        idempotencyKey: "caller-time-jti-replay",
+        inputHash: "3".repeat(64),
+        now: now + 54_000,
+        workerId: subject,
+        workerAssertion: originalToken,
+      });
+
+      expect(futureAttempt).toMatchObject({
+        created: false,
+        reason: "AUTHENTICATED_WORKER_REQUIRED",
+      });
+      expect(replay).toMatchObject({
+        created: false,
+        reason: "AUTHENTICATED_WORKER_REQUIRED",
+      });
+    } finally {
+      wallClockSpy.mockRestore();
+    }
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT task_id FROM orchestrator_tasks WHERE task_id LIKE 'task-caller-time-jti-%' ORDER BY task_id",
+      ).toArray().map(row => row.task_id)).toEqual(["task-caller-time-jti-original"]);
+      expect(state.storage.sql.exec(
+        "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
+        sharedJti,
+      ).toArray().map(row => row.jti)).toEqual([sharedJti]);
     });
   });
 

@@ -57,6 +57,9 @@ Run with Node.js 22 from tools/9router-review:
 | T40 | A41, I26 | Recovery unlock verifies each immutable event digest |
 | T41 | A41 | A stale or foreign anchor cannot authorize recovery |
 | T42 | A41 | Failed recovery validation preserves the global lock |
+| T43 | A41 | Ordinary mode setter cannot bypass anchor-verified recovery unlock |
+| T44 | A41 | Recovery lock blocks model-completion writes |
+| T45 | A41 | Recovery lock blocks all non-recovery reservation mutations |
 | 
 
 This is not the A01–A42 backend qualification suite. T32–T42 extend the in-memory reference oracle's reconciliation and recovery-validation coverage; they do not qualify a real provider adapter. The coverage map deliberately marks partial coverage. A02's controlled read-before-insert schedule, A03's forced tuple/hash-collision case, independent-process concurrency, backend failover, storage restore, R2 conditional writes, quota exhaustion, and the remaining matrix cases are still NOT_EXECUTED.

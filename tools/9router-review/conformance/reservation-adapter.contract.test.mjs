@@ -727,3 +727,68 @@ test("T31: comment attempt deadline expiry becomes UNKNOWN and never authorizes 
   });
   assert.equal(retry.status, "ALREADY_CONSUMED");
 });
+
+
+test("T32: repeated positive evidence for one remote comment across overlapping pages is not a duplicate", async () => {
+  const system = makeSystem();
+  const model = await completeModel(system);
+  const result = await system.adapter.reconcileComment({
+    key: KEY,
+    expectedRecordVersion: model.completed.record.record_version,
+    verifiedPositiveEvidence: [
+      { remoteCommentId: 950, exactMatch: true },
+      { remoteCommentId: 950, exactMatch: true },
+    ],
+    listingComplete: false,
+  });
+  assert.equal(result.status, "PUBLISHED");
+  assert.equal(result.record.comment_remote_id, 950);
+  assert.equal(result.record.duplicate_remote_ids, undefined);
+});
+
+test("T33: RECOVERY_LOCKED blocks reconciliation state transitions", async () => {
+  const system = makeSystem();
+  const model = await completeModel(system);
+  await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const result = await system.adapter.reconcileComment({
+    key: KEY,
+    expectedRecordVersion: model.completed.record.record_version,
+    verifiedPositiveEvidence: [{ remoteCommentId: 951, exactMatch: true }],
+    listingComplete: true,
+  });
+  assert.equal(result.status, "RECOVERY_LOCKED");
+  assert.equal((await system.adapter.readAuthoritative({ key: KEY })).record.state, "MODEL_COMPLETED");
+});
+
+test("T34: recovery unlock requires an independently supplied trusted anchor", async () => {
+  const system = makeSystem();
+  await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const inventory = await system.ledger.readComplete({ key: KEY, complete: true });
+  const result = await system.adapter.unlockRecovery({ ledgerInventory: inventory });
+  assert.equal(result.status, "RECOVERY_ANCHOR_REQUIRED");
+  assert.equal((await system.adapter.readAuthoritative({ key: KEY })).status, "NOT_FOUND");
+});
+
+test("T35: recovery unlock rejects a trusted anchor that does not match the inventory watermark", async () => {
+  const system = makeSystem();
+  const intent = await system.ledger.appendIntent({
+    key: KEY, stage: "MODEL", attemptId: "anchor-model-attempt", requestDigest: "anchor-request",
+  });
+  assert.equal(intent.status, "ACK");
+  await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const inventory = await system.ledger.readComplete({ key: KEY, complete: true });
+  const result = await system.adapter.unlockRecovery({
+    ledgerInventory: inventory,
+    trustedAnchor: { watermark: inventory.watermark + 1, digest: "trusted-anchor-digest" },
+  });
+  assert.equal(result.status, "RECOVERY_ANCHOR_MISMATCH");
+  assert.equal((await system.adapter.beginModelAttempt({
+    ...claimArgs(),
+    generation: 1,
+    expectedRecordVersion: 1,
+    attemptId: "blocked-after-bad-anchor",
+    requestDigest: "request",
+    effectLedgerReceipt: intent,
+    attemptTimeoutMs: 100,
+  })).status, "RECOVERY_LOCKED");
+});

@@ -448,7 +448,7 @@ Implementation is NOT authorized by this design record. The next implementation 
 ## Red-phase concurrency test authored — 2026-11-24
 
 **Test:** `tools/9router-review/review.test.mjs` — `deterministic concurrent duplicate-publication red test`  
-**Test-only commit:** `460d073bce1281ce9e15441a7e446621bc3b23a3`  
+**Test-only commit:** `00d4313599585e0b4d60edef5365cdfb9189f3f0`  
 **Test execution:** `NOT_RUN` in this environment. No RED result is claimed.
 
 ### Harness construction and falsification target

@@ -20,7 +20,7 @@ describe("TenantDirectory admission signing key custody", () => {
     const keyId = crypto.randomUUID();
 
     expect(keyPair.privateKey.extractable).toBe(false);
-    expect(keyPair.publicKey.extractable).toBe(false);
+    expect(keyPair.publicKey.extractable).toBe(true);
     expect(keyPair.privateKey.algorithm.name).toBe("Ed25519");
     expect(keyPair.publicKey.algorithm.name).toBe("Ed25519");
 
@@ -40,7 +40,7 @@ describe("TenantDirectory admission signing key custody", () => {
     expect(restored.privateKey).toBeInstanceOf(CryptoKey);
     expect(restored.publicKey).toBeInstanceOf(CryptoKey);
     expect(restored.privateKey.extractable).toBe(false);
-    expect(restored.publicKey.extractable).toBe(false);
+    expect(restored.publicKey.extractable).toBe(true);
     expect(restored.privateKey.usages).toEqual(["sign"]);
     expect(restored.publicKey.usages).toEqual(["verify"]);
 

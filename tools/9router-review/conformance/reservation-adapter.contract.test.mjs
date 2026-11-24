@@ -1018,3 +1018,46 @@ test("T45: recovery lock blocks every non-recovery reservation mutation", async 
   });
   assert.equal(closed.status, "RECOVERY_LOCKED");
 });
+
+
+test("T46: model intent rejects a comment-stage outcome", async () => {
+  const system = makeSystem();
+  const intent = await system.ledger.appendIntent({
+    key: KEY,
+    stage: "MODEL",
+    attemptId: "stage-mismatch-model",
+    requestDigest: "model-request",
+  });
+  assert.equal(intent.status, "ACK");
+  const outcome = await system.ledger.appendOutcome({
+    attemptId: "stage-mismatch-model",
+    outcomeType: "COMMENT_ACCEPTED",
+    evidenceDigest: "comment-response",
+    evidenceReference: "github-comment://9001",
+  });
+  assert.equal(outcome.status, "INVALID_OUTCOME_STAGE");
+  const inventory = await system.ledger.readComplete({ key: KEY });
+  assert.equal(inventory.events.length, 1);
+  assert.equal(inventory.events[0].kind, "INTENT");
+});
+
+test("T47: comment intent rejects a model-stage outcome", async () => {
+  const system = makeSystem();
+  const intent = await system.ledger.appendIntent({
+    key: KEY,
+    stage: "COMMENT",
+    attemptId: "stage-mismatch-comment",
+    requestDigest: "comment-payload",
+  });
+  assert.equal(intent.status, "ACK");
+  const outcome = await system.ledger.appendOutcome({
+    attemptId: "stage-mismatch-comment",
+    outcomeType: "MODEL_RESULT_STORED",
+    evidenceDigest: "model-result",
+    evidenceReference: "encrypted-result://9002",
+  });
+  assert.equal(outcome.status, "INVALID_OUTCOME_STAGE");
+  const inventory = await system.ledger.readComplete({ key: KEY });
+  assert.equal(inventory.events.length, 1);
+  assert.equal(inventory.events[0].kind, "INTENT");
+});

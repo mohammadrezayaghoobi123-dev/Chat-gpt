@@ -2728,3 +2728,103 @@ it("recovers a Queue-accepted send with a lost acknowledgement through bounded r
     dateNow.mockRestore();
   }
 }, 15000);
+
+
+it("rejects stale validation evidence after the same task advances to a new version", async () => {
+  const ledger = ledgerFor("ledger-stale-task-version-evidence");
+  const taskId = "task-stale-evidence-version-0001";
+  const commitSha = "d".repeat(40);
+
+  await createTask(ledger, {
+    task: { ...task(taskId), commitSha },
+    idempotencyKey: "task-stale-evidence-version-create",
+    inputHash: "4".repeat(64),
+    now,
+  });
+
+  const lease = await ledger.claimTask({
+    taskId,
+    workerId: "agent:worker-1",
+    workerAssertion: await claimAssertion("agent:worker-1"),
+    leaseMs: 30_000,
+    now,
+  });
+  expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+  const priorVersionEvidence = {
+    kind: "validation-evidence",
+    taskId,
+    taskVersion: 1,
+    commitSha,
+    validationOutcome: "PASS",
+    evidenceDigest: "e".repeat(64),
+    issuer: "validator:independent-01",
+  };
+
+  const firstTransition = await ledger.transitionTask({
+    taskId,
+    expectedVersion: 1,
+    expectedState: "SCHEDULED",
+    nextState: "RUNNING",
+    actor: agent,
+    evidence: { kind: "execution-start", taskId, taskVersion: 1, commitSha },
+    now: now + 1,
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1",
+      role: "agent",
+      operation: "transitionTask",
+      nowMs: now + 1,
+      jti: "jti-stale-evidence-first-transition-0001",
+    }),
+    leaseGeneration: lease.leaseGeneration,
+  });
+  expect(firstTransition).toMatchObject({ updated: true, task: { state: "RUNNING", version: 2 } });
+
+  const replayResult = await ledger.transitionTask({
+    taskId,
+    expectedVersion: 2,
+    expectedState: "RUNNING",
+    nextState: "VERIFYING",
+    actor: agent,
+    evidence: priorVersionEvidence,
+    now: now + 2,
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1",
+      role: "agent",
+      operation: "transitionTask",
+      nowMs: now + 2,
+      jti: "jti-stale-evidence-replay-0001",
+    }),
+    leaseGeneration: lease.leaseGeneration,
+  });
+
+  const taskAfter = await ledger.getTask({ taskId });
+  const persisted = await runInDurableObject(ledger, async (_instance, state) => ({
+    lease: state.storage.sql.exec(
+      "SELECT worker_id, lease_generation FROM orchestrator_execution_leases WHERE task_id = ?",
+      taskId,
+    ).one(),
+    replayJtiCount: state.storage.sql.exec(
+      "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+      "jti-stale-evidence-replay-0001",
+    ).one().count,
+  }));
+
+  // Evidence created for Task version 1 must not authorize a transition at
+  // version 2, even when Task ID, commit SHA, Agent identity, and Lease match.
+  expect.soft(replayResult.updated).toBe(false);
+  expect.soft(taskAfter).toMatchObject({
+    taskId,
+    state: "RUNNING",
+    version: 2,
+    commitSha,
+  });
+  expect.soft(taskAfter.lastTransition?.evidence).not.toEqual(priorVersionEvidence);
+  expect.soft(persisted.lease).toMatchObject({
+    worker_id: "agent:worker-1",
+    lease_generation: 1,
+  });
+  expect.soft(persisted.replayJtiCount).toBe(1);
+});

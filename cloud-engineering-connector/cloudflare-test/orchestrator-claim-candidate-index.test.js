@@ -1,11 +1,12 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOwnerAssertion } from "../orchestrator-owner-assertion.js";
 import { CLAIM_CANDIDATE_QUERY } from "../orchestrator-ledger.js";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 
-const now = Date.now();
+let now;
+beforeEach(() => { now = Date.now(); });
 afterEach(() => vi.restoreAllMocks());
 const TEST_ASSERTION_KID = "test-v1";
 const TEST_ASSERTION_KEY = Uint8Array.from(

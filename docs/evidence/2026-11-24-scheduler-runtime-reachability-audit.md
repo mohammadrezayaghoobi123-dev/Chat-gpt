@@ -71,7 +71,16 @@ The GitHub Actions workflow inventory was also reviewed:
 - `cloud-engineering-connector/orchestrator-github-intake.js:176-177` explicitly returns `sideEffects: false` and `taskExecution: false`.
 - Among the repository's 18 workflow files, the only `schedule:` trigger found is `.github/workflows/secret-history-scan.yml:8-9`, a weekly Gitleaks scan. No scheduled GitHub Actions task-creation workflow was found.
 
-### 2.5 Whole-source static call-site scan
+### 2.5 MCP and webhook ingress
+
+- `cloud-engineering-connector/worker.js:21-39` declares the finite MCP `TOOLS` catalog. It contains repository inspection, architecture, Brain Store/Vault, and draft-PR operations; it contains no Orchestrator Task creation, Scheduler, or generic Durable Object RPC tool.
+- `cloud-engineering-connector/worker.js:828-846` dispatches only the explicit tool-name switch. Unknown names throw `Unknown tool`; callers cannot choose an arbitrary Durable Object method.
+- `cloud-engineering-connector/worker.js:1128` resolves a requested MCP tool through `TOOLS.find` before calling the fixed dispatcher. Public unauthenticated access is separately constrained by `PUBLIC_READ_ONLY_TOOLS`.
+- The GitHub webhook path (`worker.js:1027-1073`) uses the Ledger's `claimGitHubDelivery` method as a delivery replay store. It does not invoke `createTask`. The validated intake result is explicitly marked `sideEffects: false` and `taskExecution: false` (`orchestrator-github-intake.js:176-177`).
+
+This further falsifies the hypothesis that the current MCP or GitHub webhook ingress is a hidden generic Scheduler-to-Ledger bridge.
+
+### 2.6 Whole-source static call-site scan
 
 The audit enumerated the complete recursive Git tree for the audited commit. It contained 20 non-test JavaScript modules under `cloud-engineering-connector/`. Those modules were fetched and checked for the Scheduler signer, direct `createTask` invocation, `.createTask` RPC invocation, Scheduler principal, and `claimTask` call-sites.
 

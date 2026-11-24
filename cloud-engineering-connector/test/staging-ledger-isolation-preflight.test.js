@@ -93,7 +93,7 @@ function runPreflight({
           ? "production-metadata"
           : "unknown";
       fs.appendFileSync(process.env.MOCK_AUTH_CALLS_PATH, url.pathname + "|" + tokenClass + "\\n");
-      if (denyProductionRead && url.pathname.endsWith("/workers/scripts/chat-gpt111/settings")) {
+      if (process.env.MOCK_DENY_PRODUCTION_READ === "true" && url.pathname.endsWith("/workers/scripts/chat-gpt111/settings")) {
         return Response.json({ success: false, errors: [{ code: 10000, message: "permission denied" }] }, { status: 403 });
       }
       let result;
@@ -131,6 +131,7 @@ function runPreflight({
         GITHUB_OUTPUT: outputPath,
         MOCK_CALLS_PATH: callsPath,
         MOCK_AUTH_CALLS_PATH: authCallsPath,
+        MOCK_DENY_PRODUCTION_READ: denyProductionRead ? "true" : "false",
       },
     });
 
@@ -266,7 +267,7 @@ function runPostDeploy({
           ? "production-metadata"
           : "unknown";
       fs.appendFileSync(process.env.MOCK_AUTH_CALLS_PATH, url.pathname + "|" + tokenClass + "\\n");
-      if (denyProductionRead && url.pathname.endsWith("/workers/scripts/chat-gpt111/settings")) {
+      if (process.env.MOCK_DENY_PRODUCTION_READ === "true" && url.pathname.endsWith("/workers/scripts/chat-gpt111/settings")) {
         return Response.json({ success: false, errors: [{ code: 10000, message: "permission denied" }] }, { status: 403 });
       }
       if (url.pathname.endsWith("/workers/scripts/chat-gpt111/settings")) {
@@ -296,6 +297,7 @@ function runPostDeploy({
         CLOUDFLARE_PRODUCTION_METADATA_TOKEN: productionMetadataToken ?? "",
         MOCK_CALLS_PATH: callsPath,
         MOCK_AUTH_CALLS_PATH: authCallsPath,
+        MOCK_DENY_PRODUCTION_READ: denyProductionRead ? "true" : "false",
       },
     });
 

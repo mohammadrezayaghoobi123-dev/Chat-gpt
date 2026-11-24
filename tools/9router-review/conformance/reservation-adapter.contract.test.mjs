@@ -892,3 +892,38 @@ test("T42: failed recovery validation never clears the global recovery lock", as
   const owner = await claim(system);
   assert.equal(owner.status, "RECOVERY_LOCKED");
 });
+
+
+test("T43: recovery lock cannot be downgraded through the ordinary mode setter", async () => {
+  const system = makeSystem();
+  await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const result = await system.adapter.setRecoveryMode("ACTIVE");
+  assert.equal(result.status, "RECOVERY_UNLOCK_REQUIRES_ANCHOR");
+  const owner = await claim(system);
+  assert.equal(owner.status, "RECOVERY_LOCKED");
+});
+
+test("T44: recovery lock blocks completion writes until verified recovery unlock", async () => {
+  const system = makeSystem();
+  const started = await modelAttempt(system);
+  const resultReference = "encrypted-result://model-attempt-1";
+  const resultDigest = "model-result-digest";
+  const outcome = await system.ledger.appendOutcome({
+    attemptId: started.attemptId,
+    outcomeType: "MODEL_RESULT_STORED",
+    evidenceDigest: resultDigest,
+    evidenceReference: resultReference,
+  });
+  await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
+  const completion = await system.adapter.completeModelAttempt({
+    key: KEY,
+    generation: started.claimed.record.generation,
+    attemptId: started.attemptId,
+    expectedRecordVersion: started.permit.record_version,
+    resultReference,
+    resultDigest,
+    effectLedgerReceipt: outcome,
+  });
+  assert.equal(completion.status, "RECOVERY_LOCKED");
+  assert.equal((await system.adapter.readAuthoritative({ key: KEY })).record.state, "MODEL_ATTEMPTED");
+});

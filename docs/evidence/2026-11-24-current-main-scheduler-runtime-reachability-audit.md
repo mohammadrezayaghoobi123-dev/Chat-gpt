@@ -55,7 +55,7 @@ Evidence:
 
 Interpretation:
 
-The binding and class registration establish that the repository provisions a Durable Object capability. They do not establish that any Worker calls that capability. The absence of a checked-in cron declaration is a source-configuration observation only; Cloudflare dashboard state was not queried, and no claim is made about deployed trigger state.
+The binding and class registration establish that the repository provisions a Durable Object capability. They do not establish that any Worker calls that capability. The absence of a checked-in cron declaration is a source-configuration observation. Read-only Cloudflare API inspection of the connected account was subsequently performed; live schedules and binding results are recorded in Section 10.
 
 ### 2.3 Scheduler assertion implementation
 
@@ -147,7 +147,11 @@ The repository does not establish which contract the owner has approved. The imp
 | External/deployed Scheduler caller | Unknown |
 | Scheduler assertion bound to Tenant/Project/Task | No |
 | Scheduler admission authorized through Tenant Directory/policy at Ledger boundary | Not demonstrated |
-| Production exploitability | Unknown |
+| Production exploitability | Unknown; no Scheduler or Ledger binding was observed in the connected Cloudflare account, but external accounts/callers remain unexamined |
+| Live `chat-gpt111` Cron schedules | Empty array from read-only Cloudflare API |
+| Live `chat-gpt111` handlers | `fetch` only |
+| Live `chat-gpt111` `ORCHESTRATOR_LEDGER` binding | Absent from returned Worker settings |
+| Live `chat-gpt111` Durable Object exports | Empty exports map |
 | Production vulnerability verdict | Not assigned |
 
 Do not classify the unknown external runtime as safe or vulnerable. Do not treat a passing test that directly calls the Durable Object as proof of production reachability.
@@ -177,3 +181,42 @@ Once the runtime owner and intended authority are identified:
 ## 9. Non-actions and safety boundary
 
 This audit created no production-code change, did not alter `main`, did not change Worker configuration, bindings, triggers, Queues, secrets, or Cloudflare resources, and did not merge or deploy anything. No secret values or fingerprints were accessed or recorded.
+
+## 10. Live Cloudflare account evidence (read-only, 2026-11-24)
+
+A read-only Cloudflare API inspection was performed after the source-only audit. The connected account's Worker Scripts list returned exactly three scripts on the queried page (`per_page=100`, page 1):
+
+| Script | Live default handlers | Named handlers / DO exports | Cron schedules |
+|---|---|---|---|
+| `chat-gpt111` | `fetch` | None; exports map empty | Empty |
+| `chat-gpt111-staging` | `fetch` | `WriteControl` Durable Object | Empty |
+| `master-brain-cloud-agent` | `fetch` | `AgentBudget`, `AgentSession` Durable Objects | Empty |
+
+The following read-only API results were obtained:
+
+- `GET /accounts/{account_id}/workers/scripts` returned the three script names above. The response did not include additional pagination metadata.
+- `GET /accounts/{account_id}/workers/scripts/{script_name}/schedules` succeeded for all three scripts; each returned `schedules: []`.
+- The script inventory reported only `fetch` in the default `handlers` array for all three scripts. No deployed `scheduled` handler was listed.
+- `GET .../chat-gpt111/settings` succeeded. Its binding names/types did **not** include `ORCHESTRATOR_LEDGER`; the returned `exports` map in the script inventory was empty.
+- The staging Worker had a `WRITE_CONTROL` Durable Object namespace binding and a `WriteControl` named Durable Object export, but no `ORCHESTRATOR_LEDGER` binding/export.
+- The Master Brain cloud agent had `AgentBudget` and `AgentSession` Durable Object exports/bindings, but no Scheduler handler or cron schedule.
+- The latest listed `chat-gpt111` deployment was created at `2026-11-03T14:29:40.273955Z`. The audited `main` head commit was authored/committed at `2026-11-09T18:07:14Z`. The deployed artifact therefore predates the audited `main` head by timestamp; the deployment source commit identity was not established from the metadata returned.
+
+### 10.1 Consequence
+
+The live metadata does not show an active Cron Trigger or Scheduler handler among the three Workers visible in the connected Cloudflare account. More materially, the live production Worker `chat-gpt111` does not expose the `ORCHESTRATOR_LEDGER` binding or Durable Object export that current `main` declares in `wrangler.toml`.
+
+This is a **verified source-versus-live-configuration discrepancy** for the connected account at inspection time. It means the inspected `chat-gpt111` deployment is not demonstrated to contain the current-main Ledger binding. It does not establish which commit produced the deployment or whether a separately configured Worker in another Cloudflare account, an external service, or a different execution platform can access a Ledger namespace.
+
+### 10.2 Updated threat disposition
+
+- **In-repository Scheduler caller:** not found in 19/19 production JS/TS source files.
+- **Connected-account Cron triggers:** none returned for the three listed Workers.
+- **Connected-account Scheduler event handlers:** none listed for the three Workers.
+- **Live production `ORCHESTRATOR_LEDGER` binding:** absent from `chat-gpt111` settings.
+- **Deployment provenance to current `main`:** not established; live deployment timestamp predates audited `main` head.
+- **External runtime or another Cloudflare account:** unknown.
+- **Production exploitability:** unknown; no active production Scheduler-to-Ledger path was demonstrated in the inspected repository/account.
+- **Primary operational finding:** deployment/configuration parity is not established. Do not deploy merely to make the live account match `main`; first determine the intended release state and obtain separate authorization.
+
+No secret values, tokens, key material, or secret fingerprints were retrieved. Only binding names and types were inspected. All Cloudflare calls in this section were GET operations; no Worker, binding, trigger, secret, Durable Object, queue, or deployment was modified.

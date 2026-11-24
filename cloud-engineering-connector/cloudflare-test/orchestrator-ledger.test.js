@@ -1,13 +1,26 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalJson, sha256Canonical } from "../orchestrator-protocol.js";
 import { consumeOrchestratorDeadLetters, consumeOrchestratorOutbox, processOrchestratorOutbox } from "../worker.js";
 
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
 }
-const now = 1_800_000_000_000;
+let now = 0;
+let wallClockNow = 0;
+let wallClockSpy;
+
+beforeEach(() => {
+  now = Math.floor(Date.now() / 1000) * 1000;
+  wallClockNow = now;
+  wallClockSpy = vi.spyOn(Date, "now").mockImplementation(() => wallClockNow);
+});
+
+afterEach(() => {
+  wallClockSpy?.mockRestore();
+  wallClockSpy = undefined;
+});
 const task = (taskId = "task-0001") => ({
   taskId, state: "SCHEDULED", version: 1, agentRound: 0, createdAt: now, updatedAt: now,
   executorId: "agent:worker-1", commitSha: "a".repeat(40),
@@ -60,7 +73,7 @@ const evidence = { kind: "test-evidence", reference: "ci://run/123" };
 describe("OrchestratorLedger durable coordination contract", () => {
   it("initializes its own SQLite schema and reports the schema version", async () => {
     const ledger = ledgerFor("ledger-schema-ping");
-    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 7 });
+    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 8 });
     await runInDurableObject(ledger, async (instance, state) => {
       const tables = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row => row.name);
       expect(tables).toEqual(expect.arrayContaining([
@@ -162,6 +175,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       idempotencyKey: "claim-skip-expired-second", inputHash: "b".repeat(64), now: now + 1,
     });
 
+    wallClockNow = now + 101;
     const result = await ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101),
       leaseMs: 30_000, now: now + 101,
@@ -208,6 +222,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       now: now + 100,
     });
 
+    wallClockNow = now + 101;
     const result = await ledger.claimTask({
       workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101),
       leaseMs: 30_000, now: now + 101,
@@ -391,6 +406,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     await expect(ledger.claimOutbox({ workerId: "publisher-1", leaseMs: 100, now }))
       .resolves.toMatchObject({ claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" });
     const first = await ledger.claimOutbox({ workerId: "publisher-1", workerAssertion: await createWorkerAssertion({ subject: "publisher-1", role: "publisher", operation: "claimOutbox", nowMs: now }), leaseMs: 100, now });
+    wallClockNow = now + 101;
     const second = await ledger.claimOutbox({ workerId: "publisher-2", workerAssertion: await createWorkerAssertion({ subject: "publisher-2", role: "publisher", operation: "claimOutbox", nowMs: now + 101 }), leaseMs: 100, now: now + 101 });
     expect(second.leaseGeneration).toBe(first.leaseGeneration + 1);
     await expect(ledger.completeOutbox({ eventId: "event-0002", workerId: "publisher-1", workerAssertion: await createWorkerAssertion({ subject: "publisher-1", role: "publisher", operation: "completeOutbox", nowMs: now + 102 }), leaseGeneration: first.leaseGeneration, now: now + 102 }))
@@ -420,6 +436,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       }),
       leaseMs: 30_000, now,
     });
+    wallClockNow = now + 1;
     const failed = await ledger.failOutbox({
       eventId: "event-outbox-retry", workerId: "publisher-1",
       workerAssertion: await createWorkerAssertion({
@@ -432,6 +449,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       failed: true, retryScheduled: true, deadLettered: false,
       nextAttemptAt: now + 1_001,
     });
+    wallClockNow = now + 500;
     await expect(ledger.claimOutbox({
       workerId: "publisher-2",
       workerAssertion: await createWorkerAssertion({
@@ -440,6 +458,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       leaseMs: 30_000, now: now + 500,
     })).resolves.toMatchObject({ claimed: false, reason: "NO_OUTBOX_AVAILABLE" });
 
+    wallClockNow = now + 1_001;
     const retry = await ledger.claimOutbox({
       workerId: "publisher-2",
       workerAssertion: await createWorkerAssertion({
@@ -448,6 +467,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       leaseMs: 30_000, now: now + 1_001,
     });
     expect(retry).toMatchObject({ claimed: true, event: { attempts: 2 } });
+    wallClockNow = now + 1_002;
     const deadLetter = await ledger.failOutbox({
       eventId: "event-outbox-retry", workerId: "publisher-2",
       workerAssertion: await createWorkerAssertion({
@@ -519,6 +539,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
     const ledger = ledgerFor("ledger-expired-lease-reconciliation");
     await createTask(ledger, { task: task(), idempotencyKey: "task-create-0012", inputHash: "b".repeat(64), now });
     const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
+    wallClockNow = now + 101;
     await expect(ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101 }))
       .resolves.toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
     const untrustedEvidence = await ledger.claimTask({
@@ -962,6 +983,7 @@ it("consumes a signed lease-renewal assertion once and rejects replay", async ()
     workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"),
     leaseMs: 30_000, now,
   });
+  wallClockNow = now + 1;
   const assertion = await createWorkerAssertion({
     subject: "agent:worker-1", role: "agent", operation: "renewLease", nowMs: now + 1,
     jti: "jti-renew-once-000000000001",
@@ -1154,6 +1176,7 @@ it("prunes consumed assertion IDs only after expiry plus the retention margin", 
   });
   await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: assertion, leaseMs: 30_000, now });
   const later = now + 12 * 60 * 1000;
+  wallClockNow = later;
   await createTask(ledger, { task: task("task-0002"), idempotencyKey: "task-create-retention-2", inputHash: "3".repeat(64), now: later });
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti='jti-claim-retention-000000000001'").one().count).toBe(0);
@@ -1180,6 +1203,7 @@ it("moves an expired final-attempt outbox lease to a lease-free dead-letter stat
   let finalAttempt;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const attemptNow = now + (attempt - 1) * 101;
+    wallClockNow = attemptNow;
     finalAttempt = await ledger.claimOutbox({
       workerId: "publisher-" + attempt,
       workerAssertion: await createWorkerAssertion({
@@ -1191,6 +1215,7 @@ it("moves an expired final-attempt outbox lease to a lease-free dead-letter stat
   }
 
   const afterLeaseExpiry = now + 8 * 101;
+  wallClockNow = afterLeaseExpiry;
   const exhausted = await ledger.claimOutbox({
     workerId: "publisher-recovery",
     workerAssertion: await createWorkerAssertion({
@@ -1445,9 +1470,7 @@ it("integrates the real Durable Object Ledger with publisher and Queue consumer 
 
 
 it("acknowledges a republished event after an uncertain send even when the publisher attempt counter changes", async () => {
-  const integrationNow = Date.now();
-  let clockNow = integrationNow;
-  const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+  const integrationNow = now;
   try {
     const ledger = ledgerFor("orchestrator-ledger-republish-e2e");
     const taskId = "task-queue-republish-e2e";
@@ -1503,7 +1526,7 @@ it("acknowledges a republished event after an uncertain send even when the publi
     expect(queued).toHaveLength(1);
     expect(queued[0].message.attempts).toBe(1);
 
-    clockNow += 120_001;
+    wallClockNow = integrationNow + 120_001;
     const recoveryPublish = await processOrchestratorOutbox(runtimeEnv, { maxEvents: 1 });
     expect(recoveryPublish).toMatchObject({ processed: 1, published: 1, completionPending: 0 });
     expect(queued).toHaveLength(2);
@@ -1576,7 +1599,6 @@ it("acknowledges a republished event after an uncertain send even when the publi
       ).one().status).toBe("COMPLETED");
     });
   } finally {
-    dateNow.mockRestore();
   }
 });
 
@@ -2127,6 +2149,7 @@ it("rejects an expired lease even when its generation is still current", async (
       now,
     });
     expect(lease).toMatchObject({ claimed: true, leaseGeneration: 1 });
+    wallClockNow = now + 101;
     await expect(ledger.transitionTask({
       taskId: "task-0001", expectedVersion: 1, expectedState: "SCHEDULED", nextState: "RUNNING",
       actor: agent, evidence, now: now + 101, workerId: "agent:worker-1",
@@ -2238,9 +2261,7 @@ it("rejects an expired lease even when its generation is still current", async (
 
 
 it("fences a late publisher acknowledgement after lease reclamation and deduplicates concurrent consumer deliveries", async () => {
-  const integrationNow = Date.now();
-  let clockNow = integrationNow;
-  const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+  const integrationNow = now;
   let releaseFirstSend;
   let resolveFirstSendEntered;
   const firstSendRelease = new Promise(resolve => { releaseFirstSend = resolve; });
@@ -2292,7 +2313,7 @@ it("fences a late publisher acknowledgement after lease reclamation and deduplic
 
     // The first Queue send is accepted by the transport fixture, but its
     // acknowledgement is delayed beyond the 120-second Ledger lease.
-    clockNow = integrationNow + 120_001;
+    wallClockNow = integrationNow + 120_001;
     const secondPublisher = await processOrchestratorOutbox(publisherEnv, { maxEvents: 1 });
     expect(secondPublisher).toEqual({
       processed: 1, published: 1, failed: 0, deadLettered: 0, completionPending: 0,
@@ -2362,14 +2383,11 @@ it("fences a late publisher acknowledgement after lease reclamation and deduplic
     });
   } finally {
     releaseFirstSend();
-    dateNow.mockRestore();
   }
 }, 15000);
 
 it("recovers a Queue-accepted send with a lost acknowledgement through bounded retry and concurrent receipt deduplication", async () => {
-  const integrationNow = Date.now();
-  let clockNow = integrationNow;
-  const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+  const integrationNow = now;
   const queued = [];
   let sendCalls = 0;
   try {
@@ -2436,7 +2454,7 @@ it("recovers a Queue-accepted send with a lost acknowledgement through bounded r
       last_error_code: "OUTBOX_QUEUE_PUBLISH_FAILED",
     });
 
-    clockNow = integrationNow + 1_001;
+    wallClockNow = integrationNow + 1_001;
     const secondPublisher = await processOrchestratorOutbox(publisherEnv, { maxEvents: 1 });
     expect(secondPublisher).toEqual({
       processed: 1, published: 1, failed: 0, deadLettered: 0, completionPending: 0,
@@ -2486,6 +2504,5 @@ it("recovers a Queue-accepted send with a lost acknowledgement through bounded r
       });
     });
   } finally {
-    dateNow.mockRestore();
   }
 }, 15000);

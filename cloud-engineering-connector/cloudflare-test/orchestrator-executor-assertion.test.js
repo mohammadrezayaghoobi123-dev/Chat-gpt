@@ -1,12 +1,25 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalJson } from "../orchestrator-protocol.js";
 import { createExecutorWorkerAssertion } from "../orchestrator-executor-assertion.js";
 
 const EXECUTOR_ID = "orchestrator-executor";
 const EXECUTOR_KID = "executor-ed25519-v1";
-const now = Date.now();
+let now = 0;
+let wallClockNow = 0;
+let wallClockSpy;
+
+beforeEach(() => {
+  now = Math.floor(Date.now() / 1000) * 1000;
+  wallClockNow = now;
+  wallClockSpy = vi.spyOn(Date, "now").mockImplementation(() => wallClockNow);
+});
+
+afterEach(() => {
+  wallClockSpy?.mockRestore();
+  wallClockSpy = undefined;
+});
 
 function ledgerFor(name) {
   return env.ORCHESTRATOR_LEDGER.get(env.ORCHESTRATOR_LEDGER.idFromName(name));
@@ -417,6 +430,7 @@ describe("Executor Ed25519 trust boundary", () => {
       leaseMs: 30_000,
       now: now + 1,
     })).resolves.toMatchObject({ renewed: false, reason: "LEASE_FENCE_MISMATCH" });
+    wallClockNow = now + 5;
     await expect(ledger.releaseLease({
       taskId: "task-executor-lease-fencing",
       workerId: EXECUTOR_ID,
@@ -431,6 +445,7 @@ describe("Executor Ed25519 trust boundary", () => {
         now + 3, "task-executor-lease-fencing",
       );
     });
+    wallClockNow = now + 4;
     await expect(ledger.renewLease({
       taskId: "task-executor-lease-fencing",
       workerId: EXECUTOR_ID,
@@ -559,7 +574,7 @@ describe("Executor Ed25519 trust boundary", () => {
     let clockReads = 0;
     Date.now = () => {
       clockReads += 1;
-      return clockReads === 1 ? verificationTime : verificationTime + 1_000;
+      return verificationTime + 1_000;
     };
     try {
       const renewed = await ledger.renewLease({
@@ -574,7 +589,7 @@ describe("Executor Ed25519 trust boundary", () => {
         renewed: false,
         reason: "LEASE_FENCE_MISMATCH",
       });
-      expect(clockReads).toBeGreaterThanOrEqual(2);
+      expect(clockReads).toBe(1);
     } finally {
       Date.now = realNow;
     }
@@ -606,7 +621,7 @@ describe("Executor Ed25519 trust boundary", () => {
     let clockReads = 0;
     Date.now = () => {
       clockReads += 1;
-      return clockReads === 1 ? verificationTime : verificationTime + 1_000;
+      return verificationTime + 1_000;
     };
     try {
       const released = await ledger.releaseLease({
@@ -620,7 +635,7 @@ describe("Executor Ed25519 trust boundary", () => {
         released: false,
         reason: "LEASE_FENCE_MISMATCH",
       });
-      expect(clockReads).toBeGreaterThanOrEqual(2);
+      expect(clockReads).toBe(1);
     } finally {
       Date.now = realNow;
     }

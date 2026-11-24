@@ -99,10 +99,10 @@ export async function createOwnerAssertion(keySet, activeKid, context, nowMs) {
   }
 }
 
-export async function verifyOwnerAssertion(keySet, token, expected) {
+async function verifyOwnerAssertionInternal(keySet, token, expected, checkTime) {
   try {
     validateContext(expected);
-    validateNow(expected.nowMs);
+    if (checkTime) validateNow(expected.nowMs);
     if (typeof token !== "string" || token.length > 4096) throw reject();
     const parts = token.split(".");
     if (parts.length !== 4 || parts[0] !== "v1" || !KID.test(parts[1])) throw reject();
@@ -119,16 +119,32 @@ export async function verifyOwnerAssertion(keySet, token, expected) {
         claims.taskId !== expected.taskId || claims.operation !== expected.operation ||
         claims.deliveryId !== expected.deliveryId || claims.commentId !== expected.commentId ||
         claims.commandHash !== expected.commandHash || !ID.test(claims.jti) || claims.jti.length < 22 ||
-        !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp)) throw reject();
-    const nowSeconds = Math.floor(expected.nowMs / 1000);
-    if (claims.exp <= claims.iat || claims.exp - claims.iat > MAX_LIFETIME_SECONDS ||
-        claims.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
-        claims.exp < nowSeconds - CLOCK_SKEW_SECONDS) throw reject();
+        !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp) ||
+        claims.exp <= claims.iat || claims.exp - claims.iat > MAX_LIFETIME_SECONDS) throw reject();
     const supplied = decodeBase64Url(parts[3]);
     if (supplied.byteLength !== 32 ||
         !(await verifyMac(keyBytes, parts.slice(0, 3).join("."), supplied))) throw reject();
+    if (checkTime && !isOwnerAssertionTimeValidAt(claims, expected.nowMs)) throw reject();
     return Object.freeze({ ...claims, kid: parts[1] });
   } catch {
     throw reject();
   }
+}
+
+export async function verifyOwnerAssertion(keySet, token, expected) {
+  return verifyOwnerAssertionInternal(keySet, token, expected, true);
+}
+
+export async function verifyOwnerAssertionSignature(keySet, token, expected) {
+  return verifyOwnerAssertionInternal(keySet, token, expected, false);
+}
+
+export function isOwnerAssertionTimeValidAt(assertion, nowMs) {
+  if (!assertion || !Number.isSafeInteger(nowMs) || nowMs < 1 ||
+      !Number.isSafeInteger(assertion.iat) || !Number.isSafeInteger(assertion.exp) ||
+      assertion.exp <= assertion.iat ||
+      assertion.exp - assertion.iat > MAX_LIFETIME_SECONDS) return false;
+  const nowSeconds = Math.floor(nowMs / 1000);
+  return assertion.iat <= nowSeconds + CLOCK_SKEW_SECONDS &&
+    assertion.exp >= nowSeconds - CLOCK_SKEW_SECONDS;
 }

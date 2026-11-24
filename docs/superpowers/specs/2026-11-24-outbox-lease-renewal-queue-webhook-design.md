@@ -105,6 +105,7 @@ Add renewOutboxLease with this contract:
 
 - fixed consumer principal: orchestrator-outbox-consumer;
 - assertion role/operation: consumer / renewOutboxLease;
+- the persisted lease owner remains the fixed publisher principal orchestrator-outbox-publisher from claimOutbox; consumer assertion identity and lease owner are separate values and must never be conflated. Every renew, fail, receipt, and DLQ source mutation compares the row's lease_worker_id with the supplied leaseOwnerId while independently verifying the signed actor principal/role;
 - require exact event ID, lease owner, generation, current token digest, IN_PROGRESS state, and lease_until > now;
 - reject expired leases; renewal must never resurrect an expired lease;
 - require bounded positive leaseMs <= MAX_LEASE_MS;

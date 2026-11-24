@@ -624,7 +624,7 @@ export class OrchestratorLedger extends DurableObject {
       }
       const existing = sql.exec("SELECT * FROM orchestrator_tasks WHERE idempotency_key = ?", idempotencyKey).toArray()[0];
       if (existing) {
-        if (existing.input_hash !== inputHash || existing.task_id !== normalizedTask.taskId) {
+        if (existing.task_id !== normalizedTask.taskId) {
           return { created: false, conflict: true, reason: "IDEMPOTENCY_CONFLICT" };
         }
         return { created: false, replay: true, task: taskFromRow(existing) };

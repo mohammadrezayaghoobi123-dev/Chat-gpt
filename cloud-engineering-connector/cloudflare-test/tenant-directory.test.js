@@ -423,7 +423,7 @@ describe("persistent Tenant Directory", () => {
     const tenantId = "tenant-epoch-rollback";
     const principalId = "principal-epoch-rollback";
     const adapters = adaptersFor(tenantId);
-    const keySet = JSON.stringify({ test: "g".repeat(64) });
+    const keySet = JSON.stringify({ test: "c".repeat(64) });
     const now = 1_800_120_000_000;
     await configureDirectory(tenantId, keySet);
 

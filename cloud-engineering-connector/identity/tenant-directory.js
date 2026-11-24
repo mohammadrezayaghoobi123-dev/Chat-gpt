@@ -56,6 +56,19 @@ export class TenantDirectory extends DurableObject {
   ensureSchema() {
     const sql = this.ctx.storage.sql;
     sql.exec("CREATE TABLE IF NOT EXISTS tenant_directory_schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)");
+    const migrationRow = sql.exec(
+      "SELECT MAX(version) AS version FROM tenant_directory_schema_migrations"
+    ).one();
+    const schemaVersionBefore = Number(migrationRow.version ?? 0);
+    const policyEpochTable = sql.exec(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='tenant_policy_scope_epochs'"
+    ).toArray()[0];
+    if (schemaVersionBefore >= 2 && !policyEpochTable) {
+      throw fail(
+        "TENANT_DIRECTORY_SCHEMA_CORRUPT",
+        "Schema version 2 requires the tenant policy scope epoch table."
+      );
+    }
     sql.exec(
       "CREATE TABLE IF NOT EXISTS tenant_memberships (" +
       "tenant_id TEXT NOT NULL, principal_id TEXT NOT NULL, membership_id TEXT NOT NULL, role TEXT NOT NULL, " +
@@ -94,7 +107,14 @@ export class TenantDirectory extends DurableObject {
     sql.exec("CREATE TRIGGER IF NOT EXISTS tenant_directory_audit_no_update BEFORE UPDATE ON tenant_directory_audit_events BEGIN SELECT RAISE(ABORT, 'TENANT_DIRECTORY_AUDIT_APPEND_ONLY'); END");
     sql.exec("CREATE TRIGGER IF NOT EXISTS tenant_directory_audit_no_delete BEFORE DELETE ON tenant_directory_audit_events BEGIN SELECT RAISE(ABORT, 'TENANT_DIRECTORY_AUDIT_APPEND_ONLY'); END");
     sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(1, ?)", Date.now());
-    sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(2, ?)", Date.now());
+    if (schemaVersionBefore < 2) {
+      sql.exec(
+        "INSERT OR IGNORE INTO tenant_policy_scope_epochs(tenant_id, project_id, principal_id, action, epoch, updated_at) " +
+        "SELECT tenant_id, project_id, principal_id, action, 1, MAX(updated_at) " +
+        "FROM tenant_project_policy_rules GROUP BY tenant_id, project_id, principal_id, action"
+      );
+      sql.exec("INSERT OR IGNORE INTO tenant_directory_schema_migrations(version, applied_at) VALUES(2, ?)", Date.now());
+    }
   }
 
   ping() {
@@ -324,10 +344,27 @@ export class TenantDirectory extends DurableObject {
         "SELECT epoch FROM tenant_policy_scope_epochs WHERE tenant_id=? AND project_id=? AND principal_id=? AND action=?",
         tenantId, projectId, principalId, action
       ).toArray()[0];
+      const hasPolicyHistory = sql.exec(
+        "SELECT 1 AS present FROM tenant_project_policy_rules WHERE tenant_id=? AND project_id=? AND principal_id=? AND action=? LIMIT 1",
+        tenantId, projectId, principalId, action
+      ).toArray()[0];
+      if (!epochRow && hasPolicyHistory) {
+        throw fail(
+          "TENANT_DIRECTORY_SCHEMA_CORRUPT",
+          "A policy scope with persisted rules is missing its monotonic epoch."
+        );
+      }
+      const numericEpoch = epochRow ? Number(epochRow.epoch) : 0;
+      if (!Number.isSafeInteger(numericEpoch) || numericEpoch < 0) {
+        throw fail(
+          "TENANT_DIRECTORY_SCHEMA_CORRUPT",
+          "The tenant policy scope epoch is invalid."
+        );
+      }
       const snapshot = {
         membershipId: membership?.membership_id ?? null,
         membershipVersion: membership ? Number(membership.version) : null,
-        policyScopeEpoch: epochRow ? Number(epochRow.epoch) : 0,
+        policyScopeEpoch: numericEpoch,
       };
 
       if (!membership || membership.status !== "active") {

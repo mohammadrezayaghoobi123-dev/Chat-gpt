@@ -125,6 +125,12 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
           typeof evidenceDigest !== "string" || !evidenceDigest) {
         return { status: "INVALID_OUTCOME" };
       }
+      const expectedOutcomeType = intent.stage === "MODEL"
+        ? "MODEL_RESULT_STORED"
+        : "COMMENT_ACCEPTED";
+      if (outcomeType !== expectedOutcomeType) {
+        return { status: "INVALID_OUTCOME_STAGE" };
+      }
       const expected = {
         key_id: intent.key_id,
         attempt_id: attemptId,

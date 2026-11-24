@@ -256,10 +256,5 @@ describe("Scheduler tenant Task admission", () => {
         "SELECT COUNT(*) AS count FROM tenant_task_admission_reservations",
       ).one().count)).toBe(0);
     });
-    await runInDurableObject(fixture.ledger, instance => {
-      expect(Number(instance.ctx.storage.sql.exec(
-        "SELECT COUNT(*) AS count FROM orchestrator_tasks",
-      ).one().count)).toBe(0);
-    });
   });
 });

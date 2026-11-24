@@ -864,13 +864,17 @@ export class OrchestratorLedger extends DurableObject {
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
+      const current = taskFromRow(row);
+      const assignedAgentId = current.executorId ?? current.assignedAgentId;
+      if (assignedAgentId !== workerId) {
+        return { updated: false, reason: "ASSIGNEE_MISMATCH", task: current };
+      }
       if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
         return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       if (outboxRejectionReason) {
         return { updated: false, reason: outboxRejectionReason };
       }
-      const current = taskFromRow(row);
       let next;
       let nextTaskJson;
       try {

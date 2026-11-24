@@ -26,9 +26,9 @@ function stagingPull(overrides = {}) {
   };
 }
 
-function approval(commitId = sha, login = reviewer, state = "APPROVED", submittedAt = date) {
+function approval(commitId = sha, login = reviewer, state = "APPROVED", submittedAt = date, userId = 335530603) {
   return {
-    user: { login },
+    user: { id: userId, login },
     state,
     commit_id: commitId,
     submitted_at: submittedAt,
@@ -49,6 +49,7 @@ const input = overrides => ({
   candidateSha: sha,
   releaseEnvironment: "staging",
   token: "test-token-not-a-real-secret",
+  allowedReviewerIds: [335530603],
   ...overrides,
 });
 
@@ -213,4 +214,25 @@ test("release approval paginates associated PRs and all reviews before accepting
   );
   assert.ok(requestedUrls.some(url => url.includes("/commits/" + sha + "/pulls") && url.includes("page=2")));
   assert.ok(requestedUrls.some(url => url.includes("/pulls/129/reviews") && url.includes("page=2")));
+});
+
+
+test("rejects an independent PR approval when the reviewer is not a configured Environment reviewer", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({ allowedReviewerIds: [335530603] }),
+      fetchImpl: fakeFetch([stagingPull()], [approval(sha, reviewer, "APPROVED", date, 999999)]),
+    }),
+    /no independent approval from a configured Environment reviewer/,
+  );
+});
+
+test("fails closed when the Environment reviewer identity set is empty", async () => {
+  await assert.rejects(
+    verifyReleaseApproval({
+      ...input({ allowedReviewerIds: [] }),
+      fetchImpl: fakeFetch([stagingPull()], [approval()]),
+    }),
+    /allowed Environment reviewer IDs/,
+  );
 });

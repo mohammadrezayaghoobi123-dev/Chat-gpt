@@ -16,6 +16,7 @@
 - Do not change main, merge, deploy, provision Cloudflare resources, or change secrets/configuration.
 - Keep all code, identifiers, comments, documentation, test names, and commit messages in English.
 - Preserve tenant/project, source-event identity, Task-version, assertion-JTI, and Lease-generation fencing.
+- Schema v10 adds receipt lease_generation additively; legacy rows default to 0 and cannot satisfy new receipt-gated completion.
 - Treat delivery as at-least-once. Do not claim exactly-once network delivery.
 - Tests use only test-scoped fake external sinks; no real network destination is called.
 
@@ -71,6 +72,7 @@
 
 - [ ] Step 1: Add the failing tests
   - Assert a fresh receipt is rejected for a stale generation and for an expired Lease.
+  - Assert the accepted receipt row stores the exact active generation; a conflicting event fingerprint is rejected.
   - Assert a valid receipt insert changes status to COMPLETED and clears publisher lease ownership.
   - Install a SQLite trigger that aborts receipt insertion; assert both receipt and completion roll back.
   - Evict/reconstruct the object and verify event state persists.

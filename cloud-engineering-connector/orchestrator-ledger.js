@@ -1272,9 +1272,6 @@ export class OrchestratorLedger extends DurableObject {
         taskId, tenantId, projectId,
       ).toArray()[0];
       const task = taskRow ? taskFromRow(taskRow) : null;
-      if (task && !["SCHEDULED", "RUNNING", "VERIFYING"].includes(task.state)) {
-        return { renewed: false, reason: "TASK_NOT_LEASE_ELIGIBLE" };
-      }
       if (task) {
         const assignedAgentId = task.executorId ?? task.assignedAgentId;
         if (assignedAgentId !== workerId) {

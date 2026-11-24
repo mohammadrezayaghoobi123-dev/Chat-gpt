@@ -174,8 +174,9 @@ The Authority performs:
 6. Re-read membership, selected rule, policy-scope epoch, and all expected versions.
 7. Reject with AUTHORIZATION_STATE_CHANGED if any value differs from the signed snapshot.
 8. Insert the Admission record, unique receipt/JTI identity, append-only audit event, and Outbox event in the same transaction.
-9. Commit. This commit is the linearization point for Admission.
-10. Schedule the TenantDirectory alarm for Outbox delivery after the commit.
+9. Persist and set the next Outbox wake-up alarm as part of the same local transaction only if an integration test proves that setAlarm participates in transactionSync commit and rollback semantics. The test must prove both directions: rollback leaves no new alarm; commit leaves both Outbox and alarm durable.
+10. If setAlarm cannot be proven to participate in the same transaction, do not schedule it after commit and claim atomicity. Select and test an independent durable wake/reconciliation mechanism before implementation; a periodic scanner requires an explicit tenant registry or equivalent discoverable work index.
+11. Commit. This commit is the linearization point for Admission.
 
 The receipt is not accepted as executable permission merely because it is signed. It records an admission decision and its immutable version snapshot.
 
@@ -209,6 +210,8 @@ The TenantDirectory alarm:
 4. The Ledger atomically inserts its admission-consumption identity and Task projection. Duplicate identical delivery returns the original result; conflicting reuse is rejected.
 5. The Authority records the acknowledgement in a separate local transaction.
 6. If the call or acknowledgement outcome is uncertain, the Authority retries after lease expiry. The Ledger's uniqueness constraints make duplicate delivery safe.
+7. The alarm handler must be idempotent and persist retry state. Cloudflare alarm delivery is at-least-once and runtime retries failures with backoff; after its retry budget is exhausted, the handler must leave work recoverable and schedule another wake-up while due work remains.
+8. Each Durable Object has one alarm slot. TenantDirectory must coordinate that slot through a persisted due-work index; it must not overwrite another alarm consumer.
 
 No Outbox payload contains private keys or raw authentication credentials. An Outbox event carries only the signed receipt and the minimum Task projection required by the Ledger.
 
@@ -216,7 +219,7 @@ No Outbox payload contains private keys or raw authentication credentials. An Ou
 
 - Authority commit succeeds, Ledger unavailable: the durable Outbox remains pending and is retried.
 - Ledger commits, acknowledgement is lost: redelivery returns the same Ledger admission projection.
-- Authority restarts: persisted Outbox state and alarm scheduling recover delivery.
+- Authority restarts: persisted Outbox state and alarm scheduling recover delivery only after the alarm/transaction integration gate above is proven; otherwise the independently reviewed recovery scanner is mandatory.
 - Ledger restarts: unique admission/JTI records prevent duplicate Task creation.
 - Repeated conflict or exhausted retry policy: dead-letter and alert; never mark delivered without a Ledger acknowledgement.
 - An operator replay must preserve admission ID, receipt, and task digest. It must not mint a new authorization implicitly.
@@ -323,7 +326,8 @@ Tests must run against the actual TenantDirectory and OrchestratorLedger classes
 
 Required test properties:
 - Every race test has deterministic barriers and asserts both legal commit orders.
-- Alarm delivery tests use the Cloudflare Durable Object test API to trigger the alarm deterministically and verify duplicate/ retry safety.
+- Alarm delivery tests use the Cloudflare Durable Object test API to trigger the alarm deterministically and verify duplicate/retry safety.
+- Alarm atomicity tests prove that Outbox commit and alarm scheduling commit together, and that a forced rollback leaves neither durable. If the platform behavior cannot meet this condition, the fallback wake mechanism must be tested under crash-before-wake and restart conditions.
 - All rejected cases assert no Task, lease, or unauthorized Outbox side effect was committed.
 - Replay tests assert both the stored digest and admission identity.
 - Key-rotation tests include restart and previous-key retirement.
@@ -350,6 +354,7 @@ The design is implementation-ready only after:
 - all invariants have a source-level owner and an observable assertion;
 - no asynchronous operation occurs inside transactionSync;
 - admission state and its outbox event commit atomically in TenantDirectory;
+- Outbox wake-up cannot be lost between transaction commit and alarm scheduling; this requires proven alarm/transaction behavior or an independent durable recovery mechanism;
 - Ledger receipt consumption and Task projection commit atomically in Ledger;
 - execution-start authorization is serialized with Membership/Policy mutation in the same TenantDirectory object;
 - no code path can create a new scheduled Task without verified Admission evidence;

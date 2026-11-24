@@ -167,6 +167,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
         )
       `);
       sql.exec("DROP TABLE orchestrator_security_clock");
+      sql.exec("DELETE FROM _sql_schema_migrations WHERE id = 8");
       sql.exec(`
         CREATE TRIGGER reject_v8_schema_migration
         BEFORE INSERT ON _sql_schema_migrations

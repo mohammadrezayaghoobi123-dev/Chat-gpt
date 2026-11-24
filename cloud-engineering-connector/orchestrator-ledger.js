@@ -7,6 +7,8 @@ import { verifyExecutorWorkerAssertionSignature } from "./orchestrator-executor-
 import { verifyOwnerAssertionSignature, isOwnerAssertionTimeValidAt } from "./orchestrator-owner-assertion.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
+const LEDGER_SCHEMA_VERSION = 8;
+const LEDGER_SCHEMA_MIGRATION_NAME = "v8-ledger-security-clock";
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const MAX_RECORD_BYTES = 32_768;
 const MAX_LEASE_MS = 86_400_000;
@@ -277,6 +279,20 @@ export class OrchestratorLedger extends DurableObject {
   ensureSchema() {
     const sql = this.ctx.storage.sql;
     sql.exec("PRAGMA foreign_keys = ON");
+    return this.ctx.storage.transactionSync(() => {
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS _sql_schema_migrations (
+          id INTEGER PRIMARY KEY CHECK(id > 0),
+          name TEXT NOT NULL,
+          applied_at_ms INTEGER NOT NULL CHECK(applied_at_ms > 0)
+        )
+      `);
+      const recordedSchemaVersion = Number(sql.exec(
+        "SELECT COALESCE(MAX(id), 0) AS version FROM _sql_schema_migrations",
+      ).one().version);
+      if (recordedSchemaVersion > LEDGER_SCHEMA_VERSION) {
+        throw fail("Ledger schema is newer than this Worker version.", "LEDGER_SCHEMA_VERSION_AHEAD");
+      }
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_tasks (
         task_id TEXT PRIMARY KEY,
@@ -313,7 +329,6 @@ export class OrchestratorLedger extends DurableObject {
     `);
     // Derived index: task eligibility is authoritative in orchestrator_tasks;
     // lease eligibility is always rechecked inside claimTask's transaction.
-    this.ctx.storage.transactionSync(() => {
       sql.exec(`
         CREATE TABLE IF NOT EXISTS orchestrator_claim_candidates (
           candidate_seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -381,7 +396,6 @@ export class OrchestratorLedger extends DurableObject {
         ON CONFLICT(task_id) DO UPDATE
           SET executor_id = excluded.executor_id, created_at = excluded.created_at
       `);
-    });
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_outbox_events (
         event_id TEXT PRIMARY KEY,
@@ -534,11 +548,32 @@ export class OrchestratorLedger extends DurableObject {
       sql.exec("ALTER TABLE orchestrator_audit_events ADD COLUMN actor_role TEXT NOT NULL DEFAULT 'unknown'");
     }
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_audit_by_task ON orchestrator_audit_events(task_id, sequence)");
+      if (recordedSchemaVersion < LEDGER_SCHEMA_VERSION) {
+        const appliedAtMs = Date.now();
+        if (!Number.isSafeInteger(appliedAtMs) || appliedAtMs < 1) {
+          throw fail("Ledger schema migration timestamp is invalid.", "LEDGER_SCHEMA_TIMESTAMP_INVALID");
+        }
+        sql.exec(
+          "INSERT INTO _sql_schema_migrations (id, name, applied_at_ms) VALUES (?, ?, ?)",
+          LEDGER_SCHEMA_VERSION,
+          LEDGER_SCHEMA_MIGRATION_NAME,
+          appliedAtMs,
+        );
+      }
+      return LEDGER_SCHEMA_VERSION;
+    });
   }
 
   ping() {
-    const result = this.ctx.storage.sql.exec("SELECT 1 AS ok").one();
-    return { ok: Number(result.ok) === 1, schemaVersion: 8 };
+    const sql = this.ctx.storage.sql;
+    const result = sql.exec("SELECT 1 AS ok").one();
+    const schemaVersion = Number(sql.exec(
+      "SELECT COALESCE(MAX(id), 0) AS version FROM _sql_schema_migrations",
+    ).one().version);
+    return {
+      ok: Number(result.ok) === 1 && schemaVersion === LEDGER_SCHEMA_VERSION,
+      schemaVersion,
+    };
   }
 
   claimGitHubDelivery({ deliveryId, bodySha256, eventName, receivedAt, idempotencyKey, inputHash } = {}) {

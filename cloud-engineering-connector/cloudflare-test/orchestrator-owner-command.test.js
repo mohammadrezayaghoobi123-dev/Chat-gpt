@@ -135,12 +135,14 @@ async function ownerAuditContentionCohort(ledger, label) {
 async function runOwnerAuditContentionWaves(ledger, inputs) {
   const waveSizes = [inputs.length, inputs.length - 1, inputs.length - 2];
   const releases = [];
-  const reached = [];
+  const reachedResolvers = [];
   const arrivals = waveSizes.map(() => 0);
-  const gates = waveSizes.map((_, index) => {
-    reached[index] = new Promise(resolve => { reached[index] = resolve; });
-    return new Promise(resolve => { releases[index] = resolve; });
-  });
+  const reached = waveSizes.map((_, index) =>
+    new Promise(resolve => { reachedResolvers[index] = resolve; }),
+  );
+  const gates = waveSizes.map((_, index) =>
+    new Promise(resolve => { releases[index] = resolve; }),
+  );
   let activeWave = 0;
   const nativeDigest = crypto.subtle.digest.bind(crypto.subtle);
   const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(
@@ -149,7 +151,7 @@ async function runOwnerAuditContentionWaves(ledger, inputs) {
       if (digestInput.includes('"previousHash"') && activeWave < waveSizes.length) {
         const wave = activeWave;
         arrivals[wave] += 1;
-        if (arrivals[wave] === waveSizes[wave]) reached[wave]();
+        if (arrivals[wave] === waveSizes[wave]) reachedResolvers[wave]();
         await gates[wave];
       }
       return nativeDigest(algorithm, data);

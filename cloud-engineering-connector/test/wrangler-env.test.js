@@ -52,33 +52,33 @@ test("Production and Staging enable persisted custom logs without invocation log
 test("Production and Staging use declarative exports for the existing SQLite WriteControl class", () => {
   const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
   const entrypoint = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-  assert.match(production, /\\[\\[durable_objects\\.bindings\\]\\][\\s\\S]*?name\\s*=\\s*"WRITE_CONTROL"[\\s\\S]*?class_name\\s*=\\s*"WriteControl"/);
-  assert.match(staging, /\\[\\[env\\.staging\\.durable_objects\\.bindings\\]\\][\\s\\S]*?name\\s*=\\s*"WRITE_CONTROL"[\\s\\S]*?class_name\\s*=\\s*"WriteControl"/);
-  assert.match(config, /^\\[exports\\.WriteControl\\]\\s*\\ntype\\s*=\\s*"durable-object"\\s*\\nstorage\\s*=\\s*"sqlite"$/m);
-  assert.match(entrypoint, /export \\{ WriteControl \\} from "\\.\\/write-control\\.js"/);
+  assert.ok(production.includes("[[durable_objects.bindings]]\\nname = \\"WRITE_CONTROL\\"\\nclass_name = \\"WriteControl\\""));
+  assert.ok(staging.includes("[[env.staging.durable_objects.bindings]]\\nname = \\"WRITE_CONTROL\\"\\nclass_name = \\"WriteControl\\""));
+  assert.ok(config.includes("[exports.WriteControl]\\ntype = \\"durable-object\\"\\nstorage = \\"sqlite\\""));
+  assert.ok(entrypoint.includes('export { WriteControl } from "./write-control.js"'));
 });
 
 test("Production and Staging declare KnowledgeStore and OrchestratorLedger as SQLite exports", () => {
   const production = config.slice(0, stagingStart >= 0 ? stagingStart : config.length);
   const entrypoint = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-  for (const [binding, className, modulePath] of [
-    ["KNOWLEDGE_STORE", "KnowledgeStore", "./knowledge-store.js"],
-    ["ORCHESTRATOR_LEDGER", "OrchestratorLedger", "./orchestrator-ledger.js"],
+  for (const [binding, className, modulePath, moduleText] of [
+    ["KNOWLEDGE_STORE", "KnowledgeStore", "./knowledge-store.js", "[exports.KnowledgeStore]\\ntype = \\"durable-object\\"\\nstorage = \\"sqlite\\""],
+    ["ORCHESTRATOR_LEDGER", "OrchestratorLedger", "./orchestrator-ledger.js", "[exports.OrchestratorLedger]\\ntype = \\"durable-object\\"\\nstorage = \\"sqlite\\""],
   ]) {
-    assert.match(production, new RegExp("\\\\[\\\\[durable_objects\\\\.bindings\\\\]\\\\][\\\\s\\\\S]*?name\\\\s*=\\\\s*\"" + binding + "\"[\\\\s\\\\S]*?class_name\\\\s*=\\\\s*\"" + className + "\""));
-    assert.match(staging, new RegExp("\\\\[\\\\[env\\\\.staging\\\\.durable_objects\\\\.bindings\\\\]\\\\][\\\\s\\\\S]*?name\\\\s*=\\\\s*\"" + binding + "\"[\\\\s\\\\S]*?class_name\\\\s*=\\\\s*\"" + className + "\""));
-    assert.match(config, new RegExp("^\\\\[exports\\\\." + className + "\\]\\\\s*\\\\ntype\\\\s*=\\\\s*\"durable-object\"\\\\s*\\\\nstorage\\\\s*=\\\\s*\"sqlite\"$", "m"));
-    assert.ok(entrypoint.includes("export { " + className + " } from \"" + modulePath + "\""));
+    assert.ok(production.includes("[[durable_objects.bindings]]\\nname = \\"" + binding + "\\"\\nclass_name = \\"" + className + "\\""));
+    assert.ok(staging.includes("[[env.staging.durable_objects.bindings]]\\nname = \\"" + binding + "\\"\\nclass_name = \\"" + className + "\\""));
+    assert.ok(config.includes(moduleText));
+    assert.ok(entrypoint.includes("export { " + className + " } from \\"" + modulePath + "\\""));
   }
 });
 
 test("Staging inherits the shared Durable Object exports map and no environment silently diverges", () => {
-  assert.doesNotMatch(config, /^\\[env\\.staging\\.exports\\./m);
-  assert.doesNotMatch(config, /^\\[\\[migrations\\]\\]/m);
-  assert.doesNotMatch(config, /^\\[\\[env\\.staging\\.migrations\\]\\]/m);
-  assert.match(config, /^\\[exports\\.WriteControl\\]/m);
-  assert.match(config, /^\\[exports\\.KnowledgeStore\\]/m);
-  assert.match(config, /^\\[exports\\.OrchestratorLedger\\]/m);
+  assert.equal(config.includes("[[migrations]]"), false);
+  assert.equal(config.includes("[[env.staging.migrations]]"), false);
+  assert.equal(config.includes("[env.staging.exports."), false);
+  for (const className of ["WriteControl", "KnowledgeStore", "OrchestratorLedger"]) {
+    assert.ok(config.includes("[exports." + className + "]"));
+  }
 });
 
 test("Production and Staging both declare the five-minute reconciliation Cron", () => {

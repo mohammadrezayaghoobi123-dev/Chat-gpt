@@ -20,3 +20,4 @@ script_name = "chat-gpt111"
 [exports.ScheduledTaskAdmissionWorkflow]
 type = "workflow"
 name = "scheduler-task-admission"
+# Add reviewed schedules only after policy, keys, cost, and staging gates are approved.

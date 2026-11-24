@@ -1,11 +1,10 @@
 import { env } from "cloudflare:workers";
 import { createScheduledController, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
-import schedulerWorker, { ScheduledTaskAdmissionWorkflow } from "../orchestrator-scheduler-worker.js";
+import { ScheduledTaskAdmissionWorkflow } from "../orchestrator-scheduler-worker.js";
 import {
   admitPreparedScheduledTask,
   prepareScheduledAdmission,
-  scheduledWorkflowId,
   verifyPreparedScheduledAdmission,
 } from "../orchestrator-scheduler-admission.js";
 import { createTenantDirectoryAdminAssertion } from "../identity/tenant-directory-assertion.js";
@@ -103,34 +102,6 @@ function taskPolicy(tenantId, suffix) {
   };
 }
 
-function workflowContext(binding) {
-  return { exports: { ScheduledTaskAdmissionWorkflow: binding } };
-}
-
-function createWorkflowBinding() {
-  let record = null;
-  const instance = {
-    id: null,
-    async status() { return { status: record.status }; },
-    async restart() { record.status = "queued"; },
-  };
-  return {
-    context: workflowContext({
-      async create({ id, params }) {
-        if (record) throw new Error("Workflow instance already exists.");
-        record = { id, params, status: "queued" };
-        instance.id = id;
-        return instance;
-      },
-      async get(id) {
-        if (!record || record.id !== id) throw new Error("Workflow instance not found.");
-        return instance;
-      },
-    }),
-    setStatus(status) { if (record) record.status = status; },
-  };
-}
-
 function createWorkflowStep({ failOnce = [] } = {}) {
   const attempts = new Map();
   return {
@@ -155,10 +126,10 @@ function createWorkflowStep({ failOnce = [] } = {}) {
   };
 }
 
-async function runWorkflow(snapshot, workflowEnv, step) {
+async function runWorkflow(schedule, workflowEnv, step) {
   return ScheduledTaskAdmissionWorkflow.prototype.run.call(
     { env: workflowEnv },
-    { payload: snapshot },
+    { schedule },
     step,
   );
 }
@@ -188,21 +159,10 @@ describe("durable Scheduler Workflow admission", () => {
     };
     const event = controller();
     const envForEvent = schedulerEnv({ [CRON]: policy });
-    const snapshot = await prepareScheduledAdmission(event, envForEvent);
-    const workflowId = await scheduledWorkflowId(snapshot);
-    expect(workflowId.length).toBeLessThanOrEqual(100);
-
-    const workflow = createWorkflowBinding();
-    const accepted = await schedulerWorker.scheduled(event, envForEvent, workflow.context);
-    expect(accepted).toMatchObject({
-      accepted: true,
-      created: true,
-      duplicate: false,
-      workflowId,
-    });
+    const schedule = { cron: CRON, scheduledTime: event.scheduledTime };
     const step = createWorkflowStep({ failOnce: ["admit-task-01"] });
-    const output = await runWorkflow(snapshot, envForEvent, step);
-    workflow.setStatus("complete");
+    const output = await runWorkflow(schedule, envForEvent, step);
+    expect(step.attempts.get("prepare-scheduled-admission")).toBe(1);
     expect(step.attempts.get("admit-task-01")).toBe(2);
     expect(output).toMatchObject({
       version: 1,
@@ -213,13 +173,13 @@ describe("durable Scheduler Workflow admission", () => {
       replayed: 0,
     });
 
-    const duplicate = await schedulerWorker.scheduled(event, envForEvent, workflow.context);
-    expect(duplicate).toMatchObject({
-      accepted: true,
-      created: false,
-      duplicate: true,
-      workflowId,
-      status: "complete",
+    const replayStep = createWorkflowStep();
+    const replay = await runWorkflow(schedule, envForEvent, replayStep);
+    expect(replay).toMatchObject({
+      version: 1,
+      processed: 1,
+      created: 0,
+      replayed: 1,
     });
 
     await runInDurableObject(fixture.ledger, instance => {
@@ -252,21 +212,16 @@ describe("durable Scheduler Workflow admission", () => {
       ],
     };
     const envForEvent = schedulerEnv({ [CRON]: policy });
-    const snapshot = await prepareScheduledAdmission(event, envForEvent);
-    const workflowId = await scheduledWorkflowId(snapshot);
-
-    const workflow = createWorkflowBinding();
-    await schedulerWorker.scheduled(event, envForEvent, workflow.context);
     const step = createWorkflowStep();
     let workflowError;
     try {
-      await runWorkflow(snapshot, envForEvent, step);
+      await runWorkflow({ cron: CRON, scheduledTime: event.scheduledTime }, envForEvent, step);
     } catch (error) {
       workflowError = error;
     }
     expect(workflowError?.name).toBe("NonRetryableError");
+    expect(step.attempts.get("prepare-scheduled-admission")).toBe(1);
     expect(step.attempts.get("admit-task-02")).toBe(1);
-    workflow.setStatus("errored");
 
     const secondLedger = env.ORCHESTRATOR_LEDGER.get(
       env.ORCHESTRATOR_LEDGER.idFromName(secondTenantId),
@@ -406,4 +361,12 @@ describe("durable Scheduler Workflow admission", () => {
     await expect(verifyPreparedScheduledAdmission(tampered))
       .rejects.toMatchObject({ code: "SCHEDULED_ADMISSION_SNAPSHOT_INVALID" });
   });
+
+  it("rejects a Workflow event without trusted Cron schedule metadata before any Durable Object write", async () => {
+    const step = createWorkflowStep();
+    await expect(runWorkflow(undefined, {}, step))
+      .rejects.toMatchObject({ name: "NonRetryableError" });
+    expect(step.attempts.size).toBe(0);
+  });
+
 });

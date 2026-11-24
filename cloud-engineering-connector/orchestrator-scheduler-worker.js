@@ -6,7 +6,6 @@ import { NonRetryableError } from "cloudflare:workflows";
 import {
   admitPreparedScheduledTask,
   prepareScheduledAdmission,
-  scheduledWorkflowId,
   verifyPreparedScheduledAdmission,
 } from "./orchestrator-scheduler-admission.js";
 
@@ -17,6 +16,11 @@ const WORKFLOW_STEP_RETRIES = Object.freeze({
 });
 
 const NON_RETRYABLE_ADMISSION_CODES = new Set([
+  "SCHEDULED_EVENT_INVALID",
+  "SCHEDULED_ADMISSION_POLICY_UNAVAILABLE",
+  "SCHEDULED_ADMISSION_POLICY_INVALID",
+  "SCHEDULED_ADMISSION_CRON_NOT_CONFIGURED",
+  "SCHEDULED_ADMISSION_SIGNER_CONFIG_INVALID",
   "SCHEDULED_ADMISSION_SNAPSHOT_INVALID",
   "SCHEDULED_ADMISSION_BINDINGS_UNAVAILABLE",
   "TASK_ADMISSION_DENIED",
@@ -35,30 +39,42 @@ const NON_RETRYABLE_ADMISSION_CODES = new Set([
   "INVALID_TENANT_DIRECTORY_INPUT",
 ]);
 
-const ACTIVE_WORKFLOW_STATUSES = new Set([
-  "queued",
-  "running",
-  "waiting",
-  "waitingForPause",
-  "complete",
-]);
-
-function fail(code, message) {
-  return Object.assign(new Error(message), { code });
-}
-
-function accepted(workflowId, status, extra = {}) {
-  return {
-    accepted: true,
-    workflowId,
-    status: status.status,
-    ...extra,
-  };
+function toWorkflowError(error, fallbackMessage) {
+  return new NonRetryableError(
+    typeof error?.message === "string" ? error.message : fallbackMessage,
+  );
 }
 
 export class ScheduledTaskAdmissionWorkflow extends WorkflowEntrypoint {
   async run(event, step) {
-    const schedule = await verifyPreparedScheduledAdmission(event?.payload);
+    const cron = event?.schedule?.cron;
+    const scheduledTime = event?.schedule?.scheduledTime;
+    if (typeof cron !== "string" || !Number.isSafeInteger(scheduledTime) || scheduledTime < 1) {
+      throw new NonRetryableError(
+        "Workflow event is missing trusted Cron schedule metadata.",
+      );
+    }
+
+    const snapshot = await step.do(
+      "prepare-scheduled-admission",
+      {
+        retries: WORKFLOW_STEP_RETRIES,
+        timeout: "2 minutes",
+      },
+      async () => {
+        try {
+          const prepared = await prepareScheduledAdmission({ cron, scheduledTime }, this.env);
+          return await verifyPreparedScheduledAdmission(prepared);
+        } catch (error) {
+          if (NON_RETRYABLE_ADMISSION_CODES.has(error?.code)) {
+            throw toWorkflowError(error, "Scheduled admission preflight was rejected.");
+          }
+          throw error;
+        }
+      },
+    );
+
+    const schedule = await verifyPreparedScheduledAdmission(snapshot);
     const admissions = [];
     let created = 0;
     let replayed = 0;
@@ -77,9 +93,7 @@ export class ScheduledTaskAdmissionWorkflow extends WorkflowEntrypoint {
             return await admitPreparedScheduledTask(schedule, item, this.env);
           } catch (error) {
             if (NON_RETRYABLE_ADMISSION_CODES.has(error?.code)) {
-              throw new NonRetryableError(
-                typeof error?.message === "string" ? error.message : "Scheduled Task admission was rejected.",
-              );
+              throw toWorkflowError(error, "Scheduled Task admission was rejected.");
             }
             throw error;
           }
@@ -103,66 +117,4 @@ export class ScheduledTaskAdmissionWorkflow extends WorkflowEntrypoint {
   }
 }
 
-export default Object.freeze({
-  async scheduled(controller, env, ctx) {
-    const workflowBinding = ctx?.exports?.ScheduledTaskAdmissionWorkflow;
-    if (!workflowBinding || typeof workflowBinding.create !== "function" ||
-        typeof workflowBinding.get !== "function") {
-      throw fail("SCHEDULED_WORKFLOW_EXPORT_UNAVAILABLE", "The durable Scheduled Task Workflow export is unavailable.");
-    }
-
-    const snapshot = await prepareScheduledAdmission(controller, env);
-    const workflowId = await scheduledWorkflowId(snapshot);
-
-    try {
-      const instance = await workflowBinding.create({ id: workflowId, params: snapshot });
-      const status = await instance.status();
-      return accepted(workflowId, status, { created: true, duplicate: false });
-    } catch (createError) {
-      let existing;
-      try {
-        existing = await workflowBinding.get(workflowId);
-      } catch {
-        throw createError;
-      }
-
-      const status = await existing.status();
-      if (status.status === "errored" && status.error?.name !== "NonRetryableError") {
-        try {
-          await existing.restart();
-          const restarted = await existing.status();
-          return accepted(workflowId, restarted, {
-            created: false,
-            duplicate: true,
-            restarted: true,
-          });
-        } catch (restartError) {
-          const latest = await existing.status();
-          if (ACTIVE_WORKFLOW_STATUSES.has(latest.status)) {
-            return accepted(workflowId, latest, {
-              created: false,
-              duplicate: true,
-              restartRace: true,
-            });
-          }
-          throw fail(
-            "SCHEDULED_WORKFLOW_RESTART_FAILED",
-            "The existing errored Workflow could not be restarted safely.",
-          );
-        }
-      }
-
-      if (ACTIVE_WORKFLOW_STATUSES.has(status.status) || status.status === "errored" ||
-          status.status === "paused" || status.status === "terminated") {
-        return accepted(workflowId, status, {
-          created: false,
-          duplicate: true,
-          terminal: status.status === "errored" || status.status === "terminated",
-          paused: status.status === "paused",
-        });
-      }
-
-      throw fail("SCHEDULED_WORKFLOW_STATE_UNKNOWN", "The existing Workflow is in an unknown state; automatic replay was refused.");
-    }
-  },
-});
+export default Object.freeze({});

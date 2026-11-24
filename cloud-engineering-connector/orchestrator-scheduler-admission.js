@@ -282,16 +282,6 @@ export async function verifyPreparedScheduledAdmission(value) {
   };
 }
 
-export async function scheduledWorkflowId(snapshot) {
-  const cron = typeof snapshot?.cron === "string" ? snapshot.cron : "";
-  const scheduledTime = snapshot?.scheduledTime;
-  if (!cron || !Number.isSafeInteger(scheduledTime) || scheduledTime < 1) {
-    throw fail("SCHEDULED_EVENT_INVALID", "Cron expression and numeric scheduledTime are required for deterministic Workflow identity.");
-  }
-  const digest = await admissionTextDigest(canonicalJson({ version: 1, cron, scheduledTime }));
-  return "schedule-" + digest;
-}
-
 export async function admitPreparedScheduledTask(schedule, item, env) {
   let directoryReserved = false;
   try {

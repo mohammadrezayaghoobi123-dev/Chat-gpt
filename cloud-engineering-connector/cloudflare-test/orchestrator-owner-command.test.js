@@ -2349,6 +2349,7 @@ describe("Owner command atomic Ledger contract", () => {
     });
 
     const originalExpiry = Math.floor(now / 1000) + 60;
+    wallClockNow = now + 660_000;
     const exactBoundary = await createAt(660, "task-jti-retention-exact-boundary");
     expect(exactBoundary).toMatchObject({
       created: false,
@@ -2376,6 +2377,7 @@ describe("Owner command atomic Ledger contract", () => {
       }]);
     });
 
+    wallClockNow = now + 661_000;
     const afterBoundary = await createAt(661, "task-jti-retention-after-boundary");
     expect(afterBoundary).toMatchObject({
       created: true,

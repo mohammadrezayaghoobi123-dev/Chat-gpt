@@ -380,7 +380,7 @@ export class TenantDirectory extends DurableObject {
     const idempotencyKey = identifier(input?.idempotencyKey, "idempotencyKey");
     const inputHash = input?.inputHash;
     if (!SHA256.test(inputHash ?? "")) throw fail("INVALID_TENANT_DIRECTORY_INPUT", "inputHash must be a SHA-256 digest.");
-    const now = timestamp(input?.now);
+    const now = timestamp(Date.now());
     let idempotencyKeyDigest;
     try {
       idempotencyKeyDigest = await admissionTextDigest(idempotencyKey);
@@ -398,7 +398,7 @@ export class TenantDirectory extends DurableObject {
           existing.task_digest !== taskDigest || existing.input_hash !== inputHash) {
         throw fail("TASK_ADMISSION_IDEMPOTENCY_CONFLICT", "Task admission idempotency key is already bound to different Task input.");
       }
-      if (existing.expires_at <= Math.floor(now / 1000)) {
+      if (existing.expires_at <= Math.floor(Date.now() / 1000)) {
         throw fail("TASK_ADMISSION_RETRY_WINDOW_EXPIRED", "The original Task admission grant has expired.");
       }
       return {

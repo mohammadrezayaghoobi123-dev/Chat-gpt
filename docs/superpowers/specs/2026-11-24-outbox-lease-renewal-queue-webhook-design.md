@@ -1,6 +1,6 @@
 # Outbox Lease Renewal and Queue/Webhook Delivery Design
 
-**Status:** Proposed design; implementation blocked pending owner approval  
+**Status:** Accepted for implementation planning by the owner's instruction to proceed; implementation remains gated on plan review and execution authorization  
 **Date:** 2026-11-24  
 **Parent:** PR #462 — atomic Outbox receipt settlement  
 **Parent head:** 2449e079792e0579632127b2ba6ff81643bf90f8  
@@ -74,7 +74,11 @@ Version 1 Queue envelope:
   "ledgerObjectId": "<DurableObjectId.toString()>",
   "eventId": "<stable-outbox-event-id>",
   "leaseGeneration": 1,
-  "leaseToken": "<256-bit-random-capability>"
+  "capability": {
+    "keyId": "active-queue-key",
+    "iv": "<96-bit-random-nonce-base64url>",
+    "ciphertext": "<AES-256-GCM-ciphertext-and-tag-base64url>"
+  }
 }
 ~~~
 
@@ -92,8 +96,10 @@ Add an additive Ledger schema migration after the current schema version 10:
 For each successful claimOutbox:
 1. Generate a cryptographically random 256-bit token.
 2. Persist only its SHA-256 digest with the new lease generation.
-3. Return the plaintext token only to the trusted alarm producer so it can be placed in the internal Queue envelope.
+3. Return the plaintext token only to the same Durable Object alarm handler's trusted runtime memory. Before Queue publication, encrypt it with AES-256-GCM under a dedicated queue-encryption key; never serialize the plaintext token into a Queue message.
 4. Keep the existing publisher lease owner and generation checks.
+
+The Queue envelope contains only an authenticated ciphertext capability. Use a 256-bit AES-GCM key from OUTBOX_QUEUE_ENCRYPTION_KEYS, a 96-bit random nonce, a 128-bit authentication tag, and associated data exactly `v1\\n{ledgerObjectId}\\n{eventId}\\n{leaseGeneration}\\n{keyId}`. The consumer must authenticate/decrypt the capability before using it. Key IDs support one active key plus an old decryption key during rotation; removing an old key requires draining all main/DLQ messages encrypted under it.
 
 Add renewOutboxLease with this contract:
 
@@ -127,7 +133,10 @@ The destination is a fixed deployment-time configuration, never a URL from Queue
 Required settings:
 - OUTBOX_WEBHOOK_URL: configured HTTPS URL with no username/password or fragment;
 - OUTBOX_WEBHOOK_HMAC_KEY: base64url-encoded random key of at least 256 bits;
-- LEDGER_WORKER_ASSERTION_KEYS: existing Worker-assertion signing key set required by the Ledger boundary.
+- LEDGER_WORKER_ASSERTION_KEYS: existing Worker-assertion signing key set required by the Ledger boundary;
+- LEDGER_WORKER_ASSERTION_ACTIVE_KID: non-secret active key ID matching the assertion key set;
+- OUTBOX_QUEUE_ENCRYPTION_KEYS: JSON key set containing one active 256-bit AES key and, during rotation, at most one previous decrypt-only key;
+- OUTBOX_QUEUE_ENCRYPTION_ACTIVE_KID: non-secret key ID selecting the current encryption key.
 
 Fail closed when any setting is missing or invalid. Do not create or modify secrets in this PR.
 
@@ -162,14 +171,14 @@ The Worker's queue(batch, env, ctx) handler dispatches based on the actual batch
 
 The main Queue is a transport retry layer. Known webhook failures use the Ledger's own retry schedule and the original Queue message is acknowledged after durable scheduling. The platform DLQ is for messages the consumer cannot safely process or durably archive. The DLQ archiver persists the original envelope hash and a redacted body in the owning Ledger. If archival fails repeatedly, Cloudflare routes the message to quarantine.
 
-The currently inspected Quarantine Queues have a one-day retention period and no consumer. That is not adequate evidence of long-term forensic retention. Before live activation, an operator must approve either a longer retention policy (Cloudflare Queue permits up to 14 days) or an independent durable export/archive for quarantine. This PR must not mutate that policy.
+The currently inspected Quarantine Queues have a one-day retention period and no consumer. Cloudflare documents retention up to 14 days where the account plan supports it; the observed 24-hour setting does not establish that longer retention is available on this account. Before live activation, verify the plan limit and approve either supported retention or an independent durable export/archive for quarantine. This PR must not mutate that policy.
 
 ## 4. Security and failure invariants
 
 1. An expired lease can never be renewed or settled.
 2. A worker with a stale generation cannot renew, fail, receipt, or dead-letter a newer claim.
 3. A duplicate Queue delivery holding a rotated token cannot begin webhook delivery.
-4. A plaintext lease token exists only in trusted runtime memory and the internal Queue envelope; never in Ledger SQL, logs, webhook headers, HMAC input metadata beyond the event generation, receipts, or persisted DLQ body.
+4. A plaintext lease token exists only in trusted Durable Object/Worker runtime memory. Queue messages contain only AES-256-GCM ciphertext; SQLite stores only the token hash. Never put the plaintext token in logs, webhook headers/bodies, HMAC input, receipts, or persisted DLQ archives.
 5. Queue message routing never uses a caller-provided URL or tenant/project path to select a webhook destination.
 6. Queue send is never performed inside a SQL transaction.
 7. Every due/recoverable Outbox event has a durable next alarm in the same storage transaction as the state change; this is verified with a Cloudflare Workers runtime test, not inferred from a local mock.
@@ -210,6 +219,7 @@ The currently inspected Quarantine Queues have a one-day retention period and no
 - timeout/network error schedules Ledger retry;
 - HMAC byte sequence, timestamp, and signature are asserted against independently derived fixtures;
 - webhook request contains the stable event ID idempotency key and never contains the lease token;
+- Queue capability encryption binds key ID, IV, ciphertext, Ledger Object ID, event ID, and lease generation; tampering with any AAD-bound field fails authentication;
 - repeated accepted event uses the same idempotency key;
 - no endpoint is read from message content.
 
@@ -234,7 +244,7 @@ At least the following mutants must be killed by tests:
 - accept webhook 3xx or 5xx as success;
 - follow redirect;
 - omit HMAC verification/signature or stable Idempotency-Key;
-- persist plaintext token in DLQ archive;
+- persist plaintext token in DLQ archive or Queue body;
 - allow stale DLQ capability to terminalize a newer generation.
 
 Exact-head CI must include Node tests, Cloudflare Workers Vitest, syntax checks, npm audit, Wrangler production/staging dry-runs, and PR-diff secret scanning. Full-history secret findings remain a separate release gate. No staging smoke or live Queue delivery is allowed in this implementation PR.
@@ -253,7 +263,7 @@ Exact-head CI must include Node tests, Cloudflare Workers Vitest, syntax checks,
 
 Live activation is prohibited until all of the following are deliberately resolved:
 1. Configure and verify ORCHESTRATOR_LEDGER, producer, and consumer bindings in the intended Worker environment.
-2. Provision LEDGER_WORKER_ASSERTION_KEYS, OUTBOX_WEBHOOK_URL, and OUTBOX_WEBHOOK_HMAC_KEY through an approved secret-management path.
+2. Provision LEDGER_WORKER_ASSERTION_KEYS, LEDGER_WORKER_ASSERTION_ACTIVE_KID, OUTBOX_QUEUE_ENCRYPTION_KEYS, OUTBOX_QUEUE_ENCRYPTION_ACTIVE_KID, OUTBOX_WEBHOOK_URL, and OUTBOX_WEBHOOK_HMAC_KEY through an approved secret/configuration path.
 3. Select and independently verify the HTTPS receiver's HMAC and idempotency implementation.
 4. Approve quarantine retention/export policy; current quarantine Queue retention is one day.
 5. Verify the already-existing upstream invocation path for transitionTask(outboxEvent) and executeOwnerCommand(release); the inspected Worker.fetch handler does not itself invoke ORCHESTRATOR_LEDGER.
@@ -281,4 +291,4 @@ Live activation is prohibited until all of the following are deliberately resolv
 
 This document proposes the combined architecture and the above fixed contracts. It does not implement code, create a Queue binding in Cloudflare, configure secrets, select a real webhook destination, add a public task/event ingress, merge, or deploy.
 
-Owner approval is required for this design document before the implementation plan and TDD code changes are created.
+The owner's instruction to proceed authorizes preparation of the implementation plan. The plan must still be reviewed and an execution method authorized before TDD code changes begin.

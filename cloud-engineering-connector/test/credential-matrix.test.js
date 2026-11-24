@@ -5,6 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import worker from "../worker.js";
+import { ORCHESTRATOR_LEDGER_SCHEMA_VERSION } from "../orchestrator-ledger-contract.js";
 
 const SECRET = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
 const GH = "ghp_FAKE_TOKEN_FOR_TEST_0123456789";
@@ -155,7 +156,7 @@ test("readyz uses a lightweight Durable Object ping rather than a full storage s
     },
     ORCHESTRATOR_LEDGER: {
       idFromName: name => name,
-      get: () => ({ ping: async () => ({ ok: true, schemaVersion: 6 }) })
+      get: () => ({ ping: async () => ({ ok: true, schemaVersion: ORCHESTRATOR_LEDGER_SCHEMA_VERSION }) })
     },
     ORCHESTRATOR_OUTBOX_QUEUE: { send: async () => {} },
     ORCHESTRATOR_OUTBOX_QUEUE_NAME: "chat-gpt111-staging-orchestrator-outbox",

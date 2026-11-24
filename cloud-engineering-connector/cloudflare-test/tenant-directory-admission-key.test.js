@@ -85,10 +85,37 @@ describe("TenantDirectory admission signing key integration", () => {
     expect(repeated.keyId).toBe(first.keyId);
     await expect(verifySignature(verificationKey.publicKey, firstMessage, repeated.signature)).resolves.toBe(true);
 
-    await expect(stub.getAdmissionVerificationKey({
-      tenantId,
-      keyId: "unknown-key-id",
-    })).rejects.toMatchObject({ code: "ADMISSION_SIGNING_KEY_NOT_FOUND" });
+    const unknownKeyLookup = await runInDurableObject(stub, async instance => {
+      try {
+        await instance.getAdmissionVerificationKey({
+          tenantId,
+          keyId: "unknown-key-id",
+        });
+        return { code: "UNEXPECTED_KEY_FOUND" };
+      } catch (error) {
+        return { code: error.code };
+      }
+    });
+    expect(unknownKeyLookup).toEqual({ code: "ADMISSION_SIGNING_KEY_NOT_FOUND" });
+
+    const unprovisionedTenantId = "directory-admission-key-unprovisioned";
+    const unprovisionedStub = directoryFor(unprovisionedTenantId);
+    const unprovisionedLookup = await runInDurableObject(unprovisionedStub, async instance => {
+      try {
+        await instance.getAdmissionVerificationKey({
+          tenantId: unprovisionedTenantId,
+          keyId: "unknown-key-id",
+        });
+        return { code: "UNEXPECTED_KEY_FOUND" };
+      } catch (error) {
+        return { code: error.code };
+      }
+    });
+    expect(unprovisionedLookup).toEqual({ code: "ADMISSION_SIGNING_KEY_NOT_FOUND" });
+    const unexpectedProvision = await runInDurableObject(unprovisionedStub, instance =>
+      instance.ctx.storage.get("admission:signing-key:v1:" + unprovisionedTenantId),
+    );
+    expect(unexpectedProvision).toBeUndefined();
   });
 
   it("isolates signing key identity and verification material across tenant objects", async () => {
@@ -104,9 +131,17 @@ describe("TenantDirectory admission signing key integration", () => {
     await expect(verifySignature(a.publicKey, "tenant-a-message", a.signature)).resolves.toBe(true);
     await expect(verifySignature(b.publicKey, "tenant-b-message", b.signature)).resolves.toBe(true);
 
-    await expect(directoryFor(tenantB).getAdmissionVerificationKey({
-      tenantId: tenantB,
-      keyId: a.keyId,
-    })).rejects.toMatchObject({ code: "ADMISSION_SIGNING_KEY_NOT_FOUND" });
+    const wrongTenantLookup = await runInDurableObject(directoryFor(tenantB), async instance => {
+      try {
+        await instance.getAdmissionVerificationKey({
+          tenantId: tenantB,
+          keyId: a.keyId,
+        });
+        return { code: "UNEXPECTED_KEY_FOUND" };
+      } catch (error) {
+        return { code: error.code };
+      }
+    });
+    expect(wrongTenantLookup).toEqual({ code: "ADMISSION_SIGNING_KEY_NOT_FOUND" });
   });
 });

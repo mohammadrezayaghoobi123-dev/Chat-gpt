@@ -2885,10 +2885,10 @@ it("rejects invalid initial agent rounds without durable task or claim-candidate
   const ledger = ledgerFor("ledger-create-task-invalid-agent-round");
   const cases = [
     { taskId: "task-round-negative", key: "create-round-negative", jti: "jti-round-negative-000001", agentRound: -1 },
-    { taskId: "task-round-five", key: "create-round-five", jti: "jti-round-five-000001", agentRound: 5 },
+    { taskId: "task-round-five", key: "create-round-five", jti: "jti-round-five-assertion-000001", agentRound: 5 },
     { taskId: "task-round-fractional", key: "create-round-fractional", jti: "jti-round-fractional-000001", agentRound: 1.5 },
     { taskId: "task-round-unsafe", key: "create-round-unsafe", jti: "jti-round-unsafe-000001", agentRound: Number.MAX_SAFE_INTEGER + 1 },
-    { taskId: "task-round-nan", key: "create-round-nan", jti: "jti-round-nan-000001", agentRound: Number.NaN },
+    { taskId: "task-round-nan", key: "create-round-nan", jti: "jti-round-nan-assertion-000001", agentRound: Number.NaN },
     { taskId: "task-round-infinity", key: "create-round-infinity", jti: "jti-round-infinity-000001", agentRound: Number.POSITIVE_INFINITY },
   ];
 

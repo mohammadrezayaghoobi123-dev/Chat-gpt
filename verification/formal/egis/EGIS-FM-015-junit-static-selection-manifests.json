@@ -2038,5 +2038,37 @@
     "meaning": "Ant JUnit batchtest does not filter non-test classes unless skipNonTests is enabled. The selected path count is not a discovered test-class or test-method count.",
     "required_lock_value": false,
     "execution_proof": "NOT_RUN"
+  },
+  "report_collision_analysis": {
+    "shared_report_directory": "${test.reports}",
+    "resolved_report_directory": "target/surefire-reports/",
+    "formatter": "xml",
+    "default_outfile_rule": "TEST-<test-class-name>.xml",
+    "source_test_target_batches": [
+      2,
+      3
+    ],
+    "packaged_jar_test_target_batches": [
+      1,
+      2
+    ],
+    "collisions": [
+      {
+        "class_name": "tlc2.tool.UserModuleOverrideAnnotationTest",
+        "source_batch": 2,
+        "packaged_jar_batch": 1,
+        "source_report": "target/surefire-reports/TEST-tlc2.tool.UserModuleOverrideAnnotationTest.xml",
+        "packaged_jar_report": "target/surefire-reports/TEST-tlc2.tool.UserModuleOverrideAnnotationTest.xml"
+      },
+      {
+        "class_name": "tlc2.tool.UserModuleOverrideFromJarTest",
+        "source_batch": 3,
+        "packaged_jar_batch": 2,
+        "source_report": "target/surefire-reports/TEST-tlc2.tool.UserModuleOverrideFromJarTest.xml",
+        "packaged_jar_report": "target/surefire-reports/TEST-tlc2.tool.UserModuleOverrideFromJarTest.xml"
+      }
+    ],
+    "disposition": "STATIC_OUTPUT_PATH_COLLISION_CONFIRMED; actual overwrite NOT_RUN",
+    "required_control": "Use distinct immutable report roots for source-test and packaged-JAR test targets; bind paths and report digests separately; fail if report roots overlap."
   }
 }

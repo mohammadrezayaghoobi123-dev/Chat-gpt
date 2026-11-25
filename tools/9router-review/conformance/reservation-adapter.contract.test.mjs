@@ -1451,6 +1451,11 @@ test("T54: a reservation digest collision with a different full tuple is rejecte
   }));
   assert.equal(colliding.status, "INTEGRITY_CONFLICT");
 
+  const originalWhileCollision = await system.adapter.readAuthoritative({ key: KEY });
+  const alternateWhileCollision = await system.adapter.readAuthoritative({ key: alternateKey });
+  assert.deepEqual(originalWhileCollision, beforeOriginal);
+  assert.equal(alternateWhileCollision.status, "INTEGRITY_CONFLICT");
+
   // Use unique diagnostic digests to detect an accidentally persisted alias record.
   forceCollision = false;
   const afterOriginal = await system.adapter.readAuthoritative({ key: KEY });

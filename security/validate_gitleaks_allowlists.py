@@ -171,8 +171,50 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
         mutated_marker = replacement + marker[1:]
         if pattern.fullmatch(mutated_marker):
             errors.append(f"{label}: regex also matches a mutated decoded fixture and is not literal-scoped")
-    return errors
+    line_entries = [
+        entry for entry in allowlists
+        if entry.get("description") in EXPECTED_LINE_EXCEPTIONS
+    ]
+    line_by_description = {entry.get("description"): entry for entry in line_entries}
+    if len(line_entries) != len(EXPECTED_LINE_EXCEPTIONS) or set(line_by_description) != set(EXPECTED_LINE_EXCEPTIONS):
+        errors.append("expected exactly 13 atomic historical line exceptions")
+        return errors
 
+    for description, (expected_commit, expected_path, line_number) in EXPECTED_LINE_EXCEPTIONS.items():
+        entry = line_by_description[description]
+        if entry.get("targetRules") != ["generic-api-key"]:
+            errors.append(f"{description}: targetRules must remain exactly generic-api-key")
+        if entry.get("condition") != "AND":
+            errors.append(f"{description}: condition must remain AND")
+        if entry.get("commits") != [expected_commit]:
+            errors.append(f"{description}: exactly one pinned commit is required")
+        escaped_path = expected_path.replace(".", r"\.")
+        if entry.get("paths") != [f"^{escaped_path}$"]:
+            errors.append(f"{description}: exact anchored path scope changed")
+        if entry.get("regexTarget") != "line":
+            errors.append(f"{description}: regexTarget must be line")
+        regexes = entry.get("regexes")
+        if not isinstance(regexes, list) or len(regexes) != 1 or not isinstance(regexes[0], str):
+            errors.append(f"{description}: exactly one line regex is required")
+            continue
+        source_line = _source_line_at(repo_root, expected_commit, expected_path, line_number)
+        if source_line is None:
+            errors.append(f"{description}: pinned historical source line could not be verified")
+            continue
+        expected_pattern = r"^\s*" + _escape_re2_literal(source_line.lstrip()) + "$"
+        if regexes[0] != expected_pattern:
+            errors.append(f"{description}: regex must equal the exact pinned source line")
+        try:
+            pattern = re.compile(regexes[0])
+        except re.error:
+            errors.append(f"{description}: regex is invalid")
+            continue
+        if not pattern.fullmatch(source_line) or not pattern.fullmatch("\n" + source_line):
+            errors.append(f"{description}: regex does not match the pinned source line")
+        if pattern.fullmatch(source_line + "x"):
+            errors.append(f"{description}: regex accepts a mutated source line")
+
+    return errors
 
 
 def diagnose_report(report: list[dict], config: dict) -> list[str]:

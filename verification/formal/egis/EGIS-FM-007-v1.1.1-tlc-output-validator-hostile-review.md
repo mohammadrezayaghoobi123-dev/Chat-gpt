@@ -1,6 +1,6 @@
 # EGIS-FM-007 — TLC Output Validator Hostile Review v1.1.1
 
-**Status:** Candidate / mocked CI verified; real TLC compatibility NOT_ESTABLISHED  
+**Status:** Candidate / exact-head mocked CI verified; real TLC compatibility NOT_ESTABLISHED  
 **Date:** 2026-11-25  
 **Scope:** TLC text-output validator and its integration into the EGIS verification gate  
 **Parent:** PR #475; stacked on EGIS operation-composition v1.1.0
@@ -49,7 +49,7 @@ The validator returns structured status/reason and extracted counts. Missing or 
 
 ## Verification boundaries
 
-- Unit tests use synthetic TLC output. They do not constitute SANY/TLC execution.\n- Latest Gitleaks run on the remediation head: PR-diff scan PASS; full-history scan FAIL with the same 13 unclassified generic-api-key findings across historical commits. No suppressions or secret changes were made.
+- Unit tests use synthetic TLC output. They do not constitute SANY/TLC execution.\n- Latest Gitleaks run on exact documentation head 5182efffab7f57909087d9c7e05ddf2894d024e8 (run 45553020837): PR-diff scan PASS; full-history scan FAIL with the same 13 unclassified generic-api-key findings across historical commits. No suppressions or secret changes were made.
 - SANY: NOT_RUN.
 - TLC: NOT_RUN.
 - Real output fixture compatibility: NOT_ESTABLISHED.

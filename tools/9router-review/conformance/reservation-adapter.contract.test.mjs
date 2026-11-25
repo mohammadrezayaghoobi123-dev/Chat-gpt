@@ -1316,3 +1316,23 @@ test("T51: COMMENT outcomes require the exact committed COMMENT boundary receipt
   });
   assert.equal(accepted.status, "ACK");
 });
+
+
+test("T52: MODEL helper forwards only its committed boundary receipt to the matching outcome", async () => {
+  const system = makeSystem();
+  const appendOutcome = system.ledger.appendOutcome.bind(system.ledger);
+  const observedCalls = [];
+  system.ledger.appendOutcome = async args => {
+    observedCalls.push(args);
+    return appendOutcome(args);
+  };
+
+  const completed = await completeModel(system);
+  const receipt = completed.permit.attemptBoundaryReceipt;
+  assert.ok(receipt, "MODEL helper must receive the committed attempt-boundary receipt");
+  assert.equal(observedCalls.length, 1);
+  assert.equal(observedCalls[0].attemptId, completed.attemptId);
+  assert.deepEqual(observedCalls[0].attemptBoundaryReceipt, receipt);
+  assert.equal(observedCalls[0].attemptBoundaryReceipt.stage, "MODEL");
+  assert.equal(observedCalls[0].attemptBoundaryReceipt.request_digest, completed.requestDigest);
+});

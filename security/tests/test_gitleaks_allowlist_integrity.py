@@ -7,6 +7,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "security"))
@@ -350,6 +351,55 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
         errors = verify_necessity_report(malformed)
         self.assertTrue(errors)
         self.assertTrue(any("malformed" in error for error in errors))
+
+
+    def test_validator_rejects_non_table_allowlist_members_without_exception(self):
+        for malformed in ("invalid", None, [], 123, {}):
+            with self.subTest(member_type=type(malformed).__name__):
+                changed = copy.deepcopy(self.config)
+                changed["allowlists"][0] = malformed
+                try:
+                    errors = validate_config(changed, ROOT)
+                except Exception as exc:
+                    self.fail(f"validator raised {type(exc).__name__} for malformed allowlist member")
+                self.assertTrue(errors)
+
+    def test_validator_rejects_non_table_baseline_members_without_exception(self):
+        malformed_baseline = 'allowlists = ["not-a-table"]\\n'
+        completed = subprocess.CompletedProcess(
+            args=["git", "show", "origin/main:.gitleaks.toml"],
+            returncode=0,
+            stdout=malformed_baseline,
+            stderr="",
+        )
+        with patch("validate_gitleaks_allowlists.subprocess.run", return_value=completed):
+            try:
+                errors = validate_config(copy.deepcopy(self.config), ROOT)
+            except Exception as exc:
+                self.fail(f"validator raised {type(exc).__name__} for malformed baseline member")
+        self.assertIn("baseline allowlists entries must be TOML tables", errors)
+
+    def test_necessity_config_rejects_non_table_members_with_value_error(self):
+        changed = copy.deepcopy(self.config)
+        changed["allowlists"][0] = "invalid"
+        from validate_gitleaks_allowlists import build_necessity_config
+        try:
+            build_necessity_config(changed)
+        except ValueError as exc:
+            self.assertIn("allowlists entries must be TOML tables", str(exc))
+        except Exception as exc:
+            self.fail(f"necessity builder raised uncontrolled {type(exc).__name__}")
+        else:
+            self.fail("necessity builder accepted a malformed allowlist member")
+
+    def test_validator_rejects_non_table_configuration_without_exception(self):
+        for malformed in (None, [], "invalid"):
+            with self.subTest(config_type=type(malformed).__name__):
+                try:
+                    errors = validate_config(malformed, ROOT)
+                except Exception as exc:
+                    self.fail(f"validator raised {type(exc).__name__} for malformed config")
+                self.assertTrue(errors)
 
 if __name__ == "__main__":
     unittest.main()

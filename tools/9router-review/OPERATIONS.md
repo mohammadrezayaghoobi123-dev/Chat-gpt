@@ -1483,3 +1483,15 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - **Evidence status:** RS-08 remains GAP. No T57 was authored, no RED/GREEN result is claimed, and no production backend is qualified by this checkpoint.
 - **Isolation:** no reviewer runtime, provider dispatch, workflow, secret, backend resource, Cloudflare/Supabase configuration, deployment, merge, main-branch ref, or local desktop state was changed.
 - **Disposition:** RS-08 CONTRACT GATE IDENTIFIED / IMPLEMENTATION DEFERRED TO A REAL DURABLE REOPEN SEAM / NO FALSE RESTART EVIDENCE.
+
+
+#### 2026-11-25 Orphan-INTENT recovery protocol draft — AR-66
+
+- **Scope:** authored `tools/9router-review/conformance/ORPHAN_INTENT_RECOVERY_CONTRACT.md` as a design-only protocol for RS-08. The document explicitly states PROPOSED DESIGN / NOT RATIFIED / NOT IMPLEMENTED.
+- **Protocol coverage:** immutable operation identity; durable EffectLedger and ReservationStore evidence interfaces; explicit state model; read-only reconciliation; monotonic recovery fencing; idempotent append-only dispositions; fail-closed evidence lattice; failure matrix; T57 independent-process restart acceptance sequence; fault-injection matrix; unresolved ratification decisions.
+- **Safety posture:** ambiguous, stale, incomplete, unavailable, or conflicting evidence remains quarantined. The proposal does not silently select automatic abort or automatic continuation. A definitively absent boundary still requires a ratified disposition policy. No provider call, permit, or GitHub POST is authorized by recovery.
+- **Hostile review:** checked all 12 required sections; no TBD/TODO/FIXME placeholders; explicit unknown/incomplete-read quarantine; explicit no-auto-permit rule; distinct writer/recovery/second-recovery process sequence; explicit not-ratified status. The current in-memory oracle remains incapable of T57; no restart test or RED/GREEN claim is made.
+- **Open decisions:** (1) terminal abort versus separately authorized continuation after definitive absence; (2) identity of continuation authorizer; (3) quarantine scope; (4) retention; (5) escalation/liveness policy; (6) recovery authority trust-root and key lifecycle. These remain open and are not inferred from the user's general instruction to continue.
+- **Evidence:** documentation/static contract review only. No test, backend adapter, storage resource, migration, process-kill test, or CI result is claimed.
+- **Isolation:** only documentation files on `verify/9router-reservation-conformance-run9-2026-11-25` were changed. No main-branch ref, PR #463, reviewer runtime, workflow policy, secret, provider, Cloudflare/Supabase resource, deployment, merge, or local desktop state was changed.
+- **Disposition:** RS-08 CONTRACT DRAFT RECORDED / USER RATIFICATION REQUIRED FOR DISPOSITION POLICY / T57 NOT IMPLEMENTED / RS-08 REMAINS GAP.

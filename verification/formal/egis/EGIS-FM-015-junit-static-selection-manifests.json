@@ -980,7 +980,8 @@
             "tlc2/tool/fp/OffHeapDiskFPSetTest.java"
           ]
         }
-      ]
+      ],
+      "selection_contract_sha256": "ed2f8674a4827d160d9a3e199cfab13db77265ae276c90bf01eeb231df1a4f09"
     },
     {
       "target": "test-dist",
@@ -1931,9 +1932,41 @@
             "tlc2/tool/fp/OffHeapDiskFPSetTest.java"
           ]
         }
-      ]
+      ],
+      "selection_contract_sha256": "bbdbd638c735399b4a9bd39d11c81ee2cbc6c44eb4109707539e28d017505a88"
     }
   ],
   "execution_status": "NOT_RUN",
-  "test_discovery_status": "NOT_ESTABLISHED"
+  "test_discovery_status": "NOT_ESTABLISHED",
+  "cross_target_comparison": {
+    "same_unique_selected_paths": true,
+    "source_only": [],
+    "packaged_jar_only": [],
+    "symmetric_difference_count": 0,
+    "source_later_batch_reselections": [
+      "tlc2/tool/EvaluatingValueTest.java",
+      "tlc2/tool/UserModuleOverrideAnnotationTest.java",
+      "tlc2/tool/UserModuleOverrideFromJarTest.java",
+      "tlc2/tool/UserModuleOverrideTest.java",
+      "tlc2/tool/distributed/TLCSetTest.java",
+      "tlc2/tool/distributed/DistributedDoInitFunctorEvalExceptionTest.java",
+      "tlc2/TLCTest.java",
+      "tlc2/tool/fp/OffHeapDiskFPSetTest.java"
+    ],
+    "packaged_jar_later_batch_reselections": [
+      "tlc2/tool/UserModuleOverrideAnnotationTest.java",
+      "tlc2/tool/UserModuleOverrideFromJarTest.java",
+      "tlc2/tool/UserModuleOverrideTest.java",
+      "tlc2/tool/distributed/TLCSetTest.java",
+      "tlc2/tool/distributed/DistributedDoInitFunctorEvalExceptionTest.java",
+      "tlc2/TLCTest.java",
+      "tlc2/tool/fp/OffHeapDiskFPSetTest.java"
+    ]
+  },
+  "discovery_contract": {
+    "ant_skip_non_tests_attribute": "NOT_EXPLICIT_IN_PINNED_BUILD",
+    "documented_ant_default": "false",
+    "meaning": "Matching source files are passed to the JUnit runner without Ant filtering out non-test classes; file-selection count is not a discovered-test or test-method count.",
+    "execution_proof": "NOT_RUN"
+  }
 }

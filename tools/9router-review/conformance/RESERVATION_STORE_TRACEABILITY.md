@@ -172,3 +172,14 @@ The current reference oracle cannot honestly execute a process-restart test: its
 **T57 acceptance gate (not implemented):** durable INTENT ACK → terminate before boundary invocation → reopen both stores in an independent process → recover the same operation identity → prove one idempotent orphan disposition and no boundary/permit/external effect → repeat concurrently and after restart → verify no duplicate ledger terminal event and no mutation on incomplete reads.
 
 RS-08 remains **GAP**. No test result or production qualification is claimed. This checkpoint is a protocol/design gate, not a substitute for T57.
+
+
+## G. RS-08 Orphan-INTENT recovery protocol draft — AR-66
+
+Design contract: `tools/9router-review/conformance/ORPHAN_INTENT_RECOVERY_CONTRACT.md`.
+
+- Contract status is **PROPOSED / NOT RATIFIED / NOT IMPLEMENTED**. It defines immutable operation identity, durable evidence interfaces for both stores, recovery states, read-only reconciliation, monotonic fencing, idempotent append-only dispositions, fail-closed handling of incomplete/ambiguous evidence, failure semantics, T57 independent-process acceptance criteria, and fault-injection cases.
+- The conservative proposal quarantines ambiguous evidence. For a definitively absent boundary, it intentionally does not choose automatic abort or automatic continuation. Both are externally observable policy decisions and remain subject to explicit user ratification.
+- Static hostile review checked all 12 contract sections, absence of TBD/TODO/FIXME placeholders, quarantine on unknown/incomplete reads, no automatic permit/external effect, and independent writer/recovery/recovery-after-lost-ack process sequence.
+- The current reference oracle remains process-local and cannot satisfy T57. No process restart, durable backend, independent process, or RED/GREEN test was run. This is design evidence only.
+- **RS-08 remains GAP.** T57 is not implemented. No production qualification is implied.

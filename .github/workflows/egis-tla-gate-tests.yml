@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "verification/formal/egis/tools/egis_tla_gate.py"
+      - "verification/formal/egis/tools/egis_tlc_output_validator.py"
       - "verification/formal/egis/tests/test_tla_gate.py"
       - ".github/workflows/egis-tla-gate-tests.yml"
   push:
@@ -35,7 +36,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Compile gate and tests
-        run: python -m compileall -q verification/formal/egis/tools/egis_tla_gate.py verification/formal/egis/tests/test_tla_gate.py
+        run: python -m compileall -q verification/formal/egis/tools/egis_tla_gate.py verification/formal/egis/tools/egis_tlc_output_validator.py verification/formal/egis/tests/test_tla_gate.py
       - name: Run mocked gate unit tests
         env:
           PYTHONPATH: verification/formal/egis/tools

@@ -344,5 +344,12 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
         self.assertEqual(parsed, reduced)
         self.assertEqual(len(parsed["allowlists"]), 17)
 
+    def test_necessity_report_rejects_malformed_tuple_types(self):
+        from validate_gitleaks_allowlists import verify_necessity_report
+        malformed = [{"Commit": [], "File": {}, "StartLine": True, "RuleID": "generic-api-key"}]
+        errors = verify_necessity_report(malformed)
+        self.assertTrue(errors)
+        self.assertTrue(any("malformed" in error for error in errors))
+
 if __name__ == "__main__":
     unittest.main()

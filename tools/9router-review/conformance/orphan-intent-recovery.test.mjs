@@ -40,7 +40,7 @@ test("T57.1: durable INTENT acknowledgement survives writer termination and inde
     import { createHash } from "node:crypto";
     const ledger = new DatabaseSync(process.argv[1]);
     ledger.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
-    ledger.exec("CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, operation_id TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, payload_json TEXT NOT NULL, payload_digest TEXT NOT NULL) STRICT;");
+    ledger.exec("CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, operation_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, payload_digest TEXT NOT NULL, UNIQUE(operation_id, kind)) STRICT;");
     const payload = process.argv[3];
     const operation = JSON.parse(payload);
     const digest = createHash("sha256").update(payload).digest("hex");

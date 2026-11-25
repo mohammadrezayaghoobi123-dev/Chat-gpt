@@ -347,7 +347,7 @@ class GateTests(unittest.TestCase):
         commit_result = {
             **self.command_result(status="PASS", process_outcome="EXIT_ZERO",
                                   process_started=True, exit_code=0),
-            "stdout": self.commit + "\\n",
+            "stdout": self.commit + "\n",
             "process_cleanup": "REAPED",
         }
         blocked = self.command_result(

@@ -220,3 +220,24 @@ Model checking completed. No error has been found.
   8 states generated, 12 distinct states found, 0 states left on queue.
 """
         self.assertNotEqual("PASS", validate_tlc_output(malformed, ["Safety"], exit_code=0)["status"])
+
+    def test_duplicate_completion_summary_is_not_pass(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        line = "Model checking completed. No error has been found."
+        output = ("Checking 1 invariant...\\n" + line + "\\n" + line +
+                  "\\n  12 states generated, 8 distinct states found, 0 states left on queue.\\n")
+        self.assertNotEqual("PASS", validate_tlc_output(output, ["Safety"], exit_code=0)["status"])
+
+    def test_nonempty_queue_is_not_complete(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        output = """Checking 1 invariant...
+Model checking completed. No error has been found.
+  12 states generated, 8 distinct states found, 2 states left on queue.
+"""
+        self.assertEqual("FAIL", validate_tlc_output(output, ["Safety"], exit_code=0)["status"])
+
+    def test_config_inventory_is_extracted_without_guessing(self):
+        from egis_tlc_output_validator import invariants_from_config
+        self.assertEqual(["Safety", "TypeOK"],
+                         invariants_from_config("SPECIFICATION Spec\\nINVARIANT Safety\\nINVARIANT TypeOK\\n"))
+        self.assertEqual([], invariants_from_config("SPECIFICATION Spec\\n"))

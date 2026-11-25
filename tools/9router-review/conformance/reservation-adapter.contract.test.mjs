@@ -1103,6 +1103,10 @@ test("T49: outcome requires an exact non-transferable committed attempt-boundary
     { request_digest: "different-request" },
     { generation: started.claimed.record.generation + 1 },
     { committed_record_version: started.permit.record_version + 1 },
+    { boundary_event_id: "forged-boundary-event" },
+    { schema_version: (receipt.schema_version || 1) + 1 },
+    { authority_id: "untrusted-authority" },
+    { signature: "forged-signature" },
   ];
 
   for (const mutation of mutations) {

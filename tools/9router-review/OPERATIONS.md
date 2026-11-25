@@ -1128,3 +1128,12 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - Test contract for the next implementation cycle: (1) reservation authority issues an opaque/integrity-protected receipt only after durable one-time boundary commit; (2) receipt binds canonical reservation tuple, schema/protocol version, stage, attempt ID, request digest, generation, committed record version, and unique boundary event; (3) EffectLedger verifies receipt against trusted authority material and the exact durable INTENT before appending OUTCOME; (4) recovery reads the same committed receipt by immutable key/stage/attempt without creating a new permit; (5) no external effect is permitted when commit acknowledgement is ambiguous.
 - Reference adapter receipts are test-oracle capabilities only; their mechanism must not be misrepresented as production cryptographic assurance. Production qualification still requires a real authority, key lifecycle, trust-root distribution, revocation/rotation, replay prevention, and cross-store failure tests.
 - Scope remains isolated to the verification branch. No main/default branch changes, merge, reviewer activation, provider dispatch, deployment, secret/resource mutation, or local-host changes.
+
+
+#### 2026-11-25 adversarial test refinement — T49 forgery dimensions
+
+- Exact test revision: `1f976f0e30d3938e016e0bcd5e4ce6df60bf5654`.
+- Hosted conformance run [45552306179](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45552306179), job `138996069364`, completed with failure.
+- T49's negative mutation set now includes reservation key, stage, attempt ID, request digest, generation, committed record version, boundary event ID, schema version, authority identity, and signature. It also requires exact receipt acceptance and no ledger watermark movement for rejected receipts.
+- Hosted execution again observed T48 RED, T49 RED at the missing receipt-presence assertion, and T50 RED at the explicit missing recovery API assertion. Because no receipt is issued, T49's individual tampering branches and exact-receipt positive path are not yet exercised. Because the recovery API is absent, T50's recovery/idempotence assertions are not yet exercised.
+- This refinement improves the adversarial test specification; it does not prove receipt verification behavior. Adapter implementation remains untouched. No GREEN claim is made.

@@ -25,7 +25,7 @@ No actual SANY or TLC run is claimed. The Python unit tests were authored but ex
 | FMH-054 | Medium | Tool/runtime version provenance is digest-only for jar; Java runtime identity is not captured | Open: record Java version and execution environment metadata |
 | FMH-055 | High | Mocked unit tests are not real tool runs and do not establish gate/model validity | Open/blocking: execute tests on exact commit; execute SANY/TLC on exact commit |
 | FMH-056 | High | TLC exit status alone is not an independent proof artifact; trace completeness and invariant list must be inspected | Open: parse TLC summary, require explicit expected invariants, archive complete output and states |
-| FMH-057 | High | No independent evaluator, mutation testing, or differential comparison is included | Open: separate follow-on verification stage |
+| FMH-057 | High | No independent evaluator, mutation testing, or differential comparison is included | Open: separate follow-on verification stage |\n| FMH-058 | High | Static inspection detected invalid Python line-continuation escaping in the first test draft | Fixed in candidate: replaced multi-context line continuations with nested context managers; execution remains NOT_RUN |\n| FMH-059 | Medium | Mocked SANY failure fixture had an incorrect stdout key | Fixed in candidate: corrected fixture key; tests still NOT_RUN |
 
 ## Test design
 

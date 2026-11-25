@@ -44,7 +44,10 @@ function transaction(db, fn) {
 
 function openDatabase(path, schema) {
   const db = new DatabaseSync(path);
-  db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
+  db.exec("PRAGMA busy_timeout=5000;");
+  const journalMode = db.prepare("PRAGMA journal_mode").get().journal_mode;
+  if (String(journalMode).toLowerCase() !== "wal") db.exec("PRAGMA journal_mode=WAL;");
+  db.exec("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
   db.exec(schema);
   return db;
 }

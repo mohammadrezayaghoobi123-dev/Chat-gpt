@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from egis_tla_gate import _rooted_path, git_identity, run_command, run_gate
+from egis_tla_gate import _rooted_path, _snapshot_file, git_identity, run_command, run_gate
 
 
 class GateTests(unittest.TestCase):
@@ -397,6 +397,33 @@ class GateTests(unittest.TestCase):
             command_mock.assert_not_called()
         finally:
             import shutil
+            shutil.rmtree(outside_dir)
+
+    def test_b1a_detects_persistent_symlink_target_change_during_snapshot(self):
+        import os
+        import shutil
+
+        outside_dir = Path(tempfile.mkdtemp(prefix="egis-snapshot-target-"))
+        try:
+            outside = outside_dir / "external.tla"
+            outside.write_text("---- MODULE External ----\n", encoding="utf-8")
+            link = self.root / "model-link.tla"
+            try:
+                os.symlink(self.module, link)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"symlink creation unavailable: {type(exc).__name__}")
+            expected_canonical = str(self.module.resolve())
+            altered_canonical = str(outside.resolve())
+            original_resolve = Path.resolve
+            def changed_resolve(path, *args, **kwargs):
+                if path == link:
+                    return Path(altered_canonical)
+                return original_resolve(path, *args, **kwargs)
+            with patch.object(Path, "resolve", new=changed_resolve):
+                result = _snapshot_file(link, "module", expected_canonical)
+            self.assertEqual("FAIL", result["status"])
+            self.assertEqual("input_changed_during_read", result["reason"])
+        finally:
             shutil.rmtree(outside_dir)
 
     def test_b1a_rejects_non_regular_required_input(self):

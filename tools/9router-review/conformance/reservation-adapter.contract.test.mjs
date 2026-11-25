@@ -1148,6 +1148,7 @@ test("T49: outcome requires an exact non-transferable committed attempt-boundary
     requestDigest: "model-request-digest",
   });
   assert.equal(foreignIntent.status, "ACK");
+  const beforeCrossKeyReplay = await system.ledger.readComplete({ key: foreignKey });
   const crossKeyReplay = await system.ledger.appendOutcome({
     attemptId: "foreign-key-attempt",
     outcomeType: "MODEL_RESULT_STORED",
@@ -1157,9 +1158,15 @@ test("T49: outcome requires an exact non-transferable committed attempt-boundary
   });
   assert.equal(crossKeyReplay.status, "INVALID_ATTEMPT_BOUNDARY_RECEIPT");
 
-  const crossKeyInventory = await system.ledger.readComplete({ key: foreignKey });
-  assert.equal(crossKeyInventory.events.length, 1);
-  assert.equal(crossKeyInventory.events[0].kind, "INTENT");
+  const afterCrossKeyReplay = await system.ledger.readComplete({ key: foreignKey });
+  assert.equal(afterCrossKeyReplay.events.length, beforeCrossKeyReplay.events.length);
+  assert.equal(afterCrossKeyReplay.watermark, beforeCrossKeyReplay.watermark);
+  assert.equal(
+    afterCrossKeyReplay.events.some(event =>
+      event.kind === "OUTCOME" && event.attempt_id === "foreign-key-attempt"
+    ),
+    false,
+  );
 });
 
 test("T50: a lost boundary acknowledgement recovers the same durable receipt without issuing another permit", async () => {

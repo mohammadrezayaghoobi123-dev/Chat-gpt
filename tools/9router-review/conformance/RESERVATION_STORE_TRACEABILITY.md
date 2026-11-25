@@ -79,13 +79,14 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 | T50 | Lost boundary ACK recovers same receipt without new permit | `readAttemptBoundaryReceipt` | RS-06, RS-09 | DIRECT for oracle lost-response simulation; durable process restart not proven |
 | T51 | COMMENT OUTCOME requires exact COMMENT boundary receipt | COMMENT receipt validation | RS-11, RS-17 (partial) | DIRECT for oracle stage-bound receipt |
 | T52 | MODEL helper forwards exact committed receipt to matching outcome | Helper/ledger integration seam | — | DIRECT for helper argument propagation; production `runReview()` integration absent |
+| T53 | Different full tuple with one changed immutable SHA creates an independent reference reservation | Canonical full-tuple identity; `claim` and authoritative read | — | DIRECT for full-tuple separation in the reference oracle; no digest collision is injected |
 
 ## B. Requirement-to-test coverage (RS-01–RS-22)
 
 | Requirement | Current mapping | Coverage | Missing evidence / falsification still required |
 |---|---|---|---|
 | RS-01 Independent clients claim one absent key | T01 | PARTIAL | T01 is one in-memory adapter/process. Add two independent clients/processes against the candidate backend and race at a barrier. |
-| RS-02 Same digest, different full tuple | T25 only tests cross-key receipt binding; T02 tests policy/runtime mismatch | GAP | Force a canonical-key digest collision through an injectable hash seam or deterministic collision fixture; prove full tuple comparison returns INTEGRITY_CONFLICT with no mutation. |
+| RS-02 Same digest, different full tuple | T53 proves different full tuples remain distinct in the reference adapter; T25 tests cross-key receipt binding | GAP | The reference adapter uses the full canonical JSON tuple as its map key and does not implement the production SHA-256 digest index. T53 is adjacent evidence only. A production-shaped digest-index seam must force a collision and prove full-tuple comparison returns INTEGRITY_CONFLICT with no mutation. |
 | RS-03 Stale owner after takeover | T03, T06, T10, T24 | PARTIAL | Independent process and backend restart; stale writes across every mutation method, not only sampled paths. |
 | RS-04 Lease expiry before any attempt | T03, T23 | PARTIAL | Backend server time under clock skew/failover and concurrent expiry/renew races. |
 | RS-05 Lease expiry after MODEL boundary | T05, T07 | PARTIAL | Process crash and competing client after committed boundary; assert no second provider permit. |
@@ -111,7 +112,7 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 
 | Production-contract operation | Nearest reference test(s) | Assessment |
 |---|---|---|
-| `claim` | T01–T03, T23, T26 | Broad oracle coverage; no production interface adapter |
+| `claim` | T01–T03, T23, T26, T53 | Broad oracle coverage; T53 characterizes full tuple separation only; no production interface adapter |
 | `renew` | T23–T24 | Oracle-only; server-time and version semantics not distributed |
 | `beginModelAttempt` | T04–T05, T48–T50 | Oracle-only; durable transaction and receipt semantics not qualified |
 | `beginCommentAttempt` | T11–T12, T31, T51 | Oracle-only; actual snapshot binding and remote POST boundary not qualified |
@@ -136,6 +137,10 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 7. **False-positive requirement mapping:** hostile reinspection found that T04 (no INTENT), T48 (no boundary receipt), and T52 (receipt propagation) do not simulate a transaction abort or a crash after durable INTENT. Their RS-07/RS-08 mappings were removed or downgraded to explicitly adjacent evidence; both requirements remain GAP.
 8. **API mismatch:** the proposed production interface has operation IDs, typed ACKs, signed recovery authorization, and explicit ledger acknowledgement types that the reference adapter API does not yet implement as an identical interface. Do not claim interface conformance from behaviorally related tests.
 9. **Integration gap:** T26 tests a reference preflight behavior; current `runReview()` still lacks durable reservation integration. No production claim is authorized.
+
+## D2. Additional hostile-review clarification
+
+10. **T53 scope restriction:** T53 demonstrates that the current reference oracle stores two distinct full canonical tuples independently when one immutable SHA changes. It does not inject a digest collision, because the oracle does not hash reservation keys for map addressing. RS-02 remains GAP; do not cite T53 as satisfying the production digest-collision requirement.
 
 ## E. Next implementation gate (not authorized by this artifact)
 

@@ -41,6 +41,9 @@ The PR-diff scan passing establishes only that Gitleaks found no leak in the sca
 - That defect was corrected: dirty checkout and commit mismatch are FAIL; unavailable Git metadata is BLOCKED. A dedicated regression test now covers unavailable metadata.
 - Remediation-head CI run 45552300042 completed successfully on source commit e7ed42327b90ec2013c3f69c951954681037a055: Python 3.11 compileall PASS; all 14 mocked unit tests PASS. This validates gate control-flow tests only, not real SANY/TLC execution.
 - Full-history Gitleaks findings remain independent and unresolved.
+- Latest-head Gitleaks run 45552373737 scanned 5,165 commits / approximately 15.84 MB. PR-diff scan: PASS (no leaks). Full fetched-history scan: FAIL with the same 13 generic-api-key findings in historical content. The findings include four paths and commits dated 2026-11-15 through 2026-11-24; no finding is classified as a confirmed credential or a false positive by this scan.
+- Latest-head unit-test run 45552380419 completed successfully: compileall PASS and 14/14 mocked tests PASS.
+
 
 ## Required next atomic increment
 

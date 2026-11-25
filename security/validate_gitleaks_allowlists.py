@@ -86,6 +86,40 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
         errors.append("allowlist count changed; new exceptions require explicit review")
         return errors
 
+    baseline_result = subprocess.run(
+        ["git", "show", "origin/main:.gitleaks.toml"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if baseline_result.returncode != 0:
+        errors.append("trusted origin/main Gitleaks baseline is unavailable")
+        return errors
+    try:
+        baseline_config = tomllib.loads(baseline_result.stdout)
+    except tomllib.TOMLDecodeError:
+        errors.append("trusted origin/main Gitleaks baseline is invalid TOML")
+        return errors
+    baseline_allowlists = baseline_config.get("allowlists", [])
+    baseline_legacy = [
+        entry for entry in baseline_allowlists
+        if entry.get("description") not in EXPECTED_FIXTURES
+    ]
+    current_legacy = [
+        entry for entry in allowlists
+        if entry.get("description") not in EXPECTED_FIXTURES
+        and entry.get("description") not in EXPECTED_LINE_EXCEPTIONS
+    ]
+    if len(baseline_legacy) != 15 or current_legacy != baseline_legacy:
+        errors.append("legacy main allowlists changed; baseline exceptions are immutable in this change")
+        return errors
+
+    descriptions = [entry.get("description") for entry in allowlists]
+    if len(set(descriptions)) != len(descriptions):
+        errors.append("allowlist descriptions must be unique")
+        return errors
+
     for index, entry in enumerate(allowlists, start=1):
         prefix = f"allowlist {index}"
         if not isinstance(entry.get("targetRules"), list) or not entry["targetRules"] or any(not isinstance(rule, str) or not rule for rule in entry["targetRules"]):

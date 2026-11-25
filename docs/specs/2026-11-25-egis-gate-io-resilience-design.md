@@ -71,11 +71,13 @@ Use canonical resolved paths and filesystem identity checks for existing targets
 
 The threat model assumes the output directory is controlled by the caller and is not concurrently modified by a hostile process. Defending against concurrent path-swap attacks with platform-specific directory-handle primitives is out of scope for this increment and must not be implied.
 
-### 3.2 Input-read classification
+### 3.2 Input-read and configuration preflight
 
-- Input read/hash `OSError` → `BLOCKED` with a stable input-unavailable reason, error class and errno; persist evidence if the output destination remains writable.
-- Invalid text encoding for the TLC configuration → `FAIL` with an explicit invalid-encoding reason; do not invoke TLC.
-- Hash mismatches and existing source/tool integrity failures retain their current `FAIL`/ `BLOCKED` meanings.
+- Use explicit filesystem metadata/open operations so an inaccessible path is not silently collapsed into a generic `is_file() == false` result.
+- Missing required inputs remain `BLOCKED`; input read/hash `OSError` becomes `BLOCKED` with a stable reason, exception class and errno. Persist evidence if the output destination remains writable.
+- Read and UTF-8-decode the TLC configuration and derive its configured invariant inventory **before invoking SANY or TLC**. Invalid text encoding is `FAIL`; an unavailable/unreadable config is `BLOCKED`. Neither case may launch Java.
+- An empty or invalid invariant inventory retains the existing fail-closed contract and must not lead to a TLC `PASS`.
+- Hash mismatches and existing source/tool integrity failures retain their current `FAIL` / `BLOCKED` meanings.
 
 ### 3.3 Evidence writer contract
 
@@ -91,8 +93,8 @@ The threat model assumes the output directory is controlled by the caller and is
 
 - Exact output/module, output/config and output/JAR path conflicts are rejected before any mutation.
 - Symlink alias and hard-link alias are rejected where the platform supports their creation.
-- Unreadable module/config/JAR paths are classified without PASS.
-- Invalid UTF-8 configuration fails closed and never launches TLC.
+- Missing and unreadable module/config/JAR paths are distinguished and classified without PASS.
+- Invalid UTF-8 configuration and empty/invalid invariant inventories fail closed before Java invocation.
 - Injected serialization, file-write and replace failures surface the typed persistence error.
 - Temporary files are removed after every tested ordinary failure.
 - CLI persistence failure returns nonzero, emits only a sanitized diagnostic, and makes no claim that a JSON evidence artifact exists.
@@ -103,6 +105,7 @@ The threat model assumes the output directory is controlled by the caller and is
 - No broad `except Exception` or `except BaseException` around the gate's full execution path.
 - No suppression or reinterpretation of tool non-zero exits/timeouts.
 - No TLC execution unless SANY is `PASS`.
+- No Java process execution until required source/config/input preflight has completed.
 - No PASS on missing, malformed, conflicting, or unpersisted required evidence.
 - No changes to TLA modules, TLC configs, JAR acquisition, Java provenance, Gitleaks policy, GitHub permissions, branch rules, `main`, or deployment.
 - Real SANY/TLC execution remains a separate provenance-gated requirement; mocked tests do not establish formal verification.

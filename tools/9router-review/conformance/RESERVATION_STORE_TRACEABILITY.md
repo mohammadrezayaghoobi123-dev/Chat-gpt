@@ -95,7 +95,7 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 | RS-05 Lease expiry after MODEL boundary | T05, T07 | PARTIAL | Process crash and competing client after committed boundary; assert no second provider permit. |
 | RS-06 Boundary commits but response is dropped | T50 | PARTIAL | Actual durable store, process termination between commit and response, then independent-client receipt recovery. |
 | RS-07 Boundary transaction aborts | T55 and T56 inject pre-commit aborts in MODEL and COMMENT respectively; prove no permit/receipt, unchanged reservation/ledger state, and no consumed boundary sequence | PARTIAL | Evidence is limited to the reference oracle's abort hook before the first reservation write. Add a production-store transaction that aborts after each write stage; prove atomic rollback of record, receipt/index, sequence and ledger linkage under backend errors, process loss, and restart. No durable backend transaction has been qualified. |
-| RS-08 Crash between ledger INTENT and reservation boundary | T04 is a missing-INTENT negative test, not a crash-window test; T52 is receipt propagation | GAP | Kill process after durable INTENT ACK but before claim-boundary call; restart and reconcile the orphan INTENT without effect. |
+| RS-08 Crash between ledger INTENT and reservation boundary | T57.1–T57.9 exercise process death/reopen, terminal tombstone + Ledger disposition, inter-store crash, fencing, incomplete reads, existing-boundary recovery, repeated reopen, attempt-start race, and forged evidence in a local SQLite harness | PARTIAL — TEST HARNESS ONLY | Implement the same protocol in selected production ReservationStore/EffectLedger authorities; prove durable receipt/ACK trust, cross-store fencing and idempotency, crash/power-loss and restore behavior, independent failure domains, external-effect interlocks, and `runReview()` integration. No production backend is qualified. |
 | RS-09 Crash after boundary ACK, before model call | T05, T09, T50 | PARTIAL | Kill/restart independent process after boundary commit; prove exact receipt recovery and no duplicate permit/inference. |
 | RS-10 Crash after provider call, before OUTCOME ACK | T06, T08 | GAP | Fault-inject provider success then process death before OUTCOME; prove MODEL UNKNOWN and no retry. |
 | RS-11 Crash after COMMENT boundary, before POST | T11, T12, T31, T51 | PARTIAL | Kill/restart after boundary ACK but before POST; prove no second COMMENT permit. |
@@ -150,7 +150,7 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 ## E. Next implementation gate (not authorized by this artifact)
 
 Before any provider adapter is written:
-1. Resolve or explicitly defer each GAP with an accepted risk owner and a falsification plan; RS-08, RS-10, RS-12, RS-17, RS-18 and RS-22 remain GAP. RS-02 and RS-07 have reference-oracle PARTIAL evidence but remain production-qualification blockers until durable SHA-256 uniqueness and transactional rollback are proven.
+1. Resolve or explicitly defer each production qualification GAP with an accepted risk owner and a falsification plan. RS-08 now has T57.1–T57.9 local SQLite harness evidence (PARTIAL only); RS-08 remains a production qualification blocker. RS-10, RS-12, RS-17, RS-18 and RS-22 remain GAP. RS-02 and RS-07 have reference-oracle PARTIAL evidence but remain production-qualification blockers until durable SHA-256 uniqueness and transactional rollback are proven.
 2. Define a canonical operation-ID/idempotency envelope and error-precedence table shared by ReservationStore and EffectLedger.
 3. Align the abstract method signatures with the existing reference adapter and T01–T56 harness, or version the conformance contract before implementation.
 4. Add production-shaped fault-injection for the missing crash, revocation, quota, durable digest-index collision, and cross-vendor cases. Preserve the original duplicate-publication RED test unchanged.
@@ -174,7 +174,7 @@ The current reference oracle cannot honestly execute a process-restart test: its
 RS-08 remains **GAP**. No test result or production qualification is claimed. This checkpoint is a protocol/design gate, not a substitute for T57.
 
 
-## G. RS-08 Orphan-INTENT recovery protocol draft — AR-66
+## G. RS-08 Orphan-INTENT recovery protocol draft — AR-66 (historical checkpoint; superseded by AR-67)
 
 Design contract: `tools/9router-review/conformance/ORPHAN_INTENT_RECOVERY_CONTRACT.md`.
 
@@ -196,15 +196,41 @@ Decision record: [ADR-001](ADR-001-ORPHAN-INTENT-TERMINAL-ABORT.md). Status: **A
 - The durable implementation, independent-process evidence, and full T57 acceptance run are pending. RS-08 remains **GAP**; no production backend is qualified.
 
 
-## I. T57 staged execution ledger — AR-68
+## I. T57 staged execution ledger — AR-69 (supersedes AR-68 status table)
 
-| Stage | Required assertion | Evidence | Status |
+| Test | Required assertion | Observed evidence | Harness status |
 | --- | --- | --- | --- |
-| T57.1 | Durable INTENT acknowledgement survives writer process termination; a separate process reopens both SQLite files and finds the exact event; no boundary row exists | Byte-identical test blob `eb55f2ab523611711d30da96223c0427f59985c6`; isolated Node.js v22.16.0 execution, 1/1 pass | **PASS — harness probe only** |
-| T57.2 | ReservationStore terminal tombstone plus final EffectLedger event; exact attempt can no longer receive a permit | Not implemented | NOT EXECUTED |
-| T57.3 | Crash after tombstone commit and before ledger terminal append; next process converges idempotently | Not implemented | NOT EXECUTED |
-| T57.4 | Two independent recovery processes; stale fence rejected before mutation | Not implemented | NOT EXECUTED |
-| T57.5 | Incomplete/unavailable read causes quarantine with no tombstone or ledger mutation; late begin is denied after terminal abort | Not implemented | NOT EXECUTED |
-| T57.6 | Second restart preserves one tombstone, one terminal event, same operation identity, monotonic watermarks, and no external effect | Not implemented | NOT EXECUTED |
+| T57.1 | Durable INTENT ACK survives writer process termination and independent-process reopen; no boundary call occurred | Two file-backed SQLite databases; writer exited after ACK with injected exit code 73; independent reader verified exact event ID, operation ID, payload and SHA-256 digest, plus zero boundaries | PASS |
+| T57.2 | Terminal tombstone and final Ledger event are unique; exact attempt cannot receive a late permit; repeat recovery preserves IDs | Separate worker processes; exactly one tombstone and one `ORPHAN_INTENT_ABORTED`; late `beginAttempt` rejected | PASS |
+| T57.3 | Crash after tombstone commit and before final Ledger append converges idempotently after reopen | Recovery worker terminated with injected exit code 74 after tombstone ACK; next independent process appended exactly one final event bound to the same tombstone | PASS |
+| T57.4 | Stale recovery fencing generation cannot mutate after takeover | One process held generation 1; stale recovery expected generation 0 and was rejected; current worker acquired generation 2; original stale process could not append its delayed tombstone | PASS |
+| T57.5 | Incomplete ReservationStore and EffectLedger reads quarantine without any mutation | Both incomplete-read paths returned `RECOVERY_QUARANTINED`; tombstone, ledger events, fence and counts remained unchanged | PASS |
+| T57.6 | If boundary is already committed, recover exact receipt and do not abort | Existing test permit/receipt returned identically; tombstone count and final abort event stayed zero | PASS |
+| T57.7 | After a second independent reopen, terminal identity and ledger watermark remain unchanged | Same tombstone ID, final event ID/digest, one INTENT, one final event, same high-water mark, zero permit/boundary | PASS |
+| T57.8 | Independent process attempt-start and orphan-abort race yields exactly one terminal outcome | Two worker processes raced; SQLite write serialization and boundary re-check yielded either permit+boundary with no tombstone/event, or tombstone+terminal event with no permit/boundary | PASS — see RED→GREEN note |
+| T57.9 | Forged tombstone ACK, altered immutable tuple and changed request payload fail closed | Forged receipt digest rejected without ledger mutation; same operation ID with altered tuple or request digest returns integrity conflict | PASS |
 
-**Stage-1 limitation:** this probe tests the Node.js SQLite persistence/reopen substrate directly; it is not an implementation of the ReservationStore or EffectLedger interfaces. T57 as a whole remains **GAP** until stages 2–6 and the complete regression are independently verified.
+**Fresh execution evidence:** the complete T57.1–T57.9 suite ran three consecutive times under Node.js `v22.16.0`; each run observed **9 tests / 9 passed / 0 failed**. Four source files passed `node --check`. T57.8 additionally passed 10 consecutive focused race probes after the snapshot fix. These are isolated local SQLite harness results, not hosted Actions evidence.
+
+### T57.8 RED→GREEN record
+
+The initial adversarial runs exposed:
+1. Missing `receipt_json` in the boundary-race SELECT projection, which caused recovery to fail to return a committed receipt.
+2. Reissuing WAL mode configuration on each open, which caused `database is locked` under simultaneous worker startup.
+3. A fractured read: boundary existence and permit counts came from separate autocommit snapshots, allowing a concurrent commit to be misclassified as `INTEGRITY_CONFLICT`.
+
+The corrections add the receipt column to the race SELECT, configure WAL only if not already active, set busy timeout before mode inspection, and read boundary/count evidence in one SQLite read transaction. Ledger history and its high-water mark are also read within one snapshot. No test assertion was removed or weakened.
+
+### Production evidence boundary
+
+All nine results are **PARTIAL / TEST-HARNESS ONLY**:
+- The adapter uses two local SQLite files on the same runner and does not qualify the eventual selected ReservationStore or EffectLedger.
+- Its receipt and evidence hashes are not signatures, independent attestations, or trust-root proofs.
+- Its fence is a generation-CAS model; worker authentication, lease expiry and real recovery authority are not qualified.
+- Its permit is a test-only row; no model/provider call, GitHub POST, or production external effect is wired.
+- No machine/power-loss test, independent backup/restore, cross-vendor outage, production quota/failover or `runReview()` integration is included.
+- Hosted workflow results for the push commit were not available through the retrieved workflow/status interface.
+
+Consequently RS-08 has moved from no direct crash-window tests to **PARTIAL test-harness evidence**, but remains a **PRODUCTION QUALIFICATION GAP**. No backend is qualified.
+
+The full reviewer regression’s known deterministic duplicate-publication race remains a separate RED and was neither edited nor suppressed.

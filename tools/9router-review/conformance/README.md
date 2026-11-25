@@ -101,7 +101,7 @@ This invokes the two T57 test files on Node.js 22. The default `npm test` also d
 | T57.5 | Incomplete ReservationStore or EffectLedger reads quarantine without mutation | PASS in isolated harness |
 | T57.6 | Existing committed boundary returns the exact prior receipt and is not aborted | PASS in isolated harness |
 | T57.7 | Second independent reopen preserves one tombstone, one final event, stable IDs and ledger watermark | PASS in isolated harness |
-| T57.8 | Independent processes race attempt start against orphan abort; permit wins only before fence, otherwise transient `RECOVERY_FENCED` is followed by terminal `ORPHAN_ABORTED` after recovery; exactly one terminal outcome exists | PASS after transient-fence expectation correction |
+| T57.8 | Independent processes race attempt start against orphan abort; transient `RECOVERY_FENCED` is distinguished from terminal `ORPHAN_ABORTED`; final state has exactly one terminal outcome | PASS — hosted exact-head run 45583936546 |
 | T57.9 | Forged tombstone ACK and same-ID tuple/request conflicts fail closed | PASS in isolated harness |
 | T57.10 | No attempt permit is issued without an exact matching durable Ledger INTENT | PASS in hosted focused suite |
 | T57.11 | An active recovery fence blocks new attempt-start until terminal disposition or recovery takeover | PASS in hosted focused suite |
@@ -189,3 +189,12 @@ The later addition of the begin-time recovery-fence gate exposed that the origin
 - `RECOVERY_FENCED` or `ORPHAN_ABORTED` for the racing start, followed by terminal recovery, then an explicit late-start probe that MUST return `ORPHAN_ABORTED`, with exactly one tombstone and terminal ledger event and zero permits/boundaries.
 
 The test asserts final durable state after the terminal outcome, not the transient interleaving label. No production code or safety assertion was weakened. The previous hosted run showed T57.8 failure solely because the expected transient state was too narrow; T57.9–T57.11 still passed and the focused 11-test tranche passed 11/11. The corrected test is now on the verification branch; a fresh exact-head Actions result is required before calling this revision GREEN.
+
+## T57 exact-head hosted verification — AR-73
+
+- **Verification branch HEAD:** `f0b6233045bbe1a59b1a64982a03c105ff1722f6`.
+- **Conformance run:** [45583936546](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45583936546). Focused T57: **11/11 PASS**; reference-oracle tranche: **56/56 PASS**; complete reviewer regression: **203/204 PASS**. Its only failure is the preserved `deterministic concurrent duplicate-publication red test` (2 comment POSTs observed where max 1 is required).
+- **T57.8:** the revised transient-fence expectation passed on this exact branch head. The abort branch distinguishes `RECOVERY_FENCED` before tombstone commit from `ORPHAN_ABORTED` after commit, and verifies one tombstone/event with zero permits/boundaries after recovery.
+- **Secret scan:** [run 45583936478](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45583936478). The PR change-range scan reported `no leaks found`. The separate full-history scan inspected 5,397 commits and reported 13 `generic-api-key` findings in older commits dated 2026-11-15 through 2026-11-24. These are historical findings, not findings in the current change range; they remain untriaged and must not be silently allowlisted or called false positives.
+- **Review integrity:** no test was skipped or weakened; the duplicate-publication assertion remains intact. The focused T57 result is independent of the complete regression failure.
+- **Qualification boundary:** all T57 evidence remains local SQLite test-harness evidence. RS-08 is still `PARTIAL / TEST-HARNESS ONLY / PRODUCTION GAP OPEN`; no deployed store, provider interlock, or `runReview()` integration is qualified.

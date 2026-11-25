@@ -1137,3 +1137,12 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - T49's negative mutation set now includes reservation key, stage, attempt ID, request digest, generation, committed record version, boundary event ID, schema version, authority identity, and signature. It also requires exact receipt acceptance and no ledger watermark movement for rejected receipts.
 - Hosted execution again observed T48 RED, T49 RED at the missing receipt-presence assertion, and T50 RED at the explicit missing recovery API assertion. Because no receipt is issued, T49's individual tampering branches and exact-receipt positive path are not yet exercised. Because the recovery API is absent, T50's recovery/idempotence assertions are not yet exercised.
 - This refinement improves the adversarial test specification; it does not prove receipt verification behavior. Adapter implementation remains untouched. No GREEN claim is made.
+
+
+#### 2026-11-25 T50 simulation integrity correction
+
+- A hostile review found the first T50 draft retained the simulated commit response and compared the recovered receipt against it; that did not actually model a lost acknowledgement.
+- Corrected the test to discard the boundary-call response, recover by immutable key/stage/attempt, bind the recovered receipt's committed record version to authoritative state, verify repeated recovery is identical, and verify a repeated begin call returns `ALREADY_CONSUMED`.
+- Exact corrected test revision: `fb3650530704fabc239ec8977bd39386de230422`; hosted run [45552431713](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45552431713), job `138996478209`.
+- T48/T49/T50 again observed RED for their intended missing behaviors. T50 now fails the explicit missing recovery API assertion after a genuinely discarded response; recovery semantics remain unexercised until implementation.
+- This correction repairs test validity only. No adapter implementation was changed; no GREEN or production-readiness claim is made.

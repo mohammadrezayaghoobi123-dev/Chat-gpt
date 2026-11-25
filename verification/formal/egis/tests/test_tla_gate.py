@@ -426,6 +426,37 @@ class GateTests(unittest.TestCase):
         finally:
             shutil.rmtree(outside_dir)
 
+    def test_b1a_rejects_config_symlink_escaping_repository_root(self):
+        import os
+        import shutil
+
+        outside_dir = Path(tempfile.mkdtemp(prefix="egis-outside-config-"))
+        try:
+            outside_config = outside_dir / "outside.cfg"
+            outside_config.write_text("SPECIFICATION Spec\n", encoding="utf-8")
+            escaped = self.root / "escaped.cfg"
+            try:
+                os.symlink(outside_config, escaped)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"symlink creation unavailable: {type(exc).__name__}")
+            result, git_mock, command_mock = self._run_gate_with_preflight_mocks(config=escaped)
+            self.assertEqual("BLOCKED", result["overall"])
+            self.assertEqual("repository_input_path_escape", result["checks"]["inputs"]["reason"])
+            self.assertEqual("config", result["checks"]["inputs"]["role"])
+            git_mock.assert_not_called()
+            command_mock.assert_not_called()
+        finally:
+            shutil.rmtree(outside_dir)
+
+    def test_b1a_missing_jar_blocks_without_git_or_java(self):
+        missing_jar = self.root / "missing-tools.jar"
+        result, git_mock, command_mock = self._run_gate_with_preflight_mocks(jar=missing_jar)
+        self.assertEqual("BLOCKED", result["overall"])
+        self.assertEqual("input_missing", result["checks"]["inputs"]["reason"])
+        self.assertEqual("tool_jar", result["checks"]["inputs"]["role"])
+        git_mock.assert_not_called()
+        command_mock.assert_not_called()
+
     def test_b1a_rejects_non_regular_required_input(self):
         directory = self.root / "module-directory"
         directory.mkdir()

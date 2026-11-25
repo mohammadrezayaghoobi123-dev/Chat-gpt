@@ -103,3 +103,16 @@ The current `createReferenceSystem` is an in-memory, single-process model. Its J
 - T50: lost boundary acknowledgement recovers the exact persisted receipt; repeated recovery is stable; second begin cannot issue a second permit.
 - Additional required cases: COMMENT-stage receipt; receipt replay against a different INTENT; stale generation/version; unknown/revoked key; invalid signature; unsupported schema/protocol; receipt/record mismatch; incomplete recovery read; authority unavailable; rotation with old receipt verification; no receipt leakage in logs.
 - Full T01–T50 suite and reviewer regression must be run after implementation. The preserved duplicate-publication concurrency test remains RED until a real atomic reservation backend prevents the tested two-runner interleaving. No test may be weakened to obtain GREEN.
+
+## Hostile test-design review
+
+The existing T49 mutation table was compared against this canonical payload definition. Two mutation keys in the test draft do not currently target the defined payload fields:
+
+- The test mutates `reservation_key`, while the contract field is `reservation_key_digest`.
+- The test mutates `schema_version`, while the contract field is `receipt_schema_version`.
+
+Until the test is corrected, those two cases do not demonstrate rejection of mutations to the canonical key digest or receipt schema version. Unknown-field rejection alone is not equivalent to mutating the signed canonical field. Before implementation is accepted, T49 must mutate the exact canonical field names and assert that each rejection leaves the ledger event count and watermark unchanged.
+
+The T49 matrix must also retain explicit coverage for `protocol_version`, `authority_id`, `signing_key_id`, `stage`, `attempt_id`, `request_digest`, `generation`, `committed_record_version`, `boundary_event_id`, `issued_at`, `purpose`, and `signature`. Add a cross-key replay and a receipt-from-another-attempt replay; do not rely only on shallow object-field mutations.
+
+This is a test-design defect, not evidence that the missing implementation behaves securely or insecurely. T49 remains RED and its positive exact-receipt path remains unexecuted until a receipt is actually issued. The test must be corrected and re-run before the GREEN phase. No production or reference-adapter code is changed by this finding.

@@ -337,10 +337,76 @@ def diagnose_report(report: list[dict], config: dict) -> list[str]:
 
 
 
-def main() -> int:
+
+def build_necessity_config(config: dict) -> dict:
+    """Remove only the 13 newly-added line exceptions for necessity testing."""
+    reduced = copy.deepcopy(config)
+    allowlists = reduced.get("allowlists", [])
+    reduced["allowlists"] = [
+        entry for entry in allowlists
+        if entry.get("description") not in EXPECTED_LINE_EXCEPTIONS
+    ]
+    if len(allowlists) - len(reduced["allowlists"]) != 13:
+        raise ValueError("necessity config must remove exactly 13 pinned line exceptions")
+    if len(reduced["allowlists"]) != 17:
+        raise ValueError("necessity config must retain 15 baseline entries and 2 synthetic fixtures")
+    return reduced
+
+
+def verify_necessity_report(report: list[dict]) -> list[str]:
+    """Verify the redacted report contains exactly the 13 expected finding tuples."""
+    expected = {
+        (commit, path, line_number, "generic-api-key")
+        for commit, path, line_number in EXPECTED_LINE_EXCEPTIONS.values()
+    }
+    observed = []
+    for finding in report:
+        observed.append((
+            finding.get("Commit"),
+            finding.get("File"),
+            finding.get("StartLine"),
+            finding.get("RuleID"),
+        ))
+    errors = []
+    duplicates = sorted({item for item in observed if observed.count(item) > 1})
+    missing = sorted(expected - set(observed))
+    extra = sorted(set(observed) - expected)
+    if duplicates:
+        errors.append(f"necessity report contains duplicate finding tuples: {len(duplicates)}")
+    if missing:
+        errors.append(f"necessity report is missing expected finding tuples: {len(missing)}")
+    if extra:
+        errors.append(f"necessity report contains unexpected finding tuples: {len(extra)}")
+    if len(observed) != 13:
+        errors.append(f"necessity report must contain exactly 13 findings, observed {len(observed)}")
+    return errors
+
+
+def write_toml_config(config: dict, destination: pathlib.Path) -> None:
+    """Serialize the restricted Gitleaks config using TOML-compatible JSON strings."""
+    import json
+    lines = []
+    for key in ("title", "minVersion"):
+        if key in config:
+            lines.append(f"{key} = {json.dumps(config[key])}")
+    extend = config.get("extend")
+    if isinstance(extend, dict):
+        lines.append("")
+        lines.append("[extend]")
+        for key, value in extend.items():
+            lines.append(f"{key} = {json.dumps(value)}")
+    for entry in config.get("allowlists", []):
+        lines.append("")
+        lines.append("[[allowlists]]")
+        for key, value in entry.items():
+            lines.append(f"{key} = {json.dumps(value)}")
+    destination.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+
+
+\ndef main() -> int:
     parser = argparse.ArgumentParser(description="Validate pinned Gitleaks allowlist integrity.")
     parser.add_argument("--config", default=".gitleaks.toml")
-    parser.add_argument("--report", default=None, help="Optional redacted Gitleaks JSON report for predicate diagnostics.")
+    parser.add_argument("--report", default=None, help="Optional redacted Gitleaks JSON report for predicate diagnostics.")\n    parser.add_argument("--necessity-config", default=None, help="Write a diagnostic config with exactly 13 new line exceptions removed.")\n    parser.add_argument("--necessity-report", default=None, help="Verify the redacted report against the exact 13 expected findings.")
     args = parser.parse_args()
     config_path = pathlib.Path(args.config).resolve()
     try:
@@ -354,7 +420,7 @@ def main() -> int:
         for error in errors:
             print(f"FAIL: {error}")
         return 1
-    print("PASS: both synthetic HMAC allowlists are pinned to verified exact source lines.")
+    print("PASS: both synthetic HMAC allowlists are pinned to verified exact source lines.")\n    if args.necessity_config:\n        try:\n            reduced = build_necessity_config(config)\n            write_toml_config(reduced, pathlib.Path(args.necessity_config))\n        except (OSError, ValueError) as exc:\n            print(f"Necessity config generation failed: {type(exc).__name__}")\n            return 2\n        print("PASS: diagnostic config preserves 15 baseline entries and 2 fixtures; removes exactly 13 new exceptions.")\n    if args.necessity_report:\n        try:\n            with pathlib.Path(args.necessity_report).open("r", encoding="utf-8") as handle:\n                necessity_report = json.load(handle)\n        except (OSError, json.JSONDecodeError) as exc:\n            print(f"Necessity report load failed: {type(exc).__name__}")\n            return 2\n        necessity_errors = verify_necessity_report(necessity_report)\n        if necessity_errors:\n            for error in necessity_errors:\n                print(f"FAIL: {error}")\n            return 1\n        print("PASS: redacted necessity report contains exactly the 13 expected finding tuples.")
     if args.report:
         try:
             with pathlib.Path(args.report).open("r", encoding="utf-8") as handle:

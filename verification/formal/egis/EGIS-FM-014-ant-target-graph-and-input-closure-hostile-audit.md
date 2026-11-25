@@ -62,7 +62,7 @@ The pinned build defines the following relevant behavior:
 
 The effective invocation trace therefore includes the `git-revision` dependency of `info` and a second explicit `git-revision` call before `dist`. The single target-name list in FM-013 does not fully represent this invocation trace.
 
-Static inspection found no Ant `import`, `include`, `subant`, external `exec`, `java`, or `get` task in this pinned build file. The local `antcall` invocations do not by themselves establish that the complete build is network-independent; the future controller must still enforce network denial and verify the effective process environment.
+Static inspection found no Ant `import`, `include`, `subant`, external `exec`, Ant `java`, or `get` task in this pinned build file. This does **not** mean that no child JVM is launched: the selected JUnit tasks explicitly use `fork="yes"` and `forkmode="perTest"`. The future controller must bind the forked JVM executable, JDK identity, arguments and inherited environment. The local `antcall` invocations do not by themselves establish that the complete build is network-independent; network denial remains mandatory.
 
 ## 4. New hostile findings
 
@@ -113,6 +113,7 @@ A successful controller preflight is not a successful build. A successful build 
 | Git ref/tag metadata reproducibility | NOT_ESTABLISHED |
 | Cleanup path/symlink behavior in isolated builder | NOT_RUN |
 | Actual test discovery and report counts | NOT_RUN |
+| Forked JUnit JVM executable and process environment | NOT_ESTABLISHED |
 | Build, JAR creation, SANY/TLC | NOT_RUN |
 
 ## 8. Safety boundary

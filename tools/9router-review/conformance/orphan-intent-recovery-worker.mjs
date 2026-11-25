@@ -51,7 +51,7 @@ if (mode === "seed-intent-crash") {
         const intent = stores.ledger.readIntent(operation.operation_id);
         const absence = stores.reservations.readAttemptBoundary(operation);
         const abortResult = stores.reservations.abortOrphanAttempt({ operation, intentAck: intent, absenceEvidence: absence, fence });
-        process.stdout.write(JSON.stringify({ abortResult, snapshot: stores.reservations.snapshot(operation.operation_id) }) + "\\n");
+        process.stdout.write(JSON.stringify({ abortResult, snapshot: stores.reservations.snapshot(operation.operation_id) }) + "\n");
         break;
       }
       if (line === "release") break;

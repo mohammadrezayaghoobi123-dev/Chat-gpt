@@ -1264,3 +1264,15 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - **Hostile review:** inspected the exact commit diff. Only T13's successful outcome path and receipt-forwarding assertions changed; the negative no-outcome path and final publication checks remain intact. T13 now covers the COMMENT helper path, while T45's separate recovery-lock COMMENT outcome remains unmigrated.
 - AR-41–AR-48 remain OPEN. Remaining successful callers: T44 MODEL recovery-lock and T45 COMMENT recovery-lock. Preserve all negative/replay tests and the original duplicate-publication concurrency RED.
 - No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.
+#### 2026-11-25 Recovery-lock receipt propagation — AR-49
+
+- Test commit: `6b782af2cc18defd58ed4d6e2030551a0a1f2606`.
+- T44's successful MODEL ledger outcome now carries `started.permit.attemptBoundaryReceipt`, the exact receipt associated with the `modelAttempt()` permit.
+- T45's successful COMMENT ledger outcome now carries `comment.permit.attemptBoundaryReceipt`, the exact receipt associated with `commentAttempt()`'s `beginCommentAttempt` permit.
+- Both paths instrument `appendOutcome` and assert exactly one append, matching attempt ID, deep-equal receipt propagation, and the correct stage (`MODEL` / `COMMENT`).
+- The recovery lock is still set only after the ledger outcome is recorded; the test continues to exercise the intended locked completion/publication rejection rather than suppressing the prerequisite outcome.
+- **Status:** AUTHORED / NOT_EXECUTED. The reference adapter still does not issue boundary receipts. No RED/GREEN result is claimed; T44/T45 and the full tranche remain NOT VERIFIED.
+- **Hostile review:** exact commit diff inspected. Only the two successful outcome argument sets and local receipt-propagation assertions changed. T44 still tests `completeModelAttempt` rejection under `RECOVERY_LOCKED`; T45 still tests the COMMENT completion rejection and other locked mutation paths. No adapter implementation, receipt fabrication, fallback, or negative-test weakening was introduced.
+- **Callsite inventory:** all intended successful MODEL/COMMENT outcomes in the current contract test now pass an explicit receipt (shared helper, T06, T13, T28, T44, T45, T49/T51 acceptance paths). Deliberately receipt-free stage-mismatch negatives T46/T47, missing-boundary T48, and mutated/replay cases remain intentionally negative. Re-scan is required after any future test edits.
+- AR-41–AR-49 remain OPEN pending execution and adapter contract implementation. Keep the original duplicate-publication concurrency RED separate and unchanged.
+- No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.

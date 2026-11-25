@@ -183,3 +183,14 @@ Design contract: `tools/9router-review/conformance/ORPHAN_INTENT_RECOVERY_CONTRA
 - Static hostile review checked all 12 contract sections, absence of TBD/TODO/FIXME placeholders, quarantine on unknown/incomplete reads, no automatic permit/external effect, and independent writer/recovery/recovery-after-lost-ack process sequence.
 - The current reference oracle remains process-local and cannot satisfy T57. No process restart, durable backend, independent process, or RED/GREEN test was run. This is design evidence only.
 - **RS-08 remains GAP.** T57 is not implemented. No production qualification is implied.
+
+
+## H. RS-08 terminal orphan-INTENT abort decision — AR-67
+
+Decision record: [ADR-001](ADR-001-ORPHAN-INTENT-TERMINAL-ABORT.md). Status: **ACCEPTED POLICY / IMPLEMENTATION NOT YET VERIFIED**.
+
+- A definitively absent boundary is terminally aborted; ambiguous or incomplete evidence remains quarantined; a committed boundary is reconciled by returning its exact existing receipt.
+- The deny-side ReservationStore tombstone MUST commit before the unique append-only EffectLedger ORPHAN_INTENT_ABORTED terminal event. The tombstone permanently blocks the exact operation/attempt ID from obtaining a permit. Recovery after a crash between stores appends the same ledger event idempotently.
+- This policy does not authorize resume/retry of the same attempt ID, provider dispatch, or GitHub publication.
+- T57 is staged as: durable INTENT + process death/reopen; terminal tombstone + ledger event; crash between stores; two-process fencing; incomplete-read quarantine and late-permit rejection; repeated restart and exact-head regression.
+- The durable implementation, independent-process evidence, and full T57 acceptance run are pending. RS-08 remains **GAP**; no production backend is qualified.

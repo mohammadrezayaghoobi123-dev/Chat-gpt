@@ -1469,7 +1469,7 @@ test("T54: a reservation digest collision with a different full tuple is rejecte
 });
 
 
-test("T55: an aborted MODEL boundary transaction leaves no receipt, state transition, or permit", async () => {
+test("T55: a pre-commit MODEL boundary abort leaves no receipt, state transition, or permit", async () => {
   let abortStage = "MODEL";
   const system = createReferenceSystem({
     now: () => 1_000,
@@ -1522,7 +1522,7 @@ test("T55: an aborted MODEL boundary transaction leaves no receipt, state transi
 });
 
 
-test("T56: an aborted COMMENT boundary transaction leaves no receipt, state transition, or permit", async () => {
+test("T56: a pre-commit COMMENT boundary abort leaves no receipt, state transition, or permit", async () => {
   let abortStage = null;
   const system = createReferenceSystem({
     now: () => 1_000,

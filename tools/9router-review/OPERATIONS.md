@@ -1103,3 +1103,14 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - The conformance workflow is configured for pushes to `verify/9router-reservation-conformance-*`. No workflow-run result has yet been retrieved for this exact commit; hosted execution is **NOT_VERIFIED**.
 - No adapter implementation was changed. T48 must be observed failing before a minimal correction is made.
 - T49/T50 remain design-only. AR-40 remains OPEN. The prior T01–T47 result is unchanged and does not include T48.
+
+
+#### 2026-11-25 hosted execution checkpoint — T48 observed RED
+
+- Exact revision tested: `80dab2c0502046e7e084f28c3dc36c90aef20e72` (conformance workflow run [45512814174](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45512814174), job `138864577949`).
+- T48 was **OBSERVED RED for the expected missing-boundary defect**: the assertion expected `ATTEMPT_BOUNDARY_NOT_ACKNOWLEDGED`, but `appendOutcome` returned `ACK`. This confirms the test reaches the protocol behavior rather than failing setup/import.
+- The full reviewer + conformance job failed as expected; T48 is not green. The preserved publication-race regression also remains independently failing; no test was removed or weakened.
+- The isolated conformance step also failed because T48 remains red. The exact run output was retrieved and inspected.
+- On the same revision, the full-history secret scan workflow run [45512814177](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45512814177) failed with exit code 2 during the all-refs scan. The PR-diff scan step passed. The retrieved log did not expose finding details, so the finding count, locations, and whether any item is an actual secret versus a configured historical match remain **UNKNOWN**; do not add allowlist entries or suppressions without obtaining and validating the report.
+- No implementation change followed the RED observation. AR-40 remains OPEN; T49/T50 are not yet authored or executed. This checkpoint is evidence-only.
+- Scope remains isolated to this verification branch. No default-branch changes, merge, reviewer activation, provider dispatch, deployment, secrets/resource mutation, or local-host changes were performed.

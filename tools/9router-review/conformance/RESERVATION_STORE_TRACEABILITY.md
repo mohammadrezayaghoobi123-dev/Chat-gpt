@@ -4,26 +4,26 @@
 
 **Status:** static traceability artifact; not an implementation qualification, test result, or approval to select a backend.
 
-**Reviewed source snapshot:** branch `verify/9router-reservation-conformance-run9-2026-11-25`, HEAD `d06fa73a5498c3a6494b9bfcc3948e0559fc89b6`, base `main` at `919b19ca3d3887352cdef06b03c668ead04fbce7`.
+**Reviewed source snapshot:** branch `verify/9router-reservation-conformance-run9-2026-11-25`, HEAD `7a42adaecc4b56c7a4b3a4fc6f4f9dd00391b190`, base `main` at `919b19ca3d3887352cdef06b03c668ead04fbce7`.
 
 **Inputs inspected:**
 - `tools/9router-review/conformance/RESERVATION_STORE_CONTRACT.md` — abstract production contract and RS-01–RS-22 fault-injection requirements.
-- `tools/9router-review/conformance/reservation-adapter.contract.test.mjs` — executable reference-oracle tests T01–T54.
+- `tools/9router-review/conformance/reservation-adapter.contract.test.mjs` — executable reference-oracle tests T01–T56.
 - `tools/9router-review/conformance/reference-adapter.mjs` — in-memory reference implementation.
 - `tools/9router-review/OPERATIONS.md` — historical protocol, state, recovery and audit decisions.
 
-The T01–T54 suite exercises only the in-memory reference oracle. The production interface in the contract is design pseudocode and is not implemented or type-checked. Mapping a test to a requirement means its title and assertions appear relevant; it does not prove complete semantic coverage or production conformance.
+The T01–T56 suite exercises only the in-memory reference oracle. The production interface in the contract is design pseudocode and is not implemented or type-checked. Mapping a test to a requirement means its title and assertions appear relevant; it does not prove complete semantic coverage or production conformance.
 
 ## Coverage vocabulary
 
 - **DIRECT** — test assertions substantially exercise the stated invariant in the reference oracle.
 - **PARTIAL** — related behavior is exercised, but at least one fault, boundary, actor, backend, or evidence condition from the requirement is absent.
-- **GAP** — no current T01–T54 test directly exercises the requirement in the reference oracle.
+- **GAP** — no current T01–T56 test directly exercises the requirement in the reference oracle.
 - **ORACLE ONLY** — all results are limited to the in-memory test adapter; no durable, cross-process, multi-region, provider, or GitHub behavior is established.
 
 A row may be DIRECT for the reference oracle and still ORACLE ONLY for production qualification.
 
-## A. Test-to-contract traceability (T01–T54)
+## A. Test-to-contract traceability (T01–T56)
 
 | Test | Executable test intent (condensed from source) | Contract area / operation | RS mapping | Reference-oracle assessment |
 |---|---|---|---|---|
@@ -81,6 +81,8 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 | T52 | MODEL helper forwards exact committed receipt to matching outcome | Helper/ledger integration seam | — | DIRECT for helper argument propagation; production `runReview()` integration absent |
 | T53 | Different full tuple with one changed immutable SHA creates an independent reference reservation | Canonical full-tuple identity; `claim` and authoritative read | — | DIRECT for full-tuple separation in the reference oracle; no digest collision is injected |
 | T54 | Forced digest collision returns `INTEGRITY_CONFLICT`; original tuple retains digest-index ownership; alternate tuple has no hidden record | Digest-index collision detection; `claim` and authoritative read | RS-02 | DIRECT / ORACLE ONLY for injected collision semantics; no production SHA-256 or durable index qualification |
+| T55 | Pre-commit MODEL boundary abort: no permit/receipt, unchanged record/ledger, same-intent retry starts sequence 1 | `beginModelAttempt`; pre-commit abort seam and boundary receipt sequence | RS-07 | DIRECT / ORACLE ONLY for pre-write abort; does not simulate rollback after a partial write or durable transaction abort |
+| T56 | Pre-commit COMMENT boundary abort: no permit/receipt, unchanged record/ledger, same-intent retry uses next unconsumed sequence | `beginCommentAttempt`; pre-commit abort seam and boundary receipt sequence | RS-07 | DIRECT / ORACLE ONLY for pre-write abort; does not simulate rollback after a partial write or durable transaction abort |
 
 ## B. Requirement-to-test coverage (RS-01–RS-22)
 
@@ -92,7 +94,7 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 | RS-04 Lease expiry before any attempt | T03, T23 | PARTIAL | Backend server time under clock skew/failover and concurrent expiry/renew races. |
 | RS-05 Lease expiry after MODEL boundary | T05, T07 | PARTIAL | Process crash and competing client after committed boundary; assert no second provider permit. |
 | RS-06 Boundary commits but response is dropped | T50 | PARTIAL | Actual durable store, process termination between commit and response, then independent-client receipt recovery. |
-| RS-07 Boundary transaction aborts | T04/T48 are adjacent missing-prerequisite checks, not transaction-abort tests | GAP | Inject transaction abort after INTENT and at each write point; prove no receipt and no external call. |
+| RS-07 Boundary transaction aborts | T55 and T56 inject pre-commit aborts in MODEL and COMMENT respectively; prove no permit/receipt, unchanged reservation/ledger state, and no consumed boundary sequence | PARTIAL | Evidence is limited to the reference oracle's abort hook before the first reservation write. Add a production-store transaction that aborts after each write stage; prove atomic rollback of record, receipt/index, sequence and ledger linkage under backend errors, process loss, and restart. No durable backend transaction has been qualified. |
 | RS-08 Crash between ledger INTENT and reservation boundary | T04 is a missing-INTENT negative test, not a crash-window test; T52 is receipt propagation | GAP | Kill process after durable INTENT ACK but before claim-boundary call; restart and reconcile the orphan INTENT without effect. |
 | RS-09 Crash after boundary ACK, before model call | T05, T09, T50 | PARTIAL | Kill/restart independent process after boundary commit; prove exact receipt recovery and no duplicate permit/inference. |
 | RS-10 Crash after provider call, before OUTCOME ACK | T06, T08 | GAP | Fault-inject provider success then process death before OUTCOME; prove MODEL UNKNOWN and no retry. |
@@ -115,9 +117,9 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 |---|---|---|
 | `claim` | T01–T03, T23, T26, T53–T54 | Broad oracle coverage; T54 exercises injected collision rejection only; no production interface adapter or durable digest index |
 | `renew` | T23–T24 | Oracle-only; server-time and version semantics not distributed |
-| `beginModelAttempt` | T04–T05, T48–T50 | Oracle-only; durable transaction and receipt semantics not qualified |
-| `beginCommentAttempt` | T11–T12, T31, T51 | Oracle-only; actual snapshot binding and remote POST boundary not qualified |
-| `readAttemptBoundaryReceipt` | T50 | Oracle-only; no durable restart or multi-client read |
+| `beginModelAttempt` | T04–T05, T48–T50, T55 | Oracle-only; T55 covers pre-commit abort only; durable rollback after partial writes and receipt atomicity remain unqualified |
+| `beginCommentAttempt` | T11–T12, T31, T51, T56 | Oracle-only; T56 covers pre-commit abort only; durable rollback after partial writes and remote POST boundary not qualified |
+| `readAttemptBoundaryReceipt` | T50, T55–T56 | Oracle-only; abort returns NOT_FOUND in memory; no durable restart or multi-client read |
 | `completeModelAttempt` | T06, T08–T09, T44 | Oracle-only; production EffectLedger outcome acknowledgement contract not compiled |
 | `completeCommentAttempt` | T13–T15, T20, T22, T32, T44 | Oracle-only; actual GitHub response and pagination evidence absent |
 | `resumeCompletedModel` | T09–T10 | Oracle-only; recovery authorization in proposed interface not implemented in reference oracle |
@@ -125,17 +127,17 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 | `markUnknown` | T08, T22, T30–T31 | Oracle-only; recovery authorization in proposed interface not implemented as specified |
 | `closeWithoutPublish` | T16, T27 | Oracle-only; dual fence/recovery authorization policy needs exact precedence tests |
 | `reconcileComment` | T14–T15, T20, T22, T30, T32–T33 | Oracle-only; listing consistency and remote evidence authenticity not qualified |
-| `read` | Read helpers throughout T01–T54 | No explicit production consistency/read-after-write conformance suite |
+| `read` | Read helpers throughout T01–T56 | No explicit production consistency/read-after-write conformance suite |
 
 ## D. Hostile review findings against this matrix
 
-1. **No false production-green inference:** the 54 tests are a reference-oracle tranche, not production backend conformance. The matrix labels all such evidence ORACLE ONLY.
+1. **No false production-green inference:** the 56 tests are a reference-oracle tranche, not production backend conformance. The matrix labels all such evidence ORACLE ONLY.
 2. **Digest alias qualification:** T54 now directly exercises a forced digest collision and full-tuple conflict in the reference oracle. It improves RS-02 from GAP to PARTIAL, but does not prove production SHA-256 indexing, durable uniqueness, or transactional atomicity.
-3. **Crash-window gaps:** test titles about UNKNOWN or lost acknowledgement do not establish process death at every boundary. RS-07, RS-08, RS-10 and RS-12 remain GAP until explicit fault injection exists.
+3. **Crash-window and rollback boundary:** T55/T56 demonstrate only pre-commit abort in the in-memory oracle. They do not simulate a transaction abort after any durable write or process death. RS-07 is PARTIAL for oracle pre-commit behavior but remains production-unqualified; RS-08, RS-10 and RS-12 remain GAP.
 4. **Trust-root gap:** stage mismatch and receipt mutation are not equivalent to signing-key revocation or authority identity change. RS-17 remains GAP.
 5. **Quota gap:** no test proves quota exhaustion fails closed before the provider or GitHub side effect. RS-18 remains GAP.
 6. **Cross-vendor gap:** in-memory recovery-lock tests do not qualify independent failure domains, partial restores or cross-vendor reconciliation. RS-22 remains GAP.
-7. **False-positive requirement mapping:** hostile reinspection found that T04 (no INTENT), T48 (no boundary receipt), and T52 (receipt propagation) do not simulate a transaction abort or a crash after durable INTENT. Their RS-07/RS-08 mappings were removed or downgraded to explicitly adjacent evidence; both requirements remain GAP.
+7. **False-positive requirement mapping:** T04 (no INTENT), T48 (no boundary receipt), and T52 (receipt propagation) remain adjacent evidence only and do not simulate abort or crash between stores. T55/T56 separately cover MODEL/COMMENT pre-commit aborts in the reference oracle; they do not close durable rollback or RS-08's crash window.
 8. **API mismatch:** the proposed production interface has operation IDs, typed ACKs, signed recovery authorization, and explicit ledger acknowledgement types that the reference adapter API does not yet implement as an identical interface. Do not claim interface conformance from behaviorally related tests.
 9. **Integration gap:** T26 tests a reference preflight behavior; current `runReview()` still lacks durable reservation integration. No production claim is authorized.
 
@@ -143,13 +145,14 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 
 10. **T53 scope restriction:** T53 demonstrates separation of two distinct full canonical tuples; it remains adjacent evidence only and does not inject a digest collision.
 11. **T54 collision-test boundary:** T54 injects a constant digest through a test-only callback and verifies `INTEGRITY_CONFLICT`; while that digest remains active, it confirms the original tuple still owns the index and the alternate remains conflicted. It then switches to a unique diagnostic namespace to detect a hidden alias record. This directly tests collision handling in the in-memory oracle. It does not implement SHA-256, persistence, database uniqueness, or multi-process atomicity; RS-02 remains PARTIAL until those production properties are tested.
+12. **T55/T56 abort-test boundary:** both tests inject a pre-commit abort before the first reservation write. They prove the in-memory record, receipt registry, ledger inventory, and boundary sequence remain unchanged and that a known-aborted attempt can retry using the same INTENT. They do not test rollback after partial writes, an actual storage-engine transaction abort, crash recovery, or external calls. RS-07 is PARTIAL and remains a production gate.
 
 ## E. Next implementation gate (not authorized by this artifact)
 
 Before any provider adapter is written:
-1. Resolve or explicitly defer each GAP with an accepted risk owner and a falsification plan; RS-02, RS-07, RS-08, RS-10, RS-12, RS-17, RS-18 and RS-22 are blocking safety gaps.
+1. Resolve or explicitly defer each GAP with an accepted risk owner and a falsification plan; RS-08, RS-10, RS-12, RS-17, RS-18 and RS-22 remain GAP. RS-02 and RS-07 have reference-oracle PARTIAL evidence but remain production-qualification blockers until durable SHA-256 uniqueness and transactional rollback are proven.
 2. Define a canonical operation-ID/idempotency envelope and error-precedence table shared by ReservationStore and EffectLedger.
-3. Align the abstract method signatures with the existing reference adapter and T01–T54 harness, or version the conformance contract before implementation.
+3. Align the abstract method signatures with the existing reference adapter and T01–T56 harness, or version the conformance contract before implementation.
 4. Add production-shaped fault-injection for the missing crash, revocation, quota, durable digest-index collision, and cross-vendor cases. Preserve the original duplicate-publication RED test unchanged.
 5. Run two independent clients/processes against a disposable test backend, including restart and restore drills.
 6. Obtain an independent hostile review of the adapter, migration, trust-root model, threat model, rollback and evidence.

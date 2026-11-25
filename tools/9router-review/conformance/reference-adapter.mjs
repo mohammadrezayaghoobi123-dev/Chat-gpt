@@ -34,6 +34,8 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
   const records = new Map();
   const intents = new Map();
   const outcomes = new Map();
+  const boundaryReceipts = new Map();
+  let boundarySequence = 0;
   let ledgerSequence = 0;
   let recoveryMode = "ACTIVE";
 
@@ -59,6 +61,55 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
       event.key_id === expected.keyId &&
       event.stage === expected.stage &&
       event.request_digest === expected.requestDigest
+    );
+  }
+
+  function issueAttemptBoundaryReceipt({ keyId, stage, attemptId, requestDigest, generation, committedRecordVersion }) {
+    boundarySequence += 1;
+    const payload = {
+      receipt_schema_version: 1,
+      protocol_version: "9router-attempt-boundary-v1",
+      authority_id: "reference-oracle-only",
+      signing_key_id: "in-memory-non-cryptographic",
+      reservation_key_digest: digest(keyId),
+      stage,
+      attempt_id: attemptId,
+      request_digest: requestDigest,
+      generation,
+      committed_record_version: committedRecordVersion,
+      boundary_event_id: "reference-boundary-" + boundarySequence,
+      issued_at: now(),
+      purpose: "9router-attempt-boundary-v1",
+    };
+    // This digest is a deterministic test token, not a cryptographic signature.
+    const receipt = {
+      ...payload,
+      signature: "reference-only:" + digest(payload),
+    };
+    boundaryReceipts.set(attemptId, {
+      keyId,
+      stage,
+      requestDigest,
+      generation,
+      committedRecordVersion,
+      receipt: clone(receipt),
+    });
+    return receipt;
+  }
+
+  function matchesAttemptBoundaryReceipt(receipt, intent, attemptId) {
+    if (!receipt || typeof receipt !== "object") return false;
+    const issued = boundaryReceipts.get(attemptId);
+    return Boolean(
+      issued &&
+      issued.keyId === intent.key_id &&
+      issued.stage === intent.stage &&
+      issued.requestDigest === intent.request_digest &&
+      receipt.stage === intent.stage &&
+      receipt.attempt_id === attemptId &&
+      receipt.request_digest === intent.request_digest &&
+      receipt.reservation_key_digest === digest(intent.key_id) &&
+      digest(receipt) === digest(issued.receipt)
     );
   }
 
@@ -117,7 +168,7 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
       return makeReceipt(event);
     },
 
-    async appendOutcome({ attemptId, outcomeType, evidenceDigest, evidenceReference }) {
+    async appendOutcome({ attemptId, outcomeType, evidenceDigest, evidenceReference, attemptBoundaryReceipt }) {
       if (recoveryMode !== "ACTIVE") return { status: "RECOVERY_LOCKED" };
       const intent = intents.get(attemptId);
       if (!intent) return { status: "NO_INTENT" };
@@ -130,6 +181,12 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
         : "COMMENT_ACCEPTED";
       if (outcomeType !== expectedOutcomeType) {
         return { status: "INVALID_OUTCOME_STAGE" };
+      }
+      if (!attemptBoundaryReceipt) {
+        return { status: "ATTEMPT_BOUNDARY_NOT_ACKNOWLEDGED" };
+      }
+      if (!matchesAttemptBoundaryReceipt(attemptBoundaryReceipt, intent, attemptId)) {
+        return { status: "INVALID_ATTEMPT_BOUNDARY_RECEIPT" };
       }
       const expected = {
         key_id: intent.key_id,
@@ -358,15 +415,29 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
       if (!findIntentReceipt(args.effectLedgerReceipt, {
         keyId, stage: "MODEL", attemptId: args.attemptId, requestDigest: args.requestDigest,
       })) return { status: "LEDGER_NOT_ACKNOWLEDGED" };
+      const attemptBoundaryReceipt = issueAttemptBoundaryReceipt({
+        keyId,
+        stage: "MODEL",
+        attemptId: args.attemptId,
+        requestDigest: args.requestDigest,
+        generation: record.generation,
+        committedRecordVersion: record.record_version + 1,
+      });
       const next = writeRecord(keyId, {
         ...record,
         state: "MODEL_ATTEMPTED",
         model_attempt_id: args.attemptId,
         model_request_digest: args.requestDigest,
+        model_attempt_boundary_receipt: clone(attemptBoundaryReceipt),
         model_attempt_deadline_at: now() + args.attemptTimeoutMs,
         model_effect_ledger_intent_id: args.effectLedgerReceipt.eventId,
       });
-      return { status: "MODEL_PERMIT", record_version: next.record_version, record: next };
+      return {
+        status: "MODEL_PERMIT",
+        record_version: next.record_version,
+        record: next,
+        attemptBoundaryReceipt: clone(attemptBoundaryReceipt),
+      };
     },
 
     async completeModelAttempt(args) {
@@ -417,17 +488,31 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
       if (!findIntentReceipt(args.effectLedgerReceipt, {
         keyId, stage: "COMMENT", attemptId: args.attemptId, requestDigest: args.payloadDigest,
       })) return { status: "LEDGER_NOT_ACKNOWLEDGED" };
+      const attemptBoundaryReceipt = issueAttemptBoundaryReceipt({
+        keyId,
+        stage: "COMMENT",
+        attemptId: args.attemptId,
+        requestDigest: args.payloadDigest,
+        generation: record.generation,
+        committedRecordVersion: record.record_version + 1,
+      });
       const next = writeRecord(keyId, {
         ...record,
         state: "COMMENT_ATTEMPTED",
         comment_attempt_id: args.attemptId,
         comment_payload_digest: args.payloadDigest,
+        comment_attempt_boundary_receipt: clone(attemptBoundaryReceipt),
         snapshot_validation_id: args.snapshotValidationId,
         snapshot_validation_digest: args.snapshotValidationDigest,
         comment_effect_ledger_intent_id: args.effectLedgerReceipt.eventId,
         comment_attempt_deadline_at: now() + args.attemptTimeoutMs,
       });
-      return { status: "COMMENT_PERMIT", record_version: next.record_version, record: next };
+      return {
+        status: "COMMENT_PERMIT",
+        record_version: next.record_version,
+        record: next,
+        attemptBoundaryReceipt: clone(attemptBoundaryReceipt),
+      };
     },
 
     async completeCommentAttempt(args) {
@@ -500,6 +585,36 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
         unknown_reason_code: "ATTEMPT_DEADLINE_EXPIRED",
       });
       return { status: "UNKNOWN", record: next };
+    },
+
+    async readAttemptBoundaryReceipt({ key, stage, attemptId }) {
+      if (recoveryMode !== "ACTIVE") return { status: "RECOVERY_LOCKED" };
+      if (!["MODEL", "COMMENT"].includes(stage) ||
+          typeof attemptId !== "string" || !attemptId) {
+        return { status: "INVALID_REQUEST" };
+      }
+      let keyId;
+      try {
+        keyId = canonicalKey(key);
+      } catch {
+        return { status: "INVALID_KEY" };
+      }
+      const record = records.get(keyId);
+      if (!record) return { status: "NOT_FOUND" };
+      const model = stage === "MODEL";
+      const storedAttemptId = model ? record.model_attempt_id : record.comment_attempt_id;
+      if (storedAttemptId !== attemptId) return { status: "NOT_FOUND" };
+      const receipt = model
+        ? record.model_attempt_boundary_receipt
+        : record.comment_attempt_boundary_receipt;
+      const issued = boundaryReceipts.get(attemptId);
+      if (!receipt || !issued ||
+          issued.keyId !== keyId ||
+          issued.stage !== stage ||
+          digest(receipt) !== digest(issued.receipt)) {
+        return { status: "INTEGRITY_CONFLICT" };
+      }
+      return { status: "ACK", receipt: clone(receipt) };
     },
 
     async readAuthoritative({ key }) {

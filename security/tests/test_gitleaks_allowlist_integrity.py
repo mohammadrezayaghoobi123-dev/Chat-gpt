@@ -269,7 +269,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                 ).stdout.splitlines()
                 line = source[line_number - 1]
                 self.assertTrue(pattern.fullmatch(line), description)
-                self.assertTrue(pattern.fullmatch("\\n" + line), description)
+                self.assertTrue(pattern.fullmatch("\n" + line), description)
                 self.assertIsNone(pattern.fullmatch(line + "x"), description)
 
 

@@ -67,7 +67,7 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
   "source": {
     "repository": "https://github.com/tlaplus/tlaplus",
     "commit": "5a47802b5c391f59ecdd44117981f4ff8c0656ba",
-    "tree_sha": null,
+    "tree_sha": "fb0d9481ef7f1c4dc4cf066812b90f38ac4b0ef1",
     "signature_status": "UNSIGNED",
     "independent_origin_evidence": null
   },
@@ -96,7 +96,7 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
   },
   "build_definition": {
     "upstream_path": "tlatools/org.lamport.tlatools/customBuild.xml",
-    "upstream_blob_sha": null,
+    "upstream_blob_sha": "3ee52fe5bc36e8e559e6a13f8c967cd8b67f9976",
     "reviewed_patch_sha256": null,
     "entry_order_policy": null,
     "zip_entry_timestamp_policy": null,

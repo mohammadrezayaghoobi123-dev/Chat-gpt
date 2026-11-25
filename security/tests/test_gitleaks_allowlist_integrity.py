@@ -404,16 +404,19 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
     def test_full_history_workflow_uses_fail_fast_and_explicit_gitleaks_exit_handling(self):
         workflow_path = ROOT / ".github" / "workflows" / "secret-history-scan.yml"
         workflow = workflow_path.read_text(encoding="utf-8")
-        self.assertIn("set -euo pipefail", workflow)
-        self.assertNotIn("set +e", workflow)
-        self.assertRegex(
-            workflow,
-            r"(?s)if /tmp/gitleaks-8\\.30\\.1/gitleaks git --config \\.gitleaks\\.toml.*?; then\\s+scan_status=0\\s+else\\s+scan_status=\\$\\?\\s+fi",
-        )
-        self.assertRegex(
-            workflow,
-            r"(?s)if /tmp/gitleaks-8\\.30\\.1/gitleaks git --config \\"?\\$necessity_config.*?; then\\s+necessity_scan_status=0\\s+else\\s+necessity_scan_status=\\$\\?\\s+fi",
-        )
+        lines = [line.strip() for line in workflow.splitlines()]
+        self.assertIn("set -euo pipefail", lines)
+        self.assertNotIn("set +e", lines)
+
+        full_scan = next(i for i, line in enumerate(lines) if line.startswith("if /tmp/gitleaks-8.30.1/gitleaks git --config .gitleaks.toml"))
+        self.assertEqual(lines[full_scan + 1:full_scan + 5], [
+            "scan_status=0", "else", "scan_status=$?", "fi"
+        ])
+
+        necessity_scan = next(i for i, line in enumerate(lines) if line.startswith('if /tmp/gitleaks-8.30.1/gitleaks git --config "$necessity_config"'))
+        self.assertEqual(lines[necessity_scan + 1:necessity_scan + 5], [
+            "necessity_scan_status=0", "else", "necessity_scan_status=$?", "fi"
+        ])
 
 if __name__ == "__main__":
     unittest.main()

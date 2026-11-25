@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import stat
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -29,6 +30,78 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _stat_identity(value) -> dict:
+    fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    identity = {name.removeprefix("st_"): getattr(value, name, None) for name in fields}
+    if any(not isinstance(identity[key], int) or isinstance(identity[key], bool)
+           for key in identity):
+        raise ValueError("input_identity_unavailable")
+    if identity["device"] < 0 or identity["inode"] <= 0 or identity["size"] < 0:
+        raise ValueError("input_identity_unavailable")
+    return identity
+
+
+def _same_identity(left: dict, right: dict) -> bool:
+    return left == right
+
+
+def _snapshot_file(path: Path, role: str, canonical_path: str) -> dict:
+    """Hash one descriptor and reject persistent metadata/path changes during read."""
+    try:
+        pre = path.stat()
+    except FileNotFoundError:
+        return {"status": "BLOCKED", "reason": "input_missing", "role": role}
+    except OSError as exc:
+        return {"status": "BLOCKED", "reason": "input_io_unavailable", "role": role,
+                "error_type": type(exc).__name__, "errno": exc.errno}
+
+    if not stat.S_ISREG(pre.st_mode):
+        return {"status": "BLOCKED", "reason": "input_not_regular", "role": role}
+
+    try:
+        pre_identity = _stat_identity(pre)
+    except ValueError:
+        return {"status": "BLOCKED", "reason": "input_identity_unavailable", "role": role}
+
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            descriptor_before = _stat_identity(os.fstat(stream.fileno()))
+            if not _same_identity(pre_identity, descriptor_before):
+                return {"status": "FAIL", "reason": "input_changed_during_read", "role": role}
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+            descriptor_after = _stat_identity(os.fstat(stream.fileno()))
+    except FileNotFoundError:
+        return {"status": "BLOCKED", "reason": "input_missing", "role": role}
+    except (OSError, ValueError) as exc:
+        return {"status": "BLOCKED",
+                "reason": "input_identity_unavailable" if isinstance(exc, ValueError)
+                          else "input_io_unavailable",
+                "role": role, "error_type": type(exc).__name__,
+                "errno": getattr(exc, "errno", None)}
+
+    try:
+        post = _stat_identity(path.stat())
+    except FileNotFoundError:
+        return {"status": "FAIL", "reason": "input_changed_during_read", "role": role}
+    except OSError as exc:
+        return {"status": "BLOCKED", "reason": "input_io_unavailable", "role": role,
+                "error_type": type(exc).__name__, "errno": exc.errno}
+    if not (_same_identity(pre_identity, descriptor_after)
+            and _same_identity(pre_identity, post)):
+        return {"status": "FAIL", "reason": "input_changed_during_read", "role": role}
+
+    return {
+        "status": "PASS",
+        "snapshot": {
+            "canonical_path": canonical_path,
+            "sha256": digest.hexdigest(),
+            "identity": descriptor_after,
+        },
+    }
 
 
 def atomic_write_json(path: Path, payload: dict) -> None:
@@ -287,13 +360,8 @@ def git_identity(root: Path) -> dict:
 def run_gate(root: Path, jar: Path, expected_sha256: str,
              expected_commit: str, module: Path, config: Path,
              output: Path, timeout: int = 300) -> dict:
-    root = root.resolve()
-    jar = _rooted_path(root, jar)
-    module = _rooted_path(root, module)
-    config = _rooted_path(root, config)
-    output = _rooted_path(root, output)
     evidence = {
-        "schema_version": "1.2",
+        "schema_version": "1.3",
         "gate": "EGIS-TLA-VERIFICATION-GATE",
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "scope": {
@@ -305,10 +373,101 @@ def run_gate(root: Path, jar: Path, expected_sha256: str,
             "tool_jar": str(jar),
             "tool_sha256_expected": expected_sha256.lower(),
             "tool_sha256_actual": None,
+            "input_snapshots": {},
         },
         "checks": {},
         "overall": "NOT_RUN",
     }
+
+    try:
+        root = Path(root).resolve(strict=True)
+        root_stat = root.stat()
+        if not stat.S_ISDIR(root_stat.st_mode):
+            raise NotADirectoryError("repository_root_not_directory")
+    except FileNotFoundError as exc:
+        evidence["checks"]["inputs"] = {
+            "status": "BLOCKED", "reason": "repository_root_missing",
+            "error_type": type(exc).__name__, "errno": exc.errno,
+        }
+        evidence["overall"] = "BLOCKED"
+        atomic_write_json(output, evidence)
+        return evidence
+    except OSError as exc:
+        evidence["checks"]["inputs"] = {
+            "status": "BLOCKED", "reason": "repository_root_unavailable",
+            "error_type": type(exc).__name__, "errno": exc.errno,
+        }
+        evidence["overall"] = "BLOCKED"
+        atomic_write_json(output, evidence)
+        return evidence
+
+    output = _rooted_path(root, output)
+    try:
+        module_canonical = module.resolve(strict=True)
+        config_canonical = config.resolve(strict=True)
+        jar_canonical = jar.resolve(strict=True)
+    except FileNotFoundError as exc:
+        missing_role = ("module" if not module.exists() else
+                       "config" if not config.exists() else "tool_jar")
+        evidence["checks"]["inputs"] = {
+            "status": "BLOCKED", "reason": "input_missing", "role": missing_role,
+            "error_type": type(exc).__name__, "errno": exc.errno,
+        }
+        evidence["overall"] = "BLOCKED"
+        atomic_write_json(output, evidence)
+        return evidence
+    except OSError as exc:
+        evidence["checks"]["inputs"] = {
+            "status": "BLOCKED", "reason": "input_io_unavailable",
+            "error_type": type(exc).__name__, "errno": exc.errno,
+        }
+        evidence["overall"] = "BLOCKED"
+        atomic_write_json(output, evidence)
+        return evidence
+
+    try:
+        module_canonical.relative_to(root)
+        config_canonical.relative_to(root)
+    except ValueError:
+        evidence["checks"]["inputs"] = {
+            "status": "BLOCKED", "reason": "repository_input_path_escape",
+            "role": "module" if not module_canonical.is_relative_to(root) else "config",
+        }
+        evidence["overall"] = "BLOCKED"
+        atomic_write_json(output, evidence)
+        return evidence
+
+    role_paths = {
+        "module": (module, str(module_canonical)),
+        "config": (config, str(config_canonical)),
+        "tool_jar": (jar, str(jar_canonical)),
+    }
+    snapshots = {}
+    for role, (path, canonical) in role_paths.items():
+        result = _snapshot_file(path, role, canonical)
+        if result["status"] != "PASS":
+            evidence["checks"]["inputs"] = {
+                key: value for key, value in result.items() if key != "snapshot"
+            }
+            evidence["overall"] = result["status"]
+            atomic_write_json(output, evidence)
+            return evidence
+        snapshots[role] = result["snapshot"]
+
+    evidence["scope"]["input_snapshots"] = snapshots
+    evidence["scope"]["module_sha256"] = snapshots["module"]["sha256"]
+    evidence["scope"]["config_sha256"] = snapshots["config"]["sha256"]
+    evidence["scope"]["tool_sha256_actual"] = snapshots["tool_jar"]["sha256"]
+    evidence["checks"]["inputs"] = {"status": "PASS", "reason": None}
+
+    actual_sha = snapshots["tool_jar"]["sha256"]
+    if len(expected_sha256) != 64 or actual_sha.lower() != expected_sha256.lower():
+        evidence["checks"]["tool_integrity"] = {
+            "status": "FAIL", "reason": "sha256_pin_missing_or_mismatch"
+        }
+        evidence["overall"] = "FAIL"
+        atomic_write_json(output, evidence)
+        return evidence
 
     identity = git_identity(root)
     evidence["checks"]["source_identity"] = identity
@@ -324,47 +483,17 @@ def run_gate(root: Path, jar: Path, expected_sha256: str,
             source_reason = "expected_commit_mismatch"
         evidence["checks"]["source_identity"]["status"] = source_status
         evidence["checks"]["source_identity"]["reason"] = source_reason
-        evidence["overall"] = evidence["checks"]["source_identity"]["status"]
-        atomic_write_json(output, evidence)
-        return evidence
-
-    required = [module, config]
-    if not all(path.is_file() for path in required):
-        missing = [str(path) for path in required if not path.is_file()]
-        evidence["checks"]["inputs"] = {
-            "status": "BLOCKED", "reason": "missing_input_files", "missing": missing
-        }
-        evidence["overall"] = "BLOCKED"
-        atomic_write_json(output, evidence)
-        return evidence
-
-    evidence["scope"]["module_sha256"] = sha256_file(module)
-    evidence["scope"]["config_sha256"] = sha256_file(config)
-    if not jar.is_file():
-        evidence["checks"]["tool"] = {
-            "status": "BLOCKED", "reason": "tool_jar_missing"
-        }
-        evidence["overall"] = "BLOCKED"
-        atomic_write_json(output, evidence)
-        return evidence
-
-    actual_sha = sha256_file(jar)
-    evidence["scope"]["tool_sha256_actual"] = actual_sha
-    if len(expected_sha256) != 64 or actual_sha.lower() != expected_sha256.lower():
-        evidence["checks"]["tool_integrity"] = {
-            "status": "FAIL", "reason": "sha256_pin_missing_or_mismatch"
-        }
-        evidence["overall"] = "FAIL"
+        evidence["overall"] = source_status
         atomic_write_json(output, evidence)
         return evidence
 
     evidence["checks"]["tool_integrity"] = {"status": "PASS"}
     java = os.environ.get("JAVA", "java")
-    sany_cmd = [java, "-cp", str(jar), "tla2sany.SANY", str(module)]
+    sany_cmd = [java, "-cp", str(jar_canonical), "tla2sany.SANY", str(module_canonical)]
     tlc_cmd = [
-        java, "-cp", str(jar), "tlc2.TLC",
-        "-config", str(config), "-workers", "1", "-deadlock",
-        str(module),
+        java, "-cp", str(jar_canonical), "tlc2.TLC",
+        "-config", str(config_canonical), "-workers", "1", "-deadlock",
+        str(module_canonical),
     ]
 
     sany = run_command(sany_cmd, root, timeout)
@@ -399,7 +528,7 @@ def run_gate(root: Path, jar: Path, expected_sha256: str,
         atomic_write_json(output, evidence)
         return evidence
 
-    expected_invariants = invariants_from_config(config.read_text(encoding="utf-8"))
+    expected_invariants = invariants_from_config(config_canonical.read_text(encoding="utf-8"))
     evidence["checks"]["tlc_output_validation"] = validate_tlc_output(
         tlc.get("stdout", "") + "\n" + tlc.get("stderr", ""),
         expected_invariants,

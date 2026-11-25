@@ -1,7 +1,7 @@
 # EGIS-VG-001 — Formal Verification Gate Contract v1.1.1
 
 **Status:** Candidate / NOT_VERIFIED  
-**Evidence schema:** 1.2  
+**Evidence schema:** 1.3  
 **Date:** 2026-11-25
 
 ## Purpose
@@ -41,6 +41,8 @@ This is a version-sensitive textual parser. The marker grammar and ordering have
 ## Evidence schema
 
 The JSON evidence contains schema version, UTC timestamp, gate identity, expected source commit, module/config paths and digests, tool path and expected/actual digest, source identity status, command arguments, exit codes, stdout/stderr, per-check statuses, TLC output-validation result, expected invariant inventory, checked invariant count, generated/distinct/queued state counts, and overall status.
+
+Schema 1.3 adds `scope.input_snapshots` keyed by `module`, `config`, and `tool_jar`. Each snapshot records `canonical_path`, `sha256`, and `identity` (`device`, `inode`, `size`, `mtime_ns`, `ctime_ns`). `checks.inputs` records stable status/reason and role. Input preflight occurs before Git or Java: repository root must strictly resolve to a directory; module/config must strictly resolve beneath the canonical repository root; the JAR may be external but must be a regular file. Explicit stat/open/fstat classification distinguishes missing, I/O-unavailable, non-regular and identity-unavailable inputs. SHA-256 is computed from the same opened descriptor and identity is checked before/after reading plus path stat. Persistent change during preflight is FAIL; inspection failure is BLOCKED. These checks do not establish snapshot isolation and cannot exclude transient ABA.
 
 Schema 1.2 command records preserve the existing `status`, `exit_code`, `stdout`, `stderr`, and `command` keys and add `reason`, `phase`, `error_type`, `errno`, `process_started`, `process_outcome`, and `process_cleanup`. `process_outcome` is one of `NOT_STARTED`, `UNKNOWN`, `EXIT_ZERO`, `EXIT_NONZERO`, or `TIMED_OUT`. `process_cleanup` is one of `NOT_STARTED`, `REAPED`, or `UNKNOWN`. `REAPED` requires both a confirmed child wait/reap and closure of parent-owned stdout/stderr pipe handles; a wait timeout, wait error, or pipe-close failure yields `UNKNOWN`. Error diagnostics are bounded and omit raw exception messages and filename/path fields. Process-start failures map to BLOCKED; communication failures after process start map to BLOCKED with `process_outcome=UNKNOWN`; timeout and nonzero exit remain FAIL.
 

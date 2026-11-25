@@ -58,6 +58,7 @@ class GateTests(unittest.TestCase):
         process.poll.return_value = -9
         process.communicate.side_effect = [
             TimeoutExpired(["java"], 1, output=b"partial\\xff", stderr=b"timed out"),
+            (b"partial\\xff", b"timed out"),
         ]
         process.wait.return_value = -9
         with patch("egis_tla_gate.subprocess.Popen", return_value=process):
@@ -74,7 +75,7 @@ class GateTests(unittest.TestCase):
         json.dumps(result)
 
     def _mock_process(self, returncode=0):
-        process = Mock()
+        process = MagicMock()
         process.returncode = returncode
         process.poll.return_value = returncode
         process.wait.return_value = returncode

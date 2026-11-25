@@ -296,7 +296,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
     
     def test_allowlist_integrity_workflow_covers_all_branches_for_security_paths(self):
         workflow_path = ROOT / ".github" / "workflows" / "gitleaks-allowlist-integrity.yml"
-        workflow = workflow_path.read_text(encoding="utf-8")
+        lines = workflow_path.read_text(encoding="utf-8").splitlines()
         expected_paths = {
             ".gitleaks.toml",
             "security/**",
@@ -306,16 +306,28 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
 
         for event in ("pull_request", "push"):
             with self.subTest(event=event):
-                match = re.search(
-                    rf"(?ms)^  {event}:\\n(.*?)(?=^  [A-Za-z_][A-Za-z0-9_-]*:\\n|^permissions:\\n)",
-                    workflow,
+                event_line = f"  {event}:"
+                self.assertIn(event_line, lines)
+                start_index = lines.index(event_line) + 1
+                end_index = next(
+                    (
+                        index for index in range(start_index, len(lines))
+                        if lines[index].startswith("  ")
+                        and not lines[index].startswith("    ")
+                        and lines[index].endswith(":")
+                    ),
+                    len(lines),
                 )
-                self.assertIsNotNone(match, f"missing {event} trigger")
-                event_block = match.group(1)
-                self.assertNotRegex(event_block, r"(?m)^\\s+branches:")
-                actual_paths = set(
-                    re.findall(r'(?m)^\\s+- "([^"]+)"\\s*$', event_block)
+                event_lines = lines[start_index:end_index]
+                self.assertFalse(
+                    any(line.strip().startswith("branches:") for line in event_lines),
+                    f"{event} must cover every target branch",
                 )
+                actual_paths = set()
+                for line in event_lines:
+                    item = line.strip()
+                    if item.startswith('- "') and item.endswith('"'):
+                        actual_paths.add(item[3:-1])
                 self.assertEqual(actual_paths, expected_paths)
 
 

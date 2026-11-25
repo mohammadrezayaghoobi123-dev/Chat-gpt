@@ -72,11 +72,11 @@ The suite mocks subprocess tool execution and tests synthetic TLC output fixture
 
 ## Current verification status
 
-- Prior hardening code head `4dea7d73481ec2fd0980f6e936f27c7b3a75a259`: CI run `45553850715`, compileall PASS; 29/29 tests PASS.
-- A new hostile test for a 5,000-digit invariant count was added in test-only commit `dcb117b16802b3935cce5bd40e81201784ed4a76`; CI run `45553960384` ran 30 tests and exposed one uncaught integer-conversion error.
-- The parser fix is in code commit `03567ec7121fd9a4274da959c82fcef3f09898c2`; it catches oversized invariant-count conversion and returns FAIL.
-- Exact post-fix CI for code commit `03567ec7121fd9a4274da959c82fcef3f09898c2`: NOT_YET_OBSERVED.
-- Gitleaks run `45553843545` on preceding code head: PR-diff PASS; full-history FAIL with 13 unclassified findings across 5,200 commits.
+- First hardening attempt exposed a regex escaping defect (7/29 tests failed); corrected and passed 29/29 on code head `4dea7d73481ec2fd0980f6e936f27c7b3a75a259`.
+- FMH-074 test-only run `45553960384` exposed an uncaught 5,000-digit invariant-count conversion (1 error).
+- Parser fix in code commit `03567ec7121fd9a4274da959c82fcef3f09898c2` catches oversized invariant-count conversion and returns FAIL.
+- Exact-head CI run `45554026290` on head `33fb63341de88eedd0556e47197416593b8e469b`: compileall PASS; 30/30 tests PASS.
+- Exact-head Gitleaks run `45554022268`: PR-diff PASS; full-history FAIL with 13 unclassified findings across 5,207 commits.
 - TLA+ tool availability: NOT_ESTABLISHED.
 - SANY: NOT_RUN.
 - TLC: NOT_RUN.
@@ -87,7 +87,7 @@ The suite mocks subprocess tool execution and tests synthetic TLC output fixture
 
 ## Promotion decision
 
-**NOT READY FOR MERGE OR PROMOTION.** The gate remains NOT_VERIFIED until post-fix CI passes, real SANY/TLC execution succeeds with an independently pinned tool, real output compatibility is established, and evidence integrity is independently addressed.
+**NOT READY FOR MERGE OR PROMOTION.** The gate remains NOT_VERIFIED until real SANY/TLC execution succeeds with an independently pinned tool, real output compatibility is established, and evidence integrity is independently addressed.
 
 ## Safety boundary
 

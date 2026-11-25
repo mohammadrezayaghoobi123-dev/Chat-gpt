@@ -1,6 +1,6 @@
 # EGIS-FM-007 — TLC Output Validator Hostile Review v1.1.1
 
-**Status:** Candidate / exact-head CI NOT_RUN; focused local adversarial reproduction 8/8 PASS  
+**Status:** Candidate / exact-head mocked CI verified; real TLC compatibility NOT_ESTABLISHED  
 **Date:** 2026-11-25  
 **Scope:** TLC text-output validator and its integration into the EGIS verification gate  
 **Parent:** PR #475; stacked on EGIS operation-composition v1.1.0
@@ -54,7 +54,7 @@ The validator distinguishes unavailable executable (BLOCKED), timeout (FAIL), an
 - Evidence attestation: NOT_IMPLEMENTED.
 - Java/runtime provenance: NOT_IMPLEMENTED.
 - Implementation conformance: NOT_ESTABLISHED.
-- Historical Gitleaks scan on prior head `84de51d1cca8cfe3d3462175236875f7f1e4a02d`: PR-diff PASS; full-history FAIL with 13 unclassified generic-api-key findings. Latest exact-head scan pending. PR-diff scan on preceding head found no leaks in 30 commits; full-history scan scanned 5,188 commits and reported 13 findings before that run was cancelled. No suppression or credential changes performed.
+- Historical Gitleaks scan on prior head `84de51d1cca8cfe3d3462175236875f7f1e4a02d`: PR-diff PASS; full-history FAIL with 13 unclassified generic-api-key findings. Exact-head Gitleaks run `45553843545`: PR-diff scan PASS (1 commit, 498 bytes, no leaks); full-history scan FAIL (5,200 commits, 15.89 MB, 13 findings). Findings remain unclassified; no suppression or credential changes performed.
 
 ## Promotion decision
 

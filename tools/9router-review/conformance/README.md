@@ -6,6 +6,7 @@ This directory contains a non-production reference oracle and the expanded execu
 - Passing these tests validates the contract harness against the reference model; it does not qualify Cloudflare Durable Objects, R2, Supabase, or any deployed backend.
 - The candidate adapter must later run the same contract suite in an isolated environment with independent clients, process restarts, fault injection, and restore drills.
 - No provider credentials, model calls, GitHub API calls, comments, or deployments are performed by this test suite.
+- The committed attempt-boundary receipt design is specified in [ATTEMPT_BOUNDARY_RECEIPT_CONTRACT.md](./ATTEMPT_BOUNDARY_RECEIPT_CONTRACT.md). It is a design contract only; no signer, verifier, or production backend is implemented.
 
 Run with Node.js 22 from tools/9router-review:
 
@@ -62,18 +63,16 @@ Run with Node.js 22 from tools/9router-review:
 | T45 | A41 | Recovery lock blocks all non-recovery reservation mutations |
 | T46 | A11, A12 | MODEL intent rejects COMMENT_ACCEPTED as a stage-incompatible outcome |
 | T47 | A11, A12 | COMMENT intent rejects MODEL_RESULT_STORED as a stage-incompatible outcome |
-| 
+| T48 | I34 | Missing attempt-boundary receipt is rejected without ledger mutation |
+| T49 | I35 | Receipt field mutations are rejected; exact committed receipt is accepted |
+| T50 | I36 | Lost boundary acknowledgement recovers the exact durable receipt without another permit |
 
 This is not the A01–A42 backend qualification suite. T32–T42 extend the in-memory reference oracle's reconciliation and recovery-validation coverage; they do not qualify a real provider adapter. The coverage map deliberately marks partial coverage. A02's controlled read-before-insert schedule, A03's forced tuple/hash-collision case, independent-process concurrency, backend failover, storage restore, R2 conditional writes, quota exhaustion, and the remaining matrix cases are still NOT_EXECUTED.
 
+## Observed evidence
 
-T46–T47 add stage-to-outcome binding checks for the append-only effect ledger.
+T46–T47 were observed RED on the initial test-only revision and GREEN after the reference-oracle correction. Hosted run 45511958154 reports T01–T47 47/47 PASS. The full reviewer regression remains intentionally non-green because the preserved duplicate-publication race still produces two POSTs. This does not qualify any persistent provider adapter.
 
+Hosted run 45552431713 on revision `fb3650530704fabc239ec8977bd39386de230422` observed T48, T49, and T50 RED. T49 specifies mutation rejection for reservation key, stage, attempt ID, request digest, generation, committed record version, boundary event ID, schema version, authority identity, and signature; execution stops at the missing-receipt assertion, so individual mutations and exact-receipt acceptance remain unexercised. T50 genuinely discards the boundary-call response, then asserts recovery returns a receipt bound to authoritative record version, repeated recovery is stable, and a repeated begin call cannot issue another permit. It fails because `readAttemptBoundaryReceipt` is absent; recovery semantics are not yet exercised. No adapter correction has been applied. Do not treat this tranche as GREEN or production qualification.
 
-Latest stage-bound outcome checkpoint: T46–T47 were observed RED on the initial test-only revision and GREEN after the reference-oracle correction. Hosted run 45511958154 reports T01–T47 47/47 PASS. The full reviewer regression remains intentionally non-green because the preserved duplicate-publication race still produces two POSTs. This does not qualify any persistent provider adapter.
-
-| T48 | I34 | Outcome append rejects a missing authoritative attempt-boundary receipt without advancing the ledger sequence |
-| T49 | I35 | Outcome append rejects receipt mutations across reservation key, stage, attempt ID, request digest, generation, or committed record version; exact receipt is accepted |
-| T50 | I36 | Lost boundary acknowledgement recovers the same durable receipt without issuing another permit |
-
-Hosted run 45552431713 on revision `fb3650530704fabc239ec8977bd39386de230422` observed T48, T49, and T50 RED. T49 specifies mutation rejection for reservation key, stage, attempt ID, request digest, generation, committed record version, boundary event ID, schema version, authority identity, and signature; execution stops at the missing-receipt assertion, so individual mutations and exact-receipt acceptance remain unexercised. T50 now genuinely discards the boundary-call response, then asserts that recovery returns a receipt bound to authoritative record version, repeated recovery is stable, and a repeated begin call cannot issue another permit. It fails its explicit API-presence assertion because `readAttemptBoundaryReceipt` is absent; recovery semantics are not yet exercised. No adapter correction has been applied. Do not treat this tranche as GREEN or production qualification.
+The design-only receipt contract was added at commit `220c956c0151711a7bdd64cef4296463bad6c3bf`. It defines the signed payload, durable commit ordering, independent ledger verification, key rotation/compromise assumptions, recovery API, and fail-closed semantics. It does not change executable code or test outcomes.

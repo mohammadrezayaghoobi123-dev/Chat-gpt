@@ -126,7 +126,6 @@ export function createReferenceSystem({
   }
 
   function registerAttemptBoundaryReceipt(receipt, keyId) {
-    boundarySequence += 1;
     boundaryReceipts.set(receipt.attempt_id, {
       keyId,
       stage: receipt.stage,
@@ -135,6 +134,7 @@ export function createReferenceSystem({
       committedRecordVersion: receipt.committed_record_version,
       receipt: clone(receipt),
     });
+    boundarySequence += 1;
   }
 
   function matchesAttemptBoundaryReceipt(receipt, intent, attemptId) {

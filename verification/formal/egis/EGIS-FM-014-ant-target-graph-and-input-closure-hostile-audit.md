@@ -77,6 +77,8 @@ Static inspection found no Ant `import`, `include`, `subant`, external `exec`, A
 | FMH-107 | Medium | Neither selected JUnit task explicitly sets `skipNonTests`; Apache Ant documents the default as `false`, so the fileset path count is not a discovered-test count and non-test classes are not filtered by Ant before invocation. | Pin the exact Ant/JUnit version and effective `skipNonTests=false` semantics; preserve upstream behavior or use an explicitly reviewed change, then inspect actual JUnit reports. |
 | FMH-108 | High | The source-test target writes XML reports to `target/surefire-reports/`; two packaged-JAR batches also write to that directory. Ant's default XML report name is class-derived, so the same two test classes target identical output paths in both targets. | Give source-test and packaged-JAR targets distinct report roots; bind each report-set identity and fail preflight on any output-path overlap. |
 | FMH-109 | Medium | The pinned clean target does not remove target/surefire-reports/ and is guarded by unless="noclean"; reports from a prior invocation can remain available to later evidence collection. | Require a fresh, absent, canonical, non-symlinked report root; reject noclean, unapproved test.reports overrides and concurrent builds sharing a checkout. Do not infer report freshness from the clean target. |
+| FMH-110 | High | Ant/JVM launcher options and user hooks can inject executable code or alter execution semantics outside the report-root property snapshot. | Reject known JVM agents, bootclasspath/module/classpath overrides, Ant listeners/loggers/input handlers/libraries/proxy options, selected launcher environment variables and user rc hooks; keep the exact launcher contract under a trusted wrapper. |
+| FMH-111 | High | The property map and launcher arguments passed to the helper are caller-supplied and are not bound to the later Ant process. A valid snapshot could be supplied while Ant is launched with different arguments, environment or working directory. | Derive effective properties and arguments inside a trusted wrapper, use the identical environment and absolute buildfile for preflight and Ant, and launch Ant only after a PASS from that same wrapper invocation. |
 
 ## 5. Corrective lock requirements
 
@@ -93,6 +95,8 @@ FM-013 must be amended before the lock can advance beyond `INCOMPLETE_BLOCKED`:
 9. Preserve source/JAR selection manifests while assigning disjoint report roots through a separately reviewed candidate overlay.
 10. Require the report root to be absent before execution; reject noclean, report-path overrides, symlink components, path escapes and same-checkout concurrent builds.
 11. Record explicit skipNonTests=false on selected source/JAR batches only after exact Ant pinning and attribute compatibility verification.
+12. Run report preflight only from a trusted wrapper that owns the exact effective Ant property map, launcher arguments and environment used for the subsequent process.
+13. Pin and verify the customBuild.xml content identity against FM-013 before execution; path identity alone is insufficient.
 
 ## 6. Falsification tests for a future authorized controller
 
@@ -109,6 +113,8 @@ The controller must be shown to BLOCK before process execution when any of the f
 - Set noclean, test.skip or an unapproved test.reports override; preflight must BLOCK.
 - Introduce a symlinked report root, path traversal, canonical-root alias or a second Ant process in the same checkout; preflight must BLOCK.
 - Make source and packaged-JAR report roots overlap after canonical resolution; preflight must BLOCK.
+- Inject a JVM agent, bootclasspath/module patch, Ant listener/logger/input handler/library/proxy option through CLI or launcher environment; preflight must BLOCK.
+- Supply a caller property map that differs from the real Ant process properties, or change cwd/argv/environment after preflight; the wrapper must refuse to launch Ant.
 
 A successful controller preflight is not a successful build. A successful build is not a successful test run. Neither is evidence of EGIS correctness or implementation conformance.
 
@@ -206,6 +212,24 @@ FM-016 documents the minimal overlay: eight source-test batches write under targ
 
 The copied FM-015 manifest file digest in this audit is aligned with the current FM-013 lock value: 1bc377150f82f3db41142ba89d35c2f1da2ea7ef93adb8a03f0a539b2e826832. The FM-015 file itself is unchanged by this proposal; the hash is a reference-integrity correction only.
 
+### FMH-110 — Ant/JVM launcher option injection
+
+Ant/JVM launcher arguments and environment options can inject executable code or change class/module loading before the JUnit tasks start. A malicious `ANT_ARGS`, `ANT_OPTS`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` or `_JAVA_OPTIONS` value may weaken the report/build contract. Ant user rc files can also add launcher options.
+
+The helper rejects known JVM agent, bootclasspath, module/classpath patching and selected security-property flags; Ant `-lib`, `-listener`, `-logger`, `-inputhandler`, `-main`, `-autoproxy`; external `-propertyfile`; buildfile search; relative or alternate buildfiles; and prohibited/conflicting property overrides. It inspects selected launcher environment variables and checks for `.antrc`, `antrc_pre.bat` and `antrc_post.bat` in the relevant home directory.
+
+These are targeted deny controls, not universal proof that all host, JVM, PATH, Ant installation, classpath or native-library injection vectors are absent. FMH-110 remains OPEN until the exact launcher contract is implemented in a trusted wrapper and verified on target operating systems.
+
+### FMH-111 — Unauthenticated property snapshot and missing invocation binding
+
+The helper receives an `ant_properties` mapping and `ant_arguments` sequence from its caller. It does not query Ant's effective property table, bind its process environment to a later child process, or acquire a lock preventing arguments, working directory or environment from changing after the check. A caller can therefore present a valid snapshot while launching Ant with different state. A PASS from this helper is not proof of the subsequent Ant invocation.
+
+The required future architecture is one trusted launcher wrapper that constructs the final property map and argument vector, rejects unreviewed environment and user hooks, passes those exact values to preflight, and then invokes Ant with the same canonical checkout working directory, exact absolute buildfile, environment and arguments without intervening mutation. The wrapper must verify the pinned `customBuild.xml` content digest against FM-013 before launch. Wrapper integration is NOT_IMPLEMENTED; FMH-111 remains OPEN.
+
+### FM-017 implementation and verification record
+
+The read-only helper and 12-test hostile unit suite are registered under the EGIS verification tree. Local Python 3.13.5 evidence: 12/12 unit tests PASS; compileall PASS; six targeted mutations (stale-root, property-file, Windows reparse-point, JVM agent, Ant extension/listener and weakened absolute buildfile identity) were each caught by their related behavior test. The exact-head Python 3.11 CI run is pending. No Ant process or JUnit test was run, and the helper is not connected to a trusted launcher wrapper.
+
 ## 11. Safety boundary and source references
 
 This selection reconstruction is static. No Ant/JDK runtime was acquired or invoked. No build, test, JAR creation, SANY/TLC run, deployment, merge or main-branch mutation occurred.
@@ -214,4 +238,7 @@ This selection reconstruction is static. No Ant/JDK runtime was acquired or invo
 - Apache Ant FileSet semantics: https://ant.apache.org/manual/Types/fileset.html
 - Apache Ant JUnit `batchtest`, XML report naming and `skipNonTests`: https://ant.apache.org/manual/Tasks/junit.html
 - Apache Ant JUnitReport aggregation and explicit filesets: https://ant.apache.org/manual/Tasks/junitreport.html
+- Apache Ant launcher arguments, environment variables and rc hooks: https://ant.apache.org/manual/running
+- Python Windows symbolic-link and reparse-point behavior: https://docs.python.org/3.13/library/os.html
+- EGIS-FM-017 preflight hostile implementation review: https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/blob/verification/egis-verification-gate-v1.1.1-2026-11-25/verification/formal/egis/EGIS-FM-017-junit-preflight-hostile-implementation-review.md
 - EGIS-FM-016 JUnit report isolation proposal: https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/blob/verification/egis-verification-gate-v1.1.1-2026-11-25/verification/formal/egis/EGIS-FM-016-junit-report-isolation-and-discovery-contract.md

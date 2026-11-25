@@ -289,11 +289,38 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
       "clean_target_deletes_report_root": false,
       "clean_target_guard_property": "noclean",
       "report_root_must_be_absent_before_execution": true,
-      "test_reports_override_allowed": false,
+      "test_reports_override_allowed": "EXACT_LOCKED_VALUE_ONLY",
       "canonical_checkout_containment_required": true,
       "symlink_components_allowed": false,
       "parallel_builds_same_checkout_allowed": false,
-      "preflight_status": "NOT_RUN"
+      "preflight_module": "verification/formal/egis/tools/egis_junit_report_preflight.py",
+      "preflight_test_module": "verification/formal/egis/tests/test_junit_report_preflight.py",
+      "preflight_local_tests": 12,
+      "preflight_mutation_checks": 6,
+      "preflight_local_python": "3.13.5",
+      "preflight_ci_python": "3.11",
+      "preflight_ci_status": "PENDING",
+      "ant_invocation": "NOT_RUN",
+      "property_map_provenance": "CALLER_SUPPLIED_UNVERIFIED",
+      "absolute_buildfile_required": true,
+      "assurance_scope": "READ_ONLY_POINT_IN_TIME_NOT_A_CONCURRENCY_LOCK",
+      "launcher_inputs_checked": [
+        "ANT_ARGS",
+        "ANT_OPTS",
+        "JAVA_TOOL_OPTIONS",
+        "JDK_JAVA_OPTIONS",
+        "_JAVA_OPTIONS",
+        "HOME/.antrc",
+        "USERPROFILE/antrc_pre.bat",
+        "USERPROFILE/antrc_post.bat",
+        "-D controlled properties",
+        "-propertyfile",
+        "-find/-s",
+        "-f absolute customBuild.xml",
+        "JVM agent/bootclasspath/module options",
+        "Ant -lib/-listener/-logger/-inputhandler/-main/-autoproxy"
+      ],
+      "preflight_status": "IMPLEMENTED_UNIT_TESTED_NOT_INTEGRATED"
     },
     "forked_jvm": {
       "fork": true,
@@ -479,7 +506,7 @@ No override may convert missing evidence to PASS. The only permissible states ar
 | JUnit source/JAR report output isolation | FAIL; two static XML output-path collisions identified (FMH-108); candidate overlay NOT_APPLIED |
 | Git ref/tag metadata reproducibility | NOT_ESTABLISHED |
 | Target cleanup isolation | NOT_RUN; clean target does not delete the JUnit report tree and can be skipped with noclean (FMH-109) |
-| Fresh canonical report-root preflight | NOT_RUN; report root must be absent, bounded and non-symlinked before execution (FMH-109) |
+| Fresh canonical report-root preflight | IMPLEMENTED_UNIT_TESTED_NOT_INTEGRATED; trusted launcher wrapper and exact-head Python 3.11 CI pending; Ant invocation NOT_RUN |
 | Extended target dependencies (JPF/JMH) | OUT_OF_SCOPE; separate lock extension required |
 | Exact JDK vendor/version/build/digest | NOT_SET |
 | Exact Ant version/archive digest | NOT_SET |
@@ -571,3 +598,14 @@ FM-016 records a target-scoped, documentation-only overlay for FMH-107 and FMH-1
 The pinned clean target does not remove target/surefire-reports/ and is guarded by unless="noclean". FM-016 therefore requires a fresh, empty, canonical, non-symlinked report root before Ant execution; it does not propose an unchecked Ant delete operation.
 
 **Candidate overlay status: PROPOSED_NOT_APPLIED.** FMH-107, FMH-108 and FMH-109 remain open pending exact Ant pinning, independent preflight implementation, patch review and actual per-target JUnit evidence. The lock remains INCOMPLETE_BLOCKED.
+
+
+## 16. Read-only JUnit report-root preflight (EGIS-FM-017)
+
+The helper `verification/formal/egis/tools/egis_junit_report_preflight.py` and its 12-test hostile suite are implemented as a read-only, standard-library-only preflight. Local evidence on Python 3.13.5: 12/12 tests PASS, `compileall` PASS, and six targeted mutation checks were each detected.
+
+The helper requires the report root to be absent and canonical; checks the exact locked `test.reports` value, `basedir` and absolute `customBuild.xml`; rejects symlinks/reparse points, unsafe or duplicate `-D` values, external property files, buildfile search/substitution, known JVM code-loading options, Ant extension/listener/logger/library/proxy options, selected launcher environment variables and user Ant rc hooks.
+
+**Critical limitation:** the CLI accepts a caller-provided JSON property snapshot. That snapshot is not authenticated or derived from Ant itself, and the helper is not wired into a trusted prelaunch wrapper. A later Ant process could receive different arguments, working directory, environment or effective properties. The result is only a read-only point-in-time check, not a lock or Ant invocation attestation.
+
+FMH-110 and FMH-111 remain OPEN; FMH-109 remains OPEN until wrapper integration and exact-head CI are completed. The pinned Ant build content digest must also be checked against FM-013 by the future wrapper. This helper performs no Ant/JUnit execution and does not authorize build, JAR creation, SANY/TLC, promotion or release. The lock remains `INCOMPLETE_BLOCKED`.

@@ -6,6 +6,8 @@ on:
       - "verification/formal/egis/tools/egis_tla_gate.py"
       - "verification/formal/egis/tools/egis_tlc_output_validator.py"
       - "verification/formal/egis/tests/test_tla_gate.py"
+      - "verification/formal/egis/tools/egis_junit_report_preflight.py"
+      - "verification/formal/egis/tests/test_junit_report_preflight.py"
       - ".github/workflows/egis-tla-gate-tests.yml"
   push:
     branches:
@@ -14,6 +16,8 @@ on:
       - "verification/formal/egis/tools/egis_tla_gate.py"
       - "verification/formal/egis/tests/test_tla_gate.py"
       - ".github/workflows/egis-tla-gate-tests.yml"
+      - "verification/formal/egis/tools/egis_junit_report_preflight.py"
+      - "verification/formal/egis/tests/test_junit_report_preflight.py"
 
 permissions:
   contents: read
@@ -35,9 +39,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Compile gate and tests
-        run: python -m compileall -q verification/formal/egis/tools/egis_tla_gate.py verification/formal/egis/tools/egis_tlc_output_validator.py verification/formal/egis/tests/test_tla_gate.py
+      - name: Compile gate and preflight tests
+        run: python -m compileall -q verification/formal/egis/tools/egis_tla_gate.py verification/formal/egis/tools/egis_tlc_output_validator.py verification/formal/egis/tools/egis_junit_report_preflight.py verification/formal/egis/tests/test_tla_gate.py verification/formal/egis/tests/test_junit_report_preflight.py
       - name: Run mocked gate unit tests
         env:
           PYTHONPATH: verification/formal/egis/tools
         run: python -m unittest discover -s verification/formal/egis/tests -p "test_tla_gate.py" -v
+      - name: Run JUnit report preflight unit tests
+        env:
+          PYTHONPATH: verification/formal/egis/tools
+        run: python -m unittest discover -s verification/formal/egis/tests -p "test_junit_report_preflight.py" -v

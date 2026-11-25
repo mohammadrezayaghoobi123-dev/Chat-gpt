@@ -1,6 +1,6 @@
 # EGIS-FM-016 — JUnit Report Isolation, Discovery Semantics, and Clean-Run Evidence Contract
 
-**Status:** Static remediation proposal only; upstream patch NOT_APPLIED; execution authorization NOT_GRANTED  
+**Status:** Static remediation proposal; read-only preflight IMPLEMENTED_UNIT_TESTED_NOT_INTEGRATED; upstream build patch NOT_APPLIED; execution authorization NOT_GRANTED  
 **Date:** 2026-11-25  
 **Parent evidence:** EGIS-FM-013, EGIS-FM-014, EGIS-FM-015  
 **Upstream repository:** tlaplus/tlaplus  
@@ -92,7 +92,7 @@ Before any future authorized execution, an independent controller must:
 
 1. Use a new disposable checkout/worktree dedicated to one build attempt. Do not reuse a workspace with prior report outputs.
 2. Require noclean to be absent and require existing test skip/halt properties to match the FM-013 lock.
-3. Require test.reports to resolve to the locked report root. Reject unapproved command-line/property overrides.
+3. Require test.reports to resolve to the locked report root. Permit only a redundant command-line override with the exact locked value; reject conflicting, duplicate or unreviewed property overrides.
 4. Require the canonical report root to be absent before execution. Do not silently delete an existing report tree.
 5. Resolve the root and both target subdirectories canonically; reject symlinks, path traversal, absolute-path escapes and any canonical path outside the checkout.
 6. Require canonical source and onJar roots to be distinct and non-overlapping.
@@ -117,7 +117,7 @@ If a later controller uses Ant junitreport or another aggregator, it must provid
 | Non-test filtering changes semantics | Explicit skipNonTests="false" on all 15 selected batches | Ant version/parser support and runtime effect NOT_RUN |
 | Stale XML from previous invocation | Require absent report root in fresh checkout | Preflight NOT_RUN; FMH-109 OPEN |
 | noclean or test.skip silently weakens execution | Reject prohibited/effective properties before Ant starts | Preflight NOT_RUN |
-| test.reports override or path traversal | Pin property; canonicalize and enforce checkout containment | Preflight NOT_RUN |
+| test.reports override or path traversal | Pin property; canonicalize and enforce checkout containment | Helper unit-tested; caller property map is not yet authenticated by a trusted wrapper |
 | Symlink aliases make nominal roots overlap | Reject symlink components and compare canonical paths | Preflight NOT_RUN |
 | Concurrent builds delete or overwrite reports | One build per checkout; separate Builder A/B worktrees | Controller enforcement NOT_RUN |
 | External aggregator combines source and JAR XML | Separate, exact filesets and identities | No aggregator in pinned file; external pipeline NOT_AUDITED |
@@ -144,7 +144,7 @@ A successful static diff review does not prove Ant accepts the patch. A successf
 |---|---|
 | FMH-107 — explicit discovery semantics | OPEN; explicit false is proposed only; exact Ant version and actual discovery are NOT_RUN |
 | FMH-108 — source/JAR output collision | OPEN; candidate report-root isolation is NOT_APPLIED |
-| FMH-109 — stale report-root retention | OPEN; report-root freshness preflight is NOT_IMPLEMENTED |
+| FMH-109 — stale report-root retention | OPEN; helper implemented/unit-tested but not integrated with a trusted launcher |
 | Candidate build-definition overlay | PROPOSED_NOT_APPLIED |
 | FM-015 source selection baseline | Preserved; no include/exclude or batch selection change |
 | Ant/JDK acquisition, build and JUnit execution | NOT_RUN |
@@ -161,3 +161,12 @@ Do not apply this overlay to upstream source, acquire tools, build, run tests, c
 - Static selection manifest: https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/blob/verification/egis-verification-gate-v1.1.1-2026-11-25/verification/formal/egis/EGIS-FM-015-junit-static-selection-manifests.json
 - Apache Ant JUnit task, batchtest, report naming and skipNonTests: https://ant.apache.org/manual/Tasks/junit.html
 - Apache Ant JUnitReport task and explicit XML filesets: https://ant.apache.org/manual/Tasks/junitreport.html
+
+
+## 10. Read-only preflight implementation status (EGIS-FM-017)
+
+The helper `egis_junit_report_preflight.py` checks the absent canonical report root, locked report/basedir paths, required test skip/halt properties, exact absolute `customBuild.xml` argument, selected JVM/Ant launcher injection options, environment variables and Ant user rc hooks. It is read-only and does not create or delete report directories.
+
+Local evidence: 12/12 tests PASS, compileall PASS, six targeted mutation checks caught; Python 3.13.5. The checked-in workflow uses Python 3.11 and the new exact-head CI result is pending. The helper accepts a caller-provided property snapshot and is **not yet connected to a trusted wrapper** that guarantees the later Ant process uses the identical properties, argv, working directory and environment. It is not a concurrency lock or invocation attestation.
+
+FMH-110 (launcher injection) and FMH-111 (unauthenticated property snapshot/missing invocation binding) remain OPEN. FMH-109 remains OPEN until wrapper integration and CI pass. The upstream `customBuild.xml` and all report-selection rules remain unchanged; no Ant/JUnit execution is claimed.

@@ -4,15 +4,15 @@
 
 **Status:** static traceability artifact; not an implementation qualification, test result, or approval to select a backend.
 
-**Reviewed source snapshot:** branch `verify/9router-reservation-conformance-run9-2026-11-25`, HEAD `445096ef585ae8c3f5235d9d6e4a84b4e52a0dd5`, base `main` at `919b19ca3d3887352cdef06b03c668ead04fbce7`.
+**Reviewed source snapshot:** branch `verify/9router-reservation-conformance-run9-2026-11-25`, HEAD `7e266cf4313b42bea7e66d5d7222218b6477e177`, base `main` at `919b19ca3d3887352cdef06b03c668ead04fbce7`.
 
 **Inputs inspected:**
 - `tools/9router-review/conformance/RESERVATION_STORE_CONTRACT.md` — abstract production contract and RS-01–RS-22 fault-injection requirements.
-- `tools/9router-review/conformance/reservation-adapter.contract.test.mjs` — executable reference-oracle tests T01–T52.
+- `tools/9router-review/conformance/reservation-adapter.contract.test.mjs` — executable reference-oracle tests T01–T53.
 - `tools/9router-review/conformance/reference-adapter.mjs` — in-memory reference implementation.
 - `tools/9router-review/OPERATIONS.md` — historical protocol, state, recovery and audit decisions.
 
-The T01–T52 suite exercises only the in-memory reference oracle. The production interface in the contract is design pseudocode and is not implemented or type-checked. Mapping a test to a requirement means its title and assertions appear relevant; it does not prove complete semantic coverage or production conformance.
+The T01–T53 suite exercises only the in-memory reference oracle. The production interface in the contract is design pseudocode and is not implemented or type-checked. Mapping a test to a requirement means its title and assertions appear relevant; it does not prove complete semantic coverage or production conformance.
 
 ## Coverage vocabulary
 

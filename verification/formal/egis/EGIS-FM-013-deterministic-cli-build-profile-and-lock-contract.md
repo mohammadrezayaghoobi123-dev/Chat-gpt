@@ -224,7 +224,7 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
       "source_test_selection_sha256": "8d28a2a1a759b6ba06c9dafadc9cbe06f45db32216dadeac42a6ad7ec45ed7a8",
       "packaged_jar_test_selection_sha256": "023647bc904ff7c20af1fd85a02a4b5c96b2c1f5dd1f090968fb86036bebf46c",
       "manifest_path": "verification/formal/egis/EGIS-FM-015-junit-static-selection-manifests.json",
-      "manifest_file_sha256": "9483602d77a05589c6ae8263d8f1b293e7f5a11f8b84ba6e11334dc15bf9c39d",
+      "manifest_file_sha256": "1bc377150f82f3db41142ba89d35c2f1da2ea7ef93adb8a03f0a539b2e826832",
       "source_test_batch_count": 8,
       "packaged_jar_test_batch_count": 7,
       "source_test_selected_file_count": 411,
@@ -256,6 +256,14 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
         "tlc2.tool.UserModuleOverrideAnnotationTest",
         "tlc2.tool.UserModuleOverrideFromJarTest"
       ],
+      "default_target_execution_order": [
+        "test",
+        "git-revision",
+        "dist",
+        "test-dist"
+      ],
+      "source_test_precedes_packaged_jar_test": true,
+      "later_same_path_write_risk": true,
       "required_policy": "DISTINCT_IMMUTABLE_REPORT_ROOTS",
       "actual_overwrite": "NOT_RUN"
     },
@@ -525,7 +533,7 @@ The two targets select the **same 411 unique source paths** (symmetric differenc
 
 - Source-test selection digest: `8d28a2a1a759b6ba06c9dafadc9cbe06f45db32216dadeac42a6ad7ec45ed7a8`
 - Packaged-JAR selection digest: `023647bc904ff7c20af1fd85a02a4b5c96b2c1f5dd1f090968fb86036bebf46c`
-- Manifest file SHA-256: `9483602d77a05589c6ae8263d8f1b293e7f5a11f8b84ba6e11334dc15bf9c39d`
+- Manifest file SHA-256: `1bc377150f82f3db41142ba89d35c2f1da2ea7ef93adb8a03f0a539b2e826832`
 
 These are **static source-file selection counts**, not JUnit-discovered classes, methods, executions or passes. The upstream build does not explicitly set JUnit `skipNonTests`; Apache Ant documents the default as false. FMH-107 therefore remains open until the exact Ant runtime semantics are pinned and actual JUnit reports are independently inspected.
 

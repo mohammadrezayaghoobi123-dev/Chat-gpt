@@ -981,7 +981,41 @@
           ]
         }
       ],
-      "selection_contract_sha256": "ed2f8674a4827d160d9a3e199cfab13db77265ae276c90bf01eeb231df1a4f09"
+      "selection_contract_sha256": "ed2f8674a4827d160d9a3e199cfab13db77265ae276c90bf01eeb231df1a4f09",
+      "broad_pattern_candidate_count": 439,
+      "primary_batch_selected_count": 403,
+      "later_batch_reselection_count": 8,
+      "permanently_unselected_candidate_count": 28,
+      "permanently_unselected_candidates": [
+        "pcal/DetlefsTest.java",
+        "pcal/MacroQuicksortTest.java",
+        "pcal/MacroRealQuicksortTest.java",
+        "pcal/PCalModelCheckerTestCase.java",
+        "pcal/PCalTest.java",
+        "pcal/PcalPaxosTest.java",
+        "pcal/SimpleMultiProcTest.java",
+        "pcal/StackTestTest.java",
+        "pcal/StarkMutexTest.java",
+        "pcal/TestPCandStackTest.java",
+        "tlc2/TestDriver.java",
+        "tlc2/TestMPRecorder.java",
+        "tlc2/tool/CommonTestCase.java",
+        "tlc2/tool/coverage/AbstractCoverageTest.java",
+        "tlc2/tool/distributed/DistributedTLCTestCase.java",
+        "tlc2/tool/distributed/TLCServerTestCase.java",
+        "tlc2/tool/evalorder/InitEvalOrderTest.java",
+        "tlc2/tool/fp/AbstractFPSetTest.java",
+        "tlc2/tool/fp/AbstractHeapBasedDiskFPSetTest.java",
+        "tlc2/tool/liveness/BidirectionalTransitions1BTest.java",
+        "tlc2/tool/liveness/BidirectionalTransitions2CTest.java",
+        "tlc2/tool/liveness/ModelCheckerTestCase.java",
+        "tlc2/tool/liveness/simulation/AbstractExampleTestCase.java",
+        "tlc2/tool/liveness/simulation/SuccessfulSimulationTestCase.java",
+        "tlc2/tool/suite/SuiteETestCase.java",
+        "tlc2/tool/suite/SuiteTestCase.java",
+        "util/IsolatedTestCaseRunner.java",
+        "util/TestPrintStream.java"
+      ]
     },
     {
       "target": "test-dist",
@@ -1933,7 +1967,41 @@
           ]
         }
       ],
-      "selection_contract_sha256": "bbdbd638c735399b4a9bd39d11c81ee2cbc6c44eb4109707539e28d017505a88"
+      "selection_contract_sha256": "bbdbd638c735399b4a9bd39d11c81ee2cbc6c44eb4109707539e28d017505a88",
+      "broad_pattern_candidate_count": 439,
+      "primary_batch_selected_count": 404,
+      "later_batch_reselection_count": 7,
+      "permanently_unselected_candidate_count": 28,
+      "permanently_unselected_candidates": [
+        "pcal/DetlefsTest.java",
+        "pcal/MacroQuicksortTest.java",
+        "pcal/MacroRealQuicksortTest.java",
+        "pcal/PCalModelCheckerTestCase.java",
+        "pcal/PCalTest.java",
+        "pcal/PcalPaxosTest.java",
+        "pcal/SimpleMultiProcTest.java",
+        "pcal/StackTestTest.java",
+        "pcal/StarkMutexTest.java",
+        "pcal/TestPCandStackTest.java",
+        "tlc2/TestDriver.java",
+        "tlc2/TestMPRecorder.java",
+        "tlc2/tool/CommonTestCase.java",
+        "tlc2/tool/coverage/AbstractCoverageTest.java",
+        "tlc2/tool/distributed/DistributedTLCTestCase.java",
+        "tlc2/tool/distributed/TLCServerTestCase.java",
+        "tlc2/tool/evalorder/InitEvalOrderTest.java",
+        "tlc2/tool/fp/AbstractFPSetTest.java",
+        "tlc2/tool/fp/AbstractHeapBasedDiskFPSetTest.java",
+        "tlc2/tool/liveness/BidirectionalTransitions1BTest.java",
+        "tlc2/tool/liveness/BidirectionalTransitions2CTest.java",
+        "tlc2/tool/liveness/ModelCheckerTestCase.java",
+        "tlc2/tool/liveness/simulation/AbstractExampleTestCase.java",
+        "tlc2/tool/liveness/simulation/SuccessfulSimulationTestCase.java",
+        "tlc2/tool/suite/SuiteETestCase.java",
+        "tlc2/tool/suite/SuiteTestCase.java",
+        "util/IsolatedTestCaseRunner.java",
+        "util/TestPrintStream.java"
+      ]
     }
   ],
   "execution_status": "NOT_RUN",
@@ -1965,8 +2033,9 @@
   },
   "discovery_contract": {
     "ant_skip_non_tests_attribute": "NOT_EXPLICIT_IN_PINNED_BUILD",
-    "documented_ant_default": "false",
-    "meaning": "Matching source files are passed to the JUnit runner without Ant filtering out non-test classes; file-selection count is not a discovered-test or test-method count.",
+    "documented_ant_default": false,
+    "meaning": "Ant JUnit batchtest does not filter non-test classes unless skipNonTests is enabled. The selected path count is not a discovered test-class or test-method count.",
+    "required_lock_value": false,
     "execution_proof": "NOT_RUN"
   }
 }

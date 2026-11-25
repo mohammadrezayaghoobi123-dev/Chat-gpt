@@ -1,6 +1,6 @@
 # EGIS-FM-008 — TLA+ Tool Artifact Provenance Assessment
 
-**Status:** Source metadata verified; artifact bytes NOT_ACQUIRED; execution NOT_RUN
+**Status:** Source identity verified; release channel rejected for pinning; artifact acquisition BLOCKED; execution NOT_RUN
 **Assessment date:** 2026-11-25
 **Scope:** Official upstream release identity and artifact provenance for the EGIS SANY/TLC gate
 **Parent:** PR #475 — EGIS Verification Gate v1.1.1
@@ -13,7 +13,7 @@ The official GitHub release API currently exposes two relevant candidates:
 
 | Release | Classification | `tla2tools.jar` SHA-256 metadata | Decision |
 |---|---|---|---|
-| `v1.8.0` | Pre-release; published 2026-11-19 | `fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713` | Preferred controlled-fixture candidate, not production-approved |
+| `v1.8.0` | Mutable rolling pre-release; publisher reports `immutable=false` | Publisher digest is mutable and has been superseded historically | REJECTED for artifact pinning or execution |
 | `v1.7.4` | Stable release; published 2024-08-05 | No SHA-256 digest in the release asset API response; release notes publish SHA-1 only | Do not use SHA-1 as the gate's security pin |
 
 For `v1.8.0`, the official release API identifies:
@@ -27,7 +27,7 @@ For `v1.8.0`, the official release API identifies:
 - Official asset URL: `https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar`
 - Release API reports `prerelease=true` and `immutable=false`.
 
-**Critical limitation:** the asset bytes were not downloaded into the controlled execution environment during this assessment. Therefore the published SHA-256 metadata has been recorded, but the digest has NOT been independently recomputed against downloaded bytes. No artifact authenticity claim or SANY/TLC execution claim is made.
+**Critical limitation:** the asset bytes were not downloaded and no digest was recomputed. More importantly, upstream issue #1399 documents that the `v1.8.0` release asset was replaced after publication and its SHA-256 changed. Upstream CI force-updates the `v1.8.0` tag on master builds. The release ID, asset ID, tag, and digest recorded below are therefore a time-bounded observation, not a durable artifact identity. Re-fetching metadata before and after download does not eliminate an ABA replacement window or establish immutability. `v1.8.0` is rejected as a security pin and this runbook must not acquire or execute it.
 
 ## Source evidence
 
@@ -42,16 +42,16 @@ The release metadata and asset digest were retrieved from GitHub's official API.
 
 ## Acceptance protocol before any real execution
 
-1. Retrieve the exact asset by its official release asset ID or official browser download URL; do not use mirrors.
-2. Record HTTP status, final URL, retrieval timestamp, byte count, and asset ID.
-3. Compute SHA-256 locally over the downloaded bytes and require exact equality with the official API digest above.
-4. Independently re-fetch the release and asset metadata and verify tag, release ID, asset ID, name, size, digest, and tag target commit have not changed.
-5. Record Java vendor, full version, runtime build, executable path, OS/architecture, and relevant JVM options.
-6. Record the exact model commit, module/config SHA-256, command line, working directory, timeout, exit code, stdout, stderr, and TLC trace artifacts.
-7. Run SANY first. Run TLC only if SANY passes.
-8. Compare real output and trace files against the validator. Any unknown output form, missing trace, mismatch, or ambiguous status must be BLOCKED/FAIL, never PASS.
-9. Keep the release classified as a pre-release unless an authorized project decision explicitly accepts that risk. Prefer a stable release for promotion after a stable release exposes an independently verifiable SHA-256.
-10. Preserve the raw metadata response and downloaded artifact digest in immutable/attested evidence before promotion.
+1. **Do not acquire `v1.8.0`**: upstream documents it as a rolling pre-release and its asset has a documented post-publication replacement history.
+2. Do not treat a release ID, asset ID, tag name, or API digest as immutable identity unless the upstream release process supplies an enforceable immutable artifact and independent provenance.
+3. Select a stable upstream release only after its artifact bytes, publisher checksum/signature, and source/build provenance can be independently reconciled. A SHA-1-only checksum is insufficient for this gate.
+4. If no qualifying official artifact exists, leave acquisition BLOCKED. Do not silently substitute a mirror, rolling build, Maven artifact, or locally cached JAR.
+5. Before any future acquisition, define a pinned source commit, immutable asset identifier, independent checksum/signature trust root, and a reproducible retrieval record.
+6. Only after artifact provenance passes, capture Java vendor, full version, runtime build, executable path, binary digest, OS/architecture, and JVM options.
+7. Record the exact model commit, module/config SHA-256, command line, working directory, timeout, exit code, stdout, stderr, and TLC trace artifacts.
+8. Run SANY first. Run TLC only if SANY passes.
+9. Compare real output and trace files against the validator. Unknown output, missing trace, mismatch, or ambiguous status must be BLOCKED/FAIL, never PASS.
+10. Preserve raw metadata, signatures, checksums, execution transcript, and evidence in immutable/attested retention before promotion.
 
 ## Hostile review
 
@@ -61,7 +61,8 @@ The release metadata and asset digest were retrieved from GitHub's official API.
 | FMH-076 | High | `v1.8.0` is a pre-release and the release API reports `immutable=false`; tag and asset mutability remain a supply-chain risk. | Open; use only for controlled fixture compatibility work, not promotion. |
 | FMH-077 | Critical | The official `v1.8.0` asset digest is metadata-only until the actual JAR bytes are retrieved and independently hashed. | Open; artifact NOT_ACQUIRED and digest NOT_RECOMPUTED. |
 | FMH-078 | High | No Java runtime identity or provenance has been captured for an actual execution. | Open; capture runtime evidence before SANY/TLC. |
-| FMH-079 | High | No real TLC output or counterexample trace has been captured from the selected release. | Open; validator compatibility remains NOT_ESTABLISHED. |
+| FMH-079 | High | No real TLC output or counterexample trace has been captured from a qualified immutable release. | Open; validator compatibility remains NOT_ESTABLISHED. |
+| FMH-086 | Critical | Official upstream issue #1399 reports that the `v1.8.0` JAR was replaced after publication and its SHA-256 changed; upstream CI force-updates the `v1.8.0` tag. A before/after metadata check cannot prove immutable artifact identity or eliminate an ABA replacement window. | Open; reject `v1.8.0` as a pin and block acquisition/execution pending a stable, independently verifiable artifact. |
 
 ## Falsification conditions
 
@@ -69,14 +70,16 @@ This assessment must be rejected or revised if any of the following occurs:
 - The official API returns a different release/tag/asset identity or digest.
 - The downloaded artifact's SHA-256 differs from the API digest.
 - The tag resolves to a different commit during the controlled acquisition window.
+- The upstream asset is mutable, replaced, or cannot be tied to immutable build provenance.
 - The JAR manifest or runtime behavior contradicts the declared release identity.
 - SANY/TLC output differs from the parser's assumed grammar or a trace artifact is incomplete.
 
 ## Final status
 
 - Official upstream source: VERIFIED.
-- `v1.8.0` release and asset metadata: VERIFIED from official GitHub API.
-- Asset bytes acquired: NO.
+- `v1.8.0` release and asset metadata: OBSERVED from official GitHub API; rejected as a durable pin.
+- Upstream mutability/replacement evidence: VERIFIED from official project sources.
+- Artifact acquisition: BLOCKED; bytes acquired: NO.
 - Local SHA-256 recomputation: NOT_RUN.
 - Java provenance: NOT_CAPTURED.
 - SANY: NOT_RUN.

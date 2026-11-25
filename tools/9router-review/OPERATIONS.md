@@ -1146,3 +1146,16 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - Exact corrected test revision: `fb3650530704fabc239ec8977bd39386de230422`; hosted run [45552431713](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45552431713), job `138996478209`.
 - T48/T49/T50 again observed RED for their intended missing behaviors. T50 now fails the explicit missing recovery API assertion after a genuinely discarded response; recovery semantics remain unexercised until implementation.
 - This correction repairs test validity only. No adapter implementation was changed; no GREEN or production-readiness claim is made.
+
+
+#### 2026-11-25 hostile T49 canonical-binding correction
+
+- Test revision: `f419216336a1c910362eb5cf68231608fcd93a42`.
+- Corrected T49 to mutate the exact receipt-contract field names `reservation_key_digest` and `receipt_schema_version`; the prior draft used non-canonical names `reservation_key` and `schema_version`.
+- Expanded the mutation set to include `protocol_version`, `authority_id`, `signing_key_id`, `issued_at`, and `purpose`, in addition to stage, attempt ID, request digest, generation, committed record version, boundary event ID, and signature.
+- Added a cross-key replay attempt using a separately acknowledged MODEL INTENT under a different immutable reservation key. The expected disposition is `INVALID_ATTEMPT_BOUNDARY_RECEIPT`, with no OUTCOME append and unchanged inventory for that foreign key.
+- This is a test-specification correction only. T49 still stops at the explicit assertion that `beginModelAttempt` must return an attempt-boundary receipt; none of the individual mutation assertions, exact-receipt acceptance, or cross-key replay assertion has executed because the reference adapter does not issue a receipt.
+- The latest test-only change was pushed to the isolated verification branch. The connected GitHub workflow-run retrieval surface filters to pull-request-triggered runs and did not provide a push-run record for this commit; hosted execution of this exact revision is therefore **NOT_VERIFIED**. Do not infer RED/GREEN for the new mutation cases from the earlier T48–T50 RED run.
+- No reference adapter implementation was changed. T48–T50 remain OPEN/RED based on the previously observed exact revision; the new T49 branches are **AUTHORED / NOT_EXECUTED**.
+- The contract and T49 review remain design/test-only. No production signer, verifier, backend, or durable receipt store is implemented.
+- Scope remains isolated to `verify/9router-reservation-conformance-run9-2026-11-25`. Do not merge this accumulated verification branch wholesale. No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host were made.

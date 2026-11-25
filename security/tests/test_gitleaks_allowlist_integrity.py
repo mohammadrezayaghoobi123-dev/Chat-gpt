@@ -293,7 +293,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
         target["regexes"] = [r'const key = ".*";']
         self.assertTrue(validate_config(changed, ROOT))
 
-
+    
     def test_allowlist_integrity_workflow_covers_all_branches_for_security_paths(self):
         workflow_path = ROOT / ".github" / "workflows" / "gitleaks-allowlist-integrity.yml"
         workflow = workflow_path.read_text(encoding="utf-8")
@@ -314,7 +314,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                 event_block = match.group(1)
                 self.assertNotRegex(event_block, r"(?m)^\\s+branches:")
                 actual_paths = set(
-                    re.findall(r'(?m)^\\s+- "([^"]+)"\\s*, event_block)
+                    re.findall(r'(?m)^\\s+- "([^"]+)"\\s*$', event_block)
                 )
                 self.assertEqual(actual_paths, expected_paths)
 

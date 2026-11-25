@@ -54,6 +54,15 @@ def _same_identity(left: dict, right: dict) -> bool:
 def _snapshot_file(path: Path, role: str, canonical_path: str) -> dict:
     """Hash one descriptor and reject persistent metadata/path changes during read."""
     try:
+        resolved_before = str(path.resolve(strict=True))
+    except FileNotFoundError:
+        return {"status": "BLOCKED", "reason": "input_missing", "role": role}
+    except OSError as exc:
+        return {"status": "BLOCKED", "reason": "input_io_unavailable", "role": role,
+                "error_type": type(exc).__name__, "errno": exc.errno}
+    if resolved_before != canonical_path:
+        return {"status": "FAIL", "reason": "input_changed_during_read", "role": role}
+    try:
         pre = path.stat()
     except FileNotFoundError:
         return {"status": "BLOCKED", "reason": "input_missing", "role": role}
@@ -88,6 +97,9 @@ def _snapshot_file(path: Path, role: str, canonical_path: str) -> dict:
                 "errno": getattr(exc, "errno", None)}
 
     try:
+        resolved_after = str(path.resolve(strict=True))
+        if resolved_after != canonical_path:
+            return {"status": "FAIL", "reason": "input_changed_during_read", "role": role}
         post = _stat_identity(path.stat())
     except FileNotFoundError:
         return {"status": "FAIL", "reason": "input_changed_during_read", "role": role}

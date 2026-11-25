@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -10,6 +11,7 @@ import stat
 from typing import Mapping, Sequence
 
 LOCKED_REPORT_ROOT = PurePosixPath("target/surefire-reports")
+LOCKED_CUSTOM_BUILD_BLOB_SHA1 = "3ee52fe5bc36e8e559e6a13f8c967cd8b67f9976"
 REQUIRED_PROPERTIES = {
     "maven.test.skip": "false",
     "maven.test.halt": "true",
@@ -75,6 +77,7 @@ def _launcher_arguments(environment: Mapping[str, str]) -> tuple[list[str], str 
 def _validate_arguments(arguments: Sequence[str], expected_buildfile: Path) -> tuple[str | None, dict[str, str | None]]:
     overrides: dict[str, str | None] = {}
     buildfiles: list[str] = []
+    targets: list[str] = []
     blocked_extensions = {"-lib", "-listener", "-logger", "-inputhandler", "-main", "-autoproxy"}
     jvm_prefixes = (
         "-javaagent", "-agentlib", "-agentpath", "-xrun", "-xbootclasspath",
@@ -110,15 +113,26 @@ def _validate_arguments(arguments: Sequence[str], expected_buildfile: Path) -> t
             name, sep, value = token.partition("=")
             if not name:
                 return "ant_property_name_empty", {}
-            if name in CONTROLLED_PROPERTIES:
-                if name in overrides:
-                    return "controlled_ant_property_duplicated", {}
-                if name == "basedir":
-                    return "ant_basedir_override_not_allowed", {}
-                overrides[name] = value if sep else None
+            if name not in CONTROLLED_PROPERTIES:
+                return "unreviewed_ant_property_override", {}
+            if name in overrides:
+                return "controlled_ant_property_duplicated", {}
+            if name in FORBIDDEN_PROPERTIES:
+                return "forbidden_ant_property_override", {}
+            if name == "basedir":
+                return "ant_basedir_override_not_allowed", {}
+            if name not in REQUIRED_PROPERTIES and name != "test.reports":
+                return "unreviewed_ant_property_override", {}
+            overrides[name] = value if sep else None
+        elif arg.startswith("-"):
+            return "ant_argument_not_allowlisted", {}
+        else:
+            targets.append(arg)
         index += 1
     if len(buildfiles) != 1:
         return "ant_buildfile_not_explicitly_locked", {}
+    if targets != ["default"]:
+        return "ant_target_not_locked", {}
     try:
         supplied = Path(buildfiles[0])
         if not supplied.is_absolute():
@@ -132,13 +146,67 @@ def _validate_arguments(arguments: Sequence[str], expected_buildfile: Path) -> t
     return None, overrides
 
 
-def _wrapper_hook_present(environment: Mapping[str, str]) -> bool:
-    home = environment.get("HOME") or environment.get("USERPROFILE")
+def _home_directories(environment: Mapping[str, str]) -> list[Path] | None:
+    candidates: list[str] = []
+    for key in ("HOME", "USERPROFILE"):
+        value = environment.get(key)
+        if value:
+            if not isinstance(value, str) or not Path(value).is_absolute():
+                return None
+            candidates.append(value)
     try:
-        directory = Path(home).expanduser() if isinstance(home, str) and home else Path.home()
-        return any(os.path.lexists(directory / name) for name in (".antrc", "antrc_pre.bat", "antrc_post.bat"))
+        candidates.append(str(Path.home()))
     except (OSError, RuntimeError, TypeError, ValueError):
+        return None
+    unique: dict[str, Path] = {}
+    for value in candidates:
+        path = Path(os.path.abspath(os.fspath(Path(value).expanduser())))
+        unique[os.path.normcase(os.fspath(path))] = path
+    return list(unique.values())
+
+
+def _wrapper_hook_present(environment: Mapping[str, str]) -> bool:
+    homes = _home_directories(environment)
+    if homes is None:
         return True
+    for directory in homes:
+        issue = _path_issue(directory)
+        if issue:
+            return True
+        try:
+            if any(os.path.lexists(directory / name) for name in (".antrc", "antrc_pre.bat", "antrc_post.bat")):
+                return True
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return True
+    return False
+
+
+def _user_ant_library_present(environment: Mapping[str, str]) -> bool:
+    homes = _home_directories(environment)
+    if homes is None:
+        return True
+    for directory in homes:
+        library = directory / ".ant" / "lib"
+        issue = _path_issue(library)
+        if issue:
+            return True
+        try:
+            if not os.path.lexists(library):
+                continue
+            if not library.is_dir():
+                return True
+            with os.scandir(library) as entries:
+                if next(entries, None) is not None:
+                    return True
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return True
+    return False
+
+
+def _git_blob_sha1(path: Path) -> str:
+    content = path.read_bytes()
+    header = f"blob {len(content)}\\0".encode("ascii")
+    return hashlib.sha1(header + content).hexdigest()
 
 
 def preflight_report_roots(
@@ -160,6 +228,13 @@ def preflight_report_roots(
     env = os.environ if environment is None else environment
     if not isinstance(env, Mapping):
         return _blocked("ant_environment_invalid")
+    classpath = env.get("CLASSPATH", "")
+    if not isinstance(classpath, str):
+        return _blocked("ant_classpath_environment_invalid")
+    if classpath.strip():
+        return _blocked("ant_classpath_environment_not_allowed")
+    if _user_ant_library_present(env):
+        return _blocked("ant_user_library_not_allowed")
     env_args, env_error = _launcher_arguments(env)
     if env_error:
         return _blocked(env_error)
@@ -207,6 +282,12 @@ def preflight_report_roots(
         return _blocked(issue[0], path=issue[1])
     if not buildfile.is_file():
         return _blocked("locked_ant_buildfile_missing")
+    try:
+        buildfile_blob_sha1 = _git_blob_sha1(buildfile)
+    except (OSError, RuntimeError, ValueError):
+        return _blocked("locked_ant_buildfile_unreadable")
+    if buildfile_blob_sha1 != LOCKED_CUSTOM_BUILD_BLOB_SHA1:
+        return _blocked("locked_ant_buildfile_digest_mismatch")
 
     error, overrides = _validate_arguments(args, buildfile)
     if error:

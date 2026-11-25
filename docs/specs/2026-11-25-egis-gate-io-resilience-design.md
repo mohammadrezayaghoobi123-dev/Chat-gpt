@@ -95,11 +95,11 @@ The gate must follow this sequence. A stage may only transition forward; a faile
 | Duplicate or syntactically invalid explicit invariant names | FAIL | `invariant_inventory_invalid` |
 | Output aliases module/config/JAR | Typed fatal path error | `evidence_output_input_alias` |
 | Evidence serialization/write/replace fails | Typed persistence error | one of the writer reason codes in Atom B3 |
-| Temporary cleanup fails after a writer error | Preserve primary error plus `cleanup_failed=true` | `evidence_temp_cleanup_failed` |
+| Temporary cleanup fails after a writer error | Preserve primary reason; set `cleanup_failed=true` and `cleanup_reason_code=evidence_temp_cleanup_failed` | `evidence_temp_cleanup_failed` |
 
 For config parsing, any line whose first token is `INVARIANT` must match the accepted single-identifier grammar; a malformed explicit invariant directive is FAIL. Other TLC config directives remain untouched. No invariant directives is BLOCKED.
 
-Diagnostics must not include raw exception reprs, absolute local paths, or environment values. For process-start errors, preserve exception class and errno when available, but not filename/path fields. Command identity remains in the established structured evidence fields; do not add secrets or environment contents.
+Diagnostics must not include raw exception reprs, absolute local paths, or environment values. For process-start errors, preserve exception class and errno when available, but not filename/path fields. Command-result metadata fields are: `reason` (stable code or null), `phase` (`spawn`, `communicate`, or null), `error_type` (exception class or null), `errno` (integer or null), and `process_cleanup` (`NOT_STARTED`, `REAPED`, or `UNKNOWN`). The `stderr` diagnostic is a fixed, bounded, path-free rendering of these fields, not `str(exc)`. Command identity remains in the established structured evidence fields; do not add secrets or environment contents.
 
 ## 4. Five atomic implementation atoms
 
@@ -115,8 +115,8 @@ Each atom has two implementation commits: **RED** (tests only) and **GREEN** (th
 2. Catch `FileNotFoundError` as a specific process-start BLOCKED result.
 3. Catch other `OSError` only around `Popen` construction as process-start BLOCKED.
 4. After successful construction, call `communicate(timeout=...)`.
-5. On timeout, kill and reap the child, safely decode captured output, and keep status FAIL.
-6. If communication raises `OSError` after process start, attempt terminate/kill and reap. Return BLOCKED with `process_result_unavailable`; never validate missing/partial output as success.
+5. On timeout, kill and reap the child using a bounded cleanup wait (maximum 5 seconds); safely decode captured output and keep status FAIL. If the bounded reap cannot be confirmed, set `process_cleanup=UNKNOWN` and do not start a dependent process.
+6. If communication raises `OSError` after process start, attempt terminate/kill and reap using the same bounded 5-second cleanup wait. Return BLOCKED with `process_result_unavailable`; never validate missing/partial output as success. If reap is uncertain, set `process_cleanup=UNKNOWN` and prohibit dependent process execution.
 7. If cleanup cannot be confirmed, report a cleanup substatus and do not start another dependent process.
 
 Do not blanket-catch OSError around the entire function. Preserve existing result keys `status`, `exit_code`, `stdout`, `stderr`, `command`; add only stable, documented `reason`, `phase`, `error_type`, `errno`, and `process_cleanup` metadata. Because this changes emitted evidence, A1 GREEN must increment `schema_version` from `1.1` to `1.2` in the same implementation commit. Update EGIS-VG-001 in the same A1 GREEN commit; do not split the schema change from its contract. Process output retains the current uncapped capture behavior; output-size limiting is a separate scope.
@@ -182,8 +182,8 @@ Do not blanket-catch OSError around the entire function. Preserve existing resul
 4. Compare normalized output candidate against normalized module/config/JAR paths.
 5. For an existing output, reject directory and non-regular targets.
 6. Use filesystem identity comparison (`samefile` / device+inode semantics) to detect hard-link aliases for existing protected files.
-7. If an existing output cannot be inspected due to a non-ENOENT OS error, fail closed with a typed path-validation error.
-8. A conflict is fatal before execution: do not write evidence to the conflicting path and do not claim a JSON artifact exists.
+7. If an existing output cannot be inspected due to a non-ENOENT OS error, fail closed with `EvidenceOutputPathError(reason_code=evidence_output_inspection_failed, errno=...)`.
+8. A conflict is fatal before execution: raise `EvidenceOutputPathError(reason_code=evidence_output_input_alias)`; do not write evidence to the conflicting path and do not claim a JSON artifact exists.
 9. A distinct existing regular evidence file may be atomically replaced by Atom B3.
 
 Parent-directory symlinks are resolved to their canonical target. The design does not claim protection against a hostile process concurrently swapping path components after validation. This residual TOCTOU assumption must be recorded.
@@ -206,8 +206,10 @@ Parent-directory symlinks are resolved to their canonical target. The design doe
 4. Write UTF-8 JSON plus one trailing newline; close the stream before replacement.
 5. Replace destination using `os.replace` on the same filesystem.
 6. On any ordinary serialization/write/close/replace failure, attempt temp cleanup. Preserve the old destination if replacement did not complete.
-7. Expose a typed `EvidencePersistenceError` with a stable reason code and cleanup-failure flag; never propagate raw path-bearing OS exception text to CLI output.
-8. The CLI catches only the typed persistence/path-validation exceptions, writes one bounded sanitized diagnostic to stderr and returns nonzero. It does not print JSON evidence or claim a persisted gate status when persistence failed.
+7. Use two narrow error types: `EvidenceOutputPathError(reason_code, errno)` for pre-execution path rejection, and `EvidencePersistenceError(reason_code, errno, cleanup_failed, cleanup_reason_code)` for evidence serialization or storage failure. Neither type carries raw paths or raw exception text.
+8. Writer reason codes are exactly: `evidence_directory_unavailable`, `evidence_serialization_failed`, `evidence_temp_create_failed`, `evidence_write_failed`, `evidence_close_failed`, and `evidence_replace_failed`. If cleanup also fails, preserve the primary reason and set `cleanup_failed=true` plus `cleanup_reason_code=evidence_temp_cleanup_failed`.
+9. Output-path reason codes are exactly: `evidence_output_input_alias`, `evidence_output_symlink`, `evidence_output_not_regular`, and `evidence_output_inspection_failed`.
+10. The CLI catches only `EvidenceOutputPathError` and `EvidencePersistenceError`, writes one bounded sanitized diagnostic to stderr in the form `EGIS_GATE_ERROR code=<reason_code> errno=<integer|none> cleanup_failed=<true|false>`, and returns nonzero. It does not print JSON evidence or claim a persisted gate status when persistence failed.
 9. Do not add file or directory fsync in this increment; document atomic replacement/visibility only, not crash durability.
 10. Do not increment the schema version in B3. Schema `1.2` is introduced atomically with A1's new command-result fields and the corresponding contract document update. Evidence-writer failure is not placed into evidence JSON because no valid evidence file may be claimed after persistence failure; it is surfaced only through the typed exception and sanitized CLI diagnostic.
 

@@ -137,6 +137,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
             "rule=True commit=True path=True regex=True allowed=True",
             result.stdout,
         )
+        self.assertIn("secret_decoded=True match_decoded=True", result.stdout)
         self.assertIn(f"secret_length={len(marker)}", result.stdout)
         self.assertIn(f"match_length={len(finding_match)}", result.stdout)
         self.assertIn(f"line_length={len(line)}", result.stdout)

@@ -2,11 +2,11 @@
 
 ## Status and decision authority
 
-**Status: PROPOSED DESIGN / NOT RATIFIED / NOT IMPLEMENTED.**
+**Status: ARCHITECTURE POLICY RATIFIED / DURABLE IMPLEMENTATION NOT YET VERIFIED.**
 
 This document specifies the recovery protocol required for RS-08. It does not select a production backend, implement a durable journal, authorize reviewer activation, or authorize model/provider execution or GitHub publication.
 
-The conservative recommendation in this proposal is to quarantine every orphan INTENT until an authoritative, complete reconciliation establishes its disposition. This recommendation is not treated as user approval. In particular, automatic abort and automatic continuation are not enabled by this document.
+The accepted policy is recorded in [ADR-001](./ADR-001-ORPHAN-INTENT-TERMINAL-ABORT.md): when complete authoritative evidence proves that the exact attempt boundary was never committed, the orphan INTENT is terminally aborted and a final append-only ledger event is recorded. A committed boundary is recovered using its exact persisted receipt. Ambiguous, unavailable, stale, incomplete, or conflicting evidence remains quarantined. This policy does not authorize automatic continuation or any provider/GitHub side effect.
 
 ## 1. Scope and crash window
 
@@ -71,7 +71,7 @@ The protocol states are:
 | `ORPHAN_SUSPECTED` | Writer disappeared or boundary acknowledgement is absent | Read-only reconciliation |
 | `RECOVERY_QUARANTINED` | Evidence is incomplete, stale, unavailable, conflicting, or ambiguous | No permit; no external effect |
 | `BOUNDARY_COMMITTED` | Reservation authority proves the exact boundary and receipt | Recover the same receipt; never mint another |
-| `BOUNDARY_DEFINITIVELY_ABSENT` | Complete authoritative evidence proves no boundary committed | Await a ratified disposition policy |
+| `BOUNDARY_DEFINITIVELY_ABSENT` | Complete authoritative evidence proves no boundary committed | Acquire a fence and execute the ratified terminal-abort protocol |
 | `ABORTED_ORPHAN` | A separately authorized terminal abort is durably recorded | No continuation |
 | `RESUME_ELIGIBLE` | Evidence permits consideration of continuation under a ratified policy | No automatic permit or external effect |
 | `INTEGRITY_CONFLICT` | Identity, receipt, store history, or sequence disagreement | Global/key quarantine and investigation |
@@ -84,13 +84,14 @@ State changes MUST be monotonic in the durable audit history. A state label is d
 2. Load the exact operation identity from the durable INTENT acknowledgement or a complete ledger read.
 3. Verify the INTENT event identity, payload digest, stage, immutable reservation tuple, and request digest.
 4. Acquire a monotonic recovery fence using compare-and-swap. A stale worker MUST be unable to append a disposition or use a recovered receipt.
-5. Query ReservationStore for the exact attempt boundary and receipt.
+5. Query ReservationStore for the exact attempt boundary and receipt using an authoritative, complete, fresh read.
 6. Apply the evidence lattice:
-   - Exact committed boundary plus matching persisted receipt: record/reconcile `BOUNDARY_COMMITTED`; return only the same receipt.
-   - Complete authoritative proof of no boundary: record `BOUNDARY_DEFINITIVELY_ABSENT`; do not automatically resume or abort until the disposition policy is ratified.
-   - Incomplete, stale, unavailable, ambiguous, or conflicting evidence: append/retain `RECOVERY_QUARANTINED`; no permit and no external effect.
-7. Append the recovery observation and evidence digests to EffectLedger using the current fence. A lost append acknowledgement is reconciled by operation ID and exact payload; it is not retried with a new identity.
-8. Re-read both stores and verify the durable disposition, fence generation, and audit high-water marks before returning.
+   - Exact committed boundary plus matching persisted receipt: record/reconcile `BOUNDARY_COMMITTED`; return only the same receipt. Do not abort.
+   - Complete authoritative proof of no boundary, receipt, permit, or boundary event: proceed to the terminal-abort sequence below.
+   - Incomplete, stale, unavailable, ambiguous, or conflicting evidence: append/retain `RECOVERY_QUARANTINED`; no permit, tombstone, terminal abort, or external effect.
+7. In one ReservationStore transaction, re-check boundary absence and the current fence, then insert a unique immutable orphan-abort tombstone that permanently blocks the exact attempt ID from obtaining a permit. The transaction and tombstone acknowledgement MUST be durable.
+8. Only after the tombstone acknowledgement, append the exact `ORPHAN_INTENT_ABORTED` event to EffectLedger. The append is unique and idempotent by operation ID and exact payload. A crash between steps 7 and 8 is repaired by reading the same tombstone and appending the same terminal event; no second tombstone or permit may be created.
+9. Re-read both stores and verify the exact tombstone, terminal ledger event, fence generation, payload digests, and high-water marks before returning `ABORTED_ORPHAN`.
 
 If either store cannot prove a complete and mutually consistent view, the operation remains quarantined. Recovery MUST NOT infer absence from a negative partial read.
 
@@ -174,18 +175,16 @@ T57 is not considered GREEN until the above runs against the selected durable ba
 - Authority/key identity changes during recovery.
 - Same operation ID is replayed with altered tuple, stage, request digest, or payload.
 
-## 11. Unresolved decisions requiring explicit ratification
+## 11. Remaining operational decisions
 
-These decisions materially change externally observable behavior and are intentionally not silently selected:
+The terminal-abort policy itself is ratified by ADR-001. The following operational decisions remain unresolved and MUST NOT be silently selected:
 
-1. **Default disposition for a definitively absent boundary:** terminal `ABORTED_ORPHAN`, or `RESUME_ELIGIBLE` subject to a separate explicit authorization?
-2. **Who may authorize continuation:** a designated human operator, a separate recovery authority, or both?
-3. **Quarantine scope:** per operation, per reservation key, or system-wide `RECOVERY_LOCKED` after cross-store inconsistency?
-4. **Retention:** minimum durable retention for INTENT, recovery history, receipts, fences, and independent backups.
-5. **Recovery liveness:** maximum quarantine duration and escalation path; no timeout may silently authorize a disposition.
-6. **Authority trust root:** ownership, rotation, revocation, and compromise response for the recovery-fence signer.
+1. **Quarantine scope:** per operation, per reservation key, or system-wide `RECOVERY_LOCKED` after cross-store inconsistency.
+2. **Retention:** minimum durable retention for INTENT, recovery history, receipts, fences, tombstones, and independent backups.
+3. **Recovery liveness:** maximum quarantine duration and escalation path; no timeout may silently authorize a disposition.
+4. **Authority trust root:** ownership, rotation, revocation, and compromise response for the recovery-fence signer.
 
-Until ratified, the safe implementation posture is read-only reconciliation plus quarantine on ambiguity. No automatic abort or continuation is authorized.
+Until these are specified, ambiguity remains quarantined. A definitively absent boundary follows the terminal-abort protocol in ADR-001; continuation of that operation is prohibited.
 
 ## 12. Reference implementation boundary
 

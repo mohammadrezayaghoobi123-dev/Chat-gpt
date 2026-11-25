@@ -236,7 +236,7 @@ The required future architecture is one trusted launcher wrapper that constructs
 
 ### FM-017 implementation and verification record
 
-The read-only helper and 12-test hostile unit suite are registered under the EGIS verification tree. Local Python 3.13.5 evidence: 12/12 unit tests PASS; compileall PASS; six targeted mutations (stale-root, property-file, Windows reparse-point, JVM agent, Ant extension/listener and weakened absolute buildfile identity) were each caught by their related behavior test. The exact-head Python 3.11 CI run is pending. No Ant process or JUnit test was run, and the helper is not connected to a trusted launcher wrapper.
+The read-only helper and 17-test hostile suite are registered under the EGIS verification tree. Test-first Python 3.11 run 45579053065 failed 14 expected assertions before hardening. Exact-code-head Python 3.11 run 45579457292 passed compileall, 30/30 mocked gate tests and 17/17 JUnit preflight tests. No Ant process or JUnit test was run; the helper is not connected to a trusted launcher wrapper. Gitleaks PR change-range scan passed on 45579457298; the full-history stage reported 13 historical generic-api-key findings.
 
 ### FMH-112 — Ant target and project-property injection
 

@@ -70,6 +70,7 @@ def _safe_process_diagnostic(reason: str, error: OSError | subprocess.TimeoutExp
 
 
 def _kill_and_reap(process: subprocess.Popen[bytes]) -> str:
+    """Kill/reap the child and close parent-owned output pipes within one deadline."""
     deadline = time.monotonic() + _PROCESS_CLEANUP_TIMEOUT
     try:
         process.kill()
@@ -79,12 +80,27 @@ def _kill_and_reap(process: subprocess.Popen[bytes]) -> str:
         # Reaping below determines whether the child is actually gone.
         pass
 
+    reaped = False
     remaining = max(0.0, deadline - time.monotonic())
     try:
         process.wait(timeout=remaining)
+        reaped = True
     except (subprocess.TimeoutExpired, OSError):
-        return "UNKNOWN"
-    return "REAPED"
+        pass
+
+    pipes_closed = True
+    for stream in (process.stdout, process.stderr):
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except OSError:
+            pipes_closed = False
+            continue
+        if getattr(stream, "closed", True) is False:
+            pipes_closed = False
+
+    return "REAPED" if reaped and pipes_closed else "UNKNOWN"
 
 
 def _command_result(command: Sequence[str], *, status: str, exit_code: int | None,

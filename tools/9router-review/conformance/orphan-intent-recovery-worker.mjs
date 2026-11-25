@@ -23,6 +23,9 @@ if (mode === "seed-intent-crash") {
 } else if (mode === "recover-incomplete") {
   const result = recoverOrphanIntent(stores, { operation, expectedFenceGeneration: Number(expectedRaw), owner, reservationReadComplete: false });
   emit({ result, snapshot: stores.reservations.snapshot(operation.operation_id), history: stores.ledger.readRecoveryHistory(operation.operation_id) });
+} else if (mode === "recover-ledger-incomplete") {
+  const result = recoverOrphanIntent(stores, { operation, expectedFenceGeneration: Number(expectedRaw), owner, ledgerReadComplete: false });
+  emit({ result, snapshot: stores.reservations.snapshot(operation.operation_id), history: stores.ledger.readRecoveryHistory(operation.operation_id) });
 } else if (mode === "inspect") {
   emit({
     intent: stores.ledger.readIntent(operation.operation_id),
@@ -43,7 +46,16 @@ if (mode === "seed-intent-crash") {
   if (fence.status !== "ACK") { stores.close(); process.exitCode = 2; }
   else {
     const input = createInterface({ input: process.stdin });
-    for await (const line of input) { if (line === "release") break; }
+    for await (const line of input) {
+      if (line === "abort") {
+        const intent = stores.ledger.readIntent(operation.operation_id);
+        const absence = stores.reservations.readAttemptBoundary(operation);
+        const abortResult = stores.reservations.abortOrphanAttempt({ operation, intentAck: intent, absenceEvidence: absence, fence });
+        process.stdout.write(JSON.stringify({ abortResult, snapshot: stores.reservations.snapshot(operation.operation_id) }) + "\\n");
+        break;
+      }
+      if (line === "release") break;
+    }
     input.close();
     stores.close();
   }

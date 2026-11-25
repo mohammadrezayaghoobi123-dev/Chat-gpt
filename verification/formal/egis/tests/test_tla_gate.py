@@ -251,6 +251,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual(2, mocked.call_count)
         payload = json.loads(self.output.read_text(encoding="utf-8"))
         self.assertEqual("PASS", payload["overall"])
+        self.assertEqual("1.2", payload["schema_version"])
         self.assertEqual(self.pin, payload["scope"]["tool_sha256_actual"])
         self.assertTrue(payload["scope"]["module_sha256"])
         self.assertTrue(payload["scope"]["config_sha256"])

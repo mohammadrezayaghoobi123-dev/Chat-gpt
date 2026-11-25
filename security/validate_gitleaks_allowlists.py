@@ -125,17 +125,15 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
             marker = ""
         if marker != "0123456789abcdef" * 2:
             errors.append(f"{label}: historical fixture does not match the approved synthetic marker")
-        key = match.group(1)
-        expected_pattern = f'^key = "{key}"$'
+        expected_pattern = f"^{marker}$"
         if regexes[0] != expected_pattern:
-            errors.append(f"{label}: regex must match only the exact extracted historical fixture secret")
-        finding_match = f'key = "{key}"'
-        if not pattern.fullmatch(finding_match):
-            errors.append(f"{label}: regex does not match the exact Gitleaks finding match")
-        replacement = "1" if key[0] != "1" else "2"
-        mutated_match = f'key = "{replacement + key[1:]}"'
-        if pattern.fullmatch(mutated_match):
-            errors.append(f"{label}: regex also matches a mutated fixture and is not literal-scoped")
+            errors.append(f"{label}: regex must match only the exact decoded historical fixture secret")
+        if not pattern.fullmatch(marker):
+            errors.append(f"{label}: regex does not match the exact decoded Gitleaks fixture secret")
+        replacement = "0" if marker[0] != "0" else "1"
+        mutated_marker = replacement + marker[1:]
+        if pattern.fullmatch(mutated_marker):
+            errors.append(f"{label}: regex also matches a mutated decoded fixture and is not literal-scoped")
     return errors
 
 
@@ -197,10 +195,15 @@ def diagnose_report(report: list[dict], config: dict) -> list[str]:
             first_half = source_key[: len(source_key) // 2]
             finding_secret = finding.get("Secret") or ""
             finding_match = finding.get("Match") or ""
-            secret_matches_full = finding_secret == source_key
-            secret_matches_first_half = finding_secret == first_half
-            match_matches_full = finding_match == f'key = "{source_key}"'
-            match_matches_first_half = finding_match == f'key = "{first_half}"'
+            try:
+                decoded_marker = bytes.fromhex(source_key).decode("ascii")
+            except (ValueError, UnicodeDecodeError):
+                decoded_marker = ""
+            finding_secret = finding.get("Secret") or ""
+            finding_match = finding.get("Match") or ""
+            secret_matches_decoded = finding_secret == decoded_marker
+            match_matches_decoded = finding_match == f'key = "{decoded_marker}"'
+            redacted = target == "REDACTED" or "REDACTED" in finding_match
             redacted = target == "REDACTED" or "REDACTED" in finding_match
             regex_match = None if redacted else any(
                 re.search(pattern, target) is not None
@@ -219,7 +222,7 @@ def diagnose_report(report: list[dict], config: dict) -> list[str]:
                 f"path={path_match} regex={regex_label} allowed={allowed_label} "
                 f"secret_length={len(finding_secret)} match_length={len(finding_match)} "
                 f"line_length={len(finding.get('Line') or '')} "
-                f"secret_full={secret_matches_full} secret_first_half={secret_matches_first_half} "
+                f"secret_decoded={secret_matches_decoded} match_decoded={match_matches_decoded}"
                 f"match_full={match_matches_full} match_first_half={match_matches_first_half}"
             )
     return diagnostics

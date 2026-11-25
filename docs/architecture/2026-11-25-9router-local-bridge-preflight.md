@@ -20,7 +20,7 @@ Accordingly, the authentication gateway, Cloudflare Quick Tunnel, and remote MCP
 |---|---|
 | Desktop Commander device | `DESKTOP-28HGRFT`, online |
 | 9Router package | `9router@0.5.119`, globally installed |
-| 9Router executable | `%APPDATA%\\npm\\node_modules\\9router` |
+| 9Router executable | `%APPDATA%\npm\node_modules\9router` |
 | 9Router CLI | Supports explicit `--host` and `--port`; default host is `0.0.0.0` |
 | cloudflared | Installed, version `2026.11.1` |
 | 9Router listener | `127.0.0.1:20128`, process PID observed as `5792` |
@@ -28,7 +28,7 @@ Accordingly, the authentication gateway, Cloudflare Quick Tunnel, and remote MCP
 | cloudflared process | Absent at final boundary check |
 | 9Router scheduled task | None observed; only the existing OpenClaw Gateway task was present |
 | 9Router database | Metadata and ACL only; database contents were not read |
-| Secret material | No upstream API key, JWT secret, database contents, or provider credential was read or emitted. The local CLI-secret file was read into process memory only for one diagnostic probe; its value was not printed, logged, copied elsewhere, or committed |
+| Secret material | No upstream API key, JWT secret, database contents, or provider credential was read or emitted. The local CLI-secret file was read into process memory only for one diagnostic probe; its value was not printed, logged, persisted elsewhere, or committed |
 
 The service was started with:
 

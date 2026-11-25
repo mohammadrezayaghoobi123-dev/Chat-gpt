@@ -72,11 +72,11 @@ The suite mocks subprocess tool execution and tests synthetic TLC output fixture
 
 ## Current verification status
 
-- First hardening attempt exposed a regex escaping defect (7/29 tests failed); corrected and passed 29/29 on code head `4dea7d73481ec2fd0980f6e936f27c7b3a75a259`.
-- FMH-074 test-only run `45553960384` exposed an uncaught 5,000-digit invariant-count conversion (1 error).
-- Parser fix in code commit `03567ec7121fd9a4274da959c82fcef3f09898c2` catches oversized invariant-count conversion and returns FAIL.
-- Exact-head CI run `45554026290` on head `33fb63341de88eedd0556e47197416593b8e469b`: compileall PASS; 30/30 tests PASS.
-- Exact-head Gitleaks run `45554022268`: PR-diff PASS; full-history FAIL with 13 unclassified findings across 5,207 commits.
+- First hardening attempt exposed a regex escaping defect (7/29 tests failed); corrected and passed 29/29 on the earlier code head.
+- FMH-074 test-only run exposed an uncaught 5,000-digit invariant-count conversion; parser fix catches the conversion and returns FAIL.
+- Exact code-head CI run `45554026290` on `33fb63341de88eedd0556e47197416593b8e469b`: compileall PASS; 30/30 tests PASS.
+- Latest PR-head CI run `45554098702` on `d6bcdf3af44da5758ee1e79bd12357e693d145c2`: compileall PASS; 30/30 tests PASS; changes since the tested code commit were documentation-only.
+- Latest PR-head Gitleaks run `45554089720`: PR-diff PASS; full-history FAIL with 13 unclassified findings across 5,210 commits.
 - TLA+ tool availability: NOT_ESTABLISHED.
 - SANY: NOT_RUN.
 - TLC: NOT_RUN.

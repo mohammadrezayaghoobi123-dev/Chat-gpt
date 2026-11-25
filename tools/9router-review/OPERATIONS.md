@@ -1495,3 +1495,15 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - **Evidence:** documentation/static contract review only. No test, backend adapter, storage resource, migration, process-kill test, or CI result is claimed.
 - **Isolation:** only documentation files on `verify/9router-reservation-conformance-run9-2026-11-25` were changed. No main-branch ref, PR #463, reviewer runtime, workflow policy, secret, provider, Cloudflare/Supabase resource, deployment, merge, or local desktop state was changed.
 - **Disposition:** RS-08 CONTRACT DRAFT RECORDED / USER RATIFICATION REQUIRED FOR DISPOSITION POLICY / T57 NOT IMPLEMENTED / RS-08 REMAINS GAP.
+
+
+#### 2026-11-25 RS-08 terminal orphan-INTENT abort decision — AR-67
+
+- **Decision:** the user explicitly selected terminal abort of an orphan INTENT with a final ledger event. The decision is formalized as [ADR-001](conformance/ADR-001-ORPHAN-INTENT-TERMINAL-ABORT.md), status ACCEPTED.
+- **Applicability:** abort only after an authoritative, complete, fresh read proves that the exact boundary, receipt, permit, and boundary event were never committed, and the immutable tuple/INTENT identity are consistent. A committed boundary must recover its exact receipt, not be aborted. Unknown, stale, unavailable, incomplete, or conflicting evidence remains quarantined.
+- **Mandatory ordering:** acquire monotonic recovery fence → in one ReservationStore transaction re-check absence and persist a unique terminal tombstone that blocks this exact attempt ID from all future permits → after durable tombstone acknowledgement append the unique immutable ORPHAN_INTENT_ABORTED EffectLedger event → re-read both stores and reconcile. If the process dies between the tombstone and ledger event, the next recovery worker must append the same event idempotently. No cross-store atomic transaction is claimed.
+- **No-retry invariant:** the aborted operation/attempt ID is terminal and MUST NOT be resumed or reused. Any future attempt, if separately allowed by higher-level policy, requires a distinct authorization and new operation identity.
+- **Implementation status:** policy accepted and documented; durable ReservationStore tombstone, EffectLedger terminal append, process restart, multi-process fencing, late-permit rejection, and incomplete-read behavior are not yet implemented or verified. T57 remains in progress; RS-08 remains GAP.
+- **T57 staging:** stage 1 will prove durable INTENT acknowledgement and writer-process termination/reopen; stage 2 will add ReservationStore tombstone and final ledger event; stage 3 will inject the inter-store crash window; stage 4 will test racing recovery workers/fencing; stage 5 will test incomplete reads and late permit rejection; stage 6 will repeat after another restart and record exact-head CI.
+- **Isolation:** design and test work remains on the verification branch. No production adapter, reviewer runtime, provider dispatch, secrets, backend provisioning, workflow policy, deployment, merge, main, or local desktop state is changed.
+- **Disposition:** POLICY ACCEPTED / PROTOCOL ORDER RECORDED / T57 NOT YET GREEN / NO PRODUCTION QUALIFICATION.

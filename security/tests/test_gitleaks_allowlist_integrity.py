@@ -97,9 +97,18 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
         fixture = re.fullmatch(r'const key = "([0-9a-f]{64})";', line)
         self.assertIsNotNone(fixture)
         finding_match = f'key = "{fixture.group(1)}"'
+        source = subprocess.run(
+            ["git", "show", f"{commit}:{path}"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.splitlines()
+        start_line = source.index(line) + 1
         report = [{
             "Commit": commit,
             "File": path,
+            "StartLine": start_line,
             "RuleID": "generic-api-key",
             "Secret": finding_match,
             "Match": finding_match,
@@ -164,6 +173,48 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("regex=redacted allowed=unverifiable", result.stdout)
         self.assertNotIn("REDACTED", result.stdout)
+
+
+
+    def test_report_diagnostics_ignore_other_lines_in_same_file_commit(self):
+        description, (commit, path) = next(iter(EXPECTED_FIXTURES.items()))
+        line = _source_fixture_line(ROOT, commit, path)
+        source = subprocess.run(
+            ["git", "show", f"{commit}:{path}"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.splitlines()
+        start_line = source.index(line) + 1
+        report = [{
+            "Commit": commit,
+            "File": path,
+            "StartLine": start_line + 1,
+            "RuleID": "generic-api-key",
+            "Secret": "unrelated",
+            "Match": "unrelated",
+            "Line": "",
+        }]
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = pathlib.Path(directory) / "other-line-report.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "security" / "validate_gitleaks_allowlists.py"),
+                    "--config",
+                    str(ROOT / ".gitleaks.toml"),
+                    "--report",
+                    str(report_path),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("finding=absent", result.stdout)
 
 
     def test_validator_rejects_non_literal_line_pattern(self):

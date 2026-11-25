@@ -72,11 +72,10 @@ The suite mocks subprocess tool execution and tests synthetic TLC output fixture
 
 ## Current verification status
 
-- Exact prior head `84de51d1cca8cfe3d3462175236875f7f1e4a02d`: CI compileall PASS; 25/25 tests PASS.
-- Adversarial test head `5bc69380cb9a023082b065c0aa7ffa2a96fce26f`: compileall PASS; 29 tests executed, 7 failed because the first hardening patch over-escaped regex literals. This failure was observed and is not concealed.
-- Corrected regex and ordering implementation: commit `74cb93dc07ad89401eedace6f26e9821c57c0824`.
-- Independent local reproduction of focused adversarial cases: 8/8 PASS. This is not GitHub CI and does not substitute for exact-head CI.
-- Exact-head CI for `74cb93dc07ad89401eedace6f26e9821c57c0824`: NOT_RUN / no workflow run observed.
+- Adversarial test head `5bc69380cb9a023082b065c0aa7ffa2a96fce26f`: compileall PASS; 29 tests executed, 7 failed because the first hardening patch over-escaped regex literals. This failure was observed and remediated.
+- Corrected parser implementation: code commit `74cb93dc07ad89401eedace6f26e9821c57c0824`.
+- Exact reviewed head `4dea7d73481ec2fd0980f6e936f27c7b3a75a259`: CI run `45553850715`, compileall PASS; 29/29 tests PASS.
+- Exact-head Gitleaks run `45553843545`: PR-diff PASS; full-history scan FAIL with 13 unclassified findings across 5,200 commits.
 - TLA+ tool availability: NOT_ESTABLISHED.
 - SANY: NOT_RUN.
 - TLC: NOT_RUN.
@@ -84,11 +83,10 @@ The suite mocks subprocess tool execution and tests synthetic TLC output fixture
 - Mutation/differential tests beyond committed hostile fixtures: NOT_RUN.
 - Evidence attestation: NOT_IMPLEMENTED.
 - Java/runtime provenance: NOT_IMPLEMENTED.
-- Historical Gitleaks: 13 generic-api-key findings remain unclassified; PR-diff scan passed on prior scan, full-history scan failed/cancelled after reporting the same 13 detections. No suppressions or credential changes were made.
 
 ## Promotion decision
 
-**NOT READY FOR MERGE OR PROMOTION.** The gate remains NOT_VERIFIED until exact-head CI passes, real SANY/TLC execution succeeds with a pinned tool, real output compatibility is established, and evidence integrity is independently addressed.
+**NOT READY FOR MERGE OR PROMOTION.** The gate remains NOT_VERIFIED until real SANY/TLC execution succeeds with an independently pinned tool, real output compatibility is established, and evidence integrity is independently addressed.
 
 ## Safety boundary
 

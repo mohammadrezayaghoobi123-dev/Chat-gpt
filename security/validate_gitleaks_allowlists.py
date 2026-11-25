@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import pathlib
 import re
@@ -406,6 +407,8 @@ def write_toml_config(config: dict, destination: pathlib.Path) -> None:
 \ndef main() -> int:
     parser = argparse.ArgumentParser(description="Validate pinned Gitleaks allowlist integrity.")
     parser.add_argument("--config", default=".gitleaks.toml")
+    parser.add_argument("--report", default=None, help="Optional redacted Gitleaks JSON report for predicate diagnostics.")
+    parser.add_argument("--report", default=None, help="Optional redacted Gitleaks JSON report for predicate diagnostics.")\n    parser.add_argument("--necessity-config", default=None, help="Write a diagnostic config with exactly 13 new line exceptions removed.")\n    parser.add_argument("--necessity-report", default=None, help="Verify the redacted report against the exact 13 expected findings.")
     parser.add_argument("--report", default=None, help="Optional redacted Gitleaks JSON report for predicate diagnostics.")\n    parser.add_argument("--necessity-config", default=None, help="Write a diagnostic config with exactly 13 new line exceptions removed.")\n    parser.add_argument("--necessity-report", default=None, help="Verify the redacted report against the exact 13 expected findings.")
     args = parser.parse_args()
     config_path = pathlib.Path(args.config).resolve()

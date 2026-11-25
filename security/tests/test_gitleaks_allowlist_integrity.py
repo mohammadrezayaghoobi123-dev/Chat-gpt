@@ -294,5 +294,44 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
         self.assertTrue(validate_config(changed, ROOT))
 
 
+
+    def test_necessity_config_removes_only_thirteen_new_line_exceptions(self):
+        from validate_gitleaks_allowlists import build_necessity_config
+        reduced = build_necessity_config(self.config)
+        self.assertEqual(len(reduced["allowlists"]), 17)
+        remaining_descriptions = {entry.get("description") for entry in reduced["allowlists"]}
+        self.assertEqual(remaining_descriptions & set(EXPECTED_LINE_EXCEPTIONS), set())
+        self.assertEqual(remaining_descriptions & set(EXPECTED_FIXTURES), set(EXPECTED_FIXTURES))
+        legacy = [
+            entry for entry in reduced["allowlists"]
+            if entry.get("description") not in EXPECTED_FIXTURES
+        ]
+        self.assertEqual(len(legacy), 15)
+
+    def test_necessity_report_matches_exact_expected_finding_tuples(self):
+        from validate_gitleaks_allowlists import verify_necessity_report
+        report = [
+            {"Commit": commit, "File": path, "StartLine": line, "RuleID": "generic-api-key"}
+            for commit, path, line in EXPECTED_LINE_EXCEPTIONS.values()
+        ]
+        self.assertEqual(verify_necessity_report(report), [])
+
+    def test_necessity_report_rejects_missing_duplicate_extra_and_mismatched_findings(self):
+        from validate_gitleaks_allowlists import verify_necessity_report
+        expected = [
+            {"Commit": commit, "File": path, "StartLine": line, "RuleID": "generic-api-key"}
+            for commit, path, line in EXPECTED_LINE_EXCEPTIONS.values()
+        ]
+        cases = {
+            "missing": expected[:-1],
+            "duplicate": expected + [expected[0]],
+            "extra": expected + [{"Commit": "f" * 40, "File": "unexpected.txt", "StartLine": 1, "RuleID": "generic-api-key"}],
+            "mismatch": [{**expected[0], "StartLine": expected[0]["StartLine"] + 1}] + expected[1:],
+        }
+        for label, report in cases.items():
+            with self.subTest(case=label):
+                self.assertTrue(verify_necessity_report(report))
+
+
 if __name__ == "__main__":
     unittest.main()

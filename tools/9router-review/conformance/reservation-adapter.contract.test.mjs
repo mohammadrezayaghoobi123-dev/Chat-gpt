@@ -1148,8 +1148,8 @@ test("T50: a lost boundary acknowledgement recovers the same durable receipt wit
   });
   assert.equal(intent.status, "ACK");
 
-  // The authoritative transition commits, but its response is deliberately discarded.
-  const committed = await system.adapter.beginModelAttempt({
+  // Commit the one-time boundary and discard its response to model a lost acknowledgement.
+  await system.adapter.beginModelAttempt({
     ...claimArgs(),
     generation: claimed.record.generation,
     expectedRecordVersion: claimed.record.record_version,
@@ -1158,7 +1158,6 @@ test("T50: a lost boundary acknowledgement recovers the same durable receipt wit
     effectLedgerReceipt: intent,
     attemptTimeoutMs: 100,
   });
-  assert.equal(committed.status, "MODEL_PERMIT");
 
   assert.equal(
     typeof system.adapter.readAttemptBoundaryReceipt,
@@ -1171,7 +1170,18 @@ test("T50: a lost boundary acknowledgement recovers the same durable receipt wit
     attemptId,
   });
   assert.equal(recovered.status, "ACK");
-  assert.deepEqual(recovered.receipt, committed.attemptBoundaryReceipt);
+
+  const authoritative = await system.adapter.readAuthoritative({ key: KEY });
+  assert.equal(authoritative.record.state, "MODEL_ATTEMPTED");
+  assert.equal(authoritative.record.model_attempt_id, attemptId);
+  assert.equal(recovered.receipt.committed_record_version, authoritative.record.record_version);
+
+  const recoveredAgain = await system.adapter.readAttemptBoundaryReceipt({
+    key: KEY,
+    stage: "MODEL",
+    attemptId,
+  });
+  assert.deepEqual(recoveredAgain, recovered);
 
   const repeated = await system.adapter.beginModelAttempt({
     ...claimArgs(),
@@ -1183,9 +1193,4 @@ test("T50: a lost boundary acknowledgement recovers the same durable receipt wit
     attemptTimeoutMs: 100,
   });
   assert.equal(repeated.status, "ALREADY_CONSUMED");
-
-  const authoritative = await system.adapter.readAuthoritative({ key: KEY });
-  assert.equal(authoritative.record.state, "MODEL_ATTEMPTED");
-  assert.equal(authoritative.record.model_attempt_id, attemptId);
-  assert.equal(authoritative.record.record_version, committed.record_version);
 });

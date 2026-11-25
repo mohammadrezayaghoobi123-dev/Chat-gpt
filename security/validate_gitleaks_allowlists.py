@@ -205,7 +205,6 @@ def diagnose_report(report: list[dict], config: dict) -> list[str]:
                 f"secret_full={secret_matches_full} secret_first_half={secret_matches_first_half} "
                 f"match_full={match_matches_full} match_first_half={match_matches_first_half}"
             )
-            )
     return diagnostics
 
 

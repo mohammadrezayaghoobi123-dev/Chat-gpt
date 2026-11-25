@@ -52,7 +52,7 @@ A successful build is not a successful test run. A successful test run is not pr
 
 FMH-098 is grounded in the pinned Ant build's `<tstamp>`, `<touch>`, and `<jar>` operations. Apache Ant documents that fixed archive-entry timestamps require the JAR/ZIP `modificationtime` attribute (Ant 1.10.2+) and that `SOURCE_DATE_EPOCH` is honored by `tstamp` only from Ant 1.10.8+. These are separate controls; neither establishes deterministic file ordering by itself.
 
-FMH-099 is grounded in the pinned Manifest's `Class-Path` attribute. Current CommunityModules documentation distinguishes `CommunityModules.jar` and `CommunityModules-deps.jar`; do not silently substitute one for the other.
+FMH-099 is grounded in the pinned Manifest's `Class-Path` attribute. The pinned TLA+ Manifest refers to `CommunityModules.jar`, while the current CommunityModules README documents `CommunityModules-deps.jar` for the dependency bundle. Their equivalence is not established; do not silently substitute one for the other.
 
 FMH-100 is a separate supply-chain boundary: the CommunityModules repository build script fetched `tla2tools.jar` from the mutable TLA+ `v1.8.0` release URL in the inspected version. Do not inherit that rolling input into this build.
 
@@ -207,7 +207,7 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
     ],
     "test_halt_on_failure": true,
     "test_exclusions_inventory_sha256": null,
-    "network_during_build": false
+    "network_during_build": "DENY"
   },
   "outputs": [
     {

@@ -311,6 +311,25 @@ class GateTests(unittest.TestCase):
         self.assertEqual("FAIL", result["overall"])
         mocked.assert_not_called()
 
+    def test_run_gate_stops_before_java_and_persists_git_unknown_state(self):
+        blocked_rev_parse = self.command_result(
+            status="BLOCKED", process_outcome="UNKNOWN",
+            process_started=True, reason="process_result_unavailable",
+        )
+        with patch("egis_tla_gate.run_command", return_value=blocked_rev_parse) as mocked:
+            result = run_gate(**self.args())
+        self.assertEqual("BLOCKED", result["overall"])
+        identity = result["checks"]["source_identity"]
+        self.assertEqual("BLOCKED", identity["status"])
+        self.assertEqual("UNKNOWN", identity["commands"]["rev_parse"]["process_outcome"])
+        self.assertEqual("NOT_RUN", identity["commands"]["status"]["status"])
+        self.assertEqual("NOT_STARTED", identity["commands"]["status"]["process_outcome"])
+        self.assertNotIn("sany", result["checks"])
+        self.assertNotIn("tlc", result["checks"])
+        mocked.assert_called_once()
+        persisted = json.loads(self.output.read_text(encoding="utf-8"))
+        self.assertEqual("UNKNOWN", persisted["checks"]["source_identity"]["commands"]["rev_parse"]["process_outcome"])
+
     def test_unavailable_git_metadata_blocks(self):
         unavailable = {"status": "BLOCKED", "commit": None, "dirty": None}
         with patch("egis_tla_gate.git_identity", return_value=unavailable):

@@ -400,7 +400,7 @@ def write_toml_config(config: dict, destination: pathlib.Path) -> None:
         lines.append("[[allowlists]]")
         for key, value in entry.items():
             lines.append(f"{key} = {json.dumps(value)}")
-    destination.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+    destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 \ndef main() -> int:

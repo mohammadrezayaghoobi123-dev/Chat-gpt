@@ -286,3 +286,11 @@ Model checking completed. No error has been found.
                   "  " + ("9" * 5000) + " states generated, 8 distinct states found, 0 states left on queue.\\n")
         result = validate_tlc_output(output, ["Safety"], exit_code=0)
         self.assertNotEqual("PASS", result["status"])
+
+    def test_oversized_invariant_count_is_fail_closed_not_exception(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        output = ("Checking " + ("9" * 5000) + " invariants...\\n"
+                  "Model checking completed. No error has been found.\\n"
+                  "  12 states generated, 8 distinct states found, 0 states left on queue.\\n")
+        result = validate_tlc_output(output, ["Safety"], exit_code=0)
+        self.assertNotEqual("PASS", result["status"])

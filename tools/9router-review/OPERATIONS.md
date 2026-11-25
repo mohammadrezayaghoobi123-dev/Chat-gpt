@@ -1543,3 +1543,20 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - **Evidence:** workflow source change was committed and fetched from the verification branch. No hosted Actions result for the new isolated step has been retrieved; hosted status remains UNVERIFIED.
 - **Isolation:** reviewer workflow `.github/workflows/9router-pr-review.yml` was not edited or enabled; `main`, PR #463, provider/runtime configuration, secrets, cloud resources and local desktop state were not modified.
 - **Disposition:** T57 FOCUSED CI STEP WIRED / HOSTED RESULT PENDING / REVIEWER WORKFLOW UNCHANGED.
+
+
+#### 2026-11-25 Permit-boundary write-ahead and active recovery-fence hardening — AR-71
+
+- **Scope:** hostile review of the test-only RS-08 SQLite adapter found that `beginAttempt` could create a permit without a matching EffectLedger INTENT and could issue a permit while a recovery fence was active.
+- **Test-first RED:** tests T57.10 and T57.11 were added at commit `5c456c60b0583eaca056f2572c03ec0be7084594` before changing the adapter. Hosted focused execution observed:
+  - T57.10: expected `LEDGER_NOT_ACKNOWLEDGED`, observed `PERMIT`.
+  - T57.11: expected `RECOVERY_FENCED`, observed `PERMIT`.
+  These were behavioral assertion failures. Existing T57.1–T57.9 tests remained green. The unrelated duplicate-publication regression also remained RED.
+- **Minimal correction:** at commit `3ad3aa7bc2f2a9a24fba1117f38596db38e4278e`, `beginAttempt` now reads the durable INTENT and verifies full canonical operation equality before a permit can be considered. Inside the same ReservationStore `BEGIN IMMEDIATE` transaction it checks: (1) terminal tombstone → `ORPHAN_ABORTED`; (2) active recovery fence → `RECOVERY_FENCED`; (3) existing boundary → `ALREADY_CONSUMED`; only then may it create the test boundary/permit rows.
+- **Why tombstone takes precedence:** an already-aborted attempt is terminal, not merely temporarily fenced. A live fence without a terminal tombstone blocks a new begin while recovery is in progress. This prevents a late caller from obtaining a permit after recovery has started evaluating the orphan.
+- **Hosted verification:** GitHub Actions run [45583104765](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45583104765), exact head `3ad3aa7bc2f2a9a24fba1117f38596db38e4278e`. Focused T57 suite: **11/11 PASS**. Reference-oracle tranche: **56/56 PASS**. Full reviewer regression: **203/204 PASS**, with the only failure being the preserved duplicate-publication race (2 POSTs versus maximum 1 at `review.test.mjs:3587`). No assertion was removed or weakened.
+- **Contract reconciliation:** `ADR-001` now explicitly requires begin-time verification of the matching durable INTENT and atomic rejection under an active recovery fence. `ORPHAN_INTENT_RECOVERY_CONTRACT.md` now specifies tombstone-first, then active-fence, then already-consumed precedence; it also requires fail-closed behavior for missing/mismatched INTENT.
+- **Traceability:** RS-08 now maps T57.1–T57.11 as **PARTIAL / TEST-HARNESS ONLY**. Production qualification remains open because the harness is not wired into `runReview()`, uses local SQLite files and non-cryptographic digest checks, and does not establish an independent production trust root, provider-effect interlock, or machine/restore durability.
+- **Hosted CI distinction:** unlike the AR-69/AR-70 checkpoint, hosted Actions evidence for this exact commit was retrieved. The focused T57 step is GREEN; the enclosing workflow remains failed because the full reviewer regression includes the known duplicate-publication RED.
+- **Isolation:** all changes remain on `verify/9router-reservation-conformance-run9-2026-11-25`. No `main`, PR #463, reviewer activation, production adapter, provider dispatch, secret, backend provisioning, cloud resource, deployment, merge, or local desktop state was changed.
+- **Disposition:** T57.10–T57.11 RED→GREEN VERIFIED / T57.1–T57.11 HOSTED FOCUSED PASS / FULL REVIEWER REGRESSION 203/204 WITH KNOWN DUPLICATE-PUBLICATION RED / RS-08 PRODUCTION GAP OPEN.

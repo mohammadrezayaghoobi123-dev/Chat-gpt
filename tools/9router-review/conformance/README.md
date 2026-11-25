@@ -6,7 +6,7 @@ This directory contains a non-production reference oracle and the expanded execu
 - Passing these tests validates the contract harness against the reference model; it does not qualify Cloudflare Durable Objects, R2, Supabase, or any deployed backend.
 - The candidate adapter must later run the same contract suite in an isolated environment with independent clients, process restarts, fault injection, and restore drills.
 - No provider credentials, model calls, GitHub API calls, comments, or deployments are performed by this test suite.
-- The committed attempt-boundary receipt design is specified in [ATTEMPT_BOUNDARY_RECEIPT_CONTRACT.md](./ATTEMPT_BOUNDARY_RECEIPT_CONTRACT.md). It is a design contract only; no signer, verifier, or production backend is implemented.
+- The committed attempt-boundary receipt design is specified in [ATTEMPT_BOUNDARY_RECEIPT_CONTRACT.md](./ATTEMPT_BOUNDARY_RECEIPT_CONTRACT.md). The reference oracle now models receipt issuance, exact capability admission, and read-only recovery with a private in-memory registry and deterministic non-cryptographic test token. This is not a cryptographic signer/verifier, durable journal, distributed authority, or production backend.
 
 Run with Node.js 22 from tools/9router-review:
 

@@ -209,7 +209,7 @@ Decision record: [ADR-001](ADR-001-ORPHAN-INTENT-TERMINAL-ABORT.md). Status: **A
 | T57.5 | Incomplete ReservationStore and EffectLedger reads quarantine without any mutation | Both incomplete-read paths returned `RECOVERY_QUARANTINED`; tombstone, ledger events, fence and counts remained unchanged | PASS |
 | T57.6 | If boundary is already committed, recover exact receipt and do not abort | Existing test permit/receipt returned identically; tombstone count and final abort event stayed zero | PASS |
 | T57.7 | After a second independent reopen, terminal identity and ledger watermark remain unchanged | Same tombstone ID, final event ID/digest, one INTENT, one final event, same high-water mark, zero permit/boundary | PASS |
-| T57.8 | Independent process attempt-start and orphan-abort race yields exactly one terminal outcome | Two worker processes raced; SQLite write serialization and boundary re-check yielded either permit+boundary with no tombstone/event, or tombstone+terminal event with no permit/boundary | PASS — see RED→GREEN note |
+| T57.8 | Independent process attempt-start and orphan-abort race yields exactly one terminal outcome | Two worker processes raced; either permit+boundary wins, or transient `RECOVERY_FENCED`/`ORPHAN_ABORTED` is followed by tombstone+terminal event and an explicit late-start denial | PASS after AR-72 expectation correction |
 | T57.9 | Forged tombstone ACK, altered immutable tuple and changed request payload fail closed | Forged receipt digest rejected without ledger mutation; same operation ID with altered tuple or request digest returns integrity conflict | PASS |
 | T57.10 | No permit without exact matching durable EffectLedger INTENT | RED on test commit: adapter returned `PERMIT`; GREEN on hosted run 45583104765 after matching INTENT validation | PASS |
 | T57.11 | Active recovery fence excludes new attempt-start; terminal tombstone retains precedence | RED on test commit: adapter returned `PERMIT`; GREEN on hosted run 45583104765 after same-transaction fence check | PASS |
@@ -282,3 +282,10 @@ Tombstone precedence is deliberate: a terminally aborted attempt reports `ORPHAN
 ### Evidence boundary
 
 The focused run confirms behavior only in the test-only SQLite harness. It does not qualify production cryptographic ACKs, recovery authority, independent storage failure domains, power-loss/restore semantics, provider interlocks, or `runReview()` integration. RS-08 remains **PARTIAL / TEST-HARNESS ONLY / PRODUCTION GAP OPEN**.
+
+
+## L. T57.8 recovery-fence interleaving correction — AR-72
+
+The new atomic begin-time fence gate adds a valid transient state to the original attempt-start/abort race. When the recovery fence commits before the tombstone, the racing begin must return `RECOVERY_FENCED`; it cannot return `ORPHAN_ABORTED` until the tombstone itself exists. The test was corrected to allow that transient response, then independently invoke begin after recovery completes and require `ORPHAN_ABORTED`. Final state assertions remain strict: the abort branch has exactly one tombstone and one terminal ledger event, zero boundary and zero permit; the permit branch has one boundary/permit, exact receipt recovery and no tombstone/event. No assertion about the final invariant was weakened.
+
+The preceding hosted run on `ea16bbb874b7d75dc0d16fb1ce6019aed95c89a5` revealed this test-expectation mismatch as the T57.8 failure. T57.10 and T57.11 passed; focused suite observed 11/11. AR-72 corrected the expected interleaving; the new exact-head hosted result is pending.

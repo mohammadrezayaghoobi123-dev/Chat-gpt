@@ -275,7 +275,7 @@ Model checking completed. No error has been found.
 Model checking completed. No error has been found.
   12 states generated, 8 distinct states found, 0 states left on queue.
 """
-        for inventory in (["Safety", ""], ["Safety", "Bad Name"], ["Safety", None]):
+        for inventory in (["Safety", ""], ["Safety", "Bad Name"], ["Safety", None], ["Safety", []]):
             with self.subTest(inventory=inventory):
                 self.assertNotEqual("PASS", validate_tlc_output(output, inventory, exit_code=0)["status"])
 

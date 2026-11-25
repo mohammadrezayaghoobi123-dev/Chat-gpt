@@ -1252,3 +1252,14 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - **Hostile review:** inspected the exact commit diff. It changes only the shared helper's successful outcome arguments and T06's successful outcome path/assertions. The negative wrong-attempt check is preserved. Remaining risks: T13 COMMENT, T44 MODEL recovery-lock, and T45 COMMENT recovery-lock successful outcomes still require exact receipt propagation; adapter receipt issuance/verification and durable recovery are still absent.
 - AR-41–AR-47 remain OPEN. Preserve T46/T47 stage-mismatch negatives, T48 missing-boundary negative, T49/T51 replay and mutation cases, and the original duplicate-publication concurrency RED.
 - No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.
+#### 2026-11-25 COMMENT receipt propagation — AR-48
+
+- Test commit: `50072e48704efc5b91380aaf929eb84aeef5f832`.
+- T13's successful `COMMENT_ACCEPTED` outcome now forwards the exact `started.permit.attemptBoundaryReceipt` returned by `beginCommentAttempt`.
+- T13 instruments the ledger call and asserts one append, matching attempt ID, deep-equal receipt propagation, and `stage === COMMENT`.
+- The preceding negative completion attempt with `effectLedgerReceipt: null` and its `LEDGER_NOT_ACKNOWLEDGED` assertion are preserved unchanged and occur before the successful append.
+- The helper path obtains its COMMENT permit only after `completeModel()` and `resumeCompletedModel()`, so this test exercises the real prerequisite sequence without synthesizing a receipt.
+- **Status:** AUTHORED / NOT_EXECUTED. The current reference adapter still does not issue boundary receipts. No RED/GREEN result is claimed; T13 and dependent tests remain NOT VERIFIED.
+- **Hostile review:** inspected the exact commit diff. Only T13's successful outcome path and receipt-forwarding assertions changed; the negative no-outcome path and final publication checks remain intact. T13 now covers the COMMENT helper path, while T45's separate recovery-lock COMMENT outcome remains unmigrated.
+- AR-41–AR-48 remain OPEN. Remaining successful callers: T44 MODEL recovery-lock and T45 COMMENT recovery-lock. Preserve all negative/replay tests and the original duplicate-publication concurrency RED.
+- No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.

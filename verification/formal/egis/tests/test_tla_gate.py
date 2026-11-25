@@ -343,6 +343,51 @@ class GateTests(unittest.TestCase):
         self.assertEqual("NOT_RUN", identity["commands"]["status"]["status"])
         mocked.assert_called_once()
 
+    def test_git_identity_blocks_when_rev_parse_exit_zero_but_cleanup_unknown(self):
+        incomplete = self.command_result(
+            status="PASS", process_outcome="EXIT_ZERO",
+            process_started=True, exit_code=0,
+        )
+        with patch("egis_tla_gate.run_command", return_value=incomplete) as mocked:
+            identity = git_identity(self.root)
+        self.assertEqual("BLOCKED", identity["status"])
+        self.assertEqual("UNKNOWN", identity["commands"]["rev_parse"]["process_cleanup"])
+        self.assertEqual("NOT_RUN", identity["commands"]["status"]["status"])
+        mocked.assert_called_once()
+
+    def test_sany_pass_with_unknown_cleanup_does_not_start_tlc(self):
+        incomplete_sany = self.command_result(
+            status="PASS", process_outcome="EXIT_ZERO",
+            process_started=True, exit_code=0,
+        )
+        with patch("egis_tla_gate.git_identity", return_value=self.identity):
+            with patch("egis_tla_gate.run_command", return_value=incomplete_sany) as mocked:
+                result = run_gate(**self.args())
+        self.assertEqual("BLOCKED", result["overall"])
+        self.assertEqual("PASS", result["checks"]["sany"]["status"])
+        self.assertEqual("UNKNOWN", result["checks"]["sany"]["process_cleanup"])
+        self.assertEqual("BLOCKED", result["checks"]["tlc"]["status"])
+        self.assertEqual("NOT_STARTED", result["checks"]["tlc"]["process_outcome"])
+        mocked.assert_called_once()
+
+    def test_tlc_pass_with_unknown_cleanup_never_invokes_validator(self):
+        sany = self.mock_pass(["sany"], self.root, 10)
+        incomplete_tlc = self.command_result(
+            status="PASS", process_outcome="EXIT_ZERO",
+            process_started=True, exit_code=0,
+        )
+        with patch("egis_tla_gate.git_identity", return_value=self.identity):
+            with patch("egis_tla_gate.run_command", side_effect=[sany, incomplete_tlc]) as mocked:
+                with patch("egis_tla_gate.validate_tlc_output", return_value={"status": "BLOCKED", "reason": "unexpected_validator_call"}) as validator:
+                    result = run_gate(**self.args())
+        self.assertEqual("BLOCKED", result["overall"])
+        self.assertEqual("PASS", result["checks"]["tlc"]["status"])
+        self.assertEqual("UNKNOWN", result["checks"]["tlc"]["process_cleanup"])
+        self.assertEqual("NOT_RUN", result["checks"]["tlc_output_validation"]["status"])
+        self.assertEqual("tlc_result_unavailable", result["checks"]["tlc_output_validation"]["reason"])
+        validator.assert_not_called()
+        self.assertEqual(2, mocked.call_count)
+
     def test_git_identity_preserves_unknown_after_status_started(self):
         commit_result = {
             **self.command_result(status="PASS", process_outcome="EXIT_ZERO",

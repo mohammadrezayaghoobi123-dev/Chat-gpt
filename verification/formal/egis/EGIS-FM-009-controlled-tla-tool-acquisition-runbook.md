@@ -75,6 +75,15 @@ if ([int64]$file.Length -ne $expectedSize) { throw 'Downloaded byte count mismat
 $actualSha256 = (Get-FileHash -LiteralPath $jarPath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualSha256 -ne $expectedSha256) { throw 'Downloaded artifact SHA-256 mismatch' }
 
+# Re-fetch publisher metadata after download to detect release/asset mutation during acquisition.
+$releaseAfter = Invoke-RestMethod -Uri $releaseUri -Headers $headers
+$assetAfter = Invoke-RestMethod -Uri $assetUri -Headers $headers
+if ($releaseAfter.id -ne $releaseId -or $releaseAfter.tag_name -ne $expectedTag) { throw 'Post-download release identity changed' }
+if ($releaseAfter.prerelease -ne $true -or $releaseAfter.immutable -ne $false) { throw 'Post-download release classification changed' }
+if ($assetAfter.id -ne $assetId -or $assetAfter.name -ne $expectedName) { throw 'Post-download asset identity changed' }
+if ([int64]$assetAfter.size -ne $expectedSize -or $assetAfter.digest -ne "sha256:$expectedSha256") { throw 'Post-download publisher digest metadata changed' }
+if ($assetAfter.browser_download_url -ne $asset.browser_download_url) { throw 'Post-download asset URL changed' }
+
 $javaCommand = Get-Command java -ErrorAction Stop
 $javaVersion = (& $javaCommand.Source -version 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Java version command failed' }

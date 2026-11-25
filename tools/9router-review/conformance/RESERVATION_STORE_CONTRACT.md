@@ -65,6 +65,16 @@ type ReservationRecord = {
   updatedAt: string;
 };
 
+type RecoveryAuthorization = {
+  authorityId: string;
+  authorizationId: string;
+  scopeDigest: string;     // exact key + permitted operation + evidence digest
+  issuedAt: string;
+  expiresAt: string;
+  nonce: string;
+  signature: string;      // verified against an out-of-band recovery trust root
+};
+
 type EffectLedgerIntentAck = {
   attemptId: string;
   stage: Stage;
@@ -185,7 +195,7 @@ interface ReservationStore {
     operationId: string;
     modelAttemptId: string;
     expectedRecordVersion: number;
-    continuationIdentity: string;
+    continuationAuthorization: RecoveryAuthorization;
   }): Promise<StoreResult<{ fence: OwnerFence; recordVersion: number }>>;
 
   abortBeforeModel(input: {
@@ -204,6 +214,7 @@ interface ReservationStore {
     expectedRecordVersion: number;
     reasonCode: string;
     evidenceReference: string;
+    recoveryAuthorization: RecoveryAuthorization;
   }): Promise<StoreResult<{ recordVersion: number; state: "UNKNOWN" }>>;
 
   closeWithoutPublish(input: {
@@ -212,6 +223,8 @@ interface ReservationStore {
     expectedRecordVersion: number;
     reasonDigest: string;
     evidenceReference: string;
+    fence: OwnerFence;
+    recoveryAuthorization?: RecoveryAuthorization;
   }): Promise<StoreResult<{ recordVersion: number; state: "CLOSED_NO_PUBLISH" }>>;
 
   reconcileComment(input: {
@@ -223,6 +236,7 @@ interface ReservationStore {
     exactMarkerCommentIds: number[];
     evidenceDigest: string;
     evidenceReference: string;
+    recoveryAuthorization: RecoveryAuthorization;
   }): Promise<StoreResult<{
     recordVersion: number;
     state: "PUBLISHED" | "DUPLICATE_ACCEPTED" | "UNKNOWN";

@@ -493,6 +493,8 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
             "missing": "allowlists = [{}]" + chr(10),
             "empty": 'allowlists = [{ description = "" }]' + chr(10),
             "whitespace": 'allowlists = [{ description = "   " }]' + chr(10),
+            "integer": "allowlists = [{ description = 7 }]" + chr(10),
+            "boolean": "allowlists = [{ description = true }]" + chr(10),
         }
         for label, baseline_text in malformed_baselines.items():
             with self.subTest(description_type=label):

@@ -431,7 +431,7 @@ class GateTests(unittest.TestCase):
         )
         with patch("egis_tla_gate.git_identity", return_value=self.identity):
             with patch("egis_tla_gate.run_command", side_effect=[sany, tlc]) as mocked:
-                with patch("egis_tla_gate.validate_tlc_output") as validator:
+                with patch("egis_tla_gate.validate_tlc_output", return_value={"status": "BLOCKED", "reason": "unexpected_validator_call"}) as validator:
                     result = run_gate(**self.args())
         self.assertEqual("BLOCKED", result["overall"])
         self.assertEqual("UNKNOWN", result["checks"]["tlc"]["process_outcome"])
@@ -448,7 +448,7 @@ class GateTests(unittest.TestCase):
         )
         with patch("egis_tla_gate.git_identity", return_value=self.identity):
             with patch("egis_tla_gate.run_command", side_effect=[sany, tlc]) as mocked:
-                with patch("egis_tla_gate.validate_tlc_output") as validator:
+                with patch("egis_tla_gate.validate_tlc_output", return_value={"status": "BLOCKED", "reason": "unexpected_validator_call"}) as validator:
                     result = run_gate(**self.args())
         self.assertEqual("FAIL", result["overall"])
         self.assertEqual("NOT_RUN", result["checks"]["tlc_output_validation"]["status"])

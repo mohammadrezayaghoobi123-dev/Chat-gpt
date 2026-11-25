@@ -97,7 +97,7 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 | RS-05 Lease expiry after MODEL boundary | T05, T07 | PARTIAL | Process crash and competing client after committed boundary; assert no second provider permit. |
 | RS-06 Boundary commits but response is dropped | T50 | PARTIAL | Actual durable store, process termination between commit and response, then independent-client receipt recovery. |
 | RS-07 Boundary transaction aborts | T55 and T56 inject pre-commit aborts in MODEL and COMMENT respectively; prove no permit/receipt, unchanged reservation/ledger state, and no consumed boundary sequence | PARTIAL | Evidence is limited to the reference oracle's abort hook before the first reservation write. Add a production-store transaction that aborts after each write stage; prove atomic rollback of record, receipt/index, sequence and ledger linkage under backend errors, process loss, and restart. No durable backend transaction has been qualified. |
-| RS-08 Crash between ledger INTENT and reservation boundary | T57.1–T57.9 exercise process death/reopen, terminal tombstone + Ledger disposition, inter-store crash, fencing, incomplete reads, existing-boundary recovery, repeated reopen, attempt-start race, and forged evidence in a local SQLite harness | PARTIAL — TEST HARNESS ONLY | Implement the same protocol in selected production ReservationStore/EffectLedger authorities; prove durable receipt/ACK trust, cross-store fencing and idempotency, crash/power-loss and restore behavior, independent failure domains, external-effect interlocks, and `runReview()` integration. No production backend is qualified. |
+| RS-08 Crash between ledger INTENT and reservation boundary | T57.1–T57.11 exercise process death/reopen, terminal tombstone + Ledger disposition, inter-store crash, fencing, incomplete reads, existing-boundary recovery, repeated reopen, attempt-start race, forged evidence, mandatory INTENT ACK, and active-fence exclusion in a local SQLite harness | PARTIAL — TEST HARNESS ONLY | Implement the same protocol in selected production ReservationStore/EffectLedger authorities; prove durable receipt/ACK trust, cross-store fencing and idempotency, crash/power-loss and restore behavior, independent failure domains, external-effect interlocks, and `runReview()` integration. No production backend is qualified. |
 | RS-09 Crash after boundary ACK, before model call | T05, T09, T50 | PARTIAL | Kill/restart independent process after boundary commit; prove exact receipt recovery and no duplicate permit/inference. |
 | RS-10 Crash after provider call, before OUTCOME ACK | T06, T08 | GAP | Fault-inject provider success then process death before OUTCOME; prove MODEL UNKNOWN and no retry. |
 | RS-11 Crash after COMMENT boundary, before POST | T11, T12, T31, T51 | PARTIAL | Kill/restart after boundary ACK but before POST; prove no second COMMENT permit. |
@@ -198,7 +198,7 @@ Decision record: [ADR-001](ADR-001-ORPHAN-INTENT-TERMINAL-ABORT.md). Status: **A
 - The durable implementation, independent-process evidence, and full T57 acceptance run are pending. RS-08 remains **GAP**; no production backend is qualified.
 
 
-## I. T57 staged execution ledger — AR-69 (supersedes AR-68 status table)
+## I. T57 staged execution ledger — AR-69 (historical T57.1–T57.9 baseline; extended by AR-71)
 
 | Test | Required assertion | Observed evidence | Harness status |
 | --- | --- | --- | --- |
@@ -211,8 +211,12 @@ Decision record: [ADR-001](ADR-001-ORPHAN-INTENT-TERMINAL-ABORT.md). Status: **A
 | T57.7 | After a second independent reopen, terminal identity and ledger watermark remain unchanged | Same tombstone ID, final event ID/digest, one INTENT, one final event, same high-water mark, zero permit/boundary | PASS |
 | T57.8 | Independent process attempt-start and orphan-abort race yields exactly one terminal outcome | Two worker processes raced; SQLite write serialization and boundary re-check yielded either permit+boundary with no tombstone/event, or tombstone+terminal event with no permit/boundary | PASS — see RED→GREEN note |
 | T57.9 | Forged tombstone ACK, altered immutable tuple and changed request payload fail closed | Forged receipt digest rejected without ledger mutation; same operation ID with altered tuple or request digest returns integrity conflict | PASS |
+| T57.10 | No permit without exact matching durable EffectLedger INTENT | RED on test commit: adapter returned `PERMIT`; GREEN on hosted run 45583104765 after matching INTENT validation | PASS |
+| T57.11 | Active recovery fence excludes new attempt-start; terminal tombstone retains precedence | RED on test commit: adapter returned `PERMIT`; GREEN on hosted run 45583104765 after same-transaction fence check | PASS |
 
-**Exact executed source blobs:** T57.1 test `eb55f2ab523611711d30da96223c0427f59985c6`; SQLite adapter `c1d9a8d578ccecd91c044f39f6f4b73f32376d79`; worker `6ecf70cd46fad12fed95750d6278d3171d072b78`; terminal-abort test `1cdd41754a5800d823e45fccc2d0f2842bf441e6`.
+**T57.1–T57.9 source blobs:** test `eb55f2ab523611711d30da96223c0427f59985c6`; adapter before AR-71 `c1d9a8d578ccecd91c044f39f6f4b73f32376d79`; worker `6ecf70cd46fad12fed95750d6278d3171d072b78`; tests before AR-71 `1cdd41754a5800d823e45fccc2d0f2842bf441e6`.
+
+**AR-71 current source blobs:** adapter `ffef7d1c57abb78c5f997c2fdad478f7f50053d9`; terminal-abort tests `f18cdc07f685132cb63f2ed4435a11290c25b81c`.
 
 **Fresh execution evidence:** the complete T57.1–T57.9 suite ran three consecutive times under Node.js `v22.16.0`; each run observed **9 tests / 9 passed / 0 failed**. Four source files passed `node --check`. T57.8 additionally passed 10 consecutive focused race probes after the snapshot fix. These are isolated local SQLite harness results, not hosted Actions evidence.
 
@@ -227,7 +231,7 @@ The corrections add the receipt column to the race SELECT, configure WAL only if
 
 ### Production evidence boundary
 
-All nine results are **PARTIAL / TEST-HARNESS ONLY**:
+T57.1–T57.9 results are **PARTIAL / TEST-HARNESS ONLY**:
 - The adapter uses two local SQLite files on the same runner and does not qualify the eventual selected ReservationStore or EffectLedger.
 - Its receipt and evidence hashes are not signatures, independent attestations, or trust-root proofs.
 - Its fence is a generation-CAS model; worker authentication, lease expiry and real recovery authority are not qualified.
@@ -240,10 +244,41 @@ Consequently RS-08 has moved from no direct crash-window tests to **PARTIAL test
 The full reviewer regression’s known deterministic duplicate-publication race remains a separate RED and was neither edited nor suppressed.
 
 
-## J. T57 isolated CI reporting — AR-70
+## J. T57 isolated CI reporting — AR-70 (hosted outcome updated by AR-71)
 
 - The verification-only workflow `.github/workflows/9router-reservation-conformance.yml` has a separate `if: always()` step that runs `npm run test:orphan-recovery`.
 - This focused step is independent of the complete `npm test` step and the in-memory reference-oracle step. It is intended to surface T57 results separately when the known duplicate-publication RED causes the full reviewer regression job to fail.
 - Workflow permissions remain `contents: read`; it is restricted to verification-branch pushes/manual dispatch and does not use provider credentials or secrets.
-- No hosted run result for this new step was retrieved. Do not convert local SQLite evidence into a hosted CI claim.
+- At the AR-70 checkpoint, no hosted run result for the new step had been retrieved. The later hosted evidence is recorded in section K / AR-71.
 - This is test-workflow integration only. The reviewer workflow remains disabled and unchanged.
+
+
+## K. T57.10–T57.11 permit-boundary hardening and hosted evidence — AR-71
+
+### Test-first findings
+
+- **T57.10** was added before changing the implementation. On test commit `5c456c60b0583eaca056f2572c03ec0be7084594`, it observed `beginAttempt` return `PERMIT` without any matching durable INTENT. Expected: `LEDGER_NOT_ACKNOWLEDGED`.
+- **T57.11** was added before changing the implementation. On the same test commit, it observed `beginAttempt` return `PERMIT` while a recovery fence was active. Expected: `RECOVERY_FENCED`.
+- Both failures were behavioral assertion failures, not syntax/setup failures. The original duplicate-publication RED was also preserved.
+
+### Corrective implementation
+
+At commit `3ad3aa7bc2f2a9a24fba1117f38596db38e4278e`, the test harness `beginAttempt` now:
+1. reads the exact durable Ledger INTENT and checks complete canonical operation equality;
+2. returns `LEDGER_NOT_ACKNOWLEDGED` or `INTEGRITY_CONFLICT` rather than issuing a permit on absent/mismatched evidence;
+3. inside the same ReservationStore write transaction, checks terminal tombstone first, active recovery fence second, and existing boundary third;
+4. writes a test boundary and permit only after these gates.
+
+Tombstone precedence is deliberate: a terminally aborted attempt reports `ORPHAN_ABORTED`; a non-terminal attempt under a live recovery fence reports `RECOVERY_FENCED`.
+
+### Hosted Actions evidence
+
+- Run: [45583104765 — 9Router Reservation Contract Conformance](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45583104765)
+- Exact head: `3ad3aa7bc2f2a9a24fba1117f38596db38e4278e`
+- Job `conformance`: the focused T57 step completed **11 tests / 11 passed / 0 failed**.
+- Reference-oracle tranche: **56/56 passed**.
+- Full reviewer regression: **203/204 passed**. The sole failure remains the deterministic duplicate-publication test at `review.test.mjs:3587`: observed 2 comment POSTs, expected at most 1. That test and assertion were not changed or suppressed.
+
+### Evidence boundary
+
+The focused run confirms behavior only in the test-only SQLite harness. It does not qualify production cryptographic ACKs, recovery authority, independent storage failure domains, power-loss/restore semantics, provider interlocks, or `runReview()` integration. RS-08 remains **PARTIAL / TEST-HARNESS ONLY / PRODUCTION GAP OPEN**.

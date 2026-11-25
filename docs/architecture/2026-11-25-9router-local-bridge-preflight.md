@@ -28,7 +28,7 @@ Accordingly, the authentication gateway, Cloudflare Quick Tunnel, and remote MCP
 | cloudflared process | Absent at final boundary check |
 | 9Router scheduled task | None observed; only the existing OpenClaw Gateway task was present |
 | 9Router database | Metadata and ACL only; database contents were not read |
-| Secret material | No token, API key, JWT secret, database secret, or credential value was read or emitted |
+| Secret material | No upstream API key, JWT secret, database contents, or provider credential was read or emitted. The local CLI-secret file was read into process memory only for one diagnostic probe; its value was not printed, logged, copied elsewhere, or committed |
 
 The service was started with:
 

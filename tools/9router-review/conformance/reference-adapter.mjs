@@ -30,8 +30,28 @@ function makeReceipt(event) {
   };
 }
 
-export function createReferenceSystem({ now = () => Date.now() } = {}) {
+export function createReferenceSystem({
+  now = () => Date.now(),
+  reservationKeyDigest = keyId => "reference-only:" + keyId,
+} = {}) {
+  if (typeof reservationKeyDigest !== "function") {
+    throw new TypeError("reservationKeyDigest must be a function");
+  }
   const records = new Map();
+  const reservationKeyDigestIndex = new Map();
+
+  function inspectReservationKey(key) {
+    const keyId = canonicalKey(key);
+    const keyDigest = reservationKeyDigest(keyId);
+    if (typeof keyDigest !== "string" || !keyDigest) {
+      throw new TypeError("Invalid reservation key digest");
+    }
+    const indexedKeyId = reservationKeyDigestIndex.get(keyDigest);
+    if (indexedKeyId !== undefined && indexedKeyId !== keyId) {
+      return { status: "INTEGRITY_CONFLICT" };
+    }
+    return { status: "OK", keyId, keyDigest };
+  }
   const intents = new Map();
   const outcomes = new Map();
   const boundaryReceipts = new Map();
@@ -264,8 +284,8 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
     },
   };
 
-  function getRecord(key) {
-    return records.get(canonicalKey(key));
+  function getRecord(keyId) {
+    return records.get(keyId);
   }
 
   function writeRecord(keyId, record) {
@@ -297,7 +317,9 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
   const adapter = {
     async claim(args) {
       if (recoveryMode !== "ACTIVE") return { status: "RECOVERY_LOCKED" };
-      const keyId = canonicalKey(args.key);
+      const identity = inspectReservationKey(args.key);
+      if (identity.status !== "OK") return { status: identity.status };
+      const { keyId, keyDigest } = identity;
       const existing = records.get(keyId);
       if (existing) {
         if (existing.reviewer_policy_digest !== args.policyDigest ||
@@ -356,6 +378,7 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
         updated_at: now(),
       };
       records.set(keyId, record);
+      reservationKeyDigestIndex.set(keyDigest, keyId);
       return { status: "CLAIMED", record: clone(record) };
     },
 
@@ -635,7 +658,9 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
     },
 
     async readAuthoritative({ key }) {
-      const record = getRecord(key);
+      const identity = inspectReservationKey(key);
+      if (identity.status !== "OK") return { status: identity.status };
+      const record = getRecord(identity.keyId);
       return record ? { status: "RECORD", record: clone(record) } : { status: "NOT_FOUND" };
     },
 

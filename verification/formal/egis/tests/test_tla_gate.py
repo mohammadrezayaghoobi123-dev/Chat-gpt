@@ -250,3 +250,39 @@ INVARIANT TypeOK
         result = validate_tlc_output("", ["Safety"], exit_code=None, timed_out=False)
         self.assertEqual("BLOCKED", result["status"])
         self.assertEqual("tlc_process_unavailable", result["reason"])
+
+
+class TlcOutputAdversarialOrderingTests(unittest.TestCase):
+    def test_completion_before_invariant_check_is_not_pass(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        output = """Model checking completed. No error has been found.
+Checking 1 invariant...
+  12 states generated, 8 distinct states found, 0 states left on queue.
+"""
+        self.assertNotEqual("PASS", validate_tlc_output(output, ["Safety"], exit_code=0)["status"])
+
+    def test_state_summary_before_completion_is_not_pass(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        output = """Checking 1 invariant...
+  12 states generated, 8 distinct states found, 0 states left on queue.
+Model checking completed. No error has been found.
+"""
+        self.assertNotEqual("PASS", validate_tlc_output(output, ["Safety"], exit_code=0)["status"])
+
+    def test_empty_or_malformed_invariant_names_are_not_pass(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        output = """Checking 2 invariants...
+Model checking completed. No error has been found.
+  12 states generated, 8 distinct states found, 0 states left on queue.
+"""
+        for inventory in (["Safety", ""], ["Safety", "Bad Name"], ["Safety", None]):
+            with self.subTest(inventory=inventory):
+                self.assertNotEqual("PASS", validate_tlc_output(output, inventory, exit_code=0)["status"])
+
+    def test_oversized_numeric_field_is_fail_closed_not_exception(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        output = ("Checking 1 invariant...\\n"
+                  "Model checking completed. No error has been found.\\n"
+                  "  " + ("9" * 5000) + " states generated, 8 distinct states found, 0 states left on queue.\\n")
+        result = validate_tlc_output(output, ["Safety"], exit_code=0)
+        self.assertNotEqual("PASS", result["status"])

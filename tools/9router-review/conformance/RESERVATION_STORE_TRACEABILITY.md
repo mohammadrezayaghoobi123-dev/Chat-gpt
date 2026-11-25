@@ -332,4 +332,24 @@ The preceding hosted run on `ea16bbb874b7d75dc0d16fb1ce6019aed95c89a5` revealed 
 - Any combination of two storage products reintroduces a cross-store recovery protocol. Every unknown/lost acknowledgement remains fail-closed.
 - No service resources, secrets, deployment, provider selection or production adapter implementation were created or changed in AR-75.
 
+## P. Global lock, ledger sequencing and RPC transaction semantics — AR-75.1
+
+| Requirement | Evidence / counterexample | Status | Required falsification evidence |
+|---|---|---|---|
+| RS-29 One contiguous global EffectLedger sequence/watermark across all reservation keys | R2 conditional create-once arbitrates a single event object key, but does not allocate one global total order across distinct event objects. Independent object creation/listing does not prove contiguous sequence or global watermark | **GAP — SEQUENCER NOT DESIGNED/QUALIFIED** | A linearizable append sequencer; two-key concurrent append; same-ID same-payload replay; same-ID changed-payload conflict; lost PUT ACK; blocked next sequence on ambiguity; frozen complete inventory proving no gaps/duplicates after restart and restore |
+| RS-30 Global recovery gate drains all previously admitted mutations and permits | A global mode read followed by a per-key object write has a TOCTOU race; an already-returned portable permit cannot be assumed revoked by a later lock | **GAP — GLOBAL GATE NOT PROVEN** | Atomic ACTIVE→LOCK_CLOSING; all mutation paths and permit consumption mediated by one authority; settle/record pre-close operations; deny stale/unconsumed permits; retain consumed effects as evidence/UNKNOWN; two-key race and coordinator restart/partition tests |
+| RS-31 Supabase RPC write and isolation semantics | PostgREST selects read-write transaction mode for POST + VOLATILE functions; STABLE/IMMUTABLE calls are read-only. Default PostgreSQL isolation is READ COMMITTED | **DESIGN REQUIREMENT / NOT IMPLEMENTED** | Exact deployed RPC volatility/method/grants; unique constraints, row locks/CAS and multi-row isolation plan; concurrent independent clients; serialization-failure handling; prove no external effect occurs inside SQL transaction |
+
+### P.1 Mandatory coordinator state contract
+
+The coordinator must distinguish `ACTIVE`, `LOCK_CLOSING` and stable `RECOVERY_LOCKED`. A successful `LOCK_CLOSING` commit closes admission immediately. Stable `RECOVERY_LOCKED` is acknowledged only after pre-close local writes have settled and every pre-close consumed external-effect permit is represented in the frozen inventory. Unconsumed permits must be invalid once the gate closes; consumed permits cannot be revoked and must remain potentially effective until positive outcome evidence or `UNKNOWN`. The gate covers all mutation paths, not only model/comment permit issuance.
+
+### P.2 R2 append-order contract
+
+R2 create-only conditional writes establish event-key uniqueness, not global sequence allocation. An authoritative sequencer must serialize the global sequence and high-water mark, and each R2 object must bind that sequence to the immutable event identity and digest. If a preceding PUT acknowledgement is lost, the same object key/payload is reconciled; a negative or incomplete read cannot advance the sequence or authorize another external effect. Later appends remain blocked until the previous sequence is established or the system is quarantined. A complete cross-key inventory must reconcile exactly to the frozen watermark.
+
+### P.3 Supabase RPC contract
+
+Mutating functions must be `VOLATILE`, called through POST, and granted only to the adapter identity. The default `READ COMMITTED` isolation is acceptable only where unique constraints, row locks and conditional state transitions prove the invariant; define and test SERIALIZABLE or a coordinator-row lock for multi-row invariants. Database-internal serialization retry must complete before any network effect; external provider/GitHub work must never be run inside the SQL transaction.
+
 

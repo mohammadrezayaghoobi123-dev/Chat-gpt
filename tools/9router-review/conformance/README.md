@@ -219,4 +219,12 @@ The test asserts final durable state after the terminal outcome, not the transie
 - **Disposition:** no production backend selected. Cloudflare DO+R2 remains test-only candidate after a global-lock topology redesign; Supabase is a transactional alternative but its Free plan is not adequate as sole production authority under current requirements.
 - See `OPERATIONS.md` §12B and `RESERVATION_STORE_TRACEABILITY.md` §O. No provider resources, secrets, deployments or code changes were made.
 
+## AR-75.1 — Global lock and ledger-order hostile refinement
+
+- A global mode check followed by a write in a separate per-key Durable Object is racy. Gate closure must mediate every mutation and permit consumption; stable `RECOVERY_LOCKED` requires settling pre-close transactions and accounting for all already-consumed permits. Unconsumed permits cannot remain portable after closure.
+- R2 `If-None-Match: *` provides create-once semantics for one object key, not a total-order global sequence or contiguous EffectLedger watermark. A linearizable sequencer and lost-PUT-ACK/quarantine protocol remain required.
+- Supabase mutations must use POST to `VOLATILE` RPC functions; default isolation is READ COMMITTED and must be matched to explicit unique constraints, row locks/CAS or stronger isolation for multi-row invariants.
+- Tracking added: RS-29 global ledger sequencer, RS-30 global-lock drain, RS-31 Supabase RPC transaction semantics. All remain open/unqualified.
+- See `OPERATIONS.md` §12B.7 and `RESERVATION_STORE_TRACEABILITY.md` §P. No code, provider selection, account resource, secret or deployment was changed.
+
 

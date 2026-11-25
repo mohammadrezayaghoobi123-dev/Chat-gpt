@@ -1737,4 +1737,48 @@ This is a design gap, not evidence that Durable Objects themselves lack per-obje
 
 **AR-75 final disposition:** backend documentation corrected and adversarially reviewed; no selection; no provider resource or secret; no adapter code; no production qualification. The user's earlier zero-cost/no-card constraint remains a decision criterion, not a verified property of the current account. The next implementation gate remains explicit user approval of a design and a non-production scope.
 
+### 12B.7 AR-75.1 — Global-lock protocol and R2 ordering refinement — 2026-11-25
+
+This refinement is mandatory before any provider spike. It closes ambiguity in §12B.3 and §12B.2; it does not select or implement a backend.
+
+#### A. Global recovery lock must have a linearization and drain protocol
+
+A separate global-control object that only answers `isRecoveryLocked()` is insufficient. A worker can read ACTIVE, pause, then commit a local per-key mutation after the global lock was acknowledged. Likewise, returning a bearer-like permit to a worker and assuming that a later lock revokes it is unsafe.
+
+The candidate protocol must separate gate closure from stable inventory:
+
+1. A single sequencing authority atomically transitions `ACTIVE → LOCK_CLOSING`. The same authority is the mandatory gate for every mutation and every external-effect authorization. Once this transition commits, it rejects new claims, renewals, reconciliations, boundary transitions, ledger writes, completions, recovery mutations, administrative state changes and permit consumptions.
+2. Every accepted mutating operation has an operation ID, fence generation and durable in-flight registration at this authority. The lock coordinator waits for all operations accepted before `LOCK_CLOSING` to either commit/abort or enter an explicit unresolved state. A timeout does not imply absence.
+3. A permit is not a portable authorization token. The caller must consume it through the same sequencing authority immediately before the one transport invocation; permit consumption is single-use and durably binds the full reservation key, stage, attempt ID and generation. A permit not consumed before gate closure cannot be used afterward.
+4. An effect whose permit was already consumed before `LOCK_CLOSING` may still be in flight or may already have reached the remote service. The lock cannot cancel that network operation. It must preserve the attempt boundary and classify the operation as completed with evidence or `UNKNOWN`; it must not erase/recycle the attempt or claim that the external side effect was rolled back.
+5. `RECOVERY_LOCKED` / stable-freeze acknowledgement is returned only after no new mutating operation or permit can be admitted, all pre-close local transactions have settled, every pre-close consumed permit has an explicit durable status, and the freeze watermark is recorded. Any unresolved remote effect remains in the frozen inventory as `UNKNOWN`.
+6. Every path that can mutate state—including less obvious paths such as expiry, abort, reconciliation, outcome append, restore-mode changes, administrative override and maintenance/cleanup—must use the gate. Read-only diagnostic inventory can remain available. If the gate/authority is unavailable or its generation cannot be proven current, all mutations and effects fail closed.
+
+**Adversarial acceptance test:** two independent clients operate on two different keys. Race `LOCK_CLOSING` against each mutator and permit-consumption path. Prove that no mutation accepted after gate closure commits; no unconsumed pre-close permit can be consumed after closure; all already-consumed permits appear in the freeze inventory; and no stale shard can write after stable-freeze acknowledgement. Repeat with lost acknowledgement, coordinator restart, partition, and a worker paused between local read and local write. A mode-read followed by an independent local write must be a deterministic RED control case.
+
+#### B. R2 per-object create-once does not establish global sequence order
+
+R2 `If-None-Match: *` / Workers `onlyIf` is a per-object-key create-once primitive. It does not by itself allocate one contiguous global sequence or a global high-water mark across different event objects. Lexicographic object listing, timestamp order, or eventual worker arrival order must not be substituted for the immutable ordered inventory required by the EffectLedger contract.
+
+If R2 remains the immutable event journal, the design must add and qualify one linearizable global sequencer:
+- allocate one monotonically increasing sequence and immutable event identity for each append;
+- serialize sequence assignment across all reservation keys and stages;
+- bind the sequence, event ID, payload digest and attempt identity into the create-only R2 object;
+- do not advance the externally acknowledged high-water mark until the exact R2 object is positively confirmed;
+- on a lost PUT acknowledgement, reconcile the same object key and exact bytes; a negative read during an in-flight or ambiguous write is not proof of absence and must not authorize a new sequence or a repeated side effect;
+- block/quarantine later appends when the preceding sequence's existence or exact payload is ambiguous, so a gap cannot be silently skipped;
+- prove a complete, ordered, cross-key inventory against the recorded watermark while writes are frozen.
+
+The sequencer is itself a critical consistency authority and a restore target. If a Durable Object implements it, its single-object transaction limit, PITR rewind, failover and independent anchor must be included in the same test. The append-only R2 objects and a separate sequence allocator do not form one atomic transaction; the lost-ack and sequence-gap protocol must be tested rather than assumed.
+
+#### C. Supabase RPC mutation and isolation semantics must be explicit
+
+A Supabase/PostgREST adapter must expose each mutating adapter operation as one HTTP POST to a PostgreSQL function that is `VOLATILE` and therefore runs in a read-write transaction. A `STABLE` or `IMMUTABLE` function is read-only under PostgREST's transaction access-mode selection. The project must test the actual function volatility, HTTP method and grants; using a separate client-side SELECT then UPDATE is not equivalent to one transaction.
+
+PostgreSQL's transaction isolation default is `READ COMMITTED`. This is not automatically a defect: unique constraints, row locks and conditional UPDATE/CAS can provide correct serialization for a narrowly scoped row transition. The design must state which invariants are protected by constraints/locks and where multi-row invariants require stronger isolation (for example, SERIALIZABLE) or a single locked coordinator row. Serialization failures must be surfaced distinctly and retried only inside the database transaction before any external effect; no provider or GitHub request may execute inside the SQL transaction.
+
+Sources: [PostgREST transaction access modes and isolation](https://docs.postgrest.org/en/v14/references/transactions.html), [Supabase database functions/RPC](https://supabase.com/docs/guides/database/functions), [Supabase database connection modes](https://supabase.com/docs/guides/database/connecting-to-postgres).
+
+**AR-75.1 disposition:** global-lock drain semantics and a total-order R2 ledger sequencer are design gates, not implementation facts. Supabase RPC semantics are now specified as a candidate conformance requirement. No backend selected; no resources, credentials, deployment, code, or production workflow changed.
+
 

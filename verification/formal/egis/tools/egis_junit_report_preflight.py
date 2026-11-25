@@ -205,7 +205,7 @@ def _user_ant_library_present(environment: Mapping[str, str]) -> bool:
 
 def _git_blob_sha1(path: Path) -> str:
     content = path.read_bytes()
-    header = f"blob {len(content)}\\0".encode("ascii")
+    header = f"blob {len(content)}\0".encode("ascii")
     return hashlib.sha1(header + content).hexdigest()
 
 

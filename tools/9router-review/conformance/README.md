@@ -140,3 +140,6 @@ The SQLite adapter is explicitly **TEST-ONLY**:
 Therefore, all nine T57 tests are **GREEN ONLY IN THE LOCAL SQLITE CONFORMANCE HARNESS**. The complete RS-08 production requirement remains **GAP / NOT QUALIFIED**. The preserved duplicate-publication race remains a separate known RED in the full reviewer regression; it was not changed by this work.
 
 Hosted Actions status for the push commits was not available from the retrieved workflow/status interface. Do not infer hosted CI success from the isolated executions.
+
+ 
+The existing read-only `.github/workflows/9router-reservation-conformance.yml` now has a dedicated `if: always()` step for `npm run test:orphan-recovery`. This isolates the T57 result from the full reviewer-regression step, whose known duplicate-publication race remains separately RED. The workflow is limited to verification-branch pushes/manual dispatch and uses `contents: read`; it does not enable the reviewer workflow or require provider credentials. A hosted run for the latest commit remains unverified until an Actions result is retrieved.

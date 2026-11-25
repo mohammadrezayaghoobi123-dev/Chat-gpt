@@ -20,14 +20,14 @@ No dependency download or tool installation is performed by the gate.
 
 ## Status semantics
 
-- PASS: source identity and cleanliness pass, tool digest matches, SANY exits zero, TLC exits zero.
-- FAIL: expected commit mismatch, dirty tree, tool digest mismatch, command non-zero, or timeout.
+- PASS: source identity and cleanliness pass, tool digest matches, SANY exits zero, TLC exits zero, and the independent TLC output validator confirms one unambiguous completion summary, the expected invariant-check count, and internally consistent completed state counts.
+- FAIL: expected commit mismatch, dirty tree, tool digest mismatch, command non-zero, timeout, invariant-count mismatch, TLC error/violation marker, or inconsistent state counts.
 - BLOCKED: source metadata, required inputs, tool jar, or executable unavailable; TLC blocked if SANY has not passed.
 - NOT_RUN: initial/unexecuted state only. A status may never be promoted to PASS based on missing evidence.
 
 ## Evidence schema
 
-The JSON evidence contains schema version, UTC timestamp, gate identity, expected source commit, module/config paths and digests, tool path and expected/actual digest, source identity status, command arguments, exit codes, stdout/stderr, per-check statuses, and overall status.
+The JSON evidence contains schema version, UTC timestamp, gate identity, expected source commit, module/config paths and digests, tool path and expected/actual digest, source identity status, command arguments, exit codes, stdout/stderr, per-check statuses, TLC output-validation result, expected invariant inventory, checked invariant count, generated/distinct/queued state counts, and overall status.
 
 Evidence is written to a temporary file in the target directory and then replaced atomically. This does not establish artifact authenticity or tamper resistance after creation.
 
@@ -56,7 +56,7 @@ From repository root:
 PYTHONPATH=verification/formal/egis/tools python -m unittest discover -s verification/formal/egis/tests -p 'test_tla_gate.py' -v
 ```
 
-The suite mocks subprocess tool execution; it verifies gate control flow, not real SANY/TLC behavior.
+The suite mocks subprocess tool execution and tests synthetic TLC output fixtures; it verifies gate control flow and parser rejection conditions, not real SANY/TLC behavior. The parser is intentionally version-sensitive and must be validated against an independently acquired output fixture from the pinned TLC release before operational reliance.
 
 ## Current verification status
 
@@ -66,4 +66,4 @@ The suite mocks subprocess tool execution; it verifies gate control flow, not re
 - SANY: NOT_RUN.
 - TLC: NOT_RUN.
 - Mutations/differential tests: NOT_RUN.
-- Evidence attestation: NOT_IMPLEMENTED.
+- Evidence attestation: NOT_IMPLEMENTED.\n- Real TLC output fixture compatibility: NOT_ESTABLISHED.\n- Validator checks invariant count from the configured inventory; it does not independently recover each invariant name from TLC output.

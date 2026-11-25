@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from egis_tla_gate import _rooted_path, run_command, run_gate
 
@@ -53,13 +53,141 @@ class GateTests(unittest.TestCase):
 
     def test_timeout_bytes_are_normalized_and_json_serializable(self):
         from subprocess import TimeoutExpired
-        with patch("egis_tla_gate.subprocess.run",
-                   side_effect=TimeoutExpired(["java"], 1, output=b"partial\\xff", stderr=b"timed out")):
+        process = Mock()
+        process.returncode = -9
+        process.poll.return_value = -9
+        process.communicate.side_effect = [
+            TimeoutExpired(["java"], 1, output=b"partial\\xff", stderr=b"timed out"),
+        ]
+        process.wait.return_value = -9
+        with patch("egis_tla_gate.subprocess.Popen", return_value=process):
             result = run_command(["java"], self.root, 1)
         self.assertEqual("FAIL", result["status"])
+        self.assertEqual("process_timed_out", result["reason"])
+        self.assertEqual("communicate", result["phase"])
+        self.assertTrue(result["process_started"])
+        self.assertEqual("TIMED_OUT", result["process_outcome"])
+        self.assertEqual("REAPED", result["process_cleanup"])
         self.assertIn("partial", result["stdout"])
         self.assertEqual("timed out", result["stderr"])
+        process.kill.assert_called_once()
         json.dumps(result)
+
+    def _mock_process(self, returncode=0):
+        process = Mock()
+        process.returncode = returncode
+        process.poll.return_value = returncode
+        process.wait.return_value = returncode
+        process.communicate.return_value = (b"", b"")
+        return process
+
+    def test_missing_executable_has_structured_blocked_result(self):
+        error = FileNotFoundError(2, "not found", "/private/tool/java")
+        with patch("egis_tla_gate.subprocess.Popen", side_effect=error):
+            result = run_command(["/private/tool/java"], self.root, 1)
+        self.assertEqual("BLOCKED", result["status"])
+        self.assertEqual("process_executable_missing", result["reason"])
+        self.assertEqual("spawn", result["phase"])
+        self.assertEqual("FileNotFoundError", result["error_type"])
+        self.assertEqual(2, result["errno"])
+        self.assertFalse(result["process_started"])
+        self.assertEqual("NOT_STARTED", result["process_outcome"])
+        self.assertEqual("NOT_STARTED", result["process_cleanup"])
+        self.assertNotIn("/private/tool/java", result["stderr"])
+        json.dumps(result)
+
+    def test_permission_error_at_process_start_is_blocked_and_redacted(self):
+        error = PermissionError(13, "permission denied", "/private/secret/java")
+        with patch("egis_tla_gate.subprocess.Popen", side_effect=error):
+            result = run_command(["/private/secret/java"], self.root, 1)
+        self.assertEqual("BLOCKED", result["status"])
+        self.assertEqual("process_start_unavailable", result["reason"])
+        self.assertEqual("spawn", result["phase"])
+        self.assertEqual("PermissionError", result["error_type"])
+        self.assertEqual(13, result["errno"])
+        self.assertFalse(result["process_started"])
+        self.assertEqual("NOT_STARTED", result["process_outcome"])
+        self.assertNotIn("/private/secret/java", result["stderr"])
+        json.dumps(result)
+
+    def test_generic_oserror_without_errno_at_process_start_is_blocked(self):
+        error = OSError("simulated process creation failure")
+        with patch("egis_tla_gate.subprocess.Popen", side_effect=error):
+            result = run_command(["java"], self.root, 1)
+        self.assertEqual("BLOCKED", result["status"])
+        self.assertEqual("process_start_unavailable", result["reason"])
+        self.assertEqual("OSError", result["error_type"])
+        self.assertIsNone(result["errno"])
+        self.assertFalse(result["process_started"])
+        self.assertEqual("NOT_STARTED", result["process_outcome"])
+        json.dumps(result)
+
+    def test_communication_oserror_after_spawn_is_blocked_with_unknown_outcome(self):
+        import errno
+
+        process = self._mock_process(returncode=-9)
+        process.communicate.side_effect = OSError(errno.EIO, "pipe failed", "/private/pipe")
+        with patch("egis_tla_gate.subprocess.Popen", return_value=process):
+            result = run_command(["java"], self.root, 1)
+        self.assertEqual("BLOCKED", result["status"])
+        self.assertEqual("process_result_unavailable", result["reason"])
+        self.assertEqual("communicate", result["phase"])
+        self.assertTrue(result["process_started"])
+        self.assertEqual("UNKNOWN", result["process_outcome"])
+        self.assertEqual("REAPED", result["process_cleanup"])
+        self.assertNotIn("/private/pipe", result["stderr"])
+        process.kill.assert_called_once()
+        process.wait.assert_called_once()
+        json.dumps(result)
+
+    def test_communication_error_with_unconfirmed_reap_remains_unknown(self):
+        from subprocess import TimeoutExpired
+
+        process = self._mock_process(returncode=None)
+        process.communicate.side_effect = OSError("pipe failure")
+        process.wait.side_effect = TimeoutExpired(["java"], 5)
+        process.poll.return_value = None
+        with patch("egis_tla_gate.subprocess.Popen", return_value=process):
+            result = run_command(["java"], self.root, 1)
+        self.assertEqual("BLOCKED", result["status"])
+        self.assertTrue(result["process_started"])
+        self.assertEqual("UNKNOWN", result["process_outcome"])
+        self.assertEqual("UNKNOWN", result["process_cleanup"])
+        process.kill.assert_called_once()
+        json.dumps(result)
+
+    def test_started_process_nonzero_exit_remains_fail(self):
+        process = self._mock_process(returncode=7)
+        process.communicate.return_value = (b"", b"tool failure")
+        with patch("egis_tla_gate.subprocess.Popen", return_value=process):
+            result = run_command(["java"], self.root, 1)
+        self.assertEqual("FAIL", result["status"])
+        self.assertEqual(7, result["exit_code"])
+        self.assertEqual("process_nonzero_exit", result["reason"])
+        self.assertTrue(result["process_started"])
+        self.assertEqual("EXIT_NONZERO", result["process_outcome"])
+        self.assertEqual("REAPED", result["process_cleanup"])
+
+    def test_started_process_success_is_pass_and_json_serializable(self):
+        process = self._mock_process(returncode=0)
+        process.communicate.return_value = (b"stdout", b"stderr")
+        with patch("egis_tla_gate.subprocess.Popen", return_value=process):
+            result = run_command(["java"], self.root, 1)
+        self.assertEqual("PASS", result["status"])
+        self.assertEqual(0, result["exit_code"])
+        self.assertEqual("stdout", result["stdout"])
+        self.assertEqual("stderr", result["stderr"])
+        self.assertTrue(result["process_started"])
+        self.assertEqual("EXIT_ZERO", result["process_outcome"])
+        self.assertEqual("REAPED", result["process_cleanup"])
+        json.dumps(result)
+
+    def test_process_control_and_programming_exceptions_are_not_swallowed(self):
+        for exception in (KeyboardInterrupt(), SystemExit(9), RuntimeError("bug")):
+            with self.subTest(exception=type(exception).__name__):
+                with patch("egis_tla_gate.subprocess.Popen", side_effect=exception):
+                    with self.assertRaises(type(exception)):
+                        run_command(["java"], self.root, 1)
 
     def test_hash_mismatch_fails_before_tools(self):
         with patch("egis_tla_gate.git_identity", return_value=self.identity):

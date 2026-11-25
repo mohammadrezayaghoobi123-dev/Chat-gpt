@@ -61,7 +61,10 @@ class GateTests(unittest.TestCase):
                       "Model checking completed. No error has been found.\\n"
                       "  12 states generated, 8 distinct states found, 0 states left on queue.\\n")
         return {"status": "PASS", "exit_code": 0, "stdout": output,
-                "stderr": "", "command": list(command)}
+                "stderr": "", "command": list(command),
+                "reason": None, "phase": None, "error_type": None, "errno": None,
+                "process_started": True, "process_outcome": "EXIT_ZERO",
+                "process_cleanup": "REAPED"}
 
     def test_relative_inputs_are_anchored_to_root(self):
         self.assertEqual(self.jar.resolve(), _rooted_path(self.root, Path("tools.jar")))
@@ -345,6 +348,7 @@ class GateTests(unittest.TestCase):
             **self.command_result(status="PASS", process_outcome="EXIT_ZERO",
                                   process_started=True, exit_code=0),
             "stdout": self.commit + "\\n",
+            "process_cleanup": "REAPED",
         }
         blocked = self.command_result(
             status="BLOCKED", process_outcome="UNKNOWN",
@@ -411,7 +415,7 @@ class GateTests(unittest.TestCase):
         )
         with patch("egis_tla_gate.git_identity", return_value=self.identity):
             with patch("egis_tla_gate.run_command", side_effect=[sany, tlc]) as mocked:
-                with patch("egis_tla_gate.validate_tlc_output") as validator:
+                with patch("egis_tla_gate.validate_tlc_output", return_value={"status": "BLOCKED", "reason": "unexpected_validator_call"}) as validator:
                     result = run_gate(**self.args())
         self.assertEqual("BLOCKED", result["overall"])
         self.assertEqual("BLOCKED", result["checks"]["tlc_output_validation"]["status"])

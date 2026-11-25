@@ -7,7 +7,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "test:orphan-recovery": "node --test conformance/orphan-intent-recovery.test.mjs conformance/orphan-intent-terminal-abort.test.mjs"
   },
   "dependencies": {
     "marked": "17.0.1"

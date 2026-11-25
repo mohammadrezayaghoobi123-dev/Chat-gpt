@@ -115,12 +115,17 @@ def run_gate(root: Path, jar: Path, expected_sha256: str,
     identity = git_identity(root)
     evidence["checks"]["source_identity"] = identity
     if identity["status"] != "PASS" or identity["commit"] != expected_commit:
-        evidence["checks"]["source_identity"]["status"] = (
-            "FAIL" if identity["status"] == "FAIL" else "BLOCKED"
-        )
-        evidence["checks"]["source_identity"]["reason"] = (
-            "dirty_checkout_or_commit_mismatch"
-        )
+        if identity["status"] == "FAIL":
+            source_status = "FAIL"
+            source_reason = "dirty_checkout"
+        elif identity["status"] != "PASS":
+            source_status = "BLOCKED"
+            source_reason = "git_metadata_unavailable"
+        else:
+            source_status = "FAIL"
+            source_reason = "expected_commit_mismatch"
+        evidence["checks"]["source_identity"]["status"] = source_status
+        evidence["checks"]["source_identity"]["reason"] = source_reason
         evidence["overall"] = evidence["checks"]["source_identity"]["status"]
         atomic_write_json(output, evidence)
         return evidence

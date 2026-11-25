@@ -142,6 +142,7 @@ Do not substitute a mirror, a different release, SHA-1, an unpinned latest tag, 
 | FMH-082 | High | Publisher digest and locally downloaded bytes share a publisher trust root; matching hashes are not independent publisher authenticity. | Open; seek independent signed checksum/provenance or trusted third-party attestation before production approval. |
 | FMH-083 | Medium | PowerShell command transcript and host identity are not automatically sealed or signed by this runbook. | Open; capture and attest evidence separately. |
 | FMH-084 | High | Java executable discovery alone does not establish vendor provenance or runtime integrity. | Open; capture vendor, full build, binary digest, and trusted distribution provenance. |
+| FMH-085 | High | A release tag reference could move between pre-download validation and post-download validation. | Fixed in procedure: compare tag-ref object SHA and type before and after acquisition; annotated-tag ambiguity remains a stop condition. |
 
 ## 7. Current execution status
 

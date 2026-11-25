@@ -72,10 +72,11 @@ The suite mocks subprocess tool execution and tests synthetic TLC output fixture
 
 ## Current verification status
 
-- Adversarial test head `5bc69380cb9a023082b065c0aa7ffa2a96fce26f`: compileall PASS; 29 tests executed, 7 failed because the first hardening patch over-escaped regex literals. This failure was observed and remediated.
-- Corrected parser implementation: code commit `74cb93dc07ad89401eedace6f26e9821c57c0824`.
-- Exact reviewed head `4dea7d73481ec2fd0980f6e936f27c7b3a75a259`: CI run `45553850715`, compileall PASS; 29/29 tests PASS.
-- Exact-head Gitleaks run `45553843545`: PR-diff PASS; full-history scan FAIL with 13 unclassified findings across 5,200 commits.
+- Prior hardening code head `4dea7d73481ec2fd0980f6e936f27c7b3a75a259`: CI run `45553850715`, compileall PASS; 29/29 tests PASS.
+- A new hostile test for a 5,000-digit invariant count was added in test-only commit `dcb117b16802b3935cce5bd40e81201784ed4a76`; CI run `45553960384` ran 30 tests and exposed one uncaught integer-conversion error.
+- The parser fix is in code commit `03567ec7121fd9a4274da959c82fcef3f09898c2`; it catches oversized invariant-count conversion and returns FAIL.
+- Exact post-fix CI for code commit `03567ec7121fd9a4274da959c82fcef3f09898c2`: NOT_YET_OBSERVED.
+- Gitleaks run `45553843545` on preceding code head: PR-diff PASS; full-history FAIL with 13 unclassified findings across 5,200 commits.
 - TLA+ tool availability: NOT_ESTABLISHED.
 - SANY: NOT_RUN.
 - TLC: NOT_RUN.
@@ -86,7 +87,7 @@ The suite mocks subprocess tool execution and tests synthetic TLC output fixture
 
 ## Promotion decision
 
-**NOT READY FOR MERGE OR PROMOTION.** The gate remains NOT_VERIFIED until real SANY/TLC execution succeeds with an independently pinned tool, real output compatibility is established, and evidence integrity is independently addressed.
+**NOT READY FOR MERGE OR PROMOTION.** The gate remains NOT_VERIFIED until post-fix CI passes, real SANY/TLC execution succeeds with an independently pinned tool, real output compatibility is established, and evidence integrity is independently addressed.
 
 ## Safety boundary
 

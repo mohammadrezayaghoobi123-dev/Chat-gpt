@@ -23,8 +23,8 @@ No dependency download or tool installation is performed by the gate.
 
 - PASS: source identity and cleanliness pass, tool digest matches, SANY exits zero, TLC exits zero, and the independent TLC output validator confirms one unambiguous completion summary, the expected invariant-check count, internally consistent completed state counts, and the required marker order.
 - FAIL: expected commit mismatch, dirty tree, tool digest mismatch, command non-zero, timeout, invariant-count mismatch, TLC error/violation marker, invalid numeric fields, or inconsistent state counts.
-- BLOCKED: source metadata, required inputs, tool jar, or executable unavailable; TLC blocked if SANY has not passed; malformed/ambiguous evidence without a confirmed violation. A command may have gate status BLOCKED with process_outcome UNKNOWN if the child started but complete output/exit status could not be captured. This must not be interpreted as NOT_STARTED, PASS, or model FAIL.
-- NOT_RUN: initial/unexecuted state only. A status may never be promoted to PASS based on missing evidence.
+- BLOCKED: source metadata, required inputs, tool jar, or executable unavailable; TLC blocked if SANY has not passed; malformed/ambiguous evidence without a confirmed violation. A command may have gate status BLOCKED with process_outcome UNKNOWN if the child started but complete output/exit status could not be captured. This must not be interpreted as NOT_STARTED, PASS, or model FAIL. Git source identity records contain sanitized `commands.rev_parse` and `commands.status` lifecycle summaries. The status command is NOT_RUN if `rev_parse` did not complete successfully. If `rev_parse` completes but status cannot be obtained, the known commit is retained while source identity remains BLOCKED.
+- NOT_RUN: an execution/validation stage was not invoked because its required predecessor result was unavailable or failed. A status may never be promoted to PASS based on missing evidence.
 
 ## TLC output validation
 
@@ -71,7 +71,7 @@ From repository root:
 PYTHONPATH=verification/formal/egis/tools python -m unittest discover -s verification/formal/egis/tests -p 'test_tla_gate.py' -v
 ```
 
-The suite mocks Popen process execution and tests synthetic TLC output fixtures; it verifies process lifecycle classification, gate control flow and parser rejection conditions, not real SANY/TLC behavior.
+The suite mocks Popen process execution and tests synthetic TLC output fixtures; it verifies process lifecycle classification, gate control flow and parser rejection conditions, not real SANY/TLC behavior. The gate invokes the TLC output validator only when TLC has a complete PASS process result (`process_started=true`, `process_outcome=EXIT_ZERO`, `process_cleanup=REAPED`). A TLC BLOCKED/UNKNOWN result leaves validation NOT_RUN; a process that never started leaves validation BLOCKED; a TLC FAIL leaves validation NOT_RUN and overall FAIL.
 
 ## Current verification status
 

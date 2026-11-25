@@ -209,16 +209,78 @@ def run_command(command: Sequence[str], cwd: Path, timeout: int) -> dict:
     )
 
 
+def _command_evidence(command_result: dict) -> dict:
+    """Retain lifecycle/status metadata without copying command output."""
+    fields = (
+        "status", "exit_code", "reason", "phase", "error_type", "errno",
+        "process_started", "process_outcome", "process_cleanup", "command",
+    )
+    return {field: command_result.get(field) for field in fields}
+
+
+def _command_completed_successfully(command_result: dict) -> bool:
+    return (
+        command_result.get("status") == "PASS"
+        and command_result.get("exit_code") == 0
+        and command_result.get("process_started") is True
+        and command_result.get("process_outcome") == "EXIT_ZERO"
+        and command_result.get("process_cleanup") == "REAPED"
+    )
+
+
+def _not_started_command_result(command: Sequence[str], reason: str) -> dict:
+    return _command_result(
+        command, status="BLOCKED", exit_code=None, stdout="", stderr="",
+        reason=reason, phase=None, error=None, process_started=False,
+        process_outcome="NOT_STARTED", process_cleanup="NOT_STARTED",
+    )
+
+
 def git_identity(root: Path) -> dict:
-    commit = run_command(["git", "rev-parse", "HEAD"], root, 10)
-    dirty = run_command(["git", "status", "--porcelain"], root, 10)
-    if commit["status"] != "PASS" or dirty["status"] != "PASS":
-        return {"status": "BLOCKED", "reason": "git_metadata_unavailable",
-                "commit": None, "dirty": None}
+    rev_parse_command = ["git", "rev-parse", "HEAD"]
+    status_command = ["git", "status", "--porcelain"]
+    commit = run_command(rev_parse_command, root, 10)
+    commands = {"rev_parse": _command_evidence(commit)}
+
+    if not _command_completed_successfully(commit):
+        commands["status"] = {
+            "status": "NOT_RUN",
+            "exit_code": None,
+            "reason": "rev_parse_not_passed",
+            "phase": None,
+            "error_type": None,
+            "errno": None,
+            "process_started": False,
+            "process_outcome": "NOT_STARTED",
+            "process_cleanup": "NOT_STARTED",
+            "command": status_command,
+        }
+        return {
+            "status": "BLOCKED",
+            "reason": "git_metadata_unavailable",
+            "commit": None,
+            "dirty": None,
+            "commands": commands,
+        }
+
+    dirty = run_command(status_command, root, 10)
+    commands["status"] = _command_evidence(dirty)
+    if not _command_completed_successfully(dirty):
+        return {
+            "status": "BLOCKED",
+            "reason": "git_metadata_unavailable",
+            "commit": commit["stdout"].strip(),
+            "dirty": None,
+            "commands": commands,
+        }
+
+    is_dirty = bool(dirty["stdout"].strip())
     return {
-        "status": "PASS" if not dirty["stdout"].strip() else "FAIL",
+        "status": "FAIL" if is_dirty else "PASS",
+        "reason": "dirty_checkout" if is_dirty else None,
         "commit": commit["stdout"].strip(),
-        "dirty": bool(dirty["stdout"].strip()),
+        "dirty": is_dirty,
+        "commands": commands,
     }
 
 
@@ -299,40 +361,60 @@ def run_gate(root: Path, jar: Path, expected_sha256: str,
     evidence["checks"]["tool_integrity"] = {"status": "PASS"}
     java = os.environ.get("JAVA", "java")
     sany_cmd = [java, "-cp", str(jar), "tla2sany.SANY", str(module)]
-    sany = run_command(sany_cmd, root, timeout)
-    evidence["checks"]["sany"] = sany
-
-    if sany["status"] != "PASS":
-        evidence["checks"]["tlc"] = {
-            "status": "BLOCKED", "reason": "SANY_not_passed"
-        }
-        evidence["overall"] = sany["status"]
-        atomic_write_json(output, evidence)
-        return evidence
-
     tlc_cmd = [
         java, "-cp", str(jar), "tlc2.TLC",
         "-config", str(config), "-workers", "1", "-deadlock",
         str(module),
     ]
+
+    sany = run_command(sany_cmd, root, timeout)
+    evidence["checks"]["sany"] = sany
+    if not _command_completed_successfully(sany):
+        evidence["checks"]["tlc"] = _not_started_command_result(
+            tlc_cmd, "SANY_not_passed"
+        )
+        evidence["overall"] = "FAIL" if sany.get("status") == "FAIL" else "BLOCKED"
+        atomic_write_json(output, evidence)
+        return evidence
+
     tlc = run_command(tlc_cmd, root, timeout)
     evidence["checks"]["tlc"] = tlc
+    if not _command_completed_successfully(tlc):
+        if tlc.get("status") == "FAIL":
+            evidence["checks"]["tlc_output_validation"] = {
+                "status": "NOT_RUN", "reason": "tlc_execution_failed"
+            }
+            evidence["overall"] = "FAIL"
+        elif (tlc.get("status") == "BLOCKED"
+              and tlc.get("process_outcome") == "NOT_STARTED"):
+            evidence["checks"]["tlc_output_validation"] = {
+                "status": "BLOCKED", "reason": "tlc_not_started"
+            }
+            evidence["overall"] = "BLOCKED"
+        else:
+            evidence["checks"]["tlc_output_validation"] = {
+                "status": "NOT_RUN", "reason": "tlc_result_unavailable"
+            }
+            evidence["overall"] = "BLOCKED"
+        atomic_write_json(output, evidence)
+        return evidence
+
     expected_invariants = invariants_from_config(config.read_text(encoding="utf-8"))
     evidence["checks"]["tlc_output_validation"] = validate_tlc_output(
         tlc.get("stdout", "") + "\n" + tlc.get("stderr", ""),
         expected_invariants,
         tlc.get("exit_code"),
-        timed_out=(tlc.get("exit_code") is None and tlc.get("status") == "FAIL"),
+        timed_out=False,
     )
 
-    statuses = [evidence["checks"]["source_identity"]["status"],
-                evidence["checks"]["tool_integrity"]["status"],
-                evidence["checks"]["sany"]["status"],
-                evidence["checks"]["tlc"]["status"],
-                evidence["checks"]["tlc_output_validation"]["status"]]
-    evidence["overall"] = "PASS" if all(s == "PASS" for s in statuses) else (
-        "BLOCKED" if "BLOCKED" in statuses else "FAIL"
-    )
+    validation_status = evidence["checks"]["tlc_output_validation"]["status"]
+    if validation_status == "PASS":
+        evidence["overall"] = "PASS"
+    elif validation_status == "FAIL":
+        evidence["overall"] = "FAIL"
+    else:
+        evidence["overall"] = "BLOCKED"
+
     atomic_write_json(output, evidence)
     return evidence
 

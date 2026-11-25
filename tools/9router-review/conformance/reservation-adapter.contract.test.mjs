@@ -1087,3 +1087,96 @@ test("T48: outcome cannot be appended before the authoritative attempt boundary 
   assert.equal(after.events.length, before.events.length);
   assert.equal(after.watermark, before.watermark);
 });
+
+
+test("T49: outcome requires an exact non-transferable committed attempt-boundary receipt", async () => {
+  const system = makeSystem();
+  const started = await modelAttempt(system);
+  assert.equal(started.permit.status, "MODEL_PERMIT");
+  const receipt = started.permit.attemptBoundaryReceipt;
+  assert.ok(receipt, "beginModelAttempt must return a committed boundary receipt");
+
+  const mutations = [
+    { reservation_key: JSON.stringify([1398846698, 463, "a".repeat(40), "b".repeat(40)]) },
+    { stage: "COMMENT" },
+    { attempt_id: "different-attempt" },
+    { request_digest: "different-request" },
+    { generation: started.claimed.record.generation + 1 },
+    { committed_record_version: started.permit.record_version + 1 },
+  ];
+
+  for (const mutation of mutations) {
+    const before = await system.ledger.readComplete({ key: KEY });
+    const rejected = await system.ledger.appendOutcome({
+      attemptId: started.attemptId,
+      outcomeType: "MODEL_RESULT_STORED",
+      evidenceDigest: "model-result-digest",
+      evidenceReference: "encrypted-result://model-attempt-1",
+      attemptBoundaryReceipt: { ...receipt, ...mutation },
+    });
+    assert.equal(rejected.status, "INVALID_ATTEMPT_BOUNDARY_RECEIPT");
+    const after = await system.ledger.readComplete({ key: KEY });
+    assert.equal(after.events.length, before.events.length);
+    assert.equal(after.watermark, before.watermark);
+  }
+
+  const accepted = await system.ledger.appendOutcome({
+    attemptId: started.attemptId,
+    outcomeType: "MODEL_RESULT_STORED",
+    evidenceDigest: "model-result-digest",
+    evidenceReference: "encrypted-result://model-attempt-1",
+    attemptBoundaryReceipt: receipt,
+  });
+  assert.equal(accepted.status, "ACK");
+});
+
+test("T50: a lost boundary acknowledgement recovers the same durable receipt without issuing another permit", async () => {
+  const system = makeSystem();
+  const claimed = await claim(system);
+  assert.equal(claimed.status, "CLAIMED");
+  const attemptId = "lost-boundary-ack-model";
+  const requestDigest = "lost-boundary-request";
+  const intent = await system.ledger.appendIntent({
+    key: KEY,
+    stage: "MODEL",
+    attemptId,
+    requestDigest,
+  });
+  assert.equal(intent.status, "ACK");
+
+  // The authoritative transition commits, but its response is deliberately discarded.
+  const committed = await system.adapter.beginModelAttempt({
+    ...claimArgs(),
+    generation: claimed.record.generation,
+    expectedRecordVersion: claimed.record.record_version,
+    attemptId,
+    requestDigest,
+    effectLedgerReceipt: intent,
+    attemptTimeoutMs: 100,
+  });
+  assert.equal(committed.status, "MODEL_PERMIT");
+
+  const recovered = await system.adapter.readAttemptBoundaryReceipt({
+    key: KEY,
+    stage: "MODEL",
+    attemptId,
+  });
+  assert.equal(recovered.status, "ACK");
+  assert.deepEqual(recovered.receipt, committed.attemptBoundaryReceipt);
+
+  const repeated = await system.adapter.beginModelAttempt({
+    ...claimArgs(),
+    generation: claimed.record.generation,
+    expectedRecordVersion: claimed.record.record_version,
+    attemptId,
+    requestDigest,
+    effectLedgerReceipt: intent,
+    attemptTimeoutMs: 100,
+  });
+  assert.equal(repeated.status, "ALREADY_CONSUMED");
+
+  const authoritative = await system.adapter.readAuthoritative({ key: KEY });
+  assert.equal(authoritative.record.state, "MODEL_ATTEMPTED");
+  assert.equal(authoritative.record.model_attempt_id, attemptId);
+  assert.equal(authoritative.record.record_version, committed.record_version);
+});

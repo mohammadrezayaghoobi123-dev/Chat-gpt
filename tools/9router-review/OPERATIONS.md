@@ -1182,3 +1182,15 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - **Verification status:** this was a source-level hostile review. No code or tests were executed in this review step. The exact latest branch revision's hosted push run remains **NOT_VERIFIED** through the connected workflow-run retrieval surface. AR-41–AR-43 are **IDENTIFIED / OPEN**, not fixed. No GREEN claim is made.
 - **Required next TDD sequence:** first add/adjust focused tests for helper receipt propagation and COMMENT-stage receipt binding; observe the expected RED; implement the smallest reference-oracle behavior; then run T48–T50, T01–T50, and the full reviewer regression. Preserve the original duplicate-publication concurrency RED unchanged.
 - No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.
+
+
+#### 2026-11-25 T51 COMMENT-stage receipt test authored — execution pending
+
+- Test commit: `c77996aa267887aaa667dc184ed4b593e649cd9f`.
+- Added T51 to `reservation-adapter.contract.test.mjs`. It requires `beginCommentAttempt` to return a boundary receipt; mutates stage, attempt ID, request digest, reservation key digest, generation, committed record version, boundary event ID, purpose, and signature; requires every invalid receipt to be rejected without changing ledger event count or watermark; tests replay of the receipt against a distinct COMMENT INTENT; and accepts the exact receipt.
+- This test is **AUTHORED / NOT_EXECUTED**. No local or hosted RED/GREEN result is claimed. The current adapter is known not to return `attemptBoundaryReceipt` from `beginCommentAttempt`, so the expected first failure is the explicit receipt-presence assertion, but this prediction is not execution evidence.
+- **Hostile review — helper dependency:** T51 uses `commentAttempt()`, which first calls `completeModel()`. That helper currently appends a MODEL OUTCOME without passing a boundary receipt. Once T48 enforcement is implemented, this setup path must be migrated to propagate the exact MODEL receipt; otherwise T51 will fail before reaching COMMENT assertions. This is part of AR-41 and must not be worked around by making receipt validation optional.
+- **Hostile review — scope:** T51 covers COMMENT receipt mutation and cross-INTENT replay, but does not yet test MODEL-receipt-to-COMMENT-INTENT replay. Add that cross-stage/cross-INTENT case before claiming complete AR-42 coverage. T51's positive append validates ledger admission only; it does not simulate or authorize a GitHub POST.
+- **No adapter implementation changed.** No tests were run. T48–T51 remain open; T01–T47 helper compatibility remains unresolved. Preserve the original duplicate-publication concurrency RED unchanged.
+- Latest known branch update for this test is `c77996aa267887aaa667dc184ed4b593e649cd9f`; this is not yet the documentation checkpoint commit. Exact hosted push execution remains **NOT_VERIFIED**.
+- No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.

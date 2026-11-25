@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Fail-closed EGIS formal verification gate.
 
-This gate reports tool execution status, not implementation conformance.
-It never downloads tools and requires a caller-supplied SHA-256 pin for the TLA+
-tool jar. Results are written atomically as JSON evidence.
+The gate requires a clean Git checkout at an expected commit and a SHA-256-pinned
+TLA+ tools jar. It never downloads tools. It records source/tool/input digests
+and atomically writes JSON evidence. It verifies formal-model artifacts only;
+it does not establish implementation conformance.
 """
 
 from __future__ import annotations
@@ -14,12 +15,9 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 from datetime import datetime, timezone
 from typing import Sequence
-
-STATUS = {"PASS", "FAIL", "NOT_RUN", "BLOCKED"}
 
 
 def sha256_file(path: Path) -> str:
@@ -62,26 +60,56 @@ def run_command(command: Sequence[str], cwd: Path, timeout: int) -> dict:
     }
 
 
+def git_identity(root: Path) -> dict:
+    commit = run_command(["git", "rev-parse", "HEAD"], root, 10)
+    dirty = run_command(["git", "status", "--porcelain"], root, 10)
+    if commit["status"] != "PASS" or dirty["status"] != "PASS":
+        return {"status": "BLOCKED", "reason": "git_metadata_unavailable",
+                "commit": None, "dirty": None}
+    return {
+        "status": "PASS" if not dirty["stdout"].strip() else "FAIL",
+        "commit": commit["stdout"].strip(),
+        "dirty": bool(dirty["stdout"].strip()),
+    }
+
+
 def run_gate(root: Path, jar: Path, expected_sha256: str,
-             module: Path, config: Path, output: Path,
-             timeout: int = 300) -> dict:
+             expected_commit: str, module: Path, config: Path,
+             output: Path, timeout: int = 300) -> dict:
     root = root.resolve()
     jar = jar.resolve()
     module = module.resolve()
     config = config.resolve()
     evidence = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "gate": "EGIS-TLA-VERIFICATION-GATE",
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "scope": {
+            "expected_commit": expected_commit,
             "module": str(module),
+            "module_sha256": None,
             "config": str(config),
+            "config_sha256": None,
             "tool_jar": str(jar),
             "tool_sha256_expected": expected_sha256.lower(),
+            "tool_sha256_actual": None,
         },
         "checks": {},
         "overall": "NOT_RUN",
     }
+
+    identity = git_identity(root)
+    evidence["checks"]["source_identity"] = identity
+    if identity["status"] != "PASS" or identity["commit"] != expected_commit:
+        evidence["checks"]["source_identity"]["status"] = (
+            "FAIL" if identity["status"] == "FAIL" else "BLOCKED"
+        )
+        evidence["checks"]["source_identity"]["reason"] = (
+            "dirty_checkout_or_commit_mismatch"
+        )
+        evidence["overall"] = evidence["checks"]["source_identity"]["status"]
+        atomic_write_json(output, evidence)
+        return evidence
 
     required = [module, config]
     if not all(path.is_file() for path in required):
@@ -93,6 +121,8 @@ def run_gate(root: Path, jar: Path, expected_sha256: str,
         atomic_write_json(output, evidence)
         return evidence
 
+    evidence["scope"]["module_sha256"] = sha256_file(module)
+    evidence["scope"]["config_sha256"] = sha256_file(config)
     if not jar.is_file():
         evidence["checks"]["tool"] = {
             "status": "BLOCKED", "reason": "tool_jar_missing"
@@ -103,7 +133,7 @@ def run_gate(root: Path, jar: Path, expected_sha256: str,
 
     actual_sha = sha256_file(jar)
     evidence["scope"]["tool_sha256_actual"] = actual_sha
-    if not expected_sha256 or actual_sha.lower() != expected_sha256.lower():
+    if len(expected_sha256) != 64 or actual_sha.lower() != expected_sha256.lower():
         evidence["checks"]["tool_integrity"] = {
             "status": "FAIL", "reason": "sha256_pin_missing_or_mismatch"
         }
@@ -133,7 +163,8 @@ def run_gate(root: Path, jar: Path, expected_sha256: str,
     tlc = run_command(tlc_cmd, root, timeout)
     evidence["checks"]["tlc"] = tlc
 
-    statuses = [evidence["checks"]["tool_integrity"]["status"],
+    statuses = [evidence["checks"]["source_identity"]["status"],
+                evidence["checks"]["tool_integrity"]["status"],
                 evidence["checks"]["sany"]["status"],
                 evidence["checks"]["tlc"]["status"]]
     evidence["overall"] = "PASS" if all(s == "PASS" for s in statuses) else (
@@ -148,13 +179,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--jar", type=Path, required=True)
     parser.add_argument("--sha256", required=True)
+    parser.add_argument("--expected-commit", required=True)
     parser.add_argument("--module", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=300)
     args = parser.parse_args(argv)
-    result = run_gate(args.root, args.jar, args.sha256, args.module,
-                      args.config, args.output, args.timeout)
+    result = run_gate(args.root, args.jar, args.sha256, args.expected_commit,
+                      args.module, args.config, args.output, args.timeout)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["overall"] == "PASS" else 2
 

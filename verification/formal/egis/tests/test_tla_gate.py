@@ -175,7 +175,7 @@ class GateTests(unittest.TestCase):
 
     def test_started_process_success_is_pass_and_json_serializable(self):
         process = self._mock_process(returncode=0)
-        process.communicate.return_value = (b"stdout", b"stderr")
+        process.communicate.return_value = ("stdout", "stderr")
         with patch("egis_tla_gate.subprocess.Popen", return_value=process):
             result = run_command(["java"], self.root, 1)
         self.assertEqual("PASS", result["status"])

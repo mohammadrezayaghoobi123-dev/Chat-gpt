@@ -214,7 +214,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                 check=False,
             )
         self.assertEqual(result.returncode, 0)
-        self.assertIn("finding=absent", result.stdout)
+        self.assertIn(f"DIAGNOSTIC: {description}: finding=absent", result.stdout)
 
 
     def test_validator_rejects_non_literal_line_pattern(self):

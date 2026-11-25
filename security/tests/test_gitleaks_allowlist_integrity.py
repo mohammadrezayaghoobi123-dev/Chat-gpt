@@ -236,7 +236,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
             ("Historical Owner command idempotency fixture line 397 (5a750037).", "5a750037bc1bec098184b7890f66b407582b94d8", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 397),
             ("Historical Owner command idempotency fixture line 516 (5a750037).", "5a750037bc1bec098184b7890f66b407582b94d8", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 516),
             ("Historical Owner command idempotency fixture line 516 (b12a3e06).", "b12a3e068c8cba44039cf478f174814fc1d8f6b5", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 516),
-            ("Historical Router rotation test fixture line 1805 (ab525a63).", "ab525a63948822e195cc74f63c3a6b4340f705db", "tools/9router-review/review.test.mjs", 1805),
+            ("Synthetic Router previous-marker key in historical rotation test line 1805 (ab525a63).", "ab525a63948822e195cc74f63c3a6b4340f705db", "tools/9router-review/review.test.mjs", 1805),
             ("Public ICU signing metadata line 32 (3082b80f).", "3082b80fbaf71685827ba63de882c3d93083b96f", "docs/MASTER_BRAIN_GATE2P_R1U17_ICU79_SIGNING_IDENTITY_CANDIDATE_RECONCILIATION_2026-11-16.md", 32),
             ("Public ICU signing metadata line 70 (3082b80f).", "3082b80fbaf71685827ba63de882c3d93083b96f", "docs/MASTER_BRAIN_GATE2P_R1U17_ICU79_SIGNING_IDENTITY_CANDIDATE_RECONCILIATION_2026-11-16.md", 70),
             ("Historical Owner command idempotency fixture line 1904 (0222e99d).", "0222e99d941ded0910ae4252f66b9dfb1dd39025", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 1904),

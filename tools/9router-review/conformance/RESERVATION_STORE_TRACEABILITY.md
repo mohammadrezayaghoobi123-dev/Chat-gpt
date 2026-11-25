@@ -194,3 +194,17 @@ Decision record: [ADR-001](ADR-001-ORPHAN-INTENT-TERMINAL-ABORT.md). Status: **A
 - This policy does not authorize resume/retry of the same attempt ID, provider dispatch, or GitHub publication.
 - T57 is staged as: durable INTENT + process death/reopen; terminal tombstone + ledger event; crash between stores; two-process fencing; incomplete-read quarantine and late-permit rejection; repeated restart and exact-head regression.
 - The durable implementation, independent-process evidence, and full T57 acceptance run are pending. RS-08 remains **GAP**; no production backend is qualified.
+
+
+## I. T57 staged execution ledger — AR-68
+
+| Stage | Required assertion | Evidence | Status |
+| --- | --- | --- | --- |
+| T57.1 | Durable INTENT acknowledgement survives writer process termination; a separate process reopens both SQLite files and finds the exact event; no boundary row exists | Byte-identical test blob `eb55f2ab523611711d30da96223c0427f59985c6`; isolated Node.js v22.16.0 execution, 1/1 pass | **PASS — harness probe only** |
+| T57.2 | ReservationStore terminal tombstone plus final EffectLedger event; exact attempt can no longer receive a permit | Not implemented | NOT EXECUTED |
+| T57.3 | Crash after tombstone commit and before ledger terminal append; next process converges idempotently | Not implemented | NOT EXECUTED |
+| T57.4 | Two independent recovery processes; stale fence rejected before mutation | Not implemented | NOT EXECUTED |
+| T57.5 | Incomplete/unavailable read causes quarantine with no tombstone or ledger mutation; late begin is denied after terminal abort | Not implemented | NOT EXECUTED |
+| T57.6 | Second restart preserves one tombstone, one terminal event, same operation identity, monotonic watermarks, and no external effect | Not implemented | NOT EXECUTED |
+
+**Stage-1 limitation:** this probe tests the Node.js SQLite persistence/reopen substrate directly; it is not an implementation of the ReservationStore or EffectLedger interfaces. T57 as a whole remains **GAP** until stages 2–6 and the complete regression are independently verified.

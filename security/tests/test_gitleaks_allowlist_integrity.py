@@ -312,8 +312,13 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                 end_index = next(
                     (
                         index for index in range(start_index, len(lines))
-                        if lines[index].startswith("  ")
-                        and not lines[index].startswith("    ")
+                        if (
+                            (
+                                lines[index].startswith("  ")
+                                and not lines[index].startswith("    ")
+                            )
+                            or not lines[index].startswith(" ")
+                        )
                         and lines[index].endswith(":")
                     ),
                     len(lines),

@@ -2,18 +2,17 @@ name: Gitleaks Allowlist Integrity
 
 on:
   pull_request:
-    branches: [main]
     paths:
       - ".gitleaks.toml"
       - "security/**"
       - ".github/workflows/gitleaks-allowlist-integrity.yml"
+      - ".github/workflows/secret-history-scan.yml"
   push:
-    branches:
-      - "security/gitleaks-allowlist-*"
     paths:
       - ".gitleaks.toml"
       - "security/**"
       - ".github/workflows/gitleaks-allowlist-integrity.yml"
+      - ".github/workflows/secret-history-scan.yml"
 
 permissions:
   contents: read

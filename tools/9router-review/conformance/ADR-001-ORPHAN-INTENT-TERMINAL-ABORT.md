@@ -62,7 +62,7 @@ ReservationStore:
 - acquireRecoveryFence(operation_id, expected_generation, owner)
 - abortOrphanAttempt(operation, absence_evidence, intent_ack, fence)
 - readOrphanAbort(operation_id)
-- beginAttempt MUST reject an operation ID already covered by a terminal orphan-abort tombstone.
+- beginAttempt MUST reject an operation ID already covered by a terminal orphan-abort tombstone. It MUST also verify the exact matching durable INTENT before issuing a permit, and atomically reject starts while a recovery fence is active (`RECOVERY_FENCED`). Tombstone precedence is stronger: a terminally aborted attempt returns `ORPHAN_ABORTED` regardless of fence state.
 
 EffectLedger:
 - readIntent(operation_id)

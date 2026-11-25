@@ -1249,7 +1249,7 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - T06's earlier negative `completeModelAttempt` call (`wrongAttempt`, null ledger receipt) remains unchanged and occurs before the instrumented successful append.
 - T52 continues to exercise the shared helper and therefore now checks the receipt propagation introduced here. No receipt fallback or synthesized capability was added.
 - **Status:** AUTHORED / NOT_EXECUTED. The reference adapter still does not issue `attemptBoundaryReceipt`; no RED/GREEN execution is claimed. T06/T52 and the full tranche remain NOT VERIFIED.
-- **Hostile review:** inspected the exact commit diff. It changes only the shared helper's successful outcome arguments and T06's successful outcome path/assertions. The negative wrong-attempt check is preserved. Remaining risks: T13 COMMENT, T44 MODEL recovery-lock, and T45 COMMENT recovery-lock successful outcomes still require exact receipt propagation; adapter receipt issuance/verification and durable recovery are still absent.
+- **Hostile review:** inspected the exact commit diff. It changes only the shared helper's successful outcome arguments and T06's successful outcome path/assertions. The negative wrong-attempt check is preserved. At the time of AR-47, T13/T44/T45 were still unmigrated. T13 was migrated in AR-48 and T44/T45 in AR-49. Adapter receipt issuance/verification and durable recovery remain absent.
 - AR-41–AR-47 remain OPEN. Preserve T46/T47 stage-mismatch negatives, T48 missing-boundary negative, T49/T51 replay and mutation cases, and the original duplicate-publication concurrency RED.
 - No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.
 
@@ -1261,8 +1261,8 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - The preceding negative completion attempt with `effectLedgerReceipt: null` and its `LEDGER_NOT_ACKNOWLEDGED` assertion are preserved unchanged and occur before the successful append.
 - The helper path obtains its COMMENT permit only after `completeModel()` and `resumeCompletedModel()`, so this test exercises the real prerequisite sequence without synthesizing a receipt.
 - **Status:** AUTHORED / NOT_EXECUTED. The current reference adapter still does not issue boundary receipts. No RED/GREEN result is claimed; T13 and dependent tests remain NOT VERIFIED.
-- **Hostile review:** inspected the exact commit diff. Only T13's successful outcome path and receipt-forwarding assertions changed; the negative no-outcome path and final publication checks remain intact. T13 now covers the COMMENT helper path, while T45's separate recovery-lock COMMENT outcome remains unmigrated.
-- AR-41–AR-48 remain OPEN. Remaining successful callers: T44 MODEL recovery-lock and T45 COMMENT recovery-lock. Preserve all negative/replay tests and the original duplicate-publication concurrency RED.
+- **Hostile review:** inspected the exact commit diff. Only T13's successful outcome path and receipt-forwarding assertions changed; the negative no-outcome path and final publication checks remain intact. T13 covers the COMMENT helper path. T45's separate recovery-lock COMMENT outcome was subsequently migrated under AR-49.
+- AR-41–AR-49 remain OPEN pending execution and adapter work. T44/T45 were subsequently migrated under AR-49. Preserve all negative/replay tests and the original duplicate-publication concurrency RED.
 - No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.
 #### 2026-11-25 Recovery-lock receipt propagation — AR-49
 

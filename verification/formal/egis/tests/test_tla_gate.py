@@ -21,7 +21,7 @@ class GateTests(unittest.TestCase):
         self.module = self.root / "model.tla"
         self.module.write_text("---- MODULE Model ----\\n", encoding="utf-8")
         self.config = self.root / "model.cfg"
-        self.config.write_text("SPECIFICATION Spec\\n", encoding="utf-8")
+        self.config.write_text("SPECIFICATION Spec\nINVARIANT Safety\n", encoding="utf-8")
         self.output = self.root / "evidence.json"
         self.pin = hashlib.sha256(self.jar.read_bytes()).hexdigest()
         self.commit = "a" * 40
@@ -38,7 +38,12 @@ class GateTests(unittest.TestCase):
         return values
 
     def mock_pass(self, command, cwd, timeout):
-        return {"status": "PASS", "exit_code": 0, "stdout": "OK",
+        output = "OK"
+        if "tlc2.TLC" in command:
+            output = ("Checking 1 invariant...\\n"
+                      "Model checking completed. No error has been found.\\n"
+                      "  12 states generated, 8 distinct states found, 0 states left on queue.\\n")
+        return {"status": "PASS", "exit_code": 0, "stdout": output,
                 "stderr": "", "command": list(command)}
 
     def test_relative_inputs_are_anchored_to_root(self):

@@ -192,18 +192,14 @@ def diagnose_report(report: list[dict], config: dict) -> list[str]:
             source_line = _source_fixture_line(pathlib.Path.cwd(), expected_commit, expected_path) or ""
             source_match = FIXTURE_LINE.fullmatch(source_line)
             source_key = source_match.group(1) if source_match else ""
-            first_half = source_key[: len(source_key) // 2]
             finding_secret = finding.get("Secret") or ""
             finding_match = finding.get("Match") or ""
             try:
                 decoded_marker = bytes.fromhex(source_key).decode("ascii")
             except (ValueError, UnicodeDecodeError):
                 decoded_marker = ""
-            finding_secret = finding.get("Secret") or ""
-            finding_match = finding.get("Match") or ""
             secret_matches_decoded = finding_secret == decoded_marker
             match_matches_decoded = finding_match == f'key = "{decoded_marker}"'
-            redacted = target == "REDACTED" or "REDACTED" in finding_match
             redacted = target == "REDACTED" or "REDACTED" in finding_match
             regex_match = None if redacted else any(
                 re.search(pattern, target) is not None
@@ -223,7 +219,6 @@ def diagnose_report(report: list[dict], config: dict) -> list[str]:
                 f"secret_length={len(finding_secret)} match_length={len(finding_match)} "
                 f"line_length={len(finding.get('Line') or '')} "
                 f"secret_decoded={secret_matches_decoded} match_decoded={match_matches_decoded}"
-                f"match_full={match_matches_full} match_first_half={match_matches_first_half}"
             )
     return diagnostics
 

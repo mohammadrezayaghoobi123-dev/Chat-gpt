@@ -5,6 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { openSqliteOrphanRecoveryHarness } from "./sqlite-orphan-recovery-adapter.mjs";
 
 const workerPath = join(dirname(fileURLToPath(import.meta.url)), "orphan-intent-recovery-worker.mjs");
 const operation = {
@@ -261,6 +262,66 @@ test("T57.8: independent attempt-start and orphan-abort transactions serialize t
     }
     assert.equal(final.snapshot.external_effects, 0);
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("T57.9: forged tombstone acknowledgements and same-ID tuple or payload conflicts fail closed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "9router-t57-hostile-binding-"));
+  const stores = openSqliteOrphanRecoveryHarness({
+    ledgerPath: join(root, "effect-ledger.sqlite"),
+    reservationPath: join(root, "reservation-store.sqlite"),
+  });
+  try {
+    const intent = stores.ledger.appendIntent(operation);
+    assert.equal(intent.status, "ACK");
+    const absence = stores.reservations.readAttemptBoundary(operation);
+    assert.equal(absence.status, "DEFINITIVELY_NOT_COMMITTED");
+    const fence = stores.reservations.acquireRecoveryFence({
+      operationId: operation.operation_id,
+      expectedGeneration: 0,
+      owner: "hostile-binding-test",
+    });
+    assert.equal(fence.status, "ACK");
+
+    const tombstone = stores.reservations.abortOrphanAttempt({
+      operation,
+      intentAck: intent,
+      absenceEvidence: absence,
+      fence,
+    });
+    assert.equal(tombstone.status, "ACK");
+
+    const forgedTombstone = { ...tombstone, payload_digest: "0".repeat(64) };
+    const rejectedEvent = stores.ledger.appendOrphanIntentAborted(
+      operation.operation_id,
+      forgedTombstone,
+      absence,
+    );
+    assert.equal(rejectedEvent.status, "TOMBSTONE_NOT_VERIFIED");
+    assert.equal(stores.ledger.readRecoveryHistory(operation.operation_id).events.length, 1);
+
+    const changedTuple = {
+      ...operation,
+      reservation_key: { ...operation.reservation_key, base_sha: "c".repeat(40) },
+    };
+    assert.equal(stores.reservations.beginAttempt(changedTuple).status, "INTEGRITY_CONFLICT");
+    assert.equal(stores.ledger.appendIntent({ ...operation, request_digest: "sha256:other-request" }).status, "INTEGRITY_CONFLICT");
+
+    const acceptedEvent = stores.ledger.appendOrphanIntentAborted(
+      operation.operation_id,
+      tombstone,
+      absence,
+    );
+    assert.equal(acceptedEvent.status, "ACK");
+    const history = stores.ledger.readRecoveryHistory(operation.operation_id);
+    assert.equal(history.events.filter(event => event.event_type === "ORPHAN_INTENT_ABORTED").length, 1);
+    const snapshot = stores.reservations.snapshot(operation.operation_id);
+    assert.equal(snapshot.tombstones, 1);
+    assert.equal(snapshot.permits, 0);
+    assert.equal(snapshot.boundaries, 0);
+  } finally {
+    stores.close();
     await rm(root, { recursive: true, force: true });
   }
 });

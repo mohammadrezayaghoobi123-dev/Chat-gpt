@@ -47,8 +47,14 @@ def validate_tlc_output(
         "queued_states": None,
     }
 
-    if timed_out or exit_code is None or exit_code != 0:
-        result.update(status="FAIL", reason="tlc_process_not_successful")
+    if timed_out:
+        result.update(status="FAIL", reason="tlc_execution_timed_out")
+        return result
+    if exit_code is None:
+        result.update(status="BLOCKED", reason="tlc_process_unavailable")
+        return result
+    if exit_code != 0:
+        result.update(status="FAIL", reason="tlc_process_nonzero_exit")
         return result
     if not expected or len(set(expected)) != len(expected):
         result["reason"] = "expected_invariant_inventory_missing_or_duplicate"

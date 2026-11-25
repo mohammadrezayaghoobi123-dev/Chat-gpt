@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import copy
 import json
 import pathlib
@@ -82,10 +83,14 @@ def _escape_re2_literal(value: str) -> str:
     return "".join("\\" + char if char in meta else char for char in value)
 def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
     errors: list[str] = []
+    if not isinstance(config, Mapping):
+        return ["configuration must be a TOML table"]
     allowlists = config.get("allowlists", [])
     if not isinstance(allowlists, list) or len(allowlists) != EXPECTED_ALLOWLIST_COUNT:
         errors.append("allowlist count changed; new exceptions require explicit review")
         return errors
+    if any(not isinstance(entry, Mapping) for entry in allowlists):
+        return ["allowlists entries must be TOML tables"]
 
     baseline_result = subprocess.run(
         ["git", "show", "origin/main:.gitleaks.toml"],
@@ -102,7 +107,16 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
     except tomllib.TOMLDecodeError:
         errors.append("trusted origin/main Gitleaks baseline is invalid TOML")
         return errors
+    if not isinstance(baseline_config, Mapping):
+        errors.append("trusted origin/main Gitleaks baseline must be a TOML table")
+        return errors
     baseline_allowlists = baseline_config.get("allowlists", [])
+    if not isinstance(baseline_allowlists, list):
+        errors.append("trusted origin/main allowlists must be an array")
+        return errors
+    if any(not isinstance(entry, Mapping) for entry in baseline_allowlists):
+        errors.append("baseline allowlists entries must be TOML tables")
+        return errors
     baseline_legacy = [
         entry for entry in baseline_allowlists
         if entry.get("description") not in EXPECTED_FIXTURES
@@ -341,13 +355,20 @@ def diagnose_report(report: list[dict], config: dict) -> list[str]:
 
 def build_necessity_config(config: dict) -> dict:
     """Remove only the 13 newly-added line exceptions for necessity testing."""
+    if not isinstance(config, Mapping):
+        raise ValueError("necessity config must be a TOML table")
+    allowlists = config.get("allowlists", [])
+    if not isinstance(allowlists, list):
+        raise ValueError("necessity config allowlists must be an array")
+    if any(not isinstance(entry, Mapping) for entry in allowlists):
+        raise ValueError("allowlists entries must be TOML tables")
     reduced = copy.deepcopy(config)
-    allowlists = reduced.get("allowlists", [])
+    reduced_allowlists = reduced.get("allowlists", [])
     reduced["allowlists"] = [
-        entry for entry in allowlists
+        entry for entry in reduced_allowlists
         if entry.get("description") not in EXPECTED_LINE_EXCEPTIONS
     ]
-    if len(allowlists) - len(reduced["allowlists"]) != 13:
+    if len(reduced_allowlists) - len(reduced["allowlists"]) != 13:
         raise ValueError("necessity config must remove exactly 13 pinned line exceptions")
     if len(reduced["allowlists"]) != 17:
         raise ValueError("necessity config must retain 15 baseline entries and 2 synthetic fixtures")

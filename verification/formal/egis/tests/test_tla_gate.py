@@ -238,6 +238,9 @@ Model checking completed. No error has been found.
 
     def test_config_inventory_is_extracted_without_guessing(self):
         from egis_tlc_output_validator import invariants_from_config
-        self.assertEqual(["Safety", "TypeOK"],
-                         invariants_from_config("SPECIFICATION Spec\\nINVARIANT Safety\\nINVARIANT TypeOK\\n"))
-        self.assertEqual([], invariants_from_config("SPECIFICATION Spec\\n"))
+        config = """SPECIFICATION Spec
+INVARIANT Safety
+INVARIANT TypeOK
+"""
+        self.assertEqual(["Safety", "TypeOK"], invariants_from_config(config))
+        self.assertEqual([], invariants_from_config("SPECIFICATION Spec"))

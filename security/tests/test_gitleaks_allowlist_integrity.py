@@ -85,10 +85,10 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                 self.assertEqual(entries[description]["regexTarget"], "secret")
                 pattern = re.compile(entries[description]["regexes"][0])
                 key = fixture.group(1)
-                finding_match = f'key = "{key}"'
-                self.assertIsNotNone(pattern.fullmatch(finding_match))
-                mutated = ("0" if key[0] != "0" else "1") + key[1:]
-                self.assertIsNone(pattern.fullmatch(f'key = "{mutated}"'))
+                marker = bytes.fromhex(key).decode("ascii")
+                self.assertIsNotNone(pattern.fullmatch(marker))
+                mutated = ("0" if marker[0] != "0" else "1") + marker[1:]
+                self.assertIsNone(pattern.fullmatch(mutated))
 
 
     def test_report_diagnostics_explain_allowlist_predicates_without_secrets(self):

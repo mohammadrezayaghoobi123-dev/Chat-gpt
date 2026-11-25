@@ -1097,15 +1097,19 @@ test("T49: outcome requires an exact non-transferable committed attempt-boundary
   assert.ok(receipt, "beginModelAttempt must return a committed boundary receipt");
 
   const mutations = [
-    { reservation_key: JSON.stringify([1398846698, 463, "a".repeat(40), "b".repeat(40)]) },
+    { reservation_key_digest: "sha256:" + "f".repeat(64) },
+    { receipt_schema_version: (receipt.receipt_schema_version || 1) + 1 },
+    { protocol_version: "unsupported-protocol" },
+    { authority_id: "untrusted-authority" },
+    { signing_key_id: "untrusted-signing-key" },
     { stage: "COMMENT" },
     { attempt_id: "different-attempt" },
     { request_digest: "different-request" },
     { generation: started.claimed.record.generation + 1 },
     { committed_record_version: started.permit.record_version + 1 },
     { boundary_event_id: "forged-boundary-event" },
-    { schema_version: (receipt.schema_version || 1) + 1 },
-    { authority_id: "untrusted-authority" },
+    { issued_at: (receipt.issued_at || 0) + 1 },
+    { purpose: "different-purpose" },
     { signature: "forged-signature" },
   ];
 
@@ -1132,6 +1136,30 @@ test("T49: outcome requires an exact non-transferable committed attempt-boundary
     attemptBoundaryReceipt: receipt,
   });
   assert.equal(accepted.status, "ACK");
+
+  const foreignKey = {
+    ...KEY,
+    repository_id: KEY.repository_id + 1,
+  };
+  const foreignIntent = await system.ledger.appendIntent({
+    key: foreignKey,
+    stage: "MODEL",
+    attemptId: "foreign-key-attempt",
+    requestDigest: "model-request-digest",
+  });
+  assert.equal(foreignIntent.status, "ACK");
+  const crossKeyReplay = await system.ledger.appendOutcome({
+    attemptId: "foreign-key-attempt",
+    outcomeType: "MODEL_RESULT_STORED",
+    evidenceDigest: "foreign-model-result",
+    evidenceReference: "encrypted-result://foreign-key",
+    attemptBoundaryReceipt: receipt,
+  });
+  assert.equal(crossKeyReplay.status, "INVALID_ATTEMPT_BOUNDARY_RECEIPT");
+
+  const crossKeyInventory = await system.ledger.readComplete({ key: foreignKey });
+  assert.equal(crossKeyInventory.events.length, 1);
+  assert.equal(crossKeyInventory.events[0].kind, "INTENT");
 });
 
 test("T50: a lost boundary acknowledgement recovers the same durable receipt without issuing another permit", async () => {

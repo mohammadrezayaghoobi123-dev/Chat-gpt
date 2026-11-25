@@ -103,6 +103,8 @@ This invokes the two T57 test files on Node.js 22. The default `npm test` also d
 | T57.7 | Second independent reopen preserves one tombstone, one final event, stable IDs and ledger watermark | PASS in isolated harness |
 | T57.8 | Independent processes race attempt start against orphan abort; exactly one terminal outcome exists | PASS in isolated harness after read-snapshot correction |
 | T57.9 | Forged tombstone ACK and same-ID tuple/request conflicts fail closed | PASS in isolated harness |
+| T57.10 | No attempt permit is issued without an exact matching durable Ledger INTENT | PASS in hosted focused suite |
+| T57.11 | An active recovery fence blocks new attempt-start until terminal disposition or recovery takeover | PASS in hosted focused suite |
 
 ### RED → GREEN evidence for T57.8
 
@@ -117,7 +119,7 @@ Corrections:
 - WAL is configured only when a database is not already in WAL mode, with busy timeout set before mode inspection;
 - `readAttemptBoundary` reads boundary and side-effect counters within one SQLite read transaction; recovery-history events and watermark are also read from one snapshot.
 
-The failure was retained as observed test evidence; no assertion was removed or weakened. After correction, T57.8 passed 10 consecutive isolated race probes. The complete T57.1–T57.9 suite then passed **three consecutive runs**, each **9 tests / 9 passed / 0 failed** on Node.js `v22.16.0`. Syntax checks for the four T57 source files also exited successfully.
+The failure was retained as observed test evidence; no assertion was removed or weakened. After correction, T57.8 passed 10 consecutive isolated race probes. The T57.1–T57.9 suite previously passed **three consecutive runs**, each **9 tests / 9 passed / 0 failed** on Node.js `v22.16.0`. T57.10 and T57.11 were then added test-first; both failed on the initial implementation because `beginAttempt` returned `PERMIT` without INTENT and while a recovery fence was active. Syntax checks for the four T57 source files also exited successfully.
 
 ### Exact source identities
 
@@ -143,3 +145,37 @@ Hosted Actions status for the push commits was not available from the retrieved 
 
  
 The existing read-only `.github/workflows/9router-reservation-conformance.yml` now has a dedicated `if: always()` step for `npm run test:orphan-recovery`. This isolates the T57 result from the full reviewer-regression step, whose known duplicate-publication race remains separately RED. The workflow is limited to verification-branch pushes/manual dispatch and uses `contents: read`; it does not enable the reviewer workflow or require provider credentials. A hosted run for the latest commit remains unverified until an Actions result is retrieved.
+
+ 
+## T57.10–T57.11 RED→GREEN and hosted verification — AR-71
+
+### Newly discovered permit-boundary defects
+
+The test-first additions exposed two unsafe behaviors:
+- T57.10 observed `beginAttempt` return `PERMIT` despite no durable EffectLedger INTENT for the exact operation.
+- T57.11 observed `beginAttempt` return `PERMIT` while a recovery fence was already committed for the operation.
+
+The expected outcomes were `LEDGER_NOT_ACKNOWLEDGED` and `RECOVERY_FENCED`, respectively. Both RED results were observed in GitHub Actions on commit `5c456c60b0583eaca056f2572c03ec0be7084594`; focused suite: **9 passed / 2 failed**. The unchanged full regression additionally retained the existing duplicate-publication failure.
+
+### Corrective implementation
+
+`beginAttempt` now:
+1. reads the durable INTENT from the test EffectLedger and requires exact canonical operation equality before proceeding;
+2. fails closed on missing or integrity-conflicted INTENT;
+3. in the same ReservationStore `BEGIN IMMEDIATE` transaction, checks terminal tombstone first, then active recovery fence, then existing boundary;
+4. only then writes the attempt boundary and permit rows.
+
+The tombstone retains precedence so an already-aborted attempt returns `ORPHAN_ABORTED`, not the weaker temporary `RECOVERY_FENCED`.
+
+### Hosted verification
+
+- Corrective commit: `3ad3aa7bc2f2a9a24fba1117f38596db38e4278e`
+- GitHub Actions run: [45583104765](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45583104765)
+- Job: `conformance`; isolated T57 step: **11 tests / 11 passed / 0 failed**.
+- Reference-oracle tranche: **56/56 passed**.
+- Full reviewer regression: **203/204 passed**; the sole failure remains `deterministic concurrent duplicate-publication red test`, which observed 2 POSTs where the invariant permits at most 1. It was not changed or suppressed.
+- Expected Node.js experimental `node:sqlite` warning was emitted; the focused suite itself completed successfully.
+
+### Evidence classification
+
+T57.10 and T57.11 are behavioral evidence for the SQLite test harness only. They do not qualify production ReservationStore/EffectLedger APIs, signatures, independent trust roots, external provider interlocks, backup/restore, or reviewer integration. RS-08 remains **PARTIAL / TEST-HARNESS ONLY / PRODUCTION GAP OPEN**.

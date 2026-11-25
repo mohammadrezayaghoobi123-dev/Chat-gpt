@@ -24,7 +24,7 @@ Requirements:
 
 ## 2. Required abstract interface
 
-The production adapter exposes typed operations. All writes are idempotent by operation ID and exact request digest. Repeating an operation ID with identical canonical input returns the original result; reusing it with different input returns `INTEGRITY_CONFLICT`.
+The production adapter exposes typed operations. All writes are idempotent by operation ID and exact canonical request digest. Repeating an operation ID with identical canonical input returns the original result; reusing it with different input returns `INTEGRITY_CONFLICT`.
 
 ```ts
 type Stage = "MODEL" | "COMMENT";
@@ -42,12 +42,57 @@ type OwnerFence = {
   recordVersion: number;
 };
 
+type ReservationState =
+  | "UNCLAIMED" | "CLAIMED" | "MODEL_ATTEMPTED" | "MODEL_COMPLETED"
+  | "COMMENT_ATTEMPTED" | "PUBLISHED" | "UNKNOWN" | "EXPIRED"
+  | "ABORTED" | "CLOSED_NO_PUBLISH" | "DUPLICATE_ACCEPTED";
+
+type ReservationRecord = {
+  key: ReservationKey;
+  keyDigest: string;
+  state: ReservationState;
+  generation: number;
+  recordVersion: number;
+  ownerId: string | null;
+  leaseExpiresAt: string | null; // backend-authoritative UTC
+  policyDigest: string;
+  runtimeDigest: string;
+  modelAttemptId: string | null;
+  commentAttemptId: string | null;
+  modelBoundaryReceipt: AttemptBoundaryReceipt | null;
+  commentBoundaryReceipt: AttemptBoundaryReceipt | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type EffectLedgerIntentAck = {
+  attemptId: string;
+  stage: Stage;
+  reservationKeyDigest: string;
+  requestDigest: string;
+  eventId: string;
+  durableWatermark: string;
+  acknowledgementDigest: string;
+};
+
+type EffectLedgerOutcomeAck = {
+  attemptId: string;
+  stage: Stage;
+  reservationKeyDigest: string;
+  boundaryReceiptDigest: string;
+  outcomeDigest: string;
+  durableWatermark: string;
+  acknowledgementDigest: string;
+};
+
 type StoreResult<T> =
   | { status: "ACK"; value: T }
   | { status: "ALREADY_CONSUMED"; value?: T }
   | { status: "BUSY"; retryAfter?: string }
+  | { status: "FENCED" }
+  | { status: "INTEGRITY_CONFLICT"; reason: string }
+  | { status: "INVALID_TRANSITION"; reason: string }
   | { status: "NOT_FOUND" }
-  | { status: "CONFLICT"; reason: string }
   | { status: "UNKNOWN"; reason: string }
   | { status: "RECOVERY_LOCKED" };
 
@@ -61,8 +106,9 @@ interface ReservationStore {
     requestedLeaseMs: number;
   }): Promise<StoreResult<{
     fence: OwnerFence;
-    leaseExpiresAt: string; // authoritative server time, canonical UTC
-    state: ReservationState;
+    leaseExpiresAt: string;
+    state: "CLAIMED";
+    recordVersion: number;
   }>>;
 
   renew(input: {
@@ -71,11 +117,10 @@ interface ReservationStore {
     fence: OwnerFence;
     expectedRecordVersion: number;
     requestedLeaseMs: number;
-  }): Promise<StoreResult<{ fence: OwnerFence; leaseExpiresAt: string }>>;
+  }): Promise<StoreResult<{ fence: OwnerFence; leaseExpiresAt: string; recordVersion: number }>>;
 
-  beginAttempt(input: {
+  beginModelAttempt(input: {
     key: ReservationKey;
-    stage: Stage;
     operationId: string;
     attemptId: string;
     requestDigest: string;
@@ -88,24 +133,100 @@ interface ReservationStore {
     committedRecordVersion: number;
   }>>;
 
+  beginCommentAttempt(input: {
+    key: ReservationKey;
+    operationId: string;
+    attemptId: string;
+    requestDigest: string;
+    fence: OwnerFence;
+    expectedRecordVersion: number;
+    modelAttemptId: string;
+    effectLedgerIntentAck: EffectLedgerIntentAck;
+    exactSnapshotValidationDigest: string;
+  }): Promise<StoreResult<{
+    fence: OwnerFence;
+    attemptBoundaryReceipt: AttemptBoundaryReceipt;
+    committedRecordVersion: number;
+  }>>;
+
   readAttemptBoundaryReceipt(input: {
     key: ReservationKey;
     stage: Stage;
     attemptId: string;
   }): Promise<StoreResult<{ attemptBoundaryReceipt: AttemptBoundaryReceipt }>>;
 
-  transition(input: {
+  completeModelAttempt(input: {
     key: ReservationKey;
     operationId: string;
-    transition: "MODEL_COMPLETED" | "PUBLISHED" | "UNKNOWN" |
-      "EXPIRED" | "ABORTED" | "CLOSED_NO_PUBLISH" | "DUPLICATE_ACCEPTED";
-    stage?: Stage;
-    attemptId?: string;
-    evidenceDigest?: string;
-    evidenceReference?: string;
-    fence?: OwnerFence;
+    attemptId: string;
+    fence: OwnerFence;
     expectedRecordVersion: number;
-  }): Promise<StoreResult<{ fence?: OwnerFence; recordVersion: number; state: ReservationState }>>;
+    attemptBoundaryReceipt: AttemptBoundaryReceipt;
+    effectLedgerOutcomeAck: EffectLedgerOutcomeAck;
+    modelEvidenceDigest: string;
+    evidenceReference: string;
+  }): Promise<StoreResult<{ fence: OwnerFence; recordVersion: number; state: "MODEL_COMPLETED" }>>;
+
+  completeCommentAttempt(input: {
+    key: ReservationKey;
+    operationId: string;
+    attemptId: string;
+    fence: OwnerFence;
+    expectedRecordVersion: number;
+    attemptBoundaryReceipt: AttemptBoundaryReceipt;
+    effectLedgerOutcomeAck: EffectLedgerOutcomeAck;
+    publicationEvidenceDigest: string;
+    remoteCommentId: number;
+    evidenceReference: string;
+  }): Promise<StoreResult<{ recordVersion: number; state: "PUBLISHED" }>>;
+
+  resumeCompletedModel(input: {
+    key: ReservationKey;
+    operationId: string;
+    modelAttemptId: string;
+    expectedRecordVersion: number;
+    continuationIdentity: string;
+  }): Promise<StoreResult<{ fence: OwnerFence; recordVersion: number }>>;
+
+  abortBeforeModel(input: {
+    key: ReservationKey;
+    operationId: string;
+    fence: OwnerFence;
+    expectedRecordVersion: number;
+    reasonDigest: string;
+  }): Promise<StoreResult<{ recordVersion: number; state: "ABORTED" }>>;
+
+  markUnknown(input: {
+    key: ReservationKey;
+    operationId: string;
+    stage: Stage;
+    attemptId: string;
+    expectedRecordVersion: number;
+    reasonCode: string;
+    evidenceReference: string;
+  }): Promise<StoreResult<{ recordVersion: number; state: "UNKNOWN" }>>;
+
+  closeWithoutPublish(input: {
+    key: ReservationKey;
+    operationId: string;
+    expectedRecordVersion: number;
+    reasonDigest: string;
+    evidenceReference: string;
+  }): Promise<StoreResult<{ recordVersion: number; state: "CLOSED_NO_PUBLISH" }>>;
+
+  reconcileComment(input: {
+    key: ReservationKey;
+    operationId: string;
+    attemptId: string;
+    expectedRecordVersion: number;
+    listingCompleteness: "COMPLETE" | "INCOMPLETE" | "UNKNOWN";
+    exactMarkerCommentIds: number[];
+    evidenceDigest: string;
+    evidenceReference: string;
+  }): Promise<StoreResult<{
+    recordVersion: number;
+    state: "PUBLISHED" | "DUPLICATE_ACCEPTED" | "UNKNOWN";
+  }>>;
 
   read(input: {
     key: ReservationKey;
@@ -114,7 +235,8 @@ interface ReservationStore {
 }
 ```
 
-This is an abstract contract, not a frozen TypeScript API. Before implementation, reconcile method names and result unions with the existing `OPERATIONS.md` state machine and the conformance harness without weakening existing cases.
+The method signatures are an abstract design target, not a frozen implementation API. Before coding, reconcile them against the existing `OPERATIONS.md` transition table and the executable conformance harness. In particular, recovery-only mutations must use a separately authenticated recovery authority; they must not accept a caller-supplied owner fence as proof of recovery privilege. `completeModelAttempt` and `completeCommentAttempt` must validate the exact persisted boundary receipt and durable EffectLedger OUTCOME acknowledgement before changing state. `markUnknown` and `reconcileComment` must be idempotent and must not mint new attempt permits.
+
 
 ## 3. Atomicity and state-transition requirements
 

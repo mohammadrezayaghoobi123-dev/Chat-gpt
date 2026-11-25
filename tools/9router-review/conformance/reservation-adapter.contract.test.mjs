@@ -1156,6 +1156,11 @@ test("T50: a lost boundary acknowledgement recovers the same durable receipt wit
   });
   assert.equal(committed.status, "MODEL_PERMIT");
 
+  assert.equal(
+    typeof system.adapter.readAttemptBoundaryReceipt,
+    "function",
+    "the adapter must expose durable boundary-receipt recovery",
+  );
   const recovered = await system.adapter.readAttemptBoundaryReceipt({
     key: KEY,
     stage: "MODEL",

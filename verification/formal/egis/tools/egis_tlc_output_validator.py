@@ -59,9 +59,10 @@ def validate_tlc_output(
     if not isinstance(exit_code, int) or isinstance(exit_code, bool) or exit_code != 0:
         result.update(status="FAIL", reason="tlc_process_nonzero_or_invalid_exit")
         return result
-    if (not expected or len(set(expected)) != len(expected)
+    if (not expected
             or any(not isinstance(name, str) or not _IDENTIFIER.fullmatch(name)
-                   for name in expected)):
+                   for name in expected)
+            or len(set(expected)) != len(expected)):
         result["reason"] = "expected_invariant_inventory_missing_duplicate_or_invalid"
         return result
     if not isinstance(output, str) or not output.strip():

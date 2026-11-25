@@ -948,12 +948,23 @@ test("T44: recovery lock blocks completion writes until verified recovery unlock
   const started = await modelAttempt(system);
   const resultReference = "encrypted-result://model-attempt-1";
   const resultDigest = "model-result-digest";
+  const appendOutcome = system.ledger.appendOutcome.bind(system.ledger);
+  const observedOutcomes = [];
+  system.ledger.appendOutcome = async args => {
+    observedOutcomes.push(args);
+    return appendOutcome(args);
+  };
   const outcome = await system.ledger.appendOutcome({
     attemptId: started.attemptId,
     outcomeType: "MODEL_RESULT_STORED",
     evidenceDigest: resultDigest,
     evidenceReference: resultReference,
+    attemptBoundaryReceipt: started.permit.attemptBoundaryReceipt,
   });
+  assert.equal(observedOutcomes.length, 1);
+  assert.equal(observedOutcomes[0].attemptId, started.attemptId);
+  assert.deepEqual(observedOutcomes[0].attemptBoundaryReceipt, started.permit.attemptBoundaryReceipt);
+  assert.equal(observedOutcomes[0].attemptBoundaryReceipt?.stage, "MODEL");
   await system.adapter.setRecoveryMode("RECOVERY_LOCKED");
   const completion = await system.adapter.completeModelAttempt({
     key: KEY,
@@ -1004,12 +1015,23 @@ test("T45: recovery lock blocks every non-recovery reservation mutation", async 
 
   const commentSystem = makeSystem();
   const comment = await commentAttempt(commentSystem);
+  const appendCommentOutcome = commentSystem.ledger.appendOutcome.bind(commentSystem.ledger);
+  const observedCommentOutcomes = [];
+  commentSystem.ledger.appendOutcome = async args => {
+    observedCommentOutcomes.push(args);
+    return appendCommentOutcome(args);
+  };
   const outcome = await commentSystem.ledger.appendOutcome({
     attemptId: comment.attemptId,
     outcomeType: "COMMENT_ACCEPTED",
     evidenceDigest: "validated-response-digest",
     evidenceReference: "github-comment://777",
+    attemptBoundaryReceipt: comment.permit.attemptBoundaryReceipt,
   });
+  assert.equal(observedCommentOutcomes.length, 1);
+  assert.equal(observedCommentOutcomes[0].attemptId, comment.attemptId);
+  assert.deepEqual(observedCommentOutcomes[0].attemptBoundaryReceipt, comment.permit.attemptBoundaryReceipt);
+  assert.equal(observedCommentOutcomes[0].attemptBoundaryReceipt?.stage, "COMMENT");
   await commentSystem.adapter.setRecoveryMode("RECOVERY_LOCKED");
   const publication = await commentSystem.adapter.completeCommentAttempt({
     key: KEY,

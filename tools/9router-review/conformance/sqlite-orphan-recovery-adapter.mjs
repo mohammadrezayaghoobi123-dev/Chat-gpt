@@ -114,6 +114,18 @@ export function openSqliteOrphanRecoveryHarness({ ledgerPath, reservationPath, n
       if (!tombstoneAck || tombstoneAck.status !== "ACK" || tombstoneAck.operation_id !== operationId) return { status: "TOMBSTONE_NOT_ACKNOWLEDGED" };
       const intent = this.readIntent(operationId);
       if (intent.status !== "ACK" || intent.event_id !== tombstoneAck.intent_event_id || intent.payload_digest !== tombstoneAck.intent_digest) return { status: "INTENT_BINDING_CONFLICT" };
+      const tombstone = reservationDb.prepare("SELECT * FROM orphan_abort_tombstones WHERE operation_id = ?").get(operationId);
+      if (!tombstone ||
+          tombstone.tombstone_id !== tombstoneAck.tombstone_id ||
+          tombstone.payload_digest !== tombstoneAck.payload_digest ||
+          sha256(tombstone.payload_json) !== tombstone.payload_digest ||
+          tombstone.intent_event_id !== intent.event_id ||
+          tombstone.intent_digest !== intent.payload_digest ||
+          tombstone.fence_generation !== tombstoneAck.fence_generation) return { status: "TOMBSTONE_NOT_VERIFIED" };
+      if (!evidence || evidence.status !== "DEFINITIVELY_NOT_COMMITTED" ||
+          evidence.digest !== sha256(evidence.evidence) ||
+          evidence.evidence.identity_digest !== sha256(intent.payload) ||
+          tombstone.absence_evidence_digest !== evidence.digest) return { status: "ABSENCE_EVIDENCE_CONFLICT" };
       const payload = { operation_id: operationId, disposition: "ORPHAN_INTENT_ABORTED", attempt_id: intent.payload.attempt_id, stage: intent.payload.stage, request_digest: intent.payload.request_digest, intent_event_id: intent.event_id, intent_digest: intent.payload_digest, tombstone_id: tombstoneAck.tombstone_id, tombstone_digest: tombstoneAck.payload_digest, tombstone_fence_generation: tombstoneAck.fence_generation, absence_evidence_digest: evidence.digest };
       const payloadJson = canonical(payload);
       const payloadDigest = sha256(payloadJson);
@@ -168,12 +180,16 @@ export function openSqliteOrphanRecoveryHarness({ ledgerPath, reservationPath, n
     abortOrphanAttempt({ operation: rawOperation, intentAck, absenceEvidence, fence }) {
       const operation = validateOperation(rawOperation);
       if (!intentAck || intentAck.status !== "ACK" || intentAck.operation_id !== operation.operation_id || !absenceEvidence || absenceEvidence.status !== "DEFINITIVELY_NOT_COMMITTED" || absenceEvidence.digest !== sha256(absenceEvidence.evidence) || absenceEvidence.evidence.identity_digest !== sha256(operation) || absenceEvidence.evidence.complete !== true) return { status: "INVALID_ABSENCE_EVIDENCE" };
+      const durableIntent = ledger.readIntent(operation.operation_id);
+      if (durableIntent.status !== "ACK" || durableIntent.event_id !== intentAck.event_id || durableIntent.payload_digest !== intentAck.payload_digest || canonical(durableIntent.payload) !== canonical(operation)) return { status: "INTENT_BINDING_CONFLICT" };
       return transaction(reservationDb, () => {
         const currentFence = reservationDb.prepare("SELECT generation, owner FROM recovery_fences WHERE operation_id = ?").get(operation.operation_id);
         if (!currentFence || currentFence.generation !== fence?.generation || currentFence.owner !== fence?.owner) return { status: "STALE_FENCE" };
         const counts = reservationCounts(operation.operation_id);
         const boundary = reservationDb.prepare("SELECT identity_json FROM attempt_boundaries WHERE operation_id = ?").get(operation.operation_id);
-        if (boundary) return { status: boundary.identity_json === canonical(operation) ? "BOUNDARY_COMMITTED" : "INTEGRITY_CONFLICT" };
+        if (boundary) return boundary.identity_json === canonical(operation)
+          ? { status: "BOUNDARY_COMMITTED", receipt: JSON.parse(boundary.receipt_json) }
+          : { status: "INTEGRITY_CONFLICT" };
         if (counts.permits || counts.external_effects) return { status: "INTEGRITY_CONFLICT" };
         const existing = reservationDb.prepare("SELECT * FROM orphan_abort_tombstones WHERE operation_id = ?").get(operation.operation_id);
         if (existing) {
@@ -200,10 +216,12 @@ export function openSqliteOrphanRecoveryHarness({ ledgerPath, reservationPath, n
     beginAttempt(rawOperation) {
       const operation = validateOperation(rawOperation);
       return transaction(reservationDb, () => {
-        const tombstone = reservationDb.prepare("SELECT tombstone_id FROM orphan_abort_tombstones WHERE operation_id = ?").get(operation.operation_id);
-        if (tombstone) return { status: "ORPHAN_ABORTED", tombstone_id: tombstone.tombstone_id };
-        const boundary = reservationDb.prepare("SELECT operation_id FROM attempt_boundaries WHERE operation_id = ?").get(operation.operation_id);
-        if (boundary) return { status: "ALREADY_CONSUMED" };
+        const tombstone = reservationDb.prepare("SELECT tombstone_id, identity_json FROM orphan_abort_tombstones WHERE operation_id = ?").get(operation.operation_id);
+        if (tombstone) return tombstone.identity_json === canonical(operation)
+          ? { status: "ORPHAN_ABORTED", tombstone_id: tombstone.tombstone_id }
+          : { status: "INTEGRITY_CONFLICT" };
+        const boundary = reservationDb.prepare("SELECT operation_id, identity_json FROM attempt_boundaries WHERE operation_id = ?").get(operation.operation_id);
+        if (boundary) return boundary.identity_json === canonical(operation) ? { status: "ALREADY_CONSUMED" } : { status: "INTEGRITY_CONFLICT" };
         const receipt = { test_only: true, operation_id: operation.operation_id, attempt_id: operation.attempt_id, issued_at: now() };
         reservationDb.prepare("INSERT INTO attempt_boundaries (operation_id, identity_json, receipt_json) VALUES (?, ?, ?)").run(operation.operation_id, canonical(operation), canonical(receipt));
         reservationDb.prepare("INSERT INTO permits (operation_id, attempt_id, created_at) VALUES (?, ?, ?)").run(operation.operation_id, operation.attempt_id, now());
@@ -237,6 +255,7 @@ export function recoverOrphanIntent(stores, { operation, expectedFenceGeneration
   const fence = stores.reservations.acquireRecoveryFence({ operationId: normalized.operation_id, expectedGeneration: expectedFenceGeneration, owner });
   if (fence.status !== "ACK") return { status: fence.status, current_generation: fence.current_generation };
   const tombstone = stores.reservations.abortOrphanAttempt({ operation: normalized, intentAck: intent, absenceEvidence: boundary, fence });
+  if (tombstone.status === "BOUNDARY_COMMITTED") return { status: "BOUNDARY_COMMITTED", receipt: tombstone.receipt };
   if (tombstone.status !== "ACK") return { status: tombstone.status };
   if (crashAfterTombstone) return { status: "TOMBSTONE_COMMITTED", tombstone };
   const terminalEvent = stores.ledger.appendOrphanIntentAborted(normalized.operation_id, tombstone, boundary);

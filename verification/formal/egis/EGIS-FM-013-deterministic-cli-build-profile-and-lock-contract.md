@@ -28,7 +28,7 @@ The inspected pinned Ant file defines materially different target paths:
 | `compile-test` | Compiles tests and copies test resources | Required for the test profile |
 | `test` | Runs JUnit with a substantial explicit exclusion list and separate batches | Required; exclusions must be reported |
 | `dist` | Unpacks mail/activation classes, touches a resource, creates `dist/tla2tools.jar` and embeds a Manifest | Required |
-| `test-dist` | Runs tests against the produced JAR under JaCoCo and also has exclusions | Required for the full verification profile, with explicit coverage reporting |
+| `test-dist` | Runs tests against the produced JAR under JaCoCo and also has exclusions | Required for the selected verification profile, with explicit coverage reporting |
 | `default` | Chains info, compile, compile-test, test, Git revision, dist and test-dist | Do not use as an opaque success label; record every nested target and result |
 | `default-maven` | Omits the normal `test` target | Prohibited as evidence of a full test run |
 

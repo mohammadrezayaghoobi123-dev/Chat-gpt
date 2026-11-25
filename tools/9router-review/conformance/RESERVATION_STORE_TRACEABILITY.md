@@ -315,4 +315,21 @@ The preceding hosted run on `ea16bbb874b7d75dc0d16fb1ce6019aed95c89a5` revealed 
 - The 56-test reference oracle and 11-test T57 SQLite harness do not establish production integration. T57 remains test-harness-only, and RS-08 remains a production gap.
 - Backend selection remains open; implementation authorization remains absent. RS-23 must remain failed until the actual runtime path is integrated and the exact deterministic regression plus full suite pass without weakening assertions.
 
+## O. Backend topology and trust-boundary gaps — AR-75
+
+| Requirement | Current evidence | Status | Required evidence to close |
+|---|---|---|---|
+| RS-24 Global `RECOVERY_LOCKED` blocks every mutation across per-key reservation authorities | DO storage is private to each object. A separate global-mode read followed by a per-key write is a cross-object race; the current per-key DO + global control topology has no atomic global lock/permit boundary | **GAP — DESIGN NOT QUALIFIED** | Prove a single linearization authority for global lock and every effect permit, including two-key races and in-flight permits, or replace the topology |
+| RS-25 R2 immutable ledger retention resists runtime and administrative tampering | Conditional writes can create once; Bucket Lock can retain objects indefinitely, but privileged Dashboard/Wrangler/API operations can remove lock rules | **PARTIAL — ADMIN TRUST GAP** | Separate writer/admin identities; runtime has no lock-config/delete privilege; test IAM propagation, policy drift detection, denied admin paths and an external trust anchor |
+| RS-26 DO Free capacity assumptions are internally consistent | Detailed pricing docs list 5M reads/day, while Cloudflare product page surfaced 50M/day; detailed pricing lists 100K writes/day and 100K requests/day; limits show 5GB total Free storage and 1GB per object | **DISPUTED / CONSERVATIVE LIMIT REQUIRED** | Written provider clarification or a corrected canonical pricing source; capacity forecast must use 5M reads/day and 1GB per object until then |
+| RS-27 Restore trust anchor is independent of the primary vendor/account failure domain | DO PITR can rewind 30 days; DO + R2 in one Cloudflare account does not protect against account-level compromise/deletion; no external monotonic anchor is selected | **GAP — TRUST ROOT NOT SELECTED** | Independently controlled external anchor, signed/append-only evidence and end-to-end restore/rollback test |
+| RS-28 Supabase Free sole-authority backup/availability | Free project can pause after 7 days; 500MB DB; no automatic backups or PITR; Pro daily backup 7 days from $25/month, PITR extra | **NOT ACCEPTABLE AS SOLE PRODUCTION AUTHORITY UNDER FREE-ONLY CONSTRAINT** | Alternative off-site backup/restore, availability policy, or explicit paid-plan approval; account billing/card status remains unknown |
+
+### O.1 Candidate status and critical architecture distinction
+
+- Cloudflare SQLite DO + R2: **TEST-ONLY CANDIDATE / NOT QUALIFIED**. R2 create-once conditional writes and DO per-object transactions are documented primitives; they do not establish global recovery locking across separate per-key Durable Objects.
+- Supabase Postgres: **DOCUMENTATION-SCREENED / NOT SELECTED**. One RPC/database function can provide a single DB transaction for a multi-statement adapter method; multiple client-side requests do not. A ledger table in the same database is transactional with reservations but is not an independent failure domain.
+- Any combination of two storage products reintroduces a cross-store recovery protocol. Every unknown/lost acknowledgement remains fail-closed.
+- No service resources, secrets, deployment, provider selection or production adapter implementation were created or changed in AR-75.
+
 

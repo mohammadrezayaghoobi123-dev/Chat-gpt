@@ -210,4 +210,13 @@ The test asserts final durable state after the terminal outcome, not the transie
 - Disposition: code fix NOT_IMPLEMENTED; backend NOT_SELECTED; implementation NOT_AUTHORIZED; RS-23 FAIL; RS-08 PARTIAL / TEST-HARNESS ONLY / PRODUCTION GAP OPEN; reviewer disabled; PR #463 remains Draft/Open/Unmerged.
 - This is an in-session hostile source/test audit, not an independent external security review. See `OPERATIONS.md` §15 and `RESERVATION_STORE_TRACEABILITY.md` §N for evidence, falsification criteria, and residuals.
 
+## Backend qualification hostile review — AR-75 — 2026-11-25
+
+- Cloudflare DO: per-object SQLite transactions and strong consistency are documented, but per-key DO instances do not share storage. A separate global recovery-mode read cannot be assumed atomic with a local object mutation.
+- Cloudflare Free limits: detailed pricing says 100K DO requests/day, 13K GB-s/day, 5M SQL rows read/day, 100K rows written/day, 5GB total DO storage and limits docs specify 1GB per object. Cloudflare's product page also surfaced 50M SQL reads/day; this discrepancy remains disputed and capacity planning uses the conservative 5M/day.
+- R2: global strong consistency and conditional create-once are useful, but plain same-key PUT is last-writer-wins. Bucket Lock rules can be removed by privileged Dashboard/Wrangler/API operations; runtime/admin separation and external trust anchor remain mandatory.
+- Supabase: Free is 500MB, can pause after 7 days, and lacks automatic backups/PITR. Pro starts at $25/month with daily backups retained 7 days; PITR is extra. Use one RPC/database function for each atomic operation; separate supabase-js calls are not one transaction.
+- **Disposition:** no production backend selected. Cloudflare DO+R2 remains test-only candidate after a global-lock topology redesign; Supabase is a transactional alternative but its Free plan is not adequate as sole production authority under current requirements.
+- See `OPERATIONS.md` §12B and `RESERVATION_STORE_TRACEABILITY.md` §O. No provider resources, secrets, deployments or code changes were made.
+
 

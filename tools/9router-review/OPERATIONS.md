@@ -1654,3 +1654,87 @@ Two boundary conditions remain explicit:
 
 **Closure rule:** this finding may be downgraded only after the selected durable adapter is integrated into the actual `runReview()` execution path, the required independent-client/fault-injection tests pass, the unchanged full reviewer regression is GREEN, and a separate hostile review accepts the exact resulting code revision.
 
+### 12B. AR-75 — Adversarial reconciliation of current backend evidence — 2026-11-25
+
+**Disposition:** DOCUMENTATION-VERIFIED SCREENING ONLY / NO PROVIDER SELECTED / NO RESOURCE OR ACCOUNT ACTION AUTHORIZED.
+
+This addendum supersedes the preliminary recommendation at the end of §12A wherever that recommendation could be read as establishing a production-ready Cloudflare topology. The earlier §12A remains a record of its original screening assumptions.
+
+#### 12B.1 Cloudflare Durable Objects — corrected limits and topology constraints
+
+**Positive, documented properties**
+- SQLite-backed Durable Object storage is transactional and strongly consistent within one object. Storage is private to the unique object instance; another Durable Object cannot directly access it. The storage API methods are transaction-wrapped. Sources: [SQLite-backed Durable Object Storage](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/) and [Access Durable Objects Storage](https://developers.cloudflare.com/durable-objects/best-practices/access-durable-objects-storage/).
+- Deterministic object names route the same logical key to the same object. Each object is single-threaded; Cloudflare documents a soft limit around 1,000 requests/second per individual object, not a throughput guarantee. Sources: [Rules of Durable Objects](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/) and [Limits](https://developers.cloudflare.com/durable-objects/platform/limits/).
+- SQLite-backed Durable Objects can be restored to a bookmark within the previous 30 days. A restore can therefore rewind reservation generations, attempt boundaries and local audit history. Source: [SQLite-backed Durable Object Storage — PITR](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/).
+
+**Free-tier corrections**
+- Detailed Durable Objects pricing documentation lists Free limits of 100,000 requests/day, 13,000 GB-s/day, 5 million SQL rows read/day, 100,000 SQL rows written/day and 5 GB total SQLite storage per account. Exceeded daily dimensions fail further operations of that type until reset. Source: [Durable Objects Pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/).
+- The detailed Limits page additionally states that a single SQLite-backed Durable Object on Free is limited to **1 GB**, while the account-wide total is 5 GB. At that per-object limit, writes fail with `SQLITE_FULL`; reads and deletes may still succeed. Source: [Durable Objects Limits](https://developers.cloudflare.com/durable-objects/platform/limits/).
+- A Cloudflare product page has surfaced a conflicting **50 million SQL rows read/day** figure. The detailed Durable Objects pricing page currently says **5 million/day**. This discrepancy is **DISPUTED / NOT RESOLVED**. Capacity and cost planning MUST use the conservative 5 million/day figure unless Cloudflare publishes an authoritative correction or supplies written account-specific confirmation. No quota or no-card eligibility has been tested against the user's account.
+
+#### 12B.2 Cloudflare R2 — conditional creation is not administrative immutability
+
+**Positive, documented properties**
+- R2 is globally strongly consistent for object read-after-write and listing operations. Normal concurrent writes to the same key use last-writer-wins behavior; strong consistency alone is not create-once arbitration. Source: [R2 Consistency Model](https://developers.cloudflare.com/r2/reference/consistency/).
+- Conditional `PutObject` with `If-None-Match: *` is evaluated atomically at commit; the Workers binding exposes conditional writes through `onlyIf`. The candidate must test the exact deployed binding/API path and verify that exactly one concurrent absent-key create is accepted. Sources: [R2 Conditional Operations](https://developers.cloudflare.com/r2/api/s3/conditional-operations/) and [R2 Workers API Reference](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/).
+- R2 Standard's documented Free envelope is 10 GB-month storage, 1 million Class A operations/month, 10 million Class B operations/month and free egress. Source: [R2 Pricing](https://developers.cloudflare.com/r2/pricing/).
+
+**Hostile qualification**
+- Bucket Lock can retain objects indefinitely, but its rules are not an independent immutable trust root. The documented management surface allows rules to be removed through Dashboard, Wrangler or API; API changes require permission to edit bucket configuration. Sources: [R2 Bucket Locks](https://developers.cloudflare.com/r2/buckets/bucket-locks/) and its [configuration API](https://developers.cloudflare.com/r2/buckets/bucket-locks/).
+- The runtime writer MUST NOT possess bucket-configuration, bucket-lock-management, delete, or administrative credentials. A separate administrator identity, least-privilege token boundary, out-of-band policy-drift detection, and an independent audit/anchor are required. A bucket-lock rule that the same compromised administrator can remove is a retention control, not tamper-proof evidence.
+- R2 and Durable Objects remain within the same Cloudflare vendor/account failure domain. Their separate products and storage APIs do not establish protection against account compromise, account suspension/deletion, or a malicious account administrator.
+- R2 listing consistency does not itself make an indefinitely paginated global recovery inventory atomic while writers are active. A complete inventory requires a proven global write freeze or a single authoritative sequencing mechanism before pagination begins.
+
+#### 12B.3 Newly identified topology defect — per-key Durable Objects versus global RECOVERY_LOCKED
+
+The §12A proposal maps each immutable reservation key to a separate Durable Object, while the recovery contract requires a global `RECOVERY_LOCKED` state that blocks every mutation across all keys.
+
+These premises do not become atomic merely by adding a separate “global control” Durable Object:
+1. Each per-key object's SQLite storage is private to that object.
+2. A check of global mode followed by a local per-key write is two operations in two objects.
+3. A recovery worker can commit the global lock after a worker's mode check but before that worker commits a per-key mutation.
+4. The stale worker could then mutate after the acknowledged global lock unless the permit/mutation is linearized at the same authority as the lock.
+
+Therefore, the proposed **per-key DO + separate global control DO** topology is **NOT QUALIFIED** for the global recovery-lock invariant.
+
+At least one of the following architectures must be explicitly designed and falsified before provider implementation:
+- **Single coordination authority:** one SQLite-backed Durable Object owns the reservation transitions, global recovery mode, effect-ledger intents/receipts, and single-use effect permits for all keys. This makes the global lock and state transitions share one transaction domain, but creates a hot coordination object, a single-object storage limit, and a per-object throughput ceiling. R2 may act as an immutable external journal/backup/anchor, but is not silently treated as transactionally co-committed.
+- **Sharded reservation authorities plus a linearizable global permit coordinator:** per-key objects own local state, but no external-effect permit can be issued without the coordinator's durable, globally serialized authorization. The coordinator protocol must prove that every previously issued permit is accounted for before recovery inventory is frozen; no stale object may mutate or issue an effect after the lock acknowledgement. Cross-object calls and generation checks alone do not prove this.
+- **Different transactional backend/topology:** use a relational authority with an explicit transaction model for the global mode, reservations and ledger records, and separately design the external immutable anchor. The backend must pass the same candidate-specific fault tests.
+
+This is a design gap, not evidence that Durable Objects themselves lack per-object transactional consistency.
+
+#### 12B.4 Supabase PostgreSQL — revised transactional and cost assessment
+
+- Supabase's Free plan currently lists 500 MB database size, two active free projects, no automatic backups, no PITR and pausing after one week of inactivity. Supabase recommends manual CLI exports and off-site backups for Free projects. Sources: [Pricing](https://supabase.com/pricing), [Project Pausing](https://supabase.com/docs/guides/platform/free-project-pausing) and [Database Backups](https://supabase.com/docs/guides/platform/backups).
+- Pro currently starts at $25/month and includes daily backups retained for 7 days; PITR is a separate paid add-on whose pricing page currently starts at approximately $100/month. Sources: [Pricing](https://supabase.com/pricing) and [PITR pricing](https://supabase.com/docs/guides/platform/manage-your-usage/point-in-time-recovery). Account-specific card requirements remain **NOT_VERIFIED**.
+- Each PostgREST API request executes inside a database transaction. A single database function invoked through `rpc()` can therefore be the atomic adapter-operation boundary. Multiple independent `supabase-js` requests are not automatically grouped into one transaction; do not implement a claim as client-side read-then-write requests. Sources: [PostgREST Transactions](https://docs.postgrest.org/en/v14/references/transactions.html), [Supabase RPC](https://supabase.com/docs/guides/database/functions) and [Supabase JS rollback/transaction note](https://supabase.com/docs/reference/javascript/using-modifiers-rollback).
+- The shared transaction pooler is suitable for short-lived serverless connections, but it does not preserve session state between transactions and does not support prepared statements; session-level advisory locks and temporary tables cannot be relied upon. Use a single SQL/RPC operation with database constraints/row locks and explicit fencing. Source: [Connect to your database](https://supabase.com/docs/guides/database/connecting-to-postgres).
+- A single PostgreSQL transaction can commit ReservationStore state and an append-only EffectLedger table together, eliminating the cross-store INTENT-to-boundary crash window **inside that database**. This is a different trust model from two independent authorities: the tables share one database, backup, administrator and failure domain. If an actually independent external ledger is mandatory, adding R2 or another provider reintroduces a cross-store protocol and must be tested as such.
+- Supabase Free is therefore not acceptable as the only production authority for this project's restore-sensitive reservation state under the current requirements. Pro improves backup and availability posture but is not compatible with an assumed zero-cost/no-card requirement; the account's billing eligibility is unknown.
+
+#### 12B.5 Corrected candidate disposition
+
+| Candidate topology | Documentation fit | Blocking issue | Current state |
+|---|---|---|---|
+| One DO per PR key + R2 ledger | Per-key transaction and conditional create are documented | No proven global recovery freeze across key objects; R2 retention policy remains admin-removable; same vendor/account trust domain | **TEST-ONLY CANDIDATE / NOT QUALIFIED** |
+| One global DO for all keys + R2 anchor/journal | Global state and per-key transitions can share one DO transaction | Single-object throughput/storage limits; external R2 is not co-committed; restore anchor not independently trusted | **TEST-ONLY CANDIDATE / NOT QUALIFIED** |
+| Supabase Postgres as one transactional authority | Strong relational fit; one RPC/database transaction can commit multiple tables atomically | Free pause/backups; paid Pro cost; same-DB ledger is not an independent failure domain | **DOCUMENTATION-SCREENED / NOT SELECTED** |
+| Supabase Postgres + external R2 ledger | Separates logical vendor/storage domains | Reintroduces two-store ordering, ambiguous acknowledgements and global recovery/restore protocol | **NOT QUALIFIED** |
+
+**Corrected recommendation:** no production backend is selected or qualified. Cloudflare DO + R2 remains the leading candidate for a bounded, non-production conformance spike only after the global-lock topology is redesigned and its trust boundary is made explicit. It is not yet a production recommendation. Supabase is a technically viable transactional alternative, but the Free plan does not satisfy the current sole-authority backup/availability requirements.
+
+#### 12B.6 Required falsification evidence
+
+1. **Global-lock race:** run two independent clients against two different reservation keys/objects. Race `RECOVERY_LOCKED` acknowledgement against claim, renew, boundary, completion, reconciliation and recovery mutations. No mutation may commit after the global lock is acknowledged; every pre-lock issued permit must be reconciled before recovery inventory is frozen.
+2. **Per-object routing and collisions:** prove identical canonical keys route to the same authority, distinct tuples remain distinct, and forced identity/digest collisions fail closed after full-tuple comparison.
+3. **R2 create-once:** submit concurrent `If-None-Match: *`/Workers `onlyIf` creates for the same absent event key. Prove one success, exact same-payload replay reconciliation, changed-payload conflict, lost-ack recovery and no overwrite/delete bypass.
+4. **Bucket-lock administration:** prove runtime credentials cannot edit or remove lock rules or delete journal objects; simulate privileged policy drift and require the external monitor/anchor to enter quarantine before accepting new intents.
+5. **Restore rollback:** restore a DO database to a prior PITR bookmark after a committed attempt. Prove the system remains globally `RECOVERY_LOCKED` until a separate trusted authority proves the complete event inventory and watermark. An R2 bucket in the same account is not by itself an independent account-compromise anchor.
+6. **Quota and failure gates:** force each DO free-tier request/row/duration/storage limit, R2 class quota, storage-full, network partition, timeout and ambiguous write. Prove zero provider/GitHub effects on unacknowledged or unavailable authority.
+7. **Supabase atomic RPC:** run independent concurrent callers against one RPC function, prove a single unique claim and rollback on injected mid-operation failures, then test pooler reconnect, lost response, database restore and free-project pause. Separate client HTTP calls must not be treated as one transaction.
+8. Preserve the exact duplicate-publication regression. Candidate tests passing cannot close RS-23 until the selected authority is integrated into `runReview()` and the full reviewer suite is GREEN.
+
+**AR-75 final disposition:** backend documentation corrected and adversarially reviewed; no selection; no provider resource or secret; no adapter code; no production qualification. The user's earlier zero-cost/no-card constraint remains a decision criterion, not a verified property of the current account. The next implementation gate remains explicit user approval of a design and a non-production scope.
+
+

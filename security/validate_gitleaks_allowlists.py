@@ -149,7 +149,7 @@ def diagnose_report(report: list[dict], config: dict) -> list[str]:
     }
     for description, (expected_commit, expected_path) in EXPECTED_FIXTURES.items():
         entry = entries.get(description)
-        label = description.split(" from ", 1)[0]
+        label = description
         if entry is None:
             diagnostics.append(f"DIAGNOSTIC: {label}: allowlist=missing")
             continue

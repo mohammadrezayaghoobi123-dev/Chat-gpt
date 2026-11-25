@@ -244,3 +244,9 @@ INVARIANT TypeOK
 """
         self.assertEqual(["Safety", "TypeOK"], invariants_from_config(config))
         self.assertEqual([], invariants_from_config("SPECIFICATION Spec"))
+
+    def test_missing_tlc_executable_is_blocked_not_execution_failure(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        result = validate_tlc_output("", ["Safety"], exit_code=None, timed_out=False)
+        self.assertEqual("BLOCKED", result["status"])
+        self.assertEqual("tlc_process_unavailable", result["reason"])

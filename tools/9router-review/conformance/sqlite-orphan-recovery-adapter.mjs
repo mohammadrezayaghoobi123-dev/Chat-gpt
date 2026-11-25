@@ -244,11 +244,17 @@ export function openSqliteOrphanRecoveryHarness({ ledgerPath, reservationPath, n
     // Test-only fake permit gate. It records no provider call or external effect.
     beginAttempt(rawOperation) {
       const operation = validateOperation(rawOperation);
+      const intent = ledger.readIntent(operation.operation_id);
+      if (intent.status === "INTEGRITY_CONFLICT") return { status: "INTEGRITY_CONFLICT" };
+      if (intent.status !== "ACK") return { status: "LEDGER_NOT_ACKNOWLEDGED" };
+      if (canonical(intent.payload) !== canonical(operation)) return { status: "INTEGRITY_CONFLICT" };
       return transaction(reservationDb, () => {
         const tombstone = reservationDb.prepare("SELECT tombstone_id, identity_json FROM orphan_abort_tombstones WHERE operation_id = ?").get(operation.operation_id);
         if (tombstone) return tombstone.identity_json === canonical(operation)
           ? { status: "ORPHAN_ABORTED", tombstone_id: tombstone.tombstone_id }
           : { status: "INTEGRITY_CONFLICT" };
+        const fence = reservationDb.prepare("SELECT generation, owner FROM recovery_fences WHERE operation_id = ?").get(operation.operation_id);
+        if (fence) return { status: "RECOVERY_FENCED", current_generation: fence.generation };
         const boundary = reservationDb.prepare("SELECT operation_id, identity_json FROM attempt_boundaries WHERE operation_id = ?").get(operation.operation_id);
         if (boundary) return boundary.identity_json === canonical(operation) ? { status: "ALREADY_CONSUMED" } : { status: "INTEGRITY_CONFLICT" };
         const receipt = { test_only: true, operation_id: operation.operation_id, attempt_id: operation.attempt_id, issued_at: now() };

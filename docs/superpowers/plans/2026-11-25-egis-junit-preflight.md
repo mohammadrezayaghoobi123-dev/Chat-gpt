@@ -1,35 +1,82 @@
-# EGIS JUnit Report Preflight Implementation Plan
+# EGIS JUnit Report Preflight Hardening Plan
 
-**Goal:** Add a read-only, fail-closed preflight for source/JAR JUnit report roots and bind its test evidence into PR #475.
+> **For agentic workers:** Execute this plan natively in the current session, task-by-task, preserving the existing PR branch and recording each verification result. Do not merge.
 
-## Constraints
-- Keep upstream `customBuild.xml` unchanged.
-- Preserve FM-015 selection manifests and both target batch sets.
-- Do not create/delete report roots; do not launch Ant.
-- Treat the property snapshot as untrusted until a trusted launcher wrapper owns both preflight and process launch.
-- No build, JUnit execution, JAR creation, SANY/TLC, deployment, merge or main-branch change.
+**Goal:** Close concrete hostile-review gaps in the read-only JUnit preflight without claiming trusted Ant invocation attestation.
 
-## Tasks
+**Architecture:** Keep the helper read-only and fail-closed. Restrict Ant invocation to the locked buildfile and single default target, reject unreviewed project-property overrides, block classpath injection via environment/user Ant libraries, and verify the pinned customBuild.xml Git blob identity. A trusted wrapper and toolchain provenance remain separate gates.
 
-### 1. Behavior-first implementation
-- [x] Create hostile tests before the helper; confirm RED due to missing API.
-- [x] Implement read-only checks for fresh report root, canonical checkout/basedir, absolute pinned buildfile, required properties, prohibited properties and disjoint report subroots.
-- [x] Block selected Ant/JVM launcher flags, external property files, environment overrides, Ant extension flags and user rc hooks.
-- [x] Run focused suite: 12/12 PASS on Python 3.13.5.
-- [x] Run compileall: PASS.
-- [x] Run six mutation checks; each was caught by its corresponding assertion.
+**Tech Stack:** Python 3.11 standard library, unittest, GitHub Actions.
 
-### 2. Evidence and workflow integration
-- [x] Register module and tests under verification/formal/egis.
-- [x] Add both file paths to the existing Python 3.11 workflow path filters.
-- [x] Add compile and unit-test steps without broadening workflow permissions.
-- [x] Update FM-013, FM-014 and FM-016 with FMH-110/111 and explicit residuals.
-- [x] Add FM-017 hostile implementation review.
+**Spec:** EGIS-FM-017 and EGIS-FM-016.
 
-### 3. Verify and register
-- [ ] Exact-head Python 3.11 workflow pending after commit.
-- [x] Read-only hostile review; lock remains INCOMPLETE_BLOCKED.
-- [x] One atomic commit on the existing PR branch with expected-head lease check.
-- [x] Verify file blobs and PR state after commit; keep PR OPEN/DRAFT/UNMERGED.
+## Global Constraints
 
-**Residual acceptance gate:** no helper PASS may be treated as actual Ant launch attestation until a trusted wrapper supplies the exact effective property map, arguments, working directory and environment to both preflight and Ant.
+- Keep upstream TLA+ customBuild.xml unchanged.
+- Preserve FM-015 target selection manifests and all 411 selected source paths.
+- Never create or delete report roots inside the helper.
+- Never launch Ant, acquire JDK/Ant, build, run JUnit, create/execute JAR, or execute SANY/TLC.
+- Do not modify main, secrets, bindings, permissions, deployment or local desktop state.
+- Keep PR #475 OPEN/DRAFT/UNMERGED.
+
+## Review Focus
+
+- A build property such as test.dir, class.dir or dist.file must not be overridable through arbitrary -D arguments.
+- An extra Ant target such as clean or test-dist-long must not pass preflight.
+- CLASSPATH or a non-empty per-user Ant library directory must not inject task implementations.
+- The exact Ant buildfile bytes must match the locked Git blob identity.
+- A helper PASS remains point-in-time only and must not be mistaken for a mutex, trusted wrapper or later process attestation.
+
+---
+
+### Task 1: Add hostile regression tests
+
+**Files:**
+- Modify: `verification/formal/egis/tests/test_junit_report_preflight.py`
+- Modify: `docs/superpowers/plans/2026-11-25-egis-junit-preflight.md`
+
+**Interfaces:**
+- The test invokes the public `preflight_report_roots` API.
+- The synthetic buildfile fixture supplies a test-scoped expected Git blob SHA-1 through a patch; production pin remains fixed in the helper.
+
+- [ ] Add tests for unreviewed `-D` properties and non-default/multiple targets.
+- [ ] Add tests for non-empty `CLASSPATH` and `<home>/.ant/lib`.
+- [ ] Add a test that mutating `customBuild.xml` bytes causes BLOCKED.
+- [ ] Run the focused suite and record expected RED failures before production changes.
+
+### Task 2: Harden the preflight
+
+**Files:**
+- Modify: `verification/formal/egis/tools/egis_junit_report_preflight.py`
+
+**Interfaces:**
+- Add `LOCKED_CUSTOM_BUILD_BLOB_SHA1`.
+- Preserve `preflight_report_roots(root, *, ant_properties, ant_arguments=(), environment=None) -> dict`.
+- Keep all failures as BLOCKED with non-sensitive reason identifiers.
+
+- [ ] Allow exactly one target token: `default`.
+- [ ] Reject every unreviewed `-D` project property; retain exact-value redundant overrides only for already locked properties.
+- [ ] Reject a non-empty `CLASSPATH`.
+- [ ] Reject non-empty user Ant library directories and any symlink/reparse-point in their path components.
+- [ ] Verify the exact Git blob SHA-1 of `customBuild.xml` before returning PASS.
+- [ ] Run focused suite to GREEN, then the full EGIS unit suite.
+
+### Task 3: Hostile review and evidence registration
+
+**Files:**
+- Create: `verification/formal/egis/EGIS-FM-018-junit-preflight-argument-and-classloader-hardening.md`
+- Modify: `verification/formal/egis/EGIS-FM-017-junit-preflight-hostile-implementation-review.md`
+- Modify: `verification/formal/egis/EGIS-FM-013-deterministic-cli-build-profile-and-lock-contract.md`
+- Modify: `verification/formal/egis/EGIS-FM-014-ant-target-graph-and-input-closure-hostile-audit.md`
+- Modify: `verification/formal/egis/EGIS-FM-016-junit-report-isolation-and-discovery-contract.md`
+
+- [ ] Register FMH-112 and FMH-113 with severity and falsification conditions.
+- [ ] Preserve FMH-109..111 as OPEN until wrapper integration and platform-level proof.
+- [ ] Recompute/verify the unchanged FM-015 file identity references.
+- [ ] Run exact-head Python 3.11 CI and inspect all relevant job logs.
+- [ ] Run current-head Gitleaks diff scan; keep historical full-history findings visible.
+- [ ] Re-fetch all modified file blobs and PR metadata, assert base and main are unchanged.
+
+## Completion Gate
+
+Only claim code hardening tested after exact-head CI returns success. Do not call preflight an Ant invocation attestation. Promotion remains BLOCKED.

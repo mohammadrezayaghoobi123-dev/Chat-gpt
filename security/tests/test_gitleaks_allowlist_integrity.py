@@ -254,7 +254,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                 self.assertEqual(entry.get("targetRules"), ["generic-api-key"])
                 self.assertEqual(entry.get("condition"), "AND")
                 self.assertEqual(entry.get("commits"), [commit])
-                self.assertEqual(entry.get("paths"), [f"^{path.replace('.', r'\\.')}$"])
+                self.assertEqual(entry.get("paths"), [f"^{path.replace('.', r'\.')}$"])
                 self.assertEqual(entry.get("regexTarget"), "line")
                 regexes = entry.get("regexes", [])
                 self.assertEqual(len(regexes), 1)

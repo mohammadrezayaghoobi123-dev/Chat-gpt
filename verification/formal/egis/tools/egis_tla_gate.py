@@ -34,7 +34,11 @@ def sha256_file(path: Path) -> str:
 
 def _stat_identity(value) -> dict:
     fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
-    identity = {name.removeprefix("st_"): getattr(value, name, None) for name in fields}
+    names = {
+        "st_dev": "device", "st_ino": "inode", "st_size": "size",
+        "st_mtime_ns": "mtime_ns", "st_ctime_ns": "ctime_ns",
+    }
+    identity = {names[name]: getattr(value, name, None) for name in fields}
     if any(not isinstance(identity[key], int) or isinstance(identity[key], bool)
            for key in identity):
         raise ValueError("input_identity_unavailable")
@@ -402,6 +406,9 @@ def run_gate(root: Path, jar: Path, expected_sha256: str,
         return evidence
 
     output = _rooted_path(root, output)
+    module = module if module.is_absolute() else root / module
+    config = config if config.is_absolute() else root / config
+    jar = jar if jar.is_absolute() else root / jar
     try:
         module_canonical = module.resolve(strict=True)
         config_canonical = config.resolve(strict=True)

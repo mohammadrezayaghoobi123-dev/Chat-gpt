@@ -32,12 +32,9 @@ Only these executable files may change during the five atoms:
 - `verification/formal/egis/tools/egis_tla_gate.py`
 - `verification/formal/egis/tests/test_tla_gate.py`
 
-One separate documentation-only commit must update:
+Atom A1 GREEN changes the two executable files and updates `verification/formal/egis/EGIS-VG-001-verification-gate-contract-v1.1.1.md` in the same atomic commit because the emitted evidence schema changes in that commit. A1 RED is test-only. Atoms A2–B3 change only the two executable files. This avoids a branch state that emits schema 1.2 while documenting schema 1.1.
 
-- `verification/formal/egis/EGIS-VG-001-verification-gate-contract-v1.1.1.md`
-- `docs/specs/2026-11-25-egis-gate-io-resilience-design.md`
-
-The EGIS workflow is not changed unless the test runner demonstrably fails to trigger for either allowed executable path; that would require a separately reviewed scope change.
+The design document itself is maintained through separate documentation-only commits. The EGIS workflow is not changed unless the test runner demonstrably fails to trigger for either allowed executable path; that would require a separately reviewed scope change.
 
 ### 1.2 Protected resources
 
@@ -106,7 +103,7 @@ Diagnostics must not include raw exception reprs, absolute local paths, or envir
 
 ## 4. Five atomic implementation atoms
 
-Each atom has two implementation commits: **RED** (tests only) and **GREEN** (the minimal implementation for those tests). A required documentation-only contract-sync commit is added immediately after A1 GREEN because A1 changes the evidence schema. This documentation commit is not a new behavioral atom. The next atom cannot start until the preceding GREEN commit has exact-head CI evidence and its hostile review has no unresolved high-severity defect.
+Each atom has two implementation commits: **RED** (tests only) and **GREEN** (the minimal implementation for those tests). A1 GREEN includes the evidence-contract documentation update in the same commit; there is no intermediate schema/documentation mismatch. The next atom cannot start until the preceding GREEN commit has exact-head CI evidence and its hostile review has no unresolved high-severity defect.
 
 ### Atom A1 — Process lifecycle adapter
 
@@ -122,13 +119,13 @@ Each atom has two implementation commits: **RED** (tests only) and **GREEN** (th
 6. If communication raises `OSError` after process start, attempt terminate/kill and reap. Return BLOCKED with `process_result_unavailable`; never validate missing/partial output as success.
 7. If cleanup cannot be confirmed, report a cleanup substatus and do not start another dependent process.
 
-Do not blanket-catch OSError around the entire function. Preserve existing result keys `status`, `exit_code`, `stdout`, `stderr`, `command`; add only stable, documented `reason`, `phase`, `error_type`, `errno`, and `process_cleanup` metadata. Because this changes emitted evidence, A1 GREEN must increment `schema_version` from `1.1` to `1.2` in the same implementation commit. A docs-only commit must update EGIS-VG-001 immediately after A1 GREEN and before A2 RED. Process output retains the current uncapped capture behavior; output-size limiting is a separate scope.
+Do not blanket-catch OSError around the entire function. Preserve existing result keys `status`, `exit_code`, `stdout`, `stderr`, `command`; add only stable, documented `reason`, `phase`, `error_type`, `errno`, and `process_cleanup` metadata. Because this changes emitted evidence, A1 GREEN must increment `schema_version` from `1.1` to `1.2` in the same implementation commit. Update EGIS-VG-001 in the same A1 GREEN commit; do not split the schema change from its contract. Process output retains the current uncapped capture behavior; output-size limiting is a separate scope.
 
 **RED-only tests:** PermissionError at Popen; generic OSError with and without errno; absent executable; communication OSError after child creation; TimeoutExpired with kill/reap; nonzero exit; successful output; KeyboardInterrupt/SystemExit and unrelated programming exception propagation; path-redacted diagnostics; JSON serialization.
 
 **GREEN acceptance:** all targeted tests pass; existing timeout/nonzero/missing-executable semantics do not regress; no child is left running in injected timeout/communication-failure tests where the platform harness can verify reaping.
 
-**Files:** `egis_tla_gate.py` and `test_tla_gate.py`. The schema contract documentation is synchronized in a separate docs-only commit immediately after A1 GREEN.
+**Files:** A1 RED changes only `test_tla_gate.py`. A1 GREEN changes `egis_tla_gate.py`, `test_tla_gate.py`, and `EGIS-VG-001-verification-gate-contract-v1.1.1.md` together.
 
 ### Atom A2 — Gate state propagation
 
@@ -212,7 +209,7 @@ Parent-directory symlinks are resolved to their canonical target. The design doe
 7. Expose a typed `EvidencePersistenceError` with a stable reason code and cleanup-failure flag; never propagate raw path-bearing OS exception text to CLI output.
 8. The CLI catches only the typed persistence/path-validation exceptions, writes one bounded sanitized diagnostic to stderr and returns nonzero. It does not print JSON evidence or claim a persisted gate status when persistence failed.
 9. Do not add file or directory fsync in this increment; document atomic replacement/visibility only, not crash durability.
-10. Do not increment the schema version in B3. Schema `1.2` was introduced atomically with A1's new command-result fields. The evidence writer failure itself is not placed into the evidence JSON because no valid evidence file may be claimed after persistence failure; it is surfaced only through the typed exception and sanitized CLI diagnostic.
+10. Do not increment the schema version in B3. Schema `1.2` is introduced atomically with A1's new command-result fields and the corresponding contract document update. Evidence-writer failure is not placed into evidence JSON because no valid evidence file may be claimed after persistence failure; it is surfaced only through the typed exception and sanitized CLI diagnostic.
 
 **RED-only tests:** NaN/non-serializable payload; parent mkdir failure; temp creation failure; partial write failure; close failure; replace failure; cleanup failure; old destination preserved before replace; temp path is same directory; temp cleanup attempted; successful JSON roundtrip; CLI captures sanitized stderr, returns nonzero, and emits no success JSON on persistence failure; KeyboardInterrupt/SystemExit not swallowed. Schema version and command-result field compatibility are tested in A1.
 
@@ -234,7 +231,7 @@ For every atom in order A1 → A2 → B1 → B2 → B3:
 8. Perform the atom's hostile tests and mutation checks; register findings and disposition in #475.
 9. Verify the next HEAD is exactly the GREEN commit; stop on unexpected branch movement, path expansion, missing CI, or failed lease.
 
-The temporary RED commit is intentionally expected to fail tests. The corresponding GREEN commit must restore the branch to all-green for the applicable unit suite. After A1 GREEN, update EGIS-VG-001 in one documentation-only commit and rerun exact-head verification before starting A2. No merge/squash/rebase is allowed during this sequence; each test/fix pair remains inspectable in ancestry.
+The temporary RED commit is intentionally expected to fail tests. The corresponding GREEN commit must restore the branch to all-green for the applicable unit suite. A1 GREEN includes EGIS-VG-001; run exact-head verification on that combined code/test/contract commit before starting A2. No merge/squash/rebase is allowed during this sequence; each test/fix pair remains inspectable in ancestry.
 
 ## 6. Failure and rollback rules
 

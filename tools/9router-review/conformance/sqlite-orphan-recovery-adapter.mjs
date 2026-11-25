@@ -226,9 +226,10 @@ export function openSqliteOrphanRecoveryHarness({ ledgerPath, reservationPath, n
   };
 }
 
-export function recoverOrphanIntent(stores, { operation, expectedFenceGeneration, owner, reservationReadComplete = true, crashAfterTombstone = false }) {
+export function recoverOrphanIntent(stores, { operation, expectedFenceGeneration, owner, ledgerReadComplete = true, reservationReadComplete = true, crashAfterTombstone = false }) {
   const normalized = validateOperation(operation);
-  const intent = stores.ledger.readIntent(normalized.operation_id);
+  const intent = stores.ledger.readIntent(normalized.operation_id, { complete: ledgerReadComplete });
+  if (intent.status === "UNKNOWN") return { status: "RECOVERY_QUARANTINED", reason: intent.reason };
   if (intent.status !== "ACK" || canonical(intent.payload) !== canonical(normalized)) return { status: "INTENT_NOT_VERIFIED" };
   const boundary = stores.reservations.readAttemptBoundary(normalized, { complete: reservationReadComplete });
   if (boundary.status === "COMMITTED") return { status: "BOUNDARY_COMMITTED", receipt: boundary.receipt };

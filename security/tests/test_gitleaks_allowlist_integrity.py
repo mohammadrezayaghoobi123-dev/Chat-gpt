@@ -10,7 +10,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "security"))
-from validate_gitleaks_allowlists import EXPECTED_FIXTURES, _source_fixture_line, validate_config
+from validate_gitleaks_allowlists import EXPECTED_FIXTURES, EXPECTED_LINE_EXCEPTIONS, _source_fixture_line, validate_config
 
 
 class GitleaksAllowlistIntegrityTests(unittest.TestCase):
@@ -53,6 +53,17 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                     mutate(target)
                     self.assertTrue(validate_config(changed, ROOT), label)
 
+
+
+    def test_legacy_main_allowlists_cannot_be_widened(self):
+        changed = copy.deepcopy(self.config)
+        legacy_entry = next(
+            entry for entry in changed["allowlists"]
+            if entry.get("description") not in EXPECTED_FIXTURES
+            and entry.get("description") not in EXPECTED_LINE_EXCEPTIONS
+        )
+        legacy_entry["regexes"] = [".*"]
+        self.assertTrue(validate_config(changed, ROOT))
 
     def test_global_allowlist_policy_rejects_new_or_unscoped_exceptions(self):
         changed = copy.deepcopy(self.config)

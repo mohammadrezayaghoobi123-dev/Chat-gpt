@@ -1194,3 +1194,6 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - **No adapter implementation changed.** No tests were run. T48–T51 remain open; T01–T47 helper compatibility remains unresolved. Preserve the original duplicate-publication concurrency RED unchanged.
 - Latest known branch update for this test is `c77996aa267887aaa667dc184ed4b593e649cd9f`; this is not yet the documentation checkpoint commit. Exact hosted push execution remains **NOT_VERIFIED**.
 - No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.
+
+
+- **T51 follow-up:** commit `8eecb9147ce03303903e8b8679d1c7ba328ecd33` adds the missing MODEL-receipt-to-distinct-COMMENT-INTENT replay rejection assertion. It requires the MODEL receipt from the completed model setup, submits it against a separate COMMENT INTENT, and verifies rejection leaves ledger event count and watermark unchanged. This assertion is **AUTHORED / NOT_EXECUTED** and depends on AR-41 helper receipt propagation. The earlier T51 hostile-review note describing this case as still missing is superseded by this follow-up; all other T51 limitations remain.

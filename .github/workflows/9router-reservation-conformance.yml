@@ -39,3 +39,8 @@ jobs:
         if: always()
         working-directory: tools/9router-review
         run: node --test conformance/reservation-adapter.contract.test.mjs
+
+      - name: Run isolated T57 orphan recovery process suite
+        if: always()
+        working-directory: tools/9router-review
+        run: npm run test:orphan-recovery

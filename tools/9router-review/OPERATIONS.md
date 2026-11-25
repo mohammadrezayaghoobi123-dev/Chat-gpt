@@ -1209,3 +1209,23 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - **Hostile integration review:** T51's COMMENT setup traverses `completeModel()`; therefore T52 is a prerequisite for reaching its COMMENT-specific assertions once ledger enforcement is active. T45 contains a second successful COMMENT outcome path that also needs the receipt from `comment.permit`. T44 needs the receipt from `started.permit`. These are concrete call-site migration targets, not permission to weaken T48.
 - No adapter implementation or existing helper migration was performed in this step. No tests were executed. T48–T52 and AR-41–AR-44 remain **OPEN / NOT VERIFIED**. Preserve the original duplicate-publication concurrency RED unchanged.
 - No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.
+
+
+#### 2026-11-25 hostile inventory correction — AR-45
+
+- **AR-45 — Earlier successful-outcome call-site inventory was incomplete.** A complete source scan of every `appendOutcome` invocation in `reservation-adapter.contract.test.mjs` found successful-attempt callers that were not listed in AR-44:
+  - `completeModel()` (shared helper): successful MODEL outcome; must pass the exact receipt from `started.permit`.
+  - T06: direct successful MODEL outcome; must pass the exact receipt from `started.permit`.
+  - T13: direct successful COMMENT outcome; must pass the exact receipt from `started.permit`.
+  - T44: direct successful MODEL outcome; must pass the exact receipt from `started.permit`.
+  - T45: direct successful COMMENT outcome; must pass the exact receipt from `comment.permit`.
+- T28 is a separate compatibility case: it currently creates a bare MODEL INTENT and appends two outcomes to test immutable outcome identity. It is not an authorized reservation attempt. It must be redesigned to obtain a real committed MODEL boundary receipt before the first append, then prove that an identical retry returns the original ACK and a changed payload returns `INTEGRITY_CONFLICT` without advancing the ledger. It must not be exempted from T48.
+- Negative and adversarial calls must remain intentionally receipt-free or use the exact mutated/replayed receipt under test:
+  - T46/T47: stage-mismatch rejection ordering; bare receipts remain intentional.
+  - T48: missing-boundary rejection; explicit null receipt remains intentional.
+  - T49/T51: malformed, mutated, foreign-key, foreign-intent, and cross-stage receipt rejection cases; preserve each tested receipt exactly.
+  - T52: instrumentation only; it must observe the exact receipt propagated by the successful helper path.
+- This inventory supersedes the narrower AR-44 list. The required migration set is now complete for the current file: T06, T13, T28, T44, T45, and `completeModel()`. `commentAttempt()` only obtains a COMMENT permit and currently has no successful COMMENT outcome append of its own; callers must use its exact permit receipt when they append one.
+- **Hostile review conclusion:** do not implement receipt enforcement until every successful caller above is migrated in a test-first sequence and T28's semantics are preserved. Do not add a permissive fallback, synthesize a receipt in a test, or blanket-add receipts to negative tests.
+- **Status:** AR-45 IDENTIFIED / OPEN. This was a source-level inventory and documentation correction; no test was executed and no adapter code changed. T48–T52 remain OPEN / NOT VERIFIED. The original duplicate-publication concurrency RED remains a separate required blocker.
+- Scope remains the isolated verification branch. No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.

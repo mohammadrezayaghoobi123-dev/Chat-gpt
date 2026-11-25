@@ -242,25 +242,34 @@ test("T57.8: independent attempt-start and orphan-abort transactions serialize t
       runWorker("seed-boundary", root),
       runWorker("recover", root, 0, "recovery-racer"),
     ]);
-    const final = await runWorker("inspect", root);
-    const terminalCount = final.history.events.filter(event => event.event_type === "ORPHAN_INTENT_ABORTED").length;
-
     if (begin.result.status === "PERMIT") {
       assert.equal(recovery.result.status, "BOUNDARY_COMMITTED", JSON.stringify({ begin: begin.result, recovery: recovery.result }));
       assert.deepEqual(recovery.result.receipt, begin.result.receipt);
-      assert.equal(final.snapshot.boundaries, 1);
-      assert.equal(final.snapshot.permits, 1);
-      assert.equal(final.snapshot.tombstones, 0);
-      assert.equal(terminalCount, 0);
+
+      const committed = await runWorker("inspect", root);
+      assert.equal(committed.snapshot.boundaries, 1);
+      assert.equal(committed.snapshot.permits, 1);
+      assert.equal(committed.snapshot.tombstones, 0);
+      assert.equal(committed.history.events.filter(event => event.event_type === "ORPHAN_INTENT_ABORTED").length, 0);
     } else {
       assert.equal(recovery.result.status, "ABORTED_ORPHAN");
-      assert.equal(begin.result.status, "ORPHAN_ABORTED");
-      assert.equal(final.snapshot.boundaries, 0);
-      assert.equal(final.snapshot.permits, 0);
-      assert.equal(final.snapshot.tombstones, 1);
-      assert.equal(terminalCount, 1);
+      assert.ok(
+        ["RECOVERY_FENCED", "ORPHAN_ABORTED"].includes(begin.result.status),
+        JSON.stringify({ begin: begin.result, recovery: recovery.result }),
+      );
+
+      // A start blocked by the live recovery fence is transiently fenced.
+      // Once recovery has durably completed, every late start must observe the terminal tombstone.
+      const late = await runWorker("late-begin", root);
+      assert.equal(late.result.status, "ORPHAN_ABORTED");
+
+      const aborted = await runWorker("inspect", root);
+      assert.equal(aborted.snapshot.boundaries, 0);
+      assert.equal(aborted.snapshot.permits, 0);
+      assert.equal(aborted.snapshot.tombstones, 1);
+      assert.equal(aborted.history.events.filter(event => event.event_type === "ORPHAN_INTENT_ABORTED").length, 1);
     }
-    assert.equal(final.snapshot.external_effects, 0);
+    assert.equal((await runWorker("inspect", root)).snapshot.external_effects, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

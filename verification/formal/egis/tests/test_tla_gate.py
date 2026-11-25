@@ -286,6 +286,151 @@ class GateTests(unittest.TestCase):
                     with self.assertRaises(type(exception)):
                         run_command(["java"], self.root, 1)
 
+    def _run_gate_with_preflight_mocks(self, **overrides):
+        with patch("egis_tla_gate.git_identity", return_value=self.identity) as git_identity_mock:
+            with patch("egis_tla_gate.run_command", side_effect=self.mock_pass) as command_mock:
+                result = run_gate(**self.args(**overrides))
+        return result, git_identity_mock, command_mock
+
+    def _run_gate_without_preflight_exception(self, **overrides):
+        try:
+            return self._run_gate_with_preflight_mocks(**overrides)
+        except Exception as exc:
+            self.fail(f"run_gate leaked an input-preflight exception: {type(exc).__name__}")
+
+    def test_b1a_records_sha256_and_filesystem_identity_for_all_inputs(self):
+        result, git_mock, command_mock = self._run_gate_with_preflight_mocks()
+        self.assertEqual("PASS", result["checks"]["inputs"]["status"])
+        snapshots = result["scope"]["input_snapshots"]
+        expected = {
+            "module": self.module,
+            "config": self.config,
+            "tool_jar": self.jar,
+        }
+        for role, path in expected.items():
+            with self.subTest(role=role):
+                snapshot = snapshots[role]
+                self.assertEqual(str(path.resolve()), snapshot["canonical_path"])
+                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), snapshot["sha256"])
+                identity = snapshot["identity"]
+                self.assertGreater(identity["device"], 0)
+                self.assertGreater(identity["inode"], 0)
+                self.assertEqual(path.stat().st_size, identity["size"])
+                self.assertIn("mtime_ns", identity)
+                self.assertIn("ctime_ns", identity)
+        self.assertEqual(result["scope"]["module_sha256"], snapshots["module"]["sha256"])
+        self.assertEqual(result["scope"]["config_sha256"], snapshots["config"]["sha256"])
+        self.assertEqual(result["scope"]["tool_sha256_actual"], snapshots["tool_jar"]["sha256"])
+        git_mock.assert_called_once()
+        self.assertEqual(2, command_mock.call_count)
+
+    def test_b1a_accepts_external_jar_and_records_its_canonical_identity(self):
+        import shutil
+
+        external_dir = Path(tempfile.mkdtemp(prefix="egis-external-jar-"))
+        try:
+            external_jar = external_dir / "approved-tools.jar"
+            external_jar.write_bytes(b"external-approved-tools")
+            pin = hashlib.sha256(external_jar.read_bytes()).hexdigest()
+            result, git_mock, command_mock = self._run_gate_with_preflight_mocks(
+                jar=external_jar,
+                expected_sha256=pin,
+            )
+            self.assertEqual("PASS", result["checks"]["inputs"]["status"])
+            self.assertEqual(str(external_jar.resolve()),
+                             result["scope"]["input_snapshots"]["tool_jar"]["canonical_path"])
+            self.assertEqual(pin, result["scope"]["input_snapshots"]["tool_jar"]["sha256"])
+            git_mock.assert_called_once()
+            self.assertEqual(2, command_mock.call_count)
+        finally:
+            shutil.rmtree(external_dir)
+
+    def test_b1a_missing_config_is_classified_as_input_missing(self):
+        missing = self.root / "missing.cfg"
+        result, git_mock, command_mock = self._run_gate_with_preflight_mocks(config=missing)
+        self.assertEqual("BLOCKED", result["overall"])
+        self.assertEqual("BLOCKED", result["checks"]["inputs"]["status"])
+        self.assertEqual("input_missing", result["checks"]["inputs"]["reason"])
+        self.assertEqual("config", result["checks"]["inputs"]["role"])
+        git_mock.assert_not_called()
+        command_mock.assert_not_called()
+
+    def test_b1a_rejects_module_symlink_escaping_repository_root(self):
+        import os
+
+        outside_dir = Path(tempfile.mkdtemp(prefix="egis-outside-root-"))
+        try:
+            outside_module = outside_dir / "outside.tla"
+            outside_module.write_text("---- MODULE Outside ----\n", encoding="utf-8")
+            escaped = self.root / "escaped.tla"
+            try:
+                os.symlink(outside_module, escaped)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"symlink creation unavailable on this runner: {type(exc).__name__}")
+            result, git_mock, command_mock = self._run_gate_with_preflight_mocks(module=escaped)
+            self.assertEqual("BLOCKED", result["overall"])
+            self.assertEqual("repository_input_path_escape", result["checks"]["inputs"]["reason"])
+            self.assertEqual("module", result["checks"]["inputs"]["role"])
+            git_mock.assert_not_called()
+            command_mock.assert_not_called()
+        finally:
+            import shutil
+            shutil.rmtree(outside_dir)
+
+    def test_b1a_rejects_non_regular_required_input(self):
+        directory = self.root / "module-directory"
+        directory.mkdir()
+        result, git_mock, command_mock = self._run_gate_with_preflight_mocks(module=directory)
+        self.assertEqual("BLOCKED", result["overall"])
+        self.assertEqual("input_not_regular", result["checks"]["inputs"]["reason"])
+        self.assertEqual("module", result["checks"]["inputs"]["role"])
+        git_mock.assert_not_called()
+        command_mock.assert_not_called()
+
+    def test_b1a_stat_io_errors_are_not_reclassified_as_missing(self):
+        original_stat = Path.stat
+        for role in ("module", "config", "tool_jar"):
+            with self.subTest(role=role):
+                target = {"module": self.module, "config": self.config,
+                          "tool_jar": self.jar}[role]
+                def denied_stat(path, *args, **kwargs):
+                    if path == target:
+                        raise PermissionError(13, "permission denied", str(path))
+                    return original_stat(path, *args, **kwargs)
+                with patch.object(Path, "stat", new=denied_stat):
+                    result, git_mock, command_mock = self._run_gate_without_preflight_exception(
+                        **{role if role != "tool_jar" else "jar": target}
+                    )
+                self.assertEqual("BLOCKED", result["overall"])
+                self.assertEqual("input_io_unavailable", result["checks"]["inputs"]["reason"])
+                self.assertEqual(role, result["checks"]["inputs"]["role"])
+                self.assertEqual("PermissionError", result["checks"]["inputs"]["error_type"])
+                git_mock.assert_not_called()
+                command_mock.assert_not_called()
+
+    def test_b1a_open_io_errors_are_blocked_with_structured_evidence(self):
+        original_open = Path.open
+        for role in ("module", "config", "tool_jar"):
+            with self.subTest(role=role):
+                target = {"module": self.module, "config": self.config,
+                          "tool_jar": self.jar}[role]
+                def denied_open(path, *args, **kwargs):
+                    if path == target:
+                        raise OSError(5, "read failed", str(path))
+                    return original_open(path, *args, **kwargs)
+                with patch.object(Path, "open", new=denied_open):
+                    result, git_mock, command_mock = self._run_gate_without_preflight_exception(
+                        **{role if role != "tool_jar" else "jar": target}
+                    )
+                self.assertEqual("BLOCKED", result["overall"])
+                self.assertEqual("input_io_unavailable", result["checks"]["inputs"]["reason"])
+                self.assertEqual(role, result["checks"]["inputs"]["role"])
+                self.assertEqual("OSError", result["checks"]["inputs"]["error_type"])
+                self.assertEqual(5, result["checks"]["inputs"]["errno"])
+                self.assertTrue(self.output.is_file())
+                git_mock.assert_not_called()
+                command_mock.assert_not_called()
+
     def test_hash_mismatch_fails_before_tools(self):
         with patch("egis_tla_gate.git_identity", return_value=self.identity):
             with patch("egis_tla_gate.run_command") as mocked:

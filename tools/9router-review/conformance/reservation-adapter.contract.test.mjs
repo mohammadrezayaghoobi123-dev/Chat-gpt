@@ -1229,3 +1229,48 @@ test("T50: a lost boundary acknowledgement recovers the same durable receipt wit
   });
   assert.equal(repeated.status, "ALREADY_CONSUMED");
 });
+
+
+test("T51: COMMENT outcomes require the exact committed COMMENT boundary receipt", async () => {
+  const system = makeSystem();
+  const started = await commentAttempt(system);
+  assert.equal(started.permit.status, "COMMENT_PERMIT");
+  const receipt = started.permit.attemptBoundaryReceipt;
+  assert.ok(receipt, "beginCommentAttempt must return a committed COMMENT boundary receipt");
+
+  const mutations = [
+    { stage: "MODEL" },
+    { attempt_id: "different-comment-attempt" },
+    { request_digest: "different-comment-payload" },
+    { reservation_key_digest: "sha256:" + "f".repeat(64) },
+    { generation: started.resumed.record.generation + 1 },
+    { committed_record_version: started.permit.record_version + 1 },
+    { boundary_event_id: "forged-comment-boundary" },
+    { purpose: "different-purpose" },
+    { signature: "forged-signature" },
+  ];
+
+  for (const mutation of mutations) {
+    const before = await system.ledger.readComplete({ key: KEY });
+    const rejected = await system.ledger.appendOutcome({
+      attemptId: started.attemptId,
+      outcomeType: "COMMENT_ACCEPTED",
+      evidenceDigest: "comment-response-digest",
+      evidenceReference: "github-comment://463/123",
+      attemptBoundaryReceipt: { ...receipt, ...mutation },
+    });
+    assert.equal(rejected.status, "INVALID_ATTEMPT_BOUNDARY_RECEIPT");
+    const after = await system.ledger.readComplete({ key: KEY });
+    assert.equal(after.events.length, before.events.length);
+    assert.equal(after.watermark, before.watermark);
+  }
+
+  const accepted = await system.ledger.appendOutcome({
+    attemptId: started.attemptId,
+    outcomeType: "COMMENT_ACCEPTED",
+    evidenceDigest: "comment-response-digest",
+    evidenceReference: "github-comment://463/123",
+    attemptBoundaryReceipt: receipt,
+  });
+  assert.equal(accepted.status, "ACK");
+});

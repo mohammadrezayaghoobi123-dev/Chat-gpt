@@ -1,0 +1,42 @@
+name: EGIS TLA Gate Unit Tests
+
+on:
+  pull_request:
+    paths:
+      - "verification/formal/egis/tools/egis_tla_gate.py"
+      - "verification/formal/egis/tests/test_tla_gate.py"
+      - ".github/workflows/egis-tla-gate-tests.yml"
+  push:
+    branches:
+      - "verification/egis-verification-gate-v1.1.1-2026-11-25"
+    paths:
+      - "verification/formal/egis/tools/egis_tla_gate.py"
+      - "verification/formal/egis/tests/test_tla_gate.py"
+      - ".github/workflows/egis-tla-gate-tests.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: egis-tla-gate-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile gate and tests
+        run: python -m compileall -q verification/formal/egis/tools/egis_tla_gate.py verification/formal/egis/tests/test_tla_gate.py
+      - name: Run mocked gate unit tests
+        env:
+          PYTHONPATH: verification/formal/egis/tools
+        run: python -m unittest discover -s verification/formal/egis/tests -p "test_tla_gate.py" -v

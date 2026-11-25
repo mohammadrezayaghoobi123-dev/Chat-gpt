@@ -1,6 +1,6 @@
 # EGIS-FM-007 — TLC Output Validator Hostile Review v1.1.1
 
-**Status:** Candidate / exact-head mocked CI verified; real TLC compatibility NOT_ESTABLISHED  
+**Status:** Candidate / FMH-074 remediation committed; post-fix CI pending; real TLC compatibility NOT_ESTABLISHED  
 **Date:** 2026-11-25  
 **Scope:** TLC text-output validator and its integration into the EGIS verification gate  
 **Parent:** PR #475; stacked on EGIS operation-composition v1.1.0

@@ -1,6 +1,6 @@
 # EGIS-FM-007 — TLC Output Validator Hostile Review v1.1.1
 
-**Status:** Candidate / CI verification pending  
+**Status:** Candidate / mocked CI verified; real TLC compatibility NOT_ESTABLISHED  
 **Date:** 2026-11-25  
 **Scope:** TLC text-output validator and its integration into the EGIS verification gate  
 **Parent:** PR #475; stacked on EGIS operation-composition v1.1.0
@@ -37,7 +37,7 @@ The validator returns structured status/reason and extracted counts. Missing or 
 | FMH-067 | High | Text output can be forged or replaced after process execution; parser success is not artifact authenticity. | Open; signed/attested execution evidence and immutable retention required. |
 | FMH-068 | Medium | Config inventory extraction accepts only one invariant name per exact INVARIANT line. Unsupported formatting yields an empty inventory and BLOCKED, not PASS. | Fail-closed by design; broaden only with fixtures and tests. |
 | FMH-069 | Medium | The summary parser is a textual heuristic and may reject valid TLC output or miss a novel error marker. | Open; version-pinned fixtures, mutation corpus, and differential parser review required. |
-| FMH-070 | Medium | Mocked subprocess tests do not prove the actual TLC executable emits the assumed marker grammar or that trace artifacts are retained. | Open; controlled real-tool execution and trace-capture verification required. |
+| FMH-070 | Medium | Mocked subprocess tests do not prove the actual TLC executable emits the assumed marker grammar or that trace artifacts are retained. | Open; controlled real-tool execution and trace-capture verification required. |\n| FMH-071 | Medium | Missing TLC executable (`exit_code=None`, no timeout) was classified as FAIL rather than BLOCKED. | Fixed in candidate: unavailable process is BLOCKED; timeout and non-zero exit remain FAIL. Regression test added. |
 
 ## Test evidence and TDD record
 
@@ -49,7 +49,7 @@ The validator returns structured status/reason and extracted counts. Missing or 
 
 ## Verification boundaries
 
-- Unit tests use synthetic TLC output. They do not constitute SANY/TLC execution.
+- Unit tests use synthetic TLC output. They do not constitute SANY/TLC execution.\n- Latest Gitleaks run on the remediation head: PR-diff scan PASS; full-history scan FAIL with the same 13 unclassified generic-api-key findings across historical commits. No suppressions or secret changes were made.
 - SANY: NOT_RUN.
 - TLC: NOT_RUN.
 - Real output fixture compatibility: NOT_ESTABLISHED.

@@ -39,7 +39,7 @@ The PR-diff scan passing establishes only that Gitleaks found no leak in the sca
 - A minimal Python 3.11 GitHub Actions workflow was added with read-only contents permission, checkout credentials disabled, compileall, and mocked unit tests.
 - First CI execution compiled successfully and ran 13 tests; 12 passed and one exposed a separate status-classification defect: an expected-commit mismatch was classified BLOCKED instead of FAIL.
 - That defect was corrected: dirty checkout and commit mismatch are FAIL; unavailable Git metadata is BLOCKED. A dedicated regression test now covers unavailable metadata.
-- The latest remediation-head unit-test run was queued at the time of this report; its final result is not yet established.
+- Remediation-head CI run 45552300042 completed successfully on source commit e7ed42327b90ec2013c3f69c951954681037a055: Python 3.11 compileall PASS; all 14 mocked unit tests PASS. This validates gate control-flow tests only, not real SANY/TLC execution.
 - Full-history Gitleaks findings remain independent and unresolved.
 
 ## Required next atomic increment

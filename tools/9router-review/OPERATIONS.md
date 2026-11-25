@@ -1795,3 +1795,10 @@ The design now requires a linearizing coordinator interface for admission, settl
 **Disposition:** AR-76 design record added; RS-32/RS-33 contract added but unimplemented/unqualified; RS-34 independent recovery authority remains GAP. Reviewer remains disabled, PR #463 remains isolated, and no main/production/cloud/secrets/local-host changes occurred.
 
 **Next gate:** translate this contract into deterministic test-first conformance cases and a provider-neutral interface skeleton only after design approval; no backend resource creation or reviewer integration.
+
+
+### AR-76.1 — Hostile interface adequacy correction
+
+The hostile pass found an enforcement gap in the first interface draft: coordinator admission/permit acknowledgements are not effective controls if a caller can bypass them and invoke an external transport directly, or mutate a shard after admission without co-commit/fencing. The contract now requires protected state mutation to co-commit with the coordinator admission/fence or use an explicit recoverable cross-authority protocol, and every provider/GitHub effect site to pass through a mandatory permit-consuming transport guard. The spike must include static transport-call inventory and negative tests for missing, stale, duplicate, wrong-key/stage and post-close permits.
+
+This correction is documentation-only. The actual call-site guard inventory, implementation, and runtime bypass tests remain NOT RUN. No backend, code, test harness, workflow activation, provider call, GitHub comment, deployment, secret, main branch, or local-host change occurred.

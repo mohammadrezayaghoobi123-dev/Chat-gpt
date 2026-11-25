@@ -153,3 +153,65 @@ class GateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TlcOutputValidatorTests(unittest.TestCase):
+    def test_complete_success_requires_summary_and_expected_invariant_count(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        output = """Checking 1 invariant...
+Model checking completed. No error has been found.
+  12 states generated, 8 distinct states found, 0 states left on queue.
+"""
+        result = validate_tlc_output(output, ["Safety"], exit_code=0)
+        self.assertEqual("PASS", result["status"])
+        self.assertEqual(8, result["distinct_states"])
+        self.assertEqual(["Safety"], result["expected_invariants"])
+
+    def test_zero_exit_without_completion_summary_is_not_pass(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        result = validate_tlc_output("TLC started successfully", ["Safety"], exit_code=0)
+        self.assertNotEqual("PASS", result["status"])
+
+    def test_missing_invariant_check_is_not_pass(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        output = """Model checking completed. No error has been found.
+  12 states generated, 8 distinct states found, 0 states left on queue.
+"""
+        result = validate_tlc_output(output, ["Safety"], exit_code=0)
+        self.assertNotEqual("PASS", result["status"])
+
+    def test_invariant_count_mismatch_is_not_pass(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        output = """Checking 0 invariants...
+Model checking completed. No error has been found.
+  12 states generated, 8 distinct states found, 0 states left on queue.
+"""
+        result = validate_tlc_output(output, ["Safety"], exit_code=0)
+        self.assertEqual("FAIL", result["status"])
+
+    def test_error_or_violation_marker_overrides_success_summary(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        output = """Checking 1 invariant...
+Error: Invariant Safety is violated.
+Model checking completed. No error has been found.
+  12 states generated, 8 distinct states found, 0 states left on queue.
+"""
+        result = validate_tlc_output(output, ["Safety"], exit_code=0)
+        self.assertEqual("FAIL", result["status"])
+
+    def test_nonzero_exit_and_timeout_never_pass(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        output = """Checking 1 invariant...
+Model checking completed. No error has been found.
+  12 states generated, 8 distinct states found, 0 states left on queue.
+"""
+        self.assertEqual("FAIL", validate_tlc_output(output, ["Safety"], exit_code=2)["status"])
+        self.assertEqual("FAIL", validate_tlc_output(output, ["Safety"], exit_code=0, timed_out=True)["status"])
+
+    def test_malformed_or_inconsistent_state_counts_never_pass(self):
+        from egis_tlc_output_validator import validate_tlc_output
+        malformed = """Checking 1 invariant...
+Model checking completed. No error has been found.
+  8 states generated, 12 distinct states found, 0 states left on queue.
+"""
+        self.assertNotEqual("PASS", validate_tlc_output(malformed, ["Safety"], exit_code=0)["status"])

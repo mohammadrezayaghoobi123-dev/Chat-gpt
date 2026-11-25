@@ -57,7 +57,7 @@ The design document itself is maintained through separate documentation-only com
 - **I-09 Exception discipline:** do not catch `BaseException`, `KeyboardInterrupt`, `SystemExit`, or unrelated programming errors at the top level.
 - **I-10 No false durability claim:** atomic visibility and crash durability are separate; this scope promises no fsync-based crash durability.
 - **I-11 No real-tool claim:** mocked process tests do not establish TLA+ tool provenance, SANY/TLC execution, or real-output compatibility.
-- **I-12 Project epistemics:** `UNKNOWN` is not success or failure; gate statuses `PASS`, `FAIL`, `BLOCKED`, and `NOT_RUN` retain their documented meanings.
+- **I-12 Project epistemics:** `UNKNOWN` is not success or failure. A gate status BLOCKED may carry command process_outcome UNKNOWN; this must remain explicitly represented and must never be converted to PASS or model FAIL. Gate statuses PASS, FAIL, BLOCKED and NOT_RUN retain their documented meanings.
 
 ## 2. Required execution state machine
 
@@ -84,7 +84,7 @@ The gate must follow this sequence. A stage may only transition forward; a faile
 |---|---|---|
 | Executable absent at process creation | BLOCKED | `process_executable_missing` |
 | Other `OSError` during `Popen` creation | BLOCKED | `process_start_unavailable` |
-| Child started; output communication raises `OSError` | BLOCKED | `process_result_unavailable` |
+| Child started; output communication raises `OSError` | BLOCKED with `process_outcome=UNKNOWN` and `process_started=true` | `process_result_unavailable` |
 | Child exceeds timeout | FAIL | `process_timed_out` |
 | Child exits nonzero | FAIL | `process_nonzero_exit` |
 | Required input missing | BLOCKED | `input_missing` |
@@ -99,7 +99,7 @@ The gate must follow this sequence. A stage may only transition forward; a faile
 
 For config parsing, any line whose first token is `INVARIANT` must match the accepted single-identifier grammar; a malformed explicit invariant directive is FAIL. Other TLC config directives remain untouched. No invariant directives is BLOCKED.
 
-Diagnostics must not include raw exception reprs, absolute local paths, or environment values. For process-start errors, preserve exception class and errno when available, but not filename/path fields. Command-result metadata fields are: `reason` (stable code or null), `phase` (`spawn`, `communicate`, or null), `error_type` (exception class or null), `errno` (integer or null), and `process_cleanup` (`NOT_STARTED`, `REAPED`, or `UNKNOWN`). The `stderr` diagnostic is a fixed, bounded, path-free rendering of these fields, not `str(exc)`. Command identity remains in the established structured evidence fields; do not add secrets or environment contents.
+Diagnostics must not include raw exception reprs, absolute local paths, or environment values. For process-start errors, preserve exception class and errno when available, but not filename/path fields. Command-result metadata fields are: `reason` (stable code or null), `phase` (`spawn`, `communicate`, or null), `error_type` (exception class or null), `errno` (integer or null), `process_started` (boolean), `process_outcome` (`NOT_STARTED`, `UNKNOWN`, `EXIT_ZERO`, `EXIT_NONZERO`, or `TIMED_OUT`), and `process_cleanup` (`NOT_STARTED`, `REAPED`, or `UNKNOWN`). A command may have gate status BLOCKED with process_outcome UNKNOWN: the child started but no complete result was captured. This is a verification disposition, not a claim that execution did not occur or that the model failed. The `stderr` diagnostic is a fixed, bounded, path-free rendering of these fields, not `str(exc)`. Command identity remains in the established structured evidence fields; do not add secrets or environment contents.
 
 ## 4. Five atomic implementation atoms
 
@@ -116,14 +116,14 @@ Each atom has two implementation commits: **RED** (tests only) and **GREEN** (th
 3. Catch other `OSError` only around `Popen` construction as process-start BLOCKED.
 4. After successful construction, call `communicate(timeout=...)`.
 5. On timeout, kill and reap the child using a bounded cleanup wait (maximum 5 seconds); safely decode captured output and keep status FAIL. If the bounded reap cannot be confirmed, set `process_cleanup=UNKNOWN` and do not start a dependent process.
-6. If communication raises `OSError` after process start, attempt terminate/kill and reap using the same bounded 5-second cleanup wait. Return BLOCKED with `process_result_unavailable`; never validate missing/partial output as success. If reap is uncertain, set `process_cleanup=UNKNOWN` and prohibit dependent process execution.
+6. If communication raises `OSError` after process start, attempt terminate/kill and reap using the same bounded 5-second cleanup wait. Return gate status BLOCKED with reason `process_result_unavailable`, phase `communicate`, process_started=true and process_outcome=UNKNOWN; never validate missing/partial output as success. If reap is uncertain, set `process_cleanup=UNKNOWN` and prohibit dependent process execution.
 7. If cleanup cannot be confirmed, report a cleanup substatus and do not start another dependent process.
 
 Do not blanket-catch OSError around the entire function. Preserve existing result keys `status`, `exit_code`, `stdout`, `stderr`, `command`; add only stable, documented `reason`, `phase`, `error_type`, `errno`, and `process_cleanup` metadata. Because this changes emitted evidence, A1 GREEN must increment `schema_version` from `1.1` to `1.2` in the same implementation commit. Update EGIS-VG-001 in the same A1 GREEN commit; do not split the schema change from its contract. Process output retains the current uncapped capture behavior; output-size limiting is a separate scope.
 
-**RED-only tests:** PermissionError at Popen; generic OSError with and without errno; absent executable; communication OSError after child creation; TimeoutExpired with kill/reap; nonzero exit; successful output; KeyboardInterrupt/SystemExit and unrelated programming exception propagation; path-redacted diagnostics; JSON serialization.
+**RED-only tests:** PermissionError at Popen; generic OSError with and without errno; absent executable; communication OSError after child creation returns gate BLOCKED plus process_outcome UNKNOWN and process_started=true; TimeoutExpired with bounded kill/reap; nonzero exit; successful output; KeyboardInterrupt/SystemExit and unrelated programming exception propagation; path-redacted diagnostics; JSON serialization.
 
-**GREEN acceptance:** all targeted tests pass; existing timeout/nonzero/missing-executable semantics do not regress; no child is left running in injected timeout/communication-failure tests where the platform harness can verify reaping.
+**GREEN acceptance:** all targeted tests pass; existing timeout/nonzero/missing-executable semantics do not regress; process_outcome distinguishes NOT_STARTED, UNKNOWN, EXIT_ZERO, EXIT_NONZERO and TIMED_OUT; no child is left running in injected timeout/communication-failure tests where the platform harness can verify reaping.
 
 **Files:** A1 RED changes only `test_tla_gate.py`. A1 GREEN changes `egis_tla_gate.py`, `test_tla_gate.py`, and `EGIS-VG-001-verification-gate-contract-v1.1.1.md` together.
 
@@ -133,13 +133,16 @@ Do not blanket-catch OSError around the entire function. Preserve existing resul
 
 **Required transitions:**
 
-- Git metadata unavailable or unobservable → source identity BLOCKED and no Java process.
+- Git process start failure → source identity BLOCKED with process_outcome NOT_STARTED; no Java process.
+- A Git child starts but result capture fails → source identity BLOCKED with process_outcome UNKNOWN; no Java process. This is not a claim that Git did not run.
 - Dirty source or expected-commit mismatch → FAIL and no Java process.
-- SANY BLOCKED → TLC BLOCKED with `SANY_not_passed`; overall BLOCKED; evidence written if output is safe/writable.
-- SANY FAIL → TLC BLOCKED with `SANY_not_passed`; overall FAIL.
+- SANY BLOCKED with process_outcome NOT_STARTED → TLC BLOCKED with SANY_not_passed; overall BLOCKED; evidence written if output is safe/writable.
+- SANY BLOCKED with process_outcome UNKNOWN → TLC BLOCKED with SANY_not_passed; overall BLOCKED; preserve process_outcome UNKNOWN in the SANY command record.
+- SANY FAIL → TLC BLOCKED with SANY_not_passed; overall FAIL.
 - TLC BLOCKED → TLC output validation BLOCKED; overall BLOCKED.
+- TLC BLOCKED with process_outcome UNKNOWN → output validation NOT_RUN; preserve the command process_outcome UNKNOWN; overall BLOCKED.
 - TLC FAIL/timeout/nonzero → output validation cannot promote the gate; overall FAIL.
-- Process result unavailable → no parser call on partial/missing output.
+- Process result unavailable → no parser call on partial/missing output; never infer not-started, PASS or model FAIL.
 
 **RED-only tests:** inject each transition separately; assert exact status and exact call count; assert no Java execution after Git metadata block; assert no TLC after every non-PASS SANY result; assert no TLC parser PASS from partial stdout.
 
@@ -158,15 +161,17 @@ Do not blanket-catch OSError around the entire function. Preserve existing resul
 - Use explicit `stat`/open operations, not `is_file()` as the sole failure discriminator.
 - Distinguish missing file from non-missing metadata/read errors.
 - Hash module/config/JAR from the bytes actually read. Read the config once and retain that exact decoded text and invariant inventory for later validation.
+- Record each input's filesystem identity and metadata with its initial digest. Recheck identity/digest immediately before each Java launch and after the final Java process. A mismatch before launch is FAIL and prevents that process; a mismatch discovered after a child starts makes the overall result BLOCKED with the affected execution evidence marked UNKNOWN. Inspection errors are BLOCKED.
+- This detects persistent mutation but cannot exclude transient ABA replacement. PASS is conditional on the caller supplying a read-only, stable input snapshot for the full invocation. This assumption must be included in evidence metadata and remains a promotion limitation until stronger snapshot isolation is designed.
 - Decode config bytes using strict UTF-8 before SANY. Invalid UTF-8 is FAIL.
 - Derive invariant names from the already decoded text once. Empty/unavailable inventory is BLOCKED; duplicate/invalid explicit names are FAIL.
 - A line beginning with the `INVARIANT` directive must match one valid identifier under the accepted grammar; do not silently ignore malformed invariant directives.
 - Pass the validated inventory to the TLC output validator; do not reread the config after TLC.
 - Preserve current pin-mismatch behavior as FAIL and missing JAR as BLOCKED.
 
-**RED-only tests:** missing module/config/JAR; stat and open PermissionError/OSError for each input class; module/config path escape via symlink; invalid UTF-8 config with assertion that Popen is never called; empty inventory; malformed/duplicate/invalid invariant directives; stable hashes over the exact bytes read.
+**RED-only tests:** missing module/config/JAR; stat and open PermissionError/OSError for each input class; module/config path escape via symlink; invalid UTF-8 config with assertion that Popen is never called; empty inventory; malformed/duplicate/invalid invariant directives; stable hashes over the exact bytes read; persistent input mutation before SANY launch blocks with FAIL; mutation between SANY and TLC prevents TLC launch; post-execution identity/digest change blocks acceptance and marks the affected execution UNKNOWN.
 
-**GREEN acceptance:** no child process starts until all required preflight checks pass; exact config bytes and inventory used for final validation are the preflight values.
+**GREEN acceptance:** no child process starts until all required preflight checks pass; exact config bytes and inventory used for final validation are the preflight values; any detected identity/digest change prevents PASS.
 
 **Files:** the two allowed executable files only.
 
@@ -210,14 +215,14 @@ Parent-directory symlinks are resolved to their canonical target. The design doe
 8. Writer reason codes are exactly: `evidence_directory_unavailable`, `evidence_serialization_failed`, `evidence_temp_create_failed`, `evidence_write_failed`, `evidence_close_failed`, and `evidence_replace_failed`. If cleanup also fails, preserve the primary reason and set `cleanup_failed=true` plus `cleanup_reason_code=evidence_temp_cleanup_failed`.
 9. Output-path reason codes are exactly: `evidence_output_input_alias`, `evidence_output_symlink`, `evidence_output_not_regular`, and `evidence_output_inspection_failed`.
 10. The CLI catches only `EvidenceOutputPathError` and `EvidencePersistenceError`, writes one bounded sanitized diagnostic to stderr in the form `EGIS_GATE_ERROR code=<reason_code> errno=<integer|none> cleanup_failed=<true|false>`, and returns nonzero. It does not print JSON evidence or claim a persisted gate status when persistence failed.
-9. Do not add file or directory fsync in this increment; document atomic replacement/visibility only, not crash durability.
-10. Do not increment the schema version in B3. Schema `1.2` is introduced atomically with A1's new command-result fields and the corresponding contract document update. Evidence-writer failure is not placed into evidence JSON because no valid evidence file may be claimed after persistence failure; it is surfaced only through the typed exception and sanitized CLI diagnostic.
+11. Do not add file or directory fsync in this increment; document atomic replacement/visibility only, not crash durability.
+12. Do not increment the schema version in B3. Schema `1.2` is introduced atomically with A1's new command-result fields and the corresponding contract document update. Evidence-writer failure is not placed into evidence JSON because no valid evidence file may be claimed after persistence failure; it is surfaced only through the typed exception and sanitized CLI diagnostic.
 
 **RED-only tests:** NaN/non-serializable payload; parent mkdir failure; temp creation failure; partial write failure; close failure; replace failure; cleanup failure; old destination preserved before replace; temp path is same directory; temp cleanup attempted; successful JSON roundtrip; CLI captures sanitized stderr, returns nonzero, and emits no success JSON on persistence failure; KeyboardInterrupt/SystemExit not swallowed. Schema version and command-result field compatibility are tested in A1.
 
 **GREEN acceptance:** old output remains unchanged for every pre-replace failure; no temp residue when cleanup succeeds; CLI makes no persisted-evidence claim after any writer failure; successful replace yields parseable JSON with schema 1.2.
 
-**Files:** the two allowed executable files only. The EGIS-VG contract update is a separate docs-only commit, not mixed into executable implementation.
+**Files:** the two allowed executable files only. EGIS-VG-001 is updated atomically with A1 GREEN and is not changed by B3.
 
 ## 5. Per-atom transaction protocol
 
@@ -247,7 +252,7 @@ The temporary RED commit is intentionally expected to fail tests. The correspond
 ## 7. Explicit residual risks
 
 - The caller-controlled output directory is assumed not to be concurrently manipulated by a hostile process. Path-swap TOCTOU resistance is not claimed.
-- Input files could be modified concurrently after their bytes are hashed but before SANY/TLC reopens them. This design records the limitation; it does not claim filesystem snapshot isolation.
+- Input files could be modified concurrently after their bytes are hashed but before SANY/TLC reopens them. B1 adds pre-launch and post-execution identity/digest checks, but these cannot exclude transient ABA changes. PASS is conditional on a caller-provided read-only stable snapshot; the gate does not claim to establish snapshot isolation. This remains FMH-120 and blocks promotion where hostile concurrent input writers are in scope.
 - Output captured by child processes remains subject to the existing uncapped capture behavior; output-size limiting is outside this narrowly scoped work.
 - Atomic replace is not crash-durable without file and directory fsync. No durability claim is made.
 - An OS/process cleanup failure may leave a child process state uncertain; the evidence must expose this and block dependent execution.

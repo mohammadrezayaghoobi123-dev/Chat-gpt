@@ -86,29 +86,44 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
       ...payload,
       signature: "reference-only:" + digest(payload),
     };
-    boundaryReceipts.set(attemptId, {
+    return receipt;
+  }
+
+  function registerAttemptBoundaryReceipt(receipt, keyId) {
+    boundaryReceipts.set(receipt.attempt_id, {
       keyId,
-      stage,
-      requestDigest,
-      generation,
-      committedRecordVersion,
+      stage: receipt.stage,
+      requestDigest: receipt.request_digest,
+      generation: receipt.generation,
+      committedRecordVersion: receipt.committed_record_version,
       receipt: clone(receipt),
     });
-    return receipt;
   }
 
   function matchesAttemptBoundaryReceipt(receipt, intent, attemptId) {
     if (!receipt || typeof receipt !== "object") return false;
     const issued = boundaryReceipts.get(attemptId);
+    const record = records.get(intent.key_id);
+    const persistedAttemptId = intent.stage === "MODEL"
+      ? record?.model_attempt_id
+      : record?.comment_attempt_id;
+    const persistedReceipt = intent.stage === "MODEL"
+      ? record?.model_attempt_boundary_receipt
+      : record?.comment_attempt_boundary_receipt;
     return Boolean(
       issued &&
+      record &&
+      persistedAttemptId === attemptId &&
       issued.keyId === intent.key_id &&
       issued.stage === intent.stage &&
       issued.requestDigest === intent.request_digest &&
+      issued.generation === receipt.generation &&
+      issued.committedRecordVersion === receipt.committed_record_version &&
       receipt.stage === intent.stage &&
       receipt.attempt_id === attemptId &&
       receipt.request_digest === intent.request_digest &&
       receipt.reservation_key_digest === digest(intent.key_id) &&
+      digest(persistedReceipt) === digest(issued.receipt) &&
       digest(receipt) === digest(issued.receipt)
     );
   }
@@ -432,6 +447,7 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
         model_attempt_deadline_at: now() + args.attemptTimeoutMs,
         model_effect_ledger_intent_id: args.effectLedgerReceipt.eventId,
       });
+      registerAttemptBoundaryReceipt(attemptBoundaryReceipt, keyId);
       return {
         status: "MODEL_PERMIT",
         record_version: next.record_version,
@@ -507,6 +523,7 @@ export function createReferenceSystem({ now = () => Date.now() } = {}) {
         comment_effect_ledger_intent_id: args.effectLedgerReceipt.eventId,
         comment_attempt_deadline_at: now() + args.attemptTimeoutMs,
       });
+      registerAttemptBoundaryReceipt(attemptBoundaryReceipt, keyId);
       return {
         status: "COMMENT_PERMIT",
         record_version: next.record_version,

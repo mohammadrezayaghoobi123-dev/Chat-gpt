@@ -195,7 +195,7 @@ export function openSqliteOrphanRecoveryHarness({ ledgerPath, reservationPath, n
         const currentFence = reservationDb.prepare("SELECT generation, owner FROM recovery_fences WHERE operation_id = ?").get(operation.operation_id);
         if (!currentFence || currentFence.generation !== fence?.generation || currentFence.owner !== fence?.owner) return { status: "STALE_FENCE" };
         const counts = reservationCounts(operation.operation_id);
-        const boundary = reservationDb.prepare("SELECT identity_json FROM attempt_boundaries WHERE operation_id = ?").get(operation.operation_id);
+        const boundary = reservationDb.prepare("SELECT identity_json, receipt_json FROM attempt_boundaries WHERE operation_id = ?").get(operation.operation_id);
         if (boundary) return boundary.identity_json === canonical(operation)
           ? { status: "BOUNDARY_COMMITTED", receipt: JSON.parse(boundary.receipt_json) }
           : { status: "INTEGRITY_CONFLICT" };

@@ -11,7 +11,7 @@
 
 Revision 1 grouped too many responsibilities into two increments. That left transaction boundaries, failure ordering, ownership, and independently falsifiable acceptance criteria underspecified.
 
-Revision 2 decomposes the work into five implementation atoms. Each atom receives its own test-only RED commit and one bounded implementation GREEN commit. No implementation commit may include the next atom's behavior.
+Revision 2 decomposes the work into seven implementation atoms. Each atom receives its own test-only RED commit and one bounded implementation GREEN commit. No implementation commit may include the next atom's behavior.
 
 Current code facts motivating this design:
 
@@ -27,12 +27,12 @@ Current code facts motivating this design:
 
 ### 1.1 Allowed implementation surface
 
-Only these executable files may change during the five atoms:
+Only these executable files may change during the seven atoms:
 
 - `verification/formal/egis/tools/egis_tla_gate.py`
 - `verification/formal/egis/tests/test_tla_gate.py`
 
-Atom A1 GREEN changes the two executable files and updates `verification/formal/egis/EGIS-VG-001-verification-gate-contract-v1.1.1.md` in the same atomic commit because the emitted evidence schema changes in that commit. A1 RED is test-only. Atoms A2–B3 change only the two executable files. This avoids a branch state that emits schema 1.2 while documenting schema 1.1.
+Atom A1 GREEN updates the process-lifecycle code, tests and EGIS-VG-001 in one commit because it introduces schema 1.2. B1a GREEN updates input-snapshot code, tests and EGIS-VG-001 in one commit because it introduces schema 1.3. A1 and B1a RED commits are test-only. A2, B1b, B1c, B2 and B3 change only the two executable files. Each schema increment and contract change must be atomic; no commit may emit undocumented fields.
 
 The design document itself is maintained through separate documentation-only commits. The EGIS workflow is not changed unless the test runner demonstrably fails to trigger for either allowed executable path; that would require a separately reviewed scope change.
 
@@ -101,7 +101,7 @@ For config parsing, any line whose first token is `INVARIANT` must match the acc
 
 Diagnostics must not include raw exception reprs, absolute local paths, or environment values. For process-start errors, preserve exception class and errno when available, but not filename/path fields. Command-result metadata fields are: `reason` (stable code or null), `phase` (`spawn`, `communicate`, or null), `error_type` (exception class or null), `errno` (integer or null), `process_started` (boolean), `process_outcome` (`NOT_STARTED`, `UNKNOWN`, `EXIT_ZERO`, `EXIT_NONZERO`, or `TIMED_OUT`), and `process_cleanup` (`NOT_STARTED`, `REAPED`, or `UNKNOWN`). A command may have gate status BLOCKED with process_outcome UNKNOWN: the child started but no complete result was captured. This is a verification disposition, not a claim that execution did not occur or that the model failed. The `stderr` diagnostic is a fixed, bounded, path-free rendering of these fields, not `str(exc)`. Command identity remains in the established structured evidence fields; do not add secrets or environment contents.
 
-## 4. Five atomic implementation atoms
+## 4. Seven atomic implementation atoms
 
 Each atom has two implementation commits: **RED** (tests only) and **GREEN** (the minimal implementation for those tests). A1 GREEN includes the evidence-contract documentation update in the same commit; there is no intermediate schema/documentation mismatch. The next atom cannot start until the preceding GREEN commit has exact-head CI evidence and its hostile review has no unresolved high-severity defect.
 
@@ -150,31 +150,86 @@ Do not blanket-catch OSError around the entire function. Preserve existing resul
 
 **Files:** the two allowed executable files only.
 
-### Atom B1 — Required-input and TLC-config preflight
+### Atom B1a — Required-input discovery and immutable read snapshot
 
-**Responsibility:** make every required input observable and validate config before process execution.
+**Responsibility:** establish an observable, regular-file input snapshot for module, config and approved TLA+ JAR before any Java process.
 
 **Required behavior:**
 
-- Resolve root strictly; module and config canonical paths must remain beneath root after resolution. An escaping symlink is BLOCKED.
-- The approved JAR may be outside root, but must be a regular readable file and must match its pinned SHA-256.
-- Use explicit `stat`/open operations, not `is_file()` as the sole failure discriminator.
-- Distinguish missing file from non-missing metadata/read errors.
-- Hash module/config/JAR from the bytes actually read. Read the config once and retain that exact decoded text and invariant inventory for later validation.
-- Record each input's filesystem identity and metadata with its initial digest. Recheck identity/digest immediately before each Java launch and after the final Java process. A mismatch before launch is FAIL and prevents that process; a mismatch discovered after a child starts makes the overall result BLOCKED with the affected execution evidence marked UNKNOWN. Inspection errors are BLOCKED.
-- This detects persistent mutation but cannot exclude transient ABA replacement. PASS is conditional on the caller supplying a read-only, stable input snapshot for the full invocation. This assumption must be included in evidence metadata and remains a promotion limitation until stronger snapshot isolation is designed.
-- Decode config bytes using strict UTF-8 before SANY. Invalid UTF-8 is FAIL.
-- Derive invariant names from the already decoded text once. Empty/unavailable inventory is BLOCKED; duplicate/invalid explicit names are FAIL.
-- A line beginning with the `INVARIANT` directive must match one valid identifier under the accepted grammar; do not silently ignore malformed invariant directives.
-- Pass the validated inventory to the TLC output validator; do not reread the config after TLC.
-- Preserve current pin-mismatch behavior as FAIL and missing JAR as BLOCKED.
+1. Resolve the repository root strictly and verify it is a directory. Root resolution/stat failure is BLOCKED.
+2. Resolve module and config strictly. Their canonical resolved paths must remain beneath the canonical repository root. An escaping symlink or path traversal is BLOCKED with `repository_input_path_escape`.
+3. The JAR may be outside the repository root, but must resolve to a regular file.
+4. Use explicit `stat` / `open("rb")` / `fstat` operations. Do not use `Path.is_file()` to classify failure.
+5. Distinguish:
+   - initial FileNotFoundError → BLOCKED / `input_missing`;
+   - any other stat/open/read OSError → BLOCKED / `input_io_unavailable`;
+   - non-regular file → BLOCKED / `input_not_regular`;
+   - unavailable device/inode identity → BLOCKED / `input_identity_unavailable`.
+6. For each input, read through one opened descriptor, hash the exact bytes from that descriptor, and capture filesystem identity `device`, `inode`, `size`, `mtime_ns`, and `ctime_ns` from `fstat`. Compare pre-open stat, descriptor identity before/after read, and a post-read path stat. A changed identity/metadata while reading is FAIL / `input_changed_during_read`.
+7. The JAR SHA-256 must match the caller's approved 64-hex pin; mismatch remains FAIL / `sha256_pin_missing_or_mismatch`. Do not weaken the existing pin check.
+8. Preserve existing top-level evidence fields `module_sha256`, `config_sha256`, `tool_sha256_actual`. Add `scope.input_snapshots` with one record per role (`module`, `config`, `tool_jar`): canonical path, SHA-256, and the exact filesystem identity tuple. Do not include content bytes in evidence.
+9. Do not invoke Git metadata commands or Java until all three input snapshots have been established successfully.
 
-**RED-only tests:** missing module/config/JAR; stat and open PermissionError/OSError for each input class; module/config path escape via symlink; invalid UTF-8 config with assertion that Popen is never called; empty inventory; malformed/duplicate/invalid invariant directives; stable hashes over the exact bytes read; persistent input mutation before SANY launch blocks with FAIL; mutation between SANY and TLC prevents TLC launch; post-execution identity/digest change blocks acceptance and marks the affected execution UNKNOWN.
+**RED-only tests:** missing module/config/JAR; stat PermissionError/OSError for each role; open/read PermissionError/OSError for each role; non-regular directory inputs; root resolution failure; module/config symlink escaping root; JAR outside root accepted; identity unavailable; file replaced or modified while reading; exact byte-stream SHA-256; JAR pin mismatch.
 
-**GREEN acceptance:** no child process starts until all required preflight checks pass; exact config bytes and inventory used for final validation are the preflight values; any detected identity/digest change prevents PASS.
+**GREEN acceptance:** only stable regular readable input snapshots can pass B1a; no child process starts on any BLOCKED/FAIL input state; every recorded digest corresponds to bytes read from the same opened descriptor.
 
-**Files:** the two allowed executable files only.
+**Files:** A1's two executable files only. Schema 1.3 and EGIS-VG-001 synchronization must be included in B1a GREEN in the same commit.
 
+### Atom B1b — TLC configuration decoding and invariant inventory
+
+**Responsibility:** validate TLC configuration semantics before SANY starts and retain a single in-memory validated representation.
+
+**Required behavior:**
+
+1. Strictly UTF-8 decode the config bytes retained by B1a. Do not reopen the config for decoding.
+2. Invalid UTF-8 → FAIL / `config_encoding_invalid`; no Git/Java subprocess may start after this failure.
+3. Parse invariant directives from the retained decoded text exactly once:
+   - Ignore blank lines and full-line TLC comments whose first non-space token is `\\*`.
+   - Any non-comment line whose first token is `INVARIANT` (case-insensitive) must match exactly one valid identifier: `[A-Za-z_][A-Za-z0-9_]*`.
+   - A missing name, extra token, invalid identifier, or duplicate identifier is FAIL / `invariant_inventory_invalid`.
+   - No explicit invariant directive is BLOCKED / `invariant_inventory_unavailable`.
+   - Preserve all unrelated TLC directives unchanged.
+4. Retain `config_text` and `expected_invariants` in memory for the current invocation. The TLC output validator must consume this exact inventory; it must not reread the config path after TLC.
+5. Add `checks.config_inventory` with status, stable reason, and the validated inventory (or an empty list when not available). Do not copy raw parser exception messages into evidence.
+
+**RED-only tests:** invalid UTF-8 config with assertion that no subprocess starts; empty inventory blocks; malformed and duplicate directives fail; valid multiple invariant identifiers preserve source order; comments/unrelated directives are ignored without altering config; the validator receives the exact retained inventory and no post-TLC config read occurs.
+
+**GREEN acceptance:** config is decoded and the invariant inventory is validated before SANY; exactly the same in-memory decoded text/inventory is used for later validation.
+
+**Files:** the two executable files only; no schema increment beyond 1.3.
+
+### Atom B1c — Input identity and digest stability checkpoints
+
+**Responsibility:** detect persistent input replacement or mutation between preflight and tool consumption, without claiming snapshot isolation.
+
+**Required checkpoints:** revalidate all three snapshots (module, config, JAR) at:
+1. immediately before SANY launch;
+2. after SANY returns, if SANY started;
+3. immediately before TLC launch;
+4. after TLC returns, if TLC started.
+
+Each recheck must strictly resolve applicable module/config paths again, verify root containment, stat/open/fstat, hash bytes from the same descriptor, and compare the canonical path, identity tuple and digest with the B1a baseline.
+
+**Disposition:**
+
+- Initial prelaunch mismatch (path, identity, metadata or digest) → FAIL / `input_snapshot_changed_before_launch`; do not start that tool.
+- Recheck inspection I/O failure → BLOCKED / `input_snapshot_recheck_unavailable`; no dependent tool and no parser.
+- Mismatch discovered after a child started → overall BLOCKED; preserve the actual process exit/result fields but add `input_integrity_status=UNKNOWN` and `input_integrity_reason=input_snapshot_changed_after_execution` to the affected SANY/TLC record. Do not infer what bytes the process consumed.
+- After SANY integrity becomes UNKNOWN, TLC is recorded BLOCKED / NOT_STARTED; do not invoke TLC.
+- Before TLC mismatch after a stable SANY completion → FAIL; TLC is NOT_STARTED.
+- After TLC integrity becomes UNKNOWN → TLC output validation is NOT_RUN; overall BLOCKED; never accept parser PASS.
+- A known process FAIL (timeout/nonzero) remains a process FAIL even if input integrity is separately UNKNOWN; retain both facts and do not relabel the process result.
+
+Add `checks.input_stability` with separate checkpoint records (`preflight`, `before_sany`, `after_sany`, `before_tlc`, `after_tlc`), each containing status, stable reason and changed/uninspectable roles. Add `scope.input_snapshot_assurance` with `mode=CALLER_PROVIDED_READ_ONLY_STABLE` and `transient_aba_excluded=false`.
+
+**Explicit epistemic boundary:** pre/post checks detect persistent changes and ordinary replacements, but cannot prove the absence of transient ABA replacement or provide filesystem snapshot isolation. Gate PASS remains conditional on the caller providing a read-only, stable snapshot for the entire invocation. If hostile concurrent input writers are in scope, immutable snapshot support remains a promotion blocker (FMH-120).
+
+**RED-only tests:** mutation before SANY; mutation after SANY before TLC; mutation after TLC before parser acceptance; file disappearance between checkpoints; permission/stat/open error during recheck; symlink target changed between checkpoints; stable repeated verification; verify SANY/TLC actual process fields are preserved when `input_integrity_status=UNKNOWN`; assert no dependent process/parser call after each failed checkpoint; record the ABA limitation without claiming it is detected.
+
+**GREEN acceptance:** no Java stage starts from a changed prelaunch snapshot; any post-start mismatch blocks overall acceptance and marks the affected execution's input integrity UNKNOWN; no parser invocation follows TLC input-integrity uncertainty.
+
+**Files:** the two executable files only; schema 1.3 fields were defined atomically in B1a GREEN.
 ### Atom B2 — Output path identity guard
 
 **Responsibility:** prevent the evidence destination from aliasing protected input bytes.
@@ -226,7 +281,7 @@ Parent-directory symlinks are resolved to their canonical target. The design doe
 
 ## 5. Per-atom transaction protocol
 
-For every atom in order A1 → A2 → B1 → B2 → B3:
+For every atom in order A1 → A2 → B1a → B1b → B1c → B2 → B3:
 
 1. Re-fetch PR metadata and branch ref; record exact starting HEAD and expected parent.
 2. Create only the RED test commit on that branch using a non-force update with `expected_sha`.
@@ -252,7 +307,7 @@ The temporary RED commit is intentionally expected to fail tests. The correspond
 ## 7. Explicit residual risks
 
 - The caller-controlled output directory is assumed not to be concurrently manipulated by a hostile process. Path-swap TOCTOU resistance is not claimed.
-- Input files could be modified concurrently after their bytes are hashed but before SANY/TLC reopens them. B1 adds pre-launch and post-execution identity/digest checks, but these cannot exclude transient ABA changes. PASS is conditional on a caller-provided read-only stable snapshot; the gate does not claim to establish snapshot isolation. This remains FMH-120 and blocks promotion where hostile concurrent input writers are in scope.
+- Input files could be modified concurrently after their bytes are hashed but before SANY/TLC reopens them. B1c adds pre-launch and post-execution identity/digest checkpoints, but these cannot exclude transient ABA changes. PASS is conditional on a caller-provided read-only stable snapshot; the gate does not claim to establish snapshot isolation. This remains FMH-120 and blocks promotion where hostile concurrent input writers are in scope.
 - Output captured by child processes remains subject to the existing uncapped capture behavior; output-size limiting is outside this narrowly scoped work.
 - Atomic replace is not crash-durable without file and directory fsync. No durability claim is made.
 - An OS/process cleanup failure may leave a child process state uncertain; the evidence must expose this and block dependent execution.
@@ -261,9 +316,9 @@ The temporary RED commit is intentionally expected to fail tests. The correspond
 
 ## 8. Completion criteria
 
-The I/O resilience work is not complete merely because the five atoms have green unit CI. Completion requires:
+The I/O resilience work is not complete merely because the seven atoms have green unit CI. Completion requires:
 
-- all five RED/GREEN pairs with intended failure evidence and exact-head green evidence;
+- all seven RED/GREEN pairs with intended failure evidence and exact-head green evidence;
 - complete per-atom changed-path and hostile-review records;
 - no unresolved high-severity defect introduced by these changes;
 - exact final-head CI evidence;

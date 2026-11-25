@@ -452,3 +452,39 @@ Official vendor documentation reviewed on 2026-11-25:
 - Supabase pricing/plan limits: https://supabase.com/pricing
 
 Vendor documentation establishes advertised platform behavior, not this project's configuration, billing state, deployed topology, or end-to-end correctness. Runtime qualification remains NOT RUN.
+
+
+## 11. Global admission coordinator and stable recovery freeze — AR-76 design contract
+
+**Status: provider-neutral design; not implemented or qualified.** A global recovery gate is not a mode flag that workers read independently. The authority that linearizes admission must also mediate every mutation and every external-effect permit consumption.
+
+### 11.1 Abstract coordinator interface
+
+The production design must expose these semantics (names are illustrative; providers may use different API names):
+
+- `beginOperation(operationId, canonicalRequestDigest, reservationKeyDigest, operationKind)`: atomically admits an operation only in `ACTIVE`, allocates the current fence generation, and records it as in-flight. Identical operation ID/digest replay returns the original admission; a changed digest conflicts.
+- `commitOperation(admission, resultDigest)` / `abortOperation(admission, reasonDigest)`: settle an admitted local mutation through the same authority. Generation, operation identity and admission state are checked atomically. Lost acknowledgements are read-only reconciled; they do not authorize a second operation.
+- `beginLockClosing(lockOperationId, evidenceDigest)`: linearizes `ACTIVE → LOCK_CLOSING`. From this commit onward, no new mutator, ledger append, permit consumption, reconciliation state mutation, recovery/admin transition, or maintenance write is admitted. Read-only diagnostics remain available.
+- `consumeEffectPermit(admission, key, stage, attemptId, generation, receiptDigest)`: one single-use atomic transition, invoked immediately before the one transport call. It requires a still-current admitted operation and ACTIVE gate. It binds the exact full reservation key, stage, attempt, generation and receipt digest; it is not a portable bearer token.
+- `freezeInventory(lockId)`: returns a stable freeze only after all pre-closing admissions have settled or become explicit unresolved records, and all pre-close consumed permits are represented in the frozen inventory. The freeze watermark and coordinator generation are persisted. A timeout or unresolved authority response returns UNKNOWN/LOCK_CLOSING, never stable RECOVERY_LOCKED.
+- `readOperation(operationId)` and `readFreeze(lockId)`: read-only authoritative recovery. They may return UNKNOWN if inventory is incomplete or the authority is unavailable.
+- `resumeActive(recoveryAuthorization, inventoryDigest, freezeWatermark)`: permitted only through a separate trusted recovery authority after complete inventory, monotonic anchor, and explicit authorization are verified. A provider restore or operator toggle alone cannot unlock the system.
+
+### 11.2 Required state and invariants
+
+Coordinator state is `ACTIVE`, `LOCK_CLOSING`, or stable `RECOVERY_LOCKED`, with monotonically increasing generation, authoritative server time, operation registry, permit-consumption registry, freeze ID, and inventory watermark. The coordinator's admission/fence check and the mutation/permit transition must share one linearization authority; a read-then-write across objects, databases, or services is not conformant.
+
+1. No operation admitted after `LOCK_CLOSING` commits a mutation or consumes an effect permit.
+2. A pre-close admission may settle only through the coordinator and is represented as committed, aborted, or unresolved; unresolved entries block stable freeze.
+3. A consumed permit is irreversible evidence that the remote operation may have occurred. It is retained as completed-with-evidence or UNKNOWN; no lock or restore can erase it.
+4. An unconsumed permit/admission is invalid after gate closure and cannot be transported or used later.
+5. Stable `RECOVERY_LOCKED` is acknowledged only with a complete frozen inventory and watermark; every unknown remote effect is retained as UNKNOWN.
+6. All mutators—including expiry, abort, reconcile, ledger append/outcome, orphan recovery, administrative and maintenance paths—must pass the gate.
+7. Authority outage, generation ambiguity, inventory incompleteness, rollback, or lost acknowledgement fail closed. There is no in-memory or read-only-preflight fallback.
+8. Permit consumption must occur immediately before transport invocation. This minimizes but cannot eliminate the crash window between permit consumption and network dispatch; that window is UNKNOWN and never retry-authorized.
+
+### 11.3 Minimum falsification suite before backend spike
+
+Use at least two independent clients and two different reservation keys; deterministic barriers must include a worker paused between admission and local mutation. Tests must cover: gate-close race against every mutator; pre-close operation settlement; consumed and unconsumed permits; stale-generation and portable-token replay; duplicate operation IDs with same/changed payload; close/freeze lost acknowledgements; coordinator restart and partition; incomplete inventory; restore behind watermark; and the deterministic RED control in which a separate mode-read followed by a shard write is allowed to race.
+
+The suite must prove linearization from authoritative records and exact inventories, not timing sleeps, process-local mutexes, or inferred absence. Provider spike remains blocked until this contract is testable and an independent hostile review approves the interface.

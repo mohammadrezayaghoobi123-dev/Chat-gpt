@@ -1,6 +1,7 @@
 # EGIS-VG-001 — Formal Verification Gate Contract v1.1.1
 
 **Status:** Candidate / NOT_VERIFIED  
+**Evidence schema:** 1.2  
 **Date:** 2026-11-25
 
 ## Purpose
@@ -22,7 +23,7 @@ No dependency download or tool installation is performed by the gate.
 
 - PASS: source identity and cleanliness pass, tool digest matches, SANY exits zero, TLC exits zero, and the independent TLC output validator confirms one unambiguous completion summary, the expected invariant-check count, internally consistent completed state counts, and the required marker order.
 - FAIL: expected commit mismatch, dirty tree, tool digest mismatch, command non-zero, timeout, invariant-count mismatch, TLC error/violation marker, invalid numeric fields, or inconsistent state counts.
-- BLOCKED: source metadata, required inputs, tool jar, or executable unavailable; TLC blocked if SANY has not passed; malformed/ambiguous evidence without a confirmed violation.
+- BLOCKED: source metadata, required inputs, tool jar, or executable unavailable; TLC blocked if SANY has not passed; malformed/ambiguous evidence without a confirmed violation. A command may have gate status BLOCKED with process_outcome UNKNOWN if the child started but complete output/exit status could not be captured. This must not be interpreted as NOT_STARTED, PASS, or model FAIL.
 - NOT_RUN: initial/unexecuted state only. A status may never be promoted to PASS based on missing evidence.
 
 ## TLC output validation
@@ -40,6 +41,8 @@ This is a version-sensitive textual parser. The marker grammar and ordering have
 ## Evidence schema
 
 The JSON evidence contains schema version, UTC timestamp, gate identity, expected source commit, module/config paths and digests, tool path and expected/actual digest, source identity status, command arguments, exit codes, stdout/stderr, per-check statuses, TLC output-validation result, expected invariant inventory, checked invariant count, generated/distinct/queued state counts, and overall status.
+
+Schema 1.2 command records preserve the existing `status`, `exit_code`, `stdout`, `stderr`, and `command` keys and add `reason`, `phase`, `error_type`, `errno`, `process_started`, `process_outcome`, and `process_cleanup`. `process_outcome` is one of `NOT_STARTED`, `UNKNOWN`, `EXIT_ZERO`, `EXIT_NONZERO`, or `TIMED_OUT`. `process_cleanup` is one of `NOT_STARTED`, `REAPED`, or `UNKNOWN`. Error diagnostics are bounded and omit raw exception messages and filename/path fields. Process-start failures map to BLOCKED; communication failures after process start map to BLOCKED with `process_outcome=UNKNOWN`; timeout and nonzero exit remain FAIL.
 
 Evidence is written to a temporary file in the target directory and then replaced atomically. This does not establish artifact authenticity or tamper resistance after creation.
 
@@ -68,7 +71,7 @@ From repository root:
 PYTHONPATH=verification/formal/egis/tools python -m unittest discover -s verification/formal/egis/tests -p 'test_tla_gate.py' -v
 ```
 
-The suite mocks subprocess tool execution and tests synthetic TLC output fixtures; it verifies gate control flow and parser rejection conditions, not real SANY/TLC behavior.
+The suite mocks Popen process execution and tests synthetic TLC output fixtures; it verifies process lifecycle classification, gate control flow and parser rejection conditions, not real SANY/TLC behavior.
 
 ## Current verification status
 

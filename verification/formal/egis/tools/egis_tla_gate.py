@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 from typing import Sequence
 
@@ -53,26 +54,143 @@ def _rooted_path(root: Path, value: Path) -> Path:
     return candidate.resolve()
 
 
+_PROCESS_CLEANUP_TIMEOUT = 5.0
+
+
+def _safe_process_diagnostic(reason: str, error: OSError | subprocess.TimeoutExpired | None,
+                             process_cleanup: str) -> str:
+    error_type = type(error).__name__ if error is not None else "none"
+    error_errno = getattr(error, "errno", None) if error is not None else None
+    if not isinstance(error_errno, int) or isinstance(error_errno, bool):
+        error_errno = "none"
+    return (
+        f"{reason} error_type={error_type} errno={error_errno} "
+        f"process_cleanup={process_cleanup}"
+    )[:256]
+
+
+def _kill_and_reap(process: subprocess.Popen[bytes]) -> str:
+    deadline = time.monotonic() + _PROCESS_CLEANUP_TIMEOUT
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+    except OSError:
+        # Reaping below determines whether the child is actually gone.
+        pass
+
+    remaining = max(0.0, deadline - time.monotonic())
+    try:
+        process.wait(timeout=remaining)
+    except (subprocess.TimeoutExpired, OSError):
+        return "UNKNOWN"
+    return "REAPED"
+
+
+def _command_result(command: Sequence[str], *, status: str, exit_code: int | None,
+                    stdout: str, stderr: str, reason: str | None,
+                    phase: str | None, error: BaseException | None,
+                    process_started: bool, process_outcome: str,
+                    process_cleanup: str) -> dict:
+    error_type = type(error).__name__ if error is not None else None
+    error_errno = getattr(error, "errno", None) if error is not None else None
+    if not isinstance(error_errno, int) or isinstance(error_errno, bool):
+        error_errno = None
+    return {
+        "status": status,
+        "exit_code": exit_code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "command": list(command),
+        "reason": reason,
+        "phase": phase,
+        "error_type": error_type,
+        "errno": error_errno,
+        "process_started": process_started,
+        "process_outcome": process_outcome,
+        "process_cleanup": process_cleanup,
+    }
+
+
 def run_command(command: Sequence[str], cwd: Path, timeout: int) -> dict:
     try:
-        completed = subprocess.run(
-            list(command), cwd=cwd, text=True, capture_output=True,
-            timeout=timeout, check=False, env=os.environ.copy(),
+        process = subprocess.Popen(
+            list(command),
+            cwd=cwd,
+            env=os.environ.copy(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
     except FileNotFoundError as exc:
-        return {"status": "BLOCKED", "exit_code": None,
-                "stdout": "", "stderr": str(exc), "command": list(command)}
+        cleanup = "NOT_STARTED"
+        return _command_result(
+            command, status="BLOCKED", exit_code=None, stdout="",
+            stderr=_safe_process_diagnostic("process_executable_missing", exc, cleanup),
+            reason="process_executable_missing", phase="spawn", error=exc,
+            process_started=False, process_outcome="NOT_STARTED",
+            process_cleanup=cleanup,
+        )
+    except OSError as exc:
+        cleanup = "NOT_STARTED"
+        return _command_result(
+            command, status="BLOCKED", exit_code=None, stdout="",
+            stderr=_safe_process_diagnostic("process_start_unavailable", exc, cleanup),
+            reason="process_start_unavailable", phase="spawn", error=exc,
+            process_started=False, process_outcome="NOT_STARTED",
+            process_cleanup=cleanup,
+        )
+
+    try:
+        stdout_bytes, stderr_bytes = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
-        return {"status": "FAIL", "exit_code": None,
-                "stdout": _decode_output(exc.stdout), "stderr": _decode_output(exc.stderr) or "timeout",
-                "command": list(command)}
-    return {
-        "status": "PASS" if completed.returncode == 0 else "FAIL",
-        "exit_code": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
-        "command": list(command),
-    }
+        cleanup = _kill_and_reap(process)
+        stdout = _decode_output(exc.stdout)
+        stderr = _decode_output(exc.stderr) or _safe_process_diagnostic(
+            "process_timed_out", exc, cleanup
+        )
+        return _command_result(
+            command, status="FAIL", exit_code=None, stdout=stdout,
+            stderr=stderr, reason="process_timed_out", phase="communicate",
+            error=exc, process_started=True, process_outcome="TIMED_OUT",
+            process_cleanup=cleanup,
+        )
+    except OSError as exc:
+        cleanup = _kill_and_reap(process)
+        return _command_result(
+            command, status="BLOCKED", exit_code=None, stdout="",
+            stderr=_safe_process_diagnostic("process_result_unavailable", exc, cleanup),
+            reason="process_result_unavailable", phase="communicate", error=exc,
+            process_started=True, process_outcome="UNKNOWN",
+            process_cleanup=cleanup,
+        )
+
+    exit_code = process.returncode
+    stdout = _decode_output(stdout_bytes)
+    stderr = _decode_output(stderr_bytes)
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        cleanup = _kill_and_reap(process)
+        return _command_result(
+            command, status="BLOCKED", exit_code=None, stdout=stdout,
+            stderr=_safe_process_diagnostic(
+                "process_result_unavailable", None, cleanup
+            ), reason="process_result_unavailable", phase="communicate",
+            error=None, process_started=True, process_outcome="UNKNOWN",
+            process_cleanup=cleanup,
+        )
+
+    if exit_code == 0:
+        return _command_result(
+            command, status="PASS", exit_code=exit_code, stdout=stdout,
+            stderr=stderr, reason=None, phase=None, error=None,
+            process_started=True, process_outcome="EXIT_ZERO",
+            process_cleanup="REAPED",
+        )
+    return _command_result(
+        command, status="FAIL", exit_code=exit_code, stdout=stdout,
+        stderr=stderr, reason="process_nonzero_exit", phase=None, error=None,
+        process_started=True, process_outcome="EXIT_NONZERO",
+        process_cleanup="REAPED",
+    )
 
 
 def git_identity(root: Path) -> dict:
@@ -97,7 +215,7 @@ def run_gate(root: Path, jar: Path, expected_sha256: str,
     config = _rooted_path(root, config)
     output = _rooted_path(root, output)
     evidence = {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "gate": "EGIS-TLA-VERIFICATION-GATE",
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "scope": {

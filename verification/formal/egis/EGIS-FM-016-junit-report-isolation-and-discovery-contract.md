@@ -169,4 +169,15 @@ The helper `egis_junit_report_preflight.py` checks the absent canonical report r
 
 Local evidence: 12/12 tests PASS, compileall PASS, six targeted mutation checks caught; Python 3.13.5. The checked-in workflow uses Python 3.11 and the new exact-head CI result is pending. The helper accepts a caller-provided property snapshot and is **not yet connected to a trusted wrapper** that guarantees the later Ant process uses the identical properties, argv, working directory and environment. It is not a concurrency lock or invocation attestation.
 
-FMH-110 (launcher injection) and FMH-111 (unauthenticated property snapshot/missing invocation binding) remain OPEN. FMH-109 remains OPEN until wrapper integration and CI pass. The upstream `customBuild.xml` and all report-selection rules remain unchanged; no Ant/JUnit execution is claimed.
+FMH-110 (remaining host/toolchain launcher identity) and FMH-111 (unauthenticated property snapshot/missing invocation binding) remain OPEN. FMH-112 (unreviewed -D/target injection) and FMH-113 (CLASSPATH/user Ant library injection) are mitigated within the helper scope and verified by exact-code-head Python 3.11 CI; the actual process boundary remains subject to FMH-110/111. FMH-109 remains OPEN until trusted wrapper integration and real per-target JUnit evidence exist. The upstream `customBuild.xml` and all report-selection rules remain unchanged; no Ant/JUnit execution is claimed.
+
+
+## 11. Argument, target and classloader hardening (EGIS-FM-018)
+
+The read-only helper now constrains Ant invocation arguments to one explicit absolute pinned customBuild.xml and exactly one target token, default. It rejects arbitrary or unreviewed -D properties, non-default/multiple/missing targets and unknown launcher options. Redundant controlled property overrides remain permitted only when their values exactly equal the lock.
+
+The helper also requires CLASSPATH empty and rejects non-empty per-user home/.ant/lib, including unsafe symlink/reparse components or inspection failures. Before it can return PASS, it computes the Git blob identity of the buildfile bytes and compares it with pinned upstream blob SHA-1 3ee52fe5bc36e8e559e6a13f8c967cd8b67f9976.
+
+Exact-code-head Python 3.11 CI run 45579457292: compile PASS, 30/30 mocked gate tests PASS, 17/17 preflight tests PASS. These tests validate helper behavior only. No Ant/JUnit process was launched. Full-history Gitleaks remains FAIL with 13 historical findings; the PR change-range stage passed.
+
+The helper still receives caller-supplied properties, arguments and environment, does not bind them to a later Ant process, and does not pin ANT_HOME/lib, JAVA_HOME, JAVACMD, PATH or native libraries. FMH-109, FMH-110 and FMH-111 remain OPEN. FMH-112 and FMH-113 are mitigated only at the helper boundary. The source-build lock remains INCOMPLETE_BLOCKED.

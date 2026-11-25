@@ -79,6 +79,8 @@ Static inspection found no Ant `import`, `include`, `subant`, external `exec`, A
 | FMH-109 | Medium | The pinned clean target does not remove target/surefire-reports/ and is guarded by unless="noclean"; reports from a prior invocation can remain available to later evidence collection. | Require a fresh, absent, canonical, non-symlinked report root; reject noclean, unapproved test.reports overrides and concurrent builds sharing a checkout. Do not infer report freshness from the clean target. |
 | FMH-110 | High | Ant/JVM launcher options and user hooks can inject executable code or alter execution semantics outside the report-root property snapshot. | Reject known JVM agents, bootclasspath/module/classpath overrides, Ant listeners/loggers/input handlers/libraries/proxy options, selected launcher environment variables and user rc hooks; keep the exact launcher contract under a trusted wrapper. |
 | FMH-111 | High | The property map and launcher arguments passed to the helper are caller-supplied and are not bound to the later Ant process. A valid snapshot could be supplied while Ant is launched with different arguments, environment or working directory. | Derive effective properties and arguments inside a trusted wrapper, use the identical environment and absolute buildfile for preflight and Ant, and launch Ant only after a PASS from that same wrapper invocation. |
+| FMH-112 | High | The preflight accepted arbitrary unreviewed -D project properties and did not constrain positional Ant target tokens; a caller could redirect test sources/output or request targets outside the locked default target graph while receiving PASS. | Allow exactly one target token, default; reject every unreviewed -D, missing/multiple/other targets and unrecognized launcher flags. Keep only exact-value overrides for locked properties. |
+| FMH-113 | High | The preflight did not reject a non-empty CLASSPATH or a non-empty per-user Ant library directory; both can add Ant task implementations outside the pinned buildfile. | Require CLASSPATH empty and reject non-empty or unsafe per-user .ant/lib; keep ANT_HOME/JVM/JDK identity and later process-binding residuals OPEN under FMH-110/111. |
 
 ## 5. Corrective lock requirements
 
@@ -97,6 +99,8 @@ FM-013 must be amended before the lock can advance beyond `INCOMPLETE_BLOCKED`:
 11. Record explicit skipNonTests=false on selected source/JAR batches only after exact Ant pinning and attribute compatibility verification.
 12. Run report preflight only from a trusted wrapper that owns the exact effective Ant property map, launcher arguments and environment used for the subsequent process.
 13. Pin and verify the customBuild.xml content identity against FM-013 before execution; path identity alone is insufficient.
+14. Restrict Ant argv to one locked buildfile, exactly one default target, and controlled property overrides only; reject all unreviewed -D and unknown options.
+15. Reject non-empty CLASSPATH and any non-empty or symlinked/reparse-point per-user .ant/lib directory before accepting preflight.
 
 ## 6. Falsification tests for a future authorized controller
 
@@ -115,6 +119,10 @@ The controller must be shown to BLOCK before process execution when any of the f
 - Make source and packaged-JAR report roots overlap after canonical resolution; preflight must BLOCK.
 - Inject a JVM agent, bootclasspath/module patch, Ant listener/logger/input handler/library/proxy option through CLI or launcher environment; preflight must BLOCK.
 - Supply a caller property map that differs from the real Ant process properties, or change cwd/argv/environment after preflight; the wrapper must refuse to launch Ant.
+- Pass -Dtest.dir, -Dclass.dir, -Ddist.file or an unknown -D property; preflight must BLOCK without echoing the value.
+- Omit the target, request clean/test-dist-long, or append a second target; preflight must BLOCK.
+- Set non-empty CLASSPATH, create a file beneath user-home/.ant/lib, or replace a component of that path with a symlink/reparse point; preflight must BLOCK.
+- Mutate customBuild.xml while preserving its pathname; the pinned Git blob identity check must BLOCK.
 
 A successful controller preflight is not a successful build. A successful build is not a successful test run. Neither is evidence of EGIS correctness or implementation conformance.
 
@@ -229,6 +237,22 @@ The required future architecture is one trusted launcher wrapper that constructs
 ### FM-017 implementation and verification record
 
 The read-only helper and 12-test hostile unit suite are registered under the EGIS verification tree. Local Python 3.13.5 evidence: 12/12 unit tests PASS; compileall PASS; six targeted mutations (stale-root, property-file, Windows reparse-point, JVM agent, Ant extension/listener and weakened absolute buildfile identity) were each caught by their related behavior test. The exact-head Python 3.11 CI run is pending. No Ant process or JUnit test was run, and the helper is not connected to a trusted launcher wrapper.
+
+### FMH-112 — Ant target and project-property injection
+
+The original argument parser silently ignored unreviewed -Dname=value tokens and did not classify positional tokens as target names. The hardened parser accepts exactly one positional target token, default; blocks missing, multiple or non-default target lists; rejects every unreviewed -D property and rejects unknown option tokens. Exact-head Python 3.11 CI exercises foreign test.dir, class.dir, dist.file, secret-like properties and missing/extra targets. FMH-112 is MITIGATED IN THE HELPER SCOPE; actual Ant launch still requires the trusted wrapper under FMH-111.
+
+### FMH-113 — Ant classloader injection through CLASSPATH and user library directory
+
+Apache Ant documents that non-empty CLASSPATH is passed to Ant as a -lib entry and that the per-user home/.ant/lib directory can be scanned for additional libraries. The hardened helper requires CLASSPATH empty and rejects non-empty per-user .ant/lib, non-directory paths, symlink/reparse components and inspection failures. Exact-head Python 3.11 tests cover the first two attack paths. ANT_HOME/lib, the Ant installation, JDK, Java executable, native libraries and PATH remain unpinned under FMH-110. FMH-113 is MITIGATED IN THE HELPER SCOPE, not a universal classloader isolation proof.
+
+### FM-018 implementation and verification record
+
+- Pinned buildfile Git blob SHA-1: 3ee52fe5bc36e8e559e6a13f8c967cd8b67f9976; the helper recomputes the Git blob identity from on-disk bytes before PASS.
+- Exact-code-head commit 78020c75cee7767ab2a892a03bb9e085e41b1606; workflow 45579457292, Python 3.11.
+- Compile PASS; mocked gate tests 30/30 PASS; JUnit preflight tests 17/17 PASS.
+- Gitleaks 45579457298: PR change-range PASS (30 commits / ~53.73 KB); fetched-ref/history FAIL with 13 historical generic-api-key findings across 5,345 commits / ~16.43 MB. No suppression, rewrite or credential rotation.
+- No Ant/JUnit execution, build, JAR creation, SANY/TLC or runtime change.
 
 ## 11. Safety boundary and source references
 

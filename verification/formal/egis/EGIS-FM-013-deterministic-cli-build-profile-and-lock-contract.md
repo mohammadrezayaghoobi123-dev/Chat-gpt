@@ -295,14 +295,21 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
       "parallel_builds_same_checkout_allowed": false,
       "preflight_module": "verification/formal/egis/tools/egis_junit_report_preflight.py",
       "preflight_test_module": "verification/formal/egis/tests/test_junit_report_preflight.py",
-      "preflight_local_tests": 12,
-      "preflight_mutation_checks": 6,
-      "preflight_local_python": "3.13.5",
+      "preflight_test_count": 17,
+      "preflight_gate_test_count": 30,
+      "preflight_local_python_previous_suite": "3.13.5",
       "preflight_ci_python": "3.11",
-      "preflight_ci_status": "PENDING",
+      "preflight_ci_status": "PASS",
+      "preflight_ci_run_id": 45579457292,
       "ant_invocation": "NOT_RUN",
       "property_map_provenance": "CALLER_SUPPLIED_UNVERIFIED",
       "absolute_buildfile_required": true,
+      "allowed_ant_targets": ["default"],
+      "unreviewed_ant_D_overrides": "BLOCKED",
+      "classpath_environment": "EMPTY_REQUIRED",
+      "user_ant_library_directory": "ABSENT_OR_EMPTY_REQUIRED",
+      "custom_buildfile_git_blob_sha1": "3ee52fe5bc36e8e559e6a13f8c967cd8b67f9976",
+      "custom_buildfile_digest_check": "IMPLEMENTED",
       "assurance_scope": "READ_ONLY_POINT_IN_TIME_NOT_A_CONCURRENCY_LOCK",
       "launcher_inputs_checked": [
         "ANT_ARGS",
@@ -320,7 +327,7 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
         "JVM agent/bootclasspath/module options",
         "Ant -lib/-listener/-logger/-inputhandler/-main/-autoproxy"
       ],
-      "preflight_status": "IMPLEMENTED_UNIT_TESTED_NOT_INTEGRATED"
+      "preflight_status": "IMPLEMENTED_HARDENED_UNIT_TESTED_NOT_WRAPPER_INTEGRATED"
     },
     "forked_jvm": {
       "fork": true,
@@ -506,7 +513,7 @@ No override may convert missing evidence to PASS. The only permissible states ar
 | JUnit source/JAR report output isolation | FAIL; two static XML output-path collisions identified (FMH-108); candidate overlay NOT_APPLIED |
 | Git ref/tag metadata reproducibility | NOT_ESTABLISHED |
 | Target cleanup isolation | NOT_RUN; clean target does not delete the JUnit report tree and can be skipped with noclean (FMH-109) |
-| Fresh canonical report-root preflight | IMPLEMENTED_UNIT_TESTED_NOT_INTEGRATED; trusted launcher wrapper and exact-head Python 3.11 CI pending; Ant invocation NOT_RUN |
+| Fresh canonical report-root preflight | IMPLEMENTED_HARDENED_UNIT_TESTED_NOT_WRAPPER_INTEGRATED; Python 3.11 CI PASS 17/17 preflight and 30/30 gate tests; Ant invocation NOT_RUN |
 | Extended target dependencies (JPF/JMH) | OUT_OF_SCOPE; separate lock extension required |
 | Exact JDK vendor/version/build/digest | NOT_SET |
 | Exact Ant version/archive digest | NOT_SET |

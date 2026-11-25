@@ -1,6 +1,6 @@
 # EGIS-FM-017 — JUnit Report Preflight Hostile Implementation Review
 
-**Status:** Implemented and locally unit-tested; trusted wrapper integration NOT_IMPLEMENTED; exact-head CI PENDING  
+**Status:** Hardened and exact-head Python 3.11 CI verified; trusted wrapper integration NOT_IMPLEMENTED  
 **Date:** 2026-11-25  
 **Parent:** EGIS-FM-013, EGIS-FM-014 and EGIS-FM-016  
 **Scope:** Read-only fail-closed preflight for JUnit report-root freshness and launcher integrity
@@ -34,6 +34,9 @@ CLI:
 - Exit code 0 for PASS; exit code 2 for BLOCKED.
 
 The helper requires:
+- the on-disk Git blob identity of customBuild.xml to match pinned SHA-1 3ee52fe5bc36e8e559e6a13f8c967cd8b67f9976;
+- exactly one positional Ant target token, default, and no unreviewed -D properties or unknown launcher flags;
+- an empty CLASSPATH and an absent or empty, non-symlinked per-user .ant/lib directory;
 - exact report root `target/surefire-reports/` and an absent root before execution;
 - canonical checkout and `basedir` equality;
 - exact absolute `<root>/customBuild.xml` through one explicit `-f` / `-file` / `-buildfile` argument;
@@ -46,7 +49,7 @@ A redundant `-Dtest.reports` is accepted only when its value is the exact locked
 
 ## 3. Launcher and wrapper attack surface
 
-The helper inspects selected values in `ANT_ARGS`, `ANT_OPTS`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` and `_JAVA_OPTIONS`, plus Ant rc hooks `.antrc`, `antrc_pre.bat` and `antrc_post.bat`.
+The helper inspects selected values in `ANT_ARGS`, `ANT_OPTS`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` and `_JAVA_OPTIONS`, requires CLASSPATH empty, rejects non-empty/unsafe per-user .ant/lib, and checks Ant rc hooks .antrc, antrc_pre.bat and antrc_post.bat across applicable home directories.
 
 It rejects known JVM agent, bootclasspath, module/classpath patching and selected security-property options; Ant `-lib`, `-listener`, `-logger`, `-inputhandler`, `-main` and `-autoproxy`; external `-propertyfile`; buildfile search; relative or alternate buildfiles; and prohibited/conflicting property overrides.
 
@@ -58,12 +61,12 @@ Local environment: Python 3.13.5.
 
 - Initial API-availability suite was RED because the public preflight function did not exist.
 - Implementation was added only after the behavior suite existed.
-- Final focused suite: **12/12 PASS**.
+- Initial focused suite: 12/12 PASS on Python 3.13.5. After hostile tests were expanded, the pre-hardening Python 3.11 run failed 14 assertions across 17 cases for the expected missing controls. After hardening, exact-code-head CI run 45579457292 passed all 17/17 preflight tests and 30/30 mocked gate tests on Python 3.11.
 - `compileall`: PASS.
 - Six targeted mutation checks were each detected by their corresponding tests: stale report-root guard, external property-file guard, Windows reparse-point guard, JVM-agent guard, Ant extension/listener guard, and weakened absolute-buildfile identity.
 - Original implementation was restored after each mutation, then the entire 12-test suite was rerun successfully.
 
-The checked-in workflow is configured for Python 3.11 and now compiles/runs the preflight suite. Exact-head Python 3.11 CI is PENDING at registration time.
+The checked-in workflow is configured for Python 3.11 and exact-code-head run 45579457292 completed successfully; compileall, 30/30 gate tests and 17/17 preflight tests passed.
 
 ## 5. Hostile findings and residual risks
 
@@ -72,11 +75,13 @@ The checked-in workflow is configured for Python 3.11 and now compiles/runs the 
 | FMH-109 | Medium | Upstream `clean` does not clear JUnit report roots and may be skipped with `noclean`; old reports can contaminate reused workspaces. | OPEN; helper checks absence but is not integrated |
 | FMH-110 | High | JVM/Ant launcher arguments, environment flags and user hooks can inject code or alter execution outside the property map. | OPEN; known vectors are denied by helper, but wrapper/host boundary remains |
 | FMH-111 | High | Caller-supplied properties/arguments are not authenticated or bound to the later Ant process; a valid preflight snapshot may differ from actual launch inputs. | OPEN; trusted wrapper required |
+| FMH-112 | High | Arbitrary -D properties and unreviewed/multiple target tokens could pass the former parser. | MITIGATED IN HELPER SCOPE; exact default target and controlled properties are enforced and CI-tested |
+| FMH-113 | High | CLASSPATH and non-empty per-user .ant/lib could inject Ant task implementations. | MITIGATED IN HELPER SCOPE; empty/absent requirements are enforced and CI-tested; ANT_HOME/lib remains under FMH-110 |
 
 Additional limitations:
 - Point-in-time filesystem inspection is subject to TOCTOU; it is not a mutex or atomic filesystem transaction.
 - A separate fresh disposable checkout and one build per checkout remain required.
-- The helper does not acquire/pin Ant or JDK, prove `ANT_HOME` / `JAVA_HOME` / `JAVACMD` / `PATH` identity, or independently verify the locked buildfile content digest.
+- The helper verifies the locked buildfile Git blob SHA-1 and checks user .ant/lib, but does not acquire/pin Ant or JDK, prove ANT_HOME / ANT_HOME/lib / JAVA_HOME / JAVACMD / PATH identity, or bind the supplied environment to a later process.
 - Windows reparse behavior is represented by a synthetic unit test; native Windows execution is NOT_RUN.
 - External `junitreport` or CI/reporting aggregation is not inspected by this helper.
 - No real Ant/JUnit/SANY/TLC operation was performed.
@@ -101,3 +106,12 @@ The exact-head Python 3.11 workflow must pass before this helper is accepted as 
 - EGIS-FM-013 build/toolchain lock
 - EGIS-FM-014 target graph and hostile audit
 - EGIS-FM-016 JUnit report isolation contract
+
+
+## 8. Additional hostile findings and hardening (FM-018)
+
+The test-first revision reproduced 14 expected assertion failures across 17 preflight tests. The hardened helper now permits only default, rejects unreviewed -D values, requires empty CLASSPATH, rejects non-empty user .ant/lib, and checks the pinned customBuild.xml Git blob identity. Exact-code-head CI run 45579457292 passes 17/17 preflight tests and 30/30 mocked gate tests.
+
+FMH-112 and FMH-113 are mitigated at the helper boundary only. The helper remains caller-driven and point-in-time. A trusted wrapper must own properties, argv, cwd and environment and launch Ant with identical state. ANT_HOME/lib, JDK, executable and PATH remain unpinned. FMH-109, FMH-110 and FMH-111 remain OPEN. No build, Ant/JUnit execution or SANY/TLC run is claimed.
+
+Gitleaks run 45579457298: PR change-range PASS (30 commits, ~53.73 KB); full-history FAIL (13 historical generic-api-key findings across 5,345 commits / ~16.43 MB). No suppressions, history rewrite or credential rotation occurred.

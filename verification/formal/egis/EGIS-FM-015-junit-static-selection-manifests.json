@@ -16,7 +16,8 @@
     "ant_fileset_case_sensitivity": "CASE_SENSITIVE_DEFAULT",
     "ant_default_excludes": "ENABLED_BY_DEFAULT; effective list must be captured from pinned Ant runtime before execution",
     "symlink_count": 0,
-    "scope_limit": "Counts are matching source paths, not JUnit-discovered test classes, test methods, executed tests or pass/fail results."
+    "scope_limit": "Counts are matching source paths, not JUnit-discovered test classes, test methods, executed tests or pass/fail results.",
+    "selection_contract_digest": "SHA-256 over compact UTF-8 JSON serialization of each target object with selection_contract_sha256 omitted; property order as stored; no trailing newline."
   },
   "targets": [
     {
@@ -981,7 +982,6 @@
           ]
         }
       ],
-      "selection_contract_sha256": "ed2f8674a4827d160d9a3e199cfab13db77265ae276c90bf01eeb231df1a4f09",
       "broad_pattern_candidate_count": 439,
       "primary_batch_selected_count": 403,
       "later_batch_reselection_count": 8,
@@ -1015,7 +1015,8 @@
         "tlc2/tool/suite/SuiteTestCase.java",
         "util/IsolatedTestCaseRunner.java",
         "util/TestPrintStream.java"
-      ]
+      ],
+      "selection_contract_sha256": "8d28a2a1a759b6ba06c9dafadc9cbe06f45db32216dadeac42a6ad7ec45ed7a8"
     },
     {
       "target": "test-dist",
@@ -1967,7 +1968,6 @@
           ]
         }
       ],
-      "selection_contract_sha256": "bbdbd638c735399b4a9bd39d11c81ee2cbc6c44eb4109707539e28d017505a88",
       "broad_pattern_candidate_count": 439,
       "primary_batch_selected_count": 404,
       "later_batch_reselection_count": 7,
@@ -2001,7 +2001,8 @@
         "tlc2/tool/suite/SuiteTestCase.java",
         "util/IsolatedTestCaseRunner.java",
         "util/TestPrintStream.java"
-      ]
+      ],
+      "selection_contract_sha256": "023647bc904ff7c20af1fd85a02a4b5c96b2c1f5dd1f090968fb86036bebf46c"
     }
   ],
   "execution_status": "NOT_RUN",

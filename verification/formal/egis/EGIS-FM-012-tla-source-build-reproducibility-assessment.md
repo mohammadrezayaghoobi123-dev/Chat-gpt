@@ -31,6 +31,7 @@ The following upstream files were inspected at commit `5a47802b5c391f59ecdd44117
 | Path | Observed identity | Relevant evidence |
 |---|---|---|
 | `DEVELOPING.md` | Pinned source path | Documents JDK 11+ and Apache Ant 1.9.8+ for TLA+ Tools; describes Ant build and test commands |
+| Upstream commit metadata | Commit `5a47802b5c391f59ecdd44117981f4ff8c0656ba` | GitHub API reports `verification.verified=false`, reason `unsigned`; source commit signer authentication is not established |
 | `tlatools/org.lamport.tlatools/customBuild.xml` | Git blob `3ee52fe5bc36e8e559e6a13f8c967cd8b67f9976` | CLI compile, distribution, test, manifest and Git revision behavior |
 | `tlatools/org.lamport.tlatools/project.properties` | Git blob `79c7a67a317446789c56012ebf573391d35dd26f` | Build output paths and version property |
 | `tlatools/org.lamport.tlatools/pom.xml` | Git blob `4cf0f219dfc62ed0e8a44478b3dc735e392223d0` | Maven wrapper around Ant and Toolbox/OSGi integration |
@@ -121,12 +122,14 @@ Even a fully successful upstream test suite would establish only the tested prop
 | FMH-092 | High | Default test targets exclude known-failure, auxiliary and long-running test classes. | Open; record exact test coverage and separately assess excluded suites. |
 | FMH-093 | High | No source build, clean-room rebuild, artifact comparison or provenance attestation has been performed. | Open; execution remains prohibited until FMH-088..092 have approved controls. |
 | FMH-094 | Medium | Build-number metadata depends on Git repository state; incomplete or altered history may change embedded provenance. | Open; require verified full source history and assert the exact source revision before building. |
+| FMH-095 | High | The pinned upstream source commit is unsigned according to GitHub commit verification metadata; a fixed hash binds bytes but does not authenticate the claimed maintainer identity. | Open; obtain independent source-origin/authorship assurance or an authenticated upstream provenance statement before approving the source tree. |
 
 ## 7. Falsification and acceptance criteria
 
 The source-build route must be rejected or remain BLOCKED if any of the following occurs:
 
 - the source checkout does not resolve to the exact approved commit;
+- the source origin and authorship cannot be independently authenticated to an accepted trust policy (an unsigned commit is not automatically malicious, but does not provide signer authentication);
 - any consumed vendored dependency lacks an independently verified digest;
 - JDK or Ant differs from the approved exact toolchain;
 - build scripts resolve unpinned external dependencies;
@@ -142,6 +145,7 @@ Approval requires all acceptance criteria to pass and a separate authorization f
 | Activity | Status |
 |---|---|
 | Source commit selected and inspected | OBSERVED |
+| Upstream source commit signature | UNSIGNED; signer authentication NOT_ESTABLISHED |
 | Build instructions and Ant build logic inspected | OBSERVED |
 | Vendored dependency tree enumerated | OBSERVED |
 | Exact JDK/Ant toolchain pinned | NOT_ESTABLISHED |

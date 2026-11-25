@@ -28,7 +28,7 @@ Accordingly, the authentication gateway, Cloudflare Quick Tunnel, and remote MCP
 | cloudflared process | Absent at final boundary check |
 | 9Router scheduled task | None observed; only the existing OpenClaw Gateway task was present |
 | 9Router database | Metadata and ACL only; database contents were not read |
-| Secret material | No upstream API key, JWT secret, database contents, or provider credential was read or emitted. The local CLI-secret file was read into process memory only for one diagnostic probe; its value was not printed, logged, persisted elsewhere, or committed |
+| Secret material | No upstream API key, JWT secret, database contents, or provider credential was read or emitted. The local CLI-secret file was read into process memory and used as a Bearer value for one loopback-only diagnostic probe; its value was not printed, logged, persisted elsewhere, or committed |
 
 The service was started with:
 
@@ -94,36 +94,40 @@ The next implementation slice must preserve the following topology:
 ```text
 ChatGPT / approved MCP client
         |
-        | HTTPS, authenticated, bounded
+        | HTTPS + authenticated Streamable HTTP MCP
         v
 Cloudflare Quick Tunnel (temporary hostname)
         |
         v
-127.0.0.1:20129  local authentication gateway
-        |  - constant-time Bearer verification
-        |  - strict method/path allowlist
-        |  - body/time/response limits
-        |  - rate and concurrency limits
-        |  - no credential/body logging
-        |  - fail-closed on missing configuration
+127.0.0.1:20129  local MCP adapter + authentication boundary
+        |  - authenticate the remote caller
+        |  - expose only the `/mcp` transport endpoint
+        |  - implement MCP JSON-RPC and negotiated protocol version
+        |  - publish only named, schema-validated tools
+        |  - enforce size/time/rate/concurrency limits
+        |  - redact credentials and sensitive request data
+        |  - fail closed on missing or invalid configuration
+        |
+        | loopback-only, allowlisted REST calls
+        | server-side 9Router API key
         v
 127.0.0.1:20128  9Router
         |
-        | server-side API key, protected local storage
         v
 Configured providers
 ```
 
-The diagram is a target design, not an implemented or verified deployment.
+The diagram is a target design, not an implemented or verified deployment. Port `20129` is the MCP adapter boundary, not a generic REST reverse proxy.
 
-Initial gateway scope should be deliberately narrow:
-- `GET /v1/models` only after gateway authentication.
-- `POST /v1/chat/completions` only after gateway authentication and an independently validated upstream API key.
-- Deny every other path and method by default. Do not expose dashboards, administration, key management, provider configuration, settings, arbitrary proxy paths, WebSockets, or file operations.
+The initial MCP surface should be deliberately narrow:
+- `tools/list` may publish only named capabilities such as `router.list_models` and `router.chat_completion`.
+- `tools/call` may invoke only those tools, with strict input schemas, bounded prompts/output, and explicit model/usage budgets.
+- Internally, the adapter may call only `GET /v1/models` and `POST /v1/chat/completions` on loopback, using a server-side 9Router API key.
+- Deny arbitrary upstream URLs, arbitrary REST paths, all unimplemented tool names, dashboard/admin/key-management/settings routes, WebSockets, and file operations.
 
-The gateway token and upstream 9Router key are distinct credentials. The gateway token is for the remote caller; the upstream key remains server-side. Store them using a protected local mechanism (for example, Windows DPAPI with a restrictive ACL), never in Git, command-line arguments, plain-text logs, or chat.
+The remote gateway token and upstream 9Router key are distinct credentials. The caller authenticates to the MCP adapter; the adapter keeps the upstream key server-side and never returns it in tool results or logs. Store credentials using a protected local mechanism (for example, Windows DPAPI with a restrictive ACL), never in Git, command-line arguments, plain-text logs, or chat.
 
-A Quick Tunnel must target **only** the authenticated gateway on port `20129`; it must never target port `20128` directly. The tunnel must remain off until the gateway's negative and positive authentication tests pass. A temporary tunnel hostname is not an identity or authorization mechanism.
+A Quick Tunnel must target **only** the authenticated MCP adapter on port `20129`; it must never target port `20128` directly. The tunnel must remain off until the adapter's negative/positive authentication tests and MCP protocol tests pass. A temporary tunnel hostname is not an identity or authorization mechanism.
 
 ## 6. Atomic implementation gates
 
@@ -132,10 +136,10 @@ A Quick Tunnel must target **only** the authenticated gateway on port `20129`; i
 | G0 — local runtime | Exact package version, explicit loopback bind, process/listener check | `PASS` |
 | G1 — route/auth characterization | Negative probes for model listing and inference; no secret disclosure | `PARTIAL`: inference rejects invalid credentials; models route is public |
 | G2 — credential custody | Valid upstream key provisioned by the owner through the supported local UI/API and stored securely | `BLOCKED` |
-| G3 — gateway implementation | Separate loopback listener, strict allowlist, dual credential separation, bounds, redaction | `NOT_STARTED` |
-| G4 — adversarial gateway tests | Missing/invalid/rotated token; wrong method/path; traversal; oversized body; slow upstream; connection reset; replay; concurrency; log-redaction tests | `NOT_RUN` |
+| G3 — MCP adapter/auth boundary | Separate loopback listener, Streamable HTTP MCP, strict tool/input allowlist, dual credential separation, bounds, redaction | `NOT_STARTED` |
+| G4 — adversarial MCP tests | Missing/invalid/rotated token; malformed JSON-RPC; invalid IDs; unsupported methods/tools; schema violations; oversized body; slow upstream; cancellation; replay; concurrency; log-redaction tests | `NOT_RUN` |
 | G5 — tunnel | Quick Tunnel to gateway only; verify external unauthenticated requests receive `401/403` and cannot reach upstream | `NOT_STARTED` |
-| G6 — MCP adapter | MCP transport and JSON-RPC conformance plus end-to-end tool invocation from supported client | `NOT_STARTED` |
+| G6 — client interoperability | MCP initialization, negotiated version, tool discovery/call, error semantics, and end-to-end invocation from a supported client | `NOT_STARTED` |
 | G7 — integration qualification | Evidence-backed cost, rate, timeout, cancellation, idempotency, recovery, and audit behavior | `NOT_STARTED` |
 
 Unknown results must remain `UNKNOWN`; they must not be relabelled as success or failure.

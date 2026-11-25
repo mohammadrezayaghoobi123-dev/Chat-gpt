@@ -333,5 +333,16 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                 self.assertTrue(verify_necessity_report(report))
 
 
+    def test_necessity_config_serializes_to_valid_toml_and_keeps_baseline(self):
+        from validate_gitleaks_allowlists import build_necessity_config, write_toml_config
+        reduced = build_necessity_config(self.config)
+        with tempfile.TemporaryDirectory() as directory:
+            destination = pathlib.Path(directory) / "diagnostic.toml"
+            write_toml_config(reduced, destination)
+            with destination.open("rb") as handle:
+                parsed = tomllib.load(handle)
+        self.assertEqual(parsed, reduced)
+        self.assertEqual(len(parsed["allowlists"]), 17)
+
 if __name__ == "__main__":
     unittest.main()

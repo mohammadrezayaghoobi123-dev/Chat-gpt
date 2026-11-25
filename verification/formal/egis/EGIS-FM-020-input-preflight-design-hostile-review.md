@@ -67,6 +67,6 @@ The design expressly does not claim to detect ABA or provide snapshot isolation.
 
 ## 7. Review conclusion
 
-The B1 decomposition is technically coherent and independently falsifiable. The three sub-atoms have non-overlapping responsibilities and explicit status/error boundaries. The remaining ABA threat is recorded as a promotion limitation, not misrepresented as solved.
+The B1 decomposition is technically coherent and independently falsifiable. The three sub-atoms have non-overlapping responsibilities and explicit status/error boundaries. A self-review correction specifies the TLC full-line comment marker as one backslash followed by an asterisk, and fixes the schema 1.3 field set and NOT_RUN checkpoint semantics. The remaining ABA threat is recorded as a promotion limitation, not misrepresented as solved.
 
 **Status:** READ-ONLY DESIGN REVIEW. No code, workflow, branch policy, main, secrets, deployment, or local workstation was modified.

@@ -169,6 +169,7 @@ Do not blanket-catch OSError around the entire function. Preserve existing resul
 7. The JAR SHA-256 must match the caller's approved 64-hex pin; mismatch remains FAIL / `sha256_pin_missing_or_mismatch`. Do not weaken the existing pin check.
 8. Preserve existing top-level evidence fields `module_sha256`, `config_sha256`, `tool_sha256_actual`. Add `scope.input_snapshots` with one record per role (`module`, `config`, `tool_jar`): canonical path, SHA-256, and the exact filesystem identity tuple. Do not include content bytes in evidence.
 9. Do not invoke Git metadata commands or Java until all three input snapshots have been established successfully.
+10. Evidence schema is 1.3. `scope.input_snapshots` is keyed by `module`, `config`, and `tool_jar`; each value contains `canonical_path`, `sha256`, and `identity` with `device`, `inode`, `size`, `mtime_ns`, and `ctime_ns`. These fields describe the exact descriptor read. `checks.inputs` records the preflight status and stable reason. EGIS-VG-001 is updated in the same B1a GREEN commit.
 
 **RED-only tests:** missing module/config/JAR; stat PermissionError/OSError for each role; open/read PermissionError/OSError for each role; non-regular directory inputs; root resolution failure; module/config symlink escaping root; JAR outside root accepted; identity unavailable; file replaced or modified while reading; exact byte-stream SHA-256; JAR pin mismatch.
 
@@ -185,13 +186,13 @@ Do not blanket-catch OSError around the entire function. Preserve existing resul
 1. Strictly UTF-8 decode the config bytes retained by B1a. Do not reopen the config for decoding.
 2. Invalid UTF-8 → FAIL / `config_encoding_invalid`; no Git/Java subprocess may start after this failure.
 3. Parse invariant directives from the retained decoded text exactly once:
-   - Ignore blank lines and full-line TLC comments whose first non-space token is `\\*`.
+   - Ignore blank lines and full-line TLC comments whose first non-space token is `\*`.
    - Any non-comment line whose first token is `INVARIANT` (case-insensitive) must match exactly one valid identifier: `[A-Za-z_][A-Za-z0-9_]*`.
    - A missing name, extra token, invalid identifier, or duplicate identifier is FAIL / `invariant_inventory_invalid`.
    - No explicit invariant directive is BLOCKED / `invariant_inventory_unavailable`.
    - Preserve all unrelated TLC directives unchanged.
 4. Retain `config_text` and `expected_invariants` in memory for the current invocation. The TLC output validator must consume this exact inventory; it must not reread the config path after TLC.
-5. Add `checks.config_inventory` with status, stable reason, and the validated inventory (or an empty list when not available). Do not copy raw parser exception messages into evidence.
+5. Add `checks.config_inventory` with status, stable reason, and the validated inventory (or an empty list when not available). Do not copy raw parser exception messages into evidence. The B1a schema 1.3 contract declares this object optional until B1b has run; after B1b it is always present, including on FAIL/BLOCKED paths.
 
 **RED-only tests:** invalid UTF-8 config with assertion that no subprocess starts; empty inventory blocks; malformed and duplicate directives fail; valid multiple invariant identifiers preserve source order; comments/unrelated directives are ignored without altering config; the validator receives the exact retained inventory and no post-TLC config read occurs.
 
@@ -221,7 +222,7 @@ Each recheck must strictly resolve applicable module/config paths again, verify 
 - After TLC integrity becomes UNKNOWN → TLC output validation is NOT_RUN; overall BLOCKED; never accept parser PASS.
 - A known process FAIL (timeout/nonzero) remains a process FAIL even if input integrity is separately UNKNOWN; retain both facts and do not relabel the process result.
 
-Add `checks.input_stability` with separate checkpoint records (`preflight`, `before_sany`, `after_sany`, `before_tlc`, `after_tlc`), each containing status, stable reason and changed/uninspectable roles. Add `scope.input_snapshot_assurance` with `mode=CALLER_PROVIDED_READ_ONLY_STABLE` and `transient_aba_excluded=false`.
+Add `checks.input_stability` with separate checkpoint records (`preflight`, `before_sany`, `after_sany`, `before_tlc`, `after_tlc`), each containing status, stable reason and changed/uninspectable roles. Unreached checkpoints are explicitly `NOT_RUN` with reason `prerequisite_not_passed`. Preflight and pre-launch checkpoints use PASS/FAIL/BLOCKED; post-launch checkpoints use PASS/UNKNOWN/BLOCKED. Add `scope.input_snapshot_assurance` with `mode=CALLER_PROVIDED_READ_ONLY_STABLE` and `transient_aba_excluded=false`. The B1a schema 1.3 contract declares these fields optional until B1c has run; once the corresponding checkpoint is reached, its record is mandatory.
 
 **Explicit epistemic boundary:** pre/post checks detect persistent changes and ordinary replacements, but cannot prove the absence of transient ABA replacement or provide filesystem snapshot isolation. Gate PASS remains conditional on the caller providing a read-only, stable snapshot for the entire invocation. If hostile concurrent input writers are in scope, immutable snapshot support remains a promotion blocker (FMH-120).
 

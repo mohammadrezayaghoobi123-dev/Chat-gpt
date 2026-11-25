@@ -4,7 +4,9 @@
 
 **Status:** static traceability artifact; not an implementation qualification, test result, or approval to select a backend.
 
-**Reviewed source snapshot:** branch `verify/9router-reservation-conformance-run9-2026-11-25`, HEAD `7a42adaecc4b56c7a4b3a4fc6f4f9dd00391b190`, base `main` at `919b19ca3d3887352cdef06b03c668ead04fbce7`.
+**Baseline source snapshot for the T01–T56 mapping:** branch `verify/9router-reservation-conformance-run9-2026-11-25`, HEAD `7a42adaecc4b56c7a4b3a4fc6f4f9dd00391b190`, base `main` at `919b19ca3d3887352cdef06b03c668ead04fbce7`.
+
+**T57 execution supplement:** AR-69 adds a separate SQLite-backed, test-only process-reopen and terminal-abort harness. Its exact source blob identities and execution status are recorded in section I; this supplement does not replace the T01–T56 reference-oracle baseline.
 
 **Inputs inspected:**
 - `tools/9router-review/conformance/RESERVATION_STORE_CONTRACT.md` — abstract production contract and RS-01–RS-22 fault-injection requirements.
@@ -161,7 +163,7 @@ Before any provider adapter is written:
 **Disposition:** TRACEABILITY BASELINE AUTHORED / STATIC SOURCE MAPPING ONLY / MULTIPLE BLOCKING GAPS IDENTIFIED / NO PROVIDER QUALIFIED.
 
 
-## F. RS-08 hostile-review checkpoint — AR-65
+## F. RS-08 hostile-review checkpoint — AR-65 (historical pre-T57 baseline; superseded by section I / AR-69)
 
 The current reference oracle cannot honestly execute a process-restart test: its reservation records, digest index, ledger INTENT/OUTCOME maps, and boundary receipt registry are process-local Maps allocated inside `createReferenceSystem()`. There is no durable-store injection/reopen API and no orphan-INTENT recovery method. Reconstructing another oracle or copying Maps would not prove persistence, crash recovery, or independent-process behavior.
 
@@ -174,7 +176,7 @@ The current reference oracle cannot honestly execute a process-restart test: its
 RS-08 remains **GAP**. No test result or production qualification is claimed. This checkpoint is a protocol/design gate, not a substitute for T57.
 
 
-## G. RS-08 Orphan-INTENT recovery protocol draft — AR-66 (historical checkpoint; superseded by AR-67)
+## G. RS-08 Orphan-INTENT recovery protocol draft — AR-66 (historical checkpoint; superseded by AR-67 / ADR-001)
 
 Design contract: `tools/9router-review/conformance/ORPHAN_INTENT_RECOVERY_CONTRACT.md`.
 
@@ -209,6 +211,8 @@ Decision record: [ADR-001](ADR-001-ORPHAN-INTENT-TERMINAL-ABORT.md). Status: **A
 | T57.7 | After a second independent reopen, terminal identity and ledger watermark remain unchanged | Same tombstone ID, final event ID/digest, one INTENT, one final event, same high-water mark, zero permit/boundary | PASS |
 | T57.8 | Independent process attempt-start and orphan-abort race yields exactly one terminal outcome | Two worker processes raced; SQLite write serialization and boundary re-check yielded either permit+boundary with no tombstone/event, or tombstone+terminal event with no permit/boundary | PASS — see RED→GREEN note |
 | T57.9 | Forged tombstone ACK, altered immutable tuple and changed request payload fail closed | Forged receipt digest rejected without ledger mutation; same operation ID with altered tuple or request digest returns integrity conflict | PASS |
+
+**Exact executed source blobs:** T57.1 test `eb55f2ab523611711d30da96223c0427f59985c6`; SQLite adapter `c1d9a8d578ccecd91c044f39f6f4b73f32376d79`; worker `6ecf70cd46fad12fed95750d6278d3171d072b78`; terminal-abort test `1cdd41754a5800d823e45fccc2d0f2842bf441e6`.
 
 **Fresh execution evidence:** the complete T57.1–T57.9 suite ran three consecutive times under Node.js `v22.16.0`; each run observed **9 tests / 9 passed / 0 failed**. Four source files passed `node --check`. T57.8 additionally passed 10 consecutive focused race probes after the snapshot fix. These are isolated local SQLite harness results, not hosted Actions evidence.
 

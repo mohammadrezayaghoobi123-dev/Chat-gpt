@@ -353,3 +353,18 @@ R2 create-only conditional writes establish event-key uniqueness, not global seq
 Mutating functions must be `VOLATILE`, called through POST, and granted only to the adapter identity. The default `READ COMMITTED` isolation is acceptable only where unique constraints, row locks and conditional state transitions prove the invariant; define and test SERIALIZABLE or a coordinator-row lock for multi-row invariants. Database-internal serialization retry must complete before any network effect; external provider/GitHub work must never be run inside the SQL transaction.
 
 
+
+
+## Q. Global coordinator admission/freeze contract — AR-76 — 2026-11-25
+
+| Requirement | Evidence / design counterexample | Status | Required falsification evidence |
+|---|---|---|---|
+| RS-32 Admission, mutation and permit consumption share one linearization authority | A separate global-mode read followed by a shard/database write admits a stale worker after closure; a portable permit cannot be revoked | **DESIGN CONTRACT ADDED / NOT IMPLEMENTED** | Independent clients race gate closure against all mutators and permit consumption; no post-close commit or consumption; stale-generation, replay and paused-worker schedules fail closed |
+| RS-33 Stable freeze waits for pre-close admissions and inventories consumed permits | A mode transition alone can acknowledge while pre-close writes or external calls are still in flight; timeout is not proof of absence | **DESIGN CONTRACT ADDED / NOT QUALIFIED** | Settle every pre-close admission or retain unresolved; include every consumed permit; freeze watermark/inventory complete; lost ACK, restart, partition and restore tests |
+| RS-34 Restore unlock requires independent monotonic recovery authorization | A local restore/operator mode toggle can roll back reservation and gate state while prior effects remain | **GAP — TRUST AUTHORITY NOT SELECTED** | Independently trusted signed authorization scoped to freeze/inventory digest; monotonic anchor; rollback and key-revocation tests |
+
+### Q.1 Hostile review disposition
+
+The contract is deliberately safety-biased: stable freeze can block indefinitely when a remote effect or pre-close admission is ambiguous. This sacrifices availability, but avoids pretending that network effects were cancelled. The contract still does **not** prove that the selected provider can implement a single authority spanning reservation mutation, ledger sequencing, global lock and permit consumption. That remains a backend topology question; this section is not implementation evidence.
+
+No code, test harness, backend, account resource, secret, workflow, reviewer activation, deployment, merge, main branch, or local runtime was changed by AR-76.

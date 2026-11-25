@@ -19,7 +19,22 @@ EXPECTED_FIXTURES = {
     ),
 }
 FIXTURE_LINE = re.compile(r'const key = "([0-9a-f]{64})";')
-EXPECTED_ALLOWLIST_COUNT = 17
+EXPECTED_LINE_EXCEPTIONS = {
+    "Historical Owner command idempotency fixture line 397 (167b6764).": ("167b676479f855a92d63b2aca575b8798128c143", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 397),
+    "Historical Owner command idempotency fixture line 516 (a5f3a65d).": ("a5f3a65dbe8e41d09c5d23131beca4eb73342fb2", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 516),
+    "Historical Owner command idempotency fixture line 516 (93214555).": ("93214555f5aa752a670c1c7c9a6d5f7b58f41cdf", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 516),
+    "Historical Owner command idempotency fixture line 397 (5a750037).": ("5a750037bc1bec098184b7890f66b407582b94d8", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 397),
+    "Historical Owner command idempotency fixture line 516 (5a750037).": ("5a750037bc1bec098184b7890f66b407582b94d8", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 516),
+    "Historical Owner command idempotency fixture line 516 (b12a3e06).": ("b12a3e068c8cba44039cf478f174814fc1d8f6b5", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 516),
+    "Synthetic Router previous-marker key in historical rotation test line 1805 (ab525a63).": ("ab525a63948822e195cc74f63c3a6b4340f705db", "tools/9router-review/review.test.mjs", 1805),
+    "Public ICU signing metadata line 32 (3082b80f).": ("3082b80fbaf71685827ba63de882c3d93083b96f", "docs/MASTER_BRAIN_GATE2P_R1U17_ICU79_SIGNING_IDENTITY_CANDIDATE_RECONCILIATION_2026-11-16.md", 32),
+    "Public ICU signing metadata line 70 (3082b80f).": ("3082b80fbaf71685827ba63de882c3d93083b96f", "docs/MASTER_BRAIN_GATE2P_R1U17_ICU79_SIGNING_IDENTITY_CANDIDATE_RECONCILIATION_2026-11-16.md", 70),
+    "Historical Owner command idempotency fixture line 1904 (0222e99d).": ("0222e99d941ded0910ae4252f66b9dfb1dd39025", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 1904),
+    "Historical Owner command idempotency fixture line 1260 (75ca4409).": ("75ca4409487e887279b45b66563c346015ce2342", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 1260),
+    "Synthetic API_KEY placeholder comment line 1402 (04d76f8f).": ("04d76f8fd734eaf4053c86461e1204caf18d9c9c", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 1402),
+    "Computed scheduler idempotency identifier line 277 (2729a325).": ("2729a325991c989cbab182967135aa76f864ac29", "cloud-engineering-connector/worker.js", 277),
+}
+EXPECTED_ALLOWLIST_COUNT = 30
 
 
 def _invalid_regex(pattern: str) -> bool:
@@ -44,6 +59,26 @@ def _source_fixture_line(repo_root: pathlib.Path, commit: str, path: str) -> str
     return matches[0] if len(matches) == 1 else None
 
 
+
+def _source_line_at(repo_root: pathlib.Path, commit: str, path: str, line_number: int) -> str | None:
+    result = subprocess.run(
+        ["git", "show", f"{commit}:{path}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    lines = result.stdout.splitlines()
+    if line_number < 1 or line_number > len(lines):
+        return None
+    return lines[line_number - 1]
+
+
+def _escape_re2_literal(value: str) -> str:
+    meta = set(r"\.^$|?*+()[]{}")
+    return "".join("\\" + char if char in meta else char for char in value)
 def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
     errors: list[str] = []
     allowlists = config.get("allowlists", [])

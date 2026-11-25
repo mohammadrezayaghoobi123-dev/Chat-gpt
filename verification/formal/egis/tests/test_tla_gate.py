@@ -54,6 +54,8 @@ class GateTests(unittest.TestCase):
     def test_timeout_bytes_are_normalized_and_json_serializable(self):
         from subprocess import TimeoutExpired
         process = MagicMock()
+        process.__enter__.return_value = process
+        process.__exit__.return_value = False
         process.returncode = -9
         process.poll.return_value = -9
         process.communicate.side_effect = [
@@ -76,6 +78,8 @@ class GateTests(unittest.TestCase):
 
     def _mock_process(self, returncode=0):
         process = MagicMock()
+        process.__enter__.return_value = process
+        process.__exit__.return_value = False
         process.returncode = returncode
         process.poll.return_value = returncode
         process.wait.return_value = returncode

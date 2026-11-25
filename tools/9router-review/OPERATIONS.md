@@ -1159,3 +1159,14 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - No reference adapter implementation was changed. T48–T50 remain OPEN/RED based on the previously observed exact revision; the new T49 branches are **AUTHORED / NOT_EXECUTED**.
 - The contract and T49 review remain design/test-only. No production signer, verifier, backend, or durable receipt store is implemented.
 - Scope remains isolated to `verify/9router-reservation-conformance-run9-2026-11-25`. Do not merge this accumulated verification branch wholesale. No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host were made.
+
+
+#### 2026-11-25 T49 cross-key assertion correction
+
+- Test revision: `70c3eb6f86a1a59694bcd74294b3d7766402885d`.
+- Hostile review of the newly added cross-key replay assertion found that `readComplete` returns the complete global ledger inventory, not a key-filtered event subset. The first assertion draft incorrectly expected exactly one event for the foreign key.
+- Corrected the test to snapshot the global event count and watermark immediately before the cross-key replay, then require both to remain unchanged after rejection; it also asserts no OUTCOME exists for the foreign attempt ID.
+- This is a test correctness correction. The branch still cannot exercise the replay assertion because `beginModelAttempt` does not issue `attemptBoundaryReceipt`, and T49 fails earlier at the explicit receipt-presence assertion.
+- Exact hosted execution for this revision is **NOT_VERIFIED**. The connected workflow-run retrieval method only exposes pull-request-triggered runs; no authenticated push-run lookup/dispatch method is available in the connected GitHub action surface used here. No claim of local execution or hosted RED/GREEN is made.
+- No executable adapter code was changed. T48–T50 retain their previously observed RED evidence; all newly corrected T49 mutation/replay paths remain **AUTHORED / NOT_EXECUTED**.
+- All changes remain on the isolated verification branch. No PR #463, main, workflow registration, reviewer, provider, secret, cloud resource, deployment, repository policy, or local-host changes occurred.

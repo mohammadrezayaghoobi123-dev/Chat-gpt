@@ -76,7 +76,11 @@ def validate_tlc_output(
     if len(invariant_matches) != 1:
         result["reason"] = "invariant_check_marker_missing_or_ambiguous"
         return result
-    checked = int(invariant_matches[0].group(1))
+    try:
+        checked = int(invariant_matches[0].group(1))
+    except (ValueError, OverflowError):
+        result.update(status="FAIL", reason="invalid_invariant_count_numeric_field")
+        return result
     result["checked_invariant_count"] = checked
     if checked != len(expected):
         result.update(status="FAIL", reason="invariant_count_mismatch")

@@ -2,7 +2,7 @@ name: Gitleaks Allowlist Integrity
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, security/gitleaks-allowlist-integrity-atomic-2026-11-25]
     paths:
       - ".gitleaks.toml"
       - "security/**"

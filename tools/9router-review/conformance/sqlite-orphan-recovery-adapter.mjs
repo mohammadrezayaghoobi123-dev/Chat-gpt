@@ -42,6 +42,18 @@ function transaction(db, fn) {
   }
 }
 
+function readTransaction(db, fn) {
+  db.exec("BEGIN");
+  try {
+    const result = fn();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch {}
+    throw error;
+  }
+}
+
 function openDatabase(path, schema) {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA busy_timeout=5000;");
@@ -150,9 +162,11 @@ export function openSqliteOrphanRecoveryHarness({ ledgerPath, reservationPath, n
     },
     readRecoveryHistory(operationId, { complete = true } = {}) {
       if (!complete) return { status: "UNKNOWN", reason: "INCOMPLETE_LEDGER_READ" };
-      const events = ledgerDb.prepare("SELECT sequence, event_id, operation_id, event_type, payload_json, payload_digest FROM ledger_events WHERE operation_id = ? ORDER BY sequence").all(operationId);
-      if (events.some(event => sha256(event.payload_json) !== event.payload_digest)) return { status: "INTEGRITY_CONFLICT" };
-      return { status: "COMPLETE", events: events.map(event => ({ ...event, payload: JSON.parse(event.payload_json) })), watermark: Number(ledgerDb.prepare("SELECT COALESCE(MAX(sequence), 0) AS value FROM ledger_events").get().value) };
+      return readTransaction(ledgerDb, () => {
+        const events = ledgerDb.prepare("SELECT sequence, event_id, operation_id, event_type, payload_json, payload_digest FROM ledger_events WHERE operation_id = ? ORDER BY sequence").all(operationId);
+        if (events.some(event => sha256(event.payload_json) !== event.payload_digest)) return { status: "INTEGRITY_CONFLICT" };
+        return { status: "COMPLETE", events: events.map(event => ({ ...event, payload: JSON.parse(event.payload_json) })), watermark: Number(ledgerDb.prepare("SELECT COALESCE(MAX(sequence), 0) AS value FROM ledger_events").get().value) };
+      });
     },
   };
 
@@ -167,15 +181,17 @@ export function openSqliteOrphanRecoveryHarness({ ledgerPath, reservationPath, n
     readAttemptBoundary(rawOperation, { complete = true } = {}) {
       const operation = validateOperation(rawOperation);
       if (!complete) return { status: "UNKNOWN", reason: "INCOMPLETE_RESERVATION_READ" };
-      const boundary = reservationDb.prepare("SELECT identity_json, receipt_json FROM attempt_boundaries WHERE operation_id = ?").get(operation.operation_id);
-      if (boundary) {
-        if (boundary.identity_json !== canonical(operation)) return { status: "INTEGRITY_CONFLICT" };
-        return { status: "COMMITTED", receipt: JSON.parse(boundary.receipt_json) };
-      }
-      const counts = reservationCounts(operation.operation_id);
-      if (counts.permits || counts.external_effects) return { status: "INTEGRITY_CONFLICT", counts };
-      const evidence = { operation_id: operation.operation_id, identity_digest: sha256(operation), complete: true, counts, source: "sqlite-reservation-test-harness" };
-      return { status: "DEFINITIVELY_NOT_COMMITTED", complete: true, evidence, digest: sha256(evidence) };
+      return readTransaction(reservationDb, () => {
+        const boundary = reservationDb.prepare("SELECT identity_json, receipt_json FROM attempt_boundaries WHERE operation_id = ?").get(operation.operation_id);
+        if (boundary) {
+          if (boundary.identity_json !== canonical(operation)) return { status: "INTEGRITY_CONFLICT" };
+          return { status: "COMMITTED", receipt: JSON.parse(boundary.receipt_json) };
+        }
+        const counts = reservationCounts(operation.operation_id);
+        if (counts.permits || counts.external_effects) return { status: "INTEGRITY_CONFLICT", counts };
+        const evidence = { operation_id: operation.operation_id, identity_digest: sha256(operation), complete: true, counts, source: "sqlite-reservation-test-harness" };
+        return { status: "DEFINITIVELY_NOT_COMMITTED", complete: true, evidence, digest: sha256(evidence) };
+      });
     },
     // CAS fencing token model only; no lease expiry, ownership authentication, or recovery trust root is simulated.
     acquireRecoveryFence({ operationId, expectedGeneration, owner }) {

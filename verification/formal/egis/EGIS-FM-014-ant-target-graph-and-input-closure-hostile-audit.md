@@ -75,6 +75,7 @@ Static inspection found no Ant `import`, `include`, `subant`, external `exec`, A
 | FMH-105 | High | The `test` and `test-dist` targets have distinct include/exclude sets, batch counts and report destinations; one global exclusion digest cannot describe both. | Static selection ambiguity MITIGATED by separate FM-015 manifests (411 unique paths per target; symmetric difference zero). Keep execution-evidence portion OPEN until actual JUnit reports establish discovered/executed/passed/failed/skipped/excluded counts per target. |
 | FMH-106 | High | The selected JUnit tasks launch child JVMs with `fork="yes"` and `forkmode="perTest"`, but the lock does not bind the effective Java executable, child-process arguments or inherited environment. | Pin the forked JVM executable/JDK identity, exact task arguments and an environment allowlist; verify the actual child-process invocation before accepting build evidence. |
 | FMH-107 | Medium | Neither selected JUnit task explicitly sets `skipNonTests`; Apache Ant documents the default as `false`, so the fileset path count is not a discovered-test count and non-test classes are not filtered by Ant before invocation. | Pin the exact Ant/JUnit version and effective `skipNonTests=false` semantics; preserve upstream behavior or use an explicitly reviewed change, then inspect actual JUnit reports. |
+| FMH-108 | High | The source-test target writes XML reports to `target/surefire-reports/`; two packaged-JAR batches also write to that directory. Ant's default XML report name is class-derived, so the same two test classes target identical output paths in both targets. | Give source-test and packaged-JAR targets distinct report roots; bind each report-set identity and fail preflight on any output-path overlap. |
 
 ## 5. Corrective lock requirements
 
@@ -120,6 +121,7 @@ A successful controller preflight is not a successful build. A successful build 
 | Equality of selected source-path sets | OBSERVED; symmetric difference = 0 |
 | Actual JUnit test discovery and report counts | NOT_RUN |
 | JUnit `skipNonTests` effective runtime semantics | NOT_RUN; upstream attribute omitted, documented default false |
+| JUnit report output path isolation | FAIL; two cross-target XML output collisions statically identified |
 
 | Forked JUnit JVM executable and process environment | NOT_ESTABLISHED |
 | Build, JAR creation, SANY/TLC | NOT_RUN |
@@ -166,7 +168,21 @@ Per-target selection digests:
 
 The upstream JUnit tasks omit `skipNonTests`. Apache Ant's JUnit task documentation specifies a default of `false`, meaning Ant does not filter out non-test classes before passing matched files to the JUnit runner. Exact Ant version and actual discovery behavior are still unpinned/unexecuted. FMH-107 remains open.
 
-FMH-105's static manifest ambiguity is mitigated, but the actual execution/report requirement remains open. No test was run and no JUnit report was generated in this audit.
+### FMH-108 — Report path collision
+
+The `test` target writes all JUnit XML reports to `${test.reports}`, which resolves to `target/surefire-reports/`. In `test-dist`, two explicit batches also write to that same directory rather than `target/surefire-reports/onJar/`:
+
+- Batch 1: `tlc2.tool.UserModuleOverrideAnnotationTest`
+- Batch 2: `tlc2.tool.UserModuleOverrideFromJarTest`
+
+The source-test target writes reports for those same classes to the same directory. Apache Ant documents the default report filename as `TEST-<test-class-name>.xml`; therefore the exact output paths collide:
+
+- `target/surefire-reports/TEST-tlc2.tool.UserModuleOverrideAnnotationTest.xml`
+- `target/surefire-reports/TEST-tlc2.tool.UserModuleOverrideFromJarTest.xml`
+
+This is a statically established path collision, not an observed overwrite: no test was executed. The packaged-JAR target's two special batches are not isolated under the `onJar` report root. Until report roots are separated, the resulting XML cannot be safely attributed to the source-test or packaged-JAR run. The manifest records both collisions; FMH-108 remains OPEN.
+
+FMH-105's static manifest ambiguity is mitigated, but the actual execution/report requirement remains open. FMH-108 separately blocks test evidence acceptance until report output collisions are removed. No test was run and no JUnit report was generated in this audit.
 
 ## 11. Safety boundary and source references
 
@@ -174,4 +190,4 @@ This selection reconstruction is static. No Ant/JDK runtime was acquired or invo
 
 - Static selection manifest: https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/blob/verification/egis-verification-gate-v1.1.1-2026-11-25/verification/formal/egis/EGIS-FM-015-junit-static-selection-manifests.json
 - Apache Ant FileSet semantics: https://ant.apache.org/manual/Types/fileset.html
-- Apache Ant JUnit `batchtest` and `skipNonTests`: https://ant.apache.org/manual/Tasks/junit.html
+- Apache Ant JUnit `batchtest`, XML report naming and `skipNonTests`: https://ant.apache.org/manual/Tasks/junit.html

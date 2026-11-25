@@ -9,7 +9,7 @@ on:
       - ".github/workflows/gitleaks-allowlist-integrity.yml"
   push:
     branches:
-      - security/gitleaks-allowlist-integrity-2026-11-25
+      - "security/gitleaks-allowlist-*"
     paths:
       - ".gitleaks.toml"
       - "security/**"

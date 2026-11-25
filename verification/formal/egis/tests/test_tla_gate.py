@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, patch
 
 from egis_tla_gate import _rooted_path, run_command, run_gate
 
@@ -53,7 +53,7 @@ class GateTests(unittest.TestCase):
 
     def test_timeout_bytes_are_normalized_and_json_serializable(self):
         from subprocess import TimeoutExpired
-        process = Mock()
+        process = MagicMock()
         process.returncode = -9
         process.poll.return_value = -9
         process.communicate.side_effect = [

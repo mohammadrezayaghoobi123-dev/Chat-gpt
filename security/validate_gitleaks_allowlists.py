@@ -408,8 +408,8 @@ def write_toml_config(config: dict, destination: pathlib.Path) -> None:
     parser = argparse.ArgumentParser(description="Validate pinned Gitleaks allowlist integrity.")
     parser.add_argument("--config", default=".gitleaks.toml")
     parser.add_argument("--report", default=None, help="Optional redacted Gitleaks JSON report for predicate diagnostics.")
-    parser.add_argument("--report", default=None, help="Optional redacted Gitleaks JSON report for predicate diagnostics.")\n    parser.add_argument("--necessity-config", default=None, help="Write a diagnostic config with exactly 13 new line exceptions removed.")\n    parser.add_argument("--necessity-report", default=None, help="Verify the redacted report against the exact 13 expected findings.")
-    parser.add_argument("--report", default=None, help="Optional redacted Gitleaks JSON report for predicate diagnostics.")\n    parser.add_argument("--necessity-config", default=None, help="Write a diagnostic config with exactly 13 new line exceptions removed.")\n    parser.add_argument("--necessity-report", default=None, help="Verify the redacted report against the exact 13 expected findings.")
+    parser.add_argument("--necessity-config", default=None, help="Write a diagnostic config with exactly 13 new line exceptions removed.")
+    parser.add_argument("--necessity-report", default=None, help="Verify the redacted report against the exact 13 expected findings.")
     args = parser.parse_args()
     config_path = pathlib.Path(args.config).resolve()
     try:
@@ -423,7 +423,28 @@ def write_toml_config(config: dict, destination: pathlib.Path) -> None:
         for error in errors:
             print(f"FAIL: {error}")
         return 1
-    print("PASS: both synthetic HMAC allowlists are pinned to verified exact source lines.")\n    if args.necessity_config:\n        try:\n            reduced = build_necessity_config(config)\n            write_toml_config(reduced, pathlib.Path(args.necessity_config))\n        except (OSError, ValueError) as exc:\n            print(f"Necessity config generation failed: {type(exc).__name__}")\n            return 2\n        print("PASS: diagnostic config preserves 15 baseline entries and 2 fixtures; removes exactly 13 new exceptions.")\n    if args.necessity_report:\n        try:\n            with pathlib.Path(args.necessity_report).open("r", encoding="utf-8") as handle:\n                necessity_report = json.load(handle)\n        except (OSError, json.JSONDecodeError) as exc:\n            print(f"Necessity report load failed: {type(exc).__name__}")\n            return 2\n        necessity_errors = verify_necessity_report(necessity_report)\n        if necessity_errors:\n            for error in necessity_errors:\n                print(f"FAIL: {error}")\n            return 1\n        print("PASS: redacted necessity report contains exactly the 13 expected finding tuples.")
+    print("PASS: synthetic fixture allowlists are pinned to verified exact source lines.")
+    if args.necessity_config:
+        try:
+            reduced = build_necessity_config(config)
+            write_toml_config(reduced, pathlib.Path(args.necessity_config))
+        except (OSError, ValueError) as exc:
+            print(f"Necessity config generation failed: {type(exc).__name__}")
+            return 2
+        print("PASS: diagnostic config preserves 15 baseline entries and 2 fixtures; removes exactly 13 new exceptions.")
+    if args.necessity_report:
+        try:
+            with pathlib.Path(args.necessity_report).open("r", encoding="utf-8") as handle:
+                necessity_report = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"Necessity report load failed: {type(exc).__name__}")
+            return 2
+        necessity_errors = verify_necessity_report(necessity_report)
+        if necessity_errors:
+            for error in necessity_errors:
+                print(f"FAIL: {error}")
+            return 1
+        print("PASS: redacted necessity report contains exactly the 13 expected finding tuples.")
     if args.report:
         try:
             with pathlib.Path(args.report).open("r", encoding="utf-8") as handle:

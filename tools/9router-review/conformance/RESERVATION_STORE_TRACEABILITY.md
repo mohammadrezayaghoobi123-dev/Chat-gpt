@@ -30,8 +30,8 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 | T01 | 64 concurrent claims; exactly one owner | Claim arbitration; `claim` | RS-01 | DIRECT / ORACLE ONLY |
 | T02 | Policy/runtime mismatch does not create second reservation | Immutable policy/runtime attributes; `claim` | — | DIRECT for digest mismatch; not a tuple-digest collision test |
 | T03 | Expired pre-attempt lease takeover increments generation; old owner fenced | Lease takeover; fencing; `claim` | RS-03, RS-04, RS-19 | DIRECT in one process; independent-client backend behavior unproven |
-| T04 | MODEL boundary rejected without durable ledger INTENT | `beginModelAttempt`; write-ahead ordering | RS-08 (partial) | DIRECT for missing INTENT; crash between two stores not simulated |
-| T05 | MODEL attempt is single-use and requires acknowledgements | `beginModelAttempt`; boundary receipt | RS-05, RS-07, RS-09 (partial) | DIRECT for single-use; transaction-abort and process-crash paths incomplete |
+| T04 | MODEL boundary rejected without durable ledger INTENT | `beginModelAttempt`; write-ahead ordering | — | DIRECT for missing INTENT; crash between two stores not simulated |
+| T05 | MODEL attempt is single-use and requires acknowledgements | `beginModelAttempt`; boundary receipt | RS-05, RS-09 (partial) | DIRECT for single-use; transaction-abort and process-crash paths incomplete |
 | T06 | MODEL completion requires generation, attempt, version and ledger outcome | `completeModelAttempt`; fencing | RS-03, RS-10 (partial) | DIRECT for stale/mismatched completion; crash after provider call not simulated |
 | T07 | MODEL_ATTEMPTED cannot be reclaimed after lease expiry | No retry after MODEL boundary | RS-05 | DIRECT / ORACLE ONLY |
 | T08 | MODEL UNKNOWN cannot be reconciled as COMMENT | `markUnknown`; stage isolation | RS-10 (partial) | DIRECT for state isolation; provider-call crash window not simulated |
@@ -74,11 +74,11 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 | T45 | Recovery lock blocks all non-recovery reservation mutations | Global mutation gate | RS-16 | DIRECT / ORACLE ONLY |
 | T46 | MODEL INTENT rejects COMMENT-stage outcome | Stage-bound EffectLedger validation | RS-17 (partial only) | DIRECT for stage mismatch; revoked key/authority rotation not tested |
 | T47 | COMMENT INTENT rejects MODEL-stage outcome | Stage-bound EffectLedger validation | RS-17 (partial only) | DIRECT for stage mismatch; revoked key/authority rotation not tested |
-| T48 | OUTCOME cannot append before authoritative boundary acknowledgement | Receipt-gated ledger append | RS-07 (partial) | DIRECT for absent boundary receipt; backend transaction abort not tested |
+| T48 | OUTCOME cannot append before authoritative boundary acknowledgement | Receipt-gated ledger append | — | DIRECT for absent boundary receipt; backend transaction abort not tested |
 | T49 | OUTCOME requires exact non-transferable committed boundary receipt | Receipt integrity, key/stage/attempt binding | RS-17 (partial) | DIRECT for receipt mutation/replay; live revocation/authority change not tested |
 | T50 | Lost boundary ACK recovers same receipt without new permit | `readAttemptBoundaryReceipt` | RS-06, RS-09 | DIRECT for oracle lost-response simulation; durable process restart not proven |
 | T51 | COMMENT OUTCOME requires exact COMMENT boundary receipt | COMMENT receipt validation | RS-11, RS-17 (partial) | DIRECT for oracle stage-bound receipt |
-| T52 | MODEL helper forwards exact committed receipt to matching outcome | Helper/ledger integration seam | RS-08 (partial) | DIRECT for helper argument propagation; production `runReview()` integration absent |
+| T52 | MODEL helper forwards exact committed receipt to matching outcome | Helper/ledger integration seam | — | DIRECT for helper argument propagation; production `runReview()` integration absent |
 
 ## B. Requirement-to-test coverage (RS-01–RS-22)
 
@@ -90,8 +90,8 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 | RS-04 Lease expiry before any attempt | T03, T23 | PARTIAL | Backend server time under clock skew/failover and concurrent expiry/renew races. |
 | RS-05 Lease expiry after MODEL boundary | T05, T07 | PARTIAL | Process crash and competing client after committed boundary; assert no second provider permit. |
 | RS-06 Boundary commits but response is dropped | T50 | PARTIAL | Actual durable store, process termination between commit and response, then independent-client receipt recovery. |
-| RS-07 Boundary transaction aborts | T04, T05, T48 (adjacent negative cases) | GAP | Inject transaction abort after INTENT and at each write point; prove no receipt and no external call. |
-| RS-08 Crash between ledger INTENT and reservation boundary | T04, T52 (partial) | GAP | Kill process after durable INTENT ACK but before claim-boundary call; restart and reconcile the orphan INTENT without effect. |
+| RS-07 Boundary transaction aborts | T04/T48 are adjacent missing-prerequisite checks, not transaction-abort tests | GAP | Inject transaction abort after INTENT and at each write point; prove no receipt and no external call. |
+| RS-08 Crash between ledger INTENT and reservation boundary | T04 is a missing-INTENT negative test, not a crash-window test; T52 is receipt propagation | GAP | Kill process after durable INTENT ACK but before claim-boundary call; restart and reconcile the orphan INTENT without effect. |
 | RS-09 Crash after boundary ACK, before model call | T05, T09, T50 | PARTIAL | Kill/restart independent process after boundary commit; prove exact receipt recovery and no duplicate permit/inference. |
 | RS-10 Crash after provider call, before OUTCOME ACK | T06, T08 | GAP | Fault-inject provider success then process death before OUTCOME; prove MODEL UNKNOWN and no retry. |
 | RS-11 Crash after COMMENT boundary, before POST | T11, T12, T31, T51 | PARTIAL | Kill/restart after boundary ACK but before POST; prove no second COMMENT permit. |
@@ -133,8 +133,9 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 4. **Trust-root gap:** stage mismatch and receipt mutation are not equivalent to signing-key revocation or authority identity change. RS-17 remains GAP.
 5. **Quota gap:** no test proves quota exhaustion fails closed before the provider or GitHub side effect. RS-18 remains GAP.
 6. **Cross-vendor gap:** in-memory recovery-lock tests do not qualify independent failure domains, partial restores or cross-vendor reconciliation. RS-22 remains GAP.
-7. **API mismatch:** the proposed production interface has operation IDs, typed ACKs, signed recovery authorization, and explicit ledger acknowledgement types that the reference adapter API does not yet implement as an identical interface. Do not claim interface conformance from behaviorally related tests.
-8. **Integration gap:** T26 tests a reference preflight behavior; current `runReview()` still lacks durable reservation integration. No production claim is authorized.
+7. **False-positive requirement mapping:** hostile reinspection found that T04 (no INTENT), T48 (no boundary receipt), and T52 (receipt propagation) do not simulate a transaction abort or a crash after durable INTENT. Their RS-07/RS-08 mappings were removed or downgraded to explicitly adjacent evidence; both requirements remain GAP.
+8. **API mismatch:** the proposed production interface has operation IDs, typed ACKs, signed recovery authorization, and explicit ledger acknowledgement types that the reference adapter API does not yet implement as an identical interface. Do not claim interface conformance from behaviorally related tests.
+9. **Integration gap:** T26 tests a reference preflight behavior; current `runReview()` still lacks durable reservation integration. No production claim is authorized.
 
 ## E. Next implementation gate (not authorized by this artifact)
 

@@ -238,3 +238,12 @@ All nine results are **PARTIAL / TEST-HARNESS ONLY**:
 Consequently RS-08 has moved from no direct crash-window tests to **PARTIAL test-harness evidence**, but remains a **PRODUCTION QUALIFICATION GAP**. No backend is qualified.
 
 The full reviewer regression’s known deterministic duplicate-publication race remains a separate RED and was neither edited nor suppressed.
+
+
+## J. T57 isolated CI reporting — AR-70
+
+- The verification-only workflow `.github/workflows/9router-reservation-conformance.yml` has a separate `if: always()` step that runs `npm run test:orphan-recovery`.
+- This focused step is independent of the complete `npm test` step and the in-memory reference-oracle step. It is intended to surface T57 results separately when the known duplicate-publication RED causes the full reviewer regression job to fail.
+- Workflow permissions remain `contents: read`; it is restricted to verification-branch pushes/manual dispatch and does not use provider credentials or secrets.
+- No hosted run result for this new step was retrieved. Do not convert local SQLite evidence into a hosted CI claim.
+- This is test-workflow integration only. The reviewer workflow remains disabled and unchanged.

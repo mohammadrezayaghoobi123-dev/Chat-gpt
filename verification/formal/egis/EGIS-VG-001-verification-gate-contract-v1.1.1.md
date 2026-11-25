@@ -48,6 +48,16 @@ python verification/formal/egis/tools/egis_tla_gate.py \
 
 The expected tool digest and source commit must come from independently approved provenance. Do not copy a digest from an untrusted artifact or use a mutable latest-release tag.
 
+## Unit-test command
+
+From repository root:
+
+```bash
+PYTHONPATH=verification/formal/egis/tools python -m unittest discover -s verification/formal/egis/tests -p 'test_tla_gate.py' -v
+```
+
+The suite mocks subprocess tool execution; it verifies gate control flow, not real SANY/TLC behavior.
+
 ## Current verification status
 
 - Gate implementation: registered candidate, static inspection only.

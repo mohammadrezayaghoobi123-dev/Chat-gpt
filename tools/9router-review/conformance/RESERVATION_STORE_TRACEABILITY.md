@@ -368,3 +368,12 @@ Mutating functions must be `VOLATILE`, called through POST, and granted only to 
 The contract is deliberately safety-biased: stable freeze can block indefinitely when a remote effect or pre-close admission is ambiguous. This sacrifices availability, but avoids pretending that network effects were cancelled. The contract still does **not** prove that the selected provider can implement a single authority spanning reservation mutation, ledger sequencing, global lock and permit consumption. That remains a backend topology question; this section is not implementation evidence.
 
 No code, test harness, backend, account resource, secret, workflow, reviewer activation, deployment, merge, main branch, or local runtime was changed by AR-76.
+
+
+### Q.2 AR-76.1 — Hostile interface adequacy correction
+
+**Finding:** The first interface draft described admission and permit consumption but did not make the enforcement point mandatory. An untrusted caller could ignore the coordinator response and invoke a provider/GitHub transport directly; a separately admitted worker could also write to a shard unless the protected mutation is co-committed or fenced through the coordinator.
+
+**Correction:** Require atomic co-commit of admission/fence and protected mutation, or a fully specified recoverable cross-authority protocol; require a mandatory transport wrapper/interlock on every external-effect call site. Static call-site inventory and negative tests must demonstrate that direct/unpermitted, stale, duplicate, wrong-key/stage, and post-close transport calls are rejected.
+
+**Disposition:** Interface adequacy gap corrected in documentation. No implementation or runtime proof exists. RS-32/33 remain unqualified; RS-34 remains open.

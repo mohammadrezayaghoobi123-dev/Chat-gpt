@@ -38,6 +38,19 @@ def atomic_write_json(path: Path, payload: dict) -> None:
     temp_path.replace(path)
 
 
+def _decode_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _rooted_path(root: Path, value: Path) -> Path:
+    candidate = value if value.is_absolute() else root / value
+    return candidate.resolve()
+
+
 def run_command(command: Sequence[str], cwd: Path, timeout: int) -> dict:
     try:
         completed = subprocess.run(
@@ -49,7 +62,7 @@ def run_command(command: Sequence[str], cwd: Path, timeout: int) -> dict:
                 "stdout": "", "stderr": str(exc), "command": list(command)}
     except subprocess.TimeoutExpired as exc:
         return {"status": "FAIL", "exit_code": None,
-                "stdout": exc.stdout or "", "stderr": exc.stderr or "timeout",
+                "stdout": _decode_output(exc.stdout), "stderr": _decode_output(exc.stderr) or "timeout",
                 "command": list(command)}
     return {
         "status": "PASS" if completed.returncode == 0 else "FAIL",
@@ -77,9 +90,10 @@ def run_gate(root: Path, jar: Path, expected_sha256: str,
              expected_commit: str, module: Path, config: Path,
              output: Path, timeout: int = 300) -> dict:
     root = root.resolve()
-    jar = jar.resolve()
-    module = module.resolve()
-    config = config.resolve()
+    jar = _rooted_path(root, jar)
+    module = _rooted_path(root, module)
+    config = _rooted_path(root, config)
+    output = _rooted_path(root, output)
     evidence = {
         "schema_version": "1.1",
         "gate": "EGIS-TLA-VERIFICATION-GATE",

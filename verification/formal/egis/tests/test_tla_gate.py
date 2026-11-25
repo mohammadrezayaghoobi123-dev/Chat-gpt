@@ -81,6 +81,14 @@ class GateTests(unittest.TestCase):
         self.assertEqual("FAIL", result["overall"])
         mocked.assert_not_called()
 
+    def test_unavailable_git_metadata_blocks(self):
+        unavailable = {"status": "BLOCKED", "commit": None, "dirty": None}
+        with patch("egis_tla_gate.git_identity", return_value=unavailable):
+            with patch("egis_tla_gate.run_command") as mocked:
+                result = run_gate(**self.args())
+        self.assertEqual("BLOCKED", result["overall"])
+        mocked.assert_not_called()
+
     def test_dirty_checkout_fails_closed(self):
         dirty_identity = {**self.identity, "status": "FAIL", "dirty": True}
         with patch("egis_tla_gate.git_identity", return_value=dirty_identity):

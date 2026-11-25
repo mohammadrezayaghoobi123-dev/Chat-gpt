@@ -96,7 +96,8 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
         line = _source_fixture_line(ROOT, commit, path)
         fixture = re.fullmatch(r'const key = "([0-9a-f]{64})";', line)
         self.assertIsNotNone(fixture)
-        finding_match = f'key = "{fixture.group(1)}"'
+        marker = bytes.fromhex(fixture.group(1)).decode("ascii")
+        finding_match = f'key = "{marker}"'
         source = subprocess.run(
             ["git", "show", f"{commit}:{path}"],
             cwd=ROOT,
@@ -110,7 +111,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
             "File": path,
             "StartLine": start_line,
             "RuleID": "generic-api-key",
-            "Secret": finding_match,
+            "Secret": marker,
             "Match": finding_match,
             "Line": line,
         }]
@@ -136,10 +137,10 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
             "rule=True commit=True path=True regex=True allowed=True",
             result.stdout,
         )
-        self.assertIn(f"secret_length={len(finding_match)}", result.stdout)
+        self.assertIn(f"secret_length={len(marker)}", result.stdout)
         self.assertIn(f"match_length={len(finding_match)}", result.stdout)
         self.assertIn(f"line_length={len(line)}", result.stdout)
-        self.assertNotIn(finding_match, result.stdout)
+        self.assertNotIn(marker, result.stdout)
 
 
 

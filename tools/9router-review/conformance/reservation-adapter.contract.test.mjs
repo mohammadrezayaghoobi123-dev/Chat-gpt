@@ -1467,3 +1467,117 @@ test("T54: a reservation digest collision with a different full tuple is rejecte
   assert.equal(afterLedger.watermark, beforeLedger.watermark);
   assert.deepEqual(afterLedger.events, beforeLedger.events);
 });
+
+
+test("T55: an aborted MODEL boundary transaction leaves no receipt, state transition, or permit", async () => {
+  let abortStage = "MODEL";
+  const system = createReferenceSystem({
+    now: () => 1_000,
+    beforeAttemptBoundaryCommit: ({ stage }) => stage === abortStage,
+  });
+  const owner = await claim(system);
+  assert.equal(owner.status, "CLAIMED");
+  const attemptId = "model-attempt-aborted-transaction";
+  const requestDigest = "model-aborted-transaction-request";
+  const intent = await system.ledger.appendIntent({
+    key: KEY, stage: "MODEL", attemptId, requestDigest,
+  });
+  assert.equal(intent.status, "ACK");
+  const beforeRecord = await system.adapter.readAuthoritative({ key: KEY });
+  const beforeLedger = await system.ledger.readComplete({ key: KEY });
+
+  const aborted = await system.adapter.beginModelAttempt({
+    ...claimArgs(),
+    generation: owner.record.generation,
+    expectedRecordVersion: owner.record.record_version,
+    attemptId,
+    requestDigest,
+    effectLedgerReceipt: intent,
+    attemptTimeoutMs: 100,
+  });
+
+  assert.equal(aborted.status, "TRANSACTION_ABORTED");
+  assert.equal(aborted.attemptBoundaryReceipt, undefined);
+  assert.equal(
+    (await system.adapter.readAttemptBoundaryReceipt({ key: KEY, stage: "MODEL", attemptId })).status,
+    "NOT_FOUND",
+  );
+  assert.deepEqual(await system.adapter.readAuthoritative({ key: KEY }), beforeRecord);
+  const afterLedger = await system.ledger.readComplete({ key: KEY });
+  assert.equal(afterLedger.watermark, beforeLedger.watermark);
+  assert.deepEqual(afterLedger.events, beforeLedger.events);
+
+  abortStage = null;
+  const retry = await system.adapter.beginModelAttempt({
+    ...claimArgs(),
+    generation: owner.record.generation,
+    expectedRecordVersion: owner.record.record_version,
+    attemptId,
+    requestDigest,
+    effectLedgerReceipt: intent,
+    attemptTimeoutMs: 100,
+  });
+  assert.equal(retry.status, "MODEL_PERMIT");
+  assert.equal(retry.attemptBoundaryReceipt.boundary_event_id, "reference-boundary-1");
+});
+
+
+test("T56: an aborted COMMENT boundary transaction leaves no receipt, state transition, or permit", async () => {
+  let abortStage = null;
+  const system = createReferenceSystem({
+    now: () => 1_000,
+    beforeAttemptBoundaryCommit: ({ stage }) => stage === abortStage,
+  });
+  const model = await completeModel(system);
+  assert.equal(model.completed.status, "MODEL_COMPLETED");
+  const resumed = await system.adapter.resumeCompletedModel({
+    key: KEY,
+    ownerId: "owner-2",
+    ownerNonce: "nonce:owner-2",
+    expectedRecordVersion: model.completed.record.record_version,
+    leaseDurationMs: 100,
+  });
+  assert.equal(resumed.status, "RESUMED");
+
+  const attemptId = "comment-attempt-aborted-transaction";
+  const payloadDigest = "comment-aborted-transaction-payload";
+  const intent = await system.ledger.appendIntent({
+    key: KEY, stage: "COMMENT", attemptId, requestDigest: payloadDigest,
+  });
+  assert.equal(intent.status, "ACK");
+  const args = {
+    key: KEY,
+    ownerId: "owner-2",
+    ownerNonce: "nonce:owner-2",
+    generation: resumed.record.generation,
+    expectedRecordVersion: resumed.record.record_version,
+    attemptId,
+    markerId: "marker-v1",
+    payloadDigest,
+    snapshotValidationId: "snapshot-validation-abort",
+    snapshotValidationDigest: "snapshot-validation-abort-digest",
+    effectLedgerReceipt: intent,
+    attemptTimeoutMs: 100,
+  };
+  const beforeRecord = await system.adapter.readAuthoritative({ key: KEY });
+  const beforeLedger = await system.ledger.readComplete({ key: KEY });
+
+  abortStage = "COMMENT";
+  const aborted = await system.adapter.beginCommentAttempt(args);
+
+  assert.equal(aborted.status, "TRANSACTION_ABORTED");
+  assert.equal(aborted.attemptBoundaryReceipt, undefined);
+  assert.equal(
+    (await system.adapter.readAttemptBoundaryReceipt({ key: KEY, stage: "COMMENT", attemptId })).status,
+    "NOT_FOUND",
+  );
+  assert.deepEqual(await system.adapter.readAuthoritative({ key: KEY }), beforeRecord);
+  const afterLedger = await system.ledger.readComplete({ key: KEY });
+  assert.equal(afterLedger.watermark, beforeLedger.watermark);
+  assert.deepEqual(afterLedger.events, beforeLedger.events);
+
+  abortStage = null;
+  const retry = await system.adapter.beginCommentAttempt(args);
+  assert.equal(retry.status, "COMMENT_PERMIT");
+  assert.equal(retry.attemptBoundaryReceipt.boundary_event_id, "reference-boundary-2");
+});

@@ -145,9 +145,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
 
     def test_redacted_report_never_claims_regex_mismatch(self):
         description, (commit, path) = next(iter(EXPECTED_FIXTURES.items()))
-        report = [{
-            "Commit": commit,
-            "File": path,
+        line = _source_fixture_line(ROOT, commit, path)
         source = subprocess.run(
             ["git", "show", f"{commit}:{path}"],
             cwd=ROOT,
@@ -155,9 +153,12 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
             text=True,
             check=True,
         ).stdout.splitlines()
-        start_line = source.index(line) + 1,
-            "RuleID": "generic-api-key",
+        start_line = source.index(line) + 1
+        report = [{
+            "Commit": commit,
+            "File": path,
             "StartLine": start_line,
+            "RuleID": "generic-api-key",
             "Secret": "REDACTED",
             "Match": "key = REDACTED",
             "Line": "",
@@ -182,8 +183,6 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("regex=redacted allowed=unverifiable", result.stdout)
         self.assertNotIn("REDACTED", result.stdout)
-
-
 
     def test_report_diagnostics_ignore_other_lines_in_same_file_commit(self):
         description, (commit, path) = next(iter(EXPECTED_FIXTURES.items()))

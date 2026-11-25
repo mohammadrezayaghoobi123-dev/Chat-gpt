@@ -654,25 +654,42 @@ test("T27: CLOSED_NO_PUBLISH is terminal and cannot consume a comment permit", a
   assert.equal(permit.status, "TERMINAL");
 });
 
-test("T28: effect-ledger outcome ID is immutable for an attempt", async () => {
+test("T28: effect-ledger outcome ID is immutable for a committed attempt", async () => {
   const system = makeSystem();
-  await system.ledger.appendIntent({
-    key: KEY, stage: "MODEL", attemptId: "outcome-once", requestDigest: "request",
-  });
+  const started = await modelAttempt(system);
+  assert.equal(started.permit.status, "MODEL_PERMIT");
+  const attemptBoundaryReceipt = started.permit.attemptBoundaryReceipt;
+  assert.ok(attemptBoundaryReceipt, "outcome idempotency requires a committed MODEL boundary receipt");
+
   const first = await system.ledger.appendOutcome({
-    attemptId: "outcome-once",
+    attemptId: started.attemptId,
     outcomeType: "MODEL_RESULT_STORED",
     evidenceDigest: "digest-1",
     evidenceReference: "result://one",
+    attemptBoundaryReceipt,
   });
+  const identicalRetry = await system.ledger.appendOutcome({
+    attemptId: started.attemptId,
+    outcomeType: "MODEL_RESULT_STORED",
+    evidenceDigest: "digest-1",
+    evidenceReference: "result://one",
+    attemptBoundaryReceipt,
+  });
+  const beforeConflict = await system.ledger.readComplete({ key: KEY });
   const conflict = await system.ledger.appendOutcome({
-    attemptId: "outcome-once",
+    attemptId: started.attemptId,
     outcomeType: "MODEL_RESULT_STORED",
     evidenceDigest: "digest-2",
     evidenceReference: "result://two",
+    attemptBoundaryReceipt,
   });
+  const afterConflict = await system.ledger.readComplete({ key: KEY });
+
   assert.equal(first.status, "ACK");
+  assert.deepEqual(identicalRetry, first);
   assert.equal(conflict.status, "INTEGRITY_CONFLICT");
+  assert.equal(afterConflict.events.length, beforeConflict.events.length);
+  assert.equal(afterConflict.watermark, beforeConflict.watermark);
 });
 
 test("T29: a changed marker ID for the same reservation key is a hard conflict", async () => {

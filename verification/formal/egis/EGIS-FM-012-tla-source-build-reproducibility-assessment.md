@@ -30,7 +30,7 @@ The following upstream files were inspected at commit `5a47802b5c391f59ecdd44117
 
 | Path | Observed identity | Relevant evidence |
 |---|---|---|
-| `DEVELOPING.md` | Pinned source path | Documents JDK 11+ and Apache Ant 1.9.8+ for TLA+ Tools; describes Ant build and test commands |
+| `DEVELOPING.md` | Pinned source path | Documents JDK 11+; does not specify a minimum or exact Ant version. Its stated `cd tlatools && ant -f customBuild.xml` path does not match the inspected tree layout |
 | Upstream commit metadata | Commit `5a47802b5c391f59ecdd44117981f4ff8c0656ba` | GitHub API reports `verification.verified=false`, reason `unsigned`; source commit signer authentication is not established |
 | `tlatools/org.lamport.tlatools/customBuild.xml` | Git blob `3ee52fe5bc36e8e559e6a13f8c967cd8b67f9976` | CLI compile, distribution, test, manifest and Git revision behavior |
 | `tlatools/org.lamport.tlatools/project.properties` | Git blob `79c7a67a317446789c56012ebf573391d35dd26f` | Build output paths and version property |
@@ -57,7 +57,7 @@ This command sequence is recorded as documentation evidence only. It was not exe
 | Component | Upstream documentation/build evidence | Assessment |
 |---|---|---|
 | JDK | JDK 11 or newer | **Not pinned** to vendor, exact release, patch level or digest |
-| Apache Ant | 1.9.8 or newer | **Not pinned** to exact release or distribution digest |
+| Apache Ant | No version floor stated in the pinned `DEVELOPING.md`; build file uses Ant tasks | **Not pinned** to minimum, exact release or distribution digest |
 | Git metadata | Ant target invokes a vendored JGit build-number task | Full and correctly identified source metadata must be available; shallow-history behavior is not approved |
 | Maven/Tycho | Used by the broader Toolbox build; Tycho version property is 1.5.0 in root POM | Not required for the narrow standalone CLI Ant path; do not silently substitute the full Toolbox build |
 | Vendored JARs | Checked into the pinned source tree | Content is commit-bound, but no independent SHA-256 inventory or external provenance was established in this review |
@@ -120,15 +120,18 @@ Even a fully successful upstream test suite would establish only the tested prop
 | FMH-090 | High | Vendored JARs are commit-bound but no independent SHA-256 dependency inventory was established. | Open; hash and independently verify every consumed JAR before build. |
 | FMH-091 | Medium | CLI Ant build and full Toolbox Maven/Tycho build are distinct paths; conflating them expands dependency scope and obscures the artifact actually produced. | Mitigated by this assessment's CLI-only scope; future commands must name the exact target and output. |
 | FMH-092 | High | Default test targets exclude known-failure, auxiliary and long-running test classes. | Open; record exact test coverage and separately assess excluded suites. |
-| FMH-093 | High | No source build, clean-room rebuild, artifact comparison or provenance attestation has been performed. | Open; execution remains prohibited until FMH-088..092 have approved controls. |
+| FMH-093 | High | No source build, clean-room rebuild, artifact comparison or provenance attestation has been performed. | Open; execution remains prohibited until FMH-088..097 have approved controls. |
 | FMH-094 | Medium | Build-number metadata depends on Git repository state; incomplete or altered history may change embedded provenance. | Open; require verified full source history and assert the exact source revision before building. |
 | FMH-095 | High | The pinned upstream source commit is unsigned according to GitHub commit verification metadata; a fixed hash binds bytes but does not authenticate the claimed maintainer identity. | Open; obtain independent source-origin/authorship assurance or an authenticated upstream provenance statement before approving the source tree. |
+| FMH-096 | High | The pinned `DEVELOPING.md` does not specify an Ant minimum or exact version; the 1.9.8+ statement appears in newer upstream documentation and cannot be attributed to this source commit. | Open; pin an exact Ant distribution/version/digest independently. |
+| FMH-097 | Medium | The pinned guide's `cd tlatools && ant -f customBuild.xml` instruction does not resolve to a file at `tlatools/customBuild.xml` in the inspected tree; the Ant file is under `tlatools/org.lamport.tlatools/`. | Open; resolve and validate the canonical CLI build invocation before any execution. |
 
 ## 7. Falsification and acceptance criteria
 
 The source-build route must be rejected or remain BLOCKED if any of the following occurs:
 
 - the source checkout does not resolve to the exact approved commit;
+- the documented build invocation does not resolve to the inspected build file, or the exact invocation is not independently established;
 - the source origin and authorship cannot be independently authenticated to an accepted trust policy (an unsigned commit is not automatically malicious, but does not provide signer authentication);
 - any consumed vendored dependency lacks an independently verified digest;
 - JDK or Ant differs from the approved exact toolchain;
@@ -146,6 +149,8 @@ Approval requires all acceptance criteria to pass and a separate authorization f
 |---|---|
 | Source commit selected and inspected | OBSERVED |
 | Upstream source commit signature | UNSIGNED; signer authentication NOT_ESTABLISHED |
+| Ant version requirement in pinned docs | NOT_SPECIFIED |
+| Pinned guide build command resolves to build file | NO; path discrepancy recorded |
 | Build instructions and Ant build logic inspected | OBSERVED |
 | Vendored dependency tree enumerated | OBSERVED |
 | Exact JDK/Ant toolchain pinned | NOT_ESTABLISHED |

@@ -1560,3 +1560,12 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - **Hosted CI distinction:** unlike the AR-69/AR-70 checkpoint, hosted Actions evidence for this exact commit was retrieved. The focused T57 step is GREEN; the enclosing workflow remains failed because the full reviewer regression includes the known duplicate-publication RED.
 - **Isolation:** all changes remain on `verify/9router-reservation-conformance-run9-2026-11-25`. No `main`, PR #463, reviewer activation, production adapter, provider dispatch, secret, backend provisioning, cloud resource, deployment, merge, or local desktop state was changed.
 - **Disposition:** T57.10–T57.11 RED→GREEN VERIFIED / T57.1–T57.11 HOSTED FOCUSED PASS / FULL REVIEWER REGRESSION 203/204 WITH KNOWN DUPLICATE-PUBLICATION RED / RS-08 PRODUCTION GAP OPEN.
+
+
+#### 2026-11-25 T57.8 transient recovery-fence interleaving — AR-72
+
+- **Observed issue:** exact-head hosted conformance on the prior docs commit `ea16bbb874b7d75dc0d16fb1ce6019aed95c89a5` failed T57.8 because the racing begin returned `RECOVERY_FENCED` while the test expected `ORPHAN_ABORTED`.
+- **Root cause:** after AR-71, `beginAttempt` correctly checks an active recovery fence before any permit. There is a legitimate interleaving where the recovery fence is committed but its terminal tombstone is not yet committed. The begin request is transiently fenced; the tombstone cannot be reported until it actually exists.
+- **Test correction:** T57.8 now accepts `RECOVERY_FENCED` or `ORPHAN_ABORTED` for the racing begin in the abort-wins branch, waits for recovery to complete, then performs a separate late-begin probe and requires `ORPHAN_ABORTED`. The final-state invariant remains strict: one tombstone, one terminal Ledger event, zero boundary/permit. The permit-wins branch still requires exact receipt recovery and zero tombstone/event.
+- **Scope:** only test expectation and corresponding conformance evidence documentation changed. Production adapter, reference oracle, original duplicate-publication regression, workflow permissions, reviewer workflow, secrets and cloud resources were not changed.
+- **Status:** T57.8 EXPECTATION CORRECTED / EXACT-HEAD HOSTED VERIFICATION PENDING / PRIOR AR-71 T57.10–T57.11 11/11 HOSTED PASS REMAINS VALID FOR ITS EXACT COMMIT / RS-08 PRODUCTION GAP OPEN.

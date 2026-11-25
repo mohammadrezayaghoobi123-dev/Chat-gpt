@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from egis_tla_gate import _rooted_path, run_command, run_gate
+from egis_tla_gate import _rooted_path, git_identity, run_command, run_gate
 
 
 class GateTests(unittest.TestCase):
@@ -36,6 +36,23 @@ class GateTests(unittest.TestCase):
                       config=self.config, output=self.output)
         values.update(overrides)
         return values
+
+    def command_result(self, *, status, process_outcome, process_started,
+                       reason=None, exit_code=None, stdout="", stderr=""):
+        return {
+            "status": status,
+            "exit_code": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+            "command": ["java"],
+            "reason": reason,
+            "phase": "spawn" if not process_started else "communicate",
+            "error_type": None,
+            "errno": None,
+            "process_started": process_started,
+            "process_outcome": process_outcome,
+            "process_cleanup": "NOT_STARTED" if not process_started else "UNKNOWN",
+        }
 
     def mock_pass(self, command, cwd, timeout):
         output = "OK"
@@ -298,6 +315,142 @@ class GateTests(unittest.TestCase):
                 result = run_gate(**self.args())
         self.assertEqual("BLOCKED", result["overall"])
         mocked.assert_not_called()
+
+    def test_git_identity_short_circuits_after_process_start_failure(self):
+        blocked = self.command_result(
+            status="BLOCKED", process_outcome="NOT_STARTED",
+            process_started=False, reason="process_start_unavailable",
+        )
+        with patch("egis_tla_gate.run_command", side_effect=[blocked, blocked]) as mocked:
+            identity = git_identity(self.root)
+        self.assertEqual("BLOCKED", identity["status"])
+        self.assertEqual("NOT_STARTED", identity["commands"]["rev_parse"]["process_outcome"])
+        self.assertEqual("NOT_RUN", identity["commands"]["status"]["status"])
+        mocked.assert_called_once()
+
+    def test_git_identity_preserves_unknown_after_rev_parse_started(self):
+        blocked = self.command_result(
+            status="BLOCKED", process_outcome="UNKNOWN",
+            process_started=True, reason="process_result_unavailable",
+        )
+        with patch("egis_tla_gate.run_command", side_effect=[blocked, self.mock_pass(["git"], self.root, 10)]) as mocked:
+            identity = git_identity(self.root)
+        self.assertEqual("BLOCKED", identity["status"])
+        self.assertEqual("UNKNOWN", identity["commands"]["rev_parse"]["process_outcome"])
+        self.assertEqual("NOT_RUN", identity["commands"]["status"]["status"])
+        mocked.assert_called_once()
+
+    def test_git_identity_preserves_unknown_after_status_started(self):
+        commit_result = {
+            **self.command_result(status="PASS", process_outcome="EXIT_ZERO",
+                                  process_started=True, exit_code=0),
+            "stdout": self.commit + "\\n",
+        }
+        blocked = self.command_result(
+            status="BLOCKED", process_outcome="UNKNOWN",
+            process_started=True, reason="process_result_unavailable",
+        )
+        with patch("egis_tla_gate.run_command", side_effect=[commit_result, blocked]):
+            identity = git_identity(self.root)
+        self.assertEqual("BLOCKED", identity["status"])
+        self.assertEqual(self.commit, identity["commit"])
+        self.assertIsNone(identity["dirty"])
+        self.assertEqual("EXIT_ZERO", identity["commands"]["rev_parse"]["process_outcome"])
+        self.assertEqual("UNKNOWN", identity["commands"]["status"]["process_outcome"])
+
+    def test_sany_blocked_not_started_blocks_tlc_with_not_started_metadata(self):
+        sany = self.command_result(
+            status="BLOCKED", process_outcome="NOT_STARTED",
+            process_started=False, reason="process_executable_missing",
+        )
+        with patch("egis_tla_gate.git_identity", return_value=self.identity):
+            with patch("egis_tla_gate.run_command", return_value=sany) as mocked:
+                result = run_gate(**self.args())
+        self.assertEqual("BLOCKED", result["overall"])
+        self.assertEqual("NOT_STARTED", result["checks"]["sany"]["process_outcome"])
+        self.assertEqual("BLOCKED", result["checks"]["tlc"]["status"])
+        self.assertEqual("SANY_not_passed", result["checks"]["tlc"]["reason"])
+        self.assertFalse(result["checks"]["tlc"]["process_started"])
+        self.assertEqual("NOT_STARTED", result["checks"]["tlc"]["process_outcome"])
+        mocked.assert_called_once()
+
+    def test_sany_blocked_unknown_preserves_unknown_and_blocks_tlc(self):
+        sany = self.command_result(
+            status="BLOCKED", process_outcome="UNKNOWN",
+            process_started=True, reason="process_result_unavailable",
+        )
+        with patch("egis_tla_gate.git_identity", return_value=self.identity):
+            with patch("egis_tla_gate.run_command", return_value=sany) as mocked:
+                result = run_gate(**self.args())
+        self.assertEqual("BLOCKED", result["overall"])
+        self.assertEqual("UNKNOWN", result["checks"]["sany"]["process_outcome"])
+        self.assertTrue(result["checks"]["sany"]["process_started"])
+        self.assertEqual("BLOCKED", result["checks"]["tlc"]["status"])
+        self.assertEqual("NOT_STARTED", result["checks"]["tlc"]["process_outcome"])
+        mocked.assert_called_once()
+
+    def test_sany_timeout_fails_and_never_starts_tlc(self):
+        sany = self.command_result(
+            status="FAIL", process_outcome="TIMED_OUT",
+            process_started=True, reason="process_timed_out",
+        )
+        with patch("egis_tla_gate.git_identity", return_value=self.identity):
+            with patch("egis_tla_gate.run_command", return_value=sany) as mocked:
+                result = run_gate(**self.args())
+        self.assertEqual("FAIL", result["overall"])
+        self.assertEqual("TIMED_OUT", result["checks"]["sany"]["process_outcome"])
+        self.assertEqual("BLOCKED", result["checks"]["tlc"]["status"])
+        self.assertEqual("NOT_STARTED", result["checks"]["tlc"]["process_outcome"])
+        mocked.assert_called_once()
+
+    def test_tlc_blocked_not_started_skips_output_validator(self):
+        sany = self.mock_pass(["sany"], self.root, 10)
+        tlc = self.command_result(
+            status="BLOCKED", process_outcome="NOT_STARTED",
+            process_started=False, reason="process_executable_missing",
+        )
+        with patch("egis_tla_gate.git_identity", return_value=self.identity):
+            with patch("egis_tla_gate.run_command", side_effect=[sany, tlc]) as mocked:
+                with patch("egis_tla_gate.validate_tlc_output") as validator:
+                    result = run_gate(**self.args())
+        self.assertEqual("BLOCKED", result["overall"])
+        self.assertEqual("BLOCKED", result["checks"]["tlc_output_validation"]["status"])
+        self.assertEqual("tlc_not_started", result["checks"]["tlc_output_validation"]["reason"])
+        validator.assert_not_called()
+        self.assertEqual(2, mocked.call_count)
+
+    def test_tlc_blocked_unknown_marks_validation_not_run(self):
+        sany = self.mock_pass(["sany"], self.root, 10)
+        tlc = self.command_result(
+            status="BLOCKED", process_outcome="UNKNOWN",
+            process_started=True, reason="process_result_unavailable",
+        )
+        with patch("egis_tla_gate.git_identity", return_value=self.identity):
+            with patch("egis_tla_gate.run_command", side_effect=[sany, tlc]) as mocked:
+                with patch("egis_tla_gate.validate_tlc_output") as validator:
+                    result = run_gate(**self.args())
+        self.assertEqual("BLOCKED", result["overall"])
+        self.assertEqual("UNKNOWN", result["checks"]["tlc"]["process_outcome"])
+        self.assertEqual("NOT_RUN", result["checks"]["tlc_output_validation"]["status"])
+        self.assertEqual("tlc_result_unavailable", result["checks"]["tlc_output_validation"]["reason"])
+        validator.assert_not_called()
+        self.assertEqual(2, mocked.call_count)
+
+    def test_tlc_nonzero_exit_skips_output_validator(self):
+        sany = self.mock_pass(["sany"], self.root, 10)
+        tlc = self.command_result(
+            status="FAIL", process_outcome="EXIT_NONZERO",
+            process_started=True, reason="process_nonzero_exit", exit_code=2,
+        )
+        with patch("egis_tla_gate.git_identity", return_value=self.identity):
+            with patch("egis_tla_gate.run_command", side_effect=[sany, tlc]) as mocked:
+                with patch("egis_tla_gate.validate_tlc_output") as validator:
+                    result = run_gate(**self.args())
+        self.assertEqual("FAIL", result["overall"])
+        self.assertEqual("NOT_RUN", result["checks"]["tlc_output_validation"]["status"])
+        self.assertEqual("tlc_execution_failed", result["checks"]["tlc_output_validation"]["reason"])
+        validator.assert_not_called()
+        self.assertEqual(2, mocked.call_count)
 
     def test_dirty_checkout_fails_closed(self):
         dirty_identity = {**self.identity, "status": "FAIL", "dirty": True}

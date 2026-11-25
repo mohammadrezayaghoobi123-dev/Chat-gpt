@@ -20,10 +20,22 @@ No dependency download or tool installation is performed by the gate.
 
 ## Status semantics
 
-- PASS: source identity and cleanliness pass, tool digest matches, SANY exits zero, TLC exits zero, and the independent TLC output validator confirms one unambiguous completion summary, the expected invariant-check count, and internally consistent completed state counts.
-- FAIL: expected commit mismatch, dirty tree, tool digest mismatch, command non-zero, timeout, invariant-count mismatch, TLC error/violation marker, or inconsistent state counts.
-- BLOCKED: source metadata, required inputs, tool jar, or executable unavailable; TLC blocked if SANY has not passed.
+- PASS: source identity and cleanliness pass, tool digest matches, SANY exits zero, TLC exits zero, and the independent TLC output validator confirms one unambiguous completion summary, the expected invariant-check count, internally consistent completed state counts, and the required marker order.
+- FAIL: expected commit mismatch, dirty tree, tool digest mismatch, command non-zero, timeout, invariant-count mismatch, TLC error/violation marker, invalid numeric fields, or inconsistent state counts.
+- BLOCKED: source metadata, required inputs, tool jar, or executable unavailable; TLC blocked if SANY has not passed; malformed/ambiguous evidence without a confirmed violation.
 - NOT_RUN: initial/unexecuted state only. A status may never be promoted to PASS based on missing evidence.
+
+## TLC output validation
+
+The parser requires exactly one marker of each type and enforces this order:
+
+1. Invariant check marker with count equal to the configured inventory.
+2. TLC completion summary: `Model checking completed. No error has been found.`
+3. State-count summary with generated states >= distinct states and zero queued states.
+
+Configured invariant names must be non-empty, unique identifiers. Unknown config syntax yields an empty inventory and BLOCKED. Numeric conversion errors fail closed. The validator checks the invariant count, not independent per-name execution evidence.
+
+This is a version-sensitive textual parser. The marker grammar and ordering have not yet been validated against a real output fixture from the exact pinned TLC release. Therefore, synthetic tests are only parser regression tests, not operational compatibility evidence.
 
 ## Evidence schema
 
@@ -56,14 +68,28 @@ From repository root:
 PYTHONPATH=verification/formal/egis/tools python -m unittest discover -s verification/formal/egis/tests -p 'test_tla_gate.py' -v
 ```
 
-The suite mocks subprocess tool execution and tests synthetic TLC output fixtures; it verifies gate control flow and parser rejection conditions, not real SANY/TLC behavior. The parser is intentionally version-sensitive and must be validated against an independently acquired output fixture from the pinned TLC release before operational reliance.
+The suite mocks subprocess tool execution and tests synthetic TLC output fixtures; it verifies gate control flow and parser rejection conditions, not real SANY/TLC behavior.
 
 ## Current verification status
 
-- Gate implementation: registered candidate, static inspection only.
-- Gate unit tests: authored; execution NOT_RUN.
+- Exact prior head `84de51d1cca8cfe3d3462175236875f7f1e4a02d`: CI compileall PASS; 25/25 tests PASS.
+- Adversarial test head `5bc69380cb9a023082b065c0aa7ffa2a96fce26f`: compileall PASS; 29 tests executed, 7 failed because the first hardening patch over-escaped regex literals. This failure was observed and is not concealed.
+- Corrected regex and ordering implementation: commit `74cb93dc07ad89401eedace6f26e9821c57c0824`.
+- Independent local reproduction of focused adversarial cases: 8/8 PASS. This is not GitHub CI and does not substitute for exact-head CI.
+- Exact-head CI for `74cb93dc07ad89401eedace6f26e9821c57c0824`: NOT_RUN / no workflow run observed.
 - TLA+ tool availability: NOT_ESTABLISHED.
 - SANY: NOT_RUN.
 - TLC: NOT_RUN.
-- Mutations/differential tests: NOT_RUN.
-- Evidence attestation: NOT_IMPLEMENTED.\n- Real TLC output fixture compatibility: NOT_ESTABLISHED.\n- Full-history Gitleaks: FAIL; 13 historical generic-api-key findings remain unclassified.\n- Validator checks invariant count from the configured inventory; it does not independently recover each invariant name from TLC output.
+- Real TLC output fixture compatibility: NOT_ESTABLISHED.
+- Mutation/differential tests beyond committed hostile fixtures: NOT_RUN.
+- Evidence attestation: NOT_IMPLEMENTED.
+- Java/runtime provenance: NOT_IMPLEMENTED.
+- Historical Gitleaks: 13 generic-api-key findings remain unclassified; PR-diff scan passed on prior scan, full-history scan failed/cancelled after reporting the same 13 detections. No suppressions or credential changes were made.
+
+## Promotion decision
+
+**NOT READY FOR MERGE OR PROMOTION.** The gate remains NOT_VERIFIED until exact-head CI passes, real SANY/TLC execution succeeds with a pinned tool, real output compatibility is established, and evidence integrity is independently addressed.
+
+## Safety boundary
+
+Draft candidate only. No merge, deployment, runtime, main branch, secrets, bindings, permissions, branch retargeting, or laptop changes.

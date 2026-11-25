@@ -377,3 +377,19 @@ No code, test harness, backend, account resource, secret, workflow, reviewer act
 **Correction:** Require atomic co-commit of admission/fence and protected mutation, or a fully specified recoverable cross-authority protocol; require a mandatory transport wrapper/interlock on every external-effect call site. Static call-site inventory and negative tests must demonstrate that direct/unpermitted, stale, duplicate, wrong-key/stage, and post-close transport calls are rejected.
 
 **Disposition:** Interface adequacy gap corrected in documentation. No implementation or runtime proof exists. RS-32/33 remain unqualified; RS-34 remains open.
+
+
+## R. Freeze semantics and remote-effect quiescence — AR-76.1
+
+| Requirement | Counterexample / semantic boundary | Status | Required falsification evidence |
+|---|---|---|---|
+| RS-35 Local freeze is not falsely represented as remote-effect quiescence | A worker paused after permit consumption may resume after local freeze ACK; consumed permit is not revocable and a separate gateway-check/network-send pair has TOCTOU | **GAP — REMOTE QUIESCENCE NOT PROVEN** | FZ-01–FZ-06 test stale paused worker, in-flight transport, closure race, restart, unlock rejection, and actual gateway enforcement; unresolved effects remain UNKNOWN |
+
+### R.1 Evidence vocabulary
+
+- ADMISSION_FREEZE_ACK: new admission and permit consumption closed at recorded epoch.
+- LOCAL_MUTATION_FREEZE_ACK: local mutations settled or represented in immutable complete inventory.
+- REMOTE_EFFECT_QUIESCENCE: trusted evidence every consumed permit had no transport invocation or a positively evidenced terminal remote outcome; not currently demonstrated.
+- UNKNOWN: consumed permit whose invocation/outcome is inconclusive; blocks automatic unlock under current policy.
+
+A timeout, worker death, absent local log, negative remote search, or incomplete inventory is not proof of REMOTE_NEGATIVE_PROVEN. The transport gateway's permit/epoch check must be non-bypassable and tested at the actual invocation boundary; a split check/send retains TOCTOU.

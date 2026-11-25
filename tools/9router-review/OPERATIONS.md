@@ -1802,3 +1802,14 @@ The design now requires a linearizing coordinator interface for admission, settl
 The hostile pass found an enforcement gap in the first interface draft: coordinator admission/permit acknowledgements are not effective controls if a caller can bypass them and invoke an external transport directly, or mutate a shard after admission without co-commit/fencing. The contract now requires protected state mutation to co-commit with the coordinator admission/fence or use an explicit recoverable cross-authority protocol, and every provider/GitHub effect site to pass through a mandatory permit-consuming transport guard. The spike must include static transport-call inventory and negative tests for missing, stale, duplicate, wrong-key/stage and post-close permits.
 
 This correction is documentation-only. The actual call-site guard inventory, implementation, and runtime bypass tests remain NOT RUN. No backend, code, test harness, workflow activation, provider call, GitHub comment, deployment, secret, main branch, or local-host change occurred.
+
+
+### AR-76.1 — Freeze acknowledgement versus remote-effect quiescence
+
+**Hostile clarification:** admission freeze, local mutation freeze, and remote-effect quiescence are distinct claims. Admission freeze closes new admissions/permit consumption at an epoch. Local mutation freeze requires all local writes settled or represented in a complete frozen inventory. Remote-effect quiescence requires trusted evidence that each consumed permit either never reached transport or reached a positively evidenced terminal outcome; this stronger property is NOT currently proven.
+
+A consumed permit cannot be retroactively revoked. A paused worker may resume after local freeze ACK, so a local coordinator alone cannot guarantee zero remote calls after ACK. That stronger requirement needs a non-bypassable transport gateway enforcing epoch/permit validation at the actual invocation boundary; a check followed by a separate network send retains TOCTOU. Absent trusted transport evidence, timeout, worker death, absent local logs, negative remote search, or incomplete inventory must remain UNKNOWN, not REMOTE_NEGATIVE_PROVEN. Under current policy, unresolved UNKNOWN blocks automatic unlock.
+
+Design-only falsification tests FZ-01–FZ-06: paused worker after permit consumption; transport invoked but outcome ACK lost; independent-client gate/permit race; coordinator restart during freeze; unlock with incomplete/stale/mismatched inventory; and gateway epoch check versus actual send atomicity. No tests are executed or claimed here.
+
+**Disposition:** RS-35 remote-effect quiescence remains GAP / NOT PROVEN. This refinement does not change the AR-76 mandatory transport guard or co-commit/fencing correction. No backend, implementation, integration, or reviewer activation authorized.

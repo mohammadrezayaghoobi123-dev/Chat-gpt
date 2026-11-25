@@ -228,3 +228,8 @@ The test asserts final durable state after the terminal outcome, not the transie
 - See `OPERATIONS.md` §12B.7 and `RESERVATION_STORE_TRACEABILITY.md` §P. No code, provider selection, account resource, secret or deployment was changed.
 
 
+
+
+## AR-76.1 freeze semantics
+
+Admission freeze, local mutation freeze, and remote-effect quiescence are distinct. Consumed permits cannot be revoked; a paused worker may resume after local freeze ACK. RS-35 remote-effect quiescence remains GAP. FZ-01–FZ-06 are design-only tests, NOT_RUN. No backend or implementation is selected/authorized.

@@ -74,9 +74,8 @@ The suite mocks subprocess tool execution and tests synthetic TLC output fixture
 
 - First hardening attempt exposed a regex escaping defect (7/29 tests failed); corrected and passed 29/29 on the earlier code head.
 - FMH-074 test-only run exposed an uncaught 5,000-digit invariant-count conversion; parser fix catches the conversion and returns FAIL.
-- Exact code-head CI run `45554026290` on `33fb63341de88eedd0556e47197416593b8e469b`: compileall PASS; 30/30 tests PASS.
-- Latest PR-head CI run `45554098702` on `d6bcdf3af44da5758ee1e79bd12357e693d145c2`: compileall PASS; 30/30 tests PASS; changes since the tested code commit were documentation-only.
-- Latest PR-head Gitleaks run `45554089720`: PR-diff PASS; full-history FAIL with 13 unclassified findings across 5,210 commits.
+- Latest exact PR-head CI run `45554166694` on `de853df55bd863cf818fddb055feb8d63e7210b1`: compileall PASS; 30/30 tests PASS.
+- Latest exact PR-head Gitleaks run `45554157983`: PR-diff PASS; full-history FAIL with 13 unclassified findings across 5,214 commits.
 - TLA+ tool availability: NOT_ESTABLISHED.
 - SANY: NOT_RUN.
 - TLC: NOT_RUN.

@@ -63,6 +63,8 @@ class GateTests(unittest.TestCase):
             (b"partial\\xff", b"timed out"),
         ]
         process.wait.return_value = -9
+        process.stdout = MagicMock()
+        process.stderr = MagicMock()
         with patch("egis_tla_gate.subprocess.Popen", return_value=process):
             result = run_command(["java"], self.root, 1)
         self.assertEqual("FAIL", result["status"])
@@ -74,6 +76,8 @@ class GateTests(unittest.TestCase):
         self.assertIn("partial", result["stdout"])
         self.assertEqual("timed out", result["stderr"])
         process.kill.assert_called_once()
+        process.stdout.close.assert_called_once()
+        process.stderr.close.assert_called_once()
         json.dumps(result)
 
     def _mock_process(self, returncode=0):
@@ -131,6 +135,8 @@ class GateTests(unittest.TestCase):
         import errno
 
         process = self._mock_process(returncode=-9)
+        process.stdout = MagicMock()
+        process.stderr = MagicMock()
         process.communicate.side_effect = OSError(errno.EIO, "pipe failed", "/private/pipe")
         with patch("egis_tla_gate.subprocess.Popen", return_value=process):
             result = run_command(["java"], self.root, 1)
@@ -143,6 +149,8 @@ class GateTests(unittest.TestCase):
         self.assertNotIn("/private/pipe", result["stderr"])
         process.kill.assert_called_once()
         process.wait.assert_called_once()
+        process.stdout.close.assert_called_once()
+        process.stderr.close.assert_called_once()
         json.dumps(result)
 
     def test_communication_error_with_unconfirmed_reap_remains_unknown(self):
@@ -203,21 +211,31 @@ class GateTests(unittest.TestCase):
         self.assertEqual("EXIT_ZERO", result["process_outcome"])
         self.assertEqual("REAPED", result["process_cleanup"])
 
-    def test_real_timeout_kills_and_reaps_child_process(self):
+    def test_real_timeout_kills_and_reaps_child_and_closes_pipes(self):
+        import gc
         import sys
         import time
+        import warnings
 
         started = time.monotonic()
-        result = run_command(
-            [sys.executable, "-c", "import time; time.sleep(20)"],
-            self.root,
-            0.1,
-        )
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always", ResourceWarning)
+            result = run_command(
+                [sys.executable, "-c", "import time; time.sleep(20)"],
+                self.root,
+                0.1,
+            )
+            gc.collect()
         elapsed = time.monotonic() - started
+        resource_warnings = [
+            warning for warning in captured
+            if issubclass(warning.category, ResourceWarning)
+        ]
         self.assertEqual("FAIL", result["status"])
         self.assertEqual("process_timed_out", result["reason"])
         self.assertEqual("TIMED_OUT", result["process_outcome"])
         self.assertEqual("REAPED", result["process_cleanup"])
+        self.assertEqual([], resource_warnings)
         self.assertLess(elapsed, 5.0)
 
     def test_process_control_and_programming_exceptions_are_not_swallowed(self):

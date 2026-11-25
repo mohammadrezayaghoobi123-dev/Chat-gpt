@@ -90,7 +90,7 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
 
     for description, (expected_commit, expected_path) in EXPECTED_FIXTURES.items():
         entry = entries[description]
-        label = description.split(" from ", 1)[0]
+        label = description
         if entry.get("targetRules") != ["generic-api-key"]:
             errors.append(f"{label}: targetRules must remain exactly generic-api-key")
         if entry.get("condition") != "AND":
@@ -153,11 +153,28 @@ def diagnose_report(report: list[dict], config: dict) -> list[str]:
         if entry is None:
             diagnostics.append(f"DIAGNOSTIC: {label}: allowlist=missing")
             continue
+        source_text = subprocess.run(
+            ["git", "show", f"{expected_commit}:{expected_path}"],
+            cwd=pathlib.Path.cwd(),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        source_lines = source_text.splitlines()
+        source_locations = [
+            index for index, source_line in enumerate(source_lines, start=1)
+            if FIXTURE_LINE.fullmatch(source_line)
+        ]
+        if len(source_locations) != 1:
+            diagnostics.append(f"DIAGNOSTIC: {label}: source_fixture=missing_or_ambiguous")
+            continue
+        expected_line = source_locations[0]
         candidates = [
             finding for finding in report
             if finding.get("Commit") == expected_commit
             and finding.get("File") == expected_path
             and finding.get("RuleID") == "generic-api-key"
+            and finding.get("StartLine") == expected_line
         ]
         if not candidates:
             diagnostics.append(f"DIAGNOSTIC: {label}: finding=absent")

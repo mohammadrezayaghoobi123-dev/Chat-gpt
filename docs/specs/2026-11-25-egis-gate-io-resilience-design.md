@@ -5,15 +5,15 @@
 **Target:** PR #475, branch `verification/egis-verification-gate-v1.1.1-2026-11-25`  
 **Design status:** Scope approved; this revised execution contract requires user review before implementation  
 **Frozen code baseline:** `78020c75cee7767ab2a892a03bb9e085e41b1606`  
-**Current documentation branch head before this revision:** `619c48a8671267f01d87145e59ff3542b6f22d3d`
+**Documentation revision parent:** `1856413b4397ec3c717e7b1a572ed57a65a683e8`
 
 ## 0. Why revision 2 is required
 
-Revision 1 grouped too many responsibilities into two increments. That made the transaction boundaries, failure ordering, ownership, and independently falsifiable acceptance criteria insufficiently precise.
+Revision 1 grouped too many responsibilities into two increments. That left transaction boundaries, failure ordering, ownership, and independently falsifiable acceptance criteria underspecified.
 
 Revision 2 decomposes the work into five implementation atoms. Each atom receives its own test-only RED commit and one bounded implementation GREEN commit. No implementation commit may include the next atom's behavior.
 
-The current code facts motivating this design are:
+Current code facts motivating this design:
 
 - `run_command()` uses `subprocess.run()`, catches `FileNotFoundError` and `TimeoutExpired`, but not other process-related `OSError`.
 - A blanket `OSError` catch around `subprocess.run()` would be incorrect: an OS error may occur after the child has started while communicating with it. Start and communicate phases must be distinguishable.
@@ -23,16 +23,23 @@ The current code facts motivating this design are:
 - `atomic_write_json()` does not guarantee cleanup of its temporary file after all ordinary failure paths and has no typed persistence error.
 - A green mocked test suite does not establish real SANY/TLC execution or parser compatibility.
 
-## 1. Scope and non-negotiable invariants
+## 1. Scope, ownership and non-negotiable invariants
 
-Only these files may change in the five atoms:
+### 1.1 Allowed implementation surface
+
+Only these executable files may change during the five atoms:
 
 - `verification/formal/egis/tools/egis_tla_gate.py`
 - `verification/formal/egis/tests/test_tla_gate.py`
 
-The design document may be updated as a separate documentation-only commit. The EGIS workflow is not changed unless the test runner demonstrably fails to trigger for either allowed path; that would require a separately reviewed scope change.
+One separate documentation-only commit must update:
 
-Protected files and resources:
+- `verification/formal/egis/EGIS-VG-001-verification-gate-contract-v1.1.1.md`
+- `docs/specs/2026-11-25-egis-gate-io-resilience-design.md`
+
+The EGIS workflow is not changed unless the test runner demonstrably fails to trigger for either allowed executable path; that would require a separately reviewed scope change.
+
+### 1.2 Protected resources
 
 - TLA module;
 - TLC configuration;
@@ -40,7 +47,7 @@ Protected files and resources:
 - pre-existing evidence output;
 - `main`, Rulesets, secrets, credentials, deployment and local workstation state.
 
-Invariants:
+### 1.3 Invariants
 
 - **I-01 Status integrity:** no missing, unreadable, malformed, timed-out, conflicting, or unpersisted evidence may yield PASS.
 - **I-02 Stage ordering:** no Java/SANY/TLC process starts until required path checks, input reads, configuration decoding and invariant-inventory validation complete.
@@ -72,7 +79,7 @@ The gate must follow this sequence. A stage may only transition forward; a faile
 | 8 | Evidence persistence | JSON serialization, temp write/close and replacement complete | Typed persistence failure; CLI exits nonzero and makes no persisted-evidence claim | No PASS claim |
 | 9 | CLI result | Evidence persistence succeeded | Print result JSON and return 0 only for overall PASS; otherwise return documented nonzero | End |
 
-**Ordering correction:** the configuration bytes must be read, UTF-8 decoded, and converted into the expected invariant inventory before SANY starts. The same in-memory decoded text/inventory is then used by the output validator. Do not reopen and parse the configuration after TLC.
+**Ordering rule:** configuration bytes must be read, UTF-8 decoded, and converted into the expected invariant inventory before SANY starts. The same in-memory decoded text/inventory is then used by the output validator. Do not reopen and parse the configuration after TLC.
 
 ## 3. Explicit failure taxonomy
 
@@ -90,10 +97,12 @@ The gate must follow this sequence. A stage may only transition forward; a faile
 | No explicit INVARIANT inventory can be derived | BLOCKED | `invariant_inventory_unavailable` |
 | Duplicate or syntactically invalid explicit invariant names | FAIL | `invariant_inventory_invalid` |
 | Output aliases module/config/JAR | Typed fatal path error | `evidence_output_input_alias` |
-| Evidence serialization/write/replace fails | Typed persistence error | one of the writer reason codes in Atom 5 |
+| Evidence serialization/write/replace fails | Typed persistence error | one of the writer reason codes in Atom B3 |
 | Temporary cleanup fails after a writer error | Preserve primary error plus `cleanup_failed=true` | `evidence_temp_cleanup_failed` |
 
-Diagnostics must not include raw exception reprs, absolute local paths, or environment values. For process-start errors, preserve the exception class and errno when available, but not the filename/path fields. Command identity remains in the established structured evidence fields; do not add secrets or environment contents.
+For config parsing, any line whose first token is `INVARIANT` must match the accepted single-identifier grammar; a malformed explicit invariant directive is FAIL. Other TLC config directives remain untouched. No invariant directives is BLOCKED.
+
+Diagnostics must not include raw exception reprs, absolute local paths, or environment values. For process-start errors, preserve exception class and errno when available, but not filename/path fields. Command identity remains in the established structured evidence fields; do not add secrets or environment contents.
 
 ## 4. Five atomic implementation atoms
 
@@ -105,21 +114,21 @@ Each atom has exactly two commits: **RED** (tests only) and **GREEN** (the minim
 
 **Design:** replace the opaque `subprocess.run()` boundary with a narrow `Popen` lifecycle inside `run_command()`:
 
-1. Construct `Popen` with the existing command, cwd, environment snapshot and stdout/stderr pipes; use byte streams and the existing safe UTF-8 replacement decoder.
+1. Construct `Popen` with the existing command, cwd, environment snapshot and stdout/stderr pipes. Use byte streams and the existing safe UTF-8 replacement decoder so child output decoding cannot unexpectedly throw.
 2. Catch `FileNotFoundError` as a specific process-start BLOCKED result.
 3. Catch other `OSError` only around `Popen` construction as process-start BLOCKED.
 4. After successful construction, call `communicate(timeout=...)`.
-5. On timeout, kill and reap the child, capture bounded/safely decoded output, and keep status FAIL.
+5. On timeout, kill and reap the child, safely decode captured output, and keep status FAIL.
 6. If communication raises `OSError` after process start, attempt terminate/kill and reap. Return BLOCKED with `process_result_unavailable`; never validate missing/partial output as success.
 7. If cleanup cannot be confirmed, report a cleanup substatus and do not start another dependent process.
 
-Do not blanket-catch OSError around the entire function. Preserve the existing result keys `status`, `exit_code`, `stdout`, `stderr`, `command`; only add stable, documented reason/phase/error metadata.
+Do not blanket-catch OSError around the entire function. Preserve existing result keys `status`, `exit_code`, `stdout`, `stderr`, `command`; add only stable, documented reason/phase/error metadata. Process output retains the current uncapped capture behavior; output-size limiting is a separate scope.
 
 **RED-only tests:** PermissionError at Popen; generic OSError with and without errno; absent executable; communication OSError after child creation; TimeoutExpired with kill/reap; nonzero exit; successful output; KeyboardInterrupt/SystemExit and unrelated programming exception propagation; path-redacted diagnostics; JSON serialization.
 
-**GREEN acceptance:** all targeted tests pass; existing timeout/nonzero/missing-executable semantics do not regress; no child is left running in injected timeout/communication-failure tests where the platform test harness can verify reaping.
+**GREEN acceptance:** all targeted tests pass; existing timeout/nonzero/missing-executable semantics do not regress; no child is left running in injected timeout/communication-failure tests where the platform harness can verify reaping.
 
-**Files:** the two allowed files only.
+**Files:** the two allowed executable files only.
 
 ### Atom A2 — Gate state propagation
 
@@ -139,7 +148,7 @@ Do not blanket-catch OSError around the entire function. Preserve the existing r
 
 **GREEN acceptance:** state table and tests agree exactly; existing top-level JSON shape remains compatible except explicitly documented additive reason metadata.
 
-**Files:** the two allowed files only.
+**Files:** the two allowed executable files only.
 
 ### Atom B1 — Required-input and TLC-config preflight
 
@@ -151,17 +160,18 @@ Do not blanket-catch OSError around the entire function. Preserve the existing r
 - The approved JAR may be outside root, but must be a regular readable file and must match its pinned SHA-256.
 - Use explicit `stat`/open operations, not `is_file()` as the sole failure discriminator.
 - Distinguish missing file from non-missing metadata/read errors.
-- Read bytes and compute module/config/JAR digests from the bytes read. Do not silently reclassify permission/metadata errors as missing.
+- Hash module/config/JAR from the bytes actually read. Read the config once and retain that exact decoded text and invariant inventory for later validation.
 - Decode config bytes using strict UTF-8 before SANY. Invalid UTF-8 is FAIL.
 - Derive invariant names from the already decoded text once. Empty/unavailable inventory is BLOCKED; duplicate/invalid explicit names are FAIL.
-- Pass this validated inventory to the TLC output validator; do not reread the config after TLC.
-- Preserve the current pin-mismatch behavior as FAIL and missing JAR as BLOCKED.
+- A line beginning with the `INVARIANT` directive must match one valid identifier under the accepted grammar; do not silently ignore malformed invariant directives.
+- Pass the validated inventory to the TLC output validator; do not reread the config after TLC.
+- Preserve current pin-mismatch behavior as FAIL and missing JAR as BLOCKED.
 
-**RED-only tests:** missing module/config/JAR; stat and open PermissionError/OSError for each input class; module/config path escape via symlink; invalid UTF-8 config with assertion that Popen is never called; empty inventory; duplicate/invalid invariant identifiers; stable hashes over the exact bytes read.
+**RED-only tests:** missing module/config/JAR; stat and open PermissionError/OSError for each input class; module/config path escape via symlink; invalid UTF-8 config with assertion that Popen is never called; empty inventory; malformed/duplicate/invalid invariant directives; stable hashes over the exact bytes read.
 
 **GREEN acceptance:** no child process starts until all required preflight checks pass; exact config bytes and inventory used for final validation are the preflight values.
 
-**Files:** the two allowed files only.
+**Files:** the two allowed executable files only.
 
 ### Atom B2 — Output path identity guard
 
@@ -169,21 +179,23 @@ Do not blanket-catch OSError around the entire function. Preserve the existing r
 
 **Required behavior before any subprocess or evidence write:**
 
-1. Resolve the output parent and normalize the candidate destination with non-strict resolution so a not-yet-created final file can be checked.
-2. Compare normalized output candidate against normalized module/config/JAR paths.
-3. If output exists, reject a final symlink and reject directory/non-regular targets.
-4. Use filesystem identity comparison (`samefile`/device+inode semantics) to detect hard-link aliases for existing protected files.
-5. If an existing output cannot be inspected due to a non-ENOENT OS error, fail closed with a typed path-validation error.
-6. A conflict is fatal before execution: do not write evidence to the conflicting path and do not claim a JSON artifact exists.
-7. A distinct existing regular evidence file may be atomically replaced by Atom B3.
+1. Anchor relative output paths to the resolved repository root, matching the current `_rooted_path` convention.
+2. Inspect the caller-supplied final output component with `lstat` before canonical resolution; reject a final-component symlink rather than accidentally losing its identity during `resolve()`.
+3. Resolve parent components and normalize the candidate destination using non-strict resolution so a not-yet-created final file can be checked.
+4. Compare normalized output candidate against normalized module/config/JAR paths.
+5. For an existing output, reject directory and non-regular targets.
+6. Use filesystem identity comparison (`samefile` / device+inode semantics) to detect hard-link aliases for existing protected files.
+7. If an existing output cannot be inspected due to a non-ENOENT OS error, fail closed with a typed path-validation error.
+8. A conflict is fatal before execution: do not write evidence to the conflicting path and do not claim a JSON artifact exists.
+9. A distinct existing regular evidence file may be atomically replaced by Atom B3.
 
-Parent-directory symlinks are resolved to their canonical target; the design does not claim protection against a hostile process concurrently swapping path components after validation. This residual TOCTOU assumption must be recorded.
+Parent-directory symlinks are resolved to their canonical target. The design does not claim protection against a hostile process concurrently swapping path components after validation. This residual TOCTOU assumption must be recorded.
 
 **RED-only tests:** exact path equality for each protected input; relative-vs-absolute aliases; final symlink to each protected input; hard link to each protected input where supported; unrelated existing evidence file allowed; output directory rejected; inaccessible output path inspection blocks; assert protected bytes remain identical and no process runs on conflict.
 
 **GREEN acceptance:** all alias cases reject before any command/write; supported hard-link/symlink tests run rather than silently skip without recording platform capability.
 
-**Files:** the two allowed files only.
+**Files:** the two allowed executable files only.
 
 ### Atom B3 — Evidence writer and CLI failure contract
 
@@ -197,19 +209,20 @@ Parent-directory symlinks are resolved to their canonical target; the design doe
 4. Write UTF-8 JSON plus one trailing newline; close the stream before replacement.
 5. Replace destination using `os.replace` on the same filesystem.
 6. On any ordinary serialization/write/close/replace failure, attempt temp cleanup. Preserve the old destination if replacement did not complete.
-7. Expose a typed `EvidencePersistenceError` with a stable reason code and a cleanup-failure flag; never propagate raw path-bearing OS exception text to CLI output.
+7. Expose a typed `EvidencePersistenceError` with a stable reason code and cleanup-failure flag; never propagate raw path-bearing OS exception text to CLI output.
 8. The CLI catches only the typed persistence/path-validation exceptions, writes one bounded sanitized diagnostic to stderr and returns nonzero. It does not print JSON evidence or claim a persisted gate status when persistence failed.
 9. Do not add file or directory fsync in this increment; document atomic replacement/visibility only, not crash durability.
+10. Increment the evidence `schema_version` from `1.1` to `1.2` because stable reason/phase/error metadata is added to command evidence; update EGIS-VG-001 in the separate documentation-only commit. Add a compatibility test that preserves all existing required keys and verifies the new optional fields.
 
-**RED-only tests:** NaN/non-serializable payload; parent mkdir failure; temp creation failure; partial write failure; close failure; replace failure; cleanup failure; old destination preserved before replace; temp path is same directory; temp cleanup attempted; successful JSON roundtrip; CLI captures sanitized stderr, returns nonzero, and emits no success JSON on persistence failure; KeyboardInterrupt/SystemExit not swallowed.
+**RED-only tests:** NaN/non-serializable payload; parent mkdir failure; temp creation failure; partial write failure; close failure; replace failure; cleanup failure; old destination preserved before replace; temp path is same directory; temp cleanup attempted; successful JSON roundtrip; CLI captures sanitized stderr, returns nonzero, and emits no success JSON on persistence failure; KeyboardInterrupt/SystemExit not swallowed; schema version and required fields checked.
 
-**GREEN acceptance:** old output remains unchanged for every pre-replace failure; no temp residue when cleanup succeeds; CLI makes no persisted-evidence claim after any writer failure; successful replace yields parseable JSON.
+**GREEN acceptance:** old output remains unchanged for every pre-replace failure; no temp residue when cleanup succeeds; CLI makes no persisted-evidence claim after any writer failure; successful replace yields parseable JSON with schema 1.2.
 
-**Files:** the two allowed files only.
+**Files:** the two allowed executable files only. The EGIS-VG contract update is a separate docs-only commit, not mixed into executable implementation.
 
 ## 5. Per-atom transaction protocol
 
-For every atom in the order A1 → A2 → B1 → B2 → B3:
+For every atom in order A1 → A2 → B1 → B2 → B3:
 
 1. Re-fetch PR metadata and branch ref; record exact starting HEAD and expected parent.
 2. Create only the RED test commit on that branch using a non-force update with `expected_sha`.
@@ -236,7 +249,7 @@ The temporary RED commit is intentionally expected to fail tests. The correspond
 
 - The caller-controlled output directory is assumed not to be concurrently manipulated by a hostile process. Path-swap TOCTOU resistance is not claimed.
 - Input files could be modified concurrently after their bytes are hashed but before SANY/TLC reopens them. This design records the limitation; it does not claim filesystem snapshot isolation.
-- Output captured by child processes remains subject to the existing memory-size behavior; output-size limiting is outside this narrowly approved scope and should be a separate design if required.
+- Output captured by child processes remains subject to the existing uncapped capture behavior; output-size limiting is outside this narrowly scoped work.
 - Atomic replace is not crash-durable without file and directory fsync. No durability claim is made.
 - An OS/process cleanup failure may leave a child process state uncertain; the evidence must expose this and block dependent execution.
 - Artifact provenance, Java/JDK provenance, real SANY/TLC execution, real TLC output grammar compatibility, source-build reproducibility and evidence attestation remain separate blocked gates.

@@ -72,6 +72,8 @@ T46–T47 add stage-to-outcome binding checks for the append-only effect ledger.
 
 Latest stage-bound outcome checkpoint: T46–T47 were observed RED on the initial test-only revision and GREEN after the reference-oracle correction. Hosted run 45511958154 reports T01–T47 47/47 PASS. The full reviewer regression remains intentionally non-green because the preserved duplicate-publication race still produces two POSTs. This does not qualify any persistent provider adapter.
 
-| T48 | I34 (proposed) | Outcome append must reject a missing authoritative attempt-boundary receipt without advancing the ledger sequence |
+| T48 | I34 | Outcome append rejects a missing authoritative attempt-boundary receipt without advancing the ledger sequence |
+| T49 | I35 | Outcome append rejects receipt mutations across reservation key, stage, attempt ID, request digest, generation, or committed record version; exact receipt is accepted |
+| T50 | I36 | Lost boundary acknowledgement recovers the same durable receipt without issuing another permit |
 
-T48 is test-authored but execution-unverified at this checkpoint. The current reference implementation does not inspect an attempt-boundary receipt in `appendOutcome`, so RED is predicted from source inspection only. Do not report T48 as an observed RED until the exact hosted test run confirms it. No GREEN correction has been applied.
+Hosted run 45552193719 on revision `522166def70bf9b0cd7b286d01a33840761b50e5` observed T48, T49, and T50 RED. T49 stopped at the missing-receipt assertion, so its mutation matrix and positive exact-receipt path remain unexecuted. T50 failed its explicit API-presence assertion because `readAttemptBoundaryReceipt` is absent; recovery semantics are not yet exercised. No adapter correction has been applied. Do not treat this tranche as GREEN or production qualification.

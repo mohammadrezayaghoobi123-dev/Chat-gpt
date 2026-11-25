@@ -34,7 +34,7 @@ The validator distinguishes unavailable executable (BLOCKED), timeout (FAIL), an
 | FMH-070 | Medium | Mocked subprocess tests do not prove actual TLC output grammar or trace retention. | Open; controlled real-tool execution required. |
 | FMH-071 | Medium | Missing TLC executable was classified FAIL rather than BLOCKED. | Fixed; unavailable process is BLOCKED, timeout/non-zero exit remain FAIL. |
 | FMH-072 | High | The parser accepted success and state-count markers in an impossible order. | Fixed in candidate; enforce invariant-check < completion < state-count and add hostile tests. |
-| FMH-073 | Medium | Invalid inventory entries and oversized numeric fields could cause unsafe behavior. | Fixed in candidate; validate identifier type/syntax before uniqueness and fail closed on numeric conversion errors. |
+| FMH-073 | Medium | Invalid inventory entries and oversized state-count fields could cause unsafe behavior. | Fixed in candidate; validate identifier type/syntax before uniqueness and fail closed on numeric conversion errors. |\n| FMH-074 | Medium | An oversized invariant-count field could raise an uncaught integer-conversion exception. | Fixed in candidate: catch invalid/oversized invariant-count conversion and return FAIL; hostile regression test added. |
 
 ## Test evidence and TDD record
 

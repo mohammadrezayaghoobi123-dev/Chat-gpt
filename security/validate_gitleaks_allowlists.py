@@ -356,30 +356,52 @@ def build_necessity_config(config: dict) -> dict:
 
 def verify_necessity_report(report: list[dict]) -> list[str]:
     """Verify the redacted report contains exactly the 13 expected finding tuples."""
-    expected = {
+    from collections import Counter
+
+    expected = Counter(
         (commit, path, line_number, "generic-api-key")
         for commit, path, line_number in EXPECTED_LINE_EXCEPTIONS.values()
-    }
-    observed = []
+    )
+    observed = Counter()
+    malformed = 0
+    if not isinstance(report, list):
+        return ["necessity report must be a JSON array"]
     for finding in report:
-        observed.append((
-            finding.get("Commit"),
-            finding.get("File"),
-            finding.get("StartLine"),
-            finding.get("RuleID"),
-        ))
+        if not isinstance(finding, dict):
+            malformed += 1
+            continue
+        commit = finding.get("Commit")
+        path = finding.get("File")
+        line_number = finding.get("StartLine")
+        rule = finding.get("RuleID")
+        if (
+            not isinstance(commit, str)
+            or re.fullmatch(r"[0-9a-f]{40}", commit) is None
+            or not isinstance(path, str)
+            or not path
+            or not isinstance(line_number, int)
+            or isinstance(line_number, bool)
+            or line_number < 1
+            or not isinstance(rule, str)
+            or not rule
+        ):
+            malformed += 1
+            continue
+        observed[(commit, path, line_number, rule)] += 1
     errors = []
-    duplicates = sorted({item for item in observed if observed.count(item) > 1})
-    missing = sorted(expected - set(observed))
-    extra = sorted(set(observed) - expected)
-    if duplicates:
-        errors.append(f"necessity report contains duplicate finding tuples: {len(duplicates)}")
+    if malformed:
+        errors.append(f"necessity report contains malformed finding records: {malformed}")
+    missing = sum((expected - observed).values())
+    extra = sum((observed - expected).values())
+    duplicate = sum(count - 1 for count in observed.values() if count > 1)
+    if duplicate:
+        errors.append(f"necessity report contains duplicate finding tuples: {duplicate}")
     if missing:
-        errors.append(f"necessity report is missing expected finding tuples: {len(missing)}")
+        errors.append(f"necessity report is missing expected finding tuples: {missing}")
     if extra:
-        errors.append(f"necessity report contains unexpected finding tuples: {len(extra)}")
-    if len(observed) != 13:
-        errors.append(f"necessity report must contain exactly 13 findings, observed {len(observed)}")
+        errors.append(f"necessity report contains unexpected finding tuples: {extra}")
+    if sum(observed.values()) + malformed != 13:
+        errors.append(f"necessity report must contain exactly 13 records, observed {sum(observed.values()) + malformed}")
     return errors
 
 

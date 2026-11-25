@@ -1328,3 +1328,17 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - **Gitleaks follow-up:** run [45562138995](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45562138995) again passed the PR-diff scan and failed the all-fetched-refs history scan with the same 13 `generic-api-key` detections across historical commits. The finding identities/commit locations are unchanged from AR-53; no new current-diff detection was reported. AR-53 remains OPEN / UNTRIAGED.
 - **Hostile review:** checked that T46/T47 stage errors precede receipt checks; T48 rejects absent receipts without advancing the ledger; T49 mutation and cross-binding rejection leaves ledger state unchanged; T50 recovers the exact MODEL receipt after discarding the first response and refuses a second permit; T51 validates COMMENT receipt and rejects cross-intent/cross-stage replay; T52 confirms exact receipt propagation. Hosted evidence confirms all 52 isolated tests pass. The remaining full-suite failure is the separate original publication race and was not edited or masked.
 - No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.
+
+
+#### 2026-11-25 post-commit receipt binding hardening — AR-55
+
+- Hardening commit: `b854849ab337280efb0c152c17eaa3d90894e574`; scope remains `tools/9router-review/conformance/reference-adapter.mjs` only.
+- **Hostile finding:** the first reference implementation inserted the private receipt-registry entry before writing the reservation record, and `appendOutcome` checked the registry without also checking the receipt persisted on the authoritative in-memory record. Although the synchronous oracle exposed no external interleaving in the tested path, that ordering was weaker than the intended commit-before-capability contract and left an avoidable split-state failure mode if the record write threw.
+- **Correction:** receipt construction is now side-effect-free; the reservation record is written with the receipt first; only after the write succeeds is the private registry entry registered, with no asynchronous boundary between those synchronous operations. `appendOutcome` now also verifies that the current authoritative record retains the same stage-specific attempt ID and exact persisted receipt, and that registry generation/committed-version metadata match the supplied receipt.
+- **Hosted verification on the hardened commit:** workflow run [45562365938](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45562365938).
+  - Isolated conformance: **52/52 PASS**.
+  - Full reviewer regression: **188/189 PASS**; sole failure remains the preserved duplicate-publication RED (2 POSTs vs expected 1).
+  - Dependency installation and both test execution steps completed.
+- Gitleaks run [45562365958](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45562365958): PR-diff scan passed; all-fetched-refs scan still reports the same 13 historical generic-key detections. AR-53 remains OPEN / UNTRIAGED.
+- **AR-55 status:** HOSTILE FINDING CORRECTED / HOSTED REFERENCE TESTS PASS / NO PRODUCTION SECURITY CLAIM.
+- No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.

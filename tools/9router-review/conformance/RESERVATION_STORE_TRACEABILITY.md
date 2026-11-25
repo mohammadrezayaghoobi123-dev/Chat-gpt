@@ -159,3 +159,16 @@ Before any provider adapter is written:
 7. Keep reviewer disabled; do not create resources, change secrets, deploy, merge, or modify `main` without separate explicit authorization.
 
 **Disposition:** TRACEABILITY BASELINE AUTHORED / STATIC SOURCE MAPPING ONLY / MULTIPLE BLOCKING GAPS IDENTIFIED / NO PROVIDER QUALIFIED.
+
+
+## F. RS-08 hostile-review checkpoint — AR-65
+
+The current reference oracle cannot honestly execute a process-restart test: its reservation records, digest index, ledger INTENT/OUTCOME maps, and boundary receipt registry are process-local Maps allocated inside `createReferenceSystem()`. There is no durable-store injection/reopen API and no orphan-INTENT recovery method. Reconstructing another oracle or copying Maps would not prove persistence, crash recovery, or independent-process behavior.
+
+**Do not treat a missing method/type error as a valid RED test.** Before T57, the protocol must define: globally unique operation/attempt identity and immutable tuple/stage/request binding; an authoritative way to distinguish definitely absent boundary from ambiguous acknowledgement; append-only/idempotent orphan disposition (abandon versus continue); proof that no permit/external effect occurred before continuation; fail-closed behavior for unavailable/stale/incomplete reads; concurrent recovery fencing; and durable read-after-write/reopen guarantees for both stores.
+
+**Safety rule:** no receipt found in a process-local cache, timeout, or unavailable store is not evidence of non-commit. Ambiguous state remains quarantined; recovery must not authorize model/provider execution or GitHub publication.
+
+**T57 acceptance gate (not implemented):** durable INTENT ACK → terminate before boundary invocation → reopen both stores in an independent process → recover the same operation identity → prove one idempotent orphan disposition and no boundary/permit/external effect → repeat concurrently and after restart → verify no duplicate ledger terminal event and no mutation on incomplete reads.
+
+RS-08 remains **GAP**. No test result or production qualification is claimed. This checkpoint is a protocol/design gate, not a substitute for T57.

@@ -137,12 +137,12 @@ test("T57.4: a competing recovery process with a stale expected fence cannot mut
     const staleAttempt = new Promise((resolve, reject) => {
       held.child.stdout.setEncoding("utf8").on("data", chunk => {
         staleOutput += chunk;
-        const lines = staleOutput.trim().split("\\n");
+        const lines = staleOutput.trim().split("\n");
         if (lines.length >= 2) resolve(JSON.parse(lines.at(-1)));
       });
       held.child.once("error", reject);
     });
-    held.child.stdin.write("abort\\n");
+    held.child.stdin.write("abort\n");
     const stale = await staleAttempt;
     assert.equal(stale.abortResult.status, "STALE_FENCE");
     assert.equal(stale.snapshot.tombstones, 1);

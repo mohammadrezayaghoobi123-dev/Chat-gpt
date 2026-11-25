@@ -1430,9 +1430,11 @@ test("T53: distinct full reservation tuples remain isolated when one immutable s
 
 
 test("T54: a reservation digest collision with a different full tuple is rejected without mutation", async () => {
+  let forceCollision = true;
   const system = createReferenceSystem({
     now: () => 1_000,
-    reservationKeyDigest: () => "forced-digest-collision",
+    reservationKeyDigest: keyId =>
+      forceCollision ? "forced-digest-collision" : "diagnostic:" + keyId,
   });
   const alternateKey = Object.freeze({
     ...KEY,
@@ -1447,15 +1449,16 @@ test("T54: a reservation digest collision with a different full tuple is rejecte
   const colliding = await system.adapter.claim(claimArgs("owner-2", {
     key: alternateKey,
   }));
-
   assert.equal(colliding.status, "INTEGRITY_CONFLICT");
 
+  // Use unique diagnostic digests to detect an accidentally persisted alias record.
+  forceCollision = false;
   const afterOriginal = await system.adapter.readAuthoritative({ key: KEY });
   const afterAlternate = await system.adapter.readAuthoritative({ key: alternateKey });
   const afterLedger = await system.ledger.readComplete({ key: KEY });
 
   assert.deepEqual(afterOriginal, beforeOriginal);
-  assert.equal(afterAlternate.status, "INTEGRITY_CONFLICT");
+  assert.equal(afterAlternate.status, "NOT_FOUND");
   assert.equal(afterLedger.watermark, beforeLedger.watermark);
   assert.deepEqual(afterLedger.events, beforeLedger.events);
 });

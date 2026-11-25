@@ -132,7 +132,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                 text=True,
                 check=False,
             )
-        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
         self.assertIn(
             "rule=True commit=True path=True regex=True allowed=True",
             result.stdout,
@@ -182,7 +182,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                 text=True,
                 check=False,
             )
-        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
         self.assertIn("regex=redacted allowed=unverifiable", result.stdout)
         self.assertNotIn("REDACTED", result.stdout)
 

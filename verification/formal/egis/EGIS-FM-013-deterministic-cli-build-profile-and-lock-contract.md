@@ -233,6 +233,18 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
       "short_revision": null,
       "commit_count": null
     },
+    "forked_jvm": {
+      "fork": true,
+      "forkmode": "perTest",
+      "jvm_arguments": [
+        "-ea",
+        "-XX:MaxDirectMemorySize=512k",
+        "-XX:+UseParallelGC"
+      ],
+      "java_executable_identity": null,
+      "jdk_archive_sha256": null,
+      "inherited_environment_allowlist_sha256": null
+    },
     "cleanup_policy": "DISPOSABLE_ISOLATED_CHECKOUT"
   },
   "runtime_companions": [
@@ -442,8 +454,9 @@ The following findings are open:
 | FMH-103 | High | `git-revision` runs as the `info` dependency and again before `dist`; branch/tag/revision/short-revision/commit-count metadata enters the Manifest. | Bind exact refs and resulting values or use a reviewed normalization patch; verify the final Manifest. |
 | FMH-104 | High | `compile` depends on `clean`, which recursively deletes `states/**` below `${basedir}`. | Require a disposable isolated checkout, canonical bounded base path and explicit symlink policy. |
 | FMH-105 | High | Source-test and packaged-JAR test targets use different include/exclude batches; one global exclusion digest is ambiguous. | Create separate selection manifests and report actual per-target JUnit counts. |
+| FMH-106 | High | Selected JUnit tasks fork child JVMs, but the lock does not bind the effective Java executable, arguments and inherited environment. | Pin and verify the forked JVM process boundary and environment allowlist. |
 
-The lock JSON now includes pinned source, test, test-model, license and properties tree/blob identities; the observed tree counts; the full target invocation sequence; required/absent test properties; separate test-selection digest placeholders; Git metadata placeholders; and a disposable-checkout policy. These additions improve traceability but do not close the findings: effective fixture selection, test reports, Git-ref values, cleanup behavior, dependency SHA-256 values and toolchain provenance remain unresolved.
+The lock JSON now includes pinned source, test, test-model, license and properties tree/blob identities; the observed tree counts; the full target invocation sequence; required/absent test properties; separate test-selection digest placeholders; Git metadata placeholders; and a disposable-checkout policy. These additions improve traceability but do not close the findings: effective fixture selection, test reports, Git-ref values, forked JVM identity/environment, cleanup behavior, dependency SHA-256 values and toolchain provenance remain unresolved.
 
 Static scan of the pinned `customBuild.xml` found no `import`, `include`, `subant`, external `exec`, `java` or `get` task. The local `antcall` chain remains explicitly represented. This is not a substitute for enforcing network denial in the future build environment.
 

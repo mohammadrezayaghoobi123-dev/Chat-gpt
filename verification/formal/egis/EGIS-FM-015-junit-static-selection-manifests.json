@@ -2069,6 +2069,16 @@
       }
     ],
     "disposition": "STATIC_OUTPUT_PATH_COLLISION_CONFIRMED; actual overwrite NOT_RUN",
-    "required_control": "Use distinct immutable report roots for source-test and packaged-JAR test targets; bind paths and report digests separately; fail if report roots overlap."
+    "required_control": "Use distinct immutable report roots for source-test and packaged-JAR test targets; bind paths and report digests separately; fail if report roots overlap.",
+    "execution_order_in_default_target": [
+      "test",
+      "git-revision",
+      "dist",
+      "test-dist"
+    ],
+    "source_test_precedes_packaged_jar_test": true,
+    "same_class_derived_output_paths_targeted_by_later_test_dist": true,
+    "filesystem_overwrite_observed": false,
+    "expected_risk": "test-dist executes after test and writes the same class-derived XML report paths; source-test report contents are at risk of replacement."
   }
 }

@@ -66,4 +66,4 @@ The suite mocks subprocess tool execution and tests synthetic TLC output fixture
 - SANY: NOT_RUN.
 - TLC: NOT_RUN.
 - Mutations/differential tests: NOT_RUN.
-- Evidence attestation: NOT_IMPLEMENTED.\n- Real TLC output fixture compatibility: NOT_ESTABLISHED.\n- Validator checks invariant count from the configured inventory; it does not independently recover each invariant name from TLC output.
+- Evidence attestation: NOT_IMPLEMENTED.\n- Real TLC output fixture compatibility: NOT_ESTABLISHED.\n- Full-history Gitleaks: FAIL; 13 historical generic-api-key findings remain unclassified.\n- Validator checks invariant count from the configured inventory; it does not independently recover each invariant name from TLC output.

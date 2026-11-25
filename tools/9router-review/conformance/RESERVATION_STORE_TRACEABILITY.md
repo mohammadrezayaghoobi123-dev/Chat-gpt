@@ -297,3 +297,22 @@ The preceding hosted run on `ea16bbb874b7d75dc0d16fb1ce6019aed95c89a5` revealed 
 - Security run [45583936478](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45583936478): PR change-range scan completed with **no leaks found**. Full-history scan found 13 `generic-api-key` matches across 5,397 commits, with finding commits dated 2026-11-15 to 2026-11-24. All reported finding commits predate the current AR-72 branch head. Historical findings remain **UNTRIAGED**; no allowlist change or false-positive assertion was made.
 - T57.8 transient-fence expectation now passes on the exact branch head. Final state assertions are unchanged: one tombstone and final ledger event, zero permit/boundary on abort; or exact recovered receipt and no tombstone/event on permit win.
 - Evidence remains test-harness-only. RS-08 stays **PARTIAL / TEST-HARNESS ONLY / PRODUCTION GAP OPEN**. The full reviewer workflow remains disabled, PR #463 remains draft/open/unmerged, and no production backend is qualified.
+
+## N. Concurrent duplicate-publication — AR-74
+
+| Requirement | Current evidence | Status | Required production evidence |
+|---|---|---|---|
+| RS-23 Two independent `runReview()` executions race from an empty comment-history preflight for the same immutable PR key | Preserved deterministic regression at `review.test.mjs:3507–3590`; exact hosted run [45584194157](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45584194157) observed 2 comment POSTs where at most 1 is allowed | **FAIL — ROOT CAUSE CONFIRMED FOR TESTED INTERLEAVING** | Integrate a selected durable ReservationStore into `runReview()`; run independent clients/processes against the same full key; assert one claim winner, loser performs zero model and comment transport calls, winner receives one single-use permit, and restart/lost-ack/retry/failover cases remain fail-closed |
+
+### N.1 Evidence and hostile boundaries
+
+- Exact tested source HEAD: `2568f387671a9f24579af405d0c7cc4f2157ce59`; `review.js` blob `9d5d60abe7551a0cfb63235b760cd61df8cb142a`; race-test blob `4153df7ab5a4a259c612d82a1c2a2d4833fe031e`.
+- Hosted run 45584194157: complete reviewer regression **203/204** (sole failure RS-23); reference oracle **56/56**; focused T57 **11/11**. The workflow overall is failure, not green.
+- The source path performs comment-history preflight, model dispatch, final PR SHA checks, then comment POST without a shared durable reservation/EffectLedger boundary. SHA checks do not serialize two invocations that see the same immutable snapshot.
+- A process-local lock or workflow concurrency group is not evidence of durable cross-host arbitration.
+- The exact GitHub PR snapshot read and subsequent comment POST cannot be made one cross-service transaction. This is a residual TOCTOU limitation; marker binding can detect staleness, not make the two API operations atomic.
+- Guarantee target is at-most-one authorized application attempt, not exactly-once remote execution/delivery/billing. Ambiguous results remain UNKNOWN and cannot be retried automatically.
+- The 56-test reference oracle and 11-test T57 SQLite harness do not establish production integration. T57 remains test-harness-only, and RS-08 remains a production gap.
+- Backend selection remains open; implementation authorization remains absent. RS-23 must remain failed until the actual runtime path is integrated and the exact deterministic regression plus full suite pass without weakening assertions.
+
+

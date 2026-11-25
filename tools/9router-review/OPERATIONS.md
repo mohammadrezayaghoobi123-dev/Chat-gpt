@@ -1579,3 +1579,78 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - **Current source identities:** T57 terminal test blob `825d8dda4a568838cec5bb0e6d1e3b5bce2eeb5f`; SQLite harness adapter blob `ffef7d1c57abb78c5f997c2fdad478f7f50053d9`. ADR-001 blob `3a8f444c674e8475bdec24711d013f0fa459c3d4`; recovery contract blob `e05b87bd8f623f0703fd096859cfab48c2a57640`.
 - **Isolation rechecked:** reviewer job remains disabled; PR #463 remains Draft/Open/Unmerged on its separate head `59c84265b18fa121350a412902acd769900ceb1c`; no main, reviewer runtime, provider, secret, cloud resource, deployment, merge, or local desktop changes.
 - **Disposition:** T57.1–T57.11 HOSTED FOCUSED PASS / FULL REGRESSION 203/204 WITH KNOWN DUPLICATE-PUBLICATION RED / PR DIFF SECRET SCAN CLEAN / 13 HISTORICAL GITLEAKS FINDINGS UNTRIAGED / RS-08 PRODUCTION GAP OPEN.
+
+## 15. Exact-head concurrent-publication hostile audit — AR-74 — 2026-11-25
+
+**Audit status:** ROOT CAUSE CONFIRMED FOR THE REPRODUCED INTERLEAVING / FIX NOT IMPLEMENTED / FULL REGRESSION RED / REVIEWER BLOCKED.
+
+**Audited source identity**
+- Verification branch: `verify/9router-reservation-conformance-run9-2026-11-25`.
+- Exact source/documentation HEAD before this record: `2568f387671a9f24579af405d0c7cc4f2157ce59`; base `main`: `919b19ca3d3887352cdef06b03c668ead04fbce7`.
+- `tools/9router-review/review.js` blob: `9d5d60abe7551a0cfb63235b760cd61df8cb142a`.
+- `tools/9router-review/review.test.mjs` blob: `4153df7ab5a4a259c612d82a1c2a2d4833fe031e`.
+- The implementation and the preserved regression were read directly from this exact branch. No code or test file was changed in this audit.
+
+### 15.1 Reproduction and causal chain
+
+The current `runReview()` has the following ordering:
+1. Read and validate the live PR snapshot and immutable patch.
+2. Perform a read-only comment-history scan through `findMatchingReviewComments()`; an empty result is not reserved or consumed.
+3. Invoke the model endpoint.
+4. Re-read the PR and validate the expected head/base SHAs.
+5. Re-read the PR at the final publication gate.
+6. POST a new comment to `/issues/{pullRequest}/comments`.
+
+There is no ReservationStore claim, linearizable compare-and-swap, durable single-use permit, or EffectLedger boundary wired into this function. Consequently, two independent invocations can both observe the same empty history and proceed through distinct model and comment requests. The final SHA checks constrain which snapshot is reviewed; they do not arbitrate concurrent writers for that same snapshot.
+
+The retained test `deterministic concurrent duplicate-publication red test` creates two `runReview()` calls, synchronizes both comment-history reads behind a barrier, returns an empty list to both, and then asserts that no more than one comment POST occurs. On the audited exact HEAD, hosted Actions run [45584194157](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45584194157) failed this assertion with **2 observed POSTs versus 1 permitted** at `review.test.mjs:3587`.
+
+The test's later `modelCalls === 1` assertion is not reached after the preceding POST-count assertion fails. The source path nevertheless contains no model-stage reservation, so duplicate inference is an unguarded consequence of this interleaving; its exact observed count is not separately claimed by this run.
+
+### 15.2 Exact-head verification
+
+| Layer | Exact observed result | Interpretation |
+|---|---:|---|
+| Complete reviewer regression | 204 tests: 203 passed, 1 failed, 0 skipped | RED; sole failure is the preserved duplicate-publication race |
+| Reference-oracle tranche | 56/56 passed | Test-only oracle behavior; not provider qualification |
+| T57 orphan-recovery tranche | 11/11 passed | Local SQLite harness behavior; not production RS-08 qualification |
+| GitHub comment redirect regression | Both 307 and 308 subcases passed within test 138 | Separate redirect-replay control; does not serialize two independent POSTs |
+
+The overall workflow [45584194157](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45584194157) is **FAILURE**, because the complete reviewer regression is not green. Focused passing tranches must not be substituted for the failed full suite.
+
+### 15.3 Hostile review — counter-evidence and residuals
+
+| Apparent mitigation | What it proves | What it does not prove |
+|---|---|---|
+| Exact live head/base SHA checks | Reject a run when a checked snapshot differs from the expected snapshot | Mutual exclusion between two runs checking the same snapshot |
+| HMAC-bound review marker and positive comment reconciliation | Helps authenticate an existing report and recognize an already-published result | Atomic reservation when both preflight reads return empty |
+| `redirect: "error"` and 307/308 tests | Prevents Fetch from replaying one request through those redirects in the tested path | Prevention of two distinct application-level POST calls |
+| T01–T56 reference-oracle tests | Validate the in-memory oracle's modeled transitions | Integration with `runReview()`, a real durable store, or independent hosts |
+| T57.1–T57.11 SQLite tests | Validate the scoped test harness using two SQLite files and separate processes | Independent failure domains, production authority, power-loss/restore safety, cryptographic trust, provider interlocks, or deployed integration |
+
+Two boundary conditions remain explicit:
+- A process-local mutex or workflow concurrency group is not an authority across independently scheduled processes/hosts and cannot replace a durable per-key conditional transaction.
+- The PR snapshot GET and GitHub comment POST are separate remote operations. No ReservationStore can make them one cross-service transaction. The design can bind a comment to the immutable snapshot and detect staleness; it cannot eliminate the final GET-to-POST TOCTOU window. The guarantee remains **at-most-one authorized application-level attempt**, conditional on correct single-use permit handling and disabled retries. It is not exactly-once delivery, execution, or billing. A crash after the durable attempt boundary but before the network call may strand the attempt; an ambiguous remote outcome remains `UNKNOWN` and is not automatically retried.
+
+### 15.4 Required falsification tests before closure
+
+1. Run two independent processes/clients against the selected production-candidate store using the same full reservation key. Prove exactly one claim winner and a definitive non-owner result for the loser.
+2. Instrument both transport boundaries. Prove the loser performs **zero model requests and zero comment POSTs**; prove the winner obtains one single-use permit per authorized stage and invokes each transport at most once.
+3. Repeat with independent hosts, restart, lease expiry, stale-generation replay, dropped commit acknowledgements, partial/unavailable reads, quota exhaustion, and backend failover. Unknown or ambiguous evidence must block effects.
+4. Simulate GitHub accepting a POST while the client loses the response. Reconciliation may use positive exact evidence; a zero/incomplete listing must never authorize another POST.
+5. Inject hidden retry behavior at the HTTP client, SDK, proxy, and middleware layers; reject any candidate that emits more than one physical request for a single permit.
+6. Preserve the exact deterministic regression and require the complete suite to pass without skips, weakened assertions, or test deletion.
+
+### 15.5 Disposition and isolation
+
+- `9R-ATOMIC-001`: **CONFIRMED FOR THE TESTED INTERLEAVING**.
+- Duplicate-publication code fix: **NOT_IMPLEMENTED**.
+- Production backend: **NOT_SELECTED**; the screening recommendation is not a selection.
+- Production adapter implementation: **NOT_AUTHORIZED** by the current design record.
+- RS-08: **PARTIAL / TEST-HARNESS ONLY / PRODUCTION GAP OPEN**.
+- Full reviewer regression: **RED — 203/204**.
+- Independent external security review: **NOT_COMPLETED**. This record is an in-session source/test hostile audit, not an independent reviewer approval.
+- Reviewer workflow remains statically disabled; PR #463 remains Draft / Open / Unmerged. No default-branch registration, provider dispatch, secret change, deployment, merge, repository-policy change, or local-host operation is authorized.
+
+**Closure rule:** this finding may be downgraded only after the selected durable adapter is integrated into the actual `runReview()` execution path, the required independent-client/fault-injection tests pass, the unchanged full reviewer regression is GREEN, and a separate hostile review accepts the exact resulting code revision.
+

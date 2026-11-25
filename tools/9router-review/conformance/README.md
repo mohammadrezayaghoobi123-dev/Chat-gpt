@@ -198,3 +198,16 @@ The test asserts final durable state after the terminal outcome, not the transie
 - **Secret scan:** [run 45583936478](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45583936478). The PR change-range scan reported `no leaks found`. The separate full-history scan inspected 5,397 commits and reported 13 `generic-api-key` findings in older commits dated 2026-11-15 through 2026-11-24. These are historical findings, not findings in the current change range; they remain untriaged and must not be silently allowlisted or called false positives.
 - **Review integrity:** no test was skipped or weakened; the duplicate-publication assertion remains intact. The focused T57 result is independent of the complete regression failure.
 - **Qualification boundary:** all T57 evidence remains local SQLite test-harness evidence. RS-08 is still `PARTIAL / TEST-HARNESS ONLY / PRODUCTION GAP OPEN`; no deployed store, provider interlock, or `runReview()` integration is qualified.
+
+## Concurrent publication hostile audit — AR-74 — 2026-11-25
+
+- Exact audited branch HEAD before this record: `2568f387671a9f24579af405d0c7cc4f2157ce59`.
+- The actual `runReview()` path has a read-only empty-comment preflight, no durable shared reservation, a model call, final PR SHA reads, then a GitHub comment POST.
+- The deterministic concurrency test synchronized two empty preflights. Exact hosted run [45584194157](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/45584194157) observed **2 POSTs**, while the invariant allows at most 1.
+- Exact-head results: full regression **203/204 (RED)**; reference oracle **56/56 PASS**; T57 **11/11 PASS**. The complete workflow is FAILURE; isolated tranche passes do not qualify production storage.
+- Root cause: no durable, linearizable reservation is integrated into `runReview()`. SHA checks and HMAC markers do not arbitrate concurrent empty-history readers.
+- Hostile limitation: the PR snapshot GET and comment POST are separate GitHub operations. The contract targets at-most-one authorized application attempt, not exactly-once delivery; ambiguous outcomes remain UNKNOWN and are never blindly retried.
+- Disposition: code fix NOT_IMPLEMENTED; backend NOT_SELECTED; implementation NOT_AUTHORIZED; RS-23 FAIL; RS-08 PARTIAL / TEST-HARNESS ONLY / PRODUCTION GAP OPEN; reviewer disabled; PR #463 remains Draft/Open/Unmerged.
+- This is an in-session hostile source/test audit, not an independent external security review. See `OPERATIONS.md` §15 and `RESERVATION_STORE_TRACEABILITY.md` §N for evidence, falsification criteria, and residuals.
+
+

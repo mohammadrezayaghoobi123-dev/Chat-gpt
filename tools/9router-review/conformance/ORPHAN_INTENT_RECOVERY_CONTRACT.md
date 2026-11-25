@@ -72,8 +72,7 @@ The protocol states are:
 | `RECOVERY_QUARANTINED` | Evidence is incomplete, stale, unavailable, conflicting, or ambiguous | No permit; no external effect |
 | `BOUNDARY_COMMITTED` | Reservation authority proves the exact boundary and receipt | Recover the same receipt; never mint another |
 | `BOUNDARY_DEFINITIVELY_ABSENT` | Complete authoritative evidence proves no boundary committed | Acquire a fence and execute the ratified terminal-abort protocol |
-| `ABORTED_ORPHAN` | A separately authorized terminal abort is durably recorded | No continuation |
-| `RESUME_ELIGIBLE` | Evidence permits consideration of continuation under a ratified policy | No automatic permit or external effect |
+| `ABORTED_ORPHAN` | The ADR-001 terminal tombstone and final ledger event are durably reconciled | Terminal; no continuation |
 | `INTEGRITY_CONFLICT` | Identity, receipt, store history, or sequence disagreement | Global/key quarantine and investigation |
 
 State changes MUST be monotonic in the durable audit history. A state label is derived from evidence; it MUST NOT overwrite or erase earlier events.

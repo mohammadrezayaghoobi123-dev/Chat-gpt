@@ -72,8 +72,9 @@ Static inspection found no Ant `import`, `include`, `subant`, external `exec`, A
 | FMH-102 | High | The lock says test failure must halt execution, but the Ant build derives `test.skip` from `maven.test.skip` and derives `test.halt` from `maven.test.halt`. All three selected test targets use `unless="test.skip"`; an ambient skip property can silently suppress tests. | Pin `maven.test.skip=false`, require `test.skip` to be absent, and set `maven.test.halt=true` / `test.halt=true`. Preflight must inspect effective Ant properties and fail before execution if tests can be skipped or failure-halt is not true. |
 | FMH-103 | High | `git-revision` is invoked as an `info` dependency and again before packaging. Its branch, tag, revision, short revision and commit-count values are embedded in the JAR Manifest. A detached exact commit plus full history does not, by itself, bind the visible ref/tag namespace or the metadata algorithm's selected values. | Lock the exact refs/tags and resulting metadata values, or use a reviewed patch that supplies fixed values. Verify the Manifest fields against the lock; do not infer determinism from the commit SHA alone. |
 | FMH-104 | High | `compile` depends on `clean`; `clean` deletes class directories and recursively deletes every `states/**` match below `${basedir}` with `failonerror=false`. This is a potentially destructive workspace operation and its path/symlink boundary is not represented in the lock. | Run only in a disposable, isolated checkout with a canonical bounded `basedir`; reject unexpected symlinks and preserve a pre-build inventory of tracked/untracked files. Never point the build at a working project checkout. |
-| FMH-105 | High | The `test` and `test-dist` targets have distinct include/exclude sets and separate batches; some test classes excluded from one batch are explicitly re-included in later batches. One global `test_exclusions_inventory_sha256` cannot unambiguously describe both effective suites. | Produce separate source-test and packaged-JAR test selection manifests, resolve include/exclude precedence, and record discovered/executed/passed/failed/skipped/excluded counts per target from actual JUnit reports. |
+| FMH-105 | High | The `test` and `test-dist` targets have distinct include/exclude sets, batch counts and report destinations; one global exclusion digest cannot describe both. | Static selection ambiguity MITIGATED by separate FM-015 manifests (411 unique paths per target; symmetric difference zero). Keep execution-evidence portion OPEN until actual JUnit reports establish discovered/executed/passed/failed/skipped/excluded counts per target. |
 | FMH-106 | High | The selected JUnit tasks launch child JVMs with `fork="yes"` and `forkmode="perTest"`, but the lock does not bind the effective Java executable, child-process arguments or inherited environment. | Pin the forked JVM executable/JDK identity, exact task arguments and an environment allowlist; verify the actual child-process invocation before accepting build evidence. |
+| FMH-107 | Medium | Neither selected JUnit task explicitly sets `skipNonTests`; Apache Ant documents the default as `false`, so the fileset path count is not a discovered-test count and non-test classes are not filtered by Ant before invocation. | Pin the exact Ant/JUnit version and effective `skipNonTests=false` semantics; preserve upstream behavior or use an explicitly reviewed change, then inspect actual JUnit reports. |
 
 ## 5. Corrective lock requirements
 
@@ -114,8 +115,12 @@ A successful controller preflight is not a successful build. A successful build 
 | Exact Ant property values at execution | NOT_RUN |
 | Git ref/tag metadata reproducibility | NOT_ESTABLISHED |
 | Cleanup path/symlink behavior in isolated builder | NOT_RUN |
-| Actual test discovery and report counts | NOT_RUN |
-| Forked JUnit JVM executable and process environment | NOT_ESTABLISHED |
+| Static source-test file selection | OBSERVED; 411 unique paths across 8 batches |
+| Static packaged-JAR file selection | OBSERVED; 411 unique paths across 7 batches |
+| Equality of selected source-path sets | OBSERVED; symmetric difference = 0 |
+| Actual JUnit test discovery and report counts | NOT_RUN |
+| JUnit `skipNonTests` effective runtime semantics | NOT_RUN; upstream attribute omitted, documented default false |
+
 | Forked JUnit JVM executable and process environment | NOT_ESTABLISHED |
 | Build, JAR creation, SANY/TLC | NOT_RUN |
 
@@ -129,3 +134,44 @@ This is a static audit only. No JDK, Ant distribution, dependency or JAR was dow
 - Pinned project properties: https://github.com/tlaplus/tlaplus/blob/5a47802b5c391f59ecdd44117981f4ff8c0656ba/tlatools/org.lamport.tlatools/project.properties
 - Pinned source tree: https://api.github.com/repos/tlaplus/tlaplus/git/trees/fb0d9481ef7f1c4dc4cf066812b90f38ac4b0ef1?recursive=1
 - TLA+ build and test instructions: https://github.com/tlaplus/tlaplus/blob/5a47802b5c391f59ecdd44117981f4ff8c0656ba/DEVELOPING.md
+
+
+## 10. Static JUnit selection reconstruction (EGIS-FM-015)
+
+The pinned `project.properties` sets `test.dir=test`. The recursive source tree contains 461 files in that directory, including 455 Java source files. The broad `**/*Test*.java` pattern matches 439 candidate source paths.
+
+The exact Ant `test` and `test-dist` batch patterns were evaluated against that pinned tree and recorded in:
+
+`verification/formal/egis/EGIS-FM-015-junit-static-selection-manifests.json`
+
+| Metric | `test` | `test-dist` |
+|---|---:|---:|
+| Broad pattern candidates | 439 | 439 |
+| Primary batch selected | 403 | 404 |
+| Later explicit batch selections | 8 | 7 |
+| Batch assignments | 411 | 411 |
+| Unique selected paths | 411 | 411 |
+| Permanently unselected broad candidates | 28 | 28 |
+| Batch count | 8 | 7 |
+
+The final unique selected path sets are identical (zero symmetric difference). This does not mean that the two targets execute the same test configuration: their primary exclusions, explicit batches and report directories differ. The source target reselects eight paths excluded from its first batch; the packaged-JAR target reselects seven.
+
+Per-target selection digests:
+
+- `test`: `8d28a2a1a759b6ba06c9dafadc9cbe06f45db32216dadeac42a6ad7ec45ed7a8`
+- `test-dist`: `023647bc904ff7c20af1fd85a02a4b5c96b2c1f5dd1f090968fb86036bebf46c`
+- Manifest SHA-256: `702154f5a83cfb50132d7db36ba295eeb9c708b71bf93eb5751aced6b5ca01c0`
+
+**Hostile interpretation:** 411 is the number of source paths selected by the static fileset model. It is not a count of JUnit test classes, test methods, test invocations or successful tests.
+
+The upstream JUnit tasks omit `skipNonTests`. Apache Ant's JUnit task documentation specifies a default of `false`, meaning Ant does not filter out non-test classes before passing matched files to the JUnit runner. Exact Ant version and actual discovery behavior are still unpinned/unexecuted. FMH-107 remains open.
+
+FMH-105's static manifest ambiguity is mitigated, but the actual execution/report requirement remains open. No test was run and no JUnit report was generated in this audit.
+
+## 11. Safety boundary and source references
+
+This selection reconstruction is static. No Ant/JDK runtime was acquired or invoked. No build, test, JAR creation, SANY/TLC run, deployment, merge or main-branch mutation occurred.
+
+- Static selection manifest: https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/blob/verification/egis-verification-gate-v1.1.1-2026-11-25/verification/formal/egis/EGIS-FM-015-junit-static-selection-manifests.json
+- Apache Ant FileSet semantics: https://ant.apache.org/manual/Types/fileset.html
+- Apache Ant JUnit `batchtest` and `skipNonTests`: https://ant.apache.org/manual/Tasks/junit.html

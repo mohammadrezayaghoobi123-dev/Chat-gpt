@@ -300,6 +300,8 @@ class GateTests(unittest.TestCase):
 
     def test_b1a_records_sha256_and_filesystem_identity_for_all_inputs(self):
         result, git_mock, command_mock = self._run_gate_with_preflight_mocks()
+        self.assertIn("inputs", result["checks"])
+        self.assertIn("input_snapshots", result["scope"])
         self.assertEqual("PASS", result["checks"]["inputs"]["status"])
         snapshots = result["scope"]["input_snapshots"]
         expected = {
@@ -336,6 +338,8 @@ class GateTests(unittest.TestCase):
                 jar=external_jar,
                 expected_sha256=pin,
             )
+            self.assertIn("inputs", result["checks"])
+            self.assertIn("input_snapshots", result["scope"])
             self.assertEqual("PASS", result["checks"]["inputs"]["status"])
             self.assertEqual(str(external_jar.resolve()),
                              result["scope"]["input_snapshots"]["tool_jar"]["canonical_path"])

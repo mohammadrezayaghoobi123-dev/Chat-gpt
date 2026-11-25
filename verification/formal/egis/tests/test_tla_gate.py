@@ -153,6 +153,27 @@ class GateTests(unittest.TestCase):
         process.stderr.close.assert_called_once()
         json.dumps(result)
 
+    def test_pipe_close_oserror_keeps_process_cleanup_unknown(self):
+        import errno
+
+        process = self._mock_process(returncode=-9)
+        process.stdout = MagicMock()
+        process.stderr = MagicMock()
+        process.stdout.close.side_effect = OSError(errno.EIO, "close failed", "/private/stdout")
+        process.communicate.side_effect = OSError(errno.EIO, "pipe failed", "/private/pipe")
+        with patch("egis_tla_gate.subprocess.Popen", return_value=process):
+            result = run_command(["java"], self.root, 1)
+        self.assertEqual("BLOCKED", result["status"])
+        self.assertEqual("UNKNOWN", result["process_cleanup"])
+        self.assertEqual("UNKNOWN", result["process_outcome"])
+        process.kill.assert_called_once()
+        process.wait.assert_called_once()
+        process.stdout.close.assert_called_once()
+        process.stderr.close.assert_called_once()
+        self.assertNotIn("/private/stdout", result["stderr"])
+        self.assertNotIn("/private/pipe", result["stderr"])
+        json.dumps(result)
+
     def test_communication_error_with_unconfirmed_reap_remains_unknown(self):
         from subprocess import TimeoutExpired
 

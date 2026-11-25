@@ -1534,3 +1534,12 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - **Known unrelated failure:** deterministic duplicate-publication regression remains RED as previously recorded. It was not modified, skipped, or weakened.
 - **Isolation:** changes remain limited to test code and conformance/operations documentation on `verify/9router-reservation-conformance-run9-2026-11-25`; no `main`, PR #463, reviewer runtime, provider dispatch, secret, backend resource, workflow policy, deployment, merge, or local desktop state changed.
 - **Disposition:** ADR-001 POLICY ACCEPTED / T57.1–T57.9 GREEN IN SQLITE TEST HARNESS ONLY / RS-08 PRODUCTION GAP OPEN / HOSTED CI UNVERIFIED / NO BACKEND QUALIFIED.
+
+
+#### 2026-11-25 T57 isolated CI reporting — AR-70
+
+- **Workflow:** `.github/workflows/9router-reservation-conformance.yml` now has a dedicated `if: always()` step that runs `npm run test:orphan-recovery` after the full reviewer regression and reference-oracle steps. This allows T57 to report separately even when the preserved duplicate-publication regression fails.
+- **Scope controls:** the workflow remains a verification-only workflow, triggered by push to `verify/9router-reservation-conformance-*` or manual dispatch; workflow permissions remain `contents: read`; no secrets, provider credentials, or reviewer activation were added.
+- **Evidence:** workflow source change was committed and fetched from the verification branch. No hosted Actions result for the new isolated step has been retrieved; hosted status remains UNVERIFIED.
+- **Isolation:** reviewer workflow `.github/workflows/9router-pr-review.yml` was not edited or enabled; `main`, PR #463, provider/runtime configuration, secrets, cloud resources and local desktop state were not modified.
+- **Disposition:** T57 FOCUSED CI STEP WIRED / HOSTED RESULT PENDING / REVIEWER WORKFLOW UNCHANGED.

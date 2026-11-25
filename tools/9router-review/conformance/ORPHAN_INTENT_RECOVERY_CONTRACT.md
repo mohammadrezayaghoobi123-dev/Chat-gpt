@@ -81,18 +81,18 @@ State changes MUST be monotonic in the durable audit history. A state label is d
 
 1. Start in read-only mode. Do not call a model/provider, create a comment, or issue an attempt permit.
 2. Any attempt-start operation MUST independently verify the exact durable EffectLedger INTENT for the same full immutable tuple, stage, attempt ID, and request digest. Missing, incomplete, unavailable, or mismatched INTENT evidence MUST fail closed before a permit can be issued.
-2. Load the exact operation identity from the durable INTENT acknowledgement or a complete ledger read.
-3. Verify the INTENT event identity, payload digest, stage, immutable reservation tuple, and request digest.
-4. Acquire a monotonic recovery fence using compare-and-swap. A stale worker MUST be unable to append a disposition or use a recovered receipt.
-5. Query ReservationStore for the exact attempt boundary and receipt using an authoritative, complete, fresh read.
-6. Apply the evidence lattice:
+3. Load the exact operation identity from the durable INTENT acknowledgement or a complete ledger read.
+4. Verify the INTENT event identity, payload digest, stage, immutable reservation tuple, and request digest.
+5. Acquire a monotonic recovery fence using compare-and-swap. A stale worker MUST be unable to append a disposition or use a recovered receipt.
+6. Query ReservationStore for the exact attempt boundary and receipt using an authoritative, complete, fresh read.
+7. Apply the evidence lattice:
    - Exact committed boundary plus matching persisted receipt: record/reconcile `BOUNDARY_COMMITTED`; return only the same receipt. Do not abort.
    - Complete authoritative proof of no boundary, receipt, permit, or boundary event: proceed to the terminal-abort sequence below.
    - Incomplete, stale, unavailable, ambiguous, or conflicting evidence: append/retain `RECOVERY_QUARANTINED`; no permit, tombstone, terminal abort, or external effect.
-7. In one ReservationStore transaction, re-check boundary absence and the current fence, then insert a unique immutable orphan-abort tombstone that permanently blocks the exact attempt ID from obtaining a permit. The transaction and tombstone acknowledgement MUST be durable.
-8. Only after the tombstone acknowledgement, append the exact `ORPHAN_INTENT_ABORTED` event to EffectLedger. The append is unique and idempotent by operation ID and exact payload. A crash between steps 7 and 8 is repaired by reading the same tombstone and appending the same terminal event; no second tombstone or permit may be created.
-9. Re-read both stores and verify the exact tombstone, terminal ledger event, fence generation, payload digests, and high-water marks before returning `ABORTED_ORPHAN`.
-10. `beginAttempt` MUST enforce the same write-ahead gate inside its public boundary. In the same ReservationStore write transaction that could issue a permit, it MUST check for a terminal tombstone first (return `ORPHAN_ABORTED`), then an active recovery fence (return `RECOVERY_FENCED`), then an already-consumed boundary. It MUST NOT issue a permit while recovery is fenced.
+8. In one ReservationStore transaction, re-check boundary absence and the current fence, then insert a unique immutable orphan-abort tombstone that permanently blocks the exact attempt ID from obtaining a permit. The transaction and tombstone acknowledgement MUST be durable.
+9. Only after the tombstone acknowledgement, append the exact `ORPHAN_INTENT_ABORTED` event to EffectLedger. The append is unique and idempotent by operation ID and exact payload. A crash between steps 7 and 8 is repaired by reading the same tombstone and appending the same terminal event; no second tombstone or permit may be created.
+10. Re-read both stores and verify the exact tombstone, terminal ledger event, fence generation, payload digests, and high-water marks before returning `ABORTED_ORPHAN`.
+11. `beginAttempt` MUST enforce the same write-ahead gate inside its public boundary. In the same ReservationStore write transaction that could issue a permit, it MUST check for a terminal tombstone first (return `ORPHAN_ABORTED`), then an active recovery fence (return `RECOVERY_FENCED`), then an already-consumed boundary. It MUST NOT issue a permit while recovery is fenced.
 
 If either store cannot prove a complete and mutually consistent view, the operation remains quarantined. Recovery MUST NOT infer absence from a negative partial read.
 

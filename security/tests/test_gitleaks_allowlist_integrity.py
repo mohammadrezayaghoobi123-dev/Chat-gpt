@@ -148,7 +148,16 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
         report = [{
             "Commit": commit,
             "File": path,
+        source = subprocess.run(
+            ["git", "show", f"{commit}:{path}"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.splitlines()
+        start_line = source.index(line) + 1,
             "RuleID": "generic-api-key",
+            "StartLine": start_line,
             "Secret": "REDACTED",
             "Match": "key = REDACTED",
             "Line": "",

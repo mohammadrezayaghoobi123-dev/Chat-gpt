@@ -63,6 +63,7 @@ async function completeModel(system, ownerId = "owner-1") {
     outcomeType: "MODEL_RESULT_STORED",
     evidenceDigest: resultDigest,
     evidenceReference: resultReference,
+    attemptBoundaryReceipt: started.permit.attemptBoundaryReceipt,
   });
   const completed = await system.adapter.completeModelAttempt({
     key: KEY,
@@ -191,12 +192,23 @@ test("T06: model completion is fenced by generation, attempt ID, record version,
   assert.equal(wrongAttempt.status, "CONFLICT");
   const resultReference = "encrypted-result://model-attempt-1";
   const resultDigest = "model-result-digest";
+  const appendOutcome = system.ledger.appendOutcome.bind(system.ledger);
+  const observedOutcomes = [];
+  system.ledger.appendOutcome = async args => {
+    observedOutcomes.push(args);
+    return appendOutcome(args);
+  };
   const outcome = await system.ledger.appendOutcome({
     attemptId: started.attemptId,
     outcomeType: "MODEL_RESULT_STORED",
     evidenceDigest: resultDigest,
     evidenceReference: resultReference,
+    attemptBoundaryReceipt: started.permit.attemptBoundaryReceipt,
   });
+  assert.equal(observedOutcomes.length, 1);
+  assert.equal(observedOutcomes[0].attemptId, started.attemptId);
+  assert.deepEqual(observedOutcomes[0].attemptBoundaryReceipt, started.permit.attemptBoundaryReceipt);
+  assert.equal(observedOutcomes[0].attemptBoundaryReceipt?.stage, "MODEL");
   const completed = await system.adapter.completeModelAttempt({
     key: KEY,
     generation: started.claimed.record.generation,

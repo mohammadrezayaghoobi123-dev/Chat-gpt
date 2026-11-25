@@ -48,7 +48,7 @@ test("T57.1: durable INTENT acknowledgement survives writer termination and inde
     const reservation = new DatabaseSync(process.argv[2]);
     reservation.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
     reservation.exec("CREATE TABLE IF NOT EXISTS attempt_boundaries (operation_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL) STRICT;");
-    process.stdout.write(JSON.stringify({ status: "ACK", event_id: "t57-intent-event", operation_id: operation.operation_id, payload_digest: digest }) + "\n", () => process.exit(73));
+    process.stdout.write(JSON.stringify({ status: "ACK", event_id: "t57-intent-event", operation_id: operation.operation_id, payload_digest: digest }) + "\\n", () => process.exit(73));
   `;
   const reader = `
     import { DatabaseSync } from "node:sqlite";
@@ -56,7 +56,7 @@ test("T57.1: durable INTENT acknowledgement survives writer termination and inde
     const reservation = new DatabaseSync(process.argv[2]);
     const event = ledger.prepare("SELECT event_id, operation_id, kind, payload_json, payload_digest, sequence FROM events WHERE operation_id = ?").get(process.argv[3]);
     const boundaryCount = reservation.prepare("SELECT COUNT(*) AS n FROM attempt_boundaries WHERE operation_id = ?").get(process.argv[3]).n;
-    process.stdout.write(JSON.stringify({ event, boundary_count: boundaryCount }) + "\n");
+    process.stdout.write(JSON.stringify({ event, boundary_count: boundaryCount }) + "\\n");
   `;
 
   try {

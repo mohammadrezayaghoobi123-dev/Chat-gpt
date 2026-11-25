@@ -232,3 +232,35 @@ test("T57.7: the final tombstone and ledger disposition remain singular after a 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("T57.8: independent attempt-start and orphan-abort transactions serialize to exactly one terminal outcome", async () => {
+  const root = await mkdtemp(join(tmpdir(), "9router-t57-start-abort-race-"));
+  try {
+    await seedIntent(root);
+    const [begin, recovery] = await Promise.all([
+      runWorker("seed-boundary", root),
+      runWorker("recover", root, 0, "recovery-racer"),
+    ]);
+    const final = await runWorker("inspect", root);
+    const terminalCount = final.history.events.filter(event => event.event_type === "ORPHAN_INTENT_ABORTED").length;
+
+    if (begin.result.status === "PERMIT") {
+      assert.equal(recovery.result.status, "BOUNDARY_COMMITTED");
+      assert.deepEqual(recovery.result.receipt, begin.result.receipt);
+      assert.equal(final.snapshot.boundaries, 1);
+      assert.equal(final.snapshot.permits, 1);
+      assert.equal(final.snapshot.tombstones, 0);
+      assert.equal(terminalCount, 0);
+    } else {
+      assert.equal(recovery.result.status, "ABORTED_ORPHAN");
+      assert.equal(begin.result.status, "ORPHAN_ABORTED");
+      assert.equal(final.snapshot.boundaries, 0);
+      assert.equal(final.snapshot.permits, 0);
+      assert.equal(final.snapshot.tombstones, 1);
+      assert.equal(terminalCount, 1);
+    }
+    assert.equal(final.snapshot.external_effects, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

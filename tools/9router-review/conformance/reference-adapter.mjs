@@ -33,9 +33,13 @@ function makeReceipt(event) {
 export function createReferenceSystem({
   now = () => Date.now(),
   reservationKeyDigest = keyId => "reference-only:" + keyId,
+  beforeAttemptBoundaryCommit = () => false,
 } = {}) {
   if (typeof reservationKeyDigest !== "function") {
     throw new TypeError("reservationKeyDigest must be a function");
+  }
+  if (typeof beforeAttemptBoundaryCommit !== "function") {
+    throw new TypeError("beforeAttemptBoundaryCommit must be a function");
   }
   const records = new Map();
   const reservationKeyDigestIndex = new Map();
@@ -52,6 +56,18 @@ export function createReferenceSystem({
     }
     return { status: "OK", keyId, keyDigest };
   }
+
+  function shouldAbortAttemptBoundary({ key, stage, attemptId, requestDigest, generation, expectedRecordVersion }) {
+    return beforeAttemptBoundaryCommit({
+      key: clone(key),
+      stage,
+      attemptId,
+      requestDigest,
+      generation,
+      expectedRecordVersion,
+    }) === true;
+  }
+
   const intents = new Map();
   const outcomes = new Map();
   const boundaryReceipts = new Map();
@@ -85,7 +101,7 @@ export function createReferenceSystem({
   }
 
   function issueAttemptBoundaryReceipt({ keyId, stage, attemptId, requestDigest, generation, committedRecordVersion }) {
-    boundarySequence += 1;
+    const nextBoundarySequence = boundarySequence + 1;
     const payload = {
       receipt_schema_version: 1,
       protocol_version: "9router-attempt-boundary-v1",
@@ -97,7 +113,7 @@ export function createReferenceSystem({
       request_digest: requestDigest,
       generation,
       committed_record_version: committedRecordVersion,
-      boundary_event_id: "reference-boundary-" + boundarySequence,
+      boundary_event_id: "reference-boundary-" + nextBoundarySequence,
       issued_at: now(),
       purpose: "9router-attempt-boundary-v1",
     };
@@ -110,6 +126,7 @@ export function createReferenceSystem({
   }
 
   function registerAttemptBoundaryReceipt(receipt, keyId) {
+    boundarySequence += 1;
     boundaryReceipts.set(receipt.attempt_id, {
       keyId,
       stage: receipt.stage,
@@ -461,6 +478,14 @@ export function createReferenceSystem({
         generation: record.generation,
         committedRecordVersion: record.record_version + 1,
       });
+      if (shouldAbortAttemptBoundary({
+        key: args.key,
+        stage: "MODEL",
+        attemptId: args.attemptId,
+        requestDigest: args.requestDigest,
+        generation: record.generation,
+        expectedRecordVersion: record.record_version,
+      })) return { status: "TRANSACTION_ABORTED" };
       const next = writeRecord(keyId, {
         ...record,
         state: "MODEL_ATTEMPTED",
@@ -535,6 +560,14 @@ export function createReferenceSystem({
         generation: record.generation,
         committedRecordVersion: record.record_version + 1,
       });
+      if (shouldAbortAttemptBoundary({
+        key: args.key,
+        stage: "COMMENT",
+        attemptId: args.attemptId,
+        requestDigest: args.payloadDigest,
+        generation: record.generation,
+        expectedRecordVersion: record.record_version,
+      })) return { status: "TRANSACTION_ABORTED" };
       const next = writeRecord(keyId, {
         ...record,
         state: "COMMENT_ATTEMPTED",

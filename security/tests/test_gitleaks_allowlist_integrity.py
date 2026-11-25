@@ -461,5 +461,82 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                 self.assertEqual(actual_paths, expected_paths)
 
 
+    def test_validate_config_rejects_malformed_current_descriptions_without_raising(self):
+        cases = [
+            ("array", []),
+            ("inline_table", {"malformed": True}),
+            ("missing", "__MISSING__"),
+            ("empty", ""),
+            ("whitespace", "   "),
+            ("integer", 7),
+            ("boolean", True),
+            ("null", None),
+        ]
+        for label, value in cases:
+            with self.subTest(description_type=label):
+                changed = copy.deepcopy(self.config)
+                if value == "__MISSING__":
+                    changed["allowlists"][0].pop("description", None)
+                else:
+                    changed["allowlists"][0]["description"] = value
+                errors = validate_config(changed, ROOT)
+                self.assertTrue(errors, "malformed description must be rejected")
+                self.assertTrue(
+                    any("description" in error.lower() for error in errors),
+                    msg=f"expected a controlled description error, got {errors!r}",
+                )
+
+    def test_validate_config_rejects_malformed_baseline_descriptions_before_filtering(self):
+        malformed_baselines = {
+            "array": "allowlists = [{ description = [] }]" + chr(10),
+            "inline_table": "allowlists = [{ description = { malformed = true } }]" + chr(10),
+            "missing": "allowlists = [{}]" + chr(10),
+            "empty": 'allowlists = [{ description = "" }]' + chr(10),
+            "whitespace": 'allowlists = [{ description = "   " }]' + chr(10),
+        }
+        for label, baseline_text in malformed_baselines.items():
+            with self.subTest(description_type=label):
+                completed = subprocess.CompletedProcess(
+                    args=["git", "show", "origin/main:.gitleaks.toml"],
+                    returncode=0,
+                    stdout=baseline_text,
+                    stderr="",
+                )
+                with patch(
+                    "validate_gitleaks_allowlists.subprocess.run",
+                    return_value=completed,
+                ):
+                    errors = validate_config(copy.deepcopy(self.config), ROOT)
+                self.assertTrue(errors, "malformed baseline description must be rejected")
+                self.assertTrue(
+                    any("description" in error.lower() for error in errors),
+                    msg=f"expected a controlled baseline description error, got {errors!r}",
+                )
+
+    def test_build_necessity_config_rejects_malformed_descriptions_with_value_error(self):
+        from validate_gitleaks_allowlists import build_necessity_config
+
+        cases = [
+            ("array", []),
+            ("inline_table", {"malformed": True}),
+            ("missing", "__MISSING__"),
+            ("empty", ""),
+            ("whitespace", "   "),
+            ("integer", 7),
+            ("boolean", True),
+            ("null", None),
+        ]
+        for label, value in cases:
+            with self.subTest(description_type=label):
+                changed = copy.deepcopy(self.config)
+                if value == "__MISSING__":
+                    changed["allowlists"][0].pop("description", None)
+                else:
+                    changed["allowlists"][0]["description"] = value
+                with self.assertRaisesRegex(ValueError, "description"):
+                    build_necessity_config(changed)
+
+
+
 if __name__ == "__main__":
     unittest.main()

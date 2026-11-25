@@ -81,16 +81,39 @@ def _source_line_at(repo_root: pathlib.Path, commit: str, path: str, line_number
 def _escape_re2_literal(value: str) -> str:
     meta = set(r"\.^$|?*+()[]{}")
     return "".join("\\" + char if char in meta else char for char in value)
+def _validate_allowlist_description_schema(allowlists: object, context: str) -> list[str]:
+    """Validate allowlist descriptions before they are used as dictionary keys."""
+    if not isinstance(allowlists, list):
+        label = "trusted origin/main" if context == "baseline" else context
+        return [f"{label} allowlists must be an array"]
+
+    errors: list[str] = []
+    for index, entry in enumerate(allowlists, start=1):
+        if not isinstance(entry, Mapping):
+            label = "baseline" if context == "baseline" else context
+            errors.append(f"{label} allowlists entries must be TOML tables")
+            continue
+
+        description = entry.get("description")
+        if not isinstance(description, str) or not description.strip():
+            label = "trusted origin/main" if context == "baseline" else context
+            errors.append(
+                f"{label} allowlist {index}: description must be a non-empty string"
+            )
+    return errors
+
+
 def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
     errors: list[str] = []
     if not isinstance(config, Mapping):
         return ["configuration must be a TOML table"]
     allowlists = config.get("allowlists", [])
-    if not isinstance(allowlists, list) or len(allowlists) != EXPECTED_ALLOWLIST_COUNT:
+    description_errors = _validate_allowlist_description_schema(allowlists, "current config")
+    if description_errors:
+        return description_errors
+    if len(allowlists) != EXPECTED_ALLOWLIST_COUNT:
         errors.append("allowlist count changed; new exceptions require explicit review")
         return errors
-    if any(not isinstance(entry, Mapping) for entry in allowlists):
-        return ["allowlists entries must be TOML tables"]
 
     baseline_result = subprocess.run(
         ["git", "show", "origin/main:.gitleaks.toml"],
@@ -111,12 +134,9 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
         errors.append("trusted origin/main Gitleaks baseline must be a TOML table")
         return errors
     baseline_allowlists = baseline_config.get("allowlists", [])
-    if not isinstance(baseline_allowlists, list):
-        errors.append("trusted origin/main allowlists must be an array")
-        return errors
-    if any(not isinstance(entry, Mapping) for entry in baseline_allowlists):
-        errors.append("baseline allowlists entries must be TOML tables")
-        return errors
+    description_errors = _validate_allowlist_description_schema(baseline_allowlists, "baseline")
+    if description_errors:
+        return description_errors
     baseline_legacy = [
         entry for entry in baseline_allowlists
         if entry.get("description") not in EXPECTED_FIXTURES
@@ -358,10 +378,9 @@ def build_necessity_config(config: dict) -> dict:
     if not isinstance(config, Mapping):
         raise ValueError("necessity config must be a TOML table")
     allowlists = config.get("allowlists", [])
-    if not isinstance(allowlists, list):
-        raise ValueError("necessity config allowlists must be an array")
-    if any(not isinstance(entry, Mapping) for entry in allowlists):
-        raise ValueError("allowlists entries must be TOML tables")
+    description_errors = _validate_allowlist_description_schema(allowlists, "necessity config")
+    if description_errors:
+        raise ValueError("; ".join(description_errors))
     reduced = copy.deepcopy(config)
     reduced_allowlists = reduced.get("allowlists", [])
     reduced["allowlists"] = [

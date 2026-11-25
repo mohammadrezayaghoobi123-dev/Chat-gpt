@@ -54,7 +54,7 @@ The validator distinguishes unavailable executable (BLOCKED), timeout (FAIL), an
 - Evidence attestation: NOT_IMPLEMENTED.
 - Java/runtime provenance: NOT_IMPLEMENTED.
 - Implementation conformance: NOT_ESTABLISHED.
-- Historical Gitleaks scan on prior head `84de51d1cca8cfe3d3462175236875f7f1e4a02d`: PR-diff PASS; full-history FAIL with 13 unclassified generic-api-key findings. Exact-head Gitleaks run `45554022268`: PR-diff scan PASS (1 commit, 978 bytes, no leaks); full-history scan FAIL (5,207 commits, 15.90 MB, 13 findings). Findings remain unclassified; no suppression or credential changes performed.
+- Historical Gitleaks scan on prior head `84de51d1cca8cfe3d3462175236875f7f1e4a02d`: PR-diff PASS; full-history FAIL with 13 unclassified generic-api-key findings. Latest PR-head Gitleaks run `45554089720`: PR-diff scan PASS (1 commit, 886 bytes, no leaks); full-history scan FAIL (5,210 commits, 15.90 MB, 13 findings). Findings remain unclassified; no suppression or credential changes performed.
 
 ## Promotion decision
 

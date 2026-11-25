@@ -1507,3 +1507,13 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - **T57 staging:** stage 1 will prove durable INTENT acknowledgement and writer-process termination/reopen; stage 2 will add ReservationStore tombstone and final ledger event; stage 3 will inject the inter-store crash window; stage 4 will test racing recovery workers/fencing; stage 5 will test incomplete reads and late permit rejection; stage 6 will repeat after another restart and record exact-head CI.
 - **Isolation:** design and test work remains on the verification branch. No production adapter, reviewer runtime, provider dispatch, secrets, backend provisioning, workflow policy, deployment, merge, main, or local desktop state is changed.
 - **Disposition:** POLICY ACCEPTED / PROTOCOL ORDER RECORDED / T57 NOT YET GREEN / NO PRODUCTION QUALIFICATION.
+
+
+#### 2026-11-25 T57.1 durable INTENT process-reopen probe — AR-68
+
+- **Test:** `tools/9router-review/conformance/orphan-intent-recovery.test.mjs`, test T57.1.
+- **Mechanism:** two independent file-backed SQLite database files (EffectLedger and ReservationStore), WAL mode, `synchronous=FULL`; writer child process inserts and acknowledges an INTENT then exits with the injected termination code 73 before any attempt-boundary invocation; a distinct reader process reopens both files and verifies exact event ID, operation ID, immutable payload, SHA-256 payload digest, and zero boundary rows.
+- **Exact source identity:** test blob `eb55f2ab523611711d30da96223c0427f59985c6`, committed at `4c8d94f7fa054ab1ab739b9205cf697343a947c2`. The source was checked byte-for-byte against the local execution copy using Git blob SHA. Node.js `v22.16.0` isolated execution: **1 test / 1 pass / 0 failures**.
+- **Evidence boundary:** this confirms the stage-1 harness can preserve a committed SQLite record across a process exit and independent reopen on the same runner filesystem. It is not a production store, not a machine/power-loss or independent failure-domain test, and not evidence for tombstone/ledger convergence, recovery fencing, terminal-abort semantics, or late-permit denial.
+- **Hosted CI:** exact-head Actions run/check result was not available via the fetched workflow-run and combined-status interfaces. No hosted PASS is claimed.
+- **Disposition:** T57.1 ISOLATED PROCESS-REOPEN PROBE PASS / T57.2+ NOT EXECUTED / RS-08 REMAINS GAP / NO PRODUCTION QUALIFICATION.

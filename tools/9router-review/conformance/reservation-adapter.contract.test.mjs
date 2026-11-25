@@ -1285,6 +1285,28 @@ test("T51: COMMENT outcomes require the exact committed COMMENT boundary receipt
   assert.equal(afterCrossIntentReplay.events.length, beforeCrossIntentReplay.events.length);
   assert.equal(afterCrossIntentReplay.watermark, beforeCrossIntentReplay.watermark);
 
+  const modelReceipt = started.model.permit.attemptBoundaryReceipt;
+  assert.ok(modelReceipt, "beginModelAttempt must return a MODEL boundary receipt");
+  const crossStageIntent = await system.ledger.appendIntent({
+    key: KEY,
+    stage: "COMMENT",
+    attemptId: "model-receipt-cross-stage",
+    requestDigest: "cross-stage-comment-payload",
+  });
+  assert.equal(crossStageIntent.status, "ACK");
+  const beforeCrossStageReplay = await system.ledger.readComplete({ key: KEY });
+  const crossStageReplay = await system.ledger.appendOutcome({
+    attemptId: "model-receipt-cross-stage",
+    outcomeType: "COMMENT_ACCEPTED",
+    evidenceDigest: "cross-stage-response",
+    evidenceReference: "github-comment://463/1000",
+    attemptBoundaryReceipt: modelReceipt,
+  });
+  assert.equal(crossStageReplay.status, "INVALID_ATTEMPT_BOUNDARY_RECEIPT");
+  const afterCrossStageReplay = await system.ledger.readComplete({ key: KEY });
+  assert.equal(afterCrossStageReplay.events.length, beforeCrossStageReplay.events.length);
+  assert.equal(afterCrossStageReplay.watermark, beforeCrossStageReplay.watermark);
+
   const accepted = await system.ledger.appendOutcome({
     attemptId: started.attemptId,
     outcomeType: "COMMENT_ACCEPTED",

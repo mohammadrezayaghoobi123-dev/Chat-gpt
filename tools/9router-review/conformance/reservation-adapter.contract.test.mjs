@@ -1414,16 +1414,16 @@ test("T53: distinct full reservation tuples remain isolated when one immutable s
 
   assert.equal(first.status, "CLAIMED");
   assert.equal(second.status, "CLAIMED");
-  assert.equal(first.record.repository_id, undefined);
-  assert.equal(second.record.repository_id, undefined);
+  assert.deepEqual(first.record.reservation_key, KEY);
+  assert.deepEqual(second.record.reservation_key, alternateKey);
 
   const original = await system.adapter.readAuthoritative({ key: KEY });
   const alternate = await system.adapter.readAuthoritative({ key: alternateKey });
   assert.equal(original.status, "RECORD");
   assert.equal(alternate.status, "RECORD");
-  assert.equal(original.record.head_sha, KEY.head_sha);
-  assert.equal(alternate.record.head_sha, alternateKey.head_sha);
-  assert.notEqual(original.record.head_sha, alternate.record.head_sha);
+  assert.deepEqual(original.record.reservation_key, KEY);
+  assert.deepEqual(alternate.record.reservation_key, alternateKey);
+  assert.notDeepEqual(original.record.reservation_key, alternate.record.reservation_key);
   assert.equal(original.record.generation, 1);
   assert.equal(alternate.record.generation, 1);
 });

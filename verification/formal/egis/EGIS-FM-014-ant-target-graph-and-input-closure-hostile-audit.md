@@ -73,6 +73,7 @@ Static inspection found no Ant `import`, `include`, `subant`, external `exec`, A
 | FMH-103 | High | `git-revision` is invoked as an `info` dependency and again before packaging. Its branch, tag, revision, short revision and commit-count values are embedded in the JAR Manifest. A detached exact commit plus full history does not, by itself, bind the visible ref/tag namespace or the metadata algorithm's selected values. | Lock the exact refs/tags and resulting metadata values, or use a reviewed patch that supplies fixed values. Verify the Manifest fields against the lock; do not infer determinism from the commit SHA alone. |
 | FMH-104 | High | `compile` depends on `clean`; `clean` deletes class directories and recursively deletes every `states/**` match below `${basedir}` with `failonerror=false`. This is a potentially destructive workspace operation and its path/symlink boundary is not represented in the lock. | Run only in a disposable, isolated checkout with a canonical bounded `basedir`; reject unexpected symlinks and preserve a pre-build inventory of tracked/untracked files. Never point the build at a working project checkout. |
 | FMH-105 | High | The `test` and `test-dist` targets have distinct include/exclude sets and separate batches; some test classes excluded from one batch are explicitly re-included in later batches. One global `test_exclusions_inventory_sha256` cannot unambiguously describe both effective suites. | Produce separate source-test and packaged-JAR test selection manifests, resolve include/exclude precedence, and record discovered/executed/passed/failed/skipped/excluded counts per target from actual JUnit reports. |
+| FMH-106 | High | The selected JUnit tasks launch child JVMs with `fork="yes"` and `forkmode="perTest"`, but the lock does not bind the effective Java executable, child-process arguments or inherited environment. | Pin the forked JVM executable/JDK identity, exact task arguments and an environment allowlist; verify the actual child-process invocation before accepting build evidence. |
 
 ## 5. Corrective lock requirements
 
@@ -83,8 +84,9 @@ FM-013 must be amended before the lock can advance beyond `INCOMPLETE_BLOCKED`:
 3. Replace an ambiguous target list with the effective invocation trace, including both `git-revision` calls.
 4. Bind the effective test properties: `maven.test.skip=false`, `test.skip` absent, `maven.test.halt=true`, and `test.halt=true`.
 5. Split test selection/exclusion manifests by source-test and packaged-JAR test target.
-6. Define a disposable-checkout policy and bounded cleanup path before any future build.
-7. Preserve the existing 11 direct JAR identities; do not add unrelated repository JARs without target-graph evidence.
+6. Pin the forked JUnit JVM executable, JDK identity, arguments and inherited environment allowlist.
+7. Define a disposable-checkout policy and bounded cleanup path before any future build.
+8. Preserve the existing 11 direct JAR identities; do not add unrelated repository JARs without target-graph evidence.
 
 ## 6. Falsification tests for a future authorized controller
 
@@ -113,6 +115,7 @@ A successful controller preflight is not a successful build. A successful build 
 | Git ref/tag metadata reproducibility | NOT_ESTABLISHED |
 | Cleanup path/symlink behavior in isolated builder | NOT_RUN |
 | Actual test discovery and report counts | NOT_RUN |
+| Forked JUnit JVM executable and process environment | NOT_ESTABLISHED |
 | Forked JUnit JVM executable and process environment | NOT_ESTABLISHED |
 | Build, JAR creation, SANY/TLC | NOT_RUN |
 

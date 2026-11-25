@@ -390,7 +390,7 @@ def run_gate(root: Path, jar: Path, expected_sha256: str,
             raise NotADirectoryError("repository_root_not_directory")
     except FileNotFoundError as exc:
         evidence["checks"]["inputs"] = {
-            "status": "BLOCKED", "reason": "repository_root_missing",
+            "status": "BLOCKED", "reason": "repository_root_unavailable",
             "error_type": type(exc).__name__, "errno": exc.errno,
         }
         evidence["overall"] = "BLOCKED"

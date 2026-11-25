@@ -73,7 +73,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual("FAIL", result["overall"])
 
     def test_sany_failure_blocks_tlc(self):
-        fake = {"status": "FAIL", "exit_code": 1, "stdout:": "",
+        fake = {"status": "FAIL", "exit_code": 1, "stdout": "",
                 "stderr": "parse error", "command": ["sany"]}
         with patch("egis_tla_gate.git_identity", return_value=self.identity):
             with patch("egis_tla_gate.run_command", return_value=fake) as mocked:

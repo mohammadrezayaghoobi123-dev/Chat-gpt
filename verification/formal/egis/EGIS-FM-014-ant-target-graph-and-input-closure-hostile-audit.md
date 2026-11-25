@@ -175,12 +175,12 @@ The `test` target writes all JUnit XML reports to `${test.reports}`, which resol
 - Batch 1: `tlc2.tool.UserModuleOverrideAnnotationTest`
 - Batch 2: `tlc2.tool.UserModuleOverrideFromJarTest`
 
-The source-test target writes reports for those same classes to the same directory. Apache Ant documents the default report filename as `TEST-<test-class-name>.xml`; therefore the exact output paths collide:
+The source-test target writes reports for those same classes to the same directory. The pinned `default` target invokes `test` before `git-revision`, `dist` and `test-dist`; therefore the packaged-JAR target runs later. Apache Ant documents the default report filename as `TEST-<test-class-name>.xml`; therefore the exact output paths collide and the later target is expected to replace the earlier files:
 
 - `target/surefire-reports/TEST-tlc2.tool.UserModuleOverrideAnnotationTest.xml`
 - `target/surefire-reports/TEST-tlc2.tool.UserModuleOverrideFromJarTest.xml`
 
-This is a statically established path collision, not an observed overwrite: no test was executed. The packaged-JAR target's two special batches are not isolated under the `onJar` report root. Until report roots are separated, the resulting XML cannot be safely attributed to the source-test or packaged-JAR run. The manifest records both collisions; FMH-108 remains OPEN.
+This is a statically established path collision and ordered overwrite risk, not an observed filesystem overwrite: no test was executed. The packaged-JAR target's two special batches are not isolated under the `onJar` report root. Until report roots are separated, the resulting XML cannot be safely attributed to the source-test or packaged-JAR run. The manifest records both collisions and the target order; FMH-108 remains OPEN.
 
 FMH-105's static manifest ambiguity is mitigated, but the actual execution/report requirement remains open. FMH-108 separately blocks test evidence acceptance until report output collisions are removed. No test was run and no JUnit report was generated in this audit.
 

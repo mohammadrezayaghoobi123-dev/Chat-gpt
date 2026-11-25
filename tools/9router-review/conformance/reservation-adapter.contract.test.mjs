@@ -1265,6 +1265,26 @@ test("T51: COMMENT outcomes require the exact committed COMMENT boundary receipt
     assert.equal(after.watermark, before.watermark);
   }
 
+  const foreignIntent = await system.ledger.appendIntent({
+    key: KEY,
+    stage: "COMMENT",
+    attemptId: "different-comment-intent",
+    requestDigest: "different-comment-payload",
+  });
+  assert.equal(foreignIntent.status, "ACK");
+  const beforeCrossIntentReplay = await system.ledger.readComplete({ key: KEY });
+  const crossIntentReplay = await system.ledger.appendOutcome({
+    attemptId: "different-comment-intent",
+    outcomeType: "COMMENT_ACCEPTED",
+    evidenceDigest: "foreign-comment-response",
+    evidenceReference: "github-comment://463/999",
+    attemptBoundaryReceipt: receipt,
+  });
+  assert.equal(crossIntentReplay.status, "INVALID_ATTEMPT_BOUNDARY_RECEIPT");
+  const afterCrossIntentReplay = await system.ledger.readComplete({ key: KEY });
+  assert.equal(afterCrossIntentReplay.events.length, beforeCrossIntentReplay.events.length);
+  assert.equal(afterCrossIntentReplay.watermark, beforeCrossIntentReplay.watermark);
+
   const accepted = await system.ledger.appendOutcome({
     attemptId: started.attemptId,
     outcomeType: "COMMENT_ACCEPTED",

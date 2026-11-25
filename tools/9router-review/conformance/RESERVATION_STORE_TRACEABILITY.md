@@ -4,26 +4,26 @@
 
 **Status:** static traceability artifact; not an implementation qualification, test result, or approval to select a backend.
 
-**Reviewed source snapshot:** branch `verify/9router-reservation-conformance-run9-2026-11-25`, HEAD `7e266cf4313b42bea7e66d5d7222218b6477e177`, base `main` at `919b19ca3d3887352cdef06b03c668ead04fbce7`.
+**Reviewed source snapshot:** branch `verify/9router-reservation-conformance-run9-2026-11-25`, HEAD `cfc9c9368bf88fc79cf9cddbcbea06e48335a7a7`, base `main` at `919b19ca3d3887352cdef06b03c668ead04fbce7`.
 
 **Inputs inspected:**
 - `tools/9router-review/conformance/RESERVATION_STORE_CONTRACT.md` — abstract production contract and RS-01–RS-22 fault-injection requirements.
-- `tools/9router-review/conformance/reservation-adapter.contract.test.mjs` — executable reference-oracle tests T01–T53.
+- `tools/9router-review/conformance/reservation-adapter.contract.test.mjs` — executable reference-oracle tests T01–T54.
 - `tools/9router-review/conformance/reference-adapter.mjs` — in-memory reference implementation.
 - `tools/9router-review/OPERATIONS.md` — historical protocol, state, recovery and audit decisions.
 
-The T01–T53 suite exercises only the in-memory reference oracle. The production interface in the contract is design pseudocode and is not implemented or type-checked. Mapping a test to a requirement means its title and assertions appear relevant; it does not prove complete semantic coverage or production conformance.
+The T01–T54 suite exercises only the in-memory reference oracle. The production interface in the contract is design pseudocode and is not implemented or type-checked. Mapping a test to a requirement means its title and assertions appear relevant; it does not prove complete semantic coverage or production conformance.
 
 ## Coverage vocabulary
 
 - **DIRECT** — test assertions substantially exercise the stated invariant in the reference oracle.
 - **PARTIAL** — related behavior is exercised, but at least one fault, boundary, actor, backend, or evidence condition from the requirement is absent.
-- **GAP** — no current T01–T52 test directly exercises the requirement.
+- **GAP** — no current T01–T54 test directly exercises the requirement in the reference oracle.
 - **ORACLE ONLY** — all results are limited to the in-memory test adapter; no durable, cross-process, multi-region, provider, or GitHub behavior is established.
 
 A row may be DIRECT for the reference oracle and still ORACLE ONLY for production qualification.
 
-## A. Test-to-contract traceability (T01–T52)
+## A. Test-to-contract traceability (T01–T54)
 
 | Test | Executable test intent (condensed from source) | Contract area / operation | RS mapping | Reference-oracle assessment |
 |---|---|---|---|---|
@@ -51,7 +51,7 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 | T22 | COMMENT UNKNOWN resolves only with positive authenticated evidence | `reconcileComment`; recovery evidence | RS-12 (partial) | DIRECT for oracle positive-evidence rule; real GitHub response ambiguity untested |
 | T23 | Lease expiry uses adapter server clock | `claim`; lease evaluation | RS-04 | DIRECT for injected oracle clock; backend clock skew/failover untested |
 | T24 | Stale record version cannot renew current lease | `renew`; version CAS | RS-03, RS-19 (partial) | DIRECT for oracle version check |
-| T25 | Ledger receipt for another immutable reservation key rejected | Receipt binding; `appendOutcome` | RS-02 (partial only) | DIRECT for cross-key receipt rejection; digest-collision/full-tuple alias test absent |
+| T25 | Ledger receipt for another immutable reservation key rejected | Receipt binding; `appendOutcome` | RS-02 (partial only) | DIRECT for cross-key receipt rejection; T54 separately covers injected digest collision in the reference oracle |
 | T26 | Positive pre-model marker prevents model dispatch | Preflight reconciliation before MODEL | — | DIRECT for oracle short-circuit; actual `runReview()` integration absent |
 | T27 | CLOSED_NO_PUBLISH is terminal and cannot consume COMMENT permit | `closeWithoutPublish`; terminal state | — | DIRECT for oracle terminal-state rule |
 | T28 | Outcome identity is immutable for committed attempt | EffectLedger outcome idempotency | RS-20, RS-21 (partial) | DIRECT for tested outcome ID conflict; cross-store duplicate delivery not tested |
@@ -80,13 +80,14 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 | T51 | COMMENT OUTCOME requires exact COMMENT boundary receipt | COMMENT receipt validation | RS-11, RS-17 (partial) | DIRECT for oracle stage-bound receipt |
 | T52 | MODEL helper forwards exact committed receipt to matching outcome | Helper/ledger integration seam | — | DIRECT for helper argument propagation; production `runReview()` integration absent |
 | T53 | Different full tuple with one changed immutable SHA creates an independent reference reservation | Canonical full-tuple identity; `claim` and authoritative read | — | DIRECT for full-tuple separation in the reference oracle; no digest collision is injected |
+| T54 | Forced digest collision for a different full tuple returns `INTEGRITY_CONFLICT` and leaves no alias record | Digest-index collision detection; `claim` and authoritative read | RS-02 | DIRECT / ORACLE ONLY for injected collision semantics; no production SHA-256 or durable index qualification |
 
 ## B. Requirement-to-test coverage (RS-01–RS-22)
 
 | Requirement | Current mapping | Coverage | Missing evidence / falsification still required |
 |---|---|---|---|
 | RS-01 Independent clients claim one absent key | T01 | PARTIAL | T01 is one in-memory adapter/process. Add two independent clients/processes against the candidate backend and race at a barrier. |
-| RS-02 Same digest, different full tuple | T53 proves different full tuples remain distinct in the reference adapter; T25 tests cross-key receipt binding | GAP | The reference adapter uses the full canonical JSON tuple as its map key and does not implement the production SHA-256 digest index. T53 is adjacent evidence only. A production-shaped digest-index seam must force a collision and prove full-tuple comparison returns INTEGRITY_CONFLICT with no mutation. |
+| RS-02 Same digest, different full tuple | T54 forces one digest for two distinct full tuples and proves `INTEGRITY_CONFLICT`, unchanged original record/ledger, and no hidden second record; T53 and T25 provide adjacent identity/receipt evidence | PARTIAL | The injected digest callback and index are in-memory reference-oracle mechanisms only. The default is explicitly non-cryptographic. Implement and test the production SHA-256 canonical digest, persistent unique digest index, atomic full-tuple comparison/write, restart behavior, and independent-client collision handling. |
 | RS-03 Stale owner after takeover | T03, T06, T10, T24 | PARTIAL | Independent process and backend restart; stale writes across every mutation method, not only sampled paths. |
 | RS-04 Lease expiry before any attempt | T03, T23 | PARTIAL | Backend server time under clock skew/failover and concurrent expiry/renew races. |
 | RS-05 Lease expiry after MODEL boundary | T05, T07 | PARTIAL | Process crash and competing client after committed boundary; assert no second provider permit. |
@@ -112,7 +113,7 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 
 | Production-contract operation | Nearest reference test(s) | Assessment |
 |---|---|---|
-| `claim` | T01–T03, T23, T26, T53 | Broad oracle coverage; T53 characterizes full tuple separation only; no production interface adapter |
+| `claim` | T01–T03, T23, T26, T53–T54 | Broad oracle coverage; T54 exercises injected collision rejection only; no production interface adapter or durable digest index |
 | `renew` | T23–T24 | Oracle-only; server-time and version semantics not distributed |
 | `beginModelAttempt` | T04–T05, T48–T50 | Oracle-only; durable transaction and receipt semantics not qualified |
 | `beginCommentAttempt` | T11–T12, T31, T51 | Oracle-only; actual snapshot binding and remote POST boundary not qualified |
@@ -124,12 +125,12 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 | `markUnknown` | T08, T22, T30–T31 | Oracle-only; recovery authorization in proposed interface not implemented as specified |
 | `closeWithoutPublish` | T16, T27 | Oracle-only; dual fence/recovery authorization policy needs exact precedence tests |
 | `reconcileComment` | T14–T15, T20, T22, T30, T32–T33 | Oracle-only; listing consistency and remote evidence authenticity not qualified |
-| `read` | Read helpers throughout T01–T52 | No explicit production consistency/read-after-write conformance suite |
+| `read` | Read helpers throughout T01–T54 | No explicit production consistency/read-after-write conformance suite |
 
 ## D. Hostile review findings against this matrix
 
-1. **No false production-green inference:** the 52 tests are a reference-oracle tranche, not production backend conformance. The matrix labels all such evidence ORACLE ONLY.
-2. **Digest alias gap:** T25 checks a receipt for another key; it does not prove that a key digest collision is detected by comparing persisted full tuples. RS-02 remains GAP.
+1. **No false production-green inference:** the 54 tests are a reference-oracle tranche, not production backend conformance. The matrix labels all such evidence ORACLE ONLY.
+2. **Digest alias qualification:** T54 now directly exercises a forced digest collision and full-tuple conflict in the reference oracle. It improves RS-02 from GAP to PARTIAL, but does not prove production SHA-256 indexing, durable uniqueness, or transactional atomicity.
 3. **Crash-window gaps:** test titles about UNKNOWN or lost acknowledgement do not establish process death at every boundary. RS-07, RS-08, RS-10 and RS-12 remain GAP until explicit fault injection exists.
 4. **Trust-root gap:** stage mismatch and receipt mutation are not equivalent to signing-key revocation or authority identity change. RS-17 remains GAP.
 5. **Quota gap:** no test proves quota exhaustion fails closed before the provider or GitHub side effect. RS-18 remains GAP.
@@ -140,15 +141,16 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 
 ## D2. Additional hostile-review clarification
 
-10. **T53 scope restriction:** T53 demonstrates that the current reference oracle stores two distinct full canonical tuples independently when one immutable SHA changes. It does not inject a digest collision, because the oracle does not hash reservation keys for map addressing. RS-02 remains GAP; do not cite T53 as satisfying the production digest-collision requirement.
+10. **T53 scope restriction:** T53 demonstrates separation of two distinct full canonical tuples; it remains adjacent evidence only and does not inject a digest collision.
+11. **T54 collision-test boundary:** T54 injects a constant digest through a test-only callback, verifies `INTEGRITY_CONFLICT`, then switches to a unique diagnostic namespace to detect a hidden alias record. This directly tests collision handling in the in-memory oracle. It does not implement SHA-256, persistence, database uniqueness, or multi-process atomicity; RS-02 remains PARTIAL until those production properties are tested.
 
 ## E. Next implementation gate (not authorized by this artifact)
 
 Before any provider adapter is written:
 1. Resolve or explicitly defer each GAP with an accepted risk owner and a falsification plan; RS-02, RS-07, RS-08, RS-10, RS-12, RS-17, RS-18 and RS-22 are blocking safety gaps.
 2. Define a canonical operation-ID/idempotency envelope and error-precedence table shared by ReservationStore and EffectLedger.
-3. Align the abstract method signatures with the existing reference adapter and T01–T52 harness, or version the conformance contract before implementation.
-4. Add fault-injection tests for the missing crash, revocation, quota, digest-alias and cross-vendor cases. Preserve the original duplicate-publication RED test unchanged.
+3. Align the abstract method signatures with the existing reference adapter and T01–T54 harness, or version the conformance contract before implementation.
+4. Add production-shaped fault-injection for the missing crash, revocation, quota, durable digest-index collision, and cross-vendor cases. Preserve the original duplicate-publication RED test unchanged.
 5. Run two independent clients/processes against a disposable test backend, including restart and restore drills.
 6. Obtain an independent hostile review of the adapter, migration, trust-root model, threat model, rollback and evidence.
 7. Keep reviewer disabled; do not create resources, change secrets, deploy, merge, or modify `main` without separate explicit authorization.

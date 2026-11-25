@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from egis_tla_gate import run_gate
+from egis_tla_gate import _rooted_path, run_command, run_gate
 
 
 class GateTests(unittest.TestCase):
@@ -40,6 +40,21 @@ class GateTests(unittest.TestCase):
     def mock_pass(self, command, cwd, timeout):
         return {"status": "PASS", "exit_code": 0, "stdout": "OK",
                 "stderr": "", "command": list(command)}
+
+    def test_relative_inputs_are_anchored_to_root(self):
+        self.assertEqual(self.jar.resolve(), _rooted_path(self.root, Path("tools.jar")))
+        self.assertEqual((self.root / "nested" / "model.tla").resolve(),
+                         _rooted_path(self.root, Path("nested/model.tla")))
+
+    def test_timeout_bytes_are_normalized_and_json_serializable(self):
+        from subprocess import TimeoutExpired
+        with patch("egis_tla_gate.subprocess.run",
+                   side_effect=TimeoutExpired(["java"], 1, output=b"partial\\xff", stderr=b"timed out")):
+            result = run_command(["java"], self.root, 1)
+        self.assertEqual("FAIL", result["status"])
+        self.assertIn("partial", result["stdout"])
+        self.assertEqual("timed out", result["stderr"])
+        json.dumps(result)
 
     def test_hash_mismatch_fails_before_tools(self):
         with patch("egis_tla_gate.git_identity", return_value=self.identity):

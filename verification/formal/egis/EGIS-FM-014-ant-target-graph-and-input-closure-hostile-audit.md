@@ -76,6 +76,7 @@ Static inspection found no Ant `import`, `include`, `subant`, external `exec`, A
 | FMH-106 | High | The selected JUnit tasks launch child JVMs with `fork="yes"` and `forkmode="perTest"`, but the lock does not bind the effective Java executable, child-process arguments or inherited environment. | Pin the forked JVM executable/JDK identity, exact task arguments and an environment allowlist; verify the actual child-process invocation before accepting build evidence. |
 | FMH-107 | Medium | Neither selected JUnit task explicitly sets `skipNonTests`; Apache Ant documents the default as `false`, so the fileset path count is not a discovered-test count and non-test classes are not filtered by Ant before invocation. | Pin the exact Ant/JUnit version and effective `skipNonTests=false` semantics; preserve upstream behavior or use an explicitly reviewed change, then inspect actual JUnit reports. |
 | FMH-108 | High | The source-test target writes XML reports to `target/surefire-reports/`; two packaged-JAR batches also write to that directory. Ant's default XML report name is class-derived, so the same two test classes target identical output paths in both targets. | Give source-test and packaged-JAR targets distinct report roots; bind each report-set identity and fail preflight on any output-path overlap. |
+| FMH-109 | Medium | The pinned clean target does not remove target/surefire-reports/ and is guarded by unless="noclean"; reports from a prior invocation can remain available to later evidence collection. | Require a fresh, absent, canonical, non-symlinked report root; reject noclean, unapproved test.reports overrides and concurrent builds sharing a checkout. Do not infer report freshness from the clean target. |
 
 ## 5. Corrective lock requirements
 
@@ -89,6 +90,9 @@ FM-013 must be amended before the lock can advance beyond `INCOMPLETE_BLOCKED`:
 6. Pin the forked JUnit JVM executable, JDK identity, arguments and inherited environment allowlist.
 7. Define a disposable-checkout policy and bounded cleanup path before any future build.
 8. Preserve the existing 11 direct JAR identities; do not add unrelated repository JARs without target-graph evidence.
+9. Preserve source/JAR selection manifests while assigning disjoint report roots through a separately reviewed candidate overlay.
+10. Require the report root to be absent before execution; reject noclean, report-path overrides, symlink components, path escapes and same-checkout concurrent builds.
+11. Record explicit skipNonTests=false on selected source/JAR batches only after exact Ant pinning and attribute compatibility verification.
 
 ## 6. Falsification tests for a future authorized controller
 
@@ -101,6 +105,10 @@ The controller must be shown to BLOCK before process execution when any of the f
 - Point `basedir` outside the disposable checkout or introduce a symlinked `states` path.
 - Alter one source-test or packaged-JAR include/exclude rule without changing its corresponding selection-manifest digest.
 - Enable network access during the build phase.
+- Seed stale XML beneath the proposed report root; preflight must BLOCK before Ant starts.
+- Set noclean, test.skip or an unapproved test.reports override; preflight must BLOCK.
+- Introduce a symlinked report root, path traversal, canonical-root alias or a second Ant process in the same checkout; preflight must BLOCK.
+- Make source and packaged-JAR report roots overlap after canonical resolution; preflight must BLOCK.
 
 A successful controller preflight is not a successful build. A successful build is not a successful test run. Neither is evidence of EGIS correctness or implementation conformance.
 
@@ -162,7 +170,7 @@ Per-target selection digests:
 
 - `test`: `8d28a2a1a759b6ba06c9dafadc9cbe06f45db32216dadeac42a6ad7ec45ed7a8`
 - `test-dist`: `023647bc904ff7c20af1fd85a02a4b5c96b2c1f5dd1f090968fb86036bebf46c`
-- Manifest SHA-256: `702154f5a83cfb50132d7db36ba295eeb9c708b71bf93eb5751aced6b5ca01c0`
+- Manifest SHA-256: `1bc377150f82f3db41142ba89d35c2f1da2ea7ef93adb8a03f0a539b2e826832`
 
 **Hostile interpretation:** 411 is the number of source paths selected by the static fileset model. It is not a count of JUnit test classes, test methods, test invocations or successful tests.
 
@@ -184,6 +192,20 @@ This is a statically established path collision and ordered overwrite risk, not 
 
 FMH-105's static manifest ambiguity is mitigated, but the actual execution/report requirement remains open. FMH-108 separately blocks test evidence acceptance until report output collisions are removed. No test was run and no JUnit report was generated in this audit.
 
+### FMH-109 — Stale report-root retention
+
+The pinned clean target at lines 96–108 deletes the class and test-class output contents and recursively deletes states/** below ${basedir}. It does not delete ${test.reports} or target/surefire-reports/. The target declaration is <target name="clean" unless="noclean">, so the clean operation can be bypassed by defining noclean.
+
+The test and test-dist targets create report directories with mkdir, but the inspected build file contains no report-root reset or stale-file rejection. Therefore, prior XML may remain in a reused workspace and be consumed by an external report collector. This is a stale-evidence risk; no stale report was observed or consumed during this static audit.
+
+The safe candidate control is not an unconditional Ant delete. A future controller must require a new disposable checkout and an absent report root, pin test.reports, canonicalize both output roots, reject symlinks/path escapes and prevent two builds from sharing one workspace. FMH-109 remains OPEN until those preconditions are implemented and falsification-tested.
+
+### Candidate remediation record (EGIS-FM-016)
+
+FM-016 documents the minimal overlay: eight source-test batches write under target/surefire-reports/source/; all seven packaged-JAR batches write under target/surefire-reports/onJar/; all 15 selected-profile batches explicitly set skipNonTests="false". No fileset or include/exclude rule changes are proposed. Exact Ant version, runtime attribute support, report-root preflight and actual JUnit reports remain NOT_RUN. The overlay is PROPOSED_NOT_APPLIED; FMH-107, FMH-108 and FMH-109 remain OPEN.
+
+The copied FM-015 manifest file digest in this audit is aligned with the current FM-013 lock value: 1bc377150f82f3db41142ba89d35c2f1da2ea7ef93adb8a03f0a539b2e826832. The FM-015 file itself is unchanged by this proposal; the hash is a reference-integrity correction only.
+
 ## 11. Safety boundary and source references
 
 This selection reconstruction is static. No Ant/JDK runtime was acquired or invoked. No build, test, JAR creation, SANY/TLC run, deployment, merge or main-branch mutation occurred.
@@ -191,3 +213,5 @@ This selection reconstruction is static. No Ant/JDK runtime was acquired or invo
 - Static selection manifest: https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/blob/verification/egis-verification-gate-v1.1.1-2026-11-25/verification/formal/egis/EGIS-FM-015-junit-static-selection-manifests.json
 - Apache Ant FileSet semantics: https://ant.apache.org/manual/Types/fileset.html
 - Apache Ant JUnit `batchtest`, XML report naming and `skipNonTests`: https://ant.apache.org/manual/Tasks/junit.html
+- Apache Ant JUnitReport aggregation and explicit filesets: https://ant.apache.org/manual/Tasks/junitreport.html
+- EGIS-FM-016 JUnit report isolation proposal: https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/blob/verification/egis-verification-gate-v1.1.1-2026-11-25/verification/formal/egis/EGIS-FM-016-junit-report-isolation-and-discovery-contract.md

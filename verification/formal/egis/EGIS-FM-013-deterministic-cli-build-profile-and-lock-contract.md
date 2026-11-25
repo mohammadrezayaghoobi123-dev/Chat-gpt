@@ -274,6 +274,27 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
       "source_file_selection_is_test_count": false,
       "actual_discovery_and_execution": "NOT_RUN"
     },
+    "candidate_report_overlay": {
+      "status": "PROPOSED_NOT_APPLIED",
+      "document": "EGIS-FM-016-junit-report-isolation-and-discovery-contract.md",
+      "source_test_report_root": "target/surefire-reports/source/",
+      "packaged_jar_report_root": "target/surefire-reports/onJar/",
+      "source_batch_count": 8,
+      "packaged_jar_batch_count": 7,
+      "explicit_skip_non_tests": false,
+      "selected_path_rules_changed": false,
+      "execution": "NOT_RUN"
+    },
+    "report_tree_freshness": {
+      "clean_target_deletes_report_root": false,
+      "clean_target_guard_property": "noclean",
+      "report_root_must_be_absent_before_execution": true,
+      "test_reports_override_allowed": false,
+      "canonical_checkout_containment_required": true,
+      "symlink_components_allowed": false,
+      "parallel_builds_same_checkout_allowed": false,
+      "preflight_status": "NOT_RUN"
+    },
     "forked_jvm": {
       "fork": true,
       "forkmode": "perTest",
@@ -286,7 +307,7 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
       "jdk_archive_sha256": null,
       "inherited_environment_allowlist_sha256": null
     },
-    "cleanup_policy": "DISPOSABLE_ISOLATED_CHECKOUT"
+    "cleanup_policy": "DISPOSABLE_ISOLATED_CHECKOUT_WITH_EMPTY_CANONICAL_REPORT_ROOT_PREFLIGHT"
   },
   "runtime_companions": [
     {
@@ -455,9 +476,10 @@ No override may convert missing evidence to PASS. The only permissible states ar
 | Static packaged-JAR test file selection | OBSERVED; 411 unique paths in 7 batches; digest pinned in FM-015 |
 | Equality of source/JAR selected path sets | OBSERVED; symmetric difference = 0 |
 | JUnit class/method discovery and execution | NOT_RUN; `skipNonTests` semantics must be pinned |
-| JUnit source/JAR report output isolation | FAIL; two static XML output-path collisions identified (FMH-108) |
+| JUnit source/JAR report output isolation | FAIL; two static XML output-path collisions identified (FMH-108); candidate overlay NOT_APPLIED |
 | Git ref/tag metadata reproducibility | NOT_ESTABLISHED |
-| Target cleanup isolation | NOT_RUN; disposable checkout required |
+| Target cleanup isolation | NOT_RUN; clean target does not delete the JUnit report tree and can be skipped with noclean (FMH-109) |
+| Fresh canonical report-root preflight | NOT_RUN; report root must be absent, bounded and non-symlinked before execution (FMH-109) |
 | Extended target dependencies (JPF/JMH) | OUT_OF_SCOPE; separate lock extension required |
 | Exact JDK vendor/version/build/digest | NOT_SET |
 | Exact Ant version/archive digest | NOT_SET |
@@ -540,3 +562,12 @@ These are **static source-file selection counts**, not JUnit-discovered classes,
 A further hostile check found that the source-test target writes all reports to `target/surefire-reports/`, while two packaged-JAR batches also write to that same directory. The default XML report name is based on the test class name, so the two outputs collide for `tlc2.tool.UserModuleOverrideAnnotationTest` and `tlc2.tool.UserModuleOverrideFromJarTest`. FMH-108 is High severity. The manifest records both exact colliding paths. No overwrite was executed; report-root isolation is mandatory before any future test run.
 
 Static selection evidence mitigates the ambiguity in FMH-105, but it does not close the execution-evidence portion of that finding. The lock remains `INCOMPLETE_BLOCKED`.
+
+
+## 15. JUnit report isolation and clean-run proposal (EGIS-FM-016)
+
+FM-016 records a target-scoped, documentation-only overlay for FMH-107 and FMH-108, plus the newly confirmed FMH-109 stale-report risk. It preserves the 411/411 static selection baseline and proposes distinct report roots: target/surefire-reports/source/ and target/surefire-reports/onJar/. It proposes explicit skipNonTests="false" on all 15 selected-profile batch tests without changing any fileset or include/exclude rule.
+
+The pinned clean target does not remove target/surefire-reports/ and is guarded by unless="noclean". FM-016 therefore requires a fresh, empty, canonical, non-symlinked report root before Ant execution; it does not propose an unchecked Ant delete operation.
+
+**Candidate overlay status: PROPOSED_NOT_APPLIED.** FMH-107, FMH-108 and FMH-109 remain open pending exact Ant pinning, independent preflight implementation, patch review and actual per-target JUnit evidence. The lock remains INCOMPLETE_BLOCKED.

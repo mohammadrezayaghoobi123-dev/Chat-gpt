@@ -418,5 +418,48 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
             "necessity_scan_status=0", "else", "necessity_scan_status=$?", "fi"
         ])
 
+
+    def test_allowlist_integrity_workflow_covers_all_branches_for_security_paths(self):
+        workflow_path = ROOT / ".github" / "workflows" / "gitleaks-allowlist-integrity.yml"
+        lines = workflow_path.read_text(encoding="utf-8").splitlines()
+        expected_paths = {
+            ".gitleaks.toml",
+            "security/**",
+            ".github/workflows/gitleaks-allowlist-integrity.yml",
+            ".github/workflows/secret-history-scan.yml",
+        }
+
+        for event in ("pull_request", "push"):
+            with self.subTest(event=event):
+                event_line = f"  {event}:"
+                self.assertIn(event_line, lines)
+                start_index = lines.index(event_line) + 1
+                end_index = next(
+                    (
+                        index for index in range(start_index, len(lines))
+                        if (
+                            (
+                                lines[index].startswith("  ")
+                                and not lines[index].startswith("    ")
+                            )
+                            or not lines[index].startswith(" ")
+                        )
+                        and lines[index].endswith(":")
+                    ),
+                    len(lines),
+                )
+                event_lines = lines[start_index:end_index]
+                self.assertFalse(
+                    any(line.strip().startswith("branches:") for line in event_lines),
+                    f"{event} must cover every target branch",
+                )
+                actual_paths = set()
+                for line in event_lines:
+                    item = line.strip()
+                    if item.startswith('- "') and item.endswith('"'):
+                        actual_paths.add(item[3:-1])
+                self.assertEqual(actual_paths, expected_paths)
+
+
 if __name__ == "__main__":
     unittest.main()

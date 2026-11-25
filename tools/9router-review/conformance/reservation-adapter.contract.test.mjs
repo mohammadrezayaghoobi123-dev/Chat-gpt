@@ -364,12 +364,23 @@ test("T13: PUBLISHED requires a validated positive outcome in the independent ef
     effectLedgerReceipt: null,
   });
   assert.equal(noOutcome.status, "LEDGER_NOT_ACKNOWLEDGED");
+  const appendOutcome = system.ledger.appendOutcome.bind(system.ledger);
+  const observedOutcomes = [];
+  system.ledger.appendOutcome = async args => {
+    observedOutcomes.push(args);
+    return appendOutcome(args);
+  };
   const outcome = await system.ledger.appendOutcome({
     attemptId: started.attemptId,
     outcomeType: "COMMENT_ACCEPTED",
     evidenceDigest: "validated-response-digest",
     evidenceReference: "github-comment://777",
+    attemptBoundaryReceipt: started.permit.attemptBoundaryReceipt,
   });
+  assert.equal(observedOutcomes.length, 1);
+  assert.equal(observedOutcomes[0].attemptId, started.attemptId);
+  assert.deepEqual(observedOutcomes[0].attemptBoundaryReceipt, started.permit.attemptBoundaryReceipt);
+  assert.equal(observedOutcomes[0].attemptBoundaryReceipt?.stage, "COMMENT");
   const published = await system.adapter.completeCommentAttempt({
     key: KEY,
     generation: started.resumed.record.generation,

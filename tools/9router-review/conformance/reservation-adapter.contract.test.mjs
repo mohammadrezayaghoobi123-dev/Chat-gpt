@@ -1398,3 +1398,32 @@ test("T52: MODEL helper forwards only its committed boundary receipt to the matc
   assert.equal(observedCalls[0].attemptBoundaryReceipt.stage, "MODEL");
   assert.equal(observedCalls[0].attemptBoundaryReceipt.request_digest, completed.requestDigest);
 });
+
+
+test("T53: distinct full reservation tuples remain isolated when one immutable snapshot field changes", async () => {
+  const system = makeSystem();
+  const alternateKey = Object.freeze({
+    ...KEY,
+    head_sha: "c".repeat(40),
+  });
+
+  const first = await system.adapter.claim(claimArgs("owner-1"));
+  const second = await system.adapter.claim(claimArgs("owner-2", {
+    key: alternateKey,
+  }));
+
+  assert.equal(first.status, "CLAIMED");
+  assert.equal(second.status, "CLAIMED");
+  assert.equal(first.record.repository_id, undefined);
+  assert.equal(second.record.repository_id, undefined);
+
+  const original = await system.adapter.readAuthoritative({ key: KEY });
+  const alternate = await system.adapter.readAuthoritative({ key: alternateKey });
+  assert.equal(original.status, "RECORD");
+  assert.equal(alternate.status, "RECORD");
+  assert.equal(original.record.head_sha, KEY.head_sha);
+  assert.equal(alternate.record.head_sha, alternateKey.head_sha);
+  assert.notEqual(original.record.head_sha, alternate.record.head_sha);
+  assert.equal(original.record.generation, 1);
+  assert.equal(alternate.record.generation, 1);
+});

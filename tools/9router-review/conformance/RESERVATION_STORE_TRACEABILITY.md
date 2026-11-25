@@ -4,7 +4,7 @@
 
 **Status:** static traceability artifact; not an implementation qualification, test result, or approval to select a backend.
 
-**Reviewed source snapshot:** branch `verify/9router-reservation-conformance-run9-2026-11-25`, HEAD `cfc9c9368bf88fc79cf9cddbcbea06e48335a7a7`, base `main` at `919b19ca3d3887352cdef06b03c668ead04fbce7`.
+**Reviewed source snapshot:** branch `verify/9router-reservation-conformance-run9-2026-11-25`, HEAD `d06fa73a5498c3a6494b9bfcc3948e0559fc89b6`, base `main` at `919b19ca3d3887352cdef06b03c668ead04fbce7`.
 
 **Inputs inspected:**
 - `tools/9router-review/conformance/RESERVATION_STORE_CONTRACT.md` — abstract production contract and RS-01–RS-22 fault-injection requirements.
@@ -80,14 +80,14 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 | T51 | COMMENT OUTCOME requires exact COMMENT boundary receipt | COMMENT receipt validation | RS-11, RS-17 (partial) | DIRECT for oracle stage-bound receipt |
 | T52 | MODEL helper forwards exact committed receipt to matching outcome | Helper/ledger integration seam | — | DIRECT for helper argument propagation; production `runReview()` integration absent |
 | T53 | Different full tuple with one changed immutable SHA creates an independent reference reservation | Canonical full-tuple identity; `claim` and authoritative read | — | DIRECT for full-tuple separation in the reference oracle; no digest collision is injected |
-| T54 | Forced digest collision for a different full tuple returns `INTEGRITY_CONFLICT` and leaves no alias record | Digest-index collision detection; `claim` and authoritative read | RS-02 | DIRECT / ORACLE ONLY for injected collision semantics; no production SHA-256 or durable index qualification |
+| T54 | Forced digest collision returns `INTEGRITY_CONFLICT`; original tuple retains digest-index ownership; alternate tuple has no hidden record | Digest-index collision detection; `claim` and authoritative read | RS-02 | DIRECT / ORACLE ONLY for injected collision semantics; no production SHA-256 or durable index qualification |
 
 ## B. Requirement-to-test coverage (RS-01–RS-22)
 
 | Requirement | Current mapping | Coverage | Missing evidence / falsification still required |
 |---|---|---|---|
 | RS-01 Independent clients claim one absent key | T01 | PARTIAL | T01 is one in-memory adapter/process. Add two independent clients/processes against the candidate backend and race at a barrier. |
-| RS-02 Same digest, different full tuple | T54 forces one digest for two distinct full tuples and proves `INTEGRITY_CONFLICT`, unchanged original record/ledger, and no hidden second record; T53 and T25 provide adjacent identity/receipt evidence | PARTIAL | The injected digest callback and index are in-memory reference-oracle mechanisms only. The default is explicitly non-cryptographic. Implement and test the production SHA-256 canonical digest, persistent unique digest index, atomic full-tuple comparison/write, restart behavior, and independent-client collision handling. |
+| RS-02 Same digest, different full tuple | T54 forces one digest for two distinct full tuples and proves `INTEGRITY_CONFLICT`, retained original digest-index ownership, unchanged original record/ledger, and no hidden second record; T53 and T25 provide adjacent identity/receipt evidence | PARTIAL | The injected digest callback and index are in-memory reference-oracle mechanisms only. The default is explicitly non-cryptographic. Implement and test the production SHA-256 canonical digest, persistent unique digest index, atomic full-tuple comparison/write, restart behavior, and independent-client collision handling. |
 | RS-03 Stale owner after takeover | T03, T06, T10, T24 | PARTIAL | Independent process and backend restart; stale writes across every mutation method, not only sampled paths. |
 | RS-04 Lease expiry before any attempt | T03, T23 | PARTIAL | Backend server time under clock skew/failover and concurrent expiry/renew races. |
 | RS-05 Lease expiry after MODEL boundary | T05, T07 | PARTIAL | Process crash and competing client after committed boundary; assert no second provider permit. |
@@ -142,7 +142,7 @@ A row may be DIRECT for the reference oracle and still ORACLE ONLY for productio
 ## D2. Additional hostile-review clarification
 
 10. **T53 scope restriction:** T53 demonstrates separation of two distinct full canonical tuples; it remains adjacent evidence only and does not inject a digest collision.
-11. **T54 collision-test boundary:** T54 injects a constant digest through a test-only callback, verifies `INTEGRITY_CONFLICT`, then switches to a unique diagnostic namespace to detect a hidden alias record. This directly tests collision handling in the in-memory oracle. It does not implement SHA-256, persistence, database uniqueness, or multi-process atomicity; RS-02 remains PARTIAL until those production properties are tested.
+11. **T54 collision-test boundary:** T54 injects a constant digest through a test-only callback and verifies `INTEGRITY_CONFLICT`; while that digest remains active, it confirms the original tuple still owns the index and the alternate remains conflicted. It then switches to a unique diagnostic namespace to detect a hidden alias record. This directly tests collision handling in the in-memory oracle. It does not implement SHA-256, persistence, database uniqueness, or multi-process atomicity; RS-02 remains PARTIAL until those production properties are tested.
 
 ## E. Next implementation gate (not authorized by this artifact)
 

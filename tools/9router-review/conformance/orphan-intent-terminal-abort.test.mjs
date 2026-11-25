@@ -1,0 +1,160 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const workerPath = join(dirname(fileURLToPath(import.meta.url)), "orphan-intent-recovery-worker.mjs");
+const operation = {
+  operation_id: "t57-terminal-abort-operation",
+  reservation_key: { repository_id: 424242, pull_request_number: 57, head_sha: "a".repeat(40), base_sha: "b".repeat(40) },
+  stage: "MODEL",
+  attempt_id: "t57-terminal-abort-attempt",
+  request_digest: "sha256:test-model-request",
+  protocol_version: "9router-orphan-recovery-v1",
+};
+
+function spawnWorker(mode, root, expectedGeneration = 0, owner = "worker", flag = "") {
+  const child = spawn(process.execPath, [workerPath, mode, root, JSON.stringify(operation), String(expectedGeneration), owner, flag], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", chunk => { stdout += chunk; });
+  child.stderr.setEncoding("utf8").on("data", chunk => { stderr += chunk; });
+  const closed = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => resolve({ code, signal, stdout, stderr }));
+  });
+  return { child, closed };
+}
+
+async function runWorker(mode, root, expectedGeneration = 0, owner = "worker", flag = "", expectedExit = 0) {
+  const run = spawnWorker(mode, root, expectedGeneration, owner, flag);
+  const result = await run.closed;
+  assert.equal(result.code, expectedExit, `${mode} exit mismatch; stdout=${result.stdout}; stderr=${result.stderr}`);
+  return result.stdout.trim() ? JSON.parse(result.stdout.trim().split("\n").at(-1)) : null;
+}
+
+async function seedIntent(root) {
+  const result = await runWorker("seed-intent-crash", root, 0, "writer-A", "", 73);
+  assert.equal(result.acknowledgement.status, "ACK");
+  assert.equal(result.acknowledgement.operation_id, operation.operation_id);
+  return result.acknowledgement;
+}
+
+test("T57.2: definitive absence creates one terminal tombstone and one final ledger event; late begin is denied", async () => {
+  const root = await mkdtemp(join(tmpdir(), "9router-t57-abort-"));
+  try {
+    const intentAck = await seedIntent(root);
+    const first = await runWorker("recover", root, 0, "recovery-A");
+    assert.equal(first.result.status, "ABORTED_ORPHAN");
+    assert.equal(first.result.tombstone.status, "ACK");
+    assert.equal(first.result.terminal_event.status, "ACK");
+    assert.equal(first.result.terminal_event.payload.disposition, "ORPHAN_INTENT_ABORTED");
+    assert.equal(first.snapshot.tombstones, 1);
+    assert.equal(first.snapshot.reservation_events, 1);
+    assert.equal(first.snapshot.boundaries, 0);
+    assert.equal(first.snapshot.permits, 0);
+    assert.equal(first.snapshot.external_effects, 0);
+
+    const late = await runWorker("late-begin", root);
+    assert.equal(late.result.status, "ORPHAN_ABORTED");
+    assert.equal(late.snapshot.permits, 0, "terminal tombstone must deny a late permit");
+    assert.equal(late.snapshot.boundaries, 0);
+
+    const repeated = await runWorker("recover", root, 1, "recovery-B");
+    assert.equal(repeated.result.status, "ABORTED_ORPHAN");
+    assert.equal(repeated.result.tombstone.tombstone_id, first.result.tombstone.tombstone_id);
+    assert.equal(repeated.result.terminal_event.event_id, first.result.terminal_event.event_id);
+    assert.equal(repeated.snapshot.tombstones, 1);
+    assert.equal(repeated.snapshot.reservation_events, 1);
+    assert.equal(repeated.result.terminal_event.payload.attempt_id, operation.attempt_id);
+    assert.equal(intentAck.event_id, first.result.terminal_event.payload.intent_event_id);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("T57.3: restart after reservation tombstone but before ledger append converges without a duplicate terminal event", async () => {
+  const root = await mkdtemp(join(tmpdir(), "9router-t57-interstore-crash-"));
+  try {
+    await seedIntent(root);
+    const crashed = await runWorker("recover", root, 0, "recovery-B", "crash-after-tombstone", 74);
+    assert.equal(crashed.result.status, "TOMBSTONE_COMMITTED");
+    assert.equal(crashed.snapshot.tombstones, 1);
+    assert.equal(crashed.history.events.filter(event => event.event_type === "ORPHAN_INTENT_ABORTED").length, 0);
+
+    const reopened = await runWorker("inspect", root);
+    assert.equal(reopened.tombstone.status, "ACK");
+    assert.equal(reopened.history.events.filter(event => event.event_type === "INTENT").length, 1);
+    assert.equal(reopened.history.events.filter(event => event.event_type === "ORPHAN_INTENT_ABORTED").length, 0);
+
+    const recovered = await runWorker("recover", root, 1, "recovery-C");
+    assert.equal(recovered.result.status, "ABORTED_ORPHAN");
+    assert.equal(recovered.snapshot.tombstones, 1);
+    assert.equal(recovered.result.terminal_event.payload.tombstone_id, reopened.tombstone.tombstone_id);
+    assert.equal(recovered.history.events.filter(event => event.event_type === "ORPHAN_INTENT_ABORTED").length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("T57.4: a competing recovery process with a stale expected fence cannot mutate either durable store", async () => {
+  const root = await mkdtemp(join(tmpdir(), "9router-t57-fence-"));
+  let held;
+  try {
+    await seedIntent(root);
+    held = spawnWorker("hold-fence", root, 0, "recovery-fence-owner");
+    let line = "";
+    const fence = await new Promise((resolve, reject) => {
+      held.child.stdout.setEncoding("utf8").on("data", chunk => {
+        line += chunk;
+        if (line.includes("\n")) resolve(JSON.parse(line.trim().split("\n")[0]));
+      });
+      held.child.once("error", reject);
+      held.child.once("close", code => reject(new Error(`fence holder exited before acquiring fence: ${code}; ${line}`)));
+    });
+    assert.equal(fence.fence.status, "ACK");
+    assert.equal(fence.fence.generation, 1);
+
+    const before = await runWorker("inspect", root);
+    const competing = await runWorker("recover", root, 0, "recovery-stale");
+    assert.equal(competing.result.status, "STALE_FENCE");
+    const after = await runWorker("inspect", root);
+    assert.deepEqual(after.snapshot, before.snapshot);
+    assert.equal(after.tombstone.status, "NOT_FOUND");
+    assert.equal(after.history.events.filter(event => event.event_type === "ORPHAN_INTENT_ABORTED").length, 0);
+
+    held.child.stdin.write("release\n");
+    const holderExit = await held.closed;
+    assert.equal(holderExit.code, 0);
+    held = null;
+
+    const authorized = await runWorker("recover", root, 1, "recovery-current");
+    assert.equal(authorized.result.status, "ABORTED_ORPHAN");
+    assert.equal(authorized.snapshot.tombstones, 1);
+  } finally {
+    if (held) { held.child.stdin.write("release\n"); await held.closed; }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("T57.5: an incomplete ReservationStore read quarantines the orphan without mutating either store", async () => {
+  const root = await mkdtemp(join(tmpdir(), "9router-t57-incomplete-"));
+  try {
+    await seedIntent(root);
+    const before = await runWorker("inspect", root);
+    const result = await runWorker("recover-incomplete", root, 0, "recovery-incomplete");
+    assert.equal(result.result.status, "RECOVERY_QUARANTINED");
+    assert.equal(result.result.reason, "UNKNOWN");
+    const after = await runWorker("inspect", root);
+    assert.deepEqual(after.snapshot, before.snapshot);
+    assert.equal(after.tombstone.status, "NOT_FOUND");
+    assert.deepEqual(after.history.events, before.history.events);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

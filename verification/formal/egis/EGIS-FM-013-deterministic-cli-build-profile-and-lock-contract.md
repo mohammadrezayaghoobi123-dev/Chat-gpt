@@ -181,6 +181,60 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
       "role": "test-fixture"
     }
   ],
+  "input_trees": {
+    "source": {
+      "path": "src/",
+      "git_tree_sha": "a74de09ccfe0be7a750467f7940eebd8fe63e772",
+      "tree_entries": 627,
+      "files": 585
+    },
+    "tests": {
+      "path": "test/",
+      "git_tree_sha": "f6aba48957fc3d94fea66a2774e8b32b124abc4c",
+      "tree_entries": 490,
+      "files": 461
+    },
+    "test_models": {
+      "path": "test-model/",
+      "git_tree_sha": "2f62a421a6bc7cb4f5d41decbdb12b8826e21f51",
+      "tree_entries": 747,
+      "files": 721
+    },
+    "license": {
+      "path": "doc/License.txt",
+      "git_blob_sha": "c8f71de5d088dc159f4b482904901e938538598c",
+      "size_bytes": 1107
+    },
+    "project_properties": {
+      "path": "project.properties",
+      "git_blob_sha": "79c7a67a317446789c56012ebf573391d35dd26f",
+      "size_bytes": 313
+    }
+  },
+  "execution_properties": {
+    "required_properties": {
+      "maven.test.skip": false,
+      "maven.test.halt": true,
+      "test.halt": true
+    },
+    "required_absent_properties": [
+      "test.skip"
+    ],
+    "test_selection_manifests": {
+      "source_test_selection_sha256": null,
+      "packaged_jar_test_selection_sha256": null
+    },
+    "git_metadata": {
+      "revision_task_invocations": 2,
+      "refs_inventory_sha256": null,
+      "branch": null,
+      "tag": null,
+      "revision": null,
+      "short_revision": null,
+      "commit_count": null
+    },
+    "cleanup_policy": "DISPOSABLE_ISOLATED_CHECKOUT"
+  },
   "runtime_companions": [
     {
       "name": "CommunityModules.jar",
@@ -192,11 +246,13 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
     }
   ],
   "build": {
-    "target_sequence": [
+    "target_invocation_sequence": [
+      "git-revision (info dependency)",
       "info",
       "compile",
       "compile-test",
       "test",
+      "git-revision (explicit antcall before dist)",
       "dist",
       "test-dist"
     ],
@@ -338,7 +394,12 @@ No override may convert missing evidence to PASS. The only permissible states ar
 | Exact upstream source commit | OBSERVED |
 | Source commit signer authentication | NOT_ESTABLISHED |
 | Pinned Ant build target graph inspected | OBSERVED |
-| Direct dependencies for selected target profile identified | PARTIAL; SHA-256 values NOT_RUN |
+| Direct selected-profile JAR references | 11/11 statically matched; SHA-256 values NOT_RUN |
+| Source/test/test-model input trees | OBSERVED; subtree identities and counts recorded |
+| Effective test fixture closure | NOT_ESTABLISHED; 747-entry test-model tree requires selection evidence |
+| Effective test skip/halt properties | NOT_RUN; fail-closed values required in lock |
+| Git ref/tag metadata reproducibility | NOT_ESTABLISHED |
+| Target cleanup isolation | NOT_RUN; disposable checkout required |
 | Extended target dependencies (JPF/JMH) | OUT_OF_SCOPE; separate lock extension required |
 | Exact JDK vendor/version/build/digest | NOT_SET |
 | Exact Ant version/archive digest | NOT_SET |
@@ -366,3 +427,28 @@ Next work is restricted to a second independent review of this lock contract and
 - Apache Ant TStamp task: https://ant.apache.org/manual/Tasks/tstamp.html
 - Apache Ant JAR task: https://ant.apache.org/manual/Tasks/jar.html
 - Apache Ant ZIP task: https://ant.apache.org/manual/Tasks/zip.html
+
+
+## 12. Independent target-graph and input-closure audit (EGIS-FM-014)
+
+A second static review of the exact pinned Ant file and recursive Git tree was recorded in `EGIS-FM-014-ant-target-graph-and-input-closure-hostile-audit.md`. It confirms that the 11 direct selected-profile JAR references match the existing dependency entries, but identifies additional source/test/model input trees and execution controls that must be bound before the lock can be considered complete.
+
+The following findings are open:
+
+| ID | Severity | Finding | Required disposition |
+|---|---|---|---|
+| FMH-101 | High | The selected test classpath includes all of `test-model/` (747 tree entries, 721 files), while the original dependency list names only one JAR fixture. | Bind the subtree identity and define the effective fixture closure or explicitly lock the entire subtree. |
+| FMH-102 | High | `maven.test.skip` controls the `test.skip` guard, while `maven.test.halt` controls failure-halting behavior. The original lock's boolean field did not bind the effective Ant properties. | Require `maven.test.skip=false`, `test.skip` absent, and both `maven.test.halt=true` and `test.halt=true`; preflight must reject any deviation. |
+| FMH-103 | High | `git-revision` runs as the `info` dependency and again before `dist`; branch/tag/revision/short-revision/commit-count metadata enters the Manifest. | Bind exact refs and resulting values or use a reviewed normalization patch; verify the final Manifest. |
+| FMH-104 | High | `compile` depends on `clean`, which recursively deletes `states/**` below `${basedir}`. | Require a disposable isolated checkout, canonical bounded base path and explicit symlink policy. |
+| FMH-105 | High | Source-test and packaged-JAR test targets use different include/exclude batches; one global exclusion digest is ambiguous. | Create separate selection manifests and report actual per-target JUnit counts. |
+
+The lock JSON now includes pinned source, test, test-model, license and properties tree/blob identities; the observed tree counts; the full target invocation sequence; required/absent test properties; separate test-selection digest placeholders; Git metadata placeholders; and a disposable-checkout policy. These additions improve traceability but do not close the findings: effective fixture selection, test reports, Git-ref values, cleanup behavior, dependency SHA-256 values and toolchain provenance remain unresolved.
+
+Static scan of the pinned `customBuild.xml` found no `import`, `include`, `subant`, external `exec`, `java` or `get` task. The local `antcall` chain remains explicitly represented. This is not a substitute for enforcing network denial in the future build environment.
+
+**Current disposition remains BLOCKED.** No build, test, download, JAR creation/execution, SANY/TLC run, or runtime modification is authorized or claimed.
+
+## 13. Audit reference
+
+- EGIS-FM-014: https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/blob/verification/egis-verification-gate-v1.1.1-2026-11-25/verification/formal/egis/EGIS-FM-014-ant-target-graph-and-input-closure-hostile-audit.md

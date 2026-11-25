@@ -1245,13 +1245,14 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 
 - Test commit: `42cecdbde075aede66dedd309adb8d3b3563f48d`.
 - The shared `completeModel()` helper now forwards `started.permit.attemptBoundaryReceipt` with its successful MODEL `appendOutcome`.
-- T06's direct successful MODEL outcome path now forwards the same exact permit receipt. It instruments the ledger call and asserts one append, matching attempt ID, byte-for-byte-equivalent receipt object, and `stage === MODEL`.
+- T06's direct successful MODEL outcome path now forwards the same exact permit receipt. It instruments the ledger call and asserts one append, matching attempt ID, deep-equal receipt object, and `stage === MODEL`.
 - T06's earlier negative `completeModelAttempt` call (`wrongAttempt`, null ledger receipt) remains unchanged and occurs before the instrumented successful append.
 - T52 continues to exercise the shared helper and therefore now checks the receipt propagation introduced here. No receipt fallback or synthesized capability was added.
 - **Status:** AUTHORED / NOT_EXECUTED. The reference adapter still does not issue `attemptBoundaryReceipt`; no RED/GREEN execution is claimed. T06/T52 and the full tranche remain NOT VERIFIED.
 - **Hostile review:** inspected the exact commit diff. It changes only the shared helper's successful outcome arguments and T06's successful outcome path/assertions. The negative wrong-attempt check is preserved. Remaining risks: T13 COMMENT, T44 MODEL recovery-lock, and T45 COMMENT recovery-lock successful outcomes still require exact receipt propagation; adapter receipt issuance/verification and durable recovery are still absent.
 - AR-41–AR-47 remain OPEN. Preserve T46/T47 stage-mismatch negatives, T48 missing-boundary negative, T49/T51 replay and mutation cases, and the original duplicate-publication concurrency RED.
 - No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.
+
 #### 2026-11-25 COMMENT receipt propagation — AR-48
 
 - Test commit: `50072e48704efc5b91380aaf929eb84aeef5f832`.

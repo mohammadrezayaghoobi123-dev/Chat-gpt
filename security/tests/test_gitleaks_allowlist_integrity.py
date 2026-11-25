@@ -365,7 +365,7 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                 self.assertTrue(errors)
 
     def test_validator_rejects_non_table_baseline_members_without_exception(self):
-        malformed_baseline = 'allowlists = ["not-a-table"]\\n'
+        malformed_baseline = 'allowlists = ["not-a-table"]\n'
         completed = subprocess.CompletedProcess(
             args=["git", "show", "origin/main:.gitleaks.toml"],
             returncode=0,

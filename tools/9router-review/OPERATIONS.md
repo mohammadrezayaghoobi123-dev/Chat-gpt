@@ -1229,3 +1229,14 @@ The current T01–T47 GREEN result remains valid only for the existing reference
 - **Hostile review conclusion:** do not implement receipt enforcement until every successful caller above is migrated in a test-first sequence and T28's semantics are preserved. Do not add a permissive fallback, synthesize a receipt in a test, or blanket-add receipts to negative tests.
 - **Status:** AR-45 IDENTIFIED / OPEN. This was a source-level inventory and documentation correction; no test was executed and no adapter code changed. T48–T52 remain OPEN / NOT VERIFIED. The original duplicate-publication concurrency RED remains a separate required blocker.
 - Scope remains the isolated verification branch. No changes to `main`, PR #463, reviewer activation, provider dispatch, secrets, Cloudflare resources/deployments, repository policy, or local host.
+
+
+#### 2026-11-25 T28 compatibility migration — AR-46
+
+- Test commit: `46197c7a68aaa2adb4542ae9e1de205ec60cff11`.
+- T28 no longer appends an outcome against a bare MODEL INTENT. It now obtains a real MODEL attempt through the shared `modelAttempt()` path, requires the permit's `attemptBoundaryReceipt`, and binds both the first OUTCOME and its identical retry to that same receipt and attempt ID.
+- The test retains the immutable-outcome contract: identical retry must return the original acknowledgement; changed evidence payload must return `INTEGRITY_CONFLICT`; the conflict must not advance event count or watermark.
+- This closes the T28 exception identified in AR-45 without adding a bypass or weakening the missing-boundary requirement. It also exposes the current adapter gap directly: `beginModelAttempt` does not yet return `attemptBoundaryReceipt`.
+- **Status:** AUTHORED / NOT_EXECUTED. The expected first failing assertion is the explicit receipt-presence assertion, based on source inspection. This is a predicted RED, not an observed test result. No adapter implementation was changed.
+- **Hostile review:** T28 now uses a reservation-authorized attempt instead of a standalone ledger-only intent; both idempotent and conflicting outcome calls use the exact same receipt; conflict immutability is checked against the ledger watermark; the test does not claim that a reference-oracle receipt is cryptographically secure. Remaining limitation: no local or hosted execution evidence was available in this step.
+- AR-41–AR-46 remain OPEN. The other successful call sites (T06, T13, T44, T45, and `completeModel()`) are not yet migrated. T48–T52 remain OPEN / NOT VERIFIED. Preserve all intentional negative/replay cases and the original duplicate-publication concurrency RED.

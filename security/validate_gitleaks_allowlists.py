@@ -88,7 +88,7 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
 
     for index, entry in enumerate(allowlists, start=1):
         prefix = f"allowlist {index}"
-        if not isinstance(entry.get("targetRules"), list) or not entry["targetRules"]:
+        if not isinstance(entry.get("targetRules"), list) or not entry["targetRules"] or any(not isinstance(rule, str) or not rule for rule in entry["targetRules"]):
             errors.append(f"{prefix}: targetRules must be non-empty")
         if entry.get("condition") != "AND":
             errors.append(f"{prefix}: condition must remain AND")
@@ -114,6 +114,8 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
             for pattern in regexes
         ):
             errors.append(f"{prefix}: regexes must be non-empty strings")
+        elif any(_invalid_regex(pattern) for pattern in regexes):
+            errors.append(f"{prefix}: regex pattern is invalid")
 
     matching_entries = [
         entry for entry in allowlists

@@ -191,7 +191,7 @@ test("T57.6: an already committed boundary is recovered, never terminally aborte
     const committed = await runWorker("seed-boundary", root);
     assert.equal(committed.result.status, "PERMIT");
     const recovery = await runWorker("recover", root, 0, "recovery-committed");
-    assert.equal(recovery.result.status, "BOUNDARY_COMMITTED");
+    assert.equal(recovery.result.status, "BOUNDARY_COMMITTED", JSON.stringify({ begin: begin.result, recovery: recovery.result }));
     assert.deepEqual(recovery.result.receipt, committed.result.receipt);
     assert.equal(recovery.snapshot.tombstones, 0);
     assert.equal(recovery.snapshot.permits, 1);

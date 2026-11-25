@@ -1,3 +1,10 @@
+/**
+ * TEST-ONLY conformance harness backed by two local SQLite files.
+ * This is not a production ReservationStore or EffectLedger and is not wired into runReview().
+ * Digests are integrity checks for this harness, not signatures or independent trust proofs.
+ * It does not provide machine/power-loss durability, cross-vendor failure isolation, or a
+ * production recovery authority. Keep production qualification explicitly separate.
+ */
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
@@ -110,7 +117,7 @@ export function openSqliteOrphanRecoveryHarness({ ledgerPath, reservationPath, n
       if (sha256(row.payload_json) !== row.payload_digest) return { status: "INTEGRITY_CONFLICT" };
       return { status: "ACK", event_id: row.event_id, sequence: row.sequence, operation_id: row.operation_id, payload_digest: row.payload_digest, payload: JSON.parse(row.payload_json) };
     },
-    appendOrphanIntentAborted(operationId, tombstoneAck, evidence) {
+    // TEST-ONLY: shared harness reads the other SQLite file to reject forged ACKs. Production must use an independently verifiable signed/attested receipt.\n    appendOrphanIntentAborted(operationId, tombstoneAck, evidence) {
       if (!tombstoneAck || tombstoneAck.status !== "ACK" || tombstoneAck.operation_id !== operationId) return { status: "TOMBSTONE_NOT_ACKNOWLEDGED" };
       const intent = this.readIntent(operationId);
       if (intent.status !== "ACK" || intent.event_id !== tombstoneAck.intent_event_id || intent.payload_digest !== tombstoneAck.intent_digest) return { status: "INTENT_BINDING_CONFLICT" };
@@ -166,7 +173,7 @@ export function openSqliteOrphanRecoveryHarness({ ledgerPath, reservationPath, n
       const evidence = { operation_id: operation.operation_id, identity_digest: sha256(operation), complete: true, counts, source: "sqlite-reservation-test-harness" };
       return { status: "DEFINITIVELY_NOT_COMMITTED", complete: true, evidence, digest: sha256(evidence) };
     },
-    acquireRecoveryFence({ operationId, expectedGeneration, owner }) {
+    // CAS fencing token model only; no lease expiry, ownership authentication, or recovery trust root is simulated.\n    acquireRecoveryFence({ operationId, expectedGeneration, owner }) {
       if (!Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0 || typeof owner !== "string" || !owner) return { status: "INVALID_FENCE_REQUEST" };
       return transaction(reservationDb, () => {
         const current = reservationDb.prepare("SELECT generation, owner FROM recovery_fences WHERE operation_id = ?").get(operationId);
@@ -213,7 +220,7 @@ export function openSqliteOrphanRecoveryHarness({ ledgerPath, reservationPath, n
       if (sha256(row.payload_json) !== row.payload_digest) return { status: "INTEGRITY_CONFLICT" };
       return { status: "ACK", operation_id: row.operation_id, tombstone_id: row.tombstone_id, payload_digest: row.payload_digest, fence_generation: row.fence_generation, intent_event_id: row.intent_event_id, intent_digest: row.intent_digest, payload: JSON.parse(row.payload_json) };
     },
-    beginAttempt(rawOperation) {
+    // Test-only fake permit gate. It records no provider call or external effect.\n    beginAttempt(rawOperation) {
       const operation = validateOperation(rawOperation);
       return transaction(reservationDb, () => {
         const tombstone = reservationDb.prepare("SELECT tombstone_id, identity_json FROM orphan_abort_tombstones WHERE operation_id = ?").get(operation.operation_id);

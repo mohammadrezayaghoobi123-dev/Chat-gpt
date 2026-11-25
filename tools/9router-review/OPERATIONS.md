@@ -1782,3 +1782,16 @@ Sources: [PostgREST transaction access modes and isolation](https://docs.postgre
 **AR-75.1 disposition:** global-lock drain semantics and a total-order R2 ledger sequencer are design gates, not implementation facts. Supabase RPC semantics are now specified as a candidate conformance requirement. No backend selected; no resources, credentials, deployment, code, or production workflow changed.
 
 
+
+
+## AR-76 — Provider-neutral global coordinator interface and hostile review — 2026-11-25
+
+**Scope:** documentation-only contract refinement on the isolated verification branch. The latest branch head before this record was `9ca8468b3edfec7e528410121236ea6f4a1e81d4`. No provider spike, implementation, test harness modification, or integration was authorized or performed.
+
+The design now requires a linearizing coordinator interface for admission, settlement, lock closure, permit consumption, stable freeze inventory, read-only recovery, and explicitly authorized recovery unlock. A global mode read followed by an independent shard write is rejected as a race. Stable `RECOVERY_LOCKED` must wait for pre-close admitted work to settle or remain explicit UNKNOWN and must include all already-consumed effect permits in its frozen inventory. Unconsumed permits are invalid after closure.
+
+**Hostile review:** the design intentionally accepts indefinite quarantine for ambiguous pre-close work; this is safety-over-liveness. It does not claim cancellation of a network request after permit consumption. The crash window between permit consumption and transport invocation remains UNKNOWN and is not retry-authorized. A single coordinator is still a possible throughput/availability bottleneck and must be evaluated against the global sequence and restore-anchor requirements. The API is provider-neutral and does not establish that Durable Objects, R2, Supabase, or a multi-service topology can satisfy all atomicity constraints.
+
+**Disposition:** AR-76 design record added; RS-32/RS-33 contract added but unimplemented/unqualified; RS-34 independent recovery authority remains GAP. Reviewer remains disabled, PR #463 remains isolated, and no main/production/cloud/secrets/local-host changes occurred.
+
+**Next gate:** translate this contract into deterministic test-first conformance cases and a provider-neutral interface skeleton only after design approval; no backend resource creation or reviewer integration.

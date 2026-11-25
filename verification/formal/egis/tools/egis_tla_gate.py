@@ -19,6 +19,8 @@ import tempfile
 from datetime import datetime, timezone
 from typing import Sequence
 
+from egis_tlc_output_validator import invariants_from_config, validate_tlc_output
+
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -181,11 +183,19 @@ def run_gate(root: Path, jar: Path, expected_sha256: str,
     ]
     tlc = run_command(tlc_cmd, root, timeout)
     evidence["checks"]["tlc"] = tlc
+    expected_invariants = invariants_from_config(config.read_text(encoding="utf-8"))
+    evidence["checks"]["tlc_output_validation"] = validate_tlc_output(
+        tlc.get("stdout", "") + "\n" + tlc.get("stderr", ""),
+        expected_invariants,
+        tlc.get("exit_code"),
+        timed_out=(tlc.get("exit_code") is None and tlc.get("status") == "FAIL"),
+    )
 
     statuses = [evidence["checks"]["source_identity"]["status"],
                 evidence["checks"]["tool_integrity"]["status"],
                 evidence["checks"]["sany"]["status"],
-                evidence["checks"]["tlc"]["status"]]
+                evidence["checks"]["tlc"]["status"],
+                evidence["checks"]["tlc_output_validation"]["status"]]
     evidence["overall"] = "PASS" if all(s == "PASS" for s in statuses) else (
         "BLOCKED" if "BLOCKED" in statuses else "FAIL"
     )

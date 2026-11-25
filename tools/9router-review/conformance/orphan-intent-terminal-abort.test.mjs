@@ -128,14 +128,31 @@ test("T57.4: a competing recovery process with a stale expected fence cannot mut
     assert.equal(after.tombstone.status, "NOT_FOUND");
     assert.equal(after.history.events.filter(event => event.event_type === "ORPHAN_INTENT_ABORTED").length, 0);
 
-    held.child.stdin.write("release\n");
+    const authorized = await runWorker("recover", root, 1, "recovery-current");
+    assert.equal(authorized.result.status, "ABORTED_ORPHAN");
+    assert.equal(authorized.result.tombstone.fence_generation, 2);
+    assert.equal(authorized.snapshot.tombstones, 1);
+
+    let staleOutput = "";
+    const staleAttempt = new Promise((resolve, reject) => {
+      held.child.stdout.setEncoding("utf8").on("data", chunk => {
+        staleOutput += chunk;
+        const lines = staleOutput.trim().split("\\n");
+        if (lines.length >= 2) resolve(JSON.parse(lines.at(-1)));
+      });
+      held.child.once("error", reject);
+    });
+    held.child.stdin.write("abort\\n");
+    const stale = await staleAttempt;
+    assert.equal(stale.abortResult.status, "STALE_FENCE");
+    assert.equal(stale.snapshot.tombstones, 1);
+
     const holderExit = await held.closed;
     assert.equal(holderExit.code, 0);
     held = null;
-
-    const authorized = await runWorker("recover", root, 1, "recovery-current");
-    assert.equal(authorized.result.status, "ABORTED_ORPHAN");
-    assert.equal(authorized.snapshot.tombstones, 1);
+    const final = await runWorker("inspect", root);
+    assert.equal(final.snapshot.tombstones, 1);
+    assert.equal(final.history.events.filter(event => event.event_type === "ORPHAN_INTENT_ABORTED").length, 1);
   } finally {
     if (held) { held.child.stdin.write("release\n"); await held.closed; }
     await rm(root, { recursive: true, force: true });
@@ -154,6 +171,64 @@ test("T57.5: an incomplete ReservationStore read quarantines the orphan without 
     assert.deepEqual(after.snapshot, before.snapshot);
     assert.equal(after.tombstone.status, "NOT_FOUND");
     assert.deepEqual(after.history.events, before.history.events);
+    
+    const ledgerIncomplete = await runWorker("recover-ledger-incomplete", root, 0, "recovery-ledger-incomplete");
+    assert.equal(ledgerIncomplete.result.status, "RECOVERY_QUARANTINED");
+    assert.equal(ledgerIncomplete.result.reason, "INCOMPLETE_LEDGER_READ");
+    const afterLedgerIncomplete = await runWorker("inspect", root);
+    assert.deepEqual(afterLedgerIncomplete.snapshot, before.snapshot);
+    assert.equal(afterLedgerIncomplete.tombstone.status, "NOT_FOUND");
+    assert.deepEqual(afterLedgerIncomplete.history.events, before.history.events);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("T57.6: an already committed boundary is recovered, never terminally aborted", async () => {
+  const root = await mkdtemp(join(tmpdir(), "9router-t57-boundary-committed-"));
+  try {
+    await seedIntent(root);
+    const committed = await runWorker("seed-boundary", root);
+    assert.equal(committed.result.status, "PERMIT");
+    const recovery = await runWorker("recover", root, 0, "recovery-committed");
+    assert.equal(recovery.result.status, "BOUNDARY_COMMITTED");
+    assert.deepEqual(recovery.result.receipt, committed.result.receipt);
+    assert.equal(recovery.snapshot.tombstones, 0);
+    assert.equal(recovery.snapshot.permits, 1);
+    assert.equal(recovery.snapshot.boundaries, 1);
+    assert.equal(recovery.history.events.filter(event => event.event_type === "ORPHAN_INTENT_ABORTED").length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("T57.7: the final tombstone and ledger disposition remain singular after a second independent reopen", async () => {
+  const root = await mkdtemp(join(tmpdir(), "9router-t57-final-reopen-"));
+  try {
+    await seedIntent(root);
+    const committed = await runWorker("recover", root, 0, "recovery-first");
+    assert.equal(committed.result.status, "ABORTED_ORPHAN");
+    const initialEvent = committed.result.terminal_event;
+    const initialWatermark = committed.result.ledger_watermark;
+
+    const reopened = await runWorker("inspect", root);
+    assert.equal(reopened.tombstone.status, "ACK");
+    assert.equal(reopened.history.events.filter(event => event.event_type === "INTENT").length, 1);
+    const terminalEvents = reopened.history.events.filter(event => event.event_type === "ORPHAN_INTENT_ABORTED");
+    assert.equal(terminalEvents.length, 1);
+    assert.equal(terminalEvents[0].event_id, initialEvent.event_id);
+    assert.equal(terminalEvents[0].payload_digest, initialEvent.payload_digest);
+    assert.equal(reopened.history.watermark, initialWatermark);
+    assert.equal(reopened.snapshot.tombstones, 1);
+    assert.equal(reopened.snapshot.permits, 0);
+    assert.equal(reopened.snapshot.boundaries, 0);
+
+    const repeated = await runWorker("recover", root, 1, "recovery-after-reopen");
+    assert.equal(repeated.result.status, "ABORTED_ORPHAN");
+    assert.equal(repeated.result.terminal_event.event_id, initialEvent.event_id);
+    assert.equal(repeated.result.ledger_watermark, initialWatermark);
+    assert.equal(repeated.snapshot.tombstones, 1);
+    assert.equal(repeated.snapshot.reservation_events, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

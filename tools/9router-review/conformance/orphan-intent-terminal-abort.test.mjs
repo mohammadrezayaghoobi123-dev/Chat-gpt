@@ -325,3 +325,52 @@ test("T57.9: forged tombstone acknowledgements and same-ID tuple or payload conf
     await rm(root, { recursive: true, force: true });
   }
 });
+
+
+test("T57.10: beginAttempt cannot issue a permit before a matching durable Ledger INTENT acknowledgement", async () => {
+  const root = await mkdtemp(join(tmpdir(), "9router-t57-no-intent-"));
+  const stores = openSqliteOrphanRecoveryHarness({
+    ledgerPath: join(root, "effect-ledger.sqlite"),
+    reservationPath: join(root, "reservation-store.sqlite"),
+  });
+  try {
+    const result = stores.reservations.beginAttempt(operation);
+    assert.equal(result.status, "LEDGER_NOT_ACKNOWLEDGED");
+    const snapshot = stores.reservations.snapshot(operation.operation_id);
+    assert.equal(snapshot.boundaries, 0);
+    assert.equal(snapshot.permits, 0);
+    assert.equal(snapshot.tombstones, 0);
+  } finally {
+    stores.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("T57.11: beginAttempt is fenced while a recovery worker holds the current recovery generation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "9router-t57-recovery-fence-blocks-begin-"));
+  const stores = openSqliteOrphanRecoveryHarness({
+    ledgerPath: join(root, "effect-ledger.sqlite"),
+    reservationPath: join(root, "reservation-store.sqlite"),
+  });
+  try {
+    assert.equal(stores.ledger.appendIntent(operation).status, "ACK");
+    const fence = stores.reservations.acquireRecoveryFence({
+      operationId: operation.operation_id,
+      expectedGeneration: 0,
+      owner: "active-recovery-worker",
+    });
+    assert.equal(fence.status, "ACK");
+    assert.equal(fence.generation, 1);
+
+    const result = stores.reservations.beginAttempt(operation);
+    assert.equal(result.status, "RECOVERY_FENCED");
+    const snapshot = stores.reservations.snapshot(operation.operation_id);
+    assert.equal(snapshot.boundaries, 0);
+    assert.equal(snapshot.permits, 0);
+    assert.equal(snapshot.tombstones, 0);
+    assert.equal(snapshot.fence_generation, 1);
+  } finally {
+    stores.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -404,7 +404,9 @@ def write_toml_config(config: dict, destination: pathlib.Path) -> None:
     destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-\ndef main() -> int:
+
+
+def main() -> int:
     parser = argparse.ArgumentParser(description="Validate pinned Gitleaks allowlist integrity.")
     parser.add_argument("--config", default=".gitleaks.toml")
     parser.add_argument("--report", default=None, help="Optional redacted Gitleaks JSON report for predicate diagnostics.")

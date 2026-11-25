@@ -187,6 +187,39 @@ class GateTests(unittest.TestCase):
         self.assertEqual("REAPED", result["process_cleanup"])
         json.dumps(result)
 
+    def test_real_child_process_captures_stdout_and_stderr(self):
+        import sys
+
+        result = run_command(
+            [sys.executable, "-c",
+             "import sys; sys.stdout.write('child-out'); sys.stderr.write('child-err')"],
+            self.root,
+            5,
+        )
+        self.assertEqual("PASS", result["status"])
+        self.assertEqual("child-out", result["stdout"])
+        self.assertEqual("child-err", result["stderr"])
+        self.assertTrue(result["process_started"])
+        self.assertEqual("EXIT_ZERO", result["process_outcome"])
+        self.assertEqual("REAPED", result["process_cleanup"])
+
+    def test_real_timeout_kills_and_reaps_child_process(self):
+        import sys
+        import time
+
+        started = time.monotonic()
+        result = run_command(
+            [sys.executable, "-c", "import time; time.sleep(20)"],
+            self.root,
+            0.1,
+        )
+        elapsed = time.monotonic() - started
+        self.assertEqual("FAIL", result["status"])
+        self.assertEqual("process_timed_out", result["reason"])
+        self.assertEqual("TIMED_OUT", result["process_outcome"])
+        self.assertEqual("REAPED", result["process_cleanup"])
+        self.assertLess(elapsed, 5.0)
+
     def test_process_control_and_programming_exceptions_are_not_swallowed(self):
         for exception in (KeyboardInterrupt(), SystemExit(9), RuntimeError("bug")):
             with self.subTest(exception=type(exception).__name__):

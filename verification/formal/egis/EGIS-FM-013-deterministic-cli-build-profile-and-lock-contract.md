@@ -224,7 +224,7 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
       "source_test_selection_sha256": "8d28a2a1a759b6ba06c9dafadc9cbe06f45db32216dadeac42a6ad7ec45ed7a8",
       "packaged_jar_test_selection_sha256": "023647bc904ff7c20af1fd85a02a4b5c96b2c1f5dd1f090968fb86036bebf46c",
       "manifest_path": "verification/formal/egis/EGIS-FM-015-junit-static-selection-manifests.json",
-      "manifest_file_sha256": "702154f5a83cfb50132d7db36ba295eeb9c708b71bf93eb5751aced6b5ca01c0",
+      "manifest_file_sha256": "9483602d77a05589c6ae8263d8f1b293e7f5a11f8b84ba6e11334dc15bf9c39d",
       "source_test_batch_count": 8,
       "packaged_jar_test_batch_count": 7,
       "source_test_selected_file_count": 411,
@@ -233,7 +233,11 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
       "ant_skip_non_tests": false,
       "actual_discovered_test_classes": null,
       "actual_test_methods": null,
-      "actual_test_results": "NOT_RUN"
+      "actual_test_results": "NOT_RUN",
+      "source_report_root": "target/surefire-reports/",
+      "packaged_jar_report_root": "target/surefire-reports/onJar/",
+      "shared_report_root_collision_count": 2,
+      "report_root_isolation": "NOT_IMPLEMENTED"
     },
     "git_metadata": {
       "revision_task_invocations": 2,
@@ -243,6 +247,17 @@ The following is a **schema example**, not a populated or approved lock. Any `nu
       "revision": null,
       "short_revision": null,
       "commit_count": null
+    },
+    "junit_report_isolation": {
+      "source_test_report_root": "target/surefire-reports/",
+      "packaged_jar_primary_report_root": "target/surefire-reports/onJar/",
+      "packaged_jar_special_batches_report_root": "target/surefire-reports/",
+      "known_colliding_test_classes": [
+        "tlc2.tool.UserModuleOverrideAnnotationTest",
+        "tlc2.tool.UserModuleOverrideFromJarTest"
+      ],
+      "required_policy": "DISTINCT_IMMUTABLE_REPORT_ROOTS",
+      "actual_overwrite": "NOT_RUN"
     },
     "junit_discovery": {
       "skip_non_tests": false,
@@ -432,6 +447,7 @@ No override may convert missing evidence to PASS. The only permissible states ar
 | Static packaged-JAR test file selection | OBSERVED; 411 unique paths in 7 batches; digest pinned in FM-015 |
 | Equality of source/JAR selected path sets | OBSERVED; symmetric difference = 0 |
 | JUnit class/method discovery and execution | NOT_RUN; `skipNonTests` semantics must be pinned |
+| JUnit source/JAR report output isolation | FAIL; two static XML output-path collisions identified (FMH-108) |
 | Git ref/tag metadata reproducibility | NOT_ESTABLISHED |
 | Target cleanup isolation | NOT_RUN; disposable checkout required |
 | Extended target dependencies (JPF/JMH) | OUT_OF_SCOPE; separate lock extension required |
@@ -478,6 +494,7 @@ The following findings are open:
 | FMH-105 | High | Source-test and packaged-JAR test targets use different include/exclude batches; one global exclusion digest is ambiguous. | Create separate selection manifests and report actual per-target JUnit counts. |
 | FMH-106 | High | Selected JUnit tasks fork child JVMs, but the lock does not bind the effective Java executable, arguments and inherited environment. | Pin and verify the forked JVM process boundary and environment allowlist. |
 | FMH-107 | Medium | The pinned JUnit tasks do not set `skipNonTests`; Ant documents its default as `false`, so the selected file count cannot be treated as a discovered-test count. | Pin the effective Ant version and `skipNonTests=false` behavior; report actual discovered classes/methods from JUnit evidence. |
+| FMH-108 | High | Two packaged-JAR test batches write XML reports into the same `target/surefire-reports/` directory used by the source-test target; the default `TEST-<class>.xml` names collide for two identical test classes. | Separate source-test and packaged-JAR report roots, bind report file identities, and reject overlapping output paths before execution. |
 
 The lock JSON now includes pinned source, test, test-model, license and properties tree/blob identities; the observed tree counts; the full target invocation sequence; required/absent test properties; separate test-selection digest placeholders; Git metadata placeholders; and a disposable-checkout policy. These additions improve traceability but do not close the findings: effective fixture selection, test reports, Git-ref values, forked JVM identity/environment, cleanup behavior, dependency SHA-256 values and toolchain provenance remain unresolved.
 
@@ -508,8 +525,10 @@ The two targets select the **same 411 unique source paths** (symmetric differenc
 
 - Source-test selection digest: `8d28a2a1a759b6ba06c9dafadc9cbe06f45db32216dadeac42a6ad7ec45ed7a8`
 - Packaged-JAR selection digest: `023647bc904ff7c20af1fd85a02a4b5c96b2c1f5dd1f090968fb86036bebf46c`
-- Manifest file SHA-256: `702154f5a83cfb50132d7db36ba295eeb9c708b71bf93eb5751aced6b5ca01c0`
+- Manifest file SHA-256: `9483602d77a05589c6ae8263d8f1b293e7f5a11f8b84ba6e11334dc15bf9c39d`
 
 These are **static source-file selection counts**, not JUnit-discovered classes, methods, executions or passes. The upstream build does not explicitly set JUnit `skipNonTests`; Apache Ant documents the default as false. FMH-107 therefore remains open until the exact Ant runtime semantics are pinned and actual JUnit reports are independently inspected.
+
+A further hostile check found that the source-test target writes all reports to `target/surefire-reports/`, while two packaged-JAR batches also write to that same directory. The default XML report name is based on the test class name, so the two outputs collide for `tlc2.tool.UserModuleOverrideAnnotationTest` and `tlc2.tool.UserModuleOverrideFromJarTest`. FMH-108 is High severity. The manifest records both exact colliding paths. No overwrite was executed; report-root isolation is mandatory before any future test run.
 
 Static selection evidence mitigates the ambiguity in FMH-105, but it does not close the execution-evidence portion of that finding. The lock remains `INCOMPLETE_BLOCKED`.

@@ -227,6 +227,51 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
         self.assertIn(f"DIAGNOSTIC: {description}: finding=absent", result.stdout)
 
 
+
+    def test_historical_false_positive_exceptions_are_atomic_and_line_exact(self):
+        specs = [
+            ("Historical Owner command idempotency fixture line 397 (167b6764).", "167b676479f855a92d63b2aca575b8798128c143", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 397),
+            ("Historical Owner command idempotency fixture line 516 (a5f3a65d).", "a5f3a65dbe8e41d09c5d23131beca4eb73342fb2", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 516),
+            ("Historical Owner command idempotency fixture line 516 (93214555).", "93214555f5aa752a670c1c7c9a6d5f7b58f41cdf", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 516),
+            ("Historical Owner command idempotency fixture line 397 (5a750037).", "5a750037bc1bec098184b7890f66b407582b94d8", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 397),
+            ("Historical Owner command idempotency fixture line 516 (5a750037).", "5a750037bc1bec098184b7890f66b407582b94d8", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 516),
+            ("Historical Owner command idempotency fixture line 516 (b12a3e06).", "b12a3e068c8cba44039cf478f174814fc1d8f6b5", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 516),
+            ("Historical Router rotation test fixture line 1805 (ab525a63).", "ab525a63948822e195cc74f63c3a6b4340f705db", "tools/9router-review/review.test.mjs", 1805),
+            ("Public ICU signing metadata line 32 (3082b80f).", "3082b80fbaf71685827ba63de882c3d93083b96f", "docs/MASTER_BRAIN_GATE2P_R1U17_ICU79_SIGNING_IDENTITY_CANDIDATE_RECONCILIATION_2026-11-16.md", 32),
+            ("Public ICU signing metadata line 70 (3082b80f).", "3082b80fbaf71685827ba63de882c3d93083b96f", "docs/MASTER_BRAIN_GATE2P_R1U17_ICU79_SIGNING_IDENTITY_CANDIDATE_RECONCILIATION_2026-11-16.md", 70),
+            ("Historical Owner command idempotency fixture line 1904 (0222e99d).", "0222e99d941ded0910ae4252f66b9dfb1dd39025", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 1904),
+            ("Historical Owner command idempotency fixture line 1260 (75ca4409).", "75ca4409487e887279b45b66563c346015ce2342", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 1260),
+            ("Synthetic API_KEY placeholder comment line 1402 (04d76f8f).", "04d76f8fd734eaf4053c86461e1204caf18d9c9c", "cloud-engineering-connector/cloudflare-test/orchestrator-owner-command.test.js", 1402),
+            ("Computed scheduler idempotency identifier line 277 (2729a325).", "2729a325991c989cbab182967135aa76f864ac29", "cloud-engineering-connector/worker.js", 277),
+        ]
+        entries = {entry.get("description"): entry for entry in self.config.get("allowlists", [])}
+        self.assertEqual(len(self.config.get("allowlists", [])), 30)
+        self.assertEqual(len(specs), len({description for description, *_ in specs}))
+        for description, commit, path, line_number in specs:
+            with self.subTest(description=description):
+                entry = entries.get(description)
+                self.assertIsNotNone(entry)
+                self.assertEqual(entry.get("targetRules"), ["generic-api-key"])
+                self.assertEqual(entry.get("condition"), "AND")
+                self.assertEqual(entry.get("commits"), [commit])
+                self.assertEqual(entry.get("paths"), [f"^{path.replace('.', r'\\.')}$"])
+                self.assertEqual(entry.get("regexTarget"), "line")
+                regexes = entry.get("regexes", [])
+                self.assertEqual(len(regexes), 1)
+                pattern = re.compile(regexes[0])
+                source = subprocess.run(
+                    ["git", "show", f"{commit}:{path}"],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.splitlines()
+                line = source[line_number - 1]
+                self.assertTrue(pattern.fullmatch(line), description)
+                self.assertTrue(pattern.fullmatch("\\n" + line), description)
+                self.assertIsNone(pattern.fullmatch(line + "x"), description)
+
+
     def test_validator_rejects_non_literal_line_pattern(self):
         changed = copy.deepcopy(self.config)
         target = next(

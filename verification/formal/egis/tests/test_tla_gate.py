@@ -349,6 +349,24 @@ class GateTests(unittest.TestCase):
         finally:
             shutil.rmtree(external_dir)
 
+    def test_b1a_non_directory_repository_root_blocks_before_commands(self):
+        file_root = self.root / "not-a-directory"
+        file_root.write_text("not a directory", encoding="utf-8")
+        result, git_mock, command_mock = self._run_gate_with_preflight_mocks(root=file_root)
+        self.assertEqual("BLOCKED", result["overall"])
+        self.assertEqual("BLOCKED", result["checks"]["inputs"]["status"])
+        self.assertEqual("repository_root_unavailable", result["checks"]["inputs"]["reason"])
+        git_mock.assert_not_called()
+        command_mock.assert_not_called()
+
+    def test_b1a_missing_repository_root_blocks_before_commands(self):
+        missing_root = self.root / "missing-root"
+        result, git_mock, command_mock = self._run_gate_with_preflight_mocks(root=missing_root)
+        self.assertEqual("BLOCKED", result["overall"])
+        self.assertEqual("repository_root_unavailable", result["checks"]["inputs"]["reason"])
+        git_mock.assert_not_called()
+        command_mock.assert_not_called()
+
     def test_b1a_missing_config_is_classified_as_input_missing(self):
         missing = self.root / "missing.cfg"
         result, git_mock, command_mock = self._run_gate_with_preflight_mocks(config=missing)

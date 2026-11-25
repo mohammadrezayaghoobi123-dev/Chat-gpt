@@ -6,16 +6,16 @@ import re
 from typing import Sequence
 
 
-_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\\Z")
-_SUMMARY = re.compile(r"Model checking completed\\. No error has been found\\.", re.IGNORECASE)
-_INVARIANT_CHECK = re.compile(r"Checking\\s+(\\d+)\\s+invariants?\\.\\.\\.", re.IGNORECASE)
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_SUMMARY = re.compile(r"Model checking completed\. No error has been found\.", re.IGNORECASE)
+_INVARIANT_CHECK = re.compile(r"Checking\s+(\d+)\s+invariants?\.\.\.", re.IGNORECASE)
 _STATE_COUNTS = re.compile(
-    r"(\\d+)\\s+states generated,\\s*(\\d+)\\s+distinct states found,\\s*"
-    r"(\\d+)\\s+states left on queue\\.",
+    r"(\d+)\s+states generated,\s*(\d+)\s+distinct states found,\s*"
+    r"(\d+)\s+states left on queue\.",
     re.IGNORECASE,
 )
 _ERROR = re.compile(
-    r"(^|\\n)\\s*(?:Error:|Invariant\\s+.+?\\s+is violated\\.|"
+    r"(^|\n)\s*(?:Error:|Invariant\s+.+?\s+is violated\.|"
     r"Deadlock reached|The behavior up to this point is)",
     re.IGNORECASE,
 )
@@ -27,7 +27,7 @@ def invariants_from_config(config_text: str) -> list[str]:
         return []
     names: list[str] = []
     for line in config_text.splitlines():
-        match = re.match(r"^\\s*INVARIANT\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*$", line)
+        match = re.match(r"^\s*INVARIANT\s+([A-Za-z_][A-Za-z0-9_]*)\s*$", line)
         if match:
             names.append(match.group(1))
     return names

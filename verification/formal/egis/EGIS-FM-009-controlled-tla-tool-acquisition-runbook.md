@@ -78,6 +78,8 @@ if ($actualSha256 -ne $expectedSha256) { throw 'Downloaded artifact SHA-256 mism
 # Re-fetch publisher metadata after download to detect release/asset mutation during acquisition.
 $releaseAfter = Invoke-RestMethod -Uri $releaseUri -Headers $headers
 $assetAfter = Invoke-RestMethod -Uri $assetUri -Headers $headers
+$tagRefAfter = Invoke-RestMethod -Uri 'https://api.github.com/repos/tlaplus/tlaplus/git/ref/tags/v1.8.0' -Headers $headers
+if ($tagRefAfter.object.sha -ne $tagRef.object.sha -or $tagRefAfter.object.type -ne $tagRef.object.type) { throw 'Post-download tag reference changed' }
 if ($releaseAfter.id -ne $releaseId -or $releaseAfter.tag_name -ne $expectedTag) { throw 'Post-download release identity changed' }
 if ($releaseAfter.prerelease -ne $true -or $releaseAfter.immutable -ne $false) { throw 'Post-download release classification changed' }
 if ($assetAfter.id -ne $assetId -or $assetAfter.name -ne $expectedName) { throw 'Post-download asset identity changed' }

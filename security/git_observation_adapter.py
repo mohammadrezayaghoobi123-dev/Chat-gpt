@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 from typing import Any
 
 from merge_coverage_inventory import build_merge_coverage_inventory
@@ -28,6 +29,7 @@ _CRITICAL_DIAGNOSTICS = {
     "commit_enumeration_failed",
     "commit_enumeration_timed_out",
     "commit_limit_exceeded",
+    "commit_output_limit_exceeded",
     "invalid_commit_record",
     "parent_object_missing",
 }
@@ -92,7 +94,7 @@ def _snapshot_refs(
         timeout_seconds=timeout_seconds,
     )
     refs: dict[str, str] = {}
-    for line in result.stdout.splitlines():
+    for line in output.splitlines():
         if not line:
             continue
         fields = line.split("\\x00")
@@ -135,19 +137,37 @@ def _read_commit_graph(
     *,
     timeout_seconds: float,
     max_commits: int,
+    max_output_bytes: int,
     diagnostics: set[str],
 ) -> dict[str, list[str]]:
     if not commit_tips:
         diagnostics.add("unsupported_ref_target")
         return {}
 
-    result = _run_git(
-        repository,
-        ["rev-list", "--parents", "--stdin"],
-        timeout_seconds=timeout_seconds,
-        input_text="".join(f"{oid}\n" for oid in sorted(set(commit_tips.values()))),
-        check=False,
-    )
+    try:
+        with tempfile.TemporaryFile(mode="w+b") as stdout_file:
+            result = subprocess.run(
+                ["git", "-C", str(repository), "rev-list", "--parents", "--stdin"],
+                input="".join(f"{oid}\\n" for oid in sorted(set(commit_tips.values()))).encode("ascii"),
+                stdout=stdout_file,
+                stderr=subprocess.PIPE,
+                env=_git_env(),
+                timeout=timeout_seconds,
+                check=False,
+            )
+            output_size = stdout_file.tell()
+            if output_size > max_output_bytes:
+                diagnostics.add("commit_output_limit_exceeded")
+                return {}
+            stdout_file.seek(0)
+            output = stdout_file.read().decode("ascii", errors="strict")
+    except subprocess.TimeoutExpired:
+        diagnostics.add("commit_enumeration_timed_out")
+        return {}
+    except (OSError, UnicodeError):
+        diagnostics.add("commit_enumeration_failed")
+        return {}
+
     if result.returncode != 0:
         diagnostics.add("commit_enumeration_failed")
 
@@ -177,6 +197,7 @@ def observe_repository(
     *,
     timeout_seconds: float = 20.0,
     max_commits: int = 100_000,
+    max_output_bytes: int = 64 * 1024 * 1024,
 ) -> dict[str, Any]:
     """Observe every commit reachable from the repository's non-replace refs.
 
@@ -189,6 +210,8 @@ def observe_repository(
         raise ValueError("timeout_seconds must be a positive number")
     if isinstance(max_commits, bool) or not isinstance(max_commits, int) or max_commits < 1:
         raise ValueError("max_commits must be a positive integer")
+    if isinstance(max_output_bytes, bool) or not isinstance(max_output_bytes, int) or max_output_bytes < 1:
+        raise ValueError("max_output_bytes must be a positive integer")
 
     repository = Path(repository_path).resolve()
     if not repository.is_dir():
@@ -251,7 +274,7 @@ def observe_repository(
     commits = _read_commit_graph(
         repository, refs_before,
         timeout_seconds=timeout_seconds, max_commits=max_commits,
-        diagnostics=diagnostics,
+        max_output_bytes=max_output_bytes, diagnostics=diagnostics,
     )
 
     raw_refs_after = _snapshot_refs(repository, timeout_seconds=timeout_seconds)
@@ -274,6 +297,7 @@ def observe_repository(
             "commit_enumeration_failed",
             "commit_enumeration_timed_out",
             "commit_limit_exceeded",
+            "commit_output_limit_exceeded",
             "invalid_commit_record",
             "parent_object_missing",
             "shallow_repository",

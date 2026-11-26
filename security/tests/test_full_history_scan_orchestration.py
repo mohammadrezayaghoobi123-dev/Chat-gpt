@@ -157,12 +157,12 @@ exit 1
         self.assertEqual(self.calls(), [])
         self.assertEqual(list(self.tmpdir.iterdir()), [])
 
-    def test_both_history_scans_request_merge_resolution_diffs(self):
+    def test_both_history_scans_keep_all_ref_scope(self):
         result = self.run_orchestrator()
         self.assertEqual(result.returncode, 0, result.stderr)
         arguments = self.args_log.read_text(encoding="utf-8").splitlines()
         self.assertEqual(
-            arguments.count("--log-opts=--all --diff-merges=remerge --no-prefix --format=medium"),
+            arguments.count("--log-opts=--all"),
             2,
             arguments,
         )

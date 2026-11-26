@@ -66,7 +66,7 @@ run_gitleaks() {
 }
 
 if run_gitleaks git --config .gitleaks.toml --redact --exit-code 2 \
-  --report-format json --report-path "$full_report" --log-opts="--all --diff-merges=first-parent" .; then
+  --report-format json --report-path "$full_report" --log-opts=--all .; then
   scan_status=0
 else
   scan_status=$?
@@ -86,7 +86,7 @@ fi
 "$PYTHON_BIN" "$VALIDATOR_SCRIPT" --necessity-config "$necessity_config"
 
 if run_gitleaks git --config "$necessity_config" --redact --exit-code 2 \
-  --report-format json --report-path "$necessity_report" --log-opts="--all --diff-merges=first-parent" .; then
+  --report-format json --report-path "$necessity_report" --log-opts=--all .; then
   necessity_scan_status=0
 else
   necessity_scan_status=$?

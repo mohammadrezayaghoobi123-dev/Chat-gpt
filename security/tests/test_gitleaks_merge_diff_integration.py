@@ -108,6 +108,26 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
             self.assertEqual(findings[0]["Commit"], merge_commit)
             self.assertEqual(findings[0]["File"], "conflict.txt")
 
+            # A per-merge first-parent invocation may preserve the merge SHA
+            # while limiting the scan to one merge commit. This is only a
+            # feasibility characterization; production integration is separate.
+            scoped_report = root / "scoped-first-parent.json"
+            scoped = run(
+                [
+                    GITLEAKS_BIN, "git", "--config", str(config), "--redact",
+                    "--exit-code", "2", "--report-format", "json",
+                    "--report-path", str(scoped_report),
+                    f"--log-opts={merge_commit}^! --diff-merges=first-parent",
+                    str(repo),
+                ],
+                expected=2,
+            )
+            scoped_findings = json.loads(scoped_report.read_text(encoding="utf-8"))
+            self.assertEqual(len(scoped_findings), 1, scoped.stdout + scoped.stderr)
+            self.assertEqual(scoped_findings[0]["RuleID"], "synthetic-merge-only")
+            self.assertEqual(scoped_findings[0]["Commit"], merge_commit)
+            self.assertEqual(scoped_findings[0]["File"], "conflict.txt")
+
             combined_report = root / "combined.json"
             combined = run(
                 [

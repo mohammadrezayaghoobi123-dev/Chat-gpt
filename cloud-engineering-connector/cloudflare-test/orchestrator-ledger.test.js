@@ -1023,7 +1023,7 @@ it("characterizes Agent claim after a forward caller-clock jump against a stable
       ).one().count).toBe(1);
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?", "task-0001",
-      ).one().count).toBe(1;
+      ).one().count).toBe(1);
     });
   } finally {
     stableLedgerWallClock.mockRestore();

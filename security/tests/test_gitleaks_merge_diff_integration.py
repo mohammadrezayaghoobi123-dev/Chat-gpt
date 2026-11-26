@@ -191,7 +191,7 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
             adapted_config = root / "remerge-adapted-allowlist.toml"
             adapted_config.write_text(
                 allowlist_config.read_text(encoding="utf-8").replace(
-                    f'commits = ["{merge_commit}"]\\n', ""
+                    f'commits = ["{merge_commit}"]\n', ""
                 ),
                 encoding="utf-8",
             )

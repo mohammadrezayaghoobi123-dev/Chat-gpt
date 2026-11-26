@@ -127,6 +127,14 @@ class MergeCoverageInventoryTests(unittest.TestCase):
             "incomplete_snapshot",
         )
 
+    def test_new_ref_tip_missing_after_snapshot_change_is_detected(self):
+        changed = self.refs() | {"refs/heads/new": "8" * 40}
+        inventory = self.build(refs_after=changed)
+
+        self.assertEqual(inventory["snapshot_status"], "incomplete")
+        self.assertIn("ref_snapshot_changed", inventory["reasons"])
+        self.assertIn("ref_tip_missing", inventory["reasons"])
+
     def test_ref_tip_missing_from_reachable_inventory_fails_closed(self):
         graph = self.complete_graph()
         del graph[D]

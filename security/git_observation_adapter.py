@@ -145,7 +145,7 @@ def _read_commit_graph(
         repository,
         ["rev-list", "--parents", "--stdin"],
         timeout_seconds=timeout_seconds,
-        input_text="".join(f"{oid}\\n" for oid in sorted(set(commit_tips.values()))),
+        input_text="".join(f"{oid}\n" for oid in sorted(set(commit_tips.values()))),
         check=False,
     )
     if result.returncode != 0:

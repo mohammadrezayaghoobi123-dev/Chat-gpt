@@ -98,6 +98,40 @@ def build_merge_coverage_inventory(
     if any(parent not in commits for parents in commits.values() for parent in parents):
         reasons.append("parent_object_missing")
 
+    # The supplied inventory must equal the transitive parent closure of all
+    # snapshotted ref tips. This rejects unrelated objects and incomplete walks.
+    reachable_from_refs: set[str] = set()
+    pending = list(before.values())
+    while pending:
+        oid = pending.pop()
+        if oid in reachable_from_refs or oid not in commits:
+            continue
+        reachable_from_refs.add(oid)
+        pending.extend(commits[oid])
+    if reachable_from_refs != set(commits):
+        reasons.append("reachable_commit_inventory_mismatch")
+
+    # Commit history must be a DAG. Kahn's algorithm avoids recursion limits
+    # on long histories and ignores missing parent edges already reported above.
+    children: dict[str, list[str]] = {sha: [] for sha in commits}
+    indegree: dict[str, int] = {}
+    for sha, parents in commits.items():
+        existing_parents = [parent for parent in parents if parent in commits]
+        indegree[sha] = len(existing_parents)
+        for parent in existing_parents:
+            children[parent].append(sha)
+    ready = [sha for sha, count in indegree.items() if count == 0]
+    visited_count = 0
+    while ready:
+        parent = ready.pop()
+        visited_count += 1
+        for child in children[parent]:
+            indegree[child] -= 1
+            if indegree[child] == 0:
+                ready.append(child)
+    if visited_count != len(commits):
+        reasons.append("commit_graph_cycle")
+
     snapshot_complete = not reasons
     merges: list[dict[str, Any]] = []
     for sha, parents in sorted(commits.items()):

@@ -117,7 +117,7 @@ def _commit_targets(
             continue
         peeled = _run_git(
             repository,
-            ["rev-parse", "--verify", f"{name}^{{commit}}"],
+            ["rev-parse", "--verify", f"{raw_refs[name]}^{{commit}}"],
             timeout_seconds=timeout_seconds,
             check=False,
         )

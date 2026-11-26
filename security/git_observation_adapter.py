@@ -16,7 +16,7 @@ from typing import Any
 from merge_coverage_inventory import build_merge_coverage_inventory
 
 
-_OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\\Z")
+_OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _CRITICAL_DIAGNOSTICS = {
     "shallow_repository",
     "replace_refs_present",
@@ -102,7 +102,7 @@ def _snapshot_refs(
     for line in result.stdout.splitlines():
         if not line:
             continue
-        fields = line.split("\\x00")
+        fields = line.split("\x00")
         if len(fields) != 2 or not fields[0] or not _OBJECT_ID.fullmatch(fields[1]):
             raise GitObservationError("Git returned a malformed ref record")
         if fields[0] in refs:

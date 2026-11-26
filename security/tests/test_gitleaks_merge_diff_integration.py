@@ -437,7 +437,7 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
             run(["git", "merge", "--no-ff", *branch_names, "-m", "octopus merge"], cwd=repo)
             merge_commit = run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
             parents = run(["git", "rev-list", "--parents", "-n", "1", merge_commit], cwd=repo).stdout.split()
-            self.assertEqual(len(parents), 4, "fixture must create a three-parent octopus merge")
+            self.assertEqual(len(parents), 5, "fixture must create a four-parent octopus merge")
 
             merged_tree = run(["git", "show", f"{merge_commit}:side-c.txt"], cwd=repo).stdout
             self.assertIn(marker, merged_tree)

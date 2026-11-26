@@ -32,6 +32,9 @@ _CRITICAL_DIAGNOSTICS = {
     "commit_output_limit_exceeded",
     "invalid_commit_record",
     "parent_object_missing",
+    "object_database_integrity_failed",
+    "object_database_integrity_timed_out",
+    "object_database_integrity_output_limit_exceeded",
 }
 
 
@@ -134,6 +137,53 @@ def _commit_targets(
             continue
         targets[name] = oid
     return targets
+
+
+
+def _verify_object_database(
+    repository: Path,
+    raw_refs: dict[str, str],
+    *,
+    timeout_seconds: float,
+    max_output_bytes: int,
+    diagnostics: set[str],
+) -> None:
+    """Run read-only strict fsck against the exact captured ref object IDs."""
+    object_ids = sorted(set(raw_refs.values()))
+    if not object_ids:
+        diagnostics.add("object_database_integrity_failed")
+        return
+
+    try:
+        with (
+            tempfile.TemporaryFile(mode="w+b") as stdout_file,
+            tempfile.TemporaryFile(mode="w+b") as stderr_file,
+        ):
+            result = subprocess.run(
+                [
+                    "git", "-C", str(repository),
+                    "fsck", "--full", "--strict", "--no-reflogs",
+                    "--no-dangling", "--no-progress", *object_ids,
+                ],
+                stdout=stdout_file,
+                stderr=stderr_file,
+                env=_git_env(),
+                timeout=timeout_seconds,
+                check=False,
+            )
+            output_size = stdout_file.tell() + stderr_file.tell()
+            if output_size > max_output_bytes:
+                diagnostics.add("object_database_integrity_output_limit_exceeded")
+                return
+    except subprocess.TimeoutExpired:
+        diagnostics.add("object_database_integrity_timed_out")
+        return
+    except OSError:
+        diagnostics.add("object_database_integrity_failed")
+        return
+
+    if result.returncode != 0:
+        diagnostics.add("object_database_integrity_failed")
 
 
 def _read_commit_graph(
@@ -244,6 +294,14 @@ def observe_repository(
     if any(name.startswith("refs/replace/") for name in raw_refs_before):
         diagnostics.add("replace_refs_present")
 
+    _verify_object_database(
+        repository,
+        raw_refs_before,
+        timeout_seconds=timeout_seconds,
+        max_output_bytes=max_output_bytes,
+        diagnostics=diagnostics,
+    )
+
     grafts = _run_git(
         repository, ["rev-parse", "--git-path", "info/grafts"],
         timeout_seconds=timeout_seconds,
@@ -308,6 +366,9 @@ def observe_repository(
             "commit_output_limit_exceeded",
             "invalid_commit_record",
             "parent_object_missing",
+            "object_database_integrity_failed",
+            "object_database_integrity_timed_out",
+            "object_database_integrity_output_limit_exceeded",
             "shallow_repository",
             "alternate_object_store_present",
             "partial_clone_promisor_present",

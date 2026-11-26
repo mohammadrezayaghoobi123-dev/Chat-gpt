@@ -80,6 +80,20 @@ class GitObservationAdapterTests(unittest.TestCase):
         self.assertIn("ref_tip_missing", observed["inventory"]["reasons"])
         self.assertEqual(observed["inventory"]["covered_count"], 0)
 
+    def test_missing_reachable_blob_fails_closed_via_git_fsck(self):
+        self.commit("payload.txt", "reachable payload")
+        blob_oid = self.git("rev-parse", "HEAD:payload.txt")
+        object_path = self.repo / ".git" / "objects" / blob_oid[:2] / blob_oid[2:]
+        self.assertTrue(object_path.is_file(), "fixture must use a loose blob object")
+        object_path.unlink()
+
+        observed = observe_repository(self.repo)
+
+        self.assertIn("object_database_integrity_failed", observed["diagnostics"])
+        self.assertFalse(observed["object_inventory_complete"])
+        self.assertEqual(observed["inventory"]["snapshot_status"], "incomplete")
+        self.assertEqual(observed["inventory"]["covered_count"], 0)
+
     def test_shallow_repository_is_incomplete_not_a_false_root_commit(self):
         head = self.commit("root.txt", "root")
         shallow_file = self.repo / ".git" / "shallow"

@@ -161,7 +161,7 @@ class GitObservationAdapterTests(unittest.TestCase):
         object_path = self.repo / ".git" / "objects" / blob_oid[:2] / blob_oid[2:]
         self.assertTrue(object_path.is_file(), "fixture must use a loose blob object")
         wrong_payload = b"tampered payload"
-        wrong_object = b"blob " + str(len(wrong_payload)).encode("ascii") + b"\\0" + wrong_payload
+        wrong_object = b"blob " + str(len(wrong_payload)).encode("ascii") + b"\0" + wrong_payload
         object_path.write_bytes(zlib.compress(wrong_object))
 
         observed = observe_repository(self.repo)

@@ -21,6 +21,7 @@ class FullHistoryScanOrchestrationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.temp_root = pathlib.Path(self.temp.name)
         self.log = self.temp_root / "calls.log"
+        self.args_log = self.temp_root / "gitleaks-args.log"
         self.tmpdir = self.temp_root / "tmp"
         self.tmpdir.mkdir()
         self.gitleaks = self.temp_root / "fake-gitleaks"
@@ -31,6 +32,7 @@ class FullHistoryScanOrchestrationTests(unittest.TestCase):
 set -euo pipefail
 report_path=""
 previous=""
+printf '%s\\n' "$@" >> "$ARGS_LOG"
 for argument in "$@"; do
   if [[ "$previous" == "--report-path" ]]; then report_path="$argument"; fi
   previous="$argument"
@@ -120,6 +122,7 @@ exit 1
         env.update(
             {
                 "CALL_LOG": self.shell_path(self.log),
+                "ARGS_LOG": self.shell_path(self.args_log),
                 "RUNNER_TEMP": self.shell_path(self.tmpdir),
                 "TMPDIR": self.shell_path(self.tmpdir),
                 "GITLEAKS_BIN": self.shell_path(self.gitleaks),
@@ -153,6 +156,16 @@ exit 1
         self.assertEqual(result.returncode, 73, result.stderr)
         self.assertEqual(self.calls(), [])
         self.assertEqual(list(self.tmpdir.iterdir()), [])
+
+    def test_both_history_scans_request_merge_resolution_diffs(self):
+        result = self.run_orchestrator()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        arguments = self.args_log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(
+            arguments.count("--log-opts=--all --diff-merges=first-parent"),
+            2,
+            arguments,
+        )
 
     def test_baseline_findings_stop_before_any_downstream_action(self):
         result = self.run_orchestrator(BASELINE_STATUS=2)

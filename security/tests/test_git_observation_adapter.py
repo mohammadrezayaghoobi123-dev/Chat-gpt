@@ -4,6 +4,7 @@ import subprocess
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 import sys
@@ -60,6 +61,24 @@ class GitObservationAdapterTests(unittest.TestCase):
         self.assertEqual(observed["inventory"]["merge_count"], 1)
         self.assertEqual(observed["inventory"]["covered_count"], 0)
         self.assertEqual(observed["inventory"]["merges"][0]["status"], "eligible_unscanned")
+
+
+    def test_ref_drift_during_enumeration_is_detected_from_captured_object_ids(self):
+        before_oid = self.commit("before.txt", "before")
+        after_oid = self.commit("after.txt", "after")
+        before_refs = {"refs/heads/main": before_oid}
+        after_refs = {"refs/heads/main": after_oid}
+
+        with mock.patch(
+            "git_observation_adapter._snapshot_refs",
+            side_effect=[before_refs, after_refs],
+        ):
+            observed = observe_repository(self.repo)
+
+        self.assertIn("ref_snapshot_changed", observed["diagnostics"])
+        self.assertEqual(observed["inventory"]["snapshot_status"], "incomplete")
+        self.assertIn("ref_tip_missing", observed["inventory"]["reasons"])
+        self.assertEqual(observed["inventory"]["covered_count"], 0)
 
     def test_shallow_repository_is_incomplete_not_a_false_root_commit(self):
         head = self.commit("root.txt", "root")

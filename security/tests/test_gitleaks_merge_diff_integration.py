@@ -1,7 +1,6 @@
 import json
 import os
 import pathlib
-import shutil
 import subprocess
 import tempfile
 import unittest
@@ -108,3 +107,19 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
             self.assertEqual(findings[0]["RuleID"], "synthetic-merge-only")
             self.assertEqual(findings[0]["Commit"], merge_commit)
             self.assertEqual(findings[0]["File"], "conflict.txt")
+
+            combined_report = root / "combined.json"
+            combined = run(
+                [
+                    GITLEAKS_BIN, "git", "--config", str(config), "--redact",
+                    "--exit-code", "2", "--report-format", "json",
+                    "--report-path", str(combined_report),
+                    "--log-opts=--all --diff-merges=combined", str(repo),
+                ],
+                expected=2,
+            )
+            combined_findings = json.loads(combined_report.read_text(encoding="utf-8"))
+            self.assertEqual(len(combined_findings), 1, combined.stdout + combined.stderr)
+            self.assertEqual(combined_findings[0]["RuleID"], "synthetic-merge-only")
+            self.assertEqual(combined_findings[0]["Commit"], merge_commit)
+            self.assertEqual(combined_findings[0]["File"], "conflict.txt")

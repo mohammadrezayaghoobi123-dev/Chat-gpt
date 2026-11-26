@@ -42,6 +42,7 @@ def _git_env() -> dict[str, str]:
     env.update(
         {
             "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_NO_LAZY_FETCH": "1",
             "GIT_OPTIONAL_LOCKS": "0",
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_PAGER": "cat",
@@ -219,14 +220,14 @@ def observe_repository(
         repository, ["rev-parse", "--git-path", "info/grafts"],
         timeout_seconds=timeout_seconds,
     ).stdout.strip()
-    if Path(grafts).is_file() and Path(grafts).stat().st_size:
+    grafts_path = _repository_path(repository, grafts)\n    if grafts_path.is_file() and grafts_path.stat().st_size:
         diagnostics.add("legacy_grafts_present")
 
     alternates = _run_git(
         repository, ["rev-parse", "--git-path", "objects/info/alternates"],
         timeout_seconds=timeout_seconds,
     ).stdout.strip()
-    if Path(alternates).is_file() and Path(alternates).stat().st_size:
+    alternates_path = _repository_path(repository, alternates)\n    if alternates_path.is_file() and alternates_path.stat().st_size:
         diagnostics.add("alternate_object_store_present")
 
     config_promisor = _run_git(
@@ -239,7 +240,7 @@ def observe_repository(
         repository, ["rev-parse", "--git-path", "objects/pack"],
         timeout_seconds=timeout_seconds,
     ).stdout.strip()
-    has_promisor_pack = Path(pack_dir).is_dir() and any(Path(pack_dir).glob("*.promisor"))
+    pack_path = _repository_path(repository, pack_dir)\n    has_promisor_pack = pack_path.is_dir() and any(pack_path.glob("*.promisor"))
     if config_promisor.returncode == 0 or has_promisor_pack:
         diagnostics.add("partial_clone_promisor_present")
 

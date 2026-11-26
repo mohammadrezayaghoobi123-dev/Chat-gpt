@@ -394,6 +394,15 @@ def build_necessity_config(config: dict) -> dict:
     return reduced
 
 
+def verify_baseline_report(report: object) -> list[str]:
+    """Require a valid, empty Gitleaks JSON array before diagnostics may proceed."""
+    if not isinstance(report, list):
+        return ["baseline report must be a JSON array"]
+    if report:
+        return [f"baseline scan must be clean; report contains {len(report)} finding records"]
+    return []
+
+
 def verify_necessity_report(report: list[dict]) -> list[str]:
     """Verify the redacted report contains exactly the 13 expected finding tuples."""
     from collections import Counter
@@ -472,6 +481,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Validate pinned Gitleaks allowlist integrity.")
     parser.add_argument("--config", default=".gitleaks.toml")
     parser.add_argument("--report", default=None, help="Optional redacted Gitleaks JSON report for predicate diagnostics.")
+    parser.add_argument("--baseline-report", default=None, help="Require a valid empty redacted baseline report before downstream diagnostics.")
     parser.add_argument("--necessity-config", default=None, help="Write a diagnostic config with exactly 13 new line exceptions removed.")
     parser.add_argument("--necessity-report", default=None, help="Verify the redacted report against the exact 13 expected findings.")
     args = parser.parse_args()
@@ -488,6 +498,19 @@ def main() -> int:
             print(f"FAIL: {error}")
         return 1
     print("PASS: synthetic fixture allowlists are pinned to verified exact source lines.")
+    if args.baseline_report:
+        try:
+            with pathlib.Path(args.baseline_report).open("r", encoding="utf-8") as handle:
+                baseline_report = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"Baseline report load failed: {type(exc).__name__}")
+            return 2
+        baseline_errors = verify_baseline_report(baseline_report)
+        if baseline_errors:
+            for error in baseline_errors:
+                print(f"FAIL: {error}")
+            return 1
+        print("PASS: redacted baseline report is a valid empty JSON array.")
     if args.necessity_config:
         try:
             reduced = build_necessity_config(config)

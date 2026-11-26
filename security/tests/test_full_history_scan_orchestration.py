@@ -97,7 +97,7 @@ esac
     def tearDown(self):
         self.temp.cleanup()
 
-    def run_orchestrator(self, **overrides):
+    def run_orchestrator(self, script=SCRIPT, **overrides):
         self.assertIsNotNone(self.bash, "Bash is required to execute the workflow orchestrator")
         env = os.environ.copy()
         env.update(
@@ -113,7 +113,7 @@ esac
         )
         env.update({key: str(value) for key, value in overrides.items()})
         return subprocess.run(
-            [self.bash, self.shell_path(SCRIPT)],
+            [self.bash, self.shell_path(script)],
             cwd=ROOT,
             env=env,
             text=True,
@@ -127,11 +127,28 @@ esac
     def assert_temp_workspace_cleaned(self):
         self.assertEqual(list(self.tmpdir.iterdir()), [])
 
-    def test_baseline_findings_stop_before_any_downstream_action(self):
-        result = self.run_orchestrator(BASELINE_STATUS=2)
+    def assert_baseline_findings_fail_closed(self, script=SCRIPT):
+        result = self.run_orchestrator(script=script, BASELINE_STATUS=2)
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertEqual(self.calls(), ["gitleaks-baseline"])
         self.assert_temp_workspace_cleaned()
+
+    def test_baseline_findings_stop_before_any_downstream_action(self):
+        self.assert_baseline_findings_fail_closed()
+
+    def test_mutation_reintroducing_status_2_continuation_is_killed(self):
+        original = SCRIPT.read_text(encoding="utf-8")
+        permissive_guard = 'if [ "$baseline_status" -ne 0 ]; then'
+        mutant_guard = 'if [ "$baseline_status" -ne 0 ] && [ "$baseline_status" -ne 2 ]; then'
+        self.assertIn(permissive_guard, original)
+        mutant = original.replace(permissive_guard, mutant_guard, 1)
+        self.assertNotEqual(mutant, original)
+        mutant_script = self.temp_root / "mutant-orchestrator.sh"
+        mutant_script.write_text(mutant, encoding="utf-8")
+        self.log.unlink(missing_ok=True)
+        with self.assertRaises(AssertionError):
+            self.assert_baseline_findings_fail_closed(script=mutant_script)
+        self.assertGreater(len(self.calls()), 1)
 
     def test_baseline_operational_errors_fail_closed(self):
         for status in (1, 7, 124, 137, 143):
@@ -139,6 +156,15 @@ esac
                 self.log.unlink(missing_ok=True)
                 result = self.run_orchestrator(BASELINE_STATUS=status)
                 self.assertEqual(result.returncode, status, result.stderr)
+                self.assertEqual(self.calls(), ["gitleaks-baseline"])
+                self.assert_temp_workspace_cleaned()
+
+    def test_missing_or_empty_baseline_report_stops_before_downstream_action(self):
+        for mode in ("missing", "empty"):
+            with self.subTest(mode=mode):
+                self.log.unlink(missing_ok=True)
+                result = self.run_orchestrator(BASELINE_REPORT_MODE=mode)
+                self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertEqual(self.calls(), ["gitleaks-baseline"])
                 self.assert_temp_workspace_cleaned()
 

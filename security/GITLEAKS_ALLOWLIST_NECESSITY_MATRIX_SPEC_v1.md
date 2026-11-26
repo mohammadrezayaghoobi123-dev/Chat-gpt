@@ -563,3 +563,67 @@ These tests must be behavioral, tied to exact executable/test names, exact commi
 ### 10.16.4 Disposition
 
 The current workflow's history-coverage gap is a P1 hostile blocker for a necessity matrix or any claim of complete reachable-history scanning. Existing successful CI is bounded to the command actually executed and does not close this gap. The design remains `CHANGES_REQUIRED / DESIGN_NOT_APPROVED`. No workflow/code change or matrix execution is authorized by this amendment.
+
+
+---
+
+## 10.17 Normative engineering amendment v8 — executable independent-oracle architecture and patch-provenance proof boundary
+
+This amendment is design-only. It supersedes any conflicting oracle/provenance language in Sections 1–10.16. It does not authorize implementation, workflow/validator changes, matrix execution, allowlist edits, merge, or deployment.
+
+### 10.17.1 Newly identified design gap
+
+Sections 10.12.1 and 10.13.1 require an independent oracle, RE2 semantics, effective detector behavior, and patch-fragment provenance, but do not yet specify a concrete executable oracle architecture, its trust boundary, an independent detector algorithm, or a proof that the oracle's expected identities cannot be derived circularly from the tested Gitleaks report or same detector implementation.
+
+This is a design-completeness gap. The presence of MAT-023–MAT-026 does not close it until the tests exercise a concrete architecture and pinned implementation.
+
+### 10.17.2 Required oracle decomposition and trust boundary
+
+Before approval, define and pin three independently auditable components:
+
+1. **Git-history/patch provenance oracle:** reads Git object graph and explicit pinned refs; independently enumerates commit-parent comparisons and changed-file/patch records; maps each candidate to commit, path, patch status, source coordinates, and scan-scope disposition. It must not consume Gitleaks JSON or invoke Gitleaks to determine expected patch visibility.
+2. **Detector-semantic oracle:** independently evaluates the exact effective detector configuration and required rule semantics for each in-scope patch fragment. It must not import Gitleaks detector/report/config implementation packages, invoke Gitleaks as its expected-result generator, or reuse the workflow's report parser/comparator. Pin the language/runtime, RE2-compatible engine, source, executable, and dependency digests. Document which rule semantics are supported and the exact semantics of regex/capture groups, keywords, entropy, path gates, required rules, decoding/archive behavior, and coordinates. Unsupported semantics or unproved equivalence are UNKNOWN.
+3. **Suppression-attribution oracle:** independently models the complete effective suppression inventory and many-to-many matching attribution, including inherited defaults and all non-target suppression sources. It must produce candidate identity-to-suppressor relations before computing expected all-out/one-out results; no description-keyed lookup and no subtraction shortcut unless independently proven.
+
+A component may be shared only if the independence claim is narrowed, the shared component is explicitly in the trust boundary, and an independent cross-check is provided. No claim of complete independent oracle may be made merely because a report is redacted or its JSON parser is separate.
+
+### 10.17.3 Immutable oracle output schema and reconciliation
+
+Define a versioned, deterministic, redacted output contract with:
+- experiment snapshot ID and exact Git/ref/object/config/toolchain digests;
+- source occurrence ID and patch-provenance record;
+- canonical full-coordinate identity and independently justified occurrence multiplicity;
+- detector rule/predicate identity and match-span/coordinate evidence (without secret-bearing text);
+- suppression source IDs and many-to-many attribution edges;
+- explicit scan-universe inclusion/exclusion reason;
+- per-record status SUPPORTED, DISPUTED, or UNKNOWN, plus aggregate status.
+
+Expected matrix multisets must be derived only from this oracle output. The observed Gitleaks report is a separate input to reconciliation. Mutating, deleting, adding, reordering, or duplicating observed report records must not change oracle output. A mismatch, unresolved attribution, unsupported detector semantics, or incomplete patch provenance is UNKNOWN/CHANGES_REQUIRED—not a count-based PASS.
+
+### 10.17.4 Patch-provenance exact contract
+
+For pinned v8.30.1 and selected Git-input manifest, specify and test:
+- commit/ref enumeration and whether every merge commit is compared against each parent or a specific parent policy; no implicit first-parent assumption;
+- path identity for rename/copy records and old/new path handling;
+- added-line-only eligibility, source coordinate mapping, and how deleted/context/mode-only/empty commits are excluded or handled;
+- binary, symlink, submodule, archive, nested archive, and size/decode-limit behavior;
+- deterministic patch serialization/parser behavior, hunk-to-source coordinate mapping, line endings, tabs, multi-byte UTF-8, combining marks, and same-line multi-finding collisions;
+- explicit reconciliation of independent patch enumerator output with pinned Gitleaks source behavior on bounded fixtures, including counterexamples and unsupported cases.
+
+If a Git feature is unsupported by the oracle, it must be excluded from the pinned experiment universe by an explicit, verified contract or make the experiment UNKNOWN. Do not silently omit it.
+
+### 10.17.5 Acceptance tests
+
+Add uniquely identified behavioral tests:
+- MAT-039: oracle independence — prove no Gitleaks package/report/parser or workflow comparator dependency; observed-report mutations do not alter expected oracle output.
+- MAT-040: deterministic oracle output — same pinned snapshot yields byte-identical canonical manifest; any source/config/tool/ref drift changes the snapshot and blocks use.
+- MAT-041: detector semantic differential suite — exact supported rule feature matrix and differential fixtures; unsupported features yield UNKNOWN rather than guessed expected findings.
+- MAT-042: suppressor-attribution graph — overlapping suppressors, global/rule scopes, defaults, inline ignore, ignore-file and path exclusion are represented without double-counting detector occurrences; description mutations/swaps do not retarget IDs.
+- MAT-043: patch provenance counterexamples — merge-parent, rename/copy, additions vs unchanged context, deletion, mode-only, binary/archive, symlink/submodule, and coordinate boundary cases; compare oracle to pinned behavior with explicit dispositions.
+- MAT-044: oracle/report separation — expected output is frozen before report ingestion; adversarial report mutation (add/remove/duplicate/reorder/corrupt identity) changes only reconciliation result, never expected identities.
+
+Tests must be executable and tied to source/test names, exact commit, dependency/toolchain digests, fixture inventory, evidence run, and disposition. Static checks alone are insufficient.
+
+### 10.17.6 Disposition and approval boundary
+
+The independent-oracle architecture and patch-provenance proof boundary are not yet concretely implemented or experimentally validated. This is a P1 design blocker. The design remains CHANGES_REQUIRED / DESIGN_NOT_APPROVED. No code/workflow changes, matrix execution, allowlist mutation, merge, or deployment are authorized.

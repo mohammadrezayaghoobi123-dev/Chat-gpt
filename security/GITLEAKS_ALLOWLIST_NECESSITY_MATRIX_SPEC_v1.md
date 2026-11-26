@@ -46,13 +46,13 @@ Run exactly 16 diagnostic scans after the ordinary full-history scan:
 
 Create a temporary config by removing exactly the 15 legacy entries from the current 30-entry config. Retain all 13 new line exceptions and both special fixtures byte-for-byte.
 
-Let (N) be the independently reconstructed tuple set covered by the 13 new exceptions and 2 special fixtures. Expected redacted report tuple set: exactly (U \\ N). The preflight hypothesis is (U \\cap N = \\varnothing), in which case this equals (U); the matrix must verify rather than assume that condition. The comparison is order-independent, and every tuple must occur exactly once. Missing, extra, duplicate, malformed, or out-of-scope tuples fail the matrix.
+Let `N` be the independently reconstructed tuple set covered by the 13 new exceptions and 2 special fixtures. Expected redacted report tuple set: exactly `U − N`. The preflight hypothesis is `U ∩ N = ∅`, in which case this equals `U`; the matrix must verify rather than assume that condition. The comparison is order-independent, and every tuple must occur exactly once. Missing, extra, duplicate, malformed, or out-of-scope tuples fail the matrix.
 
 ### B. One-out variants (15 scans)
 
 For each legacy entry (i), create a temporary config from the original current config by removing exactly entry (i), preserving every other entry byte-for-byte.
 
-Expected redacted report tuple multiset: exactly (U \setminus E_i), accounting for multiplicity and any independently established overlap. If the observed delta differs, do not label the entry redundant or overbroad automatically. Mark the result DISPUTED/UNKNOWN and require isolated attribution.
+Expected redacted report tuple set: exactly `E_i − (union(E_j for j != i) ∪ N)`. This is the subset uniquely suppressed by entry `i` while every other legacy entry and all new/fixture entries remain active. If there is no overlap, the expected report is exactly `E_i`, not `U − E_i`. Shared tuples remain suppressed by another active entry and cannot establish unique necessity in this one-out run. Any overlap or unexpected delta is DISPUTED/UNKNOWN and requires isolated attribution; do not label the entry redundant or overbroad automatically. Compare exact tuples, reject duplicate records, and require each expected tuple exactly once.
 
 ### C. Isolated attribution (conditional; not part of the 16-scan baseline)
 
@@ -63,7 +63,7 @@ If any one-out result indicates masking, an unexpected tuple, or ambiguous attri
 For every scan:
 - Invoke the pinned Gitleaks binary with explicit temporary config, `--redact`, JSON report output, and the same full-history Git log scope.
 - Capture process exit status without disabling shell fail-fast behavior globally.
-- Accept only Gitleaks exit code 2 as the expected “findings present” status for the diagnostic matrix. Exit code 0 is a mismatch for a scan expected to produce findings; any other code is an execution failure.
+- Require exit code 2 when the expected tuple set is non-empty and exit code 0 when it is empty. Any mismatch between status and expected cardinality, or any other exit code, is an execution failure.
 - Require a non-empty, parseable JSON array.
 - Validate each record's types and exact tuple fields. Reject Boolean values where integer line numbers are required.
 - Compare exact tuple multisets, not only counts or set cardinalities.

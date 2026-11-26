@@ -93,7 +93,7 @@ def build_merge_coverage_inventory(
         reasons.append("commit_enumeration_incomplete")
     if not object_inventory_complete:
         reasons.append("object_inventory_incomplete")
-    if any(oid not in commits for oid in before.values()):
+    if any(oid not in commits for oid in set(before.values()) | set(after.values())):
         reasons.append("ref_tip_missing")
     if any(parent not in commits for parents in commits.values() for parent in parents):
         reasons.append("parent_object_missing")

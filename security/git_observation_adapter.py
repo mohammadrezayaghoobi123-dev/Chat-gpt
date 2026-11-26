@@ -148,7 +148,7 @@ def _read_commit_graph(
         with tempfile.TemporaryFile(mode="w+b") as stdout_file:
             result = subprocess.run(
                 ["git", "-C", str(repository), "rev-list", "--parents", "--stdin"],
-                input="".join(f"{oid}\\n" for oid in sorted(set(commit_tips.values()))).encode("ascii"),
+                input="".join(f"{oid}\n" for oid in sorted(set(commit_tips.values()))).encode("ascii"),
                 stdout=stdout_file,
                 stderr=subprocess.PIPE,
                 env=_git_env(),
@@ -172,7 +172,7 @@ def _read_commit_graph(
         diagnostics.add("commit_enumeration_failed")
 
     commits: dict[str, list[str]] = {}
-    for line in result.stdout.splitlines():
+    for line in output.splitlines():
         fields = line.split()
         if not fields or any(not _OBJECT_ID.fullmatch(item) for item in fields):
             diagnostics.add("invalid_commit_record")

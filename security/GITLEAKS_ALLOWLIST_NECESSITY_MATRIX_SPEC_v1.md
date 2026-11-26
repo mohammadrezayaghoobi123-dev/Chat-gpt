@@ -763,3 +763,53 @@ Required correction and proof:
 The reviewed v9 head has successful existing workflow runs, but those runs exercise the current implementation and its current tests. They do not establish MAT-050–MAT-055, the 16-cell legacy matrix, the independent oracle, or design approval. The combined status endpoint returned no individual status records; the two named workflow-run results are the available CI evidence.
 
 The above findings are implementation-to-spec conformance blockers, not merely future enhancements. The disposition remains **CHANGES_REQUIRED / DESIGN_NOT_APPROVED**. The PR must remain Draft. Do not merge, deploy, alter `.gitleaks.toml`, or execute the 16-cell matrix until the design and implementation gates are independently satisfied.
+
+
+---
+
+## 10.20 Normative engineering amendment v11 — stacked ancestry proof, CI refresh, and fail-fast test-oracle defect
+
+This amendment supersedes the v10 CI timing statement where later exact-head evidence is now available. It does not downgrade any open blocker.
+
+### 10.20.1 Stacked PR ancestry — exact relation verified
+
+At the time of this audit:
+- PR #473 is Open/Draft/unmerged, HEAD `7809ad7aad46f5c996879f5f0fe2a1b7a144f43c`, BASE `919b19ca3d3887352cdef06b03c668ead04fbce7`.
+- PR #477 is Open/Draft/unmerged, BASE exactly `7809ad7aad46f5c996879f5f0fe2a1b7a144f43c`, HEAD `516c9949e947195ea8f7e3eb7865812438fdcd3d`.
+- Therefore PR #477 is stacked directly on the current HEAD of PR #473. The parent branch is 12 commits ahead of its main base and not behind it.
+- The parent-to-main diff comprises five files: the allowlist config, two workflows, validator, and tests. The child PR's cumulative changed-file set comprises those inherited files plus the necessity spec. The v10 commit itself only changed the spec; these are different scopes and MUST remain distinguished.
+
+This proves branch ancestry only. It does not prove the parent is ready to merge, nor that the child is safe to merge independently of the parent.
+
+### 10.20.2 Exact-head CI refresh
+
+The previously pending/unavailable v10 CI state has since resolved. On exact child HEAD `516c9949e947195ea8f7e3eb7865812438fdcd3d`:
+- Gitleaks Allowlist Integrity run #246: completed / success.
+- Full History Secret Scan run #7661: completed / success.
+
+On exact parent HEAD `7809ad7aad46f5c996879f5f0fe2a1b7a144f43c`:
+- Gitleaks Allowlist Integrity run #208: completed / success.
+- Full History Secret Scan run #7444: completed / success.
+
+The combined-status endpoint returned no individual status records for either SHA; the named workflow-run records above are the available CI evidence. These successful runs demonstrate that the currently implemented workflows and tests pass on those exact commits. They do not prove MAT-050–MAT-055, the 16-cell legacy matrix, independent oracle correctness, or design approval. In particular, a green test that encodes an unsafe requirement is not evidence that the requirement is safe.
+
+### 10.20.3 P1 — fail-fast test-oracle inversion
+
+The existing test `test_full_history_workflow_uses_fail_fast_and_explicit_gitleaks_exit_handling` does not test fail-fast behavior. It explicitly asserts that the workflow captures the baseline scan status through an `if/else` block and then proceeds to the necessity scan. The workflow accepts status 2 as an expected finding state, generates the necessity config, and launches the diagnostic scan before finally exiting with the original baseline status.
+
+Thus the test name and its assertion are semantically inconsistent with the safety property claimed by the name and by MAT-051. CI success currently confirms this permissive behavior is what the test expects. This is an oracle defect, not merely missing test coverage.
+
+Required correction and proof:
+- rename or replace the test to express the actual intended contract, not to preserve the current implementation;
+- for the security gate, require baseline status 0 before any validator/config generation/secondary scan;
+- inject baseline outcomes 1, 2, signal termination, timeout, missing report, malformed report, and unexpected status; assert that no downstream subprocess is invoked;
+- verify primary failure status is preserved and EXIT cleanup cannot convert failure to success;
+- add a mutation test that deliberately reintroduces status-2 continuation and prove the suite fails.
+
+**MAT-056 — fail-fast test-oracle mutation proof:** the test suite MUST fail when status-2 continuation or any non-zero baseline continuation is reintroduced, and MUST prove zero downstream invocations for every non-clean baseline outcome.
+
+### 10.20.4 Updated hostile disposition
+
+The ancestry and current CI results are now confirmed. They do not close the implementation blockers. MAT-050–MAT-056 remain open. The test-oracle inversion makes the current green CI weaker than the test name suggests and increases the priority of MAT-051/MAT-056.
+
+Disposition remains **CHANGES_REQUIRED / DESIGN_NOT_APPROVED**. Keep both PRs Draft. No merge, rebase, retarget, allowlist change, workflow change, executable test run, matrix execution, main mutation, or deployment is authorized by this audit.

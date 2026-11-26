@@ -126,7 +126,7 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
                     GITLEAKS_BIN, "git", "--config", str(config), "--redact",
                     "--exit-code", "2", "--report-format", "json",
                     "--report-path", str(remerge_report),
-                    "--log-opts=--all --diff-merges=remerge --no-prefix", str(repo),
+                    "--log-opts=--all --diff-merges=remerge --no-prefix --format=fuller", str(repo),
                 ],
                 expected=2,
             )

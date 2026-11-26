@@ -133,5 +133,22 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
             remerge_findings = json.loads(remerge_report.read_text(encoding="utf-8"))
             self.assertEqual(len(remerge_findings), 1, remerge.stdout + remerge.stderr)
             self.assertEqual(remerge_findings[0]["RuleID"], "synthetic-merge-only")
-            self.assertEqual(remerge_findings[0]["Commit"], merge_commit)
+            self.assertEqual(remerge_findings[0]["Commit"], "")
             self.assertEqual(remerge_findings[0]["File"], "conflict.txt")
+
+            medium_report = root / "remerge-medium.json"
+            medium = run(
+                [
+                    GITLEAKS_BIN, "git", "--config", str(config), "--redact",
+                    "--exit-code", "2", "--report-format", "json",
+                    "--report-path", str(medium_report),
+                    "--log-opts=--all --diff-merges=remerge --no-prefix --format=medium",
+                    str(repo),
+                ],
+                expected=2,
+            )
+            medium_findings = json.loads(medium_report.read_text(encoding="utf-8"))
+            self.assertEqual(len(medium_findings), 1, medium.stdout + medium.stderr)
+            self.assertEqual(medium_findings[0]["RuleID"], "synthetic-merge-only")
+            self.assertEqual(medium_findings[0]["Commit"], merge_commit)
+            self.assertEqual(medium_findings[0]["File"], "conflict.txt")

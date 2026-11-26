@@ -225,3 +225,85 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
             self.assertEqual(medium_findings[0]["RuleID"], "synthetic-merge-only")
             self.assertEqual(medium_findings[0]["Commit"], "")
             self.assertEqual(medium_findings[0]["File"], "conflict.txt")
+
+
+    def test_per_merge_first_parent_reattributes_second_parent_allowlisted_finding(self):
+        """A per-merge first-parent scan can reattribute a cleanly merged finding."""
+        with tempfile.TemporaryDirectory(prefix="gitleaks-merge-reattribution-") as temporary:
+            root = pathlib.Path(temporary)
+            repo = root / "repo"
+            repo.mkdir()
+            run(["git", "init", "-b", "main"], cwd=repo)
+            run(["git", "config", "user.name", "Synthetic Test"], cwd=repo)
+            run(["git", "config", "user.email", "synthetic@example.invalid"], cwd=repo)
+
+            (repo / "README.md").write_text("base\\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "base"], cwd=repo)
+
+            run(["git", "checkout", "-b", "side"], cwd=repo)
+            marker = "SYNTHETIC_INHERITED_SENTINEL"
+            (repo / "secret.txt").write_text(marker + "\\n", encoding="utf-8")
+            run(["git", "add", "secret.txt"], cwd=repo)
+            run(["git", "commit", "-m", "introduce synthetic marker on side branch"], cwd=repo)
+            introducing_commit = run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+            run(["git", "checkout", "main"], cwd=repo)
+            (repo / "main-only.txt").write_text("main change\\n", encoding="utf-8")
+            run(["git", "add", "main-only.txt"], cwd=repo)
+            run(["git", "commit", "-m", "main-only change"], cwd=repo)
+
+            run(["git", "merge", "--no-ff", "side", "-m", "merge side"], cwd=repo)
+            merge_commit = run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+            config = root / "scoped-source-allowlist.toml"
+            config.write_text(
+                'title = "Inherited finding attribution fixture"\\n'
+                '[extend]\\nuseDefault = false\\n'
+                '[[rules]]\\n'
+                'id = "synthetic-inherited"\\n'
+                'description = "Synthetic inherited marker"\\n'
+                f'regex = \'\'\'{marker}\'\'\'\\n'
+                '[[allowlists]]\\n'
+                'description = "Allow only the original introducing commit"\\n'
+                'targetRules = ["synthetic-inherited"]\\n'
+                'condition = "AND"\\n'
+                f'commits = ["{introducing_commit}"]\\n'
+                'paths = [\'\'\'^secret\\\\.txt$\'\'\']\\n'
+                'regexTarget = "line"\\n'
+                f'regexes = [\'\'\'{marker}\'\'\']\\n',
+                encoding="utf-8",
+            )
+
+            ordinary_report = root / "ordinary-allowlisted.json"
+            ordinary = run(
+                [
+                    GITLEAKS_BIN, "git", "--config", str(config), "--redact",
+                    "--exit-code", "2", "--report-format", "json",
+                    "--report-path", str(ordinary_report), "--log-opts=--all", str(repo),
+                ],
+                expected=0,
+            )
+            self.assertEqual(
+                json.loads(ordinary_report.read_text(encoding="utf-8")),
+                [],
+                ordinary.stdout + ordinary.stderr,
+            )
+
+            scoped_report = root / "merge-reattributed.json"
+            scoped = run(
+                [
+                    GITLEAKS_BIN, "git", "--config", str(config), "--redact",
+                    "--exit-code", "2", "--report-format", "json",
+                    "--report-path", str(scoped_report),
+                    f"--log-opts={merge_commit}^! --diff-merges=first-parent",
+                    str(repo),
+                ],
+                expected=2,
+            )
+            findings = json.loads(scoped_report.read_text(encoding="utf-8"))
+            self.assertEqual(len(findings), 1, scoped.stdout + scoped.stderr)
+            self.assertEqual(findings[0]["RuleID"], "synthetic-inherited")
+            self.assertEqual(findings[0]["Commit"], merge_commit)
+            self.assertNotEqual(findings[0]["Commit"], introducing_commit)
+            self.assertEqual(findings[0]["File"], "secret.txt")

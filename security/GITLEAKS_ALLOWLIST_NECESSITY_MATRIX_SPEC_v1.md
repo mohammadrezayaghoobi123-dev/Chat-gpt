@@ -670,3 +670,96 @@ Each test requires a named executable test, exact source and fixture paths, exac
 ### 10.18.5 Decision rule
 
 Until MAT-039–MAT-049 have executable evidence and independent review, the oracle is not an accepted source of expected identities. The design remains CHANGES_REQUIRED / DESIGN_NOT_APPROVED. Any unresolved shared trust dependency, non-reproducible build without approved alternative evidence, report-channel access, hard-coded production answer, or incomplete SBOM is UNKNOWN and blocks matrix execution and all PASS claims.
+
+
+---
+
+## 10.19 Normative engineering amendment v10 — implementation-to-spec conformance and fail-closed execution gates
+
+This amendment records a hostile review of the actual PR #477 implementation at the pinned v9 head. It supersedes conflicting approval assumptions in earlier sections. It is design-only: it does not authorize code/workflow/test/allowlist changes, matrix execution, merge, or deployment.
+
+### 10.19.1 Evidence scope and non-equivalence warning
+
+The PR's cumulative base-to-head change set contains four files: `.github/workflows/secret-history-scan.yml`, `security/validate_gitleaks_allowlists.py`, `security/tests/test_gitleaks_allowlist_integrity.py`, and this specification. The v9 amendment commit itself changes only this specification; that fact MUST NOT be misrepresented as meaning the entire PR is documentation-only.
+
+The current workflow and validator implement a narrower 13-line-exception diagnostic. They do not implement the 15-entry legacy allowlist necessity matrix specified in Sections 4 and 10. No report or CI result from the current 13-exception diagnostic may be described as evidence that the 15-entry matrix has run or passed.
+
+### 10.19.2 P1 — Git-history invocation still violates the v7 history contract
+
+At the reviewed head, both direct Gitleaks invocations in `.github/workflows/secret-history-scan.yml` still pass non-empty `--log-opts="--all"`. Under the pinned v8.30.1 behavior already recorded in Section 10.16, the custom-options path replaces the default Git-log option set; it does not establish equivalence to the default `--full-history --all --diff-filter=tuxdb` invocation.
+
+Required correction and proof:
+- capture actual subprocess argv for both ordinary and diagnostic scans;
+- use the pinned default full-history behavior by omitting custom log options, or prove an exactly equivalent explicit argv;
+- pin the intended refs and prove object/history completeness;
+- test a reachable history-simplification counterexample;
+- make any argv/ref/object drift block every downstream stage.
+
+**MAT-050 — actual Git argv and history-universe conformance:** behavioral process-level test for every scan class, exact expected argv, refs and object completeness, including the simplification counterexample. Static YAML inspection is insufficient.
+
+### 10.19.3 P1 — baseline finding status is accepted as permission to continue
+
+The current shell captures baseline exit status and permits both 0 and 2, then generates a diagnostic config and executes a second scan. Exit code 2 represents findings under the configured Gitleaks contract; allowing it through this gate means downstream attribution executes even when the ordinary baseline is not clean. Returning the original non-zero status only at the end does not undo the unsafe ordering or make the gate fail-fast.
+
+Required correction and proof:
+- baseline must complete with the explicitly verified clean-scan status before any necessity config generation or diagnostic scan;
+- any finding status, execution error, signal, timeout, or unknown status must stop immediately;
+- preserve the original status and ensure cleanup cannot turn a failed run into success or mask its primary failure;
+- test that no downstream process is invoked after every non-clean baseline outcome.
+
+**MAT-051 — baseline stop-before-attribution:** process-boundary test records child-process invocations and proves zero validator/config-generation/diagnostic invocations after any baseline result other than the clean status.
+
+### 10.19.4 P1 — ordinary baseline report is not validated before use or acceptance
+
+The workflow creates a baseline report path but does not verify that the report exists, is non-empty, parses as a JSON array, contains valid typed records, and is consistent with the clean exit status before proceeding. A zero exit alone does not prove the report artifact is complete or valid.
+
+Required correction and proof:
+- validate file existence, non-zero size, JSON decoding, top-level array type, record schema, and redaction constraints;
+- require an empty finding array for the clean baseline, unless a separately approved and explicitly defined policy states otherwise;
+- malformed, truncated, missing, non-empty, or status-inconsistent reports must stop the job;
+- validation output must never print secret-bearing report fields.
+
+**MAT-052 — baseline artifact integrity:** inject missing, empty, truncated, malformed, non-array, malformed-record, non-empty, and status-mismatch reports; every invalid case must fail closed without exposing sensitive values.
+
+### 10.19.5 P1 — implemented necessity scope does not match the 15-entry matrix
+
+At the reviewed head, `build_necessity_config` removes exactly the 13 newly added line exceptions and retains the 15 legacy entries plus two fixtures. `verify_necessity_report` then checks the 13 expected line-exception tuples. This is a distinct diagnostic purpose; it does not perform the all-out and 15 one-out scans required for legacy-entry necessity.
+
+Required correction and proof:
+- name the 13-exception diagnostic and 15-entry legacy matrix as separate experiment types with separate immutable manifests, budgets, expected outputs, and dispositions;
+- do not report the 13-exception scan as completion of the legacy matrix;
+- implement one all-out plus 15 one-out scans only after the independent oracle and all prerequisite gates are approved;
+- bind every scan to the same exact Git snapshot, effective configuration digest, Gitleaks binary digest, and invocation manifest.
+
+**MAT-053 — experiment-scope separation:** tests prove that 13-exception diagnostic output cannot satisfy, substitute for, or be reported as any of the 16 legacy-matrix cells; incomplete or cross-bound manifests are UNKNOWN.
+
+### 10.19.6 P1 — current report comparator is weaker than the canonical identity contract
+
+The current `verify_necessity_report` comparator uses the four-field tuple `(Commit, File, StartLine, RuleID)`. Sections 10.2 and 10.17 require the complete available coordinate identity, including `StartColumn`, `EndLine`, and `EndColumn`, and counted-multiset reconciliation. The existing comparator can collapse distinct same-line findings and cannot prove exact identity.
+
+Required correction and proof:
+- validate every required coordinate field and exact JSON type, rejecting booleans as integers, nulls, strings, zero, and negative coordinates;
+- use the full seven-field identity wherever supplied by the pinned report schema;
+- preserve multiplicity and reject duplicate full identities while retaining distinct findings sharing a four-field prefix;
+- if a required coordinate is unavailable in the pinned report, classify the affected experiment UNKNOWN or define a separately approved, independently justified identity contract before implementation;
+- do not silently fall back to the four-field tuple.
+
+**MAT-054 — full-coordinate collision suite:** fixtures include two distinct findings sharing the existing four-field prefix but differing in columns/end coordinates, duplicate full identities, malformed coordinate types, and multiplicity changes. Only exact canonical multiset equality passes.
+
+### 10.19.7 P2 — serializer must prove complete semantic preservation, not only current happy-path output
+
+The current TOML writer explicitly serializes selected top-level keys (`title`, `minVersion`, `extend`, and `allowlists`). The checked-in config currently uses those top-level keys, but the writer does not itself establish a fail-closed guarantee for future or otherwise unrecognized top-level data. A successful parse of the emitted TOML is not equivalent to semantic preservation.
+
+Required correction and proof:
+- define an explicit allowlisted schema for all supported top-level and nested fields;
+- reject unknown fields before serialization rather than silently dropping them;
+- compare canonical parsed TOML data models before and after serialization, including arrays, ordering where semantically relevant, booleans, integers, strings, regex text, and inherited-default settings;
+- prove that only the intended exception entries differ in each generated experiment config.
+
+**MAT-055 — lossless TOML round-trip and unknown-key rejection:** mutation tests add unknown top-level and nested fields and require fail-closed rejection; supported configurations must round-trip to canonical semantic equality, with a separately asserted exact intended delta.
+
+### 10.19.8 Exact-head evidence and hostile disposition
+
+The reviewed v9 head has successful existing workflow runs, but those runs exercise the current implementation and its current tests. They do not establish MAT-050–MAT-055, the 16-cell legacy matrix, the independent oracle, or design approval. The combined status endpoint returned no individual status records; the two named workflow-run results are the available CI evidence.
+
+The above findings are implementation-to-spec conformance blockers, not merely future enhancements. The disposition remains **CHANGES_REQUIRED / DESIGN_NOT_APPROVED**. The PR must remain Draft. Do not merge, deploy, alter `.gitleaks.toml`, or execute the 16-cell matrix until the design and implementation gates are independently satisfied.

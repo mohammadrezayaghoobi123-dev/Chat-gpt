@@ -4,6 +4,7 @@ import subprocess
 import shutil
 import tempfile
 import unittest
+import zlib
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -151,6 +152,41 @@ class GitObservationAdapterTests(unittest.TestCase):
         self.assertEqual(observed["inventory"]["unsupported_merge_count"], 1)
         self.assertEqual(observed["inventory"]["merges"][0]["parent_count"], 3)
         self.assertEqual(observed["inventory"]["merges"][0]["status"], "unsupported_parent_count")
+        self.assertEqual(observed["inventory"]["covered_count"], 0)
+
+
+    def test_hash_mismatched_reachable_blob_fails_closed_via_git_fsck(self):
+        self.commit("payload.txt", "reachable payload")
+        blob_oid = self.git("rev-parse", "HEAD:payload.txt")
+        object_path = self.repo / ".git" / "objects" / blob_oid[:2] / blob_oid[2:]
+        self.assertTrue(object_path.is_file(), "fixture must use a loose blob object")
+        wrong_payload = b"tampered payload"
+        wrong_object = b"blob " + str(len(wrong_payload)).encode("ascii") + b"\\0" + wrong_payload
+        object_path.write_bytes(zlib.compress(wrong_object))
+
+        observed = observe_repository(self.repo)
+
+        self.assertIn("object_database_integrity_failed", observed["diagnostics"])
+        self.assertFalse(observed["object_inventory_complete"])
+        self.assertEqual(observed["inventory"]["snapshot_status"], "incomplete")
+        self.assertEqual(observed["inventory"]["covered_count"], 0)
+
+    def test_fsck_timeout_fails_closed(self):
+        self.commit("payload.txt", "reachable payload")
+        real_run = subprocess.run
+
+        def timeout_fsck(args, *positional, **kwargs):
+            command = args if isinstance(args, (list, tuple)) else []
+            if "fsck" in command:
+                raise subprocess.TimeoutExpired(command, kwargs.get("timeout", 0))
+            return real_run(args, *positional, **kwargs)
+
+        with mock.patch("git_observation_adapter.subprocess.run", side_effect=timeout_fsck):
+            observed = observe_repository(self.repo)
+
+        self.assertIn("object_database_integrity_timed_out", observed["diagnostics"])
+        self.assertFalse(observed["object_inventory_complete"])
+        self.assertEqual(observed["inventory"]["snapshot_status"], "incomplete")
         self.assertEqual(observed["inventory"]["covered_count"], 0)
 
 

@@ -237,19 +237,19 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
             run(["git", "config", "user.name", "Synthetic Test"], cwd=repo)
             run(["git", "config", "user.email", "synthetic@example.invalid"], cwd=repo)
 
-            (repo / "README.md").write_text("base\\n", encoding="utf-8")
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
             run(["git", "add", "README.md"], cwd=repo)
             run(["git", "commit", "-m", "base"], cwd=repo)
 
             run(["git", "checkout", "-b", "side"], cwd=repo)
             marker = "SYNTHETIC_INHERITED_SENTINEL"
-            (repo / "secret.txt").write_text(marker + "\\n", encoding="utf-8")
+            (repo / "secret.txt").write_text(marker + "\n", encoding="utf-8")
             run(["git", "add", "secret.txt"], cwd=repo)
             run(["git", "commit", "-m", "introduce synthetic marker on side branch"], cwd=repo)
             introducing_commit = run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
 
             run(["git", "checkout", "main"], cwd=repo)
-            (repo / "main-only.txt").write_text("main change\\n", encoding="utf-8")
+            (repo / "main-only.txt").write_text("main change\n", encoding="utf-8")
             run(["git", "add", "main-only.txt"], cwd=repo)
             run(["git", "commit", "-m", "main-only change"], cwd=repo)
 
@@ -258,20 +258,20 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
 
             config = root / "scoped-source-allowlist.toml"
             config.write_text(
-                'title = "Inherited finding attribution fixture"\\n'
-                '[extend]\\nuseDefault = false\\n'
-                '[[rules]]\\n'
-                'id = "synthetic-inherited"\\n'
-                'description = "Synthetic inherited marker"\\n'
-                f'regex = \'\'\'{marker}\'\'\'\\n'
-                '[[allowlists]]\\n'
-                'description = "Allow only the original introducing commit"\\n'
-                'targetRules = ["synthetic-inherited"]\\n'
-                'condition = "AND"\\n'
-                f'commits = ["{introducing_commit}"]\\n'
-                'paths = [\'\'\'^secret\\\\.txt$\'\'\']\\n'
-                'regexTarget = "line"\\n'
-                f'regexes = [\'\'\'{marker}\'\'\']\\n',
+                'title = "Inherited finding attribution fixture"\n'
+                '[extend]\nuseDefault = false\n'
+                '[[rules]]\n'
+                'id = "synthetic-inherited"\n'
+                'description = "Synthetic inherited marker"\n'
+                f'regex = \'\'\'{marker}\'\'\'\n'
+                '[[allowlists]]\n'
+                'description = "Allow only the original introducing commit"\n'
+                'targetRules = ["synthetic-inherited"]\n'
+                'condition = "AND"\n'
+                f'commits = ["{introducing_commit}"]\n'
+                'paths = [\'\'\'^secret\\.txt$\'\'\']\n'
+                'regexTarget = "line"\n'
+                f'regexes = [\'\'\'{marker}\'\'\']\n',
                 encoding="utf-8",
             )
 

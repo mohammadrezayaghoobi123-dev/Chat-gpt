@@ -194,6 +194,7 @@ exit 1
         env.update(
             {
                 "CALL_LOG": self.shell_path(self.log),
+                "ARGS_LOG": self.shell_path(self.args_log),
                 "RUNNER_TEMP": self.shell_path(self.tmpdir),
                 "TMPDIR": self.shell_path(self.tmpdir),
                 "GITLEAKS_BIN": self.shell_path(self.gitleaks),

@@ -466,3 +466,53 @@ Sections 10.7 and 10.12.5 are reconciled as follows:
 
 Stable object identity and temporally correct cleanup gates are required for a sound necessity proof. The design remains `CHANGES_REQUIRED / DESIGN_NOT_APPROVED` until this amendment and all earlier requirements are independently reviewed. No executable implementation or matrix run is authorized.
 
+
+---
+
+## 10.15 Normative engineering amendment v6 — exact Git-history input and detector error propagation
+
+This amendment is design-only and supersedes conflicting wording above. It does not authorize implementation, matrix execution, allowlist changes, merge, or deployment.
+
+### 10.15.1 Pin the actual Git input command and ref universe
+
+The Gitleaks v8.30.1 source contract was inspected at tag `v8.30.1`, including `cmd/git.go` and `sources/git.go`. When `--log-opts` is empty, Gitleaks constructs `git log -p -U0 --full-history --all --diff-filter=tuxdb`. When non-empty, the user-supplied log options are appended instead of the default options; therefore the matrix MUST NOT assume that setting a non-empty option preserves the default `--full-history`, `--all`, or diff-filter behavior.
+
+Before any scan, record a redacted immutable Git-input manifest bound to the experiment snapshot:
+- exact Gitleaks executable/version and source-tag identity;
+- exact effective Git command argument vector (no shell-string ambiguity);
+- exact commit graph and ref names/SHAs included in the scan, including whether refs are local, remote-tracking, tags, and pull-request refs;
+- repository object completeness (no shallow boundary or missing object) and checkout HEAD;
+- relevant Git configuration affecting diff/rename behavior, or an explicit hermetic configuration;
+- any custom `--log-opts`, with a proof that it preserves the intended scan universe.
+
+Prefer the pinned Gitleaks default full-history command unless a custom command is necessary and separately proven equivalent. If the intended scan universe requires refs not included by Gitleaks' `--all`, fetch them explicitly before the experiment and pin them; do not silently expand refs during the matrix. Missing objects, changed refs/HEAD, shallow history, unexpected command arguments, or unresolved Git configuration makes the run UNKNOWN and blocks downstream scans.
+
+### 10.15.2 Patch-fragment semantics and coordinate provenance
+
+The pinned source implementation parses Git patch output; deleted files are skipped, ordinary text scans added text fragments with zero-context patches, and the fragment path is the patch's new path. Binary non-archive files are skipped; archive files use blob extraction and have distinct provenance behavior. Therefore the independent oracle MUST:
+- model added-line fragment scanning and exact commit/path mapping, not whole-file regex scanning;
+- explicitly cover deleted files, renames/copies, mode-only changes, binary files, archive files and nested archive limits, merge commits/parent semantics, and empty/no-addition commits;
+- prove how source-line and column coordinates are calculated from the patch fragment and detector match, including UTF-8/Unicode and line-ending fixtures;
+- account for the exact path used by Gitleaks for renamed files and the rule/path gating applied to that path;
+- reject any candidate whose patch-fragment mapping is ambiguous or cannot be independently reproduced.
+
+No source-line or secret-bearing content may be retained as proof artifacts.
+
+### 10.15.3 Error propagation is an observable contract
+
+Gitleaks v8.30.1's Git source reports non-benign Git stderr as scan errors; it also treats several known Git warnings as benign. The implementation harness MUST not infer success from a generated report alone. Capture and independently validate process exit code, timeout/termination status, stderr disposition (redacted, with benign-warning allowlist pinned), report validity, and invocation completion. Prove that the workflow's wrapper/action does not mask a Git-source error or convert an incomplete scan into a clean result. Any non-benign stderr, failed Git subprocess, incomplete fragment stream, or discrepancy between process status and report is UNKNOWN/FAIL and prevents every downstream invocation.
+
+### 10.15.4 Acceptance tests
+
+Add unique executable tests:
+- MAT-031: non-empty `--log-opts` cannot silently remove required history/ref/diff coverage; effective argv and ref inventory are exact.
+- MAT-032: shallow/missing-object or changed-ref/HEAD detection blocks scans.
+- MAT-033: fragment oracle covers additions, deletions, renames, copies, mode-only, merge commits, binary/archive behavior, and path-gating against the pinned source.
+- MAT-034: non-benign Git stderr, subprocess failure, fragment-stream error, timeout, or wrapper exit-status masking prevents downstream invocations and cannot yield PASS.
+- MAT-035: coordinate oracle verifies pinned Gitleaks patch-fragment coordinate semantics for same-line multiple findings and UTF-8/CRLF/tab boundary fixtures.
+
+Each test must be linked to its executable name, source file, exact commit, evidence run, and disposition under Section 10.12.7. Static source inspection alone is insufficient.
+
+### 10.15.5 Design disposition
+
+The exact Git-input scope and error-propagation contract are necessary to make the independent oracle falsifiable. The design remains `CHANGES_REQUIRED / DESIGN_NOT_APPROVED`. No implementation or matrix scan is authorized.

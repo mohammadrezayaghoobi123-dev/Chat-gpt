@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
+import copy
 import json
 import pathlib
 import re
@@ -79,10 +81,37 @@ def _source_line_at(repo_root: pathlib.Path, commit: str, path: str, line_number
 def _escape_re2_literal(value: str) -> str:
     meta = set(r"\.^$|?*+()[]{}")
     return "".join("\\" + char if char in meta else char for char in value)
+def _validate_allowlist_description_schema(allowlists: object, context: str) -> list[str]:
+    """Validate allowlist descriptions before they are used as dictionary keys."""
+    if not isinstance(allowlists, list):
+        label = "trusted origin/main" if context == "baseline" else context
+        return [f"{label} allowlists must be an array"]
+
+    errors: list[str] = []
+    for index, entry in enumerate(allowlists, start=1):
+        if not isinstance(entry, Mapping):
+            label = "baseline" if context == "baseline" else context
+            errors.append(f"{label} allowlists entries must be TOML tables")
+            continue
+
+        description = entry.get("description")
+        if not isinstance(description, str) or not description.strip():
+            label = "trusted origin/main" if context == "baseline" else context
+            errors.append(
+                f"{label} allowlist {index}: description must be a non-empty string"
+            )
+    return errors
+
+
 def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
     errors: list[str] = []
+    if not isinstance(config, Mapping):
+        return ["configuration must be a TOML table"]
     allowlists = config.get("allowlists", [])
-    if not isinstance(allowlists, list) or len(allowlists) != EXPECTED_ALLOWLIST_COUNT:
+    description_errors = _validate_allowlist_description_schema(allowlists, "current config")
+    if description_errors:
+        return description_errors
+    if len(allowlists) != EXPECTED_ALLOWLIST_COUNT:
         errors.append("allowlist count changed; new exceptions require explicit review")
         return errors
 
@@ -101,7 +130,13 @@ def validate_config(config: dict, repo_root: pathlib.Path) -> list[str]:
     except tomllib.TOMLDecodeError:
         errors.append("trusted origin/main Gitleaks baseline is invalid TOML")
         return errors
+    if not isinstance(baseline_config, Mapping):
+        errors.append("trusted origin/main Gitleaks baseline must be a TOML table")
+        return errors
     baseline_allowlists = baseline_config.get("allowlists", [])
+    description_errors = _validate_allowlist_description_schema(baseline_allowlists, "baseline")
+    if description_errors:
+        return description_errors
     baseline_legacy = [
         entry for entry in baseline_allowlists
         if entry.get("description") not in EXPECTED_FIXTURES
@@ -337,10 +372,118 @@ def diagnose_report(report: list[dict], config: dict) -> list[str]:
 
 
 
+
+def build_necessity_config(config: dict) -> dict:
+    """Remove only the 13 newly-added line exceptions for necessity testing."""
+    if not isinstance(config, Mapping):
+        raise ValueError("necessity config must be a TOML table")
+    allowlists = config.get("allowlists", [])
+    description_errors = _validate_allowlist_description_schema(allowlists, "necessity config")
+    if description_errors:
+        raise ValueError("; ".join(description_errors))
+    reduced = copy.deepcopy(config)
+    reduced_allowlists = reduced.get("allowlists", [])
+    reduced["allowlists"] = [
+        entry for entry in reduced_allowlists
+        if entry.get("description") not in EXPECTED_LINE_EXCEPTIONS
+    ]
+    if len(reduced_allowlists) - len(reduced["allowlists"]) != 13:
+        raise ValueError("necessity config must remove exactly 13 pinned line exceptions")
+    if len(reduced["allowlists"]) != 17:
+        raise ValueError("necessity config must retain 15 baseline entries and 2 synthetic fixtures")
+    return reduced
+
+
+def verify_baseline_report(report: object) -> list[str]:
+    """Require a valid empty Gitleaks JSON array before diagnostic attribution."""
+    if not isinstance(report, list):
+        return ["baseline report must be a JSON array"]
+    if report:
+        return [f"baseline report must be empty; observed {len(report)} finding(s)"]
+    return []
+
+
+def verify_necessity_report(report: list[dict]) -> list[str]:
+    """Verify the redacted report contains exactly the 13 expected finding tuples."""
+    from collections import Counter
+
+    expected = Counter(
+        (commit, path, line_number, "generic-api-key")
+        for commit, path, line_number in EXPECTED_LINE_EXCEPTIONS.values()
+    )
+    observed = Counter()
+    malformed = 0
+    if not isinstance(report, list):
+        return ["necessity report must be a JSON array"]
+    for finding in report:
+        if not isinstance(finding, dict):
+            malformed += 1
+            continue
+        commit = finding.get("Commit")
+        path = finding.get("File")
+        line_number = finding.get("StartLine")
+        rule = finding.get("RuleID")
+        if (
+            not isinstance(commit, str)
+            or re.fullmatch(r"[0-9a-f]{40}", commit) is None
+            or not isinstance(path, str)
+            or not path
+            or not isinstance(line_number, int)
+            or isinstance(line_number, bool)
+            or line_number < 1
+            or not isinstance(rule, str)
+            or not rule
+        ):
+            malformed += 1
+            continue
+        observed[(commit, path, line_number, rule)] += 1
+    errors = []
+    if malformed:
+        errors.append(f"necessity report contains malformed finding records: {malformed}")
+    missing = sum((expected - observed).values())
+    extra = sum((observed - expected).values())
+    duplicate = sum(count - 1 for count in observed.values() if count > 1)
+    if duplicate:
+        errors.append(f"necessity report contains duplicate finding tuples: {duplicate}")
+    if missing:
+        errors.append(f"necessity report is missing expected finding tuples: {missing}")
+    if extra:
+        errors.append(f"necessity report contains unexpected finding tuples: {extra}")
+    if sum(observed.values()) + malformed != 13:
+        errors.append(f"necessity report must contain exactly 13 records, observed {sum(observed.values()) + malformed}")
+    return errors
+
+
+def write_toml_config(config: dict, destination: pathlib.Path) -> None:
+    """Serialize the restricted Gitleaks config using TOML-compatible JSON strings."""
+    import json
+    lines = []
+    for key in ("title", "minVersion"):
+        if key in config:
+            lines.append(f"{key} = {json.dumps(config[key])}")
+    extend = config.get("extend")
+    if isinstance(extend, dict):
+        lines.append("")
+        lines.append("[extend]")
+        for key, value in extend.items():
+            lines.append(f"{key} = {json.dumps(value)}")
+    for entry in config.get("allowlists", []):
+        lines.append("")
+        lines.append("[[allowlists]]")
+        for key, value in entry.items():
+            lines.append(f"{key} = {json.dumps(value)}")
+    destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate pinned Gitleaks allowlist integrity.")
     parser.add_argument("--config", default=".gitleaks.toml")
     parser.add_argument("--report", default=None, help="Optional redacted Gitleaks JSON report for predicate diagnostics.")
+    parser.add_argument("--baseline-report", default=None, help="Require a valid empty redacted Gitleaks JSON array before necessity diagnostics.")
+    parser.add_argument("--necessity-config", default=None, help="Write a diagnostic config with exactly 13 new line exceptions removed.")
+    parser.add_argument("--necessity-report", default=None, help="Verify the redacted report against the exact 13 expected findings.")
     args = parser.parse_args()
     config_path = pathlib.Path(args.config).resolve()
     try:
@@ -354,7 +497,41 @@ def main() -> int:
         for error in errors:
             print(f"FAIL: {error}")
         return 1
-    print("PASS: both synthetic HMAC allowlists are pinned to verified exact source lines.")
+    print("PASS: synthetic fixture allowlists are pinned to verified exact source lines.")
+    if args.baseline_report is not None:
+        try:
+            with pathlib.Path(args.baseline_report).open("r", encoding="utf-8") as handle:
+                baseline_report = json.load(handle)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            print(f"Baseline report load failed: {type(exc).__name__}")
+            return 2
+        baseline_errors = verify_baseline_report(baseline_report)
+        if baseline_errors:
+            for error in baseline_errors:
+                print(f"FAIL: {error}")
+            return 1
+        print("PASS: baseline redacted report is a valid empty JSON array.")
+    if args.necessity_config:
+        try:
+            reduced = build_necessity_config(config)
+            write_toml_config(reduced, pathlib.Path(args.necessity_config))
+        except (OSError, ValueError) as exc:
+            print(f"Necessity config generation failed: {type(exc).__name__}")
+            return 2
+        print("PASS: diagnostic config preserves 15 baseline entries and 2 fixtures; removes exactly 13 new exceptions.")
+    if args.necessity_report:
+        try:
+            with pathlib.Path(args.necessity_report).open("r", encoding="utf-8") as handle:
+                necessity_report = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"Necessity report load failed: {type(exc).__name__}")
+            return 2
+        necessity_errors = verify_necessity_report(necessity_report)
+        if necessity_errors:
+            for error in necessity_errors:
+                print(f"FAIL: {error}")
+            return 1
+        print("PASS: redacted necessity report contains exactly the 13 expected finding tuples.")
     if args.report:
         try:
             with pathlib.Path(args.report).open("r", encoding="utf-8") as handle:

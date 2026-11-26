@@ -7,6 +7,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "security"))
@@ -293,7 +294,123 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
         target["regexes"] = [r'const key = ".*";']
         self.assertTrue(validate_config(changed, ROOT))
 
-    
+
+
+    def test_necessity_config_removes_only_thirteen_new_line_exceptions(self):
+        from validate_gitleaks_allowlists import build_necessity_config
+        reduced = build_necessity_config(self.config)
+        self.assertEqual(len(reduced["allowlists"]), 17)
+        remaining_descriptions = {entry.get("description") for entry in reduced["allowlists"]}
+        self.assertEqual(remaining_descriptions & set(EXPECTED_LINE_EXCEPTIONS), set())
+        self.assertEqual(remaining_descriptions & set(EXPECTED_FIXTURES), set(EXPECTED_FIXTURES))
+        legacy = [
+            entry for entry in reduced["allowlists"]
+            if entry.get("description") not in EXPECTED_FIXTURES
+        ]
+        self.assertEqual(len(legacy), 15)
+
+    def test_necessity_report_matches_exact_expected_finding_tuples(self):
+        from validate_gitleaks_allowlists import verify_necessity_report
+        report = [
+            {"Commit": commit, "File": path, "StartLine": line, "RuleID": "generic-api-key"}
+            for commit, path, line in EXPECTED_LINE_EXCEPTIONS.values()
+        ]
+        self.assertEqual(verify_necessity_report(report), [])
+
+    def test_necessity_report_rejects_missing_duplicate_extra_and_mismatched_findings(self):
+        from validate_gitleaks_allowlists import verify_necessity_report
+        expected = [
+            {"Commit": commit, "File": path, "StartLine": line, "RuleID": "generic-api-key"}
+            for commit, path, line in EXPECTED_LINE_EXCEPTIONS.values()
+        ]
+        cases = {
+            "missing": expected[:-1],
+            "duplicate": expected + [expected[0]],
+            "extra": expected + [{"Commit": "f" * 40, "File": "unexpected.txt", "StartLine": 1, "RuleID": "generic-api-key"}],
+            "mismatch": [{**expected[0], "StartLine": expected[0]["StartLine"] + 1}] + expected[1:],
+        }
+        for label, report in cases.items():
+            with self.subTest(case=label):
+                self.assertTrue(verify_necessity_report(report))
+
+
+    def test_necessity_config_serializes_to_valid_toml_and_keeps_baseline(self):
+        from validate_gitleaks_allowlists import build_necessity_config, write_toml_config
+        reduced = build_necessity_config(self.config)
+        with tempfile.TemporaryDirectory() as directory:
+            destination = pathlib.Path(directory) / "diagnostic.toml"
+            write_toml_config(reduced, destination)
+            with destination.open("rb") as handle:
+                parsed = tomllib.load(handle)
+        self.assertEqual(parsed, reduced)
+        self.assertEqual(len(parsed["allowlists"]), 17)
+
+    def test_necessity_report_rejects_malformed_tuple_types(self):
+        from validate_gitleaks_allowlists import verify_necessity_report
+        malformed = [{"Commit": [], "File": {}, "StartLine": True, "RuleID": "generic-api-key"}]
+        errors = verify_necessity_report(malformed)
+        self.assertTrue(errors)
+        self.assertTrue(any("malformed" in error for error in errors))
+
+
+    def test_validator_rejects_non_table_allowlist_members_without_exception(self):
+        for malformed in ("invalid", None, [], 123, {}):
+            with self.subTest(member_type=type(malformed).__name__):
+                changed = copy.deepcopy(self.config)
+                changed["allowlists"][0] = malformed
+                try:
+                    errors = validate_config(changed, ROOT)
+                except Exception as exc:
+                    self.fail(f"validator raised {type(exc).__name__} for malformed allowlist member")
+                self.assertTrue(errors)
+
+    def test_validator_rejects_non_table_baseline_members_without_exception(self):
+        malformed_baseline = 'allowlists = ["not-a-table"]\n'
+        completed = subprocess.CompletedProcess(
+            args=["git", "show", "origin/main:.gitleaks.toml"],
+            returncode=0,
+            stdout=malformed_baseline,
+            stderr="",
+        )
+        with patch("validate_gitleaks_allowlists.subprocess.run", return_value=completed):
+            try:
+                errors = validate_config(copy.deepcopy(self.config), ROOT)
+            except Exception as exc:
+                self.fail(f"validator raised {type(exc).__name__} for malformed baseline member")
+        self.assertIn("baseline allowlists entries must be TOML tables", errors)
+
+    def test_necessity_config_rejects_non_table_members_with_value_error(self):
+        changed = copy.deepcopy(self.config)
+        changed["allowlists"][0] = "invalid"
+        from validate_gitleaks_allowlists import build_necessity_config
+        try:
+            build_necessity_config(changed)
+        except ValueError as exc:
+            self.assertIn("allowlists entries must be TOML tables", str(exc))
+        except Exception as exc:
+            self.fail(f"necessity builder raised uncontrolled {type(exc).__name__}")
+        else:
+            self.fail("necessity builder accepted a malformed allowlist member")
+
+    def test_validator_rejects_non_table_configuration_without_exception(self):
+        for malformed in (None, [], "invalid"):
+            with self.subTest(config_type=type(malformed).__name__):
+                try:
+                    errors = validate_config(malformed, ROOT)
+                except Exception as exc:
+                    self.fail(f"validator raised {type(exc).__name__} for malformed config")
+                self.assertTrue(errors)
+
+    def test_full_history_workflow_delegates_to_behavioral_orchestrator(self):
+        workflow_path = ROOT / ".github" / "workflows" / "secret-history-scan.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
+        self.assertIn("bash security/run_full_history_secret_scan.sh", workflow)
+        self.assertNotIn("scan_status=0", workflow)
+        self.assertNotIn("necessity_scan_status=0", workflow)
+        orchestrator = ROOT / "security" / "run_full_history_secret_scan.sh"
+        self.assertTrue(orchestrator.is_file(), "workflow orchestrator must be version controlled")
+
+
     def test_allowlist_integrity_workflow_covers_all_branches_for_security_paths(self):
         workflow_path = ROOT / ".github" / "workflows" / "gitleaks-allowlist-integrity.yml"
         lines = workflow_path.read_text(encoding="utf-8").splitlines()
@@ -334,6 +451,85 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                     if item.startswith('- "') and item.endswith('"'):
                         actual_paths.add(item[3:-1])
                 self.assertEqual(actual_paths, expected_paths)
+
+
+    def test_validate_config_rejects_malformed_current_descriptions_without_raising(self):
+        cases = [
+            ("array", []),
+            ("inline_table", {"malformed": True}),
+            ("missing", "__MISSING__"),
+            ("empty", ""),
+            ("whitespace", "   "),
+            ("integer", 7),
+            ("boolean", True),
+            ("null", None),
+        ]
+        for label, value in cases:
+            with self.subTest(description_type=label):
+                changed = copy.deepcopy(self.config)
+                if value == "__MISSING__":
+                    changed["allowlists"][0].pop("description", None)
+                else:
+                    changed["allowlists"][0]["description"] = value
+                errors = validate_config(changed, ROOT)
+                self.assertTrue(errors, "malformed description must be rejected")
+                self.assertTrue(
+                    any("description" in error.lower() for error in errors),
+                    msg=f"expected a controlled description error, got {errors!r}",
+                )
+
+    def test_validate_config_rejects_malformed_baseline_descriptions_before_filtering(self):
+        malformed_baselines = {
+            "array": "allowlists = [{ description = [] }]" + chr(10),
+            "inline_table": "allowlists = [{ description = { malformed = true } }]" + chr(10),
+            "missing": "allowlists = [{}]" + chr(10),
+            "empty": 'allowlists = [{ description = "" }]' + chr(10),
+            "whitespace": 'allowlists = [{ description = "   " }]' + chr(10),
+            "integer": "allowlists = [{ description = 7 }]" + chr(10),
+            "boolean": "allowlists = [{ description = true }]" + chr(10),
+        }
+        for label, baseline_text in malformed_baselines.items():
+            with self.subTest(description_type=label):
+                completed = subprocess.CompletedProcess(
+                    args=["git", "show", "origin/main:.gitleaks.toml"],
+                    returncode=0,
+                    stdout=baseline_text,
+                    stderr="",
+                )
+                with patch(
+                    "validate_gitleaks_allowlists.subprocess.run",
+                    return_value=completed,
+                ):
+                    errors = validate_config(copy.deepcopy(self.config), ROOT)
+                self.assertTrue(errors, "malformed baseline description must be rejected")
+                self.assertTrue(
+                    any("description" in error.lower() for error in errors),
+                    msg=f"expected a controlled baseline description error, got {errors!r}",
+                )
+
+    def test_build_necessity_config_rejects_malformed_descriptions_with_value_error(self):
+        from validate_gitleaks_allowlists import build_necessity_config
+
+        cases = [
+            ("array", []),
+            ("inline_table", {"malformed": True}),
+            ("missing", "__MISSING__"),
+            ("empty", ""),
+            ("whitespace", "   "),
+            ("integer", 7),
+            ("boolean", True),
+            ("null", None),
+        ]
+        for label, value in cases:
+            with self.subTest(description_type=label):
+                changed = copy.deepcopy(self.config)
+                if value == "__MISSING__":
+                    changed["allowlists"][0].pop("description", None)
+                else:
+                    changed["allowlists"][0]["description"] = value
+                with self.assertRaisesRegex(ValueError, "description"):
+                    build_necessity_config(changed)
+
 
 
 if __name__ == "__main__":

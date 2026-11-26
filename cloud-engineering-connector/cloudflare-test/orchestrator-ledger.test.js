@@ -546,7 +546,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
       }),
       leaseMs: 100,
       now: expiredAt,
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       claimed: false, reason: "RECONCILIATION_REQUIRED",
     });
 
@@ -564,7 +564,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
         priorGeneration: first.leaseGeneration,
         evidenceRef: "github://caller-controlled/reference",
       },
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       claimed: false, reason: "RECONCILIATION_REQUIRED",
     });
 

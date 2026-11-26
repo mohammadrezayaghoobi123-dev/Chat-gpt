@@ -285,3 +285,114 @@ The design above was checked against the actual files on PR #477 head `988585084
 - `INT-P2-003` — The current PR change-range scan is delegated to the pinned Gitleaks Action; its exact effective command/config/report behavior must be included in the evidence review rather than inferred from environment variables alone.
 
 Disposition: `CHANGES_REQUIRED`. These gaps block design approval and any matrix implementation. The next implementation candidate, after user approval of the corrected design, must first close the ordinary-scan precondition/report gate and upgrade the existing 13-exception proof to the full identity model, before adding the 16 legacy scans. No change to the workflow, validator, allowlist, or matrix implementation is authorized by this audit note itself.
+
+
+### 10.12 Normative engineering amendment v3 — oracle, Git patch, runtime semantics, and trigger completeness
+
+This amendment is normative and supersedes any conflicting wording in Sections 1–10.11. It records the user's approval to refine the design only. It does not authorize production-code changes, workflow changes, allowlist changes, matrix execution, merge, or deployment. The implementation boundary in Section 10.10 remains in force.
+
+#### 10.12.1 Independent oracle architecture and provenance
+
+The oracle MUST be independent of the Gitleaks report being evaluated. It MUST NOT derive its expected identities, expected cardinality, or source manifest from a Gitleaks scan output, a previously generated report, or the same code path used to produce the observed report.
+
+The oracle design MUST provide all of the following before implementation approval:
+
+1. A separately versioned source/provenance extractor that reads Git objects and the pinned baseline configuration directly. It must not consume Gitleaks JSON as its source of truth.
+2. A separately versioned matcher for the exact required regex dialect and allowlist semantics. Python re MUST NOT be used as a substitute for Go/RE2 semantics. The proposed implementation language/runtime, compiler/toolchain version, executable digest, and source digest must be pinned.
+3. A documented semantic contract for global allowlists, rule-level allowlists, match conditions, regex targets, commits, paths, stopwords, inline directives, ignore files, and any other active suppressor. If a semantic rule cannot be independently reconstructed, the affected identity is UNKNOWN.
+4. Differential fixtures covering positive, negative, boundary, Unicode, multiline, path-separator, commit, and overlapping-suppressor cases. Fixtures must compare the independent matcher with the pinned Gitleaks behavior without using Gitleaks output to generate expected values.
+5. A provenance chain for each expected identity: source commit object, parent relationship, changed path, patch hunk, rule/predicate identifier, and exact source coordinate. Store only non-secret metadata.
+6. An independent review record for the oracle implementation and manifest, including reviewer disposition and exact source/tool digests.
+
+Using Go's standard regexp package may be considered because it implements RE2-style semantics, but language choice alone does not establish independence or correctness. The oracle MUST NOT import Gitleaks internals or call the Gitleaks executable to calculate expected results. It must independently implement only the explicitly documented semantics needed by this experiment and fail closed on unsupported semantics.
+
+The oracle MUST include self-tests that demonstrate it is not reading or trusting the observed report. A deliberate mutation of the observed report must change only the comparison result, never the oracle's expected manifest. If oracle and Gitleaks disagree on any required fixture or production candidate, disposition is UNKNOWN/DISPUTED and the matrix cannot PASS.
+
+#### 10.12.2 Git history and patch-visibility semantics
+
+A source line existing in a commit tree is not sufficient evidence that the line was introduced or scanned as a finding in that commit's Git patch. The manifest MUST distinguish tree provenance from patch provenance.
+
+For every source candidate, record and validate:
+
+- the exact commit object SHA and its parent(s);
+- the exact path at that commit, including rename/copy handling;
+- whether the relevant line is added, context, or unchanged in the commit's patch;
+- the exact patch hunk and line mapping needed to connect the source coordinate to the Gitleaks Git scanner's coordinate;
+- whether the commit is a merge commit and which parent comparison(s) are in scope;
+- whether the pinned Gitleaks 8.30.1 invocation with --log-opts=--all actually visits that commit and patch under the checked-out ref graph.
+
+Do not assume that git show COMMIT:PATH alone proves patch visibility. For merge commits, do not assume a single-parent diff or first-parent behavior without confirming the exact Gitleaks 8.30.1 implementation and invocation semantics. Rename detection, deleted files, binary files, empty commits, and lines present only as unchanged context must be explicitly handled or classified UNKNOWN.
+
+The independent oracle MUST reproduce the exact patch traversal scope of the experiment from Git objects and explicit ref reachability. A candidate that exists in a tree but is not in the scanned patch universe cannot be counted as a detector Finding. A candidate whose patch mapping is ambiguous blocks PASS.
+
+#### 10.12.3 Coordinate contract and Unicode fixture
+
+The canonical identity remains:
+(Commit, File, RuleID, StartLine, StartColumn, EndLine, EndColumn).
+
+Before relying on columns, the implementation MUST establish the exact coordinate contract of the pinned Gitleaks v8.30.1 binary:
+
+- whether columns are byte offsets, Unicode code-point offsets, UTF-16 code units, or another unit;
+- whether the start coordinate is zero-based or one-based;
+- whether the end coordinate is inclusive or exclusive;
+- how tabs, CRLF, LF, combining marks, and multi-byte UTF-8 characters affect the reported range;
+- whether the report serializer preserves these values without transformation.
+
+Add controlled fixtures containing ASCII, a multi-byte UTF-8 character before the match, combining characters, tabs, and CRLF/LF variants. Record the actual pinned-binary output as test evidence, but keep expected values independently specified in the fixture source. If the coordinate unit or boundary convention cannot be established unambiguously, column-dependent comparisons are UNKNOWN; do not silently normalize or downgrade to line-only identity.
+
+#### 10.12.4 Exact scan-count and execution accounting
+
+The phrase "18 scans" MUST be scoped precisely:
+
+- The direct full-history CLI sequence contains 18 planned invocations: one ordinary baseline scan, one separate 13-exception proof scan, and 16 legacy matrix cells.
+- The pull-request change-range scan is a separate workflow action/step and is not a matrix cell or part of the 18 direct full-history invocations.
+- The total number of actual Gitleaks process executions across the whole workflow MUST be reported from the exact pinned Action and CLI logs. Do not assert a total of 19 unless the pinned Action is independently shown to invoke exactly one Gitleaks process for that event. If the Action invokes more than one process, report the measured count and explain the distinction.
+- Every planned direct invocation must have a stable scan ID, config digest, expected identity multiset digest, report digest (redacted report only), process exit status, start/end timestamp, duration, and snapshot ID.
+- Missing, duplicate, reordered, unrecorded, or unexpected invocations are UNKNOWN/fail-closed. A green workflow status alone is not proof that all 18 intended invocations ran.
+
+#### 10.12.5 Behavioral fail-fast verification
+
+Static shell-text assertions are insufficient to prove the hard-precondition behavior.
+
+A behavioral workflow harness MUST replace the Gitleaks executable and Validator with controlled test doubles at the process boundary, then execute the actual workflow shell script (or an extracted, production-identical script) under Bash with strict mode. It MUST prove at minimum:
+
+1. Baseline exit 0 plus a valid empty JSON array permits the next mandatory stage.
+2. Baseline exit 2 prevents the validator, 13-exception proof, and every matrix invocation from starting.
+3. Unexpected exit codes prevent every downstream stage.
+4. Missing, zero-byte, malformed, truncated, non-array, or non-empty baseline report prevents every downstream stage even if the process returns 0.
+5. Validator failure, snapshot drift, timeout, and cleanup failure each stop downstream execution.
+6. The harness observes real process invocation order/count using an append-only test event log; it must not infer calls solely from mock setup or source-text order.
+7. Original process failure combined with cleanup failure preserves the original failure evidence and still returns non-zero.
+
+The test must demonstrate a genuine RED against the current behavior for the intended reason, then GREEN against the corrected implementation. Syntax/import/setup errors do not count as RED.
+
+#### 10.12.6 Workflow trigger completeness and large-diff behavior
+
+The security-critical allowlist-integrity workflow MUST NOT depend solely on GitHub Actions paths filtering for whether it runs. GitHub's path-filter evaluation has documented limits for large diffs; a change set exceeding the evaluation limit can prevent the expected workflow from being triggered.
+
+Preferred design: trigger the security-critical workflow on every relevant pull_request and push event without a restrictive paths filter, then perform an inexpensive in-workflow changed-path decision while always running the policy-integrity guard for changes to security-sensitive files. If an alternative is proposed, it must demonstrate equivalent coverage for diffs beyond 3,000 files, renames, deletions, merge queues, and branch updates.
+
+The workflow MUST also declare and test the intended events and branch scope. It must not rely on a schedule as a substitute for required PR/push checks. Required status-check identity must remain stable and must not be bypassed by a skipped workflow or renamed job.
+
+A deterministic trigger-coverage test MUST model a change set larger than 3,000 files with the security-sensitive file outside the first 3,000 changed paths and prove that the required workflow still starts and produces the expected check. If this cannot be demonstrated in GitHub Actions, the trigger design is not approved.
+
+#### 10.12.7 Updated acceptance suite additions
+
+The acceptance suite MAT-001 through MAT-022 remains mandatory. Add these unique tests:
+
+23. MAT-023 Independent oracle expected identities are generated only from Git objects, pinned source config, and the separately reviewed manifest; mutation of the observed Gitleaks report cannot mutate the oracle.
+24. MAT-024 Oracle RE2/allowlist semantics are pinned and differential fixtures cover global/rule allowlists, conditions, regex targets, paths, commits, inline ignores, and overlap; unsupported semantics produce UNKNOWN.
+25. MAT-025 Git patch provenance is proven for every candidate, including merge commits, parent selection, renames, deleted paths, and unchanged context lines; ambiguous patch mapping fails closed.
+26. MAT-026 Pinned Gitleaks coordinate units and boundaries are empirically established with UTF-8, combining-mark, tab, CRLF, and LF fixtures.
+27. MAT-027 Behavioral fail-fast harness proves that baseline findings, invalid reports, unexpected exit codes, validator errors, drift, timeout, and cleanup failure prevent all downstream invocations.
+28. MAT-028 Invocation ledger proves exactly 18 planned direct full-history CLI invocations, with the PR-diff Action accounted separately using measured process evidence.
+29. MAT-029 Trigger coverage test proves the required security workflow runs for a change set exceeding 3,000 files, including a security-sensitive file outside the first 3,000 paths.
+30. MAT-030 Oracle, compiler/toolchain, executable, source manifest, patch traversal, and coordinate-contract digests are bound to the same immutable experiment snapshot.
+
+The implementation MUST link every MAT-* ID to an executable test name, source file, exact commit SHA, exact evidence run, and observed disposition. Tests that only inspect YAML/shell text do not satisfy behavioral contracts.
+
+#### 10.12.8 Design disposition and approval boundary
+
+The design remains CHANGES_REQUIRED until all requirements in Sections 10.1–10.12 are implemented in the specification, internally consistent, and independently reviewed. The next deliverable is another exact-HEAD design review followed by a separate hostile review. No matrix code, production workflow modification, validator change, allowlist edit, runtime mutation, merge, or deployment is authorized by this amendment.
+
+The existing 18-scan design remains a proposal. Feasibility, Oracle validity, coordinate semantics, Git patch attribution, and trigger completeness are not established merely by this document or by the currently green CI runs.

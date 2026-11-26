@@ -162,7 +162,7 @@ exit 1
         self.assertEqual(result.returncode, 0, result.stderr)
         arguments = self.args_log.read_text(encoding="utf-8").splitlines()
         self.assertEqual(
-            arguments.count("--log-opts=--all --diff-merges=remerge --no-prefix --format=fuller"),
+            arguments.count("--log-opts=--all --diff-merges=remerge --no-prefix --format=medium"),
             2,
             arguments,
         )

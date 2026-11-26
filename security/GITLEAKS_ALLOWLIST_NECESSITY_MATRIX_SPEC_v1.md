@@ -516,3 +516,50 @@ Each test must be linked to its executable name, source file, exact commit, evid
 ### 10.15.5 Design disposition
 
 The exact Git-input scope and error-propagation contract are necessary to make the independent oracle falsifiable. The design remains `CHANGES_REQUIRED / DESIGN_NOT_APPROVED`. No implementation or matrix scan is authorized.
+
+
+---
+
+## 10.16 Normative engineering amendment v7 — actual workflow history-coverage mismatch
+
+This amendment is design-only and supersedes conflicting assumptions in Sections 1–10.15. It does not authorize workflow implementation, matrix execution, allowlist edits, merge, or deployment.
+
+### 10.16.1 Exact observed invocation versus pinned Gitleaks source contract
+
+The exact current workflow file `.github/workflows/secret-history-scan.yml` contains both full-history invocations with non-empty `--log-opts="--all"`:
+
+- ordinary baseline: `gitleaks git ... --log-opts="--all" .`;
+- existing 13-exception proof: `gitleaks git ... --log-opts="--all" .`.
+
+At pinned Gitleaks v8.30.1 source `sources/git.go`, a non-empty `logOpts` selects the custom-argument path: Gitleaks constructs `git -C <repo> log -p -U0` and appends the user-supplied tokens. The default empty-`logOpts` path instead includes `--full-history --all --diff-filter=tuxdb`. Therefore the present workflow's custom `--all` invocation does **not** preserve the pinned default `--full-history` or `--diff-filter=tuxdb` options.
+
+This is a verified current-workflow input-coverage gap, not a hypothetical design concern. The successful current runs cannot be treated as proof of the intended full-history universe until the invocation is corrected and independently verified.
+
+### 10.16.2 Required future implementation contract
+
+The implementation must choose and pin one of these paths:
+
+1. **Preferred default path:** omit `--log-opts` entirely, relying on the pinned v8.30.1 default argv, then verify the effective argv and ref universe; or
+2. **Explicit equivalent path:** provide a documented exact argv that includes and proves the intended `--full-history`, `--all`, and required diff-filter behavior, with no quoting/splitting ambiguity and no unsupported/changed semantics.
+
+For either path:
+- capture the actual Git subprocess argv from a behavioral test, not merely workflow source text;
+- compare it against the immutable experiment-input manifest;
+- pin all refs intended for coverage and establish object/history completeness;
+- demonstrate a fixture commit that is reachable but omitted by simplified history is detected under the selected contract;
+- fail closed if the workflow invocation is altered, any intended ref/object is absent, or argv differs from the manifest.
+
+The baseline, 13-exception proof, and all 16 matrix scans must share the same verified Git-input contract and immutable snapshot. A PR-diff Action is a separate scan surface and must remain separately accounted for.
+
+### 10.16.3 Acceptance tests
+
+Add executable acceptance tests:
+- **MAT-036:** exact workflow invocation contract — fail against the current `--log-opts="--all"` configuration because it omits the pinned default `--full-history` and `--diff-filter=tuxdb` options; pass only after the invocation is corrected and actual subprocess argv matches the manifest.
+- **MAT-037:** history-simplification counterexample — fixture proves the intended reachable commit/finding is absent under the current simplified command but included under the corrected pinned command; no secret values in fixture output.
+- **MAT-038:** invocation parity — baseline, 13-exception proof, and each matrix cell use the same verified Git-input manifest and ref/object snapshot; any drift blocks downstream execution.
+
+These tests must be behavioral, tied to exact executable/test names, exact commit SHA, evidence run, and disposition. Static YAML string checks alone are insufficient.
+
+### 10.16.4 Disposition
+
+The current workflow's history-coverage gap is a P1 hostile blocker for a necessity matrix or any claim of complete reachable-history scanning. Existing successful CI is bounded to the command actually executed and does not close this gap. The design remains `CHANGES_REQUIRED / DESIGN_NOT_APPROVED`. No workflow/code change or matrix execution is authorized by this amendment.

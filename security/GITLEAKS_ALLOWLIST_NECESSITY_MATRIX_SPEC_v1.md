@@ -438,3 +438,31 @@ A source-text assertion that a particular `paths` list exists is not trigger-cov
 
 These clarifications are required for internal consistency and a valid independent oracle. The design remains `CHANGES_REQUIRED / DESIGN_NOT_APPROVED` until the complete specification is reconciled and independently reviewed. No executable implementation or matrix run is authorized by this amendment.
 
+### 10.14 Normative engineering amendment v5 — stable identity joins and cleanup gate semantics
+
+This amendment is design-only and supersedes conflicting wording in Sections 1–10.13. It does not authorize implementation, workflow or validator changes, matrix execution, allowlist changes, merge, or deployment.
+
+#### 10.14.1 Descriptions are metadata, never identity keys
+
+Section 10.3 requires stable manifest identities and exact parsed-object binding. This clause makes the join contract explicit:
+
+- A human-readable TOML `description` is mutable metadata and MUST NOT be used as the primary key for manifest lookup, entry removal, expected-finding selection, or provenance joins.
+- Each manifest record MUST have a stable `source_id`. Bind each TOML object using the exact baseline/current config blob SHA, canonical parsed-object digest, and object ordinal/index. Preserve the complete parsed object for semantic comparison. If duplicate canonical objects exist, the object index is required to disambiguate them; if the binding remains ambiguous, classify UNKNOWN.
+- Any description-to-record mapping may be used only as a diagnostic cross-check. A changed, duplicated, missing, or edited description must not silently retarget an exception or change which object is removed.
+- Acceptance tests MUST mutate descriptions (including swaps between two records) while keeping the underlying object and manifest fixed, and prove that object identity, removal selection, and expected findings do not change. A mismatch must fail closed.
+- The implementation currently uses description strings as keys in `EXPECTED_LINE_EXCEPTIONS` and `EXPECTED_FIXTURES`, and uses those keys to select/remove entries. This is a known implementation gap, not acceptable evidence of the stable-identity contract.
+
+#### 10.14.2 Cleanup failure timing and fail-fast semantics
+
+Sections 10.7 and 10.12.5 are reconciled as follows:
+
+- An EXIT trap executes only after the main script body has stopped; therefore terminal EXIT-trap cleanup failure cannot prevent downstream stages that already ran. The specification MUST NOT claim that a terminal EXIT-trap failure retroactively stops downstream execution.
+- Any cleanup operation that is a precondition for a subsequent stage MUST be performed synchronously before that stage, and its status checked before the next process starts. A failure blocks all later stages.
+- Terminal workspace cleanup MUST still run on every exit path, verify that the private workspace no longer exists, and force the overall workflow result to non-zero if cleanup fails. If the main body already failed, preserve its original failure status/evidence and record cleanup failure separately; if the main body passed, cleanup failure changes the final result to failure.
+- The behavioral harness MUST distinguish (a) an intermediate cleanup failure, which prevents the next invocation, from (b) terminal cleanup failure, which prevents a green final result but has no later invocation to suppress. It must test both cases with the append-only event ledger.
+- Signal handling, timeout termination, child-process reaping, EXIT handling, and cleanup status composition MUST be specified as one deterministic lifecycle contract; no secret-bearing data may be emitted during failure handling.
+
+#### 10.14.3 Design disposition
+
+Stable object identity and temporally correct cleanup gates are required for a sound necessity proof. The design remains `CHANGES_REQUIRED / DESIGN_NOT_APPROVED` until this amendment and all earlier requirements are independently reviewed. No executable implementation or matrix run is authorized.
+

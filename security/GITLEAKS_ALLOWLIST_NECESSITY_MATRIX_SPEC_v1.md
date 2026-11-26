@@ -627,3 +627,46 @@ Tests must be executable and tied to source/test names, exact commit, dependency
 ### 10.17.6 Disposition and approval boundary
 
 The independent-oracle architecture and patch-provenance proof boundary are not yet concretely implemented or experimentally validated. This is a P1 design blocker. The design remains CHANGES_REQUIRED / DESIGN_NOT_APPROVED. No code/workflow changes, matrix execution, allowlist mutation, merge, or deployment are authorized.
+
+
+---
+
+## 10.18 Normative engineering amendment v9 — oracle trust-root, reproducibility, and anti-circularity controls
+
+This amendment is design-only and supersedes conflicting independence/verification assumptions in Sections 10.17 and earlier. It does not authorize implementation, workflow/validator changes, matrix execution, allowlist edits, merge, or deployment.
+
+### 10.18.1 v8 residual gap: independence assertions are not yet evidence
+
+MAT-039 and MAT-044 as written can demonstrate separation of data flow and report mutation resistance, but neither alone proves that the oracle implementation is independently authored, correctly built, free of hidden Gitleaks dependencies, or not returning hard-coded expected identities. A dependency-name scan is also insufficient: vendored, generated, dynamically loaded, or subprocess-invoked code can evade a superficial check. The oracle's trust root and reproducible build chain must be explicit before its output can be accepted as an independent expected-result source.
+
+### 10.18.2 Required trust-root and build provenance
+
+Before design approval, specify and pin:
+
+1. **Source provenance:** oracle source repository, immutable commit, reviewed source tree, license/provenance of vendored code, generated-code inputs, and complete dependency lockfiles. No floating branch, unpinned module, network-resolved dependency, or mutable artifact is admissible.
+2. **Build provenance:** compiler/toolchain versions and digests, build flags, environment, reproducible-build procedure, produced executable digest, and an independently repeatable build comparison. If bit-for-bit reproducibility is technically unavailable, document the exact limitation and require an independently reviewed build attestation plus binary/source correspondence evidence; unresolved correspondence is UNKNOWN.
+3. **Dependency boundary:** machine-readable SBOM and complete direct/transitive dependency graph, including standard-library/runtime components, regex engine, Git libraries/CLI, parsers, plugins, subprocesses, and dynamically loaded components. Explicitly classify shared trusted primitives (for example, the RE2-compatible regex engine) separately from forbidden shared Gitleaks detector/config/report code.
+4. **Execution boundary:** oracle runs in a hermetic, least-privilege process/container with no network, no credentials, read-only source inputs, bounded resources, and write access only to a designated redacted output directory. Record the sandbox policy and verify it behaviorally.
+5. **Independent review:** a reviewer who did not implement the oracle inspects source provenance, dependency graph, build evidence, trust boundary, and fixtures. Reviewer identity/approval evidence is external to the oracle's own output.
+
+A shared primitive is not automatically disqualifying. If the oracle and Gitleaks share an RE2 engine or Git implementation, name the exact component/version/digest as an explicit trust assumption; do not describe that portion as independently implemented. Cross-check the shared primitive's relevant semantics with a separately sourced conformance corpus and record residual common-mode risk. No claim of end-to-end independence may exceed the narrowest shared trust dependency.
+
+### 10.18.3 Anti-hardcoding and oracle-output integrity
+
+The oracle MUST derive records from the pinned Git objects, config, and declared semantic rules at runtime. It MUST NOT embed the expected 43-candidate count, expected Finding tuples, known commit/path/line answers, or fixture-specific production answers as a substitute for derivation. Test fixtures may contain explicit expected answers, but fixture identities must be isolated from production manifest generation.
+
+The canonical output must be generated before observed Gitleaks reports are made available to the oracle process. Enforce this with separate processes and filesystem namespaces; the oracle must have no read path to report files, CI artifacts, or workflow logs. Bind output to the snapshot digest, schema version, executable digest, and build provenance. Sign or otherwise authenticate the output using a key unavailable to the report-reconciliation process; if signing infrastructure is unavailable, document the weaker integrity model and classify the assurance limitation explicitly.
+
+### 10.18.4 Required additional acceptance tests
+
+- **MAT-045 — supply-chain closure:** reconstruct the complete dependency/SBOM graph; inject or simulate a vendored, dynamically loaded, or subprocess Gitleaks dependency and prove the gate detects it. Verify pinned toolchain and executable digests.
+- **MAT-046 — reproducible build and provenance:** independent clean builds produce the required matching artifact digest, or the approved documented alternative evidence; source/toolchain drift invalidates the oracle snapshot.
+- **MAT-047 — hermetic execution:** deny network, credentials, report paths, and undeclared filesystem reads; prove the oracle still derives the manifest and fails closed on policy violation or missing input.
+- **MAT-048 — anti-hardcoding and metamorphic derivation:** mutate bounded Git-object fixtures, config objects, ref sets, and source coordinates; prove output changes only as dictated by those inputs. Search for embedded production identities/counts and reject unexplained constants. Fixture expected values remain segregated from production output.
+- **MAT-049 — independent trust-boundary review:** record an independent reviewer disposition for source provenance, shared primitives, build chain, sandbox, output authentication, and common-mode risks. Self-attestation by the oracle author or generated PASS output is insufficient.
+
+Each test requires a named executable test, exact source and fixture paths, exact commit, dependency/toolchain digests, evidence run, reviewer disposition, and a SUPPORTED/DISPUTED/UNKNOWN result. Static dependency scans alone do not satisfy MAT-045 or MAT-047.
+
+### 10.18.5 Decision rule
+
+Until MAT-039–MAT-049 have executable evidence and independent review, the oracle is not an accepted source of expected identities. The design remains CHANGES_REQUIRED / DESIGN_NOT_APPROVED. Any unresolved shared trust dependency, non-reproducible build without approved alternative evidence, report-channel access, hard-coded production answer, or incomplete SBOM is UNKNOWN and blocks matrix execution and all PASS claims.

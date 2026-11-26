@@ -266,3 +266,22 @@ The labels `NECESSARY_FOR_DETECTION_POLICY`, `REDUNDANT_CANDIDATE`, `DISPUTED`, 
 ### 10.10 Approval boundary
 
 This amended specification is a design candidate only. No matrix code, workflow integration, allowlist edit, runtime change, merge, or deployment is authorized by the amendment. The next gate is a fresh exact-HEAD engineering review followed by a separate hostile review. Only after both reports show no unresolved P1 blocker should the design be presented for user approval. Implementation remains prohibited until that approval is explicit.
+
+
+### 10.11 Hostile integration audit of the current PR implementation
+
+The design above was checked against the actual files on PR #477 head `988585084604fbe99e91d5676d9e7ddfdc35939b`, including workflow blob `889abf609c05385c1a7f2b09e7560c14f526deb3` and validator blob `f44a7558a371ba27fdad46533a358329e87d4731`. The following are observed implementation gaps, not hypothetical design concerns:
+
+- `INT-P1-001` — The ordinary full-history scan accepts both exit status 0 and 2, then proceeds to generate and execute the 13-exception necessity scan. It exits with the original status only after that second scan. This violates the hard-precondition rule in Section 10.4: any baseline finding must stop downstream attribution immediately.
+- `INT-P1-002` — The ordinary full-history report is not checked for existence, non-zero size, JSON validity, array shape, or zero findings before the next scan. A clean-looking process status alone is not a sufficient report-integrity assertion.
+- `INT-P1-003` — The current 13-exception report validator compares only `(Commit, File, StartLine, RuleID)`. It does not validate StartColumn, EndLine, or EndColumn, so it does not satisfy the canonical identity and same-line collision requirements in Section 10.2.
+- `INT-P1-004` — The EXIT trap runs `rm -f` on three fixed filenames but does not check cleanup success, preserve/compose original and cleanup statuses, or verify that the workspace is gone. This does not satisfy the checked cleanup contract.
+- `INT-P1-005` — Temporary files are placed directly under fixed `$RUNNER_TEMP` names rather than a unique private per-run directory. `umask 077` is present, but uniqueness, directory containment, symlink resistance, and cleanup verification are not established.
+- `INT-P1-006` — The current validator serializes a reduced config by manually writing only `title`, `minVersion`, `extend`, and `allowlists`. The current config happens to be narrow, but this is not a general semantic-preservation proof for unknown/future TOML fields. The matrix implementation must use a lossless supported model or fail closed on every unrecognized key/type.
+- `INT-P1-007` — The current necessity workflow has two invocations (ordinary full-history and the 13-exception proof); the 16 legacy matrix invocations are not implemented. Do not describe the 16-cell matrix as executed or verified.
+- `INT-P1-008` — The 13-exception report check requires status 2 and a non-empty file, but its report is only checked against four fields and the workflow does not yet verify the complete redacted report schema or a pinned binary digest.
+- `INT-P2-001` — The current workflow hardcodes a Gitleaks path/version string but does not capture executable SHA-256, fetched-ref manifest, config semantic digest, or before/after snapshot drift evidence.
+- `INT-P2-002` — The 30-second per-scan and 180-second aggregate matrix ceilings have not been benchmarked against the exact runner/ref scope. Feasibility is NOT_ESTABLISHED.
+- `INT-P2-003` — The current PR change-range scan is delegated to the pinned Gitleaks Action; its exact effective command/config/report behavior must be included in the evidence review rather than inferred from environment variables alone.
+
+Disposition: `CHANGES_REQUIRED`. These gaps block design approval and any matrix implementation. The next implementation candidate, after user approval of the corrected design, must first close the ordinary-scan precondition/report gate and upgrade the existing 13-exception proof to the full identity model, before adding the 16 legacy scans. No change to the workflow, validator, allowlist, or matrix implementation is authorized by this audit note itself.

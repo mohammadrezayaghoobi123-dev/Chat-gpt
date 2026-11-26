@@ -142,6 +142,15 @@ esac
                 self.assertEqual(self.calls(), ["gitleaks-baseline"])
                 self.assert_temp_workspace_cleaned()
 
+    def test_missing_or_empty_baseline_report_stops_before_downstream_action(self):
+        for mode in ("missing", "empty"):
+            with self.subTest(mode=mode):
+                self.log.unlink(missing_ok=True)
+                result = self.run_orchestrator(BASELINE_REPORT_MODE=mode)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(self.calls(), ["gitleaks-baseline"])
+                self.assert_temp_workspace_cleaned()
+
     def test_baseline_report_validation_failure_stops_before_necessity(self):
         result = self.run_orchestrator(BASELINE_VALIDATOR_STATUS=1)
         self.assertEqual(result.returncode, 1, result.stderr)

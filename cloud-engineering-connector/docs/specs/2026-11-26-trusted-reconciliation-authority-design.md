@@ -128,12 +128,21 @@ Required properties:
 
 ### 5.3 Ledger-side commit
 
-The Ledger must, within one synchronous transaction or equivalent atomic storage primitive:
+The inspected implementation uses a synchronous SQLite transaction boundary. WebCrypto signature verification is asynchronous and must **not** be performed from inside `transactionSync`. The protocol therefore has two deliberately separated phases:
 
-1. Read the current task and lease rows.
+**Phase 1 — asynchronous pre-verification (outside the transaction):**
+
+- Parse the bounded envelope and verify canonical encoding and the TRA signature using the configured public-key set.
+- Validate issuer, audience, operation, claim shape, policy version, and token time bounds against a Ledger-sampled time value.
+- Produce an internal, non-caller-constructible verified-authorization result for the immediate commit attempt. This result is not itself a durable authorization and cannot be accepted through a public JSON argument.
+
+**Phase 2 — synchronous authoritative commit (inside one transaction):**
+
+1. Read the current task, lease, and relevant persisted key-policy/revocation metadata.
 2. Verify task eligibility and assignment constraints.
-3. Verify the TRA signature, key status, issuer, audience, operation, policy version, and validity interval using trusted Ledger time.
-4. Require the current lease owner and generation to equal the authorization's previous owner and generation.
+3. Re-check that the verified key identifier and policy/key-set epoch are still active and not revoked. The pre-verification result must be bound to that exact key identifier and epoch; if key policy changed between phases, abort and require fresh verification.
+4. Re-check token validity using trusted Ledger time sampled for the commit, including expiry and any approved clock-skew rule.
+5. Require the current lease owner and generation to equal the authorization's previous owner and generation.
 5. Require the lease to be expired according to Ledger time.
 6. Check that the authorization JTI has not already been consumed.
 7. Check that the request/idempotency record is either new or a valid retry of the same request and same intended result.
@@ -141,9 +150,9 @@ The Ledger must, within one synchronous transaction or equivalent atomic storage
 9. Advance the generation exactly once and assign the new owner/lease deadline using a conditional update that asserts the old generation.
 10. Persist an auditable outcome in the same transaction.
 
-Any failed precondition must leave the lease row and JTI-consumption state unchanged, except for explicitly designed, separately atomic audit of rejected attempts. The exact rejected-attempt audit policy must be decided before implementation.
+Any failed commit precondition must leave the lease row and successful-consumption/idempotency state unchanged. If rejected attempts are audited, that audit must be a separately defined, bounded operation with explicit abuse/DoS controls; it must not be confused with successful JTI consumption. The exact rejected-attempt audit policy must be decided before implementation.
 
-The transaction must not call remote services, fetch evidence, or perform external side effects.
+The transaction must not call remote services, perform WebCrypto operations, fetch evidence, or perform external side effects. The pre-verification/commit split is a security-critical design constraint, not an optimization.
 
 ## 6. State machine
 
@@ -179,7 +188,7 @@ The Coordinator may move its own workflow record between orchestration states. I
 - **S5 — Monotonic fencing:** generation strictly increases on successful reassignment and never decreases.
 - **S6 — Stale-worker rejection:** every protected operation checks the current generation, not merely worker identity.
 - **S7 — Trusted time:** lease expiry and authorization validity are evaluated using Ledger-controlled time.
-- **S8 — Atomic commit:** JTI consumption, reconciliation record, and lease generation/owner update commit or roll back together.
+- **S8 — Atomic commit:** successful JTI consumption, reconciliation record, idempotency outcome, and lease generation/owner update commit or roll back together. Asynchronous signature verification occurs before the transaction; the transaction re-checks the verified key's current policy epoch/revocation state to close the rotation/revocation race.
 - **S9 — Fail closed:** missing, stale, contradictory, unavailable, or unverifiable evidence never grants a lease.
 - **S10 — Auditability:** each accepted or rejected decision has a traceable request, policy version, evidence digest, and reason code without leaking secrets.
 
@@ -291,7 +300,7 @@ These decisions remain open. The design must not silently fill them with impleme
 3. **The Ledger cannot make arbitrary external effects atomic.** Database transaction atomicity does not provide exactly-once semantics for remote calls. External effects need idempotency/fencing and reconciliation of their own.
 4. **The Coordinator can be compromised.** The architecture limits its authority, but only if the TRA does not accept Coordinator assertions as sole evidence and the Ledger rejects Coordinator-signed tokens.
 5. **TRA compromise remains high impact.** Narrow claim scope and short validity reduce blast radius but do not eliminate it. Key custody, revocation propagation, and emergency shutdown are unresolved.
-6. **JTI semantics are not yet fully specified.** Consuming only successful commits is simple for atomicity but permits repeated rejected-token attempts; consuming rejected JTIs can itself create denial-of-service or transaction-design issues. A policy decision is required.
+6. **JTI semantics and async-crypto boundaries are security-critical.** Consuming only successful commits permits repeated rejected-token attempts; consuming rejected JTIs can create denial-of-service or transaction-design issues. Also, asynchronous signature verification cannot run inside the current synchronous transaction boundary. The design therefore requires pre-verification plus an in-transaction key-policy epoch/revocation re-check. Both require implementation-level tests.
 7. **Idempotency after lost responses needs durable request lookup.** A retry cannot infer failure merely because the caller did not receive a response.
 8. **The proposed state machine spans multiple systems.** Coordinator workflow state and Ledger lease state must remain separate; no distributed transaction is assumed.
 9. **No liveness proof exists.** A strict fail-closed policy can leave a task blocked indefinitely. The administrative path and bounded operational recovery remain unresolved.

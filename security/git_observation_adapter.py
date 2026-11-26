@@ -85,6 +85,11 @@ def _run_git(
     return result
 
 
+def _repository_path(repository: Path, git_path: str) -> Path:
+    candidate = Path(git_path)
+    return candidate if candidate.is_absolute() else repository / candidate
+
+
 def _snapshot_refs(
     repository: Path, *, timeout_seconds: float
 ) -> dict[str, str]:
@@ -94,7 +99,7 @@ def _snapshot_refs(
         timeout_seconds=timeout_seconds,
     )
     refs: dict[str, str] = {}
-    for line in output.splitlines():
+    for line in result.stdout.splitlines():
         if not line:
             continue
         fields = line.split("\\x00")

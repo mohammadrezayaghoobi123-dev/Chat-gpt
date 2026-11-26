@@ -396,3 +396,45 @@ The implementation MUST link every MAT-* ID to an executable test name, source f
 The design remains CHANGES_REQUIRED until all requirements in Sections 10.1–10.12 are implemented in the specification, internally consistent, and independently reviewed. The next deliverable is another exact-HEAD design review followed by a separate hostile review. No matrix code, production workflow modification, validator change, allowlist edit, runtime mutation, merge, or deployment is authorized by this amendment.
 
 The existing 18-scan design remains a proposal. Feasibility, Oracle validity, coordinate semantics, Git patch attribution, and trigger completeness are not established merely by this document or by the currently green CI runs.
+
+### 10.13 Normative engineering amendment v4 — rule scope, multiplicity, and trigger-test consistency
+
+This amendment is design-only and supersedes any conflicting wording in Sections 1–10.12. It does not authorize implementation, workflow or validator changes, matrix execution, allowlist changes, merge, or deployment.
+
+#### 10.13.1 Legacy rule-scope and detector-oracle completeness
+
+Section 3's statement that every source record uses the `generic-api-key` rule is incorrect for the 15 inherited legacy entries and is superseded.
+
+- For each legacy entry, derive its actual scope from the exact parsed baseline TOML object. Preserve the complete `targetRules` array exactly; if `targetRules` is absent, classify the entry as global-scope. Never infer `generic-api-key` for all legacy entries.
+- The currently pinned configuration includes legacy entries scoped to rule IDs other than `generic-api-key` (including `curl-auth-header`, `aws-access-token`, and `jwt`). The manifest and oracle must represent the actual rule IDs and all relevant rule scopes.
+- The independent oracle must reconstruct the detector semantics needed to produce each expected Finding, not only the allowlist predicate. For every in-scope rule ID, pin and model the effective rule definition after default-config inheritance and project overrides, including regex dialect, capture-group/secret-group selection, entropy threshold, path gating, required-rule dependencies, and the exact patch-fragment/line mapping that determines Finding coordinates. Keyword prefiltering may be omitted only if it is proven to be a semantics-preserving optimization for the relevant rule.
+- The oracle must separately model the global and rule-level allowlist matching semantics that suppress those detector findings. Unsupported rule features, unresolved inheritance, or incomplete fragment semantics force UNKNOWN; do not replace them with a generic-api-key-only approximation.
+- The 13 new line exceptions and two synthetic fixtures retain their currently configured rule scopes; this does not imply that the 15 legacy entries share those scopes.
+
+#### 10.13.2 Canonical identity and multiset reconciliation
+
+Sections 10.1 and 10.2 must be read together as follows; this clause resolves their duplicate-record wording.
+
+- Keep `E_i) as the set of unique canonical Finding identities whose suppression is attributable to legacy entry `L_i`. Keep the many-to-many attribution relation separate: one detector Finding matched by multiple suppressors is still one detector Finding and must not be multiplied by the number of suppressors.
+- Construct the expected report as a counted multiset from independently reconstructed detector occurrences and patch provenance. Its multiplicity must be justified by distinct detector occurrences, not by overlapping allowlist matches or source-entry count.
+- Compare expected and observed counted multisets over the full canonical identity. An observed duplicate is rejected when the pinned report/detector contract establishes that the same full identity cannot legitimately occur more than once. If identical full identities could represent distinct legitimate occurrences and the oracle cannot distinguish or independently count them, classify the affected comparison UNKNOWN rather than silently deduplicating or rejecting it.
+- Therefore, do not apply Section 10.1's phrase “each expected identity occurs exactly once” as an unconditional duplicate rule. It means once per independently established detector occurrence. Section 10.2's multiplicity-sensitive rule controls; no lossy set conversion is permitted.
+
+#### 10.13.3 Trigger acceptance test replaces the legacy path-filter assertion
+
+The existing test `test_allowlist_integrity_workflow_covers_all_branches_for_security_paths`, which requires exact restrictive `paths` lists for `pull_request` and `push`, is incompatible with Section 10.12.6 and MUST be replaced as part of the future implementation. It must not remain as a required acceptance test in its current form.
+
+The replacement acceptance contract must verify that:
+
+1. The security-critical integrity job is scheduled for every intended PR/push event and protected target branch without relying solely on GitHub's path-filter evaluation.
+2. If an internal changed-path decision is used, the workflow/job still produces the stable required check identity; a job-level condition must not suppress the entire check for non-matching paths.
+3. The workflow declares the intended branch and event scope. If the repository uses merge queues, `merge_group` coverage is explicit and tested; if it does not, that absence is recorded from repository configuration rather than assumed.
+4. A change set exceeding 3,000 files, with a security-sensitive path outside the first 3,000 changed paths, still starts the required workflow and produces the expected check in GitHub Actions.
+5. Rename, deletion, branch-update, and merge-queue cases are covered by deterministic tests or are explicitly marked unsupported/UNKNOWN.
+
+A source-text assertion that a particular `paths` list exists is not trigger-coverage evidence. An alternative filtered-trigger design is acceptable only if it demonstrates equivalent coverage in GitHub Actions under the large-diff and event cases above.
+
+#### 10.13.4 Design disposition
+
+These clarifications are required for internal consistency and a valid independent oracle. The design remains `CHANGES_REQUIRED / DESIGN_NOT_APPROVED` until the complete specification is reconciled and independently reviewed. No executable implementation or matrix run is authorized by this amendment.
+

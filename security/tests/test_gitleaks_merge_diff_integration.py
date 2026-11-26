@@ -128,6 +128,59 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
             self.assertEqual(scoped_findings[0]["Commit"], merge_commit)
             self.assertEqual(scoped_findings[0]["File"], "conflict.txt")
 
+            # Verify that the preserved merge SHA makes commit-scoped allowlists
+            # usable, and that a neighboring/wrong SHA does not suppress the finding.
+            allowlist_config = root / "scoped-allowlist.toml"
+            allowlist_config.write_text(
+                'title = "Scoped merge allowlist fixture"\\n'
+                '[extend]\\nuseDefault = false\\n'
+                '[[rules]]\\n'
+                'id = "synthetic-merge-only"\\n'
+                'description = "Synthetic merge-only marker"\\n'
+                'regex = \'\'\'SYNTHETIC_MERGE_ONLY_SENTINEL\'\'\'\\n'
+                '[[allowlists]]\\n'
+                'description = "Exact merge SHA and path only"\\n'
+                'targetRules = ["synthetic-merge-only"]\\n'
+                'condition = "AND"\\n'
+                f'commits = ["{merge_commit}"]\\n'
+                'paths = [\'\'\'^conflict\\\\.txt$\'\'\']\\n'
+                'regexTarget = "line"\\n'
+                'regexes = [\'\'\'SYNTHETIC_MERGE_ONLY_SENTINEL\'\'\']\\n',
+                encoding="utf-8",
+            )
+            allowed_report = root / "scoped-allowlisted.json"
+            allowed = run(
+                [
+                    GITLEAKS_BIN, "git", "--config", str(allowlist_config), "--redact",
+                    "--exit-code", "2", "--report-format", "json",
+                    "--report-path", str(allowed_report),
+                    f"--log-opts={merge_commit}^! --diff-merges=first-parent",
+                    str(repo),
+                ],
+                expected=0,
+            )
+            self.assertEqual(json.loads(allowed_report.read_text(encoding="utf-8")), [], allowed.stdout + allowed.stderr)
+
+            wrong_sha_config = root / "wrong-sha-allowlist.toml"
+            wrong_sha_config.write_text(
+                allowlist_config.read_text(encoding="utf-8").replace(merge_commit, main_parent),
+                encoding="utf-8",
+            )
+            wrong_sha_report = root / "wrong-sha-allowlist.json"
+            wrong_sha = run(
+                [
+                    GITLEAKS_BIN, "git", "--config", str(wrong_sha_config), "--redact",
+                    "--exit-code", "2", "--report-format", "json",
+                    "--report-path", str(wrong_sha_report),
+                    f"--log-opts={merge_commit}^! --diff-merges=first-parent",
+                    str(repo),
+                ],
+                expected=2,
+            )
+            wrong_sha_findings = json.loads(wrong_sha_report.read_text(encoding="utf-8"))
+            self.assertEqual(len(wrong_sha_findings), 1, wrong_sha.stdout + wrong_sha.stderr)
+            self.assertEqual(wrong_sha_findings[0]["Commit"], merge_commit)
+
             combined_report = root / "combined.json"
             combined = run(
                 [

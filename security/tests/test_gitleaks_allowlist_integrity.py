@@ -401,22 +401,14 @@ class GitleaksAllowlistIntegrityTests(unittest.TestCase):
                     self.fail(f"validator raised {type(exc).__name__} for malformed config")
                 self.assertTrue(errors)
 
-    def test_full_history_workflow_uses_fail_fast_and_explicit_gitleaks_exit_handling(self):
+    def test_full_history_workflow_delegates_to_behavioral_orchestrator(self):
         workflow_path = ROOT / ".github" / "workflows" / "secret-history-scan.yml"
         workflow = workflow_path.read_text(encoding="utf-8")
-        lines = [line.strip() for line in workflow.splitlines()]
-        self.assertIn("set -euo pipefail", lines)
-        self.assertNotIn("set +e", lines)
-
-        full_scan = next(i for i, line in enumerate(lines) if line.startswith("if /tmp/gitleaks-8.30.1/gitleaks git --config .gitleaks.toml"))
-        self.assertEqual(lines[full_scan + 1:full_scan + 5], [
-            "scan_status=0", "else", "scan_status=$?", "fi"
-        ])
-
-        necessity_scan = next(i for i, line in enumerate(lines) if line.startswith('if /tmp/gitleaks-8.30.1/gitleaks git --config "$necessity_config"'))
-        self.assertEqual(lines[necessity_scan + 1:necessity_scan + 5], [
-            "necessity_scan_status=0", "else", "necessity_scan_status=$?", "fi"
-        ])
+        self.assertIn("bash security/run_full_history_secret_scan.sh", workflow)
+        self.assertNotIn("scan_status=0", workflow)
+        self.assertNotIn("necessity_scan_status=0", workflow)
+        orchestrator = ROOT / "security" / "run_full_history_secret_scan.sh"
+        self.assertTrue(orchestrator.is_file(), "workflow orchestrator must be version controlled")
 
 
     def test_allowlist_integrity_workflow_covers_all_branches_for_security_paths(self):

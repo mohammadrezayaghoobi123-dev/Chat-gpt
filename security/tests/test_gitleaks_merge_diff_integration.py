@@ -435,12 +435,24 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
 
             run(["git", "checkout", "main"], cwd=repo)
             run(["git", "merge", "--no-ff", *branch_names, "-m", "octopus merge"], cwd=repo)
+            resolution_marker = "SYNTHETIC_OCTOPUS_RESOLUTION_ONLY_SENTINEL"
+            (repo / "octopus-resolution.txt").write_text(resolution_marker + "\n", encoding="utf-8")
+            run(["git", "add", "octopus-resolution.txt"], cwd=repo)
+            run(["git", "commit", "--amend", "--no-edit"], cwd=repo)
+
             merge_commit = run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
             parents = run(["git", "rev-list", "--parents", "-n", "1", merge_commit], cwd=repo).stdout.split()
             self.assertEqual(len(parents), 5, "fixture must create a four-parent octopus merge")
 
-            merged_tree = run(["git", "show", f"{merge_commit}:side-c.txt"], cwd=repo).stdout
-            self.assertIn(marker, merged_tree)
+            for parent_sha in parents[1:]:
+                absent = subprocess.run(
+                    ["git", "cat-file", "-e", f"{parent_sha}:octopus-resolution.txt"],
+                    cwd=repo, text=True, capture_output=True, check=False,
+                )
+                self.assertNotEqual(absent.returncode, 0, "resolution-only marker must be absent from every parent")
+
+            merged_tree = run(["git", "show", f"{merge_commit}:octopus-resolution.txt"], cwd=repo).stdout
+            self.assertIn(resolution_marker, merged_tree)
 
             config = root / "octopus.toml"
             config.write_text(
@@ -449,7 +461,7 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
                 '[[rules]]\n'
                 'id = "synthetic-octopus-only"\n'
                 'description = "Synthetic octopus marker"\n'
-                f"regex = '''{marker}-2'''\n",
+                f"regex = '''{resolution_marker}'''\n",
                 encoding="utf-8",
             )
 

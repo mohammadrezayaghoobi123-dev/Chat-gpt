@@ -23,9 +23,11 @@ A prior source-level preflight reported 43 unique candidate tuples and no cross-
 
 ## 3. Oracle contract
 
-Before matrix execution, construct a redacted, independently reviewable source-tuple manifest for the 15 legacy entries. Each tuple is:
+Before matrix execution, construct a redacted, independently reviewable source-tuple manifest for the 15 legacy entries. Each canonical Finding identity is the full coordinate tuple:
 
-`(commit, repository-relative path, start line, rule ID)`
+`(Commit, File, RuleID, StartLine, StartColumn, EndLine, EndColumn)`
+
+The independent source manifest additionally records the exact source commit, repository-relative path, rule, and source coordinates. The full identity and multiset rules in Section 10.2 are mandatory.
 
 The manifest must:
 1. Be derived from the exact pinned source commits and paths in the trusted `origin/main` baseline.
@@ -34,7 +36,7 @@ The manifest must:
 4. Be reviewed independently against the 15 baseline entries before it is used as an oracle.
 5. Be immutable during a matrix run and bound to the exact workflow commit and baseline blob identity.
 
-The previously observed candidate count of 43 is a hypothesis, not a hard-coded truth. If fresh reconstruction does not produce the same manifest, stop and classify the result UNKNOWN pending reconciliation. Do not regenerate the expected manifest from Gitleaks output.
+The previously observed candidate count of 43 is a hypothesis, not a hard-coded truth. If fresh reconstruction does not produce the same manifest, stop and classify the result UNKNOWN pending reconciliation. Do not regenerate the expected manifest from Gitleaks output. The source manifest must be versioned, exact-commit-bound, include full coordinates where reconstructable, and inventory all effective suppressors as specified in Section 10.3.
 
 Let (E_i) be the independently reviewed tuple set for legacy entry (i), and (U = \bigcup_{i=1}^{15} E_i). The matrix is valid only when the tuple sets and their overlap relationships are explicitly represented; no assumption of disjointness may be inferred from counts alone.
 
@@ -46,13 +48,13 @@ Run exactly 16 diagnostic scans after the ordinary full-history scan:
 
 Create a temporary config by removing exactly the 15 legacy entries from the current 30-entry config. Retain all 13 new line exceptions and both special fixtures without changing their parsed TOML values or order. Textual formatting may change during serialization; reparsing must yield exact semantic equality apart from the deliberately removed entries.
 
-Let `N` be the independently reconstructed tuple set covered by the 13 new exceptions and 2 special fixtures. Expected redacted report tuple set: exactly `U − N`. The preflight hypothesis is `U ∩ N = ∅`, in which case this equals `U`; the matrix must verify rather than assume that condition. The comparison is order-independent, and every tuple must occur exactly once. Missing, extra, duplicate, malformed, or out-of-scope tuples fail the matrix.
+Expected redacted report multiset: the exact Finding identities exposed by disabling only the 15 target legacy entries while every other effective suppression mechanism remains active. The oracle must include inherited defaults and every other active suppressor. The earlier `U − N` shorthand is permitted only if independently proven equivalent under the pinned effective configuration; otherwise Section 10.1 controls and any unresolved attribution is UNKNOWN.
 
 ### B. One-out variants (15 scans)
 
 For each legacy entry (i), create a temporary config from the original current config by removing exactly entry (i). Preserve every other top-level setting and allowlist object at the parsed TOML data-model level; formatting-only changes are acceptable only if reparsing yields exact semantic equality.
 
-Expected redacted report tuple set: exactly `E_i − (union(E_j for j != i) ∪ N)`. This is the subset uniquely suppressed by entry `i` while every other legacy entry and all new/fixture entries remain active. If there is no overlap, the expected report is exactly `E_i`, not `U − E_i`. Shared tuples remain suppressed by another active entry and cannot establish unique necessity in this one-out run. Any overlap or unexpected delta is DISPUTED/UNKNOWN and requires isolated attribution; do not label the entry redundant or overbroad automatically. Compare exact tuples, reject duplicate records, and require each expected tuple exactly once.
+Expected redacted report multiset: the exact Finding identities exposed by disabling only entry `i`, with every other legacy entry and every non-target suppression mechanism still active. Compute this from the independently reviewed effective-suppression oracle, not from set subtraction unless equivalence is proven. Shared or masked findings cannot establish unique necessity. Any overlap, unexpected delta, or unresolved suppressor is DISPUTED/UNKNOWN; do not label an entry redundant or overbroad automatically. Compare full-coordinate multisets.
 
 ### C. Isolated attribution (conditional; not part of the 16-scan baseline)
 
@@ -63,10 +65,10 @@ If any one-out result indicates masking, an unexpected tuple, or ambiguous attri
 For every scan:
 - Invoke the pinned Gitleaks binary with explicit temporary config, `--redact`, JSON report output, and the same full-history Git log scope.
 - Capture process exit status without disabling shell fail-fast behavior globally.
-- Require exit code 2 when the expected tuple set is non-empty and exit code 0 when it is empty. Any mismatch between status and expected cardinality, or any other exit code, is an execution failure.
-- Require a non-empty, parseable JSON array.
-- Validate each record's types and exact tuple fields. Reject Boolean values where integer line numbers are required.
-- Compare exact tuple multisets, not only counts or set cardinalities.
+- Require a report file that exists, has non-zero byte length, and parses as a JSON array. An empty array is valid only when the independently computed expected multiset is empty and the confirmed CLI exit code is the clean-scan code.
+- Require the confirmed Gitleaks finding exit code when expected cardinality is positive; verify the exact exit-code contract against the pinned CLI/wrapper before implementation. Any status/cardinality mismatch or unexpected exit code is an execution failure.
+- Validate exact report field types and all canonical coordinates; reject Boolean values where integer coordinates are required.
+- Compare full-coordinate Finding multisets, not only counts or set cardinalities.
 - Emit only scan identifier, duration, exit status, expected count, observed count, and comparison disposition. Never emit report contents.
 
 ## 6. Resource and cost controls
@@ -80,17 +82,7 @@ For every scan:
 
 ## 7. TDD and adversarial acceptance tests
 
-Before enabling the matrix in the workflow, add tests that prove:
-All-out config removes exactly the 15 baseline entries and preserves the 13 new entries, 2 fixtures, and every other TOML setting at the parsed data-model level.
-Each one-out config removes exactly one uniquely identified baseline entry and preserves all remaining entries and top-level settings at the parsed data-model level.
-3. Duplicate descriptions and duplicate tuple identities are rejected.
-4. Missing, extra, duplicate, malformed, wrong-rule, wrong-commit, wrong-path, and wrong-line findings are rejected.
-Tuple comparison is order-independent but multiplicity-sensitive; generated TOML reparses to the exact expected full config model, with only the intended allowlist entries removed. Unsupported or unknown config fields/types fail closed rather than being silently dropped.
-6. A Python-derived manifest mismatch against the independently reviewed manifest is UNKNOWN, never silently accepted.
-7. Gitleaks exit codes 0, 2, and unexpected non-zero codes are classified correctly.
-8. Per-scan timeout, aggregate timeout, scan omission, report truncation, malformed JSON, and cleanup failure all fail closed.
-9. A failure in any matrix cell prevents a green aggregate result.
-10. No test, log, artifact, or workflow output contains secret values, source-line contents, or unredacted report material.
+Before enabling the matrix in the workflow, implement and link the complete uniquely identified acceptance suite `MAT-001` through `MAT-022` in Section 10.8. The earlier abbreviated checklist is superseded; no test may be omitted or treated as satisfied by a neighboring test.
 
 The RED test must fail for the intended missing behavior; setup, import, or syntax errors do not count as RED. GREEN evidence must be from the exact resulting commit.
 

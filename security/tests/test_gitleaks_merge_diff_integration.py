@@ -132,20 +132,20 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
             # usable, and that a neighboring/wrong SHA does not suppress the finding.
             allowlist_config = root / "scoped-allowlist.toml"
             allowlist_config.write_text(
-                'title = "Scoped merge allowlist fixture"\\n'
-                '[extend]\\nuseDefault = false\\n'
-                '[[rules]]\\n'
-                'id = "synthetic-merge-only"\\n'
-                'description = "Synthetic merge-only marker"\\n'
-                'regex = \'\'\'SYNTHETIC_MERGE_ONLY_SENTINEL\'\'\'\\n'
-                '[[allowlists]]\\n'
-                'description = "Exact merge SHA and path only"\\n'
-                'targetRules = ["synthetic-merge-only"]\\n'
-                'condition = "AND"\\n'
-                f'commits = ["{merge_commit}"]\\n'
-                'paths = [\'\'\'^conflict\\\\.txt$\'\'\']\\n'
-                'regexTarget = "line"\\n'
-                'regexes = [\'\'\'SYNTHETIC_MERGE_ONLY_SENTINEL\'\'\']\\n',
+                'title = "Scoped merge allowlist fixture"\n'
+                '[extend]\nuseDefault = false\n'
+                '[[rules]]\n'
+                'id = "synthetic-merge-only"\n'
+                'description = "Synthetic merge-only marker"\n'
+                'regex = \'\'\'SYNTHETIC_MERGE_ONLY_SENTINEL\'\'\'\n'
+                '[[allowlists]]\n'
+                'description = "Exact merge SHA and path only"\n'
+                'targetRules = ["synthetic-merge-only"]\n'
+                'condition = "AND"\n'
+                f'commits = ["{merge_commit}"]\n'
+                'paths = [\'\'\'^conflict\\.txt$\'\'\']\n'
+                'regexTarget = "line"\n'
+                'regexes = [\'\'\'SYNTHETIC_MERGE_ONLY_SENTINEL\'\'\']\n',
                 encoding="utf-8",
             )
             allowed_report = root / "scoped-allowlisted.json"

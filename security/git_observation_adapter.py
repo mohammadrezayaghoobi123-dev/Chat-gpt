@@ -243,19 +243,21 @@ def observe_repository(
         repository, ["rev-parse", "--git-path", "info/grafts"],
         timeout_seconds=timeout_seconds,
     ).stdout.strip()
-    grafts_path = _repository_path(repository, grafts)\n    if grafts_path.is_file() and grafts_path.stat().st_size:
+    grafts_path = _repository_path(repository, grafts)
+    if grafts_path.is_file() and grafts_path.stat().st_size:
         diagnostics.add("legacy_grafts_present")
 
     alternates = _run_git(
         repository, ["rev-parse", "--git-path", "objects/info/alternates"],
         timeout_seconds=timeout_seconds,
     ).stdout.strip()
-    alternates_path = _repository_path(repository, alternates)\n    if alternates_path.is_file() and alternates_path.stat().st_size:
+    alternates_path = _repository_path(repository, alternates)
+    if alternates_path.is_file() and alternates_path.stat().st_size:
         diagnostics.add("alternate_object_store_present")
 
     config_promisor = _run_git(
         repository,
-        ["config", "--get-regexp", r"^remote\\..*\\.promisor$"],
+        ["config", "--get-regexp", r"^remote\..*\.promisor$"],
         timeout_seconds=timeout_seconds,
         check=False,
     )
@@ -263,7 +265,8 @@ def observe_repository(
         repository, ["rev-parse", "--git-path", "objects/pack"],
         timeout_seconds=timeout_seconds,
     ).stdout.strip()
-    pack_path = _repository_path(repository, pack_dir)\n    has_promisor_pack = pack_path.is_dir() and any(pack_path.glob("*.promisor"))
+    pack_path = _repository_path(repository, pack_dir)
+    has_promisor_pack = pack_path.is_dir() and any(pack_path.glob("*.promisor"))
     if config_promisor.returncode == 0 or has_promisor_pack:
         diagnostics.add("partial_clone_promisor_present")
 

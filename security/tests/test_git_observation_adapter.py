@@ -1,6 +1,7 @@
 import os
 import pathlib
 import subprocess
+import shutil
 import tempfile
 import unittest
 
@@ -86,6 +87,7 @@ class GitObservationAdapterTests(unittest.TestCase):
         self.assertEqual(observed["inventory"]["covered_count"], 0)
 
     def test_sha256_repository_uses_native_object_format(self):
+        shutil.rmtree(self.repo / ".git")
         self.git("init", "--object-format=sha256", "-b", "main")
         self.git("config", "user.name", "Adapter Test")
         self.git("config", "user.email", "adapter@example.invalid")

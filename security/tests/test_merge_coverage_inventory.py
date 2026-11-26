@@ -135,6 +135,28 @@ class MergeCoverageInventoryTests(unittest.TestCase):
         self.assertEqual(inventory["snapshot_status"], "incomplete")
         self.assertIn("ref_tip_missing", inventory["reasons"])
 
+    def test_unreachable_extra_commit_makes_inventory_incomplete(self):
+        graph = self.complete_graph()
+        graph["9" * 40] = []
+        inventory = self.build(reachable_commits=graph)
+
+        self.assertEqual(inventory["snapshot_status"], "incomplete")
+        self.assertIn("reachable_commit_inventory_mismatch", inventory["reasons"])
+
+    def test_parent_cycle_makes_inventory_incomplete(self):
+        graph = {A: [B], B: [A]}
+        refs = {"refs/heads/main": A}
+        inventory = build_merge_coverage_inventory(
+            refs_before=refs,
+            refs_after=refs,
+            reachable_commits=graph,
+            enumeration_complete=True,
+            object_inventory_complete=True,
+        )
+
+        self.assertEqual(inventory["snapshot_status"], "incomplete")
+        self.assertIn("commit_graph_cycle", inventory["reasons"])
+
     def test_sha256_object_ids_are_supported_without_mixing_hash_formats(self):
         ids = {name: (char * 64) for name, char in {
             "root": "1", "left": "2", "right": "3", "merge": "4"

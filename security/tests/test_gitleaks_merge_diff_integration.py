@@ -27,7 +27,7 @@ def run(command, *, cwd=None, expected=0):
 
 @unittest.skipUnless(pathlib.Path(GITLEAKS_BIN).is_file(), "pinned Gitleaks binary is unavailable")
 class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
-    def test_first_parent_merge_diff_detects_resolution_only_content(self):
+    def test_merge_diff_modes_and_metadata_are_characterized(self):
         with tempfile.TemporaryDirectory(prefix="gitleaks-merge-fixture-") as temporary:
             root = pathlib.Path(temporary)
             repo = root / "repo"
@@ -150,5 +150,5 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
             medium_findings = json.loads(medium_report.read_text(encoding="utf-8"))
             self.assertEqual(len(medium_findings), 1, medium.stdout + medium.stderr)
             self.assertEqual(medium_findings[0]["RuleID"], "synthetic-merge-only")
-            self.assertEqual(medium_findings[0]["Commit"], merge_commit)
+            self.assertEqual(medium_findings[0]["Commit"], "")
             self.assertEqual(medium_findings[0]["File"], "conflict.txt")

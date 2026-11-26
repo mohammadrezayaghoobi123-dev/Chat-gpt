@@ -168,6 +168,66 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
                 'regexes = [\'\'\'SYNTHETIC_MERGE_ONLY_SENTINEL\'\'\']\n',
                 encoding="utf-8",
             )
+            # Remerge omits Commit, so an unmodified commit-scoped allowlist
+            # cannot match even when this invocation scans exactly one known merge.
+            remerge_scoped_report = root / "remerge-commit-scoped.json"
+            remerge_scoped = run(
+                [
+                    GITLEAKS_BIN, "git", "--config", str(allowlist_config), "--redact",
+                    "--exit-code", "2", "--report-format", "json",
+                    "--report-path", str(remerge_scoped_report),
+                    f"--log-opts={merge_commit}^! --diff-merges=remerge --no-prefix",
+                    str(repo),
+                ],
+                expected=2,
+            )
+            remerge_scoped_findings = json.loads(remerge_scoped_report.read_text(encoding="utf-8"))
+            self.assertEqual(len(remerge_scoped_findings), 1, remerge_scoped.stdout + remerge_scoped.stderr)
+            self.assertEqual(remerge_scoped_findings[0]["Commit"], "")
+
+            # For a single-merge invocation, a wrapper may remove only the matching
+            # SHA predicate from a temporary config; all other allowlist predicates
+            # remain exact. A wrong SHA must remain non-matching.
+            adapted_config = root / "remerge-adapted-allowlist.toml"
+            adapted_config.write_text(
+                allowlist_config.read_text(encoding="utf-8").replace(
+                    f'commits = ["{merge_commit}"]\\n', ""
+                ),
+                encoding="utf-8",
+            )
+            adapted_report = root / "remerge-adapted.json"
+            adapted = run(
+                [
+                    GITLEAKS_BIN, "git", "--config", str(adapted_config), "--redact",
+                    "--exit-code", "2", "--report-format", "json",
+                    "--report-path", str(adapted_report),
+                    f"--log-opts={merge_commit}^! --diff-merges=remerge --no-prefix",
+                    str(repo),
+                ],
+                expected=0,
+            )
+            self.assertEqual(json.loads(adapted_report.read_text(encoding="utf-8")), [], adapted.stdout + adapted.stderr)
+
+            wrong_remerge_config = root / "remerge-wrong-sha.toml"
+            wrong_remerge_config.write_text(
+                allowlist_config.read_text(encoding="utf-8").replace(merge_commit, main_parent),
+                encoding="utf-8",
+            )
+            wrong_remerge_report = root / "remerge-wrong-sha.json"
+            wrong_remerge = run(
+                [
+                    GITLEAKS_BIN, "git", "--config", str(wrong_remerge_config), "--redact",
+                    "--exit-code", "2", "--report-format", "json",
+                    "--report-path", str(wrong_remerge_report),
+                    f"--log-opts={merge_commit}^! --diff-merges=remerge --no-prefix",
+                    str(repo),
+                ],
+                expected=2,
+            )
+            wrong_remerge_findings = json.loads(wrong_remerge_report.read_text(encoding="utf-8"))
+            self.assertEqual(len(wrong_remerge_findings), 1, wrong_remerge.stdout + wrong_remerge.stderr)
+            self.assertEqual(wrong_remerge_findings[0]["Commit"], "")
+
             allowed_report = root / "scoped-allowlisted.json"
             allowed = run(
                 [

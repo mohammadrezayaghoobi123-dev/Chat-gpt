@@ -982,6 +982,54 @@ it("consumes a signed lease-renewal assertion once and rejects replay", async ()
   });
 });
 
+it("characterizes Agent claim after a forward caller-clock jump against a stable Ledger clock", async () => {
+  const ledger = ledgerFor("ledger-agent-claim-forward-clock-jump");
+  await createTask(ledger, {
+    task: task(), idempotencyKey: "task-create-agent-claim-forward-clock",
+    inputHash: "c".repeat(64), now,
+  });
+
+  const forwardJumpedCallerTime = now + 60_000;
+  const stableLedgerWallClock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const jti = "jti-agent-claim-forward-clock-0001";
+  try {
+    const assertion = await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "claimTask",
+      nowMs: forwardJumpedCallerTime, jti,
+    });
+    expect(Date.now()).toBe(now);
+
+    const claim = await ledger.claimTask({
+      workerId: "agent:worker-1", workerAssertion: assertion,
+      leaseMs: 30_000, now: forwardJumpedCallerTime,
+    });
+    expect(claim).toMatchObject({
+      claimed: true, leaseGeneration: 1,
+      leaseUntil: forwardJumpedCallerTime + 30_000,
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until, updated_at FROM orchestrator_execution_leases WHERE task_id = ?",
+        "task-0001",
+      ).one()).toEqual({
+        worker_id: "agent:worker-1",
+        lease_generation: 1,
+        lease_until: forwardJumpedCallerTime + 30_000,
+        updated_at: forwardJumpedCallerTime,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?", jti,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?", "task-0001",
+      ).one().count).toBe(1;
+    });
+  } finally {
+    stableLedgerWallClock.mockRestore();
+  }
+});
+
 it("rejects Agent lease renewal after a forward caller-clock jump", async () => {
   const ledger = ledgerFor("ledger-agent-lease-forward-clock-jump");
   await createTask(ledger, {

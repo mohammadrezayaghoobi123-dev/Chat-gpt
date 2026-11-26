@@ -16,7 +16,7 @@ A prior source-level preflight reported 43 unique candidate tuples and no cross-
 - Do not change `.gitleaks.toml`, expand or weaken any allowlist, rewrite history, rotate credentials, or classify a finding as harmless merely because it is redacted.
 - Do not print, upload, persist, or expose secret values, unredacted reports, full source lines, or generated diagnostic TOML.
 - Preserve the ordinary full-history scan and its existing redaction and exit-status behavior.
-- Generate all temporary configs and reports under `$RUNNER_TEMP`, set `umask 077`, and remove every temporary file through an EXIT trap.
+- Generate all temporary configs and reports under `$RUNNER_TEMP`, set `umask 077`, and remove every temporary file through an EXIT trap whose cleanup status is checked; cleanup failure must force a non-zero result without masking the original failure.
 - Use the exact Gitleaks binary/version already provisioned by the workflow. No network fetch or floating tool version is permitted in the matrix step.
 - Every scan must use the same checked-out commit graph and fetched refs. A missing ref, incomplete history, changed HEAD, timeout, malformed report, or budget exhaustion is a hard failure / UNKNOWN.
 - Never convert an UNKNOWN or failed scan into PASS.
@@ -44,13 +44,13 @@ Run exactly 16 diagnostic scans after the ordinary full-history scan:
 
 ### A. All-out control (one scan)
 
-Create a temporary config by removing exactly the 15 legacy entries from the current 30-entry config. Retain all 13 new line exceptions and both special fixtures byte-for-byte.
+Create a temporary config by removing exactly the 15 legacy entries from the current 30-entry config. Retain all 13 new line exceptions and both special fixtures without changing their parsed TOML values or order. Textual formatting may change during serialization; reparsing must yield exact semantic equality apart from the deliberately removed entries.
 
 Let `N` be the independently reconstructed tuple set covered by the 13 new exceptions and 2 special fixtures. Expected redacted report tuple set: exactly `U − N`. The preflight hypothesis is `U ∩ N = ∅`, in which case this equals `U`; the matrix must verify rather than assume that condition. The comparison is order-independent, and every tuple must occur exactly once. Missing, extra, duplicate, malformed, or out-of-scope tuples fail the matrix.
 
 ### B. One-out variants (15 scans)
 
-For each legacy entry (i), create a temporary config from the original current config by removing exactly entry (i), preserving every other entry byte-for-byte.
+For each legacy entry (i), create a temporary config from the original current config by removing exactly entry (i). Preserve every other top-level setting and allowlist object at the parsed TOML data-model level; formatting-only changes are acceptable only if reparsing yields exact semantic equality.
 
 Expected redacted report tuple set: exactly `E_i − (union(E_j for j != i) ∪ N)`. This is the subset uniquely suppressed by entry `i` while every other legacy entry and all new/fixture entries remain active. If there is no overlap, the expected report is exactly `E_i`, not `U − E_i`. Shared tuples remain suppressed by another active entry and cannot establish unique necessity in this one-out run. Any overlap or unexpected delta is DISPUTED/UNKNOWN and requires isolated attribution; do not label the entry redundant or overbroad automatically. Compare exact tuples, reject duplicate records, and require each expected tuple exactly once.
 
@@ -81,11 +81,11 @@ For every scan:
 ## 7. TDD and adversarial acceptance tests
 
 Before enabling the matrix in the workflow, add tests that prove:
-1. All-out config removes exactly the 15 baseline entries and retains the 13 new entries plus 2 fixtures byte-for-byte.
-2. Each one-out config removes exactly one uniquely identified baseline entry and preserves all others byte-for-byte.
+All-out config removes exactly the 15 baseline entries and preserves the 13 new entries, 2 fixtures, and every other TOML setting at the parsed data-model level.
+Each one-out config removes exactly one uniquely identified baseline entry and preserves all remaining entries and top-level settings at the parsed data-model level.
 3. Duplicate descriptions and duplicate tuple identities are rejected.
 4. Missing, extra, duplicate, malformed, wrong-rule, wrong-commit, wrong-path, and wrong-line findings are rejected.
-5. Tuple comparison is order-independent but multiplicity-sensitive.
+Tuple comparison is order-independent but multiplicity-sensitive; generated TOML reparses to the exact expected full config model, with only the intended allowlist entries removed. Unsupported or unknown config fields/types fail closed rather than being silently dropped.
 6. A Python-derived manifest mismatch against the independently reviewed manifest is UNKNOWN, never silently accepted.
 7. Gitleaks exit codes 0, 2, and unexpected non-zero codes are classified correctly.
 8. Per-scan timeout, aggregate timeout, scan omission, report truncation, malformed JSON, and cleanup failure all fail closed.

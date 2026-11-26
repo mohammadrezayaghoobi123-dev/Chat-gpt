@@ -46,7 +46,7 @@ Run exactly 16 diagnostic scans after the ordinary full-history scan:
 
 Create a temporary config by removing exactly the 15 legacy entries from the current 30-entry config. Retain all 13 new line exceptions and both special fixtures byte-for-byte.
 
-Expected redacted report tuple multiset: exactly (U). The comparison is order-independent and includes multiplicity. Missing, extra, duplicate, malformed, or out-of-scope tuples fail the matrix.
+Let (N) be the independently reconstructed tuple set covered by the 13 new exceptions and 2 special fixtures. Expected redacted report tuple set: exactly (U \\ N). The preflight hypothesis is (U \\cap N = \\varnothing), in which case this equals (U); the matrix must verify rather than assume that condition. The comparison is order-independent, and every tuple must occur exactly once. Missing, extra, duplicate, malformed, or out-of-scope tuples fail the matrix.
 
 ### B. One-out variants (15 scans)
 

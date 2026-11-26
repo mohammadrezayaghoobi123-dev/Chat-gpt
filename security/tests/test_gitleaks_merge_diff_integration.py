@@ -406,3 +406,70 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
                 [],
                 remerge.stdout + remerge.stderr,
             )
+
+
+    def test_remerge_does_not_cover_octopus_merge_and_must_be_rejected(self):
+        """Git remerge diff is two-parent-only; octopus coverage must fail closed."""
+        with tempfile.TemporaryDirectory(prefix="gitleaks-octopus-") as temporary:
+            root = pathlib.Path(temporary)
+            repo = root / "repo"
+            repo.mkdir()
+            run(["git", "init", "-b", "main"], cwd=repo)
+            run(["git", "config", "user.name", "Synthetic Test"], cwd=repo)
+            run(["git", "config", "user.email", "synthetic@example.invalid"], cwd=repo)
+
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "README.md"], cwd=repo)
+            run(["git", "commit", "-m", "base"], cwd=repo)
+
+            marker = "SYNTHETIC_OCTOPUS_ONLY_SENTINEL"
+            branch_names = ["side-a", "side-b", "side-c"]
+            for index, branch_name in enumerate(branch_names):
+                run(["git", "checkout", "-b", branch_name], cwd=repo)
+                filename = f"{branch_name}.txt"
+                (repo / filename).write_text(f"{marker}-{index}\n", encoding="utf-8")
+                run(["git", "add", filename], cwd=repo)
+                run(["git", "commit", "-m", f"add {filename}"], cwd=repo)
+                if index < len(branch_names) - 1:
+                    run(["git", "checkout", "main"], cwd=repo)
+
+            run(["git", "checkout", "main"], cwd=repo)
+            run(["git", "merge", "--no-ff", *branch_names, "-m", "octopus merge"], cwd=repo)
+            merge_commit = run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
+            parents = run(["git", "rev-list", "--parents", "-n", "1", merge_commit], cwd=repo).stdout.split()
+            self.assertEqual(len(parents), 4, "fixture must create a three-parent octopus merge")
+
+            merged_tree = run(["git", "show", f"{merge_commit}:side-c.txt"], cwd=repo).stdout
+            self.assertIn(marker, merged_tree)
+
+            config = root / "octopus.toml"
+            config.write_text(
+                'title = "Synthetic octopus coverage fixture"\n'
+                '[extend]\nuseDefault = false\n'
+                '[[rules]]\n'
+                'id = "synthetic-octopus-only"\n'
+                'description = "Synthetic octopus marker"\n'
+                f"regex = '''{marker}-2'''\n",
+                encoding="utf-8",
+            )
+
+            report = root / "octopus-remerge.json"
+            result = run(
+                [
+                    GITLEAKS_BIN, "git", "--config", str(config), "--redact",
+                    "--exit-code", "2", "--report-format", "json",
+                    "--report-path", str(report),
+                    f"--log-opts={merge_commit}^! --diff-merges=remerge --no-prefix",
+                    str(repo),
+                ],
+                expected=0,
+            )
+            findings = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(
+                findings,
+                [],
+                result.stdout + result.stderr,
+            )
+            # The secret-like marker exists in the octopus result tree but is
+            # invisible to remerge mode. A production wrapper must reject
+            # parent-count != 2 rather than silently count this as scanned.

@@ -128,6 +128,26 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
             self.assertEqual(scoped_findings[0]["Commit"], merge_commit)
             self.assertEqual(scoped_findings[0]["File"], "conflict.txt")
 
+            # Remerge mode should isolate only the resolution delta, but Gitleaks
+            # currently omits commit identity; a future wrapper must bind this
+            # single-merge invocation to the already verified merge SHA.
+            scoped_remerge_report = root / "scoped-remerge.json"
+            scoped_remerge = run(
+                [
+                    GITLEAKS_BIN, "git", "--config", str(config), "--redact",
+                    "--exit-code", "2", "--report-format", "json",
+                    "--report-path", str(scoped_remerge_report),
+                    f"--log-opts={merge_commit}^! --diff-merges=remerge --no-prefix",
+                    str(repo),
+                ],
+                expected=2,
+            )
+            scoped_remerge_findings = json.loads(scoped_remerge_report.read_text(encoding="utf-8"))
+            self.assertEqual(len(scoped_remerge_findings), 1, scoped_remerge.stdout + scoped_remerge.stderr)
+            self.assertEqual(scoped_remerge_findings[0]["RuleID"], "synthetic-merge-only")
+            self.assertEqual(scoped_remerge_findings[0]["Commit"], "")
+            self.assertEqual(scoped_remerge_findings[0]["File"], "conflict.txt")
+
             # Verify that the preserved merge SHA makes commit-scoped allowlists
             # usable, and that a neighboring/wrong SHA does not suppress the finding.
             allowlist_config = root / "scoped-allowlist.toml"
@@ -307,3 +327,22 @@ class GitleaksMergeDiffIntegrationTests(unittest.TestCase):
             self.assertEqual(findings[0]["Commit"], merge_commit)
             self.assertNotEqual(findings[0]["Commit"], introducing_commit)
             self.assertEqual(findings[0]["File"], "secret.txt")
+
+            # Remerge diff should omit inherited side-branch content; only the
+            # resolution-specific delta belongs to the merge commit.
+            remerge_report = root / "inherited-remerge.json"
+            remerge = run(
+                [
+                    GITLEAKS_BIN, "git", "--config", str(config), "--redact",
+                    "--exit-code", "2", "--report-format", "json",
+                    "--report-path", str(remerge_report),
+                    f"--log-opts={merge_commit}^! --diff-merges=remerge --no-prefix",
+                    str(repo),
+                ],
+                expected=0,
+            )
+            self.assertEqual(
+                json.loads(remerge_report.read_text(encoding="utf-8")),
+                [],
+                remerge.stdout + remerge.stderr,
+            )

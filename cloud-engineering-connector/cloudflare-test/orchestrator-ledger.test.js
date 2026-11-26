@@ -515,27 +515,146 @@ describe("OrchestratorLedger durable coordination contract", () => {
     });
   });
 
-  it("requires reconciliation evidence before reclaiming an expired lease and preserves task state", async () => {
-    const ledger = ledgerFor("ledger-expired-lease-reconciliation");
-    await createTask(ledger, { task: task(), idempotencyKey: "task-create-0012", inputHash: "b".repeat(64), now });
-    const first = await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1"), leaseMs: 100, now });
-    await expect(ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101 }))
-      .resolves.toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
-    const untrustedEvidence = await ledger.claimTask({
-      workerId: "agent:worker-1", workerAssertion: await claimAssertion("agent:worker-1", now + 101), leaseMs: 100, now: now + 101,
-      reconciliationEvidence: { checked: true, priorGeneration: first.leaseGeneration, evidenceRef: "github://caller-controlled/reference" },
+  it("keeps an expired lease fenced when reconciliation evidence is caller-controlled", async () => {
+    const ledger = ledgerFor("ledger-expired-lease-reconciliation-fencing");
+    await createTask(ledger, {
+      task: task(), idempotencyKey: "task-create-expired-reconciliation-fencing",
+      inputHash: "b".repeat(64), now,
     });
-    expect(untrustedEvidence).toMatchObject({ claimed: false, reason: "RECONCILIATION_REQUIRED" });
-    await expect(ledger.getTask({ taskId: "task-0001" })).resolves.toMatchObject({ state: "SCHEDULED", version: 1 });
+
+    const initialJti = "jti-expired-reconciliation-initial-0001";
+    const first = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask",
+        nowMs: now, jti: initialJti,
+      }),
+      leaseMs: 100,
+      now,
+    });
+    expect(first).toMatchObject({
+      claimed: true, leaseGeneration: 1, leaseUntil: now + 100,
+    });
+
+    const expiredAt = now + 101;
+    const noEvidenceJti = "jti-expired-reconciliation-none-0001";
+    await expect(ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask",
+        nowMs: expiredAt, jti: noEvidenceJti,
+      }),
+      leaseMs: 100,
+      now: expiredAt,
+    })).resolves.toMatchObject({
+      claimed: false, reason: "RECONCILIATION_REQUIRED",
+    });
+
+    const forgedEvidenceJti = "jti-expired-reconciliation-forged-0001";
+    await expect(ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "claimTask",
+        nowMs: expiredAt, jti: forgedEvidenceJti,
+      }),
+      leaseMs: 100,
+      now: expiredAt,
+      reconciliationEvidence: {
+        checked: true,
+        priorGeneration: first.leaseGeneration,
+        evidenceRef: "github://caller-controlled/reference",
+      },
+    })).resolves.toMatchObject({
+      claimed: false, reason: "RECONCILIATION_REQUIRED",
+    });
+
+    const renewalJti = "jti-expired-reconciliation-renew-0001";
+    await expect(ledger.renewLease({
+      taskId: "task-0001",
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "renewLease",
+        nowMs: expiredAt, jti: renewalJti,
+      }),
+      leaseGeneration: first.leaseGeneration,
+      leaseMs: 30_000,
+      now: expiredAt,
+    })).resolves.toEqual({
+      renewed: false, reason: "LEASE_FENCE_MISMATCH",
+    });
+
+    const releaseJti = "jti-expired-reconciliation-release-0001";
+    await expect(ledger.releaseLease({
+      taskId: "task-0001",
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "releaseLease",
+        nowMs: expiredAt, jti: releaseJti,
+      }),
+      leaseGeneration: first.leaseGeneration,
+      now: expiredAt,
+    })).resolves.toEqual({
+      released: false, reason: "LEASE_FENCE_MISMATCH",
+    });
+
+    const transitionJti = "jti-expired-reconciliation-transition-0001";
+    await expect(ledger.transitionTask({
+      taskId: "task-0001",
+      expectedVersion: 1,
+      expectedState: "SCHEDULED",
+      nextState: "RUNNING",
+      actor: agent,
+      evidence,
+      now: expiredAt,
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "transitionTask",
+        nowMs: expiredAt, jti: transitionJti,
+      }),
+      leaseGeneration: first.leaseGeneration,
+    })).resolves.toEqual({
+      updated: false, reason: "LEASE_FENCE_MISMATCH",
+    });
+
+    await expect(ledger.getTask({ taskId: "task-0001" }))
+      .resolves.toMatchObject({ state: "SCHEDULED", version: 1, updatedAt: now });
+
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec(
-        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        "SELECT worker_id, lease_generation, lease_until, updated_at FROM orchestrator_execution_leases WHERE task_id = ?",
         "task-0001",
-      ).one()).toMatchObject({
+      ).one()).toEqual({
         worker_id: "agent:worker-1",
-        lease_generation: first.leaseGeneration,
+        lease_generation: 1,
         lease_until: now + 100,
+        updated_at: now,
       });
+      expect(state.storage.sql.exec(
+        "SELECT state, version, updated_at FROM orchestrator_tasks WHERE task_id = ?",
+        "task-0001",
+      ).one()).toEqual({
+        state: "SCHEDULED",
+        version: 1,
+        updated_at: now,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_outbox_events",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        initialJti,
+      ).one().count).toBe(1);
+      for (const jti of [
+        noEvidenceJti, forgedEvidenceJti, renewalJti, releaseJti, transitionJti,
+      ]) {
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+          jti,
+        ).one().count).toBe(0);
+      }
     });
   });
 

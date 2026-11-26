@@ -137,7 +137,8 @@ Define:
 - `P`: all other active suppression mechanisms, including the 13 new exceptions, two fixtures, inherited defaults, inline ignores, ignore files, and any other active suppressor.
 - `S_P`: the independently reconstructed set of candidate Finding identities suppressed by `P` in the exact scan universe.
 - `E_i`: independently reconstructed Finding identities attributable to legacy entry `L_i` when evaluated against the exact source commit/path/rule/line provenance.
-- `U = multiset-union(E_1 ... E_15)`, retaining overlap and multiplicity information.
+- `E_i` is a set of canonical Finding identities attributable to entry `L_i`. Preserve the many-to-many attribution relation from each identity to every suppressor that matches it; do not duplicate one detector Finding merely because multiple allowlist entries suppress it.
+- `U = union(E_1 ... E_15)` is the unique candidate identity universe; retain per-entry overlap in the attribution relation separately. The observed Gitleaks report is compared as a multiset in which each expected identity occurs exactly once; duplicate report records are rejected.
 
 The all-out expectation is the Finding multiset exposed by disabling only `L`, with `P` left unchanged. It MUST be derived from the independent source/provenance oracle and the effective suppression inventory; it MUST NOT be approximated by `U - N` unless the oracle proves that this set subtraction is equivalent under the pinned Gitleaks matching semantics. The one-out expectation MUST likewise account for every remaining legacy entry and every member of `P`. Any suppressor whose exact effect cannot be independently reconstructed makes the affected attribution UNKNOWN and blocks a PASS.
 

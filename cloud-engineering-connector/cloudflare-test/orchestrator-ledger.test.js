@@ -2564,3 +2564,84 @@ describe("OrchestratorLedger signed worker clock-skew boundaries", () => {
     }
   });
 });
+
+
+describe("OrchestratorLedger worker assertion clock rollback", () => {
+  it("rejects a consumed JTI after forward-clock cleanup and a subsequent clock rollback", async () => {
+    const ledger = ledgerFor("ledger-worker-clock-rollback-jti-replay");
+    const originalJti = "jti-clock-rollback-original-000001";
+    const forwardJti = "jti-clock-rollback-forward-000001";
+    const originalAssertion = await createWorkerAssertion({
+      subject: "orchestrator-scheduler",
+      role: "system",
+      operation: "createTask",
+      nowMs: now,
+      jti: originalJti,
+    });
+
+    await expect(ledger.createTask({
+      task: task("task-clock-rollback-original"),
+      idempotencyKey: "clock-rollback-original",
+      inputHash: "a".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: originalAssertion,
+    })).resolves.toMatchObject({ created: true });
+
+    const forwardNow = now + 661_000;
+    const forwardAssertion = await createWorkerAssertion({
+      subject: "orchestrator-scheduler",
+      role: "system",
+      operation: "createTask",
+      nowMs: forwardNow,
+      jti: forwardJti,
+    });
+    await expect(ledger.createTask({
+      task: task("task-clock-rollback-forward"),
+      idempotencyKey: "clock-rollback-forward",
+      inputHash: "b".repeat(64),
+      now: forwardNow,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: forwardAssertion,
+    })).resolves.toMatchObject({ created: true });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        originalJti,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        forwardJti,
+      ).one().count).toBe(1);
+    });
+
+    const rolledBackNow = now + 10_000;
+    await expect(ledger.createTask({
+      task: task("task-clock-rollback-replayed"),
+      idempotencyKey: "clock-rollback-replayed",
+      inputHash: "c".repeat(64),
+      now: rolledBackNow,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: originalAssertion,
+    })).resolves.toMatchObject({
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+        "task-clock-rollback-replayed",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        originalJti,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        forwardJti,
+      ).one().count).toBe(1);
+    });
+  });
+});

@@ -2804,3 +2804,74 @@ describe("OrchestratorLedger claim cursor clock rollback", () => {
     });
   });
 });
+
+
+describe("OrchestratorLedger lease clock rollback", () => {
+  it("uses effective high-water time to prevent a backward step from renewing an expired lease", async () => {
+    const ledger = ledgerFor("ledger-clock-rollback-lease-renewal");
+    const taskId = "task-clock-rollback-lease-expiry";
+    await createTask(ledger, {
+      task: task(taskId),
+      idempotencyKey: "clock-rollback-lease-expiry",
+      inputHash: "2".repeat(64),
+      now,
+    });
+
+    const claimNow = now + 1;
+    const claimed = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1",
+        role: "agent",
+        operation: "claimTask",
+        nowMs: claimNow,
+      }),
+      leaseMs: 17_000,
+      now: claimNow,
+      taskId,
+    });
+    expect(claimed).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    const originalLeaseUntil = claimNow + 17_000;
+    const forwardNow = now + 20_000;
+    await createTask(ledger, {
+      task: task("task-clock-rollback-lease-highwater"),
+      idempotencyKey: "clock-rollback-lease-highwater",
+      inputHash: "3".repeat(64),
+      now: forwardNow,
+    });
+
+    const backwardNow = now + 15_000;
+    const renewal = await ledger.renewLease({
+      taskId,
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1",
+        role: "agent",
+        operation: "renewLease",
+        nowMs: backwardNow,
+      }),
+      leaseGeneration: claimed.leaseGeneration,
+      leaseMs: 30_000,
+      now: backwardNow,
+    });
+    expect(renewal).toMatchObject({
+      renewed: false,
+      reason: "LEASE_FENCE_MISMATCH",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        taskId,
+      ).one()).toMatchObject({
+        worker_id: "agent:worker-1",
+        lease_generation: 1,
+        lease_until: originalLeaseUntil,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker'",
+      ).one().last_seen_ms).toBe(forwardNow);
+    });
+  });
+});

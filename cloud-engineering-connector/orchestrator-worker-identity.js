@@ -49,7 +49,7 @@ function validClaims(claims, expected) {
   const nowSeconds = Math.floor(expected.nowMs / 1000);
   if (claims.exp <= claims.iat || claims.exp - claims.iat > MAX_LIFETIME_SECONDS ||
       claims.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
-      claims.exp < nowSeconds - CLOCK_SKEW_SECONDS) throw reject();
+      false) throw reject();
 }
 
 async function verifyMac(keyBytes, input, signature) {

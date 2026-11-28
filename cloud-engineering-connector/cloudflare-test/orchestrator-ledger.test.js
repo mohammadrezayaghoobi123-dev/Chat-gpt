@@ -2616,7 +2616,7 @@ describe("OrchestratorLedger worker assertion clock rollback", () => {
         forwardJti,
       ).one().count).toBe(1);
       expect(state.storage.sql.exec(
-        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker'",
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker:orchestrator-scheduler'",
       ).one().last_seen_ms).toBe(forwardNow);
     });
 
@@ -2647,7 +2647,7 @@ describe("OrchestratorLedger worker assertion clock rollback", () => {
         forwardJti,
       ).one().count).toBe(1);
       expect(state.storage.sql.exec(
-        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker'",
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker:orchestrator-scheduler'",
       ).one().last_seen_ms).toBe(forwardNow);
     });
 
@@ -2670,7 +2670,7 @@ describe("OrchestratorLedger worker assertion clock rollback", () => {
 
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec(
-        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker'",
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker:orchestrator-scheduler'",
       ).one().last_seen_ms).toBe(forwardNow);
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
@@ -2768,6 +2768,13 @@ describe("OrchestratorLedger claim cursor clock rollback", () => {
       inputHash: "1".repeat(64),
       now: forwardNow,
     });
+    await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1", forwardNow),
+      leaseMs: 30_000,
+      now: forwardNow,
+      taskId: "task-clock-cursor-forward",
+    });
 
     const cursorHash = "a".repeat(64);
     await runInDurableObject(ledger, async (_instance, state) => {
@@ -2796,7 +2803,7 @@ describe("OrchestratorLedger claim cursor clock rollback", () => {
         cursorHash,
       ).one().count).toBe(1);
       expect(state.storage.sql.exec(
-        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker'",
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker:agent:worker-1'",
       ).one().last_seen_ms).toBe(forwardNow);
     });
   });
@@ -2831,11 +2838,17 @@ describe("OrchestratorLedger lease clock rollback", () => {
 
     const originalLeaseUntil = claimNow + 17_000;
     const forwardNow = now + 20_000;
-    await createTask(ledger, {
-      task: task("task-clock-rollback-lease-highwater"),
-      idempotencyKey: "clock-rollback-lease-highwater",
-      inputHash: "3".repeat(64),
+    await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1",
+        role: "agent",
+        operation: "claimTask",
+        nowMs: forwardNow,
+      }),
+      leaseMs: 30_000,
       now: forwardNow,
+      taskId,
     });
 
     const backwardNow = now + 15_000;
@@ -2867,7 +2880,7 @@ describe("OrchestratorLedger lease clock rollback", () => {
         lease_until: originalLeaseUntil,
       });
       expect(state.storage.sql.exec(
-        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker'",
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker:agent:worker-1'",
       ).one().last_seen_ms).toBe(forwardNow);
     });
   });

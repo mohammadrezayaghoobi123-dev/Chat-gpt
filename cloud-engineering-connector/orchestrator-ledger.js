@@ -19,7 +19,6 @@ const MAX_EXPIRED_CLAIM_CURSORS_PER_CALL = 64;
 const EXECUTOR_PRINCIPAL = "orchestrator-executor";
 const EXECUTOR_OPERATIONS = Object.freeze(["claimTask", "renewLease", "releaseLease"]);
 const EXECUTOR_CLOCK_SKEW_SECONDS = 5;
-const LEDGER_CLOCK_ROLLBACK_TOLERANCE_SECONDS = 5;
 
 function executorTrustedNow(assertion) {
   const trustedNow = Date.now();
@@ -137,16 +136,16 @@ function advanceLedgerClock(sql, nowMs) {
   if (!Number.isSafeInteger(nowMs) || nowMs < 1) return false;
   const nowSeconds = Math.floor(nowMs / 1000);
   const previous = sql.exec(
-    "SELECT last_seen_seconds FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+    "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE singleton_id = 1",
   ).toArray()[0];
-  if (previous && nowSeconds < previous.last_seen_seconds - LEDGER_CLOCK_ROLLBACK_TOLERANCE_SECONDS) {
+  if (previous && nowMs < previous.last_seen_ms) {
     return false;
   }
-  const monotonicSeconds = Math.max(nowSeconds, previous?.last_seen_seconds ?? nowSeconds);
+  const monotonicMs = Math.max(nowMs, previous?.last_seen_ms ?? nowMs);
   sql.exec(
-    "INSERT INTO orchestrator_ledger_clock (singleton_id, last_seen_seconds) VALUES (1, ?) " +
-      "ON CONFLICT(singleton_id) DO UPDATE SET last_seen_seconds = MAX(last_seen_seconds, excluded.last_seen_seconds)",
-    monotonicSeconds,
+    "INSERT INTO orchestrator_ledger_clock (singleton_id, last_seen_ms) VALUES (1, ?) " +
+      "ON CONFLICT(singleton_id) DO UPDATE SET last_seen_ms = MAX(last_seen_ms, excluded.last_seen_ms)",
+    monotonicMs,
   );
   return true;
 }
@@ -449,7 +448,7 @@ export class OrchestratorLedger extends DurableObject {
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_ledger_clock (
         singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
-        last_seen_seconds INTEGER NOT NULL CHECK(last_seen_seconds > 0)
+        last_seen_ms INTEGER NOT NULL CHECK(last_seen_ms > 0)
       )
     `);
     sql.exec(`

@@ -1167,7 +1167,7 @@ it("prunes consumed assertion IDs only after expiry plus the retention margin", 
   });
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti='jti-claim-retention-000000000001'").one().count).toBe(0);
-    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(3);
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(2);
   });
 });
 

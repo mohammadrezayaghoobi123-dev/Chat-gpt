@@ -161,7 +161,10 @@ function consumeWorkerAssertion(sql, assertion, nowMs) {
   const nowSeconds = Math.floor(effectiveNowMs / 1000);
   if (assertion.issuedAt > nowSeconds + 5 || assertion.expiresAt < nowSeconds - 5) return false;
   // Keep consumed IDs beyond expiry, clock skew, and an additional 10-minute margin.
-  sql.exec("DELETE FROM orchestrator_consumed_assertions WHERE expires_at < ?", nowSeconds - 600);
+  sql.exec(
+    "DELETE FROM orchestrator_consumed_assertions WHERE subject = ? AND expires_at < ?",
+    assertion.subject, nowSeconds - 600,
+  );
   const existing = sql.exec(
     "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
     assertion.jti,

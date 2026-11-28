@@ -155,3 +155,77 @@ This report is not a final per-PR audit and does not claim that all 180 PRs have
 ## Change boundary
 
 This is a documentation-only audit record on an isolated branch. It does not modify runtime code, schemas, tests, secrets, Cloudflare resources, Worker configuration, staging, production, or `main`.
+
+## Follow-up snapshot — 2026-11-28
+
+### Inventory scope and counts
+
+A fresh read-only REST pagination pass was run across all open PR pages in the four repositories visible to the primary connected identity. Chat-gpt required two pages plus an empty third-page confirmation; the other three repositories fit within one page.
+
+| Repository | Open PRs | Draft | Ready |
+|---|---:|---:|---:|
+| Chat-gpt | 171 | 167 | 4 |
+| Master-Brain-MCP-Hub | 25 | 24 | 1 |
+| openclaw | 1 | 0 | 1 |
+| verbose-funicular | 0 | 0 | 0 |
+| **Total** | **197** | **191** | **6** |
+
+Draft share: **191/197 = 96.95%**. Compared with the 2026-11-26 snapshot, the number of open PRs increased from 180 to 197 (+17); Drafts increased from 176 to 191 (+15), and Ready PRs from 4 to 6 (+2).
+
+### Exact dependency graph
+
+Dependency edges were computed by exact SHA equality: a child PR's current base.sha equals another currently open PR's head.sha. This is stronger than matching branch names, but it still does not prove semantic necessity or safety of the parent.
+
+| Repository | Open PRs | Exact parent-head dependency edges |
+|---|---:|---:|
+| Chat-gpt | 171 | 118 |
+| Master-Brain-MCP-Hub | 25 | 20 |
+| openclaw | 1 | 0 |
+| verbose-funicular | 0 | 0 |
+| **Total** | **197** | **138** |
+
+Representative current edges include:
+- Chat-gpt Orchestrator clock/JTI stack: #493 → #490 → #340.
+- Chat-gpt Gitleaks coverage stack: #484 → #477 → #473, then #485 → #486 → #487 → #488.
+- Chat-gpt Executor identity stack: #268 → #263.
+- Chat-gpt cancellation/receipt/JTI chain: #327 → #328 → #329 → #330 → #334 → #336 → #338 → #340.
+- Master-Brain-MCP-Hub schema/dedup stack: #28 → #27 → #26 → #25 → #17 → #16 → #15 → #14 → #13 → #12 → #5 (with additional side branches).
+
+The grouped Pulls list returned mergeable=null for all 197 PRs, so no bulk mergeability count is asserted. Individual PR metadata can return a computed mergeability value, but that is still not review approval or release readiness.
+
+### Hostile revalidation of all six Ready PRs
+
+A Ready label is treated as ready for review, not permission to merge. Each of the six was re-read individually for exact head/base, checks and submitted reviews.
+
+| PR | Exact head | Evidence found | Current disposition |
+|---|---|---|---|
+| Chat-gpt #489 | ca048c21661e430a2f86bd1f138f683d62874a08 | Connector test job passed; PR diff Gitleaks passed; full fetched-ref/history Gitleaks failed; no submitted review | **HOLD** — full-history gate failing |
+| Chat-gpt #225 | e429197b28b4d9067a456957827bf8a3bc2ebcbc | Connector CI and branch-history Gitleaks passed; submitted reviews are COMMENTED by the PR author, not APPROVED; staging validation is blocked by Cloudflare account recovery and was not attempted | **HOLD** — no independent approval and no staging acceptance |
+| Chat-gpt #115 | 7588e798a5c3a550249a2d254582c489ff83ef1e | Last visible test check is 2026-11-02; no submitted reviews; branch diverges from current main: 168 commits on PR side and 8 commits on main side from common base f2cae91d | **REVALIDATION REQUIRED** — sync/review/current CI absent |
+| Chat-gpt #114 | 781215d8a227ca2db479177dee43b528b9772be7 | Last visible test check is 2026-11-02; no submitted reviews; branch diverges from current main: 168 commits on PR side and 5 commits on main side from common base f2cae91d | **REVALIDATION REQUIRED** — sync/review/current CI absent |
+| Master-Brain-MCP-Hub #5 | 302ab1a711f5212372144860ba5fe2d4cdc23afd | CI last verified 2026-11-14; existing technical review explicitly states COMMENT / NOT APPROVED; clean dependent PRs #12–#17 and later #25–#28 remain open; backend endpoint/contract and mixed-version migration constraints are unresolved | **HOLD** — dependent integration and approval gates open |
+| openclaw #1 | 34b78edfd22d7e86e1d140bc34294e59d7a1d6c6 | No check runs returned for the exact current head and no submitted review; prior CI run was on older SHA 2d352775 and concluded failure | **REVALIDATION REQUIRED** — exact-head CI/review missing |
+
+Relevant exact check evidence:
+- #489 Connector CI: run 46127914186; Gitleaks: run 46127914078.
+- #225 Connector CI: run 46118652788; branch-history Gitleaks: run 46118652801.
+- OpenClaw's older CI run: 44319399140.
+
+### Cross-project integration gates still open
+
+1. **Chat-gpt PR #268 / #263:** Ledger-side Ed25519 Executor lifecycle is implemented and exact-head CI passes on PR #268, but the full fetched-ref Gitleaks gate fails on three unresolved findings documented in Issue #264. Do not promote #268 into #263 until the findings are dispositioned and exact-head scans pass.
+2. **Chat-gpt PR #493 / #490:** effective issuer timestamp propagation is integrated into the PR #493 feature branch and exact-head CI passes. Parent clock/JTI PR #490 remains Draft/open; repository-wide historical Gitleaks and Staging/runtime acceptance remain separate gates.
+3. **Gitleaks integrity chain #473 / #477 / #483–#488:** clean results remain policy/ref-inventory dependent. Merge-resolution coverage is not complete; MAT-050 and octopus-merge coverage limitations remain explicit.
+4. **Master-Brain-MCP-Hub PR #5 chain:** PR #5 is Ready but its technical review is NOT APPROVED; dependent clean PRs remain Draft and backend contract/runtime semantics are not independently verified.
+5. **OpenClaw #1:** current exact head has no check-run or independent-review evidence; older CI failed. No merge recommendation.
+
+### Safety / non-claims
+
+- main was not changed; current verified main SHA remains 919b19ca3d3887352cdef06b03c668ead04fbce7.
+- No PR was merged, closed, retargeted, or downgraded in this census update.
+- No branch was deleted, history rewritten, secret read, allowlist widened, scanner weakened, Cloudflare resource/secret changed, Worker/Queue invoked, or deployment performed.
+- This is still a census and targeted Ready-PR triage, not an individual diff/security audit of all 197 PRs. The 138 exact dependency edges are a mechanical snapshot; each chain still needs semantic review and exact-head verification before promotion.
+
+### Verdict
+
+**PROVISIONALLY ACCEPTED AS A CURRENT PR LIFECYCLE CENSUS AND TRIAGE RECORD.** All six Ready PRs have at least one evidence gate preventing a merge-readiness claim. The inventory is complete for the four repositories returned by the connected primary identity at the snapshot time; it does not claim completeness for inaccessible identities, organizations, or repositories.

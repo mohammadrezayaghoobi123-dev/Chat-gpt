@@ -229,3 +229,14 @@ Relevant exact check evidence:
 ### Verdict
 
 **PROVISIONALLY ACCEPTED AS A CURRENT PR LIFECYCLE CENSUS AND TRIAGE RECORD.** All six Ready PRs have at least one evidence gate preventing a merge-readiness claim. The inventory is complete for the four repositories returned by the connected primary identity at the snapshot time; it does not claim completeness for inaccessible identities, organizations, or repositories.
+
+
+### Full-history secret scan for this census update
+
+[Full History Secret Scan](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/actions/runs/46139547068) on the exact census update head reported:
+- PR change range: 2 commits scanned; **no leaks found**.
+- All fetched refs/reachable history: 5,572 commits scanned; **13 historical generic-api-key findings**; job failed.
+- The 13 metadata-only tuples and cross-snapshot reconciliation are recorded in [Issue #264](https://github.com/mohammadrezayaghoobi123-dev/Chat-gpt/issues/264). The snapshot union currently has 15 distinct path/line/commit tuples, but the counts differ by fetched-ref scope and do not imply simultaneous reachability.
+- No source value, annotation, regex literal, or secret fingerprint was opened. No suppression, branch deletion, history rewrite, or scanner weakening was performed.
+
+**Census PR disposition: HOLD.** This documentation-only change has a clean diff scan but an unresolved full-history security gate; the PR remains Draft/open/unmerged.

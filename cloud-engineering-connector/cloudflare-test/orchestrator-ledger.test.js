@@ -2714,18 +2714,18 @@ describe("OrchestratorLedger webhook retention clock rollback", () => {
         idempotencyKey: "webhook-clock-rollback-original",
         inputHash: "b".repeat(64),
       };
-      expect(ledger.claimGitHubDelivery(original)).toMatchObject({ claimed: true, replay: false });
+      await expect(ledger.claimGitHubDelivery(original)).resolves.toMatchObject({ claimed: true, replay: false });
 
       const forwardNow = now + 31 * 24 * 60 * 60 * 1000;
       clockNow = forwardNow;
-      expect(ledger.claimGitHubDelivery({
+      await expect(ledger.claimGitHubDelivery({
         deliveryId: "delivery-clock-rollback-0002",
         bodySha256: "c".repeat(64),
         eventName: "issues",
         receivedAt: forwardNow,
         idempotencyKey: "webhook-clock-rollback-forward",
         inputHash: "d".repeat(64),
-      })).toMatchObject({ claimed: true, replay: false });
+      })).resolves.toMatchObject({ claimed: true, replay: false });
 
       await runInDurableObject(ledger, async (_instance, state) => {
         expect(state.storage.sql.exec(
@@ -2742,7 +2742,7 @@ describe("OrchestratorLedger webhook retention clock rollback", () => {
       });
 
       clockNow = now + 1_000;
-      expect(ledger.claimGitHubDelivery(original)).toMatchObject({
+      await expect(ledger.claimGitHubDelivery(original)).resolves.toMatchObject({
         claimed: false,
         replay: false,
         reason: "LEDGER_CLOCK_ROLLBACK",

@@ -135,7 +135,7 @@ function validLeaseMs(value) {
 
 function advanceLedgerClock(sql, nowMs, clockDomain = "worker") {
   if (!Number.isSafeInteger(nowMs) || nowMs < 1 ||
-      !["worker", "ledger"].includes(clockDomain)) return null;
+      !["worker", "owner", "ledger"].includes(clockDomain)) return null;
   const previous = sql.exec(
     "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = ?",
     clockDomain,
@@ -452,7 +452,7 @@ export class OrchestratorLedger extends DurableObject {
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_consumed_assertions_by_expiry ON orchestrator_consumed_assertions(expires_at)");
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_ledger_clock (
-        clock_domain TEXT PRIMARY KEY CHECK(clock_domain IN ('worker','ledger')),
+        clock_domain TEXT PRIMARY KEY CHECK(clock_domain IN ('worker','owner','ledger')),
         last_seen_ms INTEGER NOT NULL CHECK(last_seen_ms > 0)
       )
     `);
@@ -1639,7 +1639,7 @@ export class OrchestratorLedger extends DurableObject {
 
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const effectiveNowMs = this.ctx.storage.transactionSync(
-          () => advanceLedgerClock(sql, now, "worker"),
+          () => advanceLedgerClock(sql, now, "owner"),
         );
         if (effectiveNowMs === null) return { applied: false, reason: "LEDGER_CLOCK_ROLLBACK" };
         now = effectiveNowMs;
@@ -1738,7 +1738,7 @@ export class OrchestratorLedger extends DurableObject {
             };
         const resultJson = serializeBounded(successResult, "Owner command result");
         const transactionResult = this.ctx.storage.transactionSync(() => {
-          const transactionNow = advanceLedgerClock(sql, now, "worker");
+          const transactionNow = advanceLedgerClock(sql, now, "owner");
           if (transactionNow === null) return { conflict: true, reason: "LEDGER_CLOCK_ROLLBACK" };
           if (transactionNow !== now) return { retry: true };
           const priorReceipt = sql.exec(

@@ -10,6 +10,7 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const MAX_RECORD_BYTES = 32_768;
 const MAX_LEASE_MS = 86_400_000;
+const LEDGER_CLOCK_BACKWARD_TOLERANCE_MS = 5_000;
 const MAX_OUTBOX_ATTEMPTS = 8;
 const CLAIMABLE_TASK_STATES = Object.freeze(["SCHEDULED", "RUNNING", "VERIFYING"]);
 const MAX_CLAIM_CANDIDATES_PER_CALL = 128;
@@ -132,27 +133,31 @@ function validLeaseMs(value) {
 }
 
 
-function advanceLedgerClock(sql, nowMs) {
-  if (!Number.isSafeInteger(nowMs) || nowMs < 1) return false;
-  const nowSeconds = Math.floor(nowMs / 1000);
+function advanceLedgerClock(sql, nowMs, clockDomain = "worker") {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 1 ||
+      !["worker", "ledger"].includes(clockDomain)) return null;
   const previous = sql.exec(
-    "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+    "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = ?",
+    clockDomain,
   ).toArray()[0];
-  if (previous && nowMs < previous.last_seen_ms) {
-    return false;
+  if (previous && nowMs < previous.last_seen_ms - LEDGER_CLOCK_BACKWARD_TOLERANCE_MS) {
+    return null;
   }
-  const monotonicMs = Math.max(nowMs, previous?.last_seen_ms ?? nowMs);
+  const effectiveNowMs = Math.max(nowMs, previous?.last_seen_ms ?? nowMs);
   sql.exec(
-    "INSERT INTO orchestrator_ledger_clock (singleton_id, last_seen_ms) VALUES (1, ?) " +
-      "ON CONFLICT(singleton_id) DO UPDATE SET last_seen_ms = MAX(last_seen_ms, excluded.last_seen_ms)",
-    monotonicMs,
+    "INSERT INTO orchestrator_ledger_clock (clock_domain, last_seen_ms) VALUES (?, ?) " +
+      "ON CONFLICT(clock_domain) DO UPDATE SET last_seen_ms = MAX(last_seen_ms, excluded.last_seen_ms)",
+    clockDomain, effectiveNowMs,
   );
-  return true;
+  return effectiveNowMs;
 }
 
 function consumeWorkerAssertion(sql, assertion, nowMs) {
-  if (!advanceLedgerClock(sql, nowMs)) return false;
-  const nowSeconds = Math.floor(nowMs / 1000);
+  const clockDomain = assertion.subject === EXECUTOR_PRINCIPAL ? "ledger" : "worker";
+  const effectiveNowMs = advanceLedgerClock(sql, nowMs, clockDomain);
+  if (effectiveNowMs === null) return false;
+  const nowSeconds = Math.floor(effectiveNowMs / 1000);
+  if (assertion.issuedAt > nowSeconds + 5 || assertion.expiresAt < nowSeconds - 5) return false;
   // Keep consumed IDs beyond expiry, clock skew, and an additional 10-minute margin.
   sql.exec("DELETE FROM orchestrator_consumed_assertions WHERE expires_at < ?", nowSeconds - 600);
   const existing = sql.exec(
@@ -163,7 +168,7 @@ function consumeWorkerAssertion(sql, assertion, nowMs) {
   sql.exec(
     "INSERT INTO orchestrator_consumed_assertions (jti, subject, role, operation, key_id, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     assertion.jti, assertion.subject, assertion.role, assertion.operation,
-    assertion.kid, assertion.issuedAt, assertion.expiresAt, Math.floor(nowMs / 1000),
+    assertion.kid, assertion.issuedAt, assertion.expiresAt, nowSeconds,
   );
   return true;
 }
@@ -447,7 +452,7 @@ export class OrchestratorLedger extends DurableObject {
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_consumed_assertions_by_expiry ON orchestrator_consumed_assertions(expires_at)");
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_ledger_clock (
-        singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+        clock_domain TEXT PRIMARY KEY CHECK(clock_domain IN ('worker','ledger')),
         last_seen_ms INTEGER NOT NULL CHECK(last_seen_ms > 0)
       )
     `);

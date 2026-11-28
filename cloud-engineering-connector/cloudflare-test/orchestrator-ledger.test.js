@@ -2616,7 +2616,7 @@ describe("OrchestratorLedger worker assertion clock rollback", () => {
         forwardJti,
       ).one().count).toBe(1);
       expect(state.storage.sql.exec(
-        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker'",
       ).one().last_seen_ms).toBe(forwardNow);
     });
 
@@ -2647,7 +2647,7 @@ describe("OrchestratorLedger worker assertion clock rollback", () => {
         forwardJti,
       ).one().count).toBe(1);
       expect(state.storage.sql.exec(
-        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker'",
       ).one().last_seen_ms).toBe(forwardNow);
     });
 
@@ -2673,7 +2673,7 @@ describe("OrchestratorLedger worker assertion clock rollback", () => {
 
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec(
-        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker'",
       ).one().last_seen_ms).toBe(forwardNow);
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
@@ -2724,7 +2724,7 @@ describe("OrchestratorLedger webhook retention clock rollback", () => {
           original.idempotencyKey,
         ).one().count).toBe(0);
         expect(state.storage.sql.exec(
-          "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+          "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'ledger'",
         ).one().last_seen_ms).toBe(forwardNow);
       });
 
@@ -2745,7 +2745,7 @@ describe("OrchestratorLedger webhook retention clock rollback", () => {
           original.idempotencyKey,
         ).one().count).toBe(0);
         expect(state.storage.sql.exec(
-          "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+          "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'ledger'",
         ).one().last_seen_ms).toBe(forwardNow);
       });
     } finally {
@@ -2799,7 +2799,7 @@ describe("OrchestratorLedger claim cursor clock rollback", () => {
         cursorHash,
       ).one().count).toBe(1);
       expect(state.storage.sql.exec(
-        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker'",
       ).one().last_seen_ms).toBe(forwardNow);
     });
   });

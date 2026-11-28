@@ -557,12 +557,14 @@ export class OrchestratorLedger extends DurableObject {
     }
 
     const sql = this.ctx.storage.sql;
-    const now = Date.now();
-    const expiresAt = now + 30 * 24 * 60 * 60 * 1000;
+    let now = Date.now();
     return this.ctx.storage.transactionSync(() => {
-      if (!advanceLedgerClock(sql, now)) {
+      const effectiveNowMs = advanceLedgerClock(sql, now, "ledger");
+      if (effectiveNowMs === null) {
         return { claimed: false, replay: false, reason: "LEDGER_CLOCK_ROLLBACK" };
       }
+      now = effectiveNowMs;
+      const expiresAt = now + 30 * 24 * 60 * 60 * 1000;
       sql.exec(
         "DELETE FROM orchestrator_github_webhook_deliveries WHERE delivery_id IN (SELECT delivery_id FROM orchestrator_github_webhook_deliveries WHERE expires_at <= ? ORDER BY expires_at LIMIT 500)",
         now,
@@ -1575,7 +1577,7 @@ export class OrchestratorLedger extends DurableObject {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       return { applied: false, reason: "INVALID_OWNER_COMMAND" };
     }
-    const { assertion, assertionContext, command, bodySha256, provenance, now } = input;
+    let { assertion, assertionContext, command, bodySha256, provenance, now } = input;
     try {
       timestamp(now);
       if (!command || typeof command !== "object" || Array.isArray(command) ||
@@ -1621,12 +1623,8 @@ export class OrchestratorLedger extends DurableObject {
           typeof context.commentId !== "string" || !/^[0-9]{1,20}$/.test(context.commentId)) {
         return { applied: false, reason: "OWNER_ASSERTION_REJECTED" };
       }
-      const verified = await verifyOwnerAssertion(
-        this.env?.LEDGER_OWNER_ASSERTION_KEYS,
-        assertion,
-        { ...context, nowMs: now },
-      );
       const assertionHash = await sha256Canonical({ assertion });
+      let verified;
       const sql = this.ctx.storage.sql;
       const eventType = {
         cancel: "OWNER_TASK_CANCELLED",
@@ -1640,6 +1638,20 @@ export class OrchestratorLedger extends DurableObject {
       }[command.operation];
 
       for (let attempt = 0; attempt < 3; attempt += 1) {
+        const effectiveNowMs = this.ctx.storage.transactionSync(
+          () => advanceLedgerClock(sql, now, "worker"),
+        );
+        if (effectiveNowMs === null) return { applied: false, reason: "LEDGER_CLOCK_ROLLBACK" };
+        now = effectiveNowMs;
+        try {
+          verified = await verifyOwnerAssertion(
+            this.env?.LEDGER_OWNER_ASSERTION_KEYS,
+            assertion,
+            { ...context, nowMs: now },
+          );
+        } catch {
+          return { applied: false, reason: "OWNER_ASSERTION_REJECTED" };
+        }
         const taskRow = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", command.taskId).toArray()[0] ?? null;
         const currentTask = taskFromRow(taskRow);
         const auditHead = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
@@ -1726,9 +1738,9 @@ export class OrchestratorLedger extends DurableObject {
             };
         const resultJson = serializeBounded(successResult, "Owner command result");
         const transactionResult = this.ctx.storage.transactionSync(() => {
-          if (!advanceLedgerClock(sql, now)) {
-            return { conflict: true, reason: "LEDGER_CLOCK_ROLLBACK" };
-          }
+          const transactionNow = advanceLedgerClock(sql, now, "worker");
+          if (transactionNow === null) return { conflict: true, reason: "LEDGER_CLOCK_ROLLBACK" };
+          if (transactionNow !== now) return { retry: true };
           const priorReceipt = sql.exec(
             "SELECT * FROM orchestrator_owner_command_receipts WHERE delivery_id = ? OR comment_id = ?",
             context.deliveryId, context.commentId,

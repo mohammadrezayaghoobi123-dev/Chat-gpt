@@ -135,7 +135,8 @@ function validLeaseMs(value) {
 
 function advanceLedgerClock(sql, nowMs, clockDomain = "worker") {
   if (!Number.isSafeInteger(nowMs) || nowMs < 1 ||
-      !["worker", "owner", "ledger"].includes(clockDomain)) return null;
+      !(clockDomain === "owner" || clockDomain === "ledger" ||
+        (typeof clockDomain === "string" && /^worker:[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(clockDomain)))) return null;
   const previous = sql.exec(
     "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = ?",
     clockDomain,
@@ -153,7 +154,8 @@ function advanceLedgerClock(sql, nowMs, clockDomain = "worker") {
 }
 
 function consumeWorkerAssertion(sql, assertion, nowMs) {
-  const clockDomain = assertion.subject === EXECUTOR_PRINCIPAL ? "ledger" : "worker";
+  const clockDomain = assertion.subject === EXECUTOR_PRINCIPAL
+    ? "ledger" : "worker:" + assertion.subject;
   const effectiveNowMs = advanceLedgerClock(sql, nowMs, clockDomain);
   if (effectiveNowMs === null) return false;
   const nowSeconds = Math.floor(effectiveNowMs / 1000);
@@ -452,7 +454,10 @@ export class OrchestratorLedger extends DurableObject {
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_consumed_assertions_by_expiry ON orchestrator_consumed_assertions(expires_at)");
     sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_ledger_clock (
-        clock_domain TEXT PRIMARY KEY CHECK(clock_domain IN ('worker','owner','ledger')),
+        clock_domain TEXT PRIMARY KEY CHECK(
+          clock_domain IN ('owner','ledger') OR
+          (substr(clock_domain, 1, 7) = 'worker:' AND length(clock_domain) BETWEEN 8 AND 167)
+        ),
         last_seen_ms INTEGER NOT NULL CHECK(last_seen_ms > 0)
       )
     `);
@@ -708,7 +713,7 @@ export class OrchestratorLedger extends DurableObject {
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      const effectiveNowMs = advanceLedgerClock(sql, now, "worker");
+      const effectiveNowMs = advanceLedgerClock(sql, now, "worker:" + workerId);
       if (effectiveNowMs === null) return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       now = effectiveNowMs;
       if (normalizedOutboxInput) normalizedOutboxInput.now = now;
@@ -888,7 +893,7 @@ export class OrchestratorLedger extends DurableObject {
     void reconciliationEvidence;
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      const clockDomain = workerId === EXECUTOR_PRINCIPAL ? "ledger" : "worker";
+      const clockDomain = workerId === EXECUTOR_PRINCIPAL ? "ledger" : "worker:" + workerId;
       const effectiveNowMs = advanceLedgerClock(sql, now, clockDomain);
       if (effectiveNowMs === null) return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       now = effectiveNowMs;
@@ -1123,7 +1128,7 @@ export class OrchestratorLedger extends DurableObject {
     if (nextRound > 4) return { advanced: false, reason: "AGENT_ROUND_LIMIT" };
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      const effectiveNowMs = advanceLedgerClock(sql, now, "worker");
+      const effectiveNowMs = advanceLedgerClock(sql, now, "worker:" + workerId);
       if (effectiveNowMs === null) return { advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       now = effectiveNowMs;
       const row = sql.exec("SELECT * FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0];
@@ -1186,7 +1191,7 @@ export class OrchestratorLedger extends DurableObject {
     }
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
-      const clockDomain = workerId === EXECUTOR_PRINCIPAL ? "ledger" : "worker";
+      const clockDomain = workerId === EXECUTOR_PRINCIPAL ? "ledger" : "worker:" + workerId;
       const effectiveNowMs = advanceLedgerClock(sql, now, clockDomain);
       if (effectiveNowMs === null) return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       now = effectiveNowMs;
@@ -1221,7 +1226,7 @@ export class OrchestratorLedger extends DurableObject {
     }
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
-      const clockDomain = workerId === EXECUTOR_PRINCIPAL ? "ledger" : "worker";
+      const clockDomain = workerId === EXECUTOR_PRINCIPAL ? "ledger" : "worker:" + workerId;
       const effectiveNowMs = advanceLedgerClock(sql, now, clockDomain);
       if (effectiveNowMs === null) return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       now = effectiveNowMs;
@@ -1294,7 +1299,7 @@ export class OrchestratorLedger extends DurableObject {
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      const effectiveNowMs = advanceLedgerClock(sql, now, "worker");
+      const effectiveNowMs = advanceLedgerClock(sql, now, "worker:" + workerId);
       if (effectiveNowMs === null) return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       now = effectiveNowMs;
       const row = sql.exec(
@@ -1352,7 +1357,7 @@ export class OrchestratorLedger extends DurableObject {
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      const effectiveNowMs = advanceLedgerClock(sql, now, "worker");
+      const effectiveNowMs = advanceLedgerClock(sql, now, "worker:" + workerId);
       if (effectiveNowMs === null) return { failed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       now = effectiveNowMs;
       const row = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", eventId).toArray()[0];
@@ -1406,7 +1411,7 @@ export class OrchestratorLedger extends DurableObject {
     timestamp(now);
     return this.ctx.storage.transactionSync(() => {
       const sql = this.ctx.storage.sql;
-      const effectiveNowMs = advanceLedgerClock(sql, now, "worker");
+      const effectiveNowMs = advanceLedgerClock(sql, now, "worker:" + workerId);
       if (effectiveNowMs === null) return { completed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       now = effectiveNowMs;
       const row = sql.exec("SELECT * FROM orchestrator_outbox_events WHERE event_id = ?", eventId).toArray()[0];

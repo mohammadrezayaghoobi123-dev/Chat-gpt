@@ -2548,6 +2548,70 @@ describe("OrchestratorLedger effective worker timestamps", () => {
     });
   });
 
+  it("validates Message expiry against the effective issuer high-water timestamp", async () => {
+    const ledger = ledgerFor("ledger-effective-message-expiry");
+    const taskId = "task-effective-message-expiry";
+    await createTask(ledger, {
+      task: task(taskId),
+      idempotencyKey: "effective-message-expiry-task",
+      inputHash: "a".repeat(64),
+      now,
+    });
+
+    const effectiveNow = now + 4_000;
+    const rolledBackNow = now + 3_000;
+    const firstEnvelope = protocolEnvelope(
+      "msg-effective-expiry-first", taskId, "b".repeat(64), { step: 1 }, effectiveNow,
+    );
+    await expect(ledger.recordMessage({
+      messageId: firstEnvelope.messageId,
+      taskId,
+      inputHash: firstEnvelope.inputHash,
+      envelope: firstEnvelope,
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: effectiveNow,
+      }),
+      now: effectiveNow,
+    })).resolves.toMatchObject({ accepted: true });
+
+    const staleButLocallyValidEnvelope = protocolEnvelope(
+      "msg-effective-expiry-second", taskId, "c".repeat(64), { step: 2 }, rolledBackNow - 1_000,
+    );
+    staleButLocallyValidEnvelope.expiresAt = rolledBackNow + 500;
+    const secondAssertion = await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: rolledBackNow,
+    });
+    const secondJti = JSON.parse(atob(secondAssertion.split(".")[2].replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(secondAssertion.split(".")[2].length / 4) * 4, "="))).jti;
+    await expect(ledger.recordMessage({
+      messageId: staleButLocallyValidEnvelope.messageId,
+      taskId,
+      inputHash: staleButLocallyValidEnvelope.inputHash,
+      envelope: staleButLocallyValidEnvelope,
+      workerId: "agent:worker-1",
+      workerAssertion: secondAssertion,
+      now: rolledBackNow,
+    })).resolves.toMatchObject({
+      accepted: false,
+      reason: "INVALID_MESSAGE_TIME",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_processed_messages WHERE message_id = ?",
+        staleButLocallyValidEnvelope.messageId,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        secondJti,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = ?",
+        "worker:agent:worker-1",
+      ).one().last_seen_ms).toBe(effectiveNow);
+    });
+  });
+
   it("persists Outbox receipt received_at using the consumer high-water timestamp", async () => {
     const ledger = ledgerFor("ledger-effective-receipt-timestamp");
     const taskId = "task-effective-receipt";

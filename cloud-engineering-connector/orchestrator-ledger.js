@@ -133,7 +133,7 @@ function validLeaseMs(value) {
 }
 
 
-function advanceLedgerClock(sql, nowMs, clockDomain = "worker") {
+function advanceLedgerClock(sql, nowMs, clockDomain) {
   if (!Number.isSafeInteger(nowMs) || nowMs < 1 ||
       !(clockDomain === "owner" || clockDomain === "ledger" ||
         (typeof clockDomain === "string" && /^worker:[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(clockDomain)))) return null;

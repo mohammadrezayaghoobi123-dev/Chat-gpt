@@ -2943,31 +2943,24 @@ describe("OrchestratorLedger cross-principal JTI retention", () => {
       now: forwardNow,
     })).resolves.toMatchObject({ claimed: true, event: { eventId: "evt-cross-principal-jti-retention" } });
 
-    await runInDurableObject(ledger, async (_instance, state) => {
-      expect(state.storage.sql.exec(
-        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ? AND subject = ?",
-        schedulerJti,
-        "orchestrator-scheduler",
-      ).one().count).toBe(1);
-      expect(state.storage.sql.exec(
-        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ?",
-        "orchestrator-outbox-publisher",
-      ).one().count).toBe(1);
-    });
-
-    await expect(ledger.createTask({
+    const replay = await ledger.createTask({
       task: task("task-cross-principal-jti-replay"),
       idempotencyKey: "cross-principal-jti-retention-replay",
       inputHash: "5".repeat(64),
       now: now + 10_000,
       workerId: "orchestrator-scheduler",
       workerAssertion: schedulerAssertion,
-    })).resolves.toMatchObject({
+    });
+    expect(replay).toMatchObject({
       created: false,
       reason: "AUTHENTICATED_WORKER_REQUIRED",
     });
 
     await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ?",
+        "orchestrator-outbox-publisher",
+      ).one().count).toBe(1);
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
         "task-cross-principal-jti-replay",

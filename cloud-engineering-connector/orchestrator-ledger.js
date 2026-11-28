@@ -157,9 +157,9 @@ function consumeWorkerAssertion(sql, assertion, nowMs) {
   const clockDomain = assertion.subject === EXECUTOR_PRINCIPAL
     ? "ledger" : "worker:" + assertion.subject;
   const effectiveNowMs = advanceLedgerClock(sql, nowMs, clockDomain);
-  if (effectiveNowMs === null) return false;
+  if (effectiveNowMs === null) return null;
   const nowSeconds = Math.floor(effectiveNowMs / 1000);
-  if (assertion.issuedAt > nowSeconds + 5 || assertion.expiresAt < nowSeconds - 5) return false;
+  if (assertion.issuedAt > nowSeconds + 5 || assertion.expiresAt < nowSeconds - 5) return null;
   // Keep consumed IDs beyond expiry, clock skew, and an additional 10-minute margin.
   sql.exec(
     "DELETE FROM orchestrator_consumed_assertions WHERE subject = ? AND expires_at < ?",
@@ -169,13 +169,13 @@ function consumeWorkerAssertion(sql, assertion, nowMs) {
     "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
     assertion.jti,
   ).toArray()[0];
-  if (existing) return false;
+  if (existing) return null;
   sql.exec(
     "INSERT INTO orchestrator_consumed_assertions (jti, subject, role, operation, key_id, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     assertion.jti, assertion.subject, assertion.role, assertion.operation,
     assertion.kid, assertion.issuedAt, assertion.expiresAt, nowSeconds,
   );
-  return true;
+  return effectiveNowMs;
 }
 
 function taskFromRow(row) {
@@ -659,7 +659,8 @@ export class OrchestratorLedger extends DurableObject {
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+      const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+      if (consumedNowMs === null) {
         return { created: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       if (taskRejectionReason) {
@@ -736,7 +737,8 @@ export class OrchestratorLedger extends DurableObject {
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { updated: false, reason: "LEASE_FENCE_MISMATCH" };
       }
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+      const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+      if (consumedNowMs === null) {
         return { updated: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       if (outboxRejectionReason) {
@@ -794,7 +796,7 @@ export class OrchestratorLedger extends DurableObject {
       return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
     }
     // Authenticate the sender before inspecting the untrusted message envelope.
-    // Any bounded-envelope rejection consumes the authenticated one-time assertion.
+    // Time-dependent envelope validation must use the durable issuer high-water value.
     let payloadRejectionReason = null;
     let envelopeJson;
     try {
@@ -802,7 +804,16 @@ export class OrchestratorLedger extends DurableObject {
     } catch (error) {
       payloadRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_MESSAGE";
     }
-    if (!payloadRejectionReason) {
+    const sql = this.ctx.storage.sql;
+    return this.ctx.storage.transactionSync(() => {
+      const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+      if (consumedNowMs === null) {
+        return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
+      }
+      now = consumedNowMs;
+      if (payloadRejectionReason) {
+        return { accepted: false, reason: payloadRejectionReason };
+      }
       const authenticatedSender = { id: verifiedAssertion.subject, authenticated: true, identityVerified: true };
       if (!envelope || typeof envelope !== "object" || envelope.senderId !== authenticatedSender.id) {
         payloadRejectionReason = "SENDER_IDENTITY_MISMATCH";
@@ -826,12 +837,6 @@ export class OrchestratorLedger extends DurableObject {
           }
         }
       }
-    }
-    const sql = this.ctx.storage.sql;
-    return this.ctx.storage.transactionSync(() => {
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
-        return { accepted: false, reason: "AUTHENTICATED_SENDER_REQUIRED" };
-      }
       if (payloadRejectionReason) {
         return { accepted: false, reason: payloadRejectionReason };
       }
@@ -852,7 +857,6 @@ export class OrchestratorLedger extends DurableObject {
       return { accepted: true, messageId, taskId };
     });
   }
-
   async claimTask({ workerId, workerAssertion, leaseMs, now, taskId, reconciliationEvidence, cursor } = {}) {
     identifier(workerId, "workerId");
     validLeaseMs(leaseMs);
@@ -944,7 +948,8 @@ export class OrchestratorLedger extends DurableObject {
             return { claimed: false, reason: "RECONCILIATION_REQUIRED" };
           }
         }
-        if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+        if (consumedNowMs === null) {
           return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
         }
         if (lease) {
@@ -1023,7 +1028,8 @@ export class OrchestratorLedger extends DurableObject {
             continue;
           }
         }
-        if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+        const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+        if (consumedNowMs === null) {
           return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
         }
         if (lease) {
@@ -1155,7 +1161,8 @@ export class OrchestratorLedger extends DurableObject {
           lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { advanced: false, reason: "LEASE_FENCE_MISMATCH", task: current };
       }
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+      const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+      if (consumedNowMs === null) {
         return { advanced: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       const next = {
@@ -1202,7 +1209,8 @@ export class OrchestratorLedger extends DurableObject {
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { renewed: false, reason: "LEASE_FENCE_MISMATCH" };
       }
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+      const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+      if (consumedNowMs === null) {
         return { renewed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       sql.exec(
@@ -1237,7 +1245,8 @@ export class OrchestratorLedger extends DurableObject {
       if (!lease || lease.worker_id !== workerId || lease.lease_generation !== leaseGeneration || lease.lease_until <= now) {
         return { released: false, reason: "LEASE_FENCE_MISMATCH" };
       }
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+      const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+      if (consumedNowMs === null) {
         return { released: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       sql.exec(
@@ -1275,12 +1284,14 @@ export class OrchestratorLedger extends DurableObject {
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+      const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+      if (consumedNowMs === null) {
         return { enqueued: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       if (payloadRejectionReason) {
         return { enqueued: false, reason: payloadRejectionReason };
       }
+      normalized.now = consumedNowMs;
       if (!sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", normalized.taskId).toArray()[0]) {
         return { enqueued: false, reason: "TASK_NOT_FOUND" };
       }
@@ -1310,7 +1321,8 @@ export class OrchestratorLedger extends DurableObject {
         now, now,
       ).toArray()[0];
       if (!row) return { claimed: false, reason: "NO_OUTBOX_AVAILABLE" };
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+      const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+      if (consumedNowMs === null) {
         return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       if (row.attempts >= MAX_OUTBOX_ATTEMPTS) {
@@ -1368,7 +1380,8 @@ export class OrchestratorLedger extends DurableObject {
           row.lease_generation !== leaseGeneration || row.lease_until <= now) {
         return { failed: false, reason: "LEASE_FENCE_MISMATCH" };
       }
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+      const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+      if (consumedNowMs === null) {
         return { failed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
       const deadLettered = !retryable || row.attempts >= MAX_OUTBOX_ATTEMPTS;
@@ -1422,7 +1435,8 @@ export class OrchestratorLedger extends DurableObject {
           row.lease_generation !== leaseGeneration || row.lease_until <= now) {
         return { completed: false, reason: "LEASE_FENCE_MISMATCH" };
       }
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return { completed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+      if (consumedNowMs === null) return { completed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       sql.exec(
         "UPDATE orchestrator_outbox_events SET status = 'COMPLETED', lease_worker_id = NULL, lease_until = 0, updated_at = ? WHERE event_id = ? AND status = 'IN_PROGRESS' AND lease_worker_id = ? AND lease_generation = ?",
         now, eventId, workerId, leaseGeneration,
@@ -1464,9 +1478,11 @@ export class OrchestratorLedger extends DurableObject {
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+      const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+      if (consumedNowMs === null) {
         return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
+      now = consumedNowMs;
       if (payloadRejectionReason) {
         return { recorded: false, reason: payloadRejectionReason };
       }
@@ -1554,9 +1570,11 @@ export class OrchestratorLedger extends DurableObject {
     }
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) {
+      const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+      if (consumedNowMs === null) {
         return { recorded: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
       }
+      now = consumedNowMs;
       if (bodyRejectionReason) {
         return { recorded: false, reason: bodyRejectionReason };
       }
@@ -1922,9 +1940,12 @@ export class OrchestratorLedger extends DurableObject {
       detailsRejectionReason = typeof error?.code === "string" ? error.code : "INVALID_AUDIT_DETAILS";
     }
     const sql = this.ctx.storage.sql;
+    const clockDomain = "worker:" + workerId;
     if (detailsRejectionReason) {
-      const consumed = this.ctx.storage.transactionSync(() => consumeWorkerAssertion(sql, verifiedAssertion, now));
-      if (!consumed) return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+      const consumedNowMs = this.ctx.storage.transactionSync(
+        () => consumeWorkerAssertion(sql, verifiedAssertion, now),
+      );
+      if (consumedNowMs === null) return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
       return { appended: false, reason: detailsRejectionReason };
     }
     if (!sql.exec("SELECT task_id FROM orchestrator_tasks WHERE task_id = ?", taskId).toArray()[0]) {
@@ -1932,10 +1953,19 @@ export class OrchestratorLedger extends DurableObject {
     }
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
+      // Normalize before hashing, but do not consume the one-time assertion until
+      // the hash-linked insert can commit atomically.
+      const effectiveNowMs = this.ctx.storage.transactionSync(() => advanceLedgerClock(sql, now, clockDomain));
+      if (effectiveNowMs === null) return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+      now = effectiveNowMs;
+
       const existing = sql.exec("SELECT * FROM orchestrator_audit_events WHERE event_id = ?", eventId).toArray()[0];
       if (existing) {
-        const consumed = this.ctx.storage.transactionSync(() => consumeWorkerAssertion(sql, verifiedAssertion, now));
-        if (!consumed) return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+        const consumedNowMs = this.ctx.storage.transactionSync(
+          () => consumeWorkerAssertion(sql, verifiedAssertion, now),
+        );
+        if (consumedNowMs === null) return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+        now = consumedNowMs;
         if (existing.task_id === taskId && existing.actor_id === actorId &&
             existing.actor_role === actorRole && existing.event_type === eventType &&
             existing.details_json === detailsJson && existing.created_at === now) {
@@ -1943,25 +1973,37 @@ export class OrchestratorLedger extends DurableObject {
         }
         return { appended: false, conflict: true, reason: "EVENT_ID_CONFLICT" };
       }
+
       const previous = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
       const previousHash = previous?.event_hash ?? null;
       const eventHash = await sha256Canonical({
         eventId, taskId, actorId, actorRole, eventType, details: JSON.parse(detailsJson), occurredAt: now, previousHash,
       });
       const inserted = this.ctx.storage.transactionSync(() => {
+        const transactionNow = advanceLedgerClock(sql, now, clockDomain);
+        if (transactionNow === null) return { status: "replay" };
+        if (transactionNow !== now) return { status: "clock-advanced", now: transactionNow };
         const latest = sql.exec("SELECT event_hash FROM orchestrator_audit_events ORDER BY sequence DESC LIMIT 1").toArray()[0];
-        if ((latest?.event_hash ?? null) !== previousHash) return "retry";
+        if ((latest?.event_hash ?? null) !== previousHash) return { status: "retry" };
         const duplicate = sql.exec("SELECT * FROM orchestrator_audit_events WHERE event_id = ?", eventId).toArray()[0];
-        if (duplicate) return "retry";
-        if (!consumeWorkerAssertion(sql, verifiedAssertion, now)) return "replay";
+        if (duplicate) return { status: "retry" };
+        const consumedNowMs = consumeWorkerAssertion(sql, verifiedAssertion, now);
+        if (consumedNowMs === null) return { status: "replay" };
+        if (consumedNowMs !== now) {
+          throw fail("Audit timestamp changed during assertion consumption; transaction rolled back.", "LEDGER_CLOCK_RACE");
+        }
         sql.exec(
           "INSERT INTO orchestrator_audit_events (event_id, task_id, actor_id, actor_role, event_type, details_json, previous_hash, event_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          eventId, taskId, actorId, actorRole, eventType, detailsJson, previousHash, eventHash, now,
+          eventId, taskId, actorId, actorRole, eventType, detailsJson, previousHash, eventHash, consumedNowMs,
         );
-        return "inserted";
+        return { status: "inserted" };
       });
-      if (inserted === "replay") return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
-      if (inserted === "retry") continue;
+      if (inserted.status === "replay") return { appended: false, reason: "AUTHENTICATED_ACTOR_REQUIRED" };
+      if (inserted.status === "clock-advanced") {
+        now = inserted.now;
+        continue;
+      }
+      if (inserted.status === "retry") continue;
       return { appended: true, event: {
         eventId, taskId, actorId, actorRole, eventType, details: JSON.parse(detailsJson),
         previousHash, eventHash, createdAt: now,

@@ -2501,6 +2501,265 @@ it("recovers a Queue-accepted send with a lost acknowledgement through bounded r
 }, 15000);
 
 
+
+describe("OrchestratorLedger effective worker timestamps", () => {
+  it("persists Message received_at using the issuer high-water timestamp", async () => {
+    const ledger = ledgerFor("ledger-effective-message-timestamp");
+    await createTask(ledger, {
+      task: task("task-effective-message"),
+      idempotencyKey: "effective-message-task",
+      inputHash: "a".repeat(64),
+      now,
+    });
+
+    const effectiveNow = now + 4_000;
+    const rolledBackNow = now + 3_000;
+    const firstMessage = {
+      messageId: "msg-effective-clock-first",
+      taskId: "task-effective-message",
+      inputHash: "b".repeat(64),
+      envelope: protocolEnvelope("msg-effective-clock-first", "task-effective-message", "b".repeat(64), { step: 1 }, effectiveNow),
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: effectiveNow,
+      }),
+      now: effectiveNow,
+    };
+    await expect(ledger.recordMessage(firstMessage)).resolves.toMatchObject({ accepted: true });
+
+    const secondMessage = {
+      messageId: "msg-effective-clock-second",
+      taskId: "task-effective-message",
+      inputHash: "c".repeat(64),
+      envelope: protocolEnvelope("msg-effective-clock-second", "task-effective-message", "c".repeat(64), { step: 2 }, rolledBackNow),
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: rolledBackNow,
+      }),
+      now: rolledBackNow,
+    };
+    await expect(ledger.recordMessage(secondMessage)).resolves.toMatchObject({ accepted: true });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT received_at FROM orchestrator_processed_messages WHERE message_id = ?",
+        secondMessage.messageId,
+      ).one().received_at).toBe(effectiveNow);
+    });
+  });
+
+  it("validates Message expiry against the effective issuer high-water timestamp", async () => {
+    const ledger = ledgerFor("ledger-effective-message-expiry");
+    const taskId = "task-effective-message-expiry";
+    await createTask(ledger, {
+      task: task(taskId),
+      idempotencyKey: "effective-message-expiry-task",
+      inputHash: "a".repeat(64),
+      now,
+    });
+
+    const effectiveNow = now + 4_000;
+    const rolledBackNow = now + 3_000;
+    const firstEnvelope = protocolEnvelope(
+      "msg-effective-expiry-first", taskId, "b".repeat(64), { step: 1 }, effectiveNow,
+    );
+    await expect(ledger.recordMessage({
+      messageId: firstEnvelope.messageId,
+      taskId,
+      inputHash: firstEnvelope.inputHash,
+      envelope: firstEnvelope,
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: effectiveNow,
+      }),
+      now: effectiveNow,
+    })).resolves.toMatchObject({ accepted: true });
+
+    const staleButLocallyValidEnvelope = protocolEnvelope(
+      "msg-effective-expiry-second", taskId, "c".repeat(64), { step: 2 }, rolledBackNow - 1_000,
+    );
+    staleButLocallyValidEnvelope.expiresAt = rolledBackNow + 500;
+    const secondAssertion = await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: rolledBackNow,
+    });
+    const secondJti = JSON.parse(atob(secondAssertion.split(".")[2].replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(secondAssertion.split(".")[2].length / 4) * 4, "="))).jti;
+    await expect(ledger.recordMessage({
+      messageId: staleButLocallyValidEnvelope.messageId,
+      taskId,
+      inputHash: staleButLocallyValidEnvelope.inputHash,
+      envelope: staleButLocallyValidEnvelope,
+      workerId: "agent:worker-1",
+      workerAssertion: secondAssertion,
+      now: rolledBackNow,
+    })).resolves.toMatchObject({
+      accepted: false,
+      reason: "INVALID_MESSAGE_TIME",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_processed_messages WHERE message_id = ?",
+        staleButLocallyValidEnvelope.messageId,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        secondJti,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = ?",
+        "worker:agent:worker-1",
+      ).one().last_seen_ms).toBe(effectiveNow);
+    });
+  });
+
+  it("persists Outbox receipt received_at using the consumer high-water timestamp", async () => {
+    const ledger = ledgerFor("ledger-effective-receipt-timestamp");
+    const taskId = "task-effective-receipt";
+    await createTask(ledger, {
+      task: task(taskId),
+      idempotencyKey: "effective-receipt-task",
+      inputHash: "d".repeat(64),
+      now,
+    });
+
+    const effectiveNow = now + 4_000;
+    const rolledBackNow = now + 3_000;
+    const payloads = [
+      { eventId: "evt-effective-receipt-first", idempotencyKey: "effective-receipt-first", payload: { version: 1 } },
+      { eventId: "evt-effective-receipt-second", idempotencyKey: "effective-receipt-second", payload: { version: 1 } },
+    ];
+    for (const item of payloads) {
+      await expect(ledger.enqueueOutbox({
+        eventId: item.eventId,
+        idempotencyKey: item.idempotencyKey,
+        taskId,
+        eventType: "task.created",
+        payload: item.payload,
+        workerId: "agent:worker-1",
+        workerAssertion: await createWorkerAssertion({
+          subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: effectiveNow,
+        }),
+        now: effectiveNow,
+      })).resolves.toMatchObject({ enqueued: true });
+    }
+
+    const recordReceipt = async (item, timestamp) => ledger.recordOutboxReceipt({
+      eventId: item.eventId,
+      eventType: "task.created",
+      idempotencyKey: item.idempotencyKey,
+      taskId,
+      payload: item.payload,
+      createdAt: effectiveNow,
+      schemaVersion: 1,
+      envelopeSha256: "e".repeat(64),
+      consumerId: "orchestrator-outbox-consumer",
+      workerAssertion: await createWorkerAssertion({
+        subject: "orchestrator-outbox-consumer", role: "consumer",
+        operation: "recordOutboxReceipt", nowMs: timestamp,
+      }),
+      now: timestamp,
+    });
+    await expect(recordReceipt(payloads[0], effectiveNow)).resolves.toMatchObject({ recorded: true });
+    await expect(recordReceipt(payloads[1], rolledBackNow)).resolves.toMatchObject({ recorded: true });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT received_at FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        payloads[1].eventId,
+      ).one().received_at).toBe(effectiveNow);
+    });
+  });
+
+  it("persists dead-letter archived_at using the archiver high-water timestamp", async () => {
+    const ledger = ledgerFor("ledger-effective-dead-letter-timestamp");
+    const queueName = "orchestrator-outbox";
+    const archiverId = "orchestrator-outbox-dlq-archiver";
+    const effectiveNow = now + 4_000;
+    const rolledBackNow = now + 3_000;
+
+    const recordDeadLetter = async (messageId, timestamp) => {
+      const messageAttempts = 3;
+      const messageTimestamp = timestamp - 1_000;
+      const body = { reason: "retry-exhausted", taskId: "task-effective-dead-letter" };
+      const bodySha256 = await sha256Canonical({
+        queueName, messageId, messageAttempts, messageTimestamp, body,
+      });
+      return ledger.recordOutboxDeadLetter({
+        queueName,
+        messageId,
+        messageAttempts,
+        messageTimestamp,
+        body,
+        bodySha256,
+        archiverId,
+        workerAssertion: await createWorkerAssertion({
+          subject: archiverId, role: "consumer",
+          operation: "recordOutboxDeadLetter", nowMs: timestamp,
+        }),
+        now: timestamp,
+      });
+    };
+
+    await expect(recordDeadLetter("msg-effective-dead-first", effectiveNow)).resolves.toMatchObject({ recorded: true });
+    await expect(recordDeadLetter("msg-effective-dead-second", rolledBackNow)).resolves.toMatchObject({ recorded: true });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT archived_at FROM orchestrator_outbox_dead_letters WHERE message_id = ?",
+        "msg-effective-dead-second",
+      ).one().archived_at).toBe(effectiveNow);
+    });
+  });
+
+  it("normalizes Audit hash timestamps and persisted created_at to the same high-water value", async () => {
+    const ledger = ledgerFor("ledger-effective-audit-timestamp");
+    const taskId = "task-effective-audit";
+    await createTask(ledger, {
+      task: task(taskId),
+      idempotencyKey: "effective-audit-task",
+      inputHash: "f".repeat(64),
+      now,
+    });
+
+    const effectiveNow = now + 4_000;
+    const rolledBackNow = now + 3_000;
+    const append = async (eventId, eventType, timestamp) => ledger.appendAuditEvent({
+      eventId,
+      taskId,
+      actor: agent,
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "appendAuditEvent", nowMs: timestamp,
+      }),
+      eventType,
+      details: { version: 1 },
+      now: timestamp,
+    });
+
+    const first = await append("audit-effective-first", "task.created", effectiveNow);
+    const second = await append("audit-effective-second", "task.scheduled", rolledBackNow);
+    expect(first).toMatchObject({ appended: true });
+    expect(second).toMatchObject({ appended: true, event: { createdAt: effectiveNow, previousHash: first.event.eventHash } });
+
+    const expectedHash = await sha256Canonical({
+      eventId: "audit-effective-second",
+      taskId,
+      actorId: "agent:worker-1",
+      actorRole: "agent",
+      eventType: "task.scheduled",
+      details: { version: 1 },
+      occurredAt: effectiveNow,
+      previousHash: first.event.eventHash,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT created_at, event_hash FROM orchestrator_audit_events WHERE event_id = ?",
+        "audit-effective-second",
+      ).one()).toEqual({ created_at: effectiveNow, event_hash: expectedHash });
+    });
+  });
+});
+
 describe("OrchestratorLedger signed worker clock-skew boundaries", () => {
   it("enforces the exact lower and upper clock-skew boundaries for signed worker assertions", async () => {
     const cases = [

@@ -19,6 +19,7 @@ const MAX_EXPIRED_CLAIM_CURSORS_PER_CALL = 64;
 const EXECUTOR_PRINCIPAL = "orchestrator-executor";
 const EXECUTOR_OPERATIONS = Object.freeze(["claimTask", "renewLease", "releaseLease"]);
 const EXECUTOR_CLOCK_SKEW_SECONDS = 5;
+const LEDGER_CLOCK_ROLLBACK_TOLERANCE_SECONDS = 5;
 
 function executorTrustedNow(assertion) {
   const trustedNow = Date.now();
@@ -132,7 +133,26 @@ function validLeaseMs(value) {
 }
 
 
+function advanceLedgerClock(sql, nowMs) {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 1) return false;
+  const nowSeconds = Math.floor(nowMs / 1000);
+  const previous = sql.exec(
+    "SELECT last_seen_seconds FROM orchestrator_ledger_clock WHERE singleton_id = 1",
+  ).toArray()[0];
+  if (previous && nowSeconds < previous.last_seen_seconds - LEDGER_CLOCK_ROLLBACK_TOLERANCE_SECONDS) {
+    return false;
+  }
+  const monotonicSeconds = Math.max(nowSeconds, previous?.last_seen_seconds ?? nowSeconds);
+  sql.exec(
+    "INSERT INTO orchestrator_ledger_clock (singleton_id, last_seen_seconds) VALUES (1, ?) " +
+      "ON CONFLICT(singleton_id) DO UPDATE SET last_seen_seconds = MAX(last_seen_seconds, excluded.last_seen_seconds)",
+    monotonicSeconds,
+  );
+  return true;
+}
+
 function consumeWorkerAssertion(sql, assertion, nowMs) {
+  if (!advanceLedgerClock(sql, nowMs)) return false;
   const nowSeconds = Math.floor(nowMs / 1000);
   // Keep consumed IDs beyond expiry, clock skew, and an additional 10-minute margin.
   sql.exec("DELETE FROM orchestrator_consumed_assertions WHERE expires_at < ?", nowSeconds - 600);
@@ -427,6 +447,12 @@ export class OrchestratorLedger extends DurableObject {
     `);
     sql.exec("CREATE INDEX IF NOT EXISTS orchestrator_consumed_assertions_by_expiry ON orchestrator_consumed_assertions(expires_at)");
     sql.exec(`
+      CREATE TABLE IF NOT EXISTS orchestrator_ledger_clock (
+        singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+        last_seen_seconds INTEGER NOT NULL CHECK(last_seen_seconds > 0)
+      )
+    `);
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS orchestrator_github_webhook_deliveries (
         delivery_id TEXT PRIMARY KEY,
         body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 64),
@@ -509,7 +535,7 @@ export class OrchestratorLedger extends DurableObject {
 
   ping() {
     const result = this.ctx.storage.sql.exec("SELECT 1 AS ok").one();
-    return { ok: Number(result.ok) === 1, schemaVersion: 7 };
+    return { ok: Number(result.ok) === 1, schemaVersion: 8 };
   }
 
   claimGitHubDelivery({ deliveryId, bodySha256, eventName, receivedAt, idempotencyKey, inputHash } = {}) {
@@ -530,6 +556,9 @@ export class OrchestratorLedger extends DurableObject {
     const now = Date.now();
     const expiresAt = now + 30 * 24 * 60 * 60 * 1000;
     return this.ctx.storage.transactionSync(() => {
+      if (!advanceLedgerClock(sql, now)) {
+        return { claimed: false, replay: false, reason: "LEDGER_CLOCK_ROLLBACK" };
+      }
       sql.exec(
         "DELETE FROM orchestrator_github_webhook_deliveries WHERE delivery_id IN (SELECT delivery_id FROM orchestrator_github_webhook_deliveries WHERE expires_at <= ? ORDER BY expires_at LIMIT 500)",
         now,
@@ -849,6 +878,9 @@ export class OrchestratorLedger extends DurableObject {
     void reconciliationEvidence;
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
+      if (!advanceLedgerClock(sql, now)) {
+        return { claimed: false, reason: "AUTHENTICATED_WORKER_REQUIRED" };
+      }
       sql.exec(`
         DELETE FROM orchestrator_claim_cursors
         WHERE cursor_hash IN (
@@ -1665,6 +1697,9 @@ export class OrchestratorLedger extends DurableObject {
             };
         const resultJson = serializeBounded(successResult, "Owner command result");
         const transactionResult = this.ctx.storage.transactionSync(() => {
+          if (!advanceLedgerClock(sql, now)) {
+            return { conflict: true, reason: "LEDGER_CLOCK_ROLLBACK" };
+          }
           const priorReceipt = sql.exec(
             "SELECT * FROM orchestrator_owner_command_receipts WHERE delivery_id = ? OR comment_id = ?",
             context.deliveryId, context.commentId,

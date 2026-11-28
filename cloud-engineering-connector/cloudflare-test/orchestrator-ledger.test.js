@@ -1156,9 +1156,18 @@ it("prunes consumed assertion IDs only after expiry plus the retention margin", 
   await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: assertion, leaseMs: 30_000, now });
   const later = now + 12 * 60 * 1000;
   await createTask(ledger, { task: task("task-0002"), idempotencyKey: "task-create-retention-2", inputHash: "3".repeat(64), now: later });
+  await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: later,
+    }),
+    leaseMs: 30_000,
+    now: later,
+    taskId: "task-0002",
+  });
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti='jti-claim-retention-000000000001'").one().count).toBe(0);
-    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(1);
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(3);
   });
 });
 

@@ -48,7 +48,6 @@ function validClaims(claims, expected) {
       !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp)) throw reject();
   const nowSeconds = Math.floor(expected.nowMs / 1000);
   if (claims.exp <= claims.iat || claims.exp - claims.iat > MAX_LIFETIME_SECONDS ||
-      claims.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
       claims.exp < nowSeconds - CLOCK_SKEW_SECONDS) throw reject();
 }
 

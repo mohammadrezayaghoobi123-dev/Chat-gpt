@@ -141,9 +141,7 @@ function advanceLedgerClock(sql, nowMs, clockDomain) {
     "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = ?",
     clockDomain,
   ).toArray()[0];
-  if (previous && nowMs < previous.last_seen_ms - LEDGER_CLOCK_BACKWARD_TOLERANCE_MS) {
-    return null;
-  }
+  // Deliberate mutant: accept backward clock steps.
   const effectiveNowMs = Math.max(nowMs, previous?.last_seen_ms ?? nowMs);
   sql.exec(
     "INSERT INTO orchestrator_ledger_clock (clock_domain, last_seen_ms) VALUES (?, ?) " +

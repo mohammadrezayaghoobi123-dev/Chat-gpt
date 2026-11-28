@@ -60,7 +60,7 @@ const evidence = { kind: "test-evidence", reference: "ci://run/123" };
 describe("OrchestratorLedger durable coordination contract", () => {
   it("initializes its own SQLite schema and reports the schema version", async () => {
     const ledger = ledgerFor("ledger-schema-ping");
-    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 7 });
+    expect(await ledger.ping()).toEqual({ ok: true, schemaVersion: 8 });
     await runInDurableObject(ledger, async (instance, state) => {
       const tables = state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray().map(row => row.name);
       expect(tables).toEqual(expect.arrayContaining([
@@ -69,6 +69,7 @@ describe("OrchestratorLedger durable coordination contract", () => {
         "orchestrator_consumed_assertions",
         "orchestrator_owner_consumed_assertions",
         "orchestrator_owner_command_receipts",
+        "orchestrator_ledger_clock",
       ]));
       const outboxColumns = state.storage.sql.exec("PRAGMA table_info(orchestrator_outbox_events)").toArray().map(row => row.name);
       expect(outboxColumns).toEqual(expect.arrayContaining([
@@ -1155,9 +1156,18 @@ it("prunes consumed assertion IDs only after expiry plus the retention margin", 
   await ledger.claimTask({ workerId: "agent:worker-1", workerAssertion: assertion, leaseMs: 30_000, now });
   const later = now + 12 * 60 * 1000;
   await createTask(ledger, { task: task("task-0002"), idempotencyKey: "task-create-retention-2", inputHash: "3".repeat(64), now: later });
+  await ledger.claimTask({
+    workerId: "agent:worker-1",
+    workerAssertion: await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "claimTask", nowMs: later,
+    }),
+    leaseMs: 30_000,
+    now: later,
+    taskId: "task-0002",
+  });
   await runInDurableObject(ledger, async (_instance, state) => {
     expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti='jti-claim-retention-000000000001'").one().count).toBe(0);
-    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(1);
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions").one().count).toBe(2);
   });
 });
 
@@ -2491,6 +2501,265 @@ it("recovers a Queue-accepted send with a lost acknowledgement through bounded r
 }, 15000);
 
 
+
+describe("OrchestratorLedger effective worker timestamps", () => {
+  it("persists Message received_at using the issuer high-water timestamp", async () => {
+    const ledger = ledgerFor("ledger-effective-message-timestamp");
+    await createTask(ledger, {
+      task: task("task-effective-message"),
+      idempotencyKey: "effective-message-task",
+      inputHash: "a".repeat(64),
+      now,
+    });
+
+    const effectiveNow = now + 4_000;
+    const rolledBackNow = now + 3_000;
+    const firstMessage = {
+      messageId: "msg-effective-clock-first",
+      taskId: "task-effective-message",
+      inputHash: "b".repeat(64),
+      envelope: protocolEnvelope("msg-effective-clock-first", "task-effective-message", "b".repeat(64), { step: 1 }, effectiveNow),
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: effectiveNow,
+      }),
+      now: effectiveNow,
+    };
+    await expect(ledger.recordMessage(firstMessage)).resolves.toMatchObject({ accepted: true });
+
+    const secondMessage = {
+      messageId: "msg-effective-clock-second",
+      taskId: "task-effective-message",
+      inputHash: "c".repeat(64),
+      envelope: protocolEnvelope("msg-effective-clock-second", "task-effective-message", "c".repeat(64), { step: 2 }, rolledBackNow),
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: rolledBackNow,
+      }),
+      now: rolledBackNow,
+    };
+    await expect(ledger.recordMessage(secondMessage)).resolves.toMatchObject({ accepted: true });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT received_at FROM orchestrator_processed_messages WHERE message_id = ?",
+        secondMessage.messageId,
+      ).one().received_at).toBe(effectiveNow);
+    });
+  });
+
+  it("validates Message expiry against the effective issuer high-water timestamp", async () => {
+    const ledger = ledgerFor("ledger-effective-message-expiry");
+    const taskId = "task-effective-message-expiry";
+    await createTask(ledger, {
+      task: task(taskId),
+      idempotencyKey: "effective-message-expiry-task",
+      inputHash: "a".repeat(64),
+      now,
+    });
+
+    const effectiveNow = now + 4_000;
+    const rolledBackNow = now + 3_000;
+    const firstEnvelope = protocolEnvelope(
+      "msg-effective-expiry-first", taskId, "b".repeat(64), { step: 1 }, effectiveNow,
+    );
+    await expect(ledger.recordMessage({
+      messageId: firstEnvelope.messageId,
+      taskId,
+      inputHash: firstEnvelope.inputHash,
+      envelope: firstEnvelope,
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: effectiveNow,
+      }),
+      now: effectiveNow,
+    })).resolves.toMatchObject({ accepted: true });
+
+    const staleButLocallyValidEnvelope = protocolEnvelope(
+      "msg-effective-expiry-second", taskId, "c".repeat(64), { step: 2 }, rolledBackNow - 1_000,
+    );
+    staleButLocallyValidEnvelope.expiresAt = rolledBackNow + 500;
+    const secondAssertion = await createWorkerAssertion({
+      subject: "agent:worker-1", role: "agent", operation: "recordMessage", nowMs: rolledBackNow,
+    });
+    const secondJti = JSON.parse(atob(secondAssertion.split(".")[2].replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(secondAssertion.split(".")[2].length / 4) * 4, "="))).jti;
+    await expect(ledger.recordMessage({
+      messageId: staleButLocallyValidEnvelope.messageId,
+      taskId,
+      inputHash: staleButLocallyValidEnvelope.inputHash,
+      envelope: staleButLocallyValidEnvelope,
+      workerId: "agent:worker-1",
+      workerAssertion: secondAssertion,
+      now: rolledBackNow,
+    })).resolves.toMatchObject({
+      accepted: false,
+      reason: "INVALID_MESSAGE_TIME",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_processed_messages WHERE message_id = ?",
+        staleButLocallyValidEnvelope.messageId,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        secondJti,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = ?",
+        "worker:agent:worker-1",
+      ).one().last_seen_ms).toBe(effectiveNow);
+    });
+  });
+
+  it("persists Outbox receipt received_at using the consumer high-water timestamp", async () => {
+    const ledger = ledgerFor("ledger-effective-receipt-timestamp");
+    const taskId = "task-effective-receipt";
+    await createTask(ledger, {
+      task: task(taskId),
+      idempotencyKey: "effective-receipt-task",
+      inputHash: "d".repeat(64),
+      now,
+    });
+
+    const effectiveNow = now + 4_000;
+    const rolledBackNow = now + 3_000;
+    const payloads = [
+      { eventId: "evt-effective-receipt-first", idempotencyKey: "effective-receipt-first", payload: { version: 1 } },
+      { eventId: "evt-effective-receipt-second", idempotencyKey: "effective-receipt-second", payload: { version: 1 } },
+    ];
+    for (const item of payloads) {
+      await expect(ledger.enqueueOutbox({
+        eventId: item.eventId,
+        idempotencyKey: item.idempotencyKey,
+        taskId,
+        eventType: "task.created",
+        payload: item.payload,
+        workerId: "agent:worker-1",
+        workerAssertion: await createWorkerAssertion({
+          subject: "agent:worker-1", role: "agent", operation: "enqueueOutbox", nowMs: effectiveNow,
+        }),
+        now: effectiveNow,
+      })).resolves.toMatchObject({ enqueued: true });
+    }
+
+    const recordReceipt = async (item, timestamp) => ledger.recordOutboxReceipt({
+      eventId: item.eventId,
+      eventType: "task.created",
+      idempotencyKey: item.idempotencyKey,
+      taskId,
+      payload: item.payload,
+      createdAt: effectiveNow,
+      schemaVersion: 1,
+      envelopeSha256: "e".repeat(64),
+      consumerId: "orchestrator-outbox-consumer",
+      workerAssertion: await createWorkerAssertion({
+        subject: "orchestrator-outbox-consumer", role: "consumer",
+        operation: "recordOutboxReceipt", nowMs: timestamp,
+      }),
+      now: timestamp,
+    });
+    await expect(recordReceipt(payloads[0], effectiveNow)).resolves.toMatchObject({ recorded: true });
+    await expect(recordReceipt(payloads[1], rolledBackNow)).resolves.toMatchObject({ recorded: true });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT received_at FROM orchestrator_outbox_receipts WHERE event_id = ?",
+        payloads[1].eventId,
+      ).one().received_at).toBe(effectiveNow);
+    });
+  });
+
+  it("persists dead-letter archived_at using the archiver high-water timestamp", async () => {
+    const ledger = ledgerFor("ledger-effective-dead-letter-timestamp");
+    const queueName = "orchestrator-outbox";
+    const archiverId = "orchestrator-outbox-dlq-archiver";
+    const effectiveNow = now + 4_000;
+    const rolledBackNow = now + 3_000;
+
+    const recordDeadLetter = async (messageId, timestamp) => {
+      const messageAttempts = 3;
+      const messageTimestamp = timestamp - 1_000;
+      const body = { reason: "retry-exhausted", taskId: "task-effective-dead-letter" };
+      const bodySha256 = await sha256Canonical({
+        queueName, messageId, messageAttempts, messageTimestamp, body,
+      });
+      return ledger.recordOutboxDeadLetter({
+        queueName,
+        messageId,
+        messageAttempts,
+        messageTimestamp,
+        body,
+        bodySha256,
+        archiverId,
+        workerAssertion: await createWorkerAssertion({
+          subject: archiverId, role: "consumer",
+          operation: "recordOutboxDeadLetter", nowMs: timestamp,
+        }),
+        now: timestamp,
+      });
+    };
+
+    await expect(recordDeadLetter("msg-effective-dead-first", effectiveNow)).resolves.toMatchObject({ recorded: true });
+    await expect(recordDeadLetter("msg-effective-dead-second", rolledBackNow)).resolves.toMatchObject({ recorded: true });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT archived_at FROM orchestrator_outbox_dead_letters WHERE message_id = ?",
+        "msg-effective-dead-second",
+      ).one().archived_at).toBe(effectiveNow);
+    });
+  });
+
+  it("normalizes Audit hash timestamps and persisted created_at to the same high-water value", async () => {
+    const ledger = ledgerFor("ledger-effective-audit-timestamp");
+    const taskId = "task-effective-audit";
+    await createTask(ledger, {
+      task: task(taskId),
+      idempotencyKey: "effective-audit-task",
+      inputHash: "f".repeat(64),
+      now,
+    });
+
+    const effectiveNow = now + 4_000;
+    const rolledBackNow = now + 3_000;
+    const append = async (eventId, eventType, timestamp) => ledger.appendAuditEvent({
+      eventId,
+      taskId,
+      actor: agent,
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1", role: "agent", operation: "appendAuditEvent", nowMs: timestamp,
+      }),
+      eventType,
+      details: { version: 1 },
+      now: timestamp,
+    });
+
+    const first = await append("audit-effective-first", "task.created", effectiveNow);
+    const second = await append("audit-effective-second", "task.scheduled", rolledBackNow);
+    expect(first).toMatchObject({ appended: true });
+    expect(second).toMatchObject({ appended: true, event: { createdAt: effectiveNow, previousHash: first.event.eventHash } });
+
+    const expectedHash = await sha256Canonical({
+      eventId: "audit-effective-second",
+      taskId,
+      actorId: "agent:worker-1",
+      actorRole: "agent",
+      eventType: "task.scheduled",
+      details: { version: 1 },
+      occurredAt: effectiveNow,
+      previousHash: first.event.eventHash,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT created_at, event_hash FROM orchestrator_audit_events WHERE event_id = ?",
+        "audit-effective-second",
+      ).one()).toEqual({ created_at: effectiveNow, event_hash: expectedHash });
+    });
+  });
+});
+
 describe("OrchestratorLedger signed worker clock-skew boundaries", () => {
   it("enforces the exact lower and upper clock-skew boundaries for signed worker assertions", async () => {
     const cases = [
@@ -2562,5 +2831,404 @@ describe("OrchestratorLedger signed worker clock-skew boundaries", () => {
         ).one().count).toBe(scenario.jtiRows);
       });
     }
+  });
+});
+
+
+describe("OrchestratorLedger worker assertion clock rollback", () => {
+  it("rejects a consumed JTI after forward-clock cleanup and a subsequent clock rollback", async () => {
+    const ledger = ledgerFor("ledger-worker-clock-rollback-jti-replay");
+    const originalJti = "jti-clock-rollback-original-000001";
+    const forwardJti = "jti-clock-rollback-forward-000001";
+    const originalAssertion = await createWorkerAssertion({
+      subject: "orchestrator-scheduler",
+      role: "system",
+      operation: "createTask",
+      nowMs: now,
+      jti: originalJti,
+    });
+
+    await expect(ledger.createTask({
+      task: task("task-clock-rollback-original"),
+      idempotencyKey: "clock-rollback-original",
+      inputHash: "a".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: originalAssertion,
+    })).resolves.toMatchObject({ created: true });
+
+    const forwardNow = now + 661_000;
+    const forwardAssertion = await createWorkerAssertion({
+      subject: "orchestrator-scheduler",
+      role: "system",
+      operation: "createTask",
+      nowMs: forwardNow,
+      jti: forwardJti,
+    });
+    await expect(ledger.createTask({
+      task: task("task-clock-rollback-forward"),
+      idempotencyKey: "clock-rollback-forward",
+      inputHash: "b".repeat(64),
+      now: forwardNow,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: forwardAssertion,
+    })).resolves.toMatchObject({ created: true });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        originalJti,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        forwardJti,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker:orchestrator-scheduler'",
+      ).one().last_seen_ms).toBe(forwardNow);
+    });
+
+    const rolledBackNow = now + 10_000;
+    await expect(ledger.createTask({
+      task: task("task-clock-rollback-replayed"),
+      idempotencyKey: "clock-rollback-replayed",
+      inputHash: "c".repeat(64),
+      now: rolledBackNow,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: originalAssertion,
+    })).resolves.toMatchObject({
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+        "task-clock-rollback-replayed",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        originalJti,
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        forwardJti,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker:orchestrator-scheduler'",
+      ).one().last_seen_ms).toBe(forwardNow);
+    });
+
+    const boundaryNow = forwardNow - 5_000;
+    const boundaryAssertion = await createWorkerAssertion({
+      subject: "orchestrator-scheduler",
+      role: "system",
+      operation: "createTask",
+      nowMs: boundaryNow,
+      jti: "jti-clock-rollback-boundary-0001",
+    });
+    await expect(ledger.createTask({
+      task: task("task-clock-rollback-boundary"),
+      idempotencyKey: "clock-rollback-boundary",
+      inputHash: "d".repeat(64),
+      now: boundaryNow,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: boundaryAssertion,
+    })).resolves.toMatchObject({ created: true });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker:orchestrator-scheduler'",
+      ).one().last_seen_ms).toBe(forwardNow);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+        "task-clock-rollback-boundary",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
+        "jti-clock-rollback-boundary-0001",
+      ).one().count).toBe(1);
+    });
+  });
+});
+
+describe("OrchestratorLedger webhook retention clock rollback", () => {
+  it("rejects delivery replay after retention cleanup and a backward clock step", async () => {
+    const ledger = ledgerFor("ledger-webhook-retention-clock-rollback");
+    let clockNow = now;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+    try {
+      const original = {
+        deliveryId: "delivery-clock-rollback-0001",
+        bodySha256: "a".repeat(64),
+        eventName: "issues",
+        receivedAt: now,
+        idempotencyKey: "webhook-clock-rollback-original",
+        inputHash: "b".repeat(64),
+      };
+      await expect(ledger.claimGitHubDelivery(original)).resolves.toMatchObject({ claimed: true, replay: false });
+
+      const forwardNow = now + 31 * 24 * 60 * 60 * 1000;
+      clockNow = forwardNow;
+      await expect(ledger.claimGitHubDelivery({
+        deliveryId: "delivery-clock-rollback-0002",
+        bodySha256: "c".repeat(64),
+        eventName: "issues",
+        receivedAt: forwardNow,
+        idempotencyKey: "webhook-clock-rollback-forward",
+        inputHash: "d".repeat(64),
+      })).resolves.toMatchObject({ claimed: true, replay: false });
+
+      await runInDurableObject(ledger, async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries WHERE delivery_id = ?",
+          original.deliveryId,
+        ).one().count).toBe(0);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_github_business_idempotency WHERE idempotency_key = ?",
+          original.idempotencyKey,
+        ).one().count).toBe(0);
+        expect(state.storage.sql.exec(
+          "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'ledger'",
+        ).one().last_seen_ms).toBe(forwardNow);
+      });
+
+      clockNow = now + 1_000;
+      await expect(ledger.claimGitHubDelivery(original)).resolves.toMatchObject({
+        claimed: false,
+        replay: false,
+        reason: "LEDGER_CLOCK_ROLLBACK",
+      });
+
+      await runInDurableObject(ledger, async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_github_webhook_deliveries WHERE delivery_id = ?",
+          original.deliveryId,
+        ).one().count).toBe(0);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS count FROM orchestrator_github_business_idempotency WHERE idempotency_key = ?",
+          original.idempotencyKey,
+        ).one().count).toBe(0);
+        expect(state.storage.sql.exec(
+          "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'ledger'",
+        ).one().last_seen_ms).toBe(forwardNow);
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+});
+
+describe("OrchestratorLedger claim cursor clock rollback", () => {
+  it("does not prune expired cursors before rejecting a backward Ledger clock", async () => {
+    const ledger = ledgerFor("ledger-claim-cursor-clock-rollback");
+    await createTask(ledger, {
+      task: task("task-clock-cursor-original"),
+      idempotencyKey: "clock-cursor-original",
+      inputHash: "f".repeat(64),
+      now,
+    });
+
+    const forwardNow = now + 661_000;
+    await createTask(ledger, {
+      task: task("task-clock-cursor-forward"),
+      idempotencyKey: "clock-cursor-forward",
+      inputHash: "1".repeat(64),
+      now: forwardNow,
+    });
+    await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await claimAssertion("agent:worker-1", forwardNow),
+      leaseMs: 30_000,
+      now: forwardNow,
+      taskId: "task-clock-cursor-forward",
+    });
+
+    const cursorHash = "a".repeat(64);
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO orchestrator_claim_cursors (cursor_hash, executor_id, snapshot_sequence, created_at, task_id, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+        cursorHash, "agent:worker-1", 0, now, "task-clock-cursor-original",
+        Math.floor((now + 20_000) / 1000),
+      );
+    });
+
+    const rolledBackNow = now + 30_000;
+    const workerAssertion = await claimAssertion("agent:worker-1", rolledBackNow);
+    await expect(ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion,
+      leaseMs: 30_000,
+      now: rolledBackNow,
+    })).resolves.toMatchObject({
+      claimed: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_claim_cursors WHERE cursor_hash = ?",
+        cursorHash,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker:agent:worker-1'",
+      ).one().last_seen_ms).toBe(forwardNow);
+    });
+  });
+});
+
+
+describe("OrchestratorLedger lease clock rollback", () => {
+  it("uses effective high-water time to prevent a backward step from renewing an expired lease", async () => {
+    const ledger = ledgerFor("ledger-clock-rollback-lease-renewal");
+    const taskId = "task-clock-rollback-lease-expiry";
+    await createTask(ledger, {
+      task: task(taskId),
+      idempotencyKey: "clock-rollback-lease-expiry",
+      inputHash: "2".repeat(64),
+      now,
+    });
+
+    const claimNow = now + 1;
+    const claimed = await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1",
+        role: "agent",
+        operation: "claimTask",
+        nowMs: claimNow,
+      }),
+      leaseMs: 17_000,
+      now: claimNow,
+      taskId,
+    });
+    expect(claimed).toMatchObject({ claimed: true, leaseGeneration: 1 });
+
+    const originalLeaseUntil = claimNow + 17_000;
+    const forwardNow = now + 20_000;
+    await ledger.claimTask({
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1",
+        role: "agent",
+        operation: "claimTask",
+        nowMs: forwardNow,
+      }),
+      leaseMs: 30_000,
+      now: forwardNow,
+      taskId,
+    });
+
+    const backwardNow = now + 15_000;
+    const renewal = await ledger.renewLease({
+      taskId,
+      workerId: "agent:worker-1",
+      workerAssertion: await createWorkerAssertion({
+        subject: "agent:worker-1",
+        role: "agent",
+        operation: "renewLease",
+        nowMs: backwardNow,
+      }),
+      leaseGeneration: claimed.leaseGeneration,
+      leaseMs: 30_000,
+      now: backwardNow,
+    });
+    expect(renewal).toMatchObject({
+      renewed: false,
+      reason: "LEASE_FENCE_MISMATCH",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT worker_id, lease_generation, lease_until FROM orchestrator_execution_leases WHERE task_id = ?",
+        taskId,
+      ).one()).toMatchObject({
+        worker_id: "agent:worker-1",
+        lease_generation: 1,
+        lease_until: originalLeaseUntil,
+      });
+      expect(state.storage.sql.exec(
+        "SELECT last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'worker:agent:worker-1'",
+      ).one().last_seen_ms).toBe(forwardNow);
+    });
+  });
+});
+
+
+describe("OrchestratorLedger cross-principal JTI retention", () => {
+  it("does not let a different Worker principal prune a consumed JTI before its issuer clock advances", async () => {
+    const ledger = ledgerFor("ledger-cross-principal-jti-retention");
+    const schedulerJti = "jti-scheduler-cross-principal-retention-0001";
+    const schedulerAssertion = await createWorkerAssertion({
+      subject: "orchestrator-scheduler",
+      role: "system",
+      operation: "createTask",
+      nowMs: now,
+      jti: schedulerJti,
+    });
+    await expect(ledger.createTask({
+      task: task("task-cross-principal-jti-retention"),
+      idempotencyKey: "cross-principal-jti-retention-create",
+      inputHash: "4".repeat(64),
+      now,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: schedulerAssertion,
+    })).resolves.toMatchObject({ created: true });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO orchestrator_outbox_events (event_id, idempotency_key, task_id, event_type, payload_json, status, attempts, lease_worker_id, lease_generation, lease_until, created_at, updated_at, retry_state, next_attempt_at) VALUES (?, ?, ?, ?, ?, 'PENDING', 0, NULL, 0, 0, ?, ?, 'READY', 0)",
+        "evt-cross-principal-jti-retention",
+        "key-cross-principal-jti-retention",
+        "task-cross-principal-jti-retention",
+        "task.transitioned",
+        JSON.stringify({ taskId: "task-cross-principal-jti-retention", version: 1 }),
+        now,
+        now,
+      );
+    });
+
+    const forwardNow = now + 661_000;
+    const publisherAssertion = await createWorkerAssertion({
+      subject: "orchestrator-outbox-publisher",
+      role: "publisher",
+      operation: "claimOutbox",
+      nowMs: forwardNow,
+    });
+    await expect(ledger.claimOutbox({
+      workerId: "orchestrator-outbox-publisher",
+      workerAssertion: publisherAssertion,
+      leaseMs: 30_000,
+      now: forwardNow,
+    })).resolves.toMatchObject({ claimed: true, event: { eventId: "evt-cross-principal-jti-retention" } });
+
+    const replay = await ledger.createTask({
+      task: task("task-cross-principal-jti-replay"),
+      idempotencyKey: "cross-principal-jti-retention-replay",
+      inputHash: "5".repeat(64),
+      now: now + 10_000,
+      workerId: "orchestrator-scheduler",
+      workerAssertion: schedulerAssertion,
+    });
+    expect(replay).toMatchObject({
+      created: false,
+      reason: "AUTHENTICATED_WORKER_REQUIRED",
+    });
+
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE subject = ?",
+        "orchestrator-outbox-publisher",
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
+        "task-cross-principal-jti-replay",
+      ).one().count).toBe(0);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ? AND subject = ?",
+        schedulerJti,
+        "orchestrator-scheduler",
+      ).one().count).toBe(1);
+    });
   });
 });

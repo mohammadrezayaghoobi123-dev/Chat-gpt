@@ -63,7 +63,8 @@ async function ownerInput(overrides = {}) {
     commentId: overrides.commentId ?? "123456789",
     commandHash: await sha256Canonical({ eventId: command.eventId, operation: command.operation, reason: command.reason, taskId: command.taskId }),
   };
-  const assertion = await createOwnerAssertion(ownerKeySet, "owner-v1", context, now);
+  const commandNow = overrides.now ?? now;
+  const assertion = await createOwnerAssertion(ownerKeySet, "owner-v1", context, commandNow);
   return {
     assertion, assertionContext: context, command,
     bodySha256: overrides.bodySha256 ?? "c".repeat(64),
@@ -71,13 +72,96 @@ async function ownerInput(overrides = {}) {
       eventName: "issue_comment.created",
       repository: "mohammadrezayaghoobi123-dev/Chat-gpt",
       issueNumber: 7,
-      commentCreatedAt: now,
+      commentCreatedAt: commandNow,
     },
-    now: overrides.now ?? now,
+    now: commandNow,
   };
 }
 
 describe("Owner command atomic Ledger contract", () => {
+
+  it("rejects Owner command replay after its independent clock high-water moves forward", async () => {
+    const ledger = ledgerFor("owner-clock-rollback-highwater");
+    const taskId = "task-owner-clock-rollback";
+    await createTask(ledger, task(taskId));
+
+    const invalidOwnerInput = await ownerInput({
+      command: {
+        taskId,
+        operation: "quarantine",
+        reason: "Attempt to move Owner clock without a valid assertion",
+        eventId: "owner-clock-invalid-command-01",
+      },
+      deliveryId: "delivery-owner-clock-invalid-01",
+      commentId: "123456820",
+      now: now + 120_000,
+    });
+    invalidOwnerInput.assertion = "invalid-owner-assertion";
+    await expect(ledger.executeOwnerCommand(invalidOwnerInput)).resolves.toMatchObject({
+      applied: false,
+      reason: "OWNER_ASSERTION_REJECTED",
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_ledger_clock WHERE clock_domain = 'owner'",
+      ).one().count).toBe(0);
+    });
+
+    const forwardNow = now + 12_000;
+    const first = await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        taskId,
+        operation: "quarantine",
+        reason: "Establish Owner clock high-water",
+        eventId: "owner-clock-forward-command-01",
+      },
+      deliveryId: "delivery-owner-clock-forward-01",
+      commentId: "123456821",
+      now: forwardNow,
+    }));
+    expect(first).toMatchObject({
+      applied: true,
+      operation: "quarantine",
+      task: { taskId, state: "QUARANTINED", version: 2 },
+    });
+
+    const rolledBackNow = now + 4_000;
+    const replay = await ledger.executeOwnerCommand(await ownerInput({
+      command: {
+        taskId,
+        operation: "release",
+        reason: "Attempt Owner command after clock rollback",
+        eventId: "owner-clock-rollback-command-01",
+      },
+      deliveryId: "delivery-owner-clock-rollback-01",
+      commentId: "123456822",
+      now: rolledBackNow,
+    }));
+    expect(replay).toMatchObject({
+      applied: false,
+      reason: "LEDGER_CLOCK_ROLLBACK",
+    });
+
+    await expect(ledger.getTask({ taskId })).resolves.toMatchObject({
+      taskId,
+      state: "QUARANTINED",
+      version: 2,
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT clock_domain, last_seen_ms FROM orchestrator_ledger_clock WHERE clock_domain = 'owner'",
+      ).toArray()).toEqual([{ clock_domain: "owner", last_seen_ms: forwardNow }]);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_command_receipts WHERE task_id = ?",
+        taskId,
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_owner_consumed_assertions WHERE task_id = ?",
+        taskId,
+      ).one().count).toBe(1);
+    });
+  });
+
   it("atomically consumes Owner JTI, claims delivery/comment, cancels task, fences Agent and outbox leases, and appends audit", async () => {
     const ledger = ledgerFor("owner-atomic-cancel");
     await createTask(ledger);

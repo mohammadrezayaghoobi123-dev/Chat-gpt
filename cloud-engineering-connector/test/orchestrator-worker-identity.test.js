@@ -37,6 +37,15 @@ test("scheduled signer cannot mint agent identities or caller-selected principal
   );
   await assert.rejects(
     createScheduledWorkerAssertion(keySet, "worker-v1", {
+      subject: "orchestrator-executor",
+      role: "agent",
+      operation: "claimTask",
+      nowMs,
+    }),
+    error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
+  );
+  await assert.rejects(
+    createScheduledWorkerAssertion(keySet, "worker-v1", {
       subject: "orchestrator-outbox-publisher",
       role: "system",
       operation: "createTask",
@@ -112,36 +121,16 @@ test("scheduled signer authorizes only the dedicated DLQ archiver principal and 
 });
 
 
-test("executor signer fixes its principal and role and permits only the initial claim operation", async () => {
+test("legacy HMAC signer refuses to mint Executor assertions", async () => {
   const { createExecutorWorkerAssertion } = await import("../orchestrator-worker-identity.js");
   assert.equal(typeof createExecutorWorkerAssertion, "function");
-
-  const token = await createExecutorWorkerAssertion(keySet, "worker-v1", {
-    operation: "claimTask",
-    nowMs,
-    subject: "attacker-selected-principal",
-    role: "system",
-  });
-  const verified = await verifyWorkerAssertion(keySet, token, {
-    subject: "orchestrator-executor",
-    role: "agent",
-    operation: "claimTask",
-    nowMs,
-  });
-  assert.equal(verified.subject, "orchestrator-executor");
-  assert.equal(verified.role, "agent");
-  assert.equal(verified.operation, "claimTask");
-
-  for (const operation of ["createTask", "transitionTask", "renewLease", "releaseLease", "claimOutbox"]) {
-    await assert.rejects(
-      createExecutorWorkerAssertion(keySet, "worker-v1", { operation, nowMs }),
-      error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
-    );
-  }
-
-  const ambiguousKeySet = JSON.stringify({ undefined: key });
   await assert.rejects(
-    createExecutorWorkerAssertion(ambiguousKeySet, undefined, { operation: "claimTask", nowMs }),
+    createExecutorWorkerAssertion(keySet, "worker-v1", {
+      operation: "claimTask",
+      nowMs,
+      subject: "attacker-selected-principal",
+      role: "system",
+    }),
     error => error?.code === "AUTHENTICATED_WORKER_REQUIRED",
   );
 });

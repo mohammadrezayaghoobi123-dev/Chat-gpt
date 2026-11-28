@@ -85,6 +85,28 @@ describe("Owner command atomic Ledger contract", () => {
     const taskId = "task-owner-clock-rollback";
     await createTask(ledger, task(taskId));
 
+    const invalidOwnerInput = await ownerInput({
+      command: {
+        taskId,
+        operation: "quarantine",
+        reason: "Attempt to move Owner clock without a valid assertion",
+        eventId: "owner-clock-invalid-command-01",
+      },
+      deliveryId: "delivery-owner-clock-invalid-01",
+      commentId: "123456820",
+      now: now + 120_000,
+    });
+    invalidOwnerInput.assertion = "invalid-owner-assertion";
+    await expect(ledger.executeOwnerCommand(invalidOwnerInput)).resolves.toMatchObject({
+      applied: false,
+      reason: "OWNER_ASSERTION_REJECTED",
+    });
+    await runInDurableObject(ledger, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM orchestrator_ledger_clock WHERE clock_domain = 'owner'",
+      ).one().count).toBe(0);
+    });
+
     const forwardNow = now + 12_000;
     const first = await ledger.executeOwnerCommand(await ownerInput({
       command: {

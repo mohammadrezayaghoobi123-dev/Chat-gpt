@@ -1631,6 +1631,15 @@ export class OrchestratorLedger extends DurableObject {
           typeof context.commentId !== "string" || !/^[0-9]{1,20}$/.test(context.commentId)) {
         return { applied: false, reason: "OWNER_ASSERTION_REJECTED" };
       }
+      try {
+        await verifyOwnerAssertion(
+          this.env?.LEDGER_OWNER_ASSERTION_KEYS,
+          assertion,
+          { ...context, nowMs: now },
+        );
+      } catch {
+        return { applied: false, reason: "OWNER_ASSERTION_REJECTED" };
+      }
       const assertionHash = await sha256Canonical({ assertion });
       let verified;
       const sql = this.ctx.storage.sql;

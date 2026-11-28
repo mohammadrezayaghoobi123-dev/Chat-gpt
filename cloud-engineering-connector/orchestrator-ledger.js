@@ -169,7 +169,7 @@ function consumeWorkerAssertion(sql, assertion, nowMs) {
     "SELECT jti FROM orchestrator_consumed_assertions WHERE jti = ?",
     assertion.jti,
   ).toArray()[0];
-  if (existing) return false;
+  if (existing) return null;
   sql.exec(
     "INSERT INTO orchestrator_consumed_assertions (jti, subject, role, operation, key_id, issued_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     assertion.jti, assertion.subject, assertion.role, assertion.operation,

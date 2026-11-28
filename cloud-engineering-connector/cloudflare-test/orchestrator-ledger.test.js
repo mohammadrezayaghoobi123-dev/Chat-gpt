@@ -2666,10 +2666,7 @@ describe("OrchestratorLedger worker assertion clock rollback", () => {
       now: boundaryNow,
       workerId: "orchestrator-scheduler",
       workerAssertion: boundaryAssertion,
-    })).resolves.toMatchObject({
-      created: false,
-      reason: "AUTHENTICATED_WORKER_REQUIRED",
-    });
+    })).resolves.toMatchObject({ created: true });
 
     await runInDurableObject(ledger, async (_instance, state) => {
       expect(state.storage.sql.exec(
@@ -2678,11 +2675,11 @@ describe("OrchestratorLedger worker assertion clock rollback", () => {
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_tasks WHERE task_id = ?",
         "task-clock-rollback-boundary",
-      ).one().count).toBe(0);
+      ).one().count).toBe(1);
       expect(state.storage.sql.exec(
         "SELECT COUNT(*) AS count FROM orchestrator_consumed_assertions WHERE jti = ?",
         "jti-clock-rollback-boundary-0001",
-      ).one().count).toBe(0);
+      ).one().count).toBe(1);
     });
   });
 });

@@ -2011,5 +2011,4 @@ export class OrchestratorLedger extends DurableObject {
     }
     throw fail("Audit chain changed too frequently; retry the append.", "AUDIT_CHAIN_CONTENTION");
   }
-  }
 }
